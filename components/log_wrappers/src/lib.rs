@@ -68,22 +68,25 @@ impl<T: std::fmt::Debug> slog::Value for DebugValue<T> {
 /// data.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RedactOption {
-    Mode(String),
-    Flag(bool),
+    Off,
+    On,
+    Marker,
 }
 
 impl Default for RedactOption {
     fn default() -> Self {
-        Self::Mode("False".to_owned())
+        Self::Off
     }
 }
 
 impl fmt::Display for RedactOption {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Flag(flag) => write!(f, "{}", if *flag { "on" } else { "off" }),
-            Self::Mode(mode) => write!(f, "{}", mode),
+            Self::On => "on",
+            Self::Off => "off",
+            Self::Marker => "marker",
         }
+        .fmt(f)
     }
 }
 
@@ -92,10 +95,12 @@ impl FromStr for RedactOption {
     fn from_str(s: &str) -> Result<RedactOption, String> {
         match s {
             "" => Ok(RedactOption::default()),
-            "on" | "ON" | "true" | "TRUE" | "True" => Ok(RedactOption::Flag(true)),
-            "off" | "OFF" | "false" | "FALSE" | "False" => Ok(RedactOption::Flag(false)),
-            "marker" | "MARKER" => Ok(RedactOption::Mode("marker".to_owned())),
-            s => Err(format!("expect: marker, on | off, got: {:?}", s)),
+            "on" | "ON" | "true" | "TRUE" | "True" => Ok(RedactOption::On),
+            "off" | "OFF" | "false" | "FALSE" | "False" => Ok(RedactOption::Off),
+            "marker" | "MARKER" => Ok(RedactOption::Marker),
+            s => Err(format!(
+                "expect: marker | on | off | true | false, got: {s:?}"
+            )),
         }
     }
 }
@@ -104,11 +109,11 @@ impl TryFrom<ConfigValue> for RedactOption {
     type Error = String;
     fn try_from(value: ConfigValue) -> Result<Self, Self::Error> {
         match value {
-            ConfigValue::Bool(flag) => Ok(RedactOption::Flag(flag)),
+            ConfigValue::Bool(true) => Ok(RedactOption::On),
+            ConfigValue::Bool(false) => Ok(RedactOption::Off),
             ConfigValue::String(s) => RedactOption::from_str(&s),
             _ => Err(format!(
-                "expect: marker, on | off | true | false, got: {:?}",
-                value
+                "expect: marker, marker | on | off | true | false, got: {value:?}"
             )),
         }
     }
@@ -116,10 +121,7 @@ impl TryFrom<ConfigValue> for RedactOption {
 
 impl From<RedactOption> for ConfigValue {
     fn from(option: RedactOption) -> Self {
-        match option {
-            RedactOption::Flag(flag) => ConfigValue::Bool(flag),
-            RedactOption::Mode(mode) => ConfigValue::String(mode),
-        }
+        ConfigValue::String(option.to_string())
     }
 }
 
@@ -129,8 +131,9 @@ impl Serialize for RedactOption {
         S: Serializer,
     {
         match self {
-            Self::Flag(flag) => flag.serialize(serializer),
-            Self::Mode(mode) => mode.serialize(serializer),
+            Self::On => true.serialize(serializer),
+            Self::Off => false.serialize(serializer),
+            Self::Marker => "marker".serialize(serializer),
         }
     }
 }
@@ -160,7 +163,11 @@ impl<'de> Deserialize<'de> for RedactOption {
             where
                 E: de::Error,
             {
-                Ok(RedactOption::Flag(flag))
+                Ok(if flag {
+                    RedactOption::On
+                } else {
+                    RedactOption::Off
+                })
             }
         }
 
@@ -171,14 +178,9 @@ impl<'de> Deserialize<'de> for RedactOption {
 impl RedactOption {
     fn convert(&self) -> RedactLevel {
         match self {
-            Self::Flag(true) => RedactLevel::On,
-            Self::Mode(mode) => match mode.to_lowercase().as_str() {
-                "on" | "true" => RedactLevel::On,
-                "off" | "false" => RedactLevel::Off,
-                "marker" => RedactLevel::Marker,
-                _ => RedactLevel::Off,
-            },
-            _ => RedactLevel::Off,
+            Self::On => RedactLevel::On,
+            Self::Off => RedactLevel::Off,
+            Self::Marker => RedactLevel::Marker,
         }
     }
 }
@@ -310,25 +312,16 @@ mod tests {
             redact_info_log: RedactOption,
         }
 
-        assert_eq!(
-            RedactOption::from_str("").unwrap(),
-            RedactOption::Flag(false)
-        );
-        assert_eq!(
-            RedactOption::from_str("on").unwrap(),
-            RedactOption::Flag(true)
-        );
-        assert_eq!(
-            RedactOption::from_str("off").unwrap(),
-            RedactOption::Flag(false)
-        );
+        assert_eq!(RedactOption::from_str("").unwrap(), RedactOption::Off);
+        assert_eq!(RedactOption::from_str("on").unwrap(), RedactOption::On);
+        assert_eq!(RedactOption::from_str("off").unwrap(), RedactOption::Off);
         assert_eq!(
             RedactOption::from_str("marker").unwrap(),
-            RedactOption::Mode("marker".to_owned())
+            RedactOption::Marker
         );
         assert_eq!(
             RedactOption::from_str("MARKER").unwrap(),
-            RedactOption::Mode("marker".to_owned())
+            RedactOption::Marker
         );
         RedactOption::from_str("Marker").unwrap_err();
 
@@ -338,51 +331,45 @@ mod tests {
         assert_eq!(test_config.redact_info_log.convert(), RedactLevel::Off);
 
         template = r#"
-            redact-info-log = true  
+            redact-info-log = true
         "#;
         test_config = toml::from_str(template).unwrap();
-        assert_eq!(test_config.redact_info_log, RedactOption::Flag(true));
+        assert_eq!(test_config.redact_info_log, RedactOption::On);
         assert_eq!(test_config.redact_info_log.convert(), RedactLevel::On);
 
         template = r#"
-            redact-info-log = false  
+            redact-info-log = false
         "#;
         test_config = toml::from_str(template).unwrap();
-        assert_eq!(test_config.redact_info_log, RedactOption::Flag(false));
+        assert_eq!(test_config.redact_info_log, RedactOption::Off);
         assert_eq!(test_config.redact_info_log.convert(), RedactLevel::Off);
 
         template = r#"
-            redact-info-log = "on"  
+            redact-info-log = "on"
         "#;
         test_config = toml::from_str(template).unwrap();
-        assert_eq!(test_config.redact_info_log, RedactOption::Flag(true));
+        assert_eq!(test_config.redact_info_log, RedactOption::On);
         assert_eq!(test_config.redact_info_log.convert(), RedactLevel::On);
 
         template = r#"
-            redact-info-log = "off" 
+            redact-info-log = "off"
         "#;
         test_config = toml::from_str(template).unwrap();
-        assert_eq!(test_config.redact_info_log, RedactOption::Flag(false));
+        assert_eq!(test_config.redact_info_log, RedactOption::Off);
         assert_eq!(test_config.redact_info_log.convert(), RedactLevel::Off);
 
         template = r#"
             redact-info-log = "marker"
         "#;
         test_config = toml::from_str(template).unwrap();
-        assert_eq!(
-            test_config.redact_info_log,
-            RedactOption::Mode("marker".to_owned())
-        );
+        assert_eq!(test_config.redact_info_log, RedactOption::Marker);
         assert_eq!(test_config.redact_info_log.convert(), RedactLevel::Marker);
 
         template = r#"
             redact-info-log = "MARKER"
         "#;
         test_config = toml::from_str(template).unwrap();
-        assert_eq!(
-            test_config.redact_info_log,
-            RedactOption::Mode("marker".to_owned())
-        );
+        assert_eq!(test_config.redact_info_log, RedactOption::Marker);
         assert_eq!(test_config.redact_info_log.convert(), RedactLevel::Marker);
 
         template = r#"
@@ -395,7 +382,7 @@ mod tests {
     fn test_redact_info_log() {
         let buffer = crate::test_util::SyncLoggerBuffer::new();
         let logger = buffer.build_logger();
-        set_redact_info_log(RedactOption::Flag(true));
+        set_redact_info_log(RedactOption::On);
         slog_info!(logger, "foo"; "bar" => Value::key(b"\xAB \xCD"));
         assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: ?\n");
 
@@ -405,7 +392,7 @@ mod tests {
         assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: AB20CD\n");
 
         buffer.clear();
-        set_redact_info_log(RedactOption::Mode("marker".to_owned()));
+        set_redact_info_log(RedactOption::Marker);
         slog_info!(logger, "foo"; "bar" => Value::key(b"\xAB \xCD"));
         assert_eq!(
             buffer.as_string(),

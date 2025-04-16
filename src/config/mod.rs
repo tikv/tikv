@@ -5522,7 +5522,7 @@ mod tests {
         incoming.gc.max_write_bytes_per_sec = ReadableSize::mb(100);
         incoming.rocksdb.defaultcf.block_cache_size = Some(ReadableSize::mb(500));
         incoming.storage.io_rate_limit.import_priority = file_system::IoPriority::High;
-        incoming.security.redact_info_log = log_wrappers::RedactOption::Mode("marker".to_owned());
+        incoming.security.redact_info_log = log_wrappers::RedactOption::Marker;
         let diff = old.diff(&incoming);
         let mut change = HashMap::new();
         change.insert(
