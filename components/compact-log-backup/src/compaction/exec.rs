@@ -264,7 +264,7 @@ where
         meta.set_end_key(end_key);
         meta.set_cf(cf.to_owned());
         meta.name = name.to_owned();
-        meta.end_version = u64::MAX;
+        meta.start_version = u64::MAX;
 
         let mut data_key = keys::DATA_PREFIX_KEY.to_vec();
         for item in sorted_items {
