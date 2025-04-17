@@ -82,7 +82,7 @@ use raftstore::{
 };
 use resolved_ts::{LeadershipResolver, Task};
 use resource_control::{config::ResourceContrlCfgMgr, ResourceGroupManager};
-use security::SecurityManager;
+use security::{SecurityConfigManager, SecurityManager};
 use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
 use snap_recovery::RecoveryService;
 use tikv::{
@@ -555,7 +555,10 @@ where
 
         cfg_controller.register(tikv::config::Module::Log, Box::new(LogConfigManager));
         cfg_controller.register(tikv::config::Module::Memory, Box::new(MemoryConfigManager));
-
+        cfg_controller.register(
+            tikv::config::Module::Security,
+            Box::new(SecurityConfigManager),
+        );
         // Create cdc.
         let cdc_memory_quota = Arc::new(MemoryQuota::new(
             self.core.config.cdc.sink_memory_quota.0 as _,
