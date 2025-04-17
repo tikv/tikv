@@ -4078,6 +4078,11 @@ impl TikvConfig {
         match self.storage.engine {
             EngineType::RaftKv => {
                 if self.rocksdb.titan.enabled.is_none() {
+                    // Override titan.enabled with last_cfg if it exists.
+                    self.rocksdb.titan.enabled =
+                        last_cfg.as_ref().and_then(|cfg| cfg.rocksdb.titan.enabled);
+                }
+                if self.rocksdb.titan.enabled.is_none() {
                     // If the user doesn't specify titan.enabled, we enable it by default for newly
                     // created clusters.
                     if (kv_data_exists && !titan_data_exists) || self.storage.enable_ttl {
@@ -6162,7 +6167,7 @@ mod tests {
 
         // Case 4: Create a new instance
         {
-            let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
+            let (mut cfg, dir) = TikvConfig::with_tmp().unwrap();
             assert_eq!(cfg.rocksdb.titan.enabled, None);
             validate_and_persist_config(&mut cfg, true).unwrap();
             assert_eq!(cfg.rocksdb.titan.enabled, Some(true));
@@ -6170,6 +6175,28 @@ mod tests {
                 cfg.rocksdb.defaultcf.titan.min_blob_size,
                 Some(ReadableSize::kb(32)),
             );
+            let (storage, cfg_controller, ..) = new_engines::<ApiV1>(cfg);
+            assert_eq!(
+                cfg_controller.get_current().rocksdb.titan.enabled,
+                Some(true)
+            );
+            assert_eq!(
+                cfg_controller
+                    .get_current()
+                    .rocksdb
+                    .defaultcf
+                    .titan
+                    .min_blob_size,
+                Some(ReadableSize::kb(32)),
+            );
+            drop(storage);
+            drop(cfg_controller);
+
+            // Restart the instance
+            let mut cfg = TikvConfig::from_file(&dir.path().join("config.toml"), None).unwrap();
+            assert_eq!(cfg.rocksdb.titan.enabled, None);
+            validate_and_persist_config(&mut cfg, true).unwrap();
+            assert_eq!(cfg.rocksdb.titan.enabled, Some(true));
             let (_storage, cfg_controller, ..) = new_engines::<ApiV1>(cfg);
             assert_eq!(
                 cfg_controller.get_current().rocksdb.titan.enabled,
