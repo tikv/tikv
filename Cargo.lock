@@ -4575,6 +4575,7 @@ version = "0.0.1"
 dependencies = [
  "atomic",
  "hex 0.4.3",
+ "online_config",
  "protobuf 2.8.0",
  "serde",
  "slog",
@@ -6947,9 +6948,13 @@ dependencies = [
  "encryption",
  "grpcio",
  "log_wrappers",
+ "online_config",
  "serde",
  "serde_derive",
+ "slog",
+ "slog-global",
  "tempfile",
+ "tikv_util",
 ]
 
 [[package]]

@@ -1693,9 +1693,9 @@ mod tests {
             generation: 0 \
             }"
         );
-        log_wrappers::set_redact_info_log(log_wrappers::RedactOption::Flag(true));
+        log_wrappers::set_redact_info_log(log_wrappers::RedactOption::On);
         let redact_result = format!("{:?}", lock);
-        log_wrappers::set_redact_info_log(log_wrappers::RedactOption::Flag(false));
+        log_wrappers::set_redact_info_log(log_wrappers::RedactOption::Off);
         assert_eq!(
             redact_result,
             "Lock { \
@@ -1719,7 +1719,7 @@ mod tests {
 
         log_wrappers::set_redact_info_log(log_wrappers::RedactOption::Marker);
         let redact_result = format!("{:?}", lock);
-        log_wrappers::set_redact_info_log(log_wrappers::RedactOption::Flag(false));
+        log_wrappers::set_redact_info_log(log_wrappers::RedactOption::Off);
         assert_eq!(
             redact_result,
             "Lock { \
@@ -1765,9 +1765,9 @@ mod tests {
             generation: 10 \
             }"
         );
-        log_wrappers::set_redact_info_log(log_wrappers::RedactOption::Flag(true));
+        log_wrappers::set_redact_info_log(log_wrappers::RedactOption::On);
         let redact_result = format!("{:?}", lock);
-        log_wrappers::set_redact_info_log(log_wrappers::RedactOption::Flag(false));
+        log_wrappers::set_redact_info_log(log_wrappers::RedactOption::Off);
         assert_eq!(
             redact_result,
             "Lock { \
@@ -1841,9 +1841,9 @@ mod tests {
             last_change: Exist { last_change_ts: TimeStamp(8), estimated_versions_to_last_change: 2 }\
             , is_locked_with_conflict: false }"
         );
-        log_wrappers::set_redact_info_log(log_wrappers::RedactOption::Flag(true));
+        log_wrappers::set_redact_info_log(log_wrappers::RedactOption::On);
         let redact_result = format!("{:?}", pessimistic_lock);
-        log_wrappers::set_redact_info_log(log_wrappers::RedactOption::Flag(false));
+        log_wrappers::set_redact_info_log(log_wrappers::RedactOption::Off);
         assert_eq!(
             redact_result,
             "PessimisticLock { primary_key: ?, start_ts: TimeStamp(5), ttl: 1000, \
