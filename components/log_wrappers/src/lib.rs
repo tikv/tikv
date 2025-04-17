@@ -113,7 +113,7 @@ impl TryFrom<ConfigValue> for RedactOption {
             ConfigValue::Bool(false) => Ok(RedactOption::Off),
             ConfigValue::String(s) => RedactOption::from_str(&s),
             _ => Err(format!(
-                "expect: marker, marker | on | off | true | false, got: {value:?}"
+                "expect: marker | on | off | true | false, got: {value:?}"
             )),
         }
     }
