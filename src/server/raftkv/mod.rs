@@ -885,7 +885,7 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                         .observe(begin_instant.saturating_elapsed().as_secs_f64());
                 }
             }
-            if rctx.locked.is_none() {
+            if rctx.locked.is_none() && !start_ts.is_max() {
                 if let (Some(region_start_key), Some(region_end_key)) =
                     (region_start_key, region_end_key)
                 {
