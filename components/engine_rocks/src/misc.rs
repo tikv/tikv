@@ -364,7 +364,7 @@ impl MiscExt for RocksEngine {
     }
 
     fn disable_manual_compaction(&self) -> Result<()> {
-        self.as_inner().disable_manual_compaction();
+        self.as_inner().disable_manual_compaction(true);
         Ok(())
     }
 
@@ -376,7 +376,7 @@ impl MiscExt for RocksEngine {
     fn pause_background_work(&self) -> Result<()> {
         // This will make manual compaction return error instead of waiting. In practice
         // we might want to identify this case by parsing error message.
-        self.disable_manual_compaction()?;
+        self.as_inner().disable_manual_compaction(false);
         self.as_inner().pause_bg_work();
         Ok(())
     }
