@@ -819,6 +819,20 @@ impl<E: KvEngine> CoprocessorHost<E> {
         }
     }
 
+    pub fn on_apply_snapshot_committed(
+        &self,
+        region: &Region,
+        peer_id: u64,
+        snap_key: &crate::store::SnapKey,
+        snap: Option<&crate::store::Snapshot>,
+    ) {
+        let mut ctx = ObserverContext::new(region);
+        for observer in &self.registry.apply_snapshot_observers {
+            let observer = observer.observer.inner();
+            observer.on_apply_snapshot_committed(&mut ctx, peer_id, snap_key, snap);
+        }
+    }
+
     pub fn new_split_checker_host<'a>(
         &'a self,
         region: &Region,
@@ -1087,6 +1101,7 @@ mod tests {
         PreWriteApplyState = 25,
         OnRaftMessage = 26,
         CancelApplySnapshot = 27,
+        ApplySnapshotCommitted = 28,
     }
 
     impl Coprocessor for TestCoprocessor {}
@@ -1312,6 +1327,19 @@ mod tests {
                 Ordering::SeqCst,
             );
         }
+
+        fn on_apply_snapshot_committed(
+            &self,
+            _: &mut ObserverContext<'_>,
+            _: u64,
+            _: &crate::store::SnapKey,
+            _: Option<&crate::store::Snapshot>,
+        ) {
+            self.called.fetch_add(
+                ObserverIndex::ApplySnapshotCommitted as usize,
+                Ordering::SeqCst,
+            );
+        }
     }
 
     impl CmdObserver<PanicEngine> for TestCoprocessor {
@@ -1504,6 +1532,15 @@ mod tests {
 
         host.cancel_apply_snapshot(region.get_id(), 0);
         index += ObserverIndex::CancelApplySnapshot as usize;
+        assert_all!([&ob.called], &[index]);
+
+        let sk = SnapKey {
+            region_id: region.get_id(),
+            term: 0,
+            idx: 0,
+        };
+        host.on_apply_snapshot_committed(&region, 0, &sk, None);
+        index += ObserverIndex::ApplySnapshotCommitted as usize;
         assert_all!([&ob.called], &[index]);
     }
 
