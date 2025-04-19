@@ -7,7 +7,7 @@ use kvproto::brpb::{self, FileType};
 use self::collector::CollectSubcompactionConfig;
 use crate::{
     statistic::{LoadStatistic, SubcompactStatistic},
-    storage::{Epoch, LogFile, LogFileId},
+    storage::{Epoch, LogFile, LogFileEncryptionInfo, LogFileId},
     util,
 };
 
@@ -17,6 +17,7 @@ pub const META_OUT_REL: &str = "metas";
 #[derive(Debug, Clone)]
 pub struct Input {
     pub id: LogFileId,
+    pub encryption: LogFileEncryptionInfo,
     pub compression: brpb::CompressionType,
     pub crc64xor: u64,
     pub key_value_size: u64,
@@ -190,6 +191,7 @@ fn to_input(file: &LogFile) -> Input {
         crc64xor: file.crc64xor,
         key_value_size: file.hacky_key_value_size(),
         num_of_entries: file.number_of_entries as u64,
+        encryption: file.encryption.clone(),
     }
 }
 
