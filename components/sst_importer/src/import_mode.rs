@@ -11,7 +11,7 @@ use std::{
 use engine_traits::{CfOptions, DbOptions, KvEngine};
 use futures_util::compat::Future01CompatExt;
 use kvproto::import_sstpb::*;
-use tikv_util::{resizable_threadpool::ResizableRuntimeHandle, timer::GLOBAL_TIMER_HANDLE};
+use tikv_util::{resizable_threadpool::DeamonRuntimeHandle, timer::GLOBAL_TIMER_HANDLE};
 
 use super::{Config, Result};
 
@@ -88,7 +88,7 @@ impl ImportModeSwitcher {
     }
 
     // start_resizable_threads only serves for resizable runtime
-    pub fn start_resizable_threads<E: KvEngine>(&self, executor: &ResizableRuntimeHandle, db: E) {
+    pub fn start_resizable_threads<E: KvEngine>(&self, executor: &DeamonRuntimeHandle, db: E) {
         // spawn a background future to put TiKV back into normal mode after timeout
         let inner = self.inner.clone();
         let switcher = Arc::downgrade(&inner);
@@ -252,7 +252,7 @@ mod tests {
     use super::*;
 
     fn create_tokio_runtime(_: usize, _: &str) -> TokioResult<Runtime> {
-        tokio::runtime::Builder::new_current_thread()
+        tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
     }
@@ -314,11 +314,14 @@ mod tests {
 
         let cfg = Config::default();
 
-        let mut threads =
-            ResizableRuntime::new("test", Box::new(create_tokio_runtime), Box::new(|_| {}));
-        threads.adjust_with(cfg.num_threads);
+        let threads = ResizableRuntime::new(
+            cfg.num_threads,
+            "test",
+            Box::new(create_tokio_runtime),
+            Box::new(|_| {}),
+        );
         let switcher = ImportModeSwitcher::new(&cfg);
-        switcher.start_resizable_threads(&ResizableRuntimeHandle::new(threads), db.clone());
+        switcher.start_resizable_threads(&threads.handle(), db.clone());
         check_import_options(&db, &normal_db_options, &normal_cf_options);
         assert!(switcher.enter_import_mode(&db, mf).unwrap());
         check_import_options(&db, &import_db_options, &import_cf_options);
@@ -350,11 +353,10 @@ mod tests {
             ..Config::default()
         };
 
-        let mut threads =
-            ResizableRuntime::new("test", Box::new(create_tokio_runtime), Box::new(|_| {}));
-        threads.adjust_with(4);
+        let threads =
+            ResizableRuntime::new(4, "test", Box::new(create_tokio_runtime), Box::new(|_| {}));
         let switcher = ImportModeSwitcher::new(&cfg);
-        let handle = ResizableRuntimeHandle::new(threads);
+        let handle = threads.handle();
 
         switcher.start_resizable_threads(&handle, db.clone());
         check_import_options(&db, &normal_db_options, &normal_cf_options);

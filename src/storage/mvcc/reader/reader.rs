@@ -350,30 +350,40 @@ impl<S: EngineSnapshot> MvccReader<S> {
             Ok(None)
         };
 
-        let mut locks = Vec::with_capacity(limit.min(memory_locks.len()));
+        let mut locks: Vec<(Key, Lock)> = Vec::with_capacity(limit.min(memory_locks.len()));
         let mut memory_iter = memory_locks.into_iter();
         let mut memory_pair = memory_iter.next();
         let mut storage_pair = next_pair_from_storage()?;
         let has_remain = loop {
-            match (memory_pair.as_ref(), storage_pair.as_ref()) {
+            let next_key = match (memory_pair.as_ref(), storage_pair.as_ref()) {
                 (Some((memory_key, _)), Some((storage_key, _))) => {
                     if storage_key <= memory_key {
-                        locks.push(storage_pair.take().unwrap());
+                        let next_key = storage_pair.take().unwrap();
                         storage_pair = next_pair_from_storage()?;
+                        next_key
                     } else {
-                        locks.push(memory_pair.take().unwrap());
+                        let next_key = memory_pair.take().unwrap();
                         memory_pair = memory_iter.next();
+                        next_key
                     }
                 }
                 (Some(_), None) => {
-                    locks.push(memory_pair.take().unwrap());
+                    let next_key = memory_pair.take().unwrap();
                     memory_pair = memory_iter.next();
+                    next_key
                 }
                 (None, Some(_)) => {
-                    locks.push(storage_pair.take().unwrap());
+                    let next_key = storage_pair.take().unwrap();
                     storage_pair = next_pair_from_storage()?;
+                    next_key
                 }
                 (None, None) => break memory_has_remain,
+            };
+            // The same key could exist in both memory and storage when there is ongoing
+            // leader transfer, split or merge on this region. In this case, duplicated
+            // keys should be ignored.
+            if locks.is_empty() || locks.last().unwrap().0 != next_key.0 {
+                locks.push(next_key);
             }
             if limit > 0 && locks.len() >= limit {
                 break memory_pair.is_some() || storage_pair.is_some() || memory_has_remain;
@@ -1056,7 +1066,7 @@ pub mod tests {
         pub fn prewrite(&mut self, m: Mutation, pk: &[u8], start_ts: impl Into<TimeStamp>) {
             let snap = self.snapshot();
             let start_ts = start_ts.into();
-            let cm = ConcurrencyManager::new(start_ts);
+            let cm = ConcurrencyManager::new_for_test(start_ts);
             let mut txn = MvccTxn::new(start_ts, cm);
             let mut reader = SnapshotReader::new(start_ts, snap, true);
 
@@ -1081,7 +1091,7 @@ pub mod tests {
         ) {
             let snap = self.snapshot();
             let start_ts = start_ts.into();
-            let cm = ConcurrencyManager::new(start_ts);
+            let cm = ConcurrencyManager::new_for_test(start_ts);
             let mut txn = MvccTxn::new(start_ts, cm);
             let mut reader = SnapshotReader::new(start_ts, snap, true);
 
@@ -1107,7 +1117,7 @@ pub mod tests {
         ) {
             let snap = self.snapshot();
             let for_update_ts = for_update_ts.into();
-            let cm = ConcurrencyManager::new(for_update_ts);
+            let cm = ConcurrencyManager::new_for_test(for_update_ts);
             let start_ts = start_ts.into();
             let mut txn = MvccTxn::new(start_ts, cm);
             let mut reader = SnapshotReader::new(start_ts, snap, true);
@@ -1138,7 +1148,7 @@ pub mod tests {
         ) {
             let snap = self.snapshot();
             let start_ts = start_ts.into();
-            let cm = ConcurrencyManager::new(start_ts);
+            let cm = ConcurrencyManager::new_for_test(start_ts);
             let mut txn = MvccTxn::new(start_ts, cm);
             let mut reader = SnapshotReader::new(start_ts, snap, true);
             commit(&mut txn, &mut reader, Key::from_raw(pk), commit_ts.into()).unwrap();
@@ -1148,7 +1158,7 @@ pub mod tests {
         pub fn rollback(&mut self, pk: &[u8], start_ts: impl Into<TimeStamp>) {
             let snap = self.snapshot();
             let start_ts = start_ts.into();
-            let cm = ConcurrencyManager::new(start_ts);
+            let cm = ConcurrencyManager::new_for_test(start_ts);
             let mut txn = MvccTxn::new(start_ts, cm);
             let mut reader = SnapshotReader::new(start_ts, snap, true);
             cleanup(
@@ -1163,7 +1173,7 @@ pub mod tests {
         }
 
         pub fn gc(&mut self, pk: &[u8], safe_point: impl Into<TimeStamp> + Copy) {
-            let cm = ConcurrencyManager::new(safe_point.into());
+            let cm = ConcurrencyManager::new_for_test(safe_point.into());
             loop {
                 let snap = self.snapshot();
                 let mut txn = MvccTxn::new(safe_point.into(), cm.clone());
@@ -2470,7 +2480,7 @@ pub mod tests {
         ];
         for (i, case) in cases.into_iter().enumerate() {
             let mut engine = TestEngineBuilder::new().build().unwrap();
-            let cm = ConcurrencyManager::new(42.into());
+            let cm = ConcurrencyManager::new_for_test(42.into());
             let mut txn = MvccTxn::new(TimeStamp::new(10), cm.clone());
             for (write_record, put_ts) in case.written.iter() {
                 txn.put_write(

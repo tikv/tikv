@@ -15,7 +15,7 @@ use fail::fail_point;
 use futures::channel::oneshot::{self, Canceled};
 use futures_util::future::FutureExt;
 use prometheus::{IntCounter, IntGauge};
-use tracker::TrackedFuture;
+use tracker::TlsTrackedFuture;
 use yatp::{queue::Extras, task::future};
 
 use crate::resource_control::{priority_from_task_meta, TaskPriority};
@@ -98,14 +98,15 @@ impl FuturePool {
     where
         F: Future + Send + 'static,
     {
-        self.inner.spawn(TrackedFuture::new(future), None)
+        self.inner.spawn(TlsTrackedFuture::new(future), None)
     }
 
     pub fn spawn_with_extras<F>(&self, future: F, extras: Extras) -> Result<(), Full>
     where
         F: Future + Send + 'static,
     {
-        self.inner.spawn(TrackedFuture::new(future), Some(extras))
+        self.inner
+            .spawn(TlsTrackedFuture::new(future), Some(extras))
     }
 
     /// Spawns a future in the pool and returns a handle to the result of the
@@ -120,7 +121,7 @@ impl FuturePool {
         F: Future + Send + 'static,
         F::Output: Send,
     {
-        self.inner.spawn_handle(TrackedFuture::new(future))
+        self.inner.spawn_handle(TlsTrackedFuture::new(future))
     }
 
     /// Return the min thread count and the max thread count that this pool can

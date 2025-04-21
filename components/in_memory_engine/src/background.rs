@@ -9,8 +9,8 @@ use crossbeam::{
 };
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{
-    CacheRegion, EvictReason, IterOptions, Iterable, Iterator, MiscExt, RangeHintService,
-    SnapshotMiscExt, CF_DEFAULT, CF_WRITE, DATA_CFS,
+    CacheRegion, EvictReason, IterOptions, Iterable, Iterator, MiscExt, OnEvictFinishedCallback,
+    RangeHintService, SnapshotMiscExt, CF_DEFAULT, CF_WRITE, DATA_CFS,
 };
 use fail::fail_point;
 use keys::{origin_end_key, origin_key};
@@ -49,7 +49,7 @@ use crate::{
     region_label::{
         LabelRule, RegionLabelChangedCallback, RegionLabelRulesManager, RegionLabelServiceBuilder,
     },
-    region_manager::{AsyncFnOnce, CacheRegionMeta, RegionState},
+    region_manager::{CacheRegionMeta, RegionState},
     region_stats::{RegionStatsManager, DEFAULT_EVICT_MIN_DURATION},
     write_batch::RegionCacheWriteBatchEntry,
     InMemoryEngineConfig, RegionCacheMemoryEngine,
@@ -327,7 +327,11 @@ impl BgWorkManager {
                     let cache_region = CacheRegion::from_region(&r);
                     if let Err(e) = region_manager.load_region(cache_region) {
                         failed += 1;
-                        warn!("ime load region failed"; "err" => ?e, "region" => ?r);
+                        // Ignore the error caused by the same region. It is possible that the
+                        // caller is trying to load the same region multiple times.
+                        if !e.is_caused_by_same_region() {
+                            warn!("ime load region failed"; "err" => ?e, "region" => ?r);
+                        }
                     }
                 }
                 info!(
@@ -524,7 +528,8 @@ impl BackgroundRunnerCore {
                 "ime safe point update";
                 "prev" => region_meta.safe_point(),
                 "current" => safe_point,
-                "region" => ?region,
+                "region_id" => ?region.id,
+                "epoch_version" => ?region.epoch_version,
             );
             region_meta.set_safe_point(safe_point);
             region_meta.set_in_gc(true);
@@ -548,7 +553,8 @@ impl BackgroundRunnerCore {
         IN_MEMORY_ENGINE_GC_TIME_HISTOGRAM.observe(duration.as_secs_f64());
         info!(
             "ime region gc complete";
-            "region" => ?gc_region.as_ref(),
+            "region_id" => ?gc_region.id,
+            "epoch_version" => ?gc_region.epoch_version,
             "gc_duration" => ?duration,
             "total_version" => filter.metrics.total,
             "filtered_version" => filter.metrics.filtered,
@@ -713,7 +719,7 @@ impl BackgroundRunnerCore {
         let evict_count = regions_to_evict.len();
         let mut regions_to_delete = Vec::with_capacity(evict_count);
         info!(
-            "ime load_evict";
+            "ime auto load evict";
             "regions_to_load" => ?&regions_to_load,
             "regions_to_evict" => ?&regions_to_evict,
         );
@@ -730,11 +736,6 @@ impl BackgroundRunnerCore {
                         let _ = tx_clone.send(()).await;
                     })
                 })),
-            );
-            info!(
-                "ime load_evict: auto evict";
-                "region_to_evict" => ?&cache_region,
-                "evicted_regions" => ?&deletable_regions,
             );
             regions_to_delete.extend(deletable_regions);
         }
@@ -771,7 +772,7 @@ impl BackgroundRunnerCore {
             }
         }
         region_stats_manager.complete_auto_load_and_evict();
-        info!("ime load_evict complete");
+        info!("ime auto load evict complete");
     }
 }
 
@@ -934,7 +935,8 @@ impl BackgroundRunner {
         }
         let skiplist_engine = core.engine.engine.clone();
 
-        if core.memory_controller.reached_stop_load_threshold() {
+        let reached_stop_load = core.memory_controller.reached_stop_load_threshold();
+        if reached_stop_load {
             // We are running out of memory, so cancel the load.
             is_canceled = true;
         }
@@ -943,6 +945,7 @@ impl BackgroundRunner {
             info!(
                 "ime snapshot load canceled";
                 "region" => ?region,
+                "reached_stop_load" => reached_stop_load,
             );
             core.on_snapshot_load_failed(&region, &delete_range_scheduler, false);
             return;
@@ -1153,7 +1156,7 @@ impl Runnable for BackgroundRunner {
 
                             let evict_fn = |evict_region: &CacheRegion,
                                             evict_reason: EvictReason,
-                                            cb: Option<Box<dyn AsyncFnOnce + Send + Sync>>|
+                                            cb: Option<OnEvictFinishedCallback>|
                              -> Vec<CacheRegion> {
                                 core.engine.region_manager.evict_region(
                                     evict_region,
@@ -2782,16 +2785,8 @@ pub mod tests {
         let k = format!("zk{:08}", 15).into_bytes();
         let region1 = CacheRegion::new(1, 0, DATA_MIN_KEY, k.clone());
         let region2 = CacheRegion::new(2, 0, k, DATA_MAX_KEY);
-        engine
-            .core
-            .region_manager()
-            .load_region(region1.clone())
-            .unwrap();
-        engine
-            .core
-            .region_manager()
-            .load_region(region2.clone())
-            .unwrap();
+        engine.load_region(region1.clone()).unwrap();
+        engine.load_region(region2.clone()).unwrap();
         engine.prepare_for_apply(&region1, false);
         engine.prepare_for_apply(&region2, false);
 
@@ -3248,7 +3243,7 @@ pub mod tests {
         // 840*2 > capacity 1500, so the load will fail and the loaded keys should be
         // removed. However now we change the memory quota to 2000, so the range2 can be
         // cached.
-        let mut config_manager = InMemoryEngineConfigManager(config.clone());
+        let mut config_manager = InMemoryEngineConfigManager::new(config.clone());
         let mut config_change = ConfigChange::new();
         config_change.insert(String::from("capacity"), ConfigValue::Size(2000));
         config_manager.dispatch(config_change).unwrap();

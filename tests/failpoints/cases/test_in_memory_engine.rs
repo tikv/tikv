@@ -4,6 +4,7 @@ use std::{
     fs::File,
     io::Read,
     sync::{mpsc::sync_channel, Arc, Mutex},
+    thread::sleep,
     time::Duration,
 };
 
@@ -19,7 +20,7 @@ use kvproto::{
     import_sstpb::SstMeta,
     kvrpcpb::Context,
     raft_cmdpb::{AdminCmdType, CmdType, RaftCmdRequest, RaftRequestHeader, Request},
-    raft_serverpb::RaftMessage,
+    raft_serverpb::{PeerState, RaftMessage},
 };
 use pd_client::PdClient;
 use protobuf::Message;
@@ -36,8 +37,9 @@ use test_coprocessor::{
     handle_request, init_data_with_details_pd_client, DagChunkSpliter, DagSelect, ProductTable,
 };
 use test_raftstore::{
-    get_tso, new_learner_peer, new_peer, new_put_cf_cmd, new_server_cluster_with_hybrid_engine,
-    CloneFilterFactory, Cluster, Direction, RegionPacketFilter, ServerCluster,
+    configure_for_merge, get_tso, must_get_equal, new_learner_peer, new_peer, new_put_cf_cmd,
+    new_server_cluster_with_hybrid_engine, sleep_ms, CloneFilterFactory, Cluster, Direction,
+    RegionPacketFilter, ServerCluster,
 };
 use test_util::eventually;
 use tidb_query_datatype::{
@@ -215,18 +217,12 @@ fn test_load() {
         let r2 = cluster.get_region(&split_keys[1]);
         let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
         region_cache_engine
-            .core()
-            .region_manager()
             .load_region(CacheRegion::from_region(&r))
             .unwrap();
         region_cache_engine
-            .core()
-            .region_manager()
             .load_region(CacheRegion::from_region(&r1))
             .unwrap();
         region_cache_engine
-            .core()
-            .region_manager()
             .load_region(CacheRegion::from_region(&r2))
             .unwrap();
     }
@@ -280,8 +276,6 @@ fn test_load_with_split() {
         // it correctly.
         let cache_range = new_region(1, "", "");
         region_cache_engine
-            .core()
-            .region_manager()
             .load_region(CacheRegion::from_region(&cache_range))
             .unwrap();
     }
@@ -369,8 +363,6 @@ fn test_load_with_split2() {
     // try to load a region with old epoch and bigger range,
     // it should be updated to the real region range.
     region_cache_engine
-        .core()
-        .region_manager()
         .load_region(CacheRegion::new(r_split.id, 0, DATA_MIN_KEY, DATA_MAX_KEY))
         .unwrap();
 
@@ -436,11 +428,7 @@ fn test_load_with_eviction() {
     // it correctly.
     let r = cluster.get_region(b"");
     let cache_range = CacheRegion::from_region(&r);
-    region_cache_engine
-        .core()
-        .region_manager()
-        .load_region(cache_range)
-        .unwrap();
+    region_cache_engine.load_region(cache_range).unwrap();
 
     let product1 = ProductTable::new();
     let product2 = ProductTable::new();
@@ -521,8 +509,7 @@ fn test_evictions_after_transfer_leader() {
         .unwrap_err();
 }
 
-#[test]
-fn test_eviction_after_merge() {
+fn test_commit_merge(test_reload: bool) {
     let mut cluster = new_server_cluster_with_hybrid_engine(0, 1);
     cluster.run();
     let r = cluster.get_region(b"");
@@ -550,11 +537,163 @@ fn test_eviction_after_merge() {
         .snapshot(range2.clone(), 100, 100)
         .unwrap();
 
+    if !test_reload {
+        // Prevent reload.
+        fail::cfg("ime_on_load_region", "return").unwrap();
+    }
+
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.must_merge(r.get_id(), r2.get_id());
 
     region_cache_engine.snapshot(range1, 100, 100).unwrap_err();
     region_cache_engine.snapshot(range2, 100, 100).unwrap_err();
+
+    if test_reload {
+        // Get the latest region `r2`.
+        let r2 = cluster.get_region(b"key1");
+        let range2 = CacheRegion::from_region(&r2);
+        // `r2` should be reloaded after merge completed.
+        eventually(Duration::from_millis(100), Duration::from_secs(5), || {
+            region_cache_engine
+                .snapshot(range2.clone(), 100, 100)
+                .is_ok()
+        });
+    }
+}
+
+#[test]
+fn test_eviction_after_merge() {
+    let test_reload = false;
+    test_commit_merge(test_reload);
+}
+
+// IME should reload cached region automatically after commit merge to
+// minimize the impact to coprocessor requests.
+#[test]
+fn test_reload_after_merge() {
+    let test_reload = true;
+    test_commit_merge(test_reload);
+}
+
+fn test_rollback_merge(test_reload: bool) {
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 3);
+    configure_for_merge(&mut cluster.cfg);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run_conf_change();
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k2").unwrap();
+
+    pd_client.must_add_peer(left.get_id(), new_peer(2, 2));
+    pd_client.must_add_peer(right.get_id(), new_peer(2, 4));
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let mut region = pd_client.get_region(b"k1").unwrap();
+    let target_region = pd_client.get_region(b"k3").unwrap();
+
+    let schedule_merge_fp = "on_schedule_merge";
+    fail::cfg(schedule_merge_fp, "return()").unwrap();
+
+    let (tx, rx) = sync_channel(1);
+    fail::cfg_callback("on_apply_res_prepare_merge", move || {
+        tx.send(()).unwrap();
+    })
+    .unwrap();
+
+    cluster.merge_region(region.get_id(), target_region.get_id(), Callback::None);
+    // PrepareMerge is applied.
+    rx.recv().unwrap();
+
+    let leader = cluster.leader_of_region(left.get_id()).unwrap();
+
+    let region_cache_engine = cluster.sim.rl().get_region_cache_engine(leader.store_id);
+
+    // After prepare merge, version becomes 2 + 1 = 3;
+    region.mut_region_epoch().set_version(3);
+    // load region after PrepareMerge.
+    let cache_region = CacheRegion::from_region(&region);
+    region_cache_engine
+        .core()
+        .region_manager()
+        .new_region(cache_region.clone());
+    eventually(Duration::from_millis(100), Duration::from_secs(5), || {
+        region_cache_engine
+            .snapshot(cache_region.clone(), 100, 100)
+            .is_ok()
+    });
+    if !test_reload {
+        // Prevent reload after rollback merge.
+        fail::cfg("ime_on_load_region", "return").unwrap();
+    }
+
+    // Add a peer to trigger rollback.
+    pd_client.must_add_peer(right.get_id(), new_peer(3, 5));
+    cluster.must_put(b"k4", b"v4");
+    must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
+
+    let mut region = pd_client.get_region(b"k1").unwrap();
+    // After split and prepare_merge, version becomes 1 + 2 = 3;
+    assert_eq!(region.get_region_epoch().get_version(), 3);
+    // After ConfChange and prepare_merge, conf version becomes 1 + 2 = 3;
+    assert_eq!(region.get_region_epoch().get_conf_ver(), 3);
+    fail::remove(schedule_merge_fp);
+    // Wait till rollback.
+    cluster.must_put(b"k11", b"v11");
+
+    // After rollback, version becomes 3 + 1 = 4;
+    region.mut_region_epoch().set_version(4);
+    for i in 1..3 {
+        must_get_equal(&cluster.get_engine(i), b"k11", b"v11");
+        let state = cluster.region_local_state(region.get_id(), i);
+        assert_eq!(state.get_state(), PeerState::Normal);
+        assert_eq!(*state.get_region(), region);
+    }
+
+    if !test_reload {
+        // After rollback, IME cached region is evicted.
+        eventually(Duration::from_millis(100), Duration::from_secs(5), || {
+            let region_map = region_cache_engine
+                .core()
+                .region_manager()
+                .regions_map()
+                .read();
+            region_map.regions().is_empty()
+        });
+    } else {
+        // Get the latest region.
+        let region = pd_client.get_region(b"k1").unwrap();
+        let cache_region = CacheRegion::from_region(&region);
+        // Region should be reloaded after merge completed.
+        eventually(Duration::from_millis(100), Duration::from_secs(5), || {
+            region_cache_engine
+                .snapshot(cache_region.clone(), 100, 100)
+                .is_ok()
+        });
+    }
+}
+
+// IME should also handle RollbackMerge event, we also try to evict the region
+// on merge rollback for simplicity. If region is loaded after PrepareMerge and
+// the merge is rollbacked, IME should track this rollback because it will also
+// change epoch version.
+#[test]
+fn test_eviction_after_rollback_merge() {
+    let test_reload = false;
+    test_rollback_merge(test_reload);
+}
+
+// IME should reload cached region automatically after merge rollback to
+// minimize the impact to coprocessor requests.
+#[test]
+fn test_reload_after_rollback_merge() {
+    let test_reload = true;
+    test_rollback_merge(test_reload);
 }
 
 #[test]
@@ -668,33 +807,107 @@ fn test_eviction_after_ingest_sst() {
 }
 
 #[test]
-fn test_pre_load_when_transfer_ledaer() {
+fn test_warmup_when_transfer_leader() {
     let mut cluster = new_server_cluster_with_hybrid_engine(0, 3);
+    // Using a large warmup timeout to stable the test.
+    cluster.cfg.raft_store.max_entry_cache_warmup_duration.0 = Duration::from_secs(1000);
     cluster.run();
-
-    let (tx, rx) = unbounded();
-    fail::cfg_callback("ime_on_completes_batch_loading", move || {
-        tx.send(true).unwrap();
-    })
-    .unwrap();
 
     let r = cluster.get_region(b"");
     cluster.must_transfer_leader(r.id, new_peer(1, 1));
+    let cache_region = CacheRegion::from_region(&r);
     let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
     region_cache_engine
-        .load_region(CacheRegion::from_region(&r))
+        .load_region(cache_region.clone())
         .unwrap();
     // put some key to trigger load
     cluster.must_put(b"k", b"val");
-    let _ = rx.recv_timeout(Duration::from_secs(500)).unwrap();
+    eventually(Duration::from_millis(100), Duration::from_secs(5), || {
+        region_cache_engine
+            .snapshot(cache_region.clone(), 100, 100)
+            .is_ok()
+    });
 
-    cluster.must_transfer_leader(r.id, new_peer(2, 2));
+    let (tx, rx) = unbounded::<()>();
+    fail::cfg_callback("ime_on_snapshot_load_finished", move || {
+        let _ = rx.recv();
+    })
+    .unwrap();
+
+    cluster.transfer_leader(r.id, new_peer(2, 2));
+    // Transfer leader will not complete until the region is cached.
+    sleep_ms(1000);
+    cluster.reset_leader_of_region(r.id);
+    let leader = cluster.leader_of_region(r.id).unwrap();
+    assert_eq!(leader, new_peer(1, 1));
+
+    // Unpause the snapshot load.
+    drop(tx);
+    fail::remove("ime_on_snapshot_load_finished");
+    eventually(Duration::from_millis(100), Duration::from_secs(50), || {
+        cluster.reset_leader_of_region(r.id);
+        let leader = cluster.leader_of_region(r.id).unwrap();
+        leader == new_peer(2, 2)
+    });
+
+    // The region must be loaded after transfer leader.
+    let region_cache_engine = cluster.sim.rl().get_region_cache_engine(2);
+    region_cache_engine
+        .snapshot(cache_region.clone(), 100, 100)
+        .unwrap();
+}
+
+#[test]
+fn test_warmup_timeout_does_not_block_transfer_leader() {
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 3);
+    // Using a large warmup timeout to stable the test.
+    cluster.cfg.raft_store.max_entry_cache_warmup_duration.0 = Duration::from_secs(1);
+    cluster.run();
+
+    let r = cluster.get_region(b"");
+    cluster.must_transfer_leader(r.id, new_peer(1, 1));
+    let cache_region = CacheRegion::from_region(&r);
+    let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
+    region_cache_engine
+        .load_region(cache_region.clone())
+        .unwrap();
+    // put some key to trigger load
+    cluster.must_put(b"k", b"val");
+    eventually(Duration::from_millis(100), Duration::from_secs(5), || {
+        region_cache_engine
+            .snapshot(cache_region.clone(), 100, 100)
+            .is_ok()
+    });
+
+    let (tx, rx) = unbounded::<()>();
+    fail::cfg_callback("ime_on_snapshot_load_finished", move || {
+        let _ = rx.recv();
+    })
+    .unwrap();
+
+    cluster.transfer_leader(r.id, new_peer(2, 2));
+    // Transfer leader will not block forever when warmup times out.
+    sleep(cluster.cfg.raft_store.max_entry_cache_warmup_duration.0);
+    eventually(Duration::from_millis(100), Duration::from_secs(50), || {
+        cluster.reset_leader_of_region(r.id);
+        let leader = cluster.leader_of_region(r.id).unwrap();
+        leader == new_peer(2, 2)
+    });
+    let region_cache_engine = cluster.sim.rl().get_region_cache_engine(2);
+    region_cache_engine
+        .snapshot(cache_region.clone(), 100, 100)
+        .unwrap_err();
+
+    // Unpause the snapshot load.
+    drop(tx);
+    fail::remove("ime_on_snapshot_load_finished");
     // put some key to trigger load
     cluster.must_put(b"k2", b"val");
-    let _ = rx.recv_timeout(Duration::from_secs(500)).unwrap();
-
-    let region_cache_engine = cluster.sim.rl().get_region_cache_engine(2);
-    assert!(region_cache_engine.region_cached(&r));
+    eventually(Duration::from_millis(100), Duration::from_secs(5), || {
+        region_cache_engine
+            .snapshot(cache_region.clone(), 100, 100)
+            .is_ok()
+    });
 }
 
 #[test]
@@ -717,7 +930,7 @@ fn test_background_loading_pending_region() {
     .unwrap();
 
     rx.recv_timeout(Duration::from_secs(2)).unwrap();
-    assert!(region_cache_engine.region_cached(&r));
+    assert!(region_cache_engine.region_cached(&r, false));
 }
 
 // test delete range and unsafe destroy range
@@ -739,8 +952,6 @@ fn test_delete_range() {
             // it correctly.
             let cache_range = new_region(1, "", "");
             region_cache_engine
-                .core()
-                .region_manager()
                 .load_region(CacheRegion::from_region(&cache_range))
                 .unwrap();
         }
@@ -783,7 +994,7 @@ fn test_delete_range() {
         {
             let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
             let cache_range = new_region(1, "", "");
-            assert!(!region_cache_engine.region_cached(&cache_range));
+            assert!(!region_cache_engine.region_cached(&cache_range, false));
         }
     };
 
@@ -807,8 +1018,6 @@ fn test_evict_on_flashback() {
     {
         let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
         region_cache_engine
-            .core()
-            .region_manager()
             .load_region(CacheRegion::from_region(&r))
             .unwrap();
     }
@@ -852,8 +1061,6 @@ fn test_load_during_flashback() {
     {
         let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
         region_cache_engine
-            .core()
-            .region_manager()
             .load_region(CacheRegion::from_region(&r))
             .unwrap();
     }
@@ -887,13 +1094,9 @@ fn test_apply_prepared_but_not_write() {
     // load both regions at store 1
     let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
     region_cache_engine
-        .core()
-        .region_manager()
         .load_region(CacheRegion::from_region(&r1))
         .unwrap();
     region_cache_engine
-        .core()
-        .region_manager()
         .load_region(CacheRegion::from_region(&r2))
         .unwrap();
 
@@ -988,11 +1191,7 @@ fn test_eviction_when_destroy_peer() {
     {
         let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
         let cache_region = CacheRegion::from_region(&r);
-        region_cache_engine
-            .core()
-            .region_manager()
-            .load_region(cache_region)
-            .unwrap();
+        region_cache_engine.load_region(cache_region).unwrap();
     }
 
     must_copr_load_data(&mut cluster, &t1, 1);
@@ -1021,7 +1220,7 @@ fn test_eviction_when_destroy_peer() {
 
     {
         let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
-        assert!(!region_cache_engine.region_cached(&r));
+        assert!(!region_cache_engine.region_cached(&r, false));
     }
 }
 
@@ -1058,4 +1257,52 @@ fn test_eviction_when_destroy_uninitialized_peer() {
     let learner2 = new_learner_peer(2, 3);
     pd_client.must_add_peer(region.get_id(), learner2.clone());
     cluster.must_region_exist(region.get_id(), 2);
+}
+
+// IME must not panic when warmup an uninitialized peer.
+#[test]
+fn test_transfer_leader_warmup_uninitialized_peer() {
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 2);
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+    cluster.run_conf_change();
+
+    let region = pd_client.get_region(b"").unwrap();
+    assert!(
+        !region.get_peers().iter().any(|p| p.get_store_id() == 2),
+        "{:?}",
+        region
+    );
+
+    // Load the region in leader.
+    let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
+    region_cache_engine
+        .load_region(CacheRegion::from_region(&region))
+        .unwrap();
+    // Put some key to trigger load
+    cluster.must_put(b"k", b"val");
+    eventually(Duration::from_millis(100), Duration::from_secs(5), || {
+        region_cache_engine
+            .snapshot(CacheRegion::from_region(&region), 100, 100)
+            .is_ok()
+    });
+
+    // Block snapshot messages, so that new peers will never be initialized.
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(region.get_id(), 2)
+            .msg_type(MessageType::MsgSnapshot)
+            .direction(Direction::Recv),
+    ));
+
+    let peer1 = new_peer(2, 2);
+    pd_client.must_add_peer(region.get_id(), peer1.clone());
+    cluster.must_region_exist(region.get_id(), 2);
+
+    // IME will send a MsgPreLoadRegion message before transferring leader,
+    // and this message must not cause panic.
+    cluster.transfer_leader(region.get_id(), new_peer(2, 2));
+    // Give some time for handling MsgPreLoadRegion message.
+    sleep_ms(100);
+    cluster.clear_send_filters();
+    cluster.must_transfer_leader(region.get_id(), new_peer(2, 2));
 }

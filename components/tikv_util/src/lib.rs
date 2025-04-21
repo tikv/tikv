@@ -11,10 +11,12 @@
 extern crate test;
 
 use std::{
+    cell::RefCell,
     cmp,
     collections::{
         hash_map::Entry,
         vec_deque::{Iter, VecDeque},
+        HashMap,
     },
     convert::AsRef,
     env,
@@ -29,10 +31,12 @@ use std::{
     time::Duration,
 };
 
+use lazy_static::lazy_static;
 use nix::{
     sys::wait::{wait, WaitStatus},
     unistd::{fork, ForkResult},
 };
+use serde::Serialize;
 
 use crate::sys::thread::StdThreadBuildWrapper;
 
@@ -54,6 +58,7 @@ pub mod memory;
 pub mod metrics;
 pub mod mpsc;
 pub mod quota_limiter;
+pub mod range_latch;
 pub mod resizable_threadpool;
 pub mod resource_control;
 pub mod smoother;
@@ -441,6 +446,68 @@ impl<T> Drop for MustConsumeVec<T> {
     }
 }
 
+// Thread-local variable for storing the panic context.
+thread_local! {
+    pub static PANIC_CONTEXT: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
+}
+
+/// Guard to automatically remove a key from `PANIC_CONTEXT` on drop.
+pub struct PanicContextGuard(pub Vec<String>);
+
+impl Drop for PanicContextGuard {
+    fn drop(&mut self) {
+        let _ = crate::PANIC_CONTEXT.try_with(|ctx| {
+            if let Ok(mut ctx) = ctx.try_borrow_mut() {
+                for key in self.0.iter() {
+                    ctx.remove(key);
+                }
+            }
+        });
+    }
+}
+
+/// Sets key-value pairs in the thread-local panic context that will be logged
+/// on panic. Each key is prefixed with the source code location.
+///
+/// Returns a `PanicContextGuard` to ensure the keys are removed on scope exit.
+#[macro_export]
+macro_rules! set_panic_context {
+    ( $($key:expr => $value:expr),+ $(,)?) => {{
+        let location = format!("{}:{}", file!(), line!());
+        let mut keys = Vec::new();
+        $(
+            let full_key = format!("({}) {}", location, $key);
+            let _ = $crate::PANIC_CONTEXT.try_with(|ctx| {
+                if let Ok(mut ctx) = ctx.try_borrow_mut() {
+                    ctx.insert(full_key.clone(), $value.to_string());
+                }
+            });
+            keys.push(full_key);
+        )+
+        $crate::PanicContextGuard(keys)
+    }};
+}
+
+/// Retrieves the current panic context as a string of key-value pairs.
+pub fn get_panic_context() -> String {
+    PANIC_CONTEXT
+        .try_with(|ctx| {
+            ctx.try_borrow()
+                .map(|ctx| {
+                    if ctx.is_empty() {
+                        String::new()
+                    } else {
+                        ctx.iter()
+                            .map(|(k, v)| format!("{}=>{}", k, v))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    }
+                })
+                .unwrap_or_default()
+        })
+        .unwrap_or_default()
+}
+
 /// Exit the whole process when panic.
 pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
     use std::{panic, process};
@@ -477,12 +544,21 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
             .location()
             .map(|l| format!("{}:{}", l.file(), l.line()));
         let bt = backtrace::Backtrace::new();
-        crit!("{}", msg;
-            "thread_name" => name,
-            "location" => loc.unwrap_or_else(|| "<unknown>".to_owned()),
-            "backtrace" => format_args!("{:?}", bt),
-        );
-
+        let context = get_panic_context();
+        if context.is_empty() {
+            crit!("{}", msg;
+                "thread_name" => name,
+                "location" => loc.unwrap_or_else(|| "<unknown>".to_owned()),
+                "backtrace" => format_args!("{:?}", bt),
+            );
+        } else {
+            crit!("{}", msg;
+                "thread_name" => name,
+                "location" => loc.unwrap_or_else(|| "<unknown>".to_owned()),
+                "backtrace" => format_args!("{:?}", bt),
+                "context" => context,
+            );
+        }
         // There might be remaining logs in the async logger.
         // To collect remaining logs and also collect future logs, replace the old one
         // with a terminal logger.
@@ -579,6 +655,48 @@ pub fn set_vec_capacity<T>(v: &mut Vec<T>, cap: usize) {
         cmp::Ordering::Less => v.shrink_to(cap),
         cmp::Ordering::Greater => v.reserve_exact(cap - v.len()),
         cmp::Ordering::Equal => {}
+    }
+}
+
+// Global server readiness state.
+//
+// This is used to track whether TiKV is fully ready to serve requests after
+// startup. It is queried by the `/ready` API of the status server.
+lazy_static! {
+    pub static ref GLOBAL_SERVER_READINESS: Arc<ServerReadiness> =
+        Arc::new(ServerReadiness::default());
+}
+
+/// Represents the readiness state of the server.
+///
+/// Each field is a flag indicating a condition that must be met for the server
+/// to be considered fully ready to serve.
+#[derive(Serialize, Default)]
+pub struct ServerReadiness {
+    /// Indicates whether the server has connected to PD.
+    pub connected_to_pd: AtomicBool,
+    /// Indicates whether a sufficient number of Raft peers have caught up
+    /// applying logs.
+    pub raft_peers_caught_up: AtomicBool,
+}
+
+impl ServerReadiness {
+    /// Checks if the server is ready.
+    ///
+    /// All conditions must be met for the server to be considered ready.
+    pub fn is_ready(&self) -> bool {
+        self.raft_peers_caught_up.load(Ordering::SeqCst)
+            && self.connected_to_pd.load(Ordering::SeqCst)
+    }
+
+    pub fn to_json(&self) -> String {
+        let json_result = serde_json::to_string_pretty(&self);
+        match json_result {
+            Ok(json) => json,
+            Err(e) => {
+                format!("failed to serialize ServerReadiness: {}", e)
+            }
+        }
     }
 }
 
@@ -808,5 +926,23 @@ mod tests {
             // the test would fail.
         });
         res.unwrap_err();
+    }
+
+    #[test]
+    fn test_panic_context() {
+        let _guard = set_panic_context! {"outer_ctx" => "foo"};
+        {
+            let _guard = set_panic_context! {
+                "inner_ctx1" => "bar",
+                "inner_ctx2" => "baz",
+            };
+            assert!(get_panic_context().contains("outer_ctx=>foo"));
+            assert!(get_panic_context().contains("inner_ctx1=>bar"));
+            assert!(get_panic_context().contains("inner_ctx2=>baz"));
+        } // Inner guard is dropped, removing "inner_ctx"
+
+        // Only the outer context remains
+        assert!(get_panic_context().contains("outer_ctx=>foo"));
+        assert!(!get_panic_context().contains("inner_ctx"));
     }
 }

@@ -145,7 +145,11 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
         // It is not allowed for commit to overwrite a protected rollback. So we update
         // max_ts to prevent this case from happening.
         let region_id = self.ctx.get_region_id();
-        context.concurrency_manager.update_max_ts(self.start_ts);
+        context
+            .concurrency_manager
+            .update_max_ts(self.start_ts, || {
+                format!("check_secondary_locks-{}", self.start_ts)
+            })?;
 
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
         let mut reader = ReaderWithStats::new(
@@ -263,7 +267,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let lock_ts = lock_ts.into();
-        let cm = ConcurrencyManager::new(lock_ts);
+        let cm = ConcurrencyManager::new_for_test(lock_ts);
         let command = crate::storage::txn::commands::CheckSecondaryLocks {
             ctx: ctx.clone(),
             keys: vec![Key::from_raw(key)],
@@ -297,7 +301,7 @@ pub mod tests {
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let mut engine_clone = engine.clone();
         let ctx = Context::default();
-        let cm = ConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new_for_test(1.into());
 
         let mut check_secondary = |key, ts| {
             let snapshot = engine_clone.snapshot(Default::default()).unwrap();

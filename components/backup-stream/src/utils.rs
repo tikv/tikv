@@ -828,7 +828,7 @@ mod test {
 
     #[test]
     fn test_redact() {
-        log_wrappers::set_redact_info_log(RedactOption::Flag(true));
+        log_wrappers::set_redact_info_log(RedactOption::On);
         let mut region = Region::default();
         region.set_id(42);
         region.set_start_key(b"TiDB".to_vec());

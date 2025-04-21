@@ -961,7 +961,7 @@ pub mod test_util {
         start_ts: u64,
         one_pc_max_commit_ts: Option<u64>,
     ) -> Result<PrewriteResult> {
-        let cm = ConcurrencyManager::new(start_ts.into());
+        let cm = ConcurrencyManager::new_for_test(start_ts.into());
         prewrite_with_cm(
             engine,
             cm,
@@ -1004,7 +1004,7 @@ pub mod test_util {
         for_update_ts: u64,
         one_pc_max_commit_ts: Option<u64>,
     ) -> Result<PrewriteResult> {
-        let cm = ConcurrencyManager::new(start_ts.into());
+        let cm = ConcurrencyManager::new_for_test(start_ts.into());
         pessimistic_prewrite_with_cm(
             engine,
             cm,
@@ -1064,7 +1064,7 @@ pub mod test_util {
                 .into_iter()
                 .map(|(size, ts)| (size, TimeStamp::from(ts))),
         );
-        let cm = ConcurrencyManager::new(start_ts.into());
+        let cm = ConcurrencyManager::new_for_test(start_ts.into());
         prewrite_command(engine, cm, statistics, cmd)
     }
 
@@ -1077,7 +1077,7 @@ pub mod test_util {
     ) -> Result<()> {
         let ctx = Context::default();
         let snap = engine.snapshot(Default::default())?;
-        let concurrency_manager = ConcurrencyManager::new(lock_ts.into());
+        let concurrency_manager = ConcurrencyManager::new_for_test(lock_ts.into());
         let cmd = Commit::new(
             keys,
             TimeStamp::from(lock_ts),
@@ -1109,7 +1109,7 @@ pub mod test_util {
     ) -> Result<()> {
         let ctx = Context::default();
         let snap = engine.snapshot(Default::default())?;
-        let concurrency_manager = ConcurrencyManager::new(start_ts.into());
+        let concurrency_manager = ConcurrencyManager::new_for_test(start_ts.into());
         let cmd = Rollback::new(keys, TimeStamp::from(start_ts), ctx);
         let context = WriteContext {
             lock_mgr: &MockLockManager::new(),
@@ -1134,6 +1134,54 @@ pub mod test_util {
             Some(Arc::new(test_provider))
         } else {
             None
+        }
+    }
+
+    pub fn pessimistic_lock<E: Engine>(
+        engine: &mut E,
+        statistics: &mut Statistics,
+        keys: Vec<(&[u8], bool)>,
+        primary: Vec<u8>,
+        start_ts: u64,
+        for_update_ts: u64,
+        return_values: bool,
+    ) -> PessimisticLockResults {
+        let ctx = Context::default();
+        let snap = engine.snapshot(Default::default()).unwrap();
+        let concurrency_manager = ConcurrencyManager::new_for_test(start_ts.into());
+        let cmd = AcquirePessimisticLock::new(
+            keys.into_iter()
+                .map(|key| (Key::from_raw(key.0), key.1))
+                .collect(),
+            primary,
+            TimeStamp::from(start_ts),
+            0,
+            false,
+            TimeStamp::from(for_update_ts),
+            None,
+            return_values,
+            TimeStamp::zero(),
+            false,
+            false,
+            false,
+            ctx,
+        );
+        let context = WriteContext {
+            lock_mgr: &MockLockManager::new(),
+            concurrency_manager,
+            extra_op: ExtraOp::Noop,
+            statistics,
+            async_apply_prewrite: false,
+            raw_ext: None,
+            txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
+        };
+
+        let ret = cmd.cmd.process_write(snap, context).unwrap();
+        let ctx = Context::default();
+        engine.write(&ctx, ret.to_be_write).unwrap();
+        match ret.pr {
+            ProcessResult::PessimisticLockRes { res } => res.unwrap(),
+            _ => unreachable!(),
         }
     }
 }

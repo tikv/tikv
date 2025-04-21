@@ -94,6 +94,10 @@ make_auto_flush_static_metric! {
         failure,
         success,
         trigger_next,
+        last_level_seek_filtered,
+        last_level_seek_filter_match,
+        non_last_level_seek_filtered,
+        non_last_level_seek_filter_match,
     }
 
     pub struct EngineTickerMetrics : LocalIntCounter {
@@ -226,6 +230,30 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
             STORE_ENGINE_BLOOM_EFFICIENCY
                 .get(name_enum)
                 .bloom_useful
+                .inc_by(value);
+        }
+        TickerType::LastLevelSeekFiltered => {
+            STORE_ENGINE_BLOOM_EFFICIENCY
+                .get(name_enum)
+                .last_level_seek_filtered
+                .inc_by(value);
+        }
+        TickerType::LastLevelSeekFilterMatch => {
+            STORE_ENGINE_BLOOM_EFFICIENCY
+                .get(name_enum)
+                .last_level_seek_filter_match
+                .inc_by(value);
+        }
+        TickerType::NonLastLevelSeekFiltered => {
+            STORE_ENGINE_BLOOM_EFFICIENCY
+                .get(name_enum)
+                .non_last_level_seek_filtered
+                .inc_by(value);
+        }
+        TickerType::NonLastLevelSeekFilterMatch => {
+            STORE_ENGINE_BLOOM_EFFICIENCY
+                .get(name_enum)
+                .non_last_level_seek_filter_match
                 .inc_by(value);
         }
         TickerType::MemtableHit => {
@@ -878,6 +906,8 @@ struct DbStats {
     block_cache_size: Option<u64>,
     blob_cache_size: Option<u64>,
     stall_num: Option<[u64; ROCKSDB_IOSTALL_KEY.len()]>,
+    num_running_compactions: Option<u64>,
+    num_running_flushes: Option<u64>,
 }
 
 pub struct RocksStatisticsReporter {
@@ -1007,6 +1037,17 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
                     *val += info.get_property_int_value(key);
                 }
             }
+        }
+
+        // For compaction and flushes.
+        if let Some(v) = db.get_property_int(ROCKSDB_NUM_RUNNING_COMPACTIONS) {
+            *self
+                .db_stats
+                .num_running_compactions
+                .get_or_insert_default() += v;
+        }
+        if let Some(v) = db.get_property_int(ROCKSDB_NUM_RUNNING_FLUSHES) {
+            *self.db_stats.num_running_flushes.get_or_insert_default() += v;
         }
 
         // For snapshot
@@ -1142,6 +1183,17 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
             }
         }
 
+        if let Some(v) = self.db_stats.num_running_compactions {
+            STORE_ENGINE_NUM_RUNNING_COMPACTIONS_GAUGE_VEC
+                .with_label_values(&[&self.name])
+                .set(v as i64);
+        }
+        if let Some(v) = self.db_stats.num_running_flushes {
+            STORE_ENGINE_NUM_RUNNING_FLUSHES_GAUGE_VEC
+                .with_label_values(&[&self.name])
+                .set(v as i64);
+        }
+
         if let Some(v) = self.db_stats.num_snapshots {
             STORE_ENGINE_NUM_SNAPSHOTS_GAUGE_VEC
                 .with_label_values(&[&self.name])
@@ -1237,6 +1289,16 @@ lazy_static! {
         "tikv_engine_num_files_at_level",
         "Number of files at each level",
         &["db", "cf", "level"]
+    ).unwrap();
+    pub static ref STORE_ENGINE_NUM_RUNNING_COMPACTIONS_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_engine_num_running_compactions",
+        "Number of currently running compactions",
+        &["db"]
+    ).unwrap();
+    pub static ref STORE_ENGINE_NUM_RUNNING_FLUSHES_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_engine_num_running_flushes",
+        "Number of currently running flushes",
+        &["db"]
     ).unwrap();
     pub static ref STORE_ENGINE_NUM_SNAPSHOTS_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
         "tikv_engine_num_snapshots",

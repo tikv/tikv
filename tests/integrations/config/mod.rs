@@ -36,7 +36,8 @@ use tikv::{
         lock_manager::Config as PessimisticTxnConfig, Config as ServerConfig,
     },
     storage::config::{
-        BlockCacheConfig, Config as StorageConfig, EngineType, FlowControlConfig, IoRateLimitConfig,
+        BlockCacheConfig, Config as StorageConfig, EngineType, FlowControlConfig,
+        IoRateLimitConfig, MaxTsConfig,
     },
 };
 use tikv_util::config::{LogFormat, ReadableDuration, ReadableSchedule, ReadableSize};
@@ -780,6 +781,11 @@ fn test_serde_custom_tikv_config() {
         background_error_recovery_window: ReadableDuration::hours(1),
         txn_status_cache_capacity: 1000,
         memory_quota: ReadableSize::kb(123),
+        max_ts: MaxTsConfig {
+            max_drift: ReadableDuration::secs(333),
+            cache_sync_interval: ReadableDuration::secs(44),
+            action_on_invalid_update: "error".to_owned(),
+        },
     };
     value.coprocessor = CopConfig {
         split_region_on_table: false,
@@ -804,7 +810,7 @@ fn test_serde_custom_tikv_config() {
         key_path: "invalid path".to_owned(),
         override_ssl_target: "".to_owned(),
         cert_allowed_cn,
-        redact_info_log: log_wrappers::RedactOption::Flag(true),
+        redact_info_log: log_wrappers::RedactOption::On,
         encryption: EncryptionConfig {
             data_encryption_method: EncryptionMethod::Aes128Ctr,
             data_key_rotation_period: ReadableDuration::days(14),

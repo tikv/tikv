@@ -40,7 +40,8 @@ const DEFAULT_ENDPOINT_REQUEST_MAX_HANDLE_SECS: u64 = 60;
 // Number of rows in each chunk for streaming coprocessor.
 const DEFAULT_ENDPOINT_STREAM_BATCH_ROW_LIMIT: usize = 128;
 
-// By default, endpoint memory quota will be set to 12.5% of system memory.
+// By default, endpoint memory quota will be set to 12.5% of the available
+// memory of TiKV.
 //
 // TPCC check test shows that:
 // * The actual endpoint memory usage is about 3 times to memory quota.
@@ -256,10 +257,13 @@ impl Default for Config {
             status_thread_pool_size: 1,
             max_grpc_send_msg_len: DEFAULT_MAX_GRPC_SEND_MSG_LEN,
             raft_client_grpc_send_msg_buffer: 512 * 1024,
-            raft_client_queue_size: 8192,
+            // As of https://github.com/tikv/tikv/pull/17821, the raft_client_queue_size has been
+            // increased from 8192 to 16384 to reduce the message delays under too many messages
+            // load. Additionally, the raft_msg_max_batch_size has also been increased.
+            raft_client_queue_size: 16384,
             raft_client_max_backoff: ReadableDuration::secs(5),
             raft_client_initial_reconnect_backoff: ReadableDuration::secs(1),
-            raft_msg_max_batch_size: 128,
+            raft_msg_max_batch_size: 256,
             grpc_compression_type: GrpcCompressionType::None,
             grpc_gzip_compression_level: DEFAULT_GRPC_GZIP_COMPRESSION_LEVEL,
             grpc_min_message_size_to_compress: DEFAULT_GRPC_MIN_MESSAGE_SIZE_TO_COMPRESS,

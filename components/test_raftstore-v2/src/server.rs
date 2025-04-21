@@ -61,7 +61,7 @@ use tikv::{
         lock_manager::LockManager,
         raftkv::ReplicaReadLockChecker,
         resolve,
-        service::{DebugService, DiagnosticsService},
+        service::{DebugService, DefaultGrpcMessageFilter, DiagnosticsService},
         ConnectionBuilder, Error, Extension, NodeV2, PdStoreAddrResolver, RaftClient, RaftKv2,
         Result as ServerResult, Server, ServerTransport,
     },
@@ -461,7 +461,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
 
         let latest_ts =
             block_on(self.pd_client.get_tso()).expect("failed to get timestamp from PD");
-        let concurrency_manager = ConcurrencyManager::new(latest_ts);
+        let concurrency_manager = ConcurrencyManager::new_for_test(latest_ts);
 
         let (tx, _rx) = std::sync::mpsc::channel();
         let mut gc_worker = GcWorker::new(
@@ -644,6 +644,9 @@ impl<EK: KvEngine> ServerCluster<EK> {
                 debug_thread_pool.clone(),
                 health_controller.clone(),
                 resource_manager.clone(),
+                Arc::new(DefaultGrpcMessageFilter::new(
+                    server_cfg.value().reject_messages_on_memory_ratio,
+                )),
             )
             .unwrap();
             svr.register_service(create_diagnostics(diag_service.clone()));

@@ -33,7 +33,7 @@ use backup_stream::{
 };
 use causal_ts::CausalTsProviderImpl;
 use cdc::CdcConfigManager;
-use concurrency_manager::ConcurrencyManager;
+use concurrency_manager::{ConcurrencyManager, LIMIT_VALID_TIME_MULTIPLIER};
 use engine_rocks::{from_rocks_compression_type, RocksEngine, RocksStatistics};
 use engine_traits::{Engines, KvEngine, MiscExt, RaftEngine, TabletRegistry, CF_DEFAULT, CF_WRITE};
 use file_system::{get_io_rate_limiter, BytesFetcher, MetricsManager as IoMetricsManager};
@@ -49,6 +49,7 @@ use kvproto::{
 };
 use pd_client::{
     meta_storage::{Checked, Sourced},
+    metrics::STORE_SIZE_EVENT_INT_VEC,
     PdClient, RpcClient,
 };
 use raft_log_engine::RaftLogEngine;
@@ -69,7 +70,7 @@ use raftstore_v2::{
 };
 use resolved_ts::Task;
 use resource_control::{config::ResourceContrlCfgMgr, ResourceGroupManager};
-use security::SecurityManager;
+use security::{SecurityConfigManager, SecurityManager};
 use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
 use tikv::{
     config::{
@@ -90,7 +91,7 @@ use tikv::{
         lock_manager::LockManager,
         raftkv::ReplicaReadLockChecker,
         resolve,
-        service::{DebugService, DiagnosticsService},
+        service::{DebugService, DefaultGrpcMessageFilter, DiagnosticsService},
         status_server::StatusServer,
         KvEngineFactoryBuilder, NodeV2, RaftKv2, Server, CPU_CORES_QUOTA_GAUGE, GRPC_THREAD_PREFIX,
         MEMORY_LIMIT_GAUGE,
@@ -108,7 +109,9 @@ use tikv::{
         Engine, Storage,
     },
 };
-use tikv_alloc::{add_thread_memory_accessor, remove_thread_memory_accessor};
+use tikv_alloc::{
+    add_thread_memory_accessor, remove_thread_memory_accessor, thread_allocate_exclusive_arena,
+};
 use tikv_util::{
     check_environment_variables,
     config::VersionTrack,
@@ -161,6 +164,7 @@ fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(
     tikv.init_metrics_flusher(fetcher, engines_info);
     tikv.init_cgroup_monitor();
     tikv.init_storage_stats_task();
+    tikv.init_max_ts_updater();
     tikv.run_server(server_config);
     tikv.run_status_server();
     tikv.core.init_quota_tuning_task(tikv.quota_limiter.clone());
@@ -299,6 +303,7 @@ where
 
                     // SAFETY: we will call `remove_thread_memory_accessor` at before_stop.
                     unsafe { add_thread_memory_accessor() };
+                    thread_allocate_exclusive_arena().unwrap();
                 })
                 .before_stop(|| {
                     remove_thread_memory_accessor();
@@ -324,7 +329,19 @@ where
 
         // Initialize concurrency manager
         let latest_ts = block_on(pd_client.get_tso()).expect("failed to get timestamp from PD");
-        let concurrency_manager = ConcurrencyManager::new(latest_ts);
+        let concurrency_manager = ConcurrencyManager::new_with_config(
+            latest_ts,
+            (config.storage.max_ts.cache_sync_interval * LIMIT_VALID_TIME_MULTIPLIER).into(),
+            config
+                .storage
+                .max_ts
+                .action_on_invalid_update
+                .as_str()
+                .try_into()
+                .unwrap(),
+            Some(pd_client.clone()),
+            config.storage.max_ts.max_drift.0,
+        );
 
         // use different quota for front-end and back-end requests
         let quota_limiter = Arc::new(QuotaLimiter::new(
@@ -449,7 +466,10 @@ where
 
         cfg_controller.register(tikv::config::Module::Log, Box::new(LogConfigManager));
         cfg_controller.register(tikv::config::Module::Memory, Box::new(MemoryConfigManager));
-
+        cfg_controller.register(
+            tikv::config::Module::Security,
+            Box::new(SecurityConfigManager),
+        );
         let lock_mgr = LockManager::new(&self.core.config.pessimistic_txn);
         cfg_controller.register(
             tikv::config::Module::PessimisticTxn,
@@ -585,6 +605,7 @@ where
                 ttl_scheduler,
                 flow_controller,
                 storage.get_scheduler(),
+                storage.get_concurrency_manager(),
             )),
         );
 
@@ -812,6 +833,9 @@ where
             debug_thread_pool,
             health_controller,
             self.resource_manager.clone(),
+            Arc::new(DefaultGrpcMessageFilter::new(
+                server_config.value().reject_messages_on_memory_ratio,
+            )),
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
         cfg_controller.register(
@@ -944,6 +968,28 @@ where
         });
 
         server_config
+    }
+
+    fn init_max_ts_updater(&self) {
+        let cm = self.concurrency_manager.clone();
+        let pd_client = self.pd_client.clone();
+
+        let max_ts_sync_interval = self.core.config.storage.max_ts.cache_sync_interval.into();
+        self.core
+            .background_worker
+            .spawn_interval_async_task(max_ts_sync_interval, move || {
+                let cm = cm.clone();
+                let pd_client = pd_client.clone();
+
+                async move {
+                    let pd_tso = pd_client.get_tso().await;
+                    if let Ok(ts) = pd_tso {
+                        cm.set_max_ts_limit(ts);
+                    } else {
+                        warn!("failed to get tso from pd in background");
+                    }
+                }
+            });
     }
 
     fn register_services(&mut self) {
@@ -1170,9 +1216,9 @@ where
         let snap_mgr = self.snap_mgr.clone().unwrap();
         let reserve_space = disk::get_disk_reserved_space();
         let reserve_raft_space = disk::get_raft_disk_reserved_space();
-        if reserve_space == 0 && reserve_raft_space == 0 {
-            info!("disk space checker not enabled");
-            return;
+        let need_update_disk_status = reserve_space != 0 || reserve_raft_space != 0;
+        if !need_update_disk_status {
+            info!("ignore updating disk status as no reserve space is set");
         }
         let raft_engine = self.engines.as_ref().unwrap().raft_engine.clone();
         let tablet_registry = self.tablet_registry.clone().unwrap();
@@ -1254,7 +1300,23 @@ where
                         capacity
                     );
                 }
-                disk::set_disk_status(cur_disk_status);
+                // Update disk status if disk space checker is enabled.
+                if need_update_disk_status {
+                    disk::set_disk_status(cur_disk_status);
+                }
+                // Update disk capacity, used size and available size.
+                disk::set_disk_capacity(capacity);
+                disk::set_disk_used_size(used_size);
+                disk::set_disk_available_size(available);
+
+                // Update metrics.
+                STORE_SIZE_EVENT_INT_VEC.raft_size.set(raft_size as i64);
+                STORE_SIZE_EVENT_INT_VEC.snap_size.set(snap_size as i64);
+                STORE_SIZE_EVENT_INT_VEC.kv_size.set(kv_size as i64);
+
+                STORE_SIZE_EVENT_INT_VEC.capacity.set(capacity as i64);
+                STORE_SIZE_EVENT_INT_VEC.available.set(available as i64);
+                STORE_SIZE_EVENT_INT_VEC.used.set(used_size as i64);
             })
     }
 

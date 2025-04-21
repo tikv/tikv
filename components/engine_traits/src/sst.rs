@@ -55,7 +55,7 @@ pub trait ExternalSstFileReader: std::io::Read + Send {
 }
 
 // compression type used for write sst file
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum SstCompressionType {
     Lz4,
     Snappy,

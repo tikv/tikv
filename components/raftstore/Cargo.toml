@@ -26,6 +26,7 @@ byteorder = "1.2"
 bytes = "1.0"
 causal_ts = { workspace = true }
 chrono = { workspace = true }
+codec = { workspace = true }
 collections = { workspace = true }
 concurrency_manager = { workspace = true }
 crc32fast = "1.2"
@@ -88,5 +89,6 @@ encryption_export = { workspace = true }
 engine_panic = { workspace = true }
 engine_rocks = { workspace = true }
 engine_test = { workspace = true }
+file_system = { workspace = true, features = ["testexport"] }
 panic_hook = { workspace = true }
 test_sst_importer = { workspace = true }

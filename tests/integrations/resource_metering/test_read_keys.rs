@@ -222,7 +222,7 @@ fn init_coprocessor_with_data(
         &CoprReadPoolConfig::default_for_test(),
         store.get_engine(),
     ));
-    let cm = ConcurrencyManager::new(1.into());
+    let cm = ConcurrencyManager::new_for_test(1.into());
     Endpoint::new(
         &tikv::server::Config::default(),
         pool.handle(),

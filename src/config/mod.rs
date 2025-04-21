@@ -3499,7 +3499,7 @@ pub struct TikvConfig {
     #[online_config(skip)]
     pub raft_engine: RaftEngineConfig,
 
-    #[online_config(skip)]
+    #[online_config(submodule)]
     pub security: SecurityConfig,
 
     #[online_config(submodule)]
@@ -4077,6 +4077,11 @@ impl TikvConfig {
 
         match self.storage.engine {
             EngineType::RaftKv => {
+                if self.rocksdb.titan.enabled.is_none() {
+                    // Override titan.enabled with last_cfg if it exists.
+                    self.rocksdb.titan.enabled =
+                        last_cfg.as_ref().and_then(|cfg| cfg.rocksdb.titan.enabled);
+                }
                 if self.rocksdb.titan.enabled.is_none() {
                     // If the user doesn't specify titan.enabled, we enable it by default for newly
                     // created clusters.
@@ -5517,6 +5522,7 @@ mod tests {
         incoming.gc.max_write_bytes_per_sec = ReadableSize::mb(100);
         incoming.rocksdb.defaultcf.block_cache_size = Some(ReadableSize::mb(500));
         incoming.storage.io_rate_limit.import_priority = file_system::IoPriority::High;
+        incoming.security.redact_info_log = log_wrappers::RedactOption::Marker;
         let diff = old.diff(&incoming);
         let mut change = HashMap::new();
         change.insert(
@@ -5532,6 +5538,7 @@ mod tests {
             "storage.io-rate-limit.import-priority".to_owned(),
             "high".to_owned(),
         );
+        change.insert("security.redact-info-log".to_owned(), "marker".to_owned());
         let res = to_config_change(change).unwrap();
         assert_eq!(diff, res);
 
@@ -5667,6 +5674,7 @@ mod tests {
                 scheduler,
                 flow_controller.clone(),
                 storage.get_scheduler(),
+                storage.get_concurrency_manager(),
             )),
         );
         (storage, cfg_controller, receiver, flow_controller)
@@ -5963,8 +5971,9 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "#ifdef MALLOC_CONF"]
     #[cfg(feature = "mem-profiling")]
-    fn test_change_memory_config() {
+    fn test_change_memory_config_ifdef_malloc_conf() {
         let (cfg, _dir) = TikvConfig::with_tmp().unwrap();
         let cfg_controller = ConfigController::new(cfg);
 
@@ -6161,7 +6170,7 @@ mod tests {
 
         // Case 4: Create a new instance
         {
-            let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
+            let (mut cfg, dir) = TikvConfig::with_tmp().unwrap();
             assert_eq!(cfg.rocksdb.titan.enabled, None);
             validate_and_persist_config(&mut cfg, true).unwrap();
             assert_eq!(cfg.rocksdb.titan.enabled, Some(true));
@@ -6169,6 +6178,28 @@ mod tests {
                 cfg.rocksdb.defaultcf.titan.min_blob_size,
                 Some(ReadableSize::kb(32)),
             );
+            let (storage, cfg_controller, ..) = new_engines::<ApiV1>(cfg);
+            assert_eq!(
+                cfg_controller.get_current().rocksdb.titan.enabled,
+                Some(true)
+            );
+            assert_eq!(
+                cfg_controller
+                    .get_current()
+                    .rocksdb
+                    .defaultcf
+                    .titan
+                    .min_blob_size,
+                Some(ReadableSize::kb(32)),
+            );
+            drop(storage);
+            drop(cfg_controller);
+
+            // Restart the instance
+            let mut cfg = TikvConfig::from_file(&dir.path().join("config.toml"), None).unwrap();
+            assert_eq!(cfg.rocksdb.titan.enabled, None);
+            validate_and_persist_config(&mut cfg, true).unwrap();
+            assert_eq!(cfg.rocksdb.titan.enabled, Some(true));
             let (_storage, cfg_controller, ..) = new_engines::<ApiV1>(cfg);
             assert_eq!(
                 cfg_controller.get_current().rocksdb.titan.enabled,
@@ -7004,6 +7035,7 @@ mod tests {
         cfg.server.grpc_memory_pool_quota = default_cfg.server.grpc_memory_pool_quota;
         cfg.server.background_thread_count = default_cfg.server.background_thread_count;
         cfg.server.end_point_max_concurrency = default_cfg.server.end_point_max_concurrency;
+        cfg.server.end_point_memory_quota = default_cfg.server.end_point_memory_quota;
         cfg.storage.scheduler_worker_pool_size = default_cfg.storage.scheduler_worker_pool_size;
         cfg.rocksdb.max_background_jobs = default_cfg.rocksdb.max_background_jobs;
         cfg.rocksdb.max_background_flushes = default_cfg.rocksdb.max_background_flushes;

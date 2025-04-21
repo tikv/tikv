@@ -99,10 +99,11 @@ use tikv_util::{
     deadline::Deadline,
     future::try_poll,
     quota_limiter::QuotaLimiter,
-    time::{duration_to_ms, duration_to_sec, Instant, ThreadReadId},
+    time::{duration_to_ms, duration_to_sec, Instant, InstantExt, ThreadReadId},
 };
 use tracker::{
-    clear_tls_tracker_token, set_tls_tracker_token, with_tls_tracker, TrackedFuture, TrackerToken,
+    clear_tls_tracker_token, set_tls_tracker_token, with_tls_tracker, TlsTrackedFuture,
+    TrackerToken,
 };
 use txn_types::{Key, KvPair, Lock, LockType, TimeStamp, TsSet, Value};
 
@@ -606,7 +607,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         key: Key,
         start_ts: TimeStamp,
     ) -> impl Future<Output = Result<(Option<Value>, KvGetStatistics)>> {
-        let stage_begin_ts = Instant::now();
         let deadline = Self::get_deadline(&ctx);
         const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
@@ -631,9 +631,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let mut sample = quota_limiter.new_sample(true);
         with_tls_tracker(|tracker| {
             tracker.metrics.grpc_process_nanos =
-                stage_begin_ts.saturating_elapsed().as_nanos() as u64;
+                tracker.req_info.begin.saturating_elapsed().as_nanos() as u64;
         });
 
+        let stage_begin_ts = Instant::now();
         self.read_pool_spawn_with_busy_check(
             busy_threshold,
             async move {
@@ -700,6 +701,17 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                 r
                             })
                     });
+                    if let Err(
+                        e @ Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
+                            mvcc::Error(box mvcc::ErrorInner::DefaultNotFound { .. }),
+                        )))),
+                    ) = &result
+                    {
+                        error!("default not found in storage get";
+                            "err" => ?e,
+                            "RpcContext" => ?&ctx,
+                        );
+                    }
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(
                         ctx.get_region_id(),
@@ -882,7 +894,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
                     let snap = Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx));
                     req_snaps.push((
-                        TrackedFuture::new(snap),
+                        TlsTrackedFuture::new(snap),
                         key,
                         start_ts,
                         isolation_level,
@@ -992,7 +1004,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         mut keys: Vec<Key>,
         start_ts: TimeStamp,
     ) -> impl Future<Output = Result<(Vec<Result<KvPair>>, KvGetStatistics)>> {
-        let stage_begin_ts = Instant::now();
         let deadline = Self::get_deadline(&ctx);
         const CMD: CommandKind = CommandKind::buffer_batch_get;
         let priority = ctx.get_priority();
@@ -1021,8 +1032,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let mut sample = quota_limiter.new_sample(true);
         with_tls_tracker(|tracker| {
             tracker.metrics.grpc_process_nanos =
-                stage_begin_ts.saturating_elapsed().as_nanos() as u64;
+                tracker.req_info.begin.saturating_elapsed().as_nanos() as u64;
         });
+        let stage_begin_ts = Instant::now();
         self.read_pool_spawn_with_busy_check(
             busy_threshold,
             async move {
@@ -1188,7 +1200,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         keys: Vec<Key>,
         start_ts: TimeStamp,
     ) -> impl Future<Output = Result<(Vec<Result<KvPair>>, KvGetStatistics)>> {
-        let stage_begin_ts = Instant::now();
         let deadline = Self::get_deadline(&ctx);
         const CMD: CommandKind = CommandKind::batch_get;
         let priority = ctx.get_priority();
@@ -1215,8 +1226,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let mut sample = quota_limiter.new_sample(true);
         with_tls_tracker(|tracker| {
             tracker.metrics.grpc_process_nanos =
-                stage_begin_ts.saturating_elapsed().as_nanos() as u64;
+                tracker.req_info.begin.saturating_elapsed().as_nanos() as u64;
         });
+        let stage_begin_ts = Instant::now();
         self.read_pool_spawn_with_busy_check(
             busy_threshold,
             async move {
@@ -1312,6 +1324,17 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             });
                         (result, stats)
                     });
+                    if let Err(
+                        e @ Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
+                            mvcc::Error(box mvcc::ErrorInner::DefaultNotFound { .. }),
+                        )))),
+                    ) = &result
+                    {
+                        error!("default not found in storage batch_get";
+                            "err" => ?e,
+                            "RpcContext" => ?&ctx,
+                        );
+                    }
                     metrics::tls_collect_scan_details(CMD, &stats);
                     let now = Instant::now();
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
@@ -1455,7 +1478,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
                 // Update max_ts and check the in-memory lock table before getting the snapshot
                 if !ctx.get_stale_read() {
-                    concurrency_manager.update_max_ts(start_ts);
+                    concurrency_manager
+                        .update_max_ts(start_ts, "scan")
+                        .map_err(txn::Error::from)?;
                 }
                 if need_check_locks(ctx.get_isolation_level()) {
                     let begin_instant = Instant::now();
@@ -1620,7 +1645,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
                 let command_duration = Instant::now();
 
-                concurrency_manager.update_max_ts(max_ts);
+                concurrency_manager
+                    .update_max_ts(max_ts, "scan_lock")
+                    .map_err(txn::Error::from)?;
                 let begin_instant = Instant::now();
                 // TODO: Though it's very unlikely to find a conflicting memory lock here, it's
                 // not a good idea to return an error to the client, making the GC fail. A
@@ -3351,7 +3378,11 @@ fn prepare_snap_ctx<'a>(
 ) -> Result<SnapContext<'a>> {
     // Update max_ts and check the in-memory lock table before getting the snapshot
     if !pb_ctx.get_stale_read() {
-        concurrency_manager.update_max_ts(start_ts);
+        concurrency_manager
+            .update_max_ts(start_ts, || {
+                format!("prepare_snap_ctx-{}-{}", cmd, start_ts)
+            })
+            .map_err(txn::Error::from)?;
     }
     fail_point!("before-storage-check-memory-locks");
     let isolation_level = pb_ctx.get_isolation_level();
@@ -3636,7 +3667,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             &self.config,
             ReadPool::from(read_pool).handle(),
             self.lock_mgr,
-            ConcurrencyManager::new(1.into()),
+            ConcurrencyManager::new_for_test(1.into()),
             DynamicConfigs {
                 pipelined_pessimistic_lock: self.pipelined_pessimistic_lock,
                 in_memory_pessimistic_lock: self.in_memory_pessimistic_lock,
@@ -3672,7 +3703,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             &self.config,
             ReadPool::from(read_pool).handle(),
             self.lock_mgr,
-            ConcurrencyManager::new(1.into()),
+            ConcurrencyManager::new_for_test(1.into()),
             DynamicConfigs {
                 pipelined_pessimistic_lock: self.pipelined_pessimistic_lock,
                 in_memory_pessimistic_lock: self.in_memory_pessimistic_lock,
@@ -3711,7 +3742,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             &self.config,
             ReadPool::from(read_pool).handle(),
             self.lock_mgr,
-            ConcurrencyManager::new(1.into()),
+            ConcurrencyManager::new_for_test(1.into()),
             DynamicConfigs {
                 pipelined_pessimistic_lock: self.pipelined_pessimistic_lock,
                 in_memory_pessimistic_lock: self.in_memory_pessimistic_lock,
@@ -10266,7 +10297,7 @@ mod tests {
             .build()
             .unwrap();
         let cm = storage.concurrency_manager.clone();
-        cm.update_max_ts(10.into());
+        cm.update_max_ts(10.into(), "").unwrap();
 
         // Optimistic prewrite
         let (tx, rx) = channel();
@@ -10314,7 +10345,7 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
 
-        cm.update_max_ts(1000.into());
+        cm.update_max_ts(1000.into(), "").unwrap();
 
         let (tx, rx) = channel();
         storage
@@ -11421,7 +11452,7 @@ mod tests {
         // commit enabled, and max_ts changes when the second request arrives.
 
         // A retrying prewrite request arrives.
-        cm.update_max_ts(20.into());
+        cm.update_max_ts(20.into(), "").unwrap();
         let mut ctx = Context::default();
         ctx.set_is_retry_request(true);
         let (tx, rx) = channel();
@@ -11605,7 +11636,7 @@ mod tests {
 
         // 1PC update
         let (tx, rx) = channel();
-        cm.update_max_ts(59.into());
+        cm.update_max_ts(59.into(), "").unwrap();
         storage
             .sched_txn_command(
                 Prewrite::new(

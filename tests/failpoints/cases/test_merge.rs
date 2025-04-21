@@ -10,16 +10,17 @@ use std::{
     time::Duration,
 };
 
-use engine_traits::{Peekable, CF_RAFT};
+use engine_traits::{Peekable, CF_DEFAULT, CF_RAFT};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
     kvrpcpb::{PrewriteRequestPessimisticAction::*, *},
+    raft_cmdpb::{self, RaftCmdRequest},
     raft_serverpb::{PeerState, RaftMessage, RegionLocalState},
     tikvpb::TikvClient,
 };
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
-use raftstore::store::*;
+use raftstore::{router::RaftStoreRouter, store::*};
 use raftstore_v2::router::{PeerMsg, PeerTick};
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
@@ -2268,4 +2269,152 @@ fn test_destroy_race_during_atomic_snapshot_after_merge() {
     // New peer applies snapshot eventually.
     cluster.must_transfer_leader(right.get_id(), new_peer(3, new_peer_id));
     cluster.must_put(b"k4", b"v4");
+}
+
+// `test_raft_log_gc_after_merge` tests when a region is destoryed, e.g. due to
+// region merge, PeerFsm can still handle pending raft messages correctly.
+#[test]
+fn test_raft_log_gc_after_merge() {
+    let mut cluster = new_node_cluster(0, 1);
+    configure_for_merge(&mut cluster.cfg);
+    cluster.cfg.raft_store.store_batch_system.pool_size = 2;
+    cluster.run();
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k2");
+    let left = cluster.get_region(b"k1");
+    let right = cluster.get_region(b"k3");
+
+    fail::cfg_callback("destroy_region_before_gc_flush", move || {
+        fail::cfg("pause_on_peer_collect_message", "pause").unwrap();
+    })
+    .unwrap();
+
+    let (tx, rx) = channel();
+    fail::cfg_callback("destroy_region_after_gc_flush", move || {
+        tx.send(()).unwrap();
+    })
+    .unwrap();
+
+    // the right peer's id is 1.
+    pd_client.must_merge(right.get_id(), left.get_id());
+    rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+    let raft_router = cluster.get_router(1).unwrap();
+
+    // send a raft cmd to test when peer fsm is closed, this cmd will still be
+    // handled.
+    let cmd = {
+        let mut cmd = RaftCmdRequest::default();
+        let mut req = raft_cmdpb::Request::default();
+        req.set_read_index(raft_cmdpb::ReadIndexRequest::default());
+        cmd.mut_requests().push(req);
+        cmd.mut_header().region_id = 1;
+        cmd
+    };
+    let (tx, rx) = std::sync::mpsc::channel();
+    let callback = Callback::read(Box::new(move |req| {
+        tx.send(req).unwrap();
+    }));
+    let cmd_req = RaftCommand::new(cmd, callback);
+    raft_router.send_raft_command(cmd_req).unwrap();
+
+    // send a casual msg that can trigger panic after peer fms closed.
+    raft_router
+        .send_casual_msg(1, CasualMessage::ForceCompactRaftLogs)
+        .unwrap();
+
+    fail::remove("pause_on_peer_collect_message");
+
+    // wait some time for merge finish.
+    std::thread::sleep(Duration::from_secs(1));
+    must_get_equal(&cluster.get_engine(1), b"k3", b"v3");
+
+    let resp = rx.recv().unwrap();
+    assert!(resp.response.get_header().has_error());
+}
+
+// This case tests following scenario:
+// When the disk IO is slow or block and PrepareMerge is proposed, it is
+// possible that the leader's committed index is higher than its persisted
+// index. In this case, we should still ensure that all peers can recover
+// necessary raft logs from the CatchUpLogs phase.
+// For more information, see: https://github.com/tikv/tikv/issues/18129
+#[test]
+fn test_node_merge_with_apply_ahead_of_persist() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster.cfg);
+    cluster.cfg.raft_store.cmd_batch_concurrent_ready_max_count = 32;
+    cluster.cfg.raft_store.store_io_pool_size = 1;
+    // even if "early apply" is disabled, the raft committed index can still be
+    // higher than persisted/matched index.
+    cluster.cfg.raft_store.max_apply_unpersisted_log_limit = 0;
+
+    cluster.run();
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v1");
+
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k2");
+    let left = cluster.get_region(b"k1");
+    let right = cluster.get_region(b"k3");
+
+    cluster.must_put(b"k1", b"v2");
+    cluster.must_put(b"k3", b"v2");
+
+    let raft_before_save_on_store_1_fp = "raft_before_persist_on_store_1";
+    // Skip persisting to simulate raft log persist lag but not block node restart.
+    fail::cfg(raft_before_save_on_store_1_fp, "return").unwrap();
+
+    let cmd = new_put_cf_cmd(CF_DEFAULT, b"k1", b"v3");
+    let req = new_request(left.id, left.get_region_epoch().clone(), vec![cmd], false);
+    cluster
+        .call_command_on_leader(req, Duration::from_secs(1))
+        .unwrap_err();
+    let cmd = new_put_cf_cmd(CF_DEFAULT, b"k3", b"v3");
+    let req = new_request(right.id, right.get_region_epoch().clone(), vec![cmd], false);
+    cluster
+        .call_command_on_leader(req, Duration::from_secs(1))
+        .unwrap_err();
+
+    let schedule_merge_fp = "on_schedule_merge";
+    fail::cfg(schedule_merge_fp, "return()").unwrap();
+
+    // Propose merge on leader will fail with timeout due to not persist.
+    let req = cluster.new_prepare_merge(left.get_id(), right.get_id());
+    cluster
+        .call_command_on_leader(req, Duration::from_secs(1))
+        .unwrap_err();
+
+    // stop node 1, some unpersisted logs will be lost.
+    cluster.stop_node(1);
+
+    fail::remove(raft_before_save_on_store_1_fp);
+    fail::remove(schedule_merge_fp);
+
+    // Wait till merge is finished.
+    pd_client.check_merged_timeout(left.get_id(), Duration::from_secs(5));
+
+    // restart node 1 to let it apply the merge.
+    cluster.run_node(1).unwrap();
+
+    let region = cluster.get_region(b"k1");
+    let peer = region
+        .get_peers()
+        .iter()
+        .find(|p| p.store_id == 1)
+        .unwrap()
+        .clone();
+    cluster.must_transfer_leader(1, peer);
+
+    cluster.must_put(b"k1", b"v3");
 }

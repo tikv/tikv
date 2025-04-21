@@ -4,6 +4,8 @@ mod metrics;
 /// Provides profilers for TiKV.
 mod profile;
 
+pub mod lite;
+
 use std::{
     env::args,
     error::Error as StdError,
@@ -56,6 +58,7 @@ use tikv_util::{
     logger::set_log_level,
     metrics::{dump, dump_to},
     timer::GLOBAL_TIMER_HANDLE,
+    GLOBAL_SERVER_READINESS,
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite},
@@ -457,13 +460,8 @@ where
     pub fn listening_addr(&self) -> SocketAddr {
         self.addr.unwrap()
     }
-}
 
-impl<R> StatusServer<R>
-where
-    R: 'static + Send + RaftExtension + Clone,
-{
-    fn dump_async_trace() -> hyper::Result<Response<Body>> {
+    pub fn dump_async_trace() -> hyper::Result<Response<Body>> {
         Ok(make_response(
             StatusCode::OK,
             tracing_active_tree::layer::global().fmt_bytes_with(|t, buf| {
@@ -474,6 +472,32 @@ where
         ))
     }
 
+    fn metrics_to_resp(req: Request<Body>, should_simplify: bool) -> hyper::Result<Response<Body>> {
+        let gz_encoding = client_accept_gzip(&req);
+        let metrics = if gz_encoding {
+            // gzip can reduce the body size to less than 1/10.
+            let mut encoder = GzEncoder::new(vec![], Compression::default());
+            dump_to(&mut encoder, should_simplify);
+            encoder.finish().unwrap()
+        } else {
+            dump(should_simplify).into_bytes()
+        };
+        let mut resp = Response::new(metrics.into());
+        resp.headers_mut()
+            .insert(CONTENT_TYPE, HeaderValue::from_static(TEXT_FORMAT));
+        if gz_encoding {
+            resp.headers_mut()
+                .insert(CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+        }
+
+        Ok(resp)
+    }
+}
+
+impl<R> StatusServer<R>
+where
+    R: 'static + Send + RaftExtension + Clone,
+{
     fn handle_pause_grpc(
         mut grpc_service_mgr: GrpcServiceManager,
     ) -> hyper::Result<Response<Body>> {
@@ -585,24 +609,27 @@ where
         mgr: &ConfigController,
     ) -> hyper::Result<Response<Body>> {
         let should_simplify = mgr.get_current().server.simplify_metrics;
-        let gz_encoding = client_accept_gzip(&req);
-        let metrics = if gz_encoding {
-            // gzip can reduce the body size to less than 1/10.
-            let mut encoder = GzEncoder::new(vec![], Compression::default());
-            dump_to(&mut encoder, should_simplify);
-            encoder.finish().unwrap()
-        } else {
-            dump(should_simplify).into_bytes()
-        };
-        let mut resp = Response::new(metrics.into());
-        resp.headers_mut()
-            .insert(CONTENT_TYPE, HeaderValue::from_static(TEXT_FORMAT));
-        if gz_encoding {
-            resp.headers_mut()
-                .insert(CONTENT_ENCODING, HeaderValue::from_static("gzip"));
-        }
+        Self::metrics_to_resp(req, should_simplify)
+    }
 
-        Ok(resp)
+    fn handle_ready_request(req: Request<Body>) -> hyper::Result<Response<Body>> {
+        let verbose = req
+            .uri()
+            .query()
+            .map_or(false, |query| query.contains("verbose"));
+
+        let status_code = if GLOBAL_SERVER_READINESS.is_ready() {
+            StatusCode::OK
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        };
+
+        let body = if verbose {
+            GLOBAL_SERVER_READINESS.to_json()
+        } else {
+            "".to_string()
+        };
+        Ok(make_response(status_code, body))
     }
 
     fn start_serve<I, C>(&mut self, builder: HyperBuilder<I>)
@@ -674,6 +701,9 @@ where
                                 Self::handle_get_metrics(req, &cfg_controller)
                             }
                             (Method::GET, "/status") => Ok(Response::default()),
+                            (Method::GET, "/ready") => {
+                                Self::handle_ready_request(req)
+                            }
                             (Method::GET, "/debug/pprof/heap_list") => {
                                 Ok(make_response(
                                     StatusCode::GONE,
@@ -1200,7 +1230,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{env, io::Read, path::PathBuf, sync::Arc};
+    use std::{
+        env,
+        io::Read,
+        path::PathBuf,
+        sync::{atomic::Ordering, Arc},
+    };
 
     use collections::HashSet;
     use flate2::read::GzDecoder;
@@ -1219,7 +1254,7 @@ mod tests {
     use service::service_manager::GrpcServiceManager;
     use test_util::new_security_cfg;
     use tikv_kv::RaftExtension;
-    use tikv_util::logger::get_log_level;
+    use tikv_util::{logger::get_log_level, GLOBAL_SERVER_READINESS};
 
     use crate::{
         config::{ConfigController, TikvConfig},
@@ -1974,5 +2009,63 @@ mod tests {
             }
             status_server.stop();
         }
+    }
+
+    #[test]
+    fn test_ready_endpoint() {
+        let mut status_server = StatusServer::new(
+            1,
+            ConfigController::default(),
+            Arc::new(SecurityConfig::default()),
+            MockRouter,
+            None,
+            GrpcServiceManager::dummy(),
+            None,
+        )
+        .unwrap();
+        let addr = "127.0.0.1:0".to_owned();
+        let _ = status_server.start(addr);
+        let client = Client::new();
+        let uri = Uri::builder()
+            .scheme("http")
+            .authority(status_server.listening_addr().to_string().as_str())
+            .path_and_query("/ready?verbose")
+            .build()
+            .unwrap();
+        let uri2 = uri.clone();
+        // Set one readiness condition to true.
+        GLOBAL_SERVER_READINESS
+            .connected_to_pd
+            .store(true, Ordering::Relaxed);
+        let handle = status_server.thread_pool.spawn(async move {
+            let resp = client.get(uri).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+            let body_bytes = hyper::body::to_bytes(resp.into_body()).await.unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+            assert_eq!(
+                json["connected_to_pd"], true,
+                "connected_to_pd should be false"
+            );
+            assert_eq!(
+                json["raft_peers_caught_up"], false,
+                "raft_peers_caught_up should be false"
+            );
+        });
+        block_on(handle).unwrap();
+
+        // Set the remaining readiness conditions to true.
+        GLOBAL_SERVER_READINESS
+            .raft_peers_caught_up
+            .store(true, Ordering::Relaxed);
+
+        let client = Client::new();
+        let handle2 = status_server.thread_pool.spawn(async move {
+            let resp = client.get(uri2).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+        });
+        block_on(handle2).unwrap();
+
+        status_server.stop();
     }
 }

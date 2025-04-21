@@ -7,7 +7,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc,
     },
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use api_version::KvFormat;
@@ -42,7 +42,7 @@ use tikv_util::{
     future::{paired_future_callback, poll_future_notify},
     mpsc::future::{unbounded, BatchReceiver, Sender, WakePolicy},
     sys::memory_usage_reaches_high_water,
-    time::Instant,
+    time::{nanos_to_secs, Instant},
     worker::Scheduler,
 };
 use tracker::{set_tls_tracker_token, RequestInfo, RequestType, Tracker, GLOBAL_TRACKERS};
@@ -70,6 +70,41 @@ use crate::{
 
 const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
+
+pub trait RaftGrpcMessageFilter: Send + Sync {
+    fn should_reject_raft_message(&self, _: &RaftMessage) -> bool;
+    fn should_reject_snapshot(&self) -> bool;
+}
+
+// The default filter is exported for other engines as reference.
+#[derive(Clone)]
+pub struct DefaultGrpcMessageFilter {
+    reject_messages_on_memory_ratio: f64,
+}
+
+impl DefaultGrpcMessageFilter {
+    pub fn new(reject_messages_on_memory_ratio: f64) -> Self {
+        Self {
+            reject_messages_on_memory_ratio,
+        }
+    }
+}
+
+impl RaftGrpcMessageFilter for DefaultGrpcMessageFilter {
+    fn should_reject_raft_message(&self, msg: &RaftMessage) -> bool {
+        fail::fail_point!("force_reject_raft_append_message", |_| true);
+        if msg.get_message().get_msg_type() == MessageType::MsgAppend {
+            needs_reject_raft_append(self.reject_messages_on_memory_ratio)
+        } else {
+            false
+        }
+    }
+
+    fn should_reject_snapshot(&self) -> bool {
+        fail::fail_point!("force_reject_raft_snapshot_message", |_| true);
+        false
+    }
+}
 
 /// Service handles the RPC messages for the `Tikv` service.
 pub struct Service<E: Engine, L: LockManager, F: KvFormat> {
@@ -103,6 +138,8 @@ pub struct Service<E: Engine, L: LockManager, F: KvFormat> {
     health_controller: HealthController,
     health_feedback_interval: Option<Duration>,
     health_feedback_seq: Arc<AtomicU64>,
+
+    raft_message_filter: Arc<dyn RaftGrpcMessageFilter>,
 }
 
 impl<E: Engine, L: LockManager, F: KvFormat> Drop for Service<E, L, F> {
@@ -130,6 +167,7 @@ impl<E: Engine + Clone, L: LockManager + Clone, F: KvFormat> Clone for Service<E
             health_controller: self.health_controller.clone(),
             health_feedback_seq: self.health_feedback_seq.clone(),
             health_feedback_interval: self.health_feedback_interval,
+            raft_message_filter: self.raft_message_filter.clone(),
         }
     }
 }
@@ -152,6 +190,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
         resource_manager: Option<Arc<ResourceGroupManager>>,
         health_controller: HealthController,
         health_feedback_interval: Option<Duration>,
+        raft_message_filter: Arc<dyn RaftGrpcMessageFilter>,
     ) -> Self {
         let now_unix = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -174,6 +213,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
             health_controller,
             health_feedback_interval,
             health_feedback_seq: Arc::new(AtomicU64::new(now_unix)),
+            raft_message_filter,
         }
     }
 
@@ -181,7 +221,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
         store_id: u64,
         ch: &E::RaftExtension,
         msg: RaftMessage,
-        reject: bool,
+        raft_msg_filter: &Arc<dyn RaftGrpcMessageFilter>,
     ) -> RaftStoreResult<()> {
         let to_store_id = msg.get_to_peer().get_store_id();
         if to_store_id != store_id {
@@ -190,8 +230,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
                 my_store_id: store_id,
             });
         }
-        if reject && msg.get_message().get_msg_type() == MessageType::MsgAppend {
-            RAFT_APPEND_REJECTS.inc();
+
+        if raft_msg_filter.should_reject_raft_message(&msg) {
+            if msg.get_message().get_msg_type() == MessageType::MsgAppend {
+                RAFT_APPEND_REJECTS.inc();
+            }
             let id = msg.get_region_id();
             let peer_id = msg.get_message().get_from();
             ch.report_reject_message(id, peer_id);
@@ -753,15 +796,15 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
 
         let store_id = self.store_id;
         let ch = self.storage.get_engine().raft_extension();
-        let reject_messages_on_memory_ratio = self.reject_messages_on_memory_ratio;
+        let ob = self.raft_message_filter.clone();
 
         let res = async move {
             let mut stream = stream.map_err(Error::from);
             while let Some(msg) = stream.try_next().await? {
                 RAFT_MESSAGE_RECV_COUNTER.inc();
-                let reject = needs_reject_raft_append(reject_messages_on_memory_ratio);
+
                 if let Err(err @ RaftStoreError::StoreNotMatch { .. }) =
-                    Self::handle_raft_message(store_id, &ch, msg, reject)
+                    Self::handle_raft_message(store_id, &ch, msg, &ob)
                 {
                     // Return an error here will break the connection, only do that for
                     // `StoreNotMatch` to let tikv to resolve a correct address from PD
@@ -806,18 +849,25 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
 
         let store_id = self.store_id;
         let ch = self.storage.get_engine().raft_extension();
-        let reject_messages_on_memory_ratio = self.reject_messages_on_memory_ratio;
+        let ob = self.raft_message_filter.clone();
 
         let res = async move {
             let mut stream = stream.map_err(Error::from);
             while let Some(mut batch_msg) = stream.try_next().await? {
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos() as u64;
+                let elapsed = nanos_to_secs(now.saturating_sub(batch_msg.last_observed_time));
+                RAFT_MESSAGE_DURATION.receive_delay.observe(elapsed);
+
                 let len = batch_msg.get_msgs().len();
                 RAFT_MESSAGE_RECV_COUNTER.inc_by(len as u64);
                 RAFT_MESSAGE_BATCH_SIZE.observe(len as f64);
-                let reject = needs_reject_raft_append(reject_messages_on_memory_ratio);
+
                 for msg in batch_msg.take_msgs().into_iter() {
                     if let Err(err @ RaftStoreError::StoreNotMatch { .. }) =
-                        Self::handle_raft_message(store_id, &ch, msg, reject)
+                        Self::handle_raft_message(store_id, &ch, msg, &ob)
                     {
                         // Return an error here will break the connection, only do that for
                         // `StoreNotMatch` to let tikv to resolve a correct address from PD
@@ -854,6 +904,13 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         stream: RequestStream<SnapshotChunk>,
         sink: ClientStreamingSink<Done>,
     ) {
+        if self.raft_message_filter.should_reject_snapshot() {
+            RAFT_SNAPSHOT_REJECTS.inc();
+            let status =
+                RpcStatus::with_message(RpcStatusCode::UNAVAILABLE, "rejected by peer".to_string());
+            ctx.spawn(sink.fail(status).map(|_| ()));
+            return;
+        };
         let task = SnapTask::Recv { stream, sink };
         if let Err(e) = self.snap_scheduler.schedule(task) {
             let err_msg = format!("{}", e);
@@ -1256,8 +1313,12 @@ fn response_batch_commands_request<F, T>(
     T: Default,
 {
     let task = async move {
+        let resp_res = resp.await;
+        // GrpcRequestDuration must be initialized after the response is ready,
+        // because it measures the grpc_wait_time, which is the time from
+        // receiving the response to sending it.
         let measure = GrpcRequestDuration::new(begin, label, source, resource_priority);
-        match resp.await {
+        match resp_res {
             Ok(resp) => {
                 let task = MeasuredSingleResponse::new(id, resp, measure, None);
                 if let Err(e) = tx.send_with(task, WakePolicy::Immediately) {
@@ -1580,7 +1641,7 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
                         .write_scan_detail(exec_detail_v2.mut_scan_detail_v2());
                     GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
                         tracker.write_scan_detail(exec_detail_v2.mut_scan_detail_v2());
-                        tracker.write_time_detail(exec_detail_v2.mut_time_detail_v2());
+                        tracker.merge_time_detail(exec_detail_v2.mut_time_detail_v2());
                     });
                     set_time_detail(exec_detail_v2, duration, &stats.latency_stats);
                     match val {
@@ -1697,7 +1758,7 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
                         .write_scan_detail(exec_detail_v2.mut_scan_detail_v2());
                     GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
                         tracker.write_scan_detail(exec_detail_v2.mut_scan_detail_v2());
-                        tracker.write_time_detail(exec_detail_v2.mut_time_detail_v2());
+                        tracker.merge_time_detail(exec_detail_v2.mut_time_detail_v2());
                     });
                     set_time_detail(exec_detail_v2, duration, &stats.latency_stats);
                     resp.set_pairs(pairs.into());
@@ -2301,7 +2362,7 @@ macro_rules! txn_command_future {
             GLOBAL_TRACKERS.with_tracker($tracker, |tracker| {
                 tracker.write_scan_detail($resp.mut_exec_details_v2().mut_scan_detail_v2());
                 tracker.write_write_detail($resp.mut_exec_details_v2().mut_write_detail());
-                tracker.write_time_detail($resp.mut_exec_details_v2().mut_time_detail_v2());
+                tracker.merge_time_detail($resp.mut_exec_details_v2().mut_time_detail_v2());
             });
         });
     };
@@ -2312,7 +2373,7 @@ macro_rules! txn_command_future {
             GLOBAL_TRACKERS.with_tracker($tracker, |tracker| {
                 tracker.write_scan_detail($resp.mut_exec_details_v2().mut_scan_detail_v2());
                 tracker.write_write_detail($resp.mut_exec_details_v2().mut_write_detail());
-                tracker.write_time_detail($resp.mut_exec_details_v2().mut_time_detail_v2());
+                tracker.merge_time_detail($resp.mut_exec_details_v2().mut_time_detail_v2());
             });
         });
     };

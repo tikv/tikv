@@ -162,6 +162,11 @@ pub(super) fn async_snapshot<E: Engine>(
         ..Default::default()
     });
     async move {
+        fail::fail_point!("failed_to_async_snapshot", |_| {
+            let mut e = errorpb::Error::default();
+            e.set_message("faild to get snapshot".to_string());
+            Err(e)
+        });
         res.await.map_err(|e| {
             let err: storage::Error = e.into();
             if let Some(e) = extract_region_error_from_error(&err) {

@@ -30,7 +30,7 @@ use pd_client::PdClient;
 use raft::eraftpb;
 use raftstore::{
     coprocessor::CoprocessorHost,
-    store::{fsm::store::StoreMeta, AutoSplitController, SnapManager},
+    store::{fsm::store::StoreMeta, AutoSplitController, DiskCheckRunner, SnapManager},
 };
 use resource_metering::CollectorRegHandle;
 use service::service_manager::GrpcServiceManager;
@@ -1408,9 +1408,10 @@ fn test_double_run_node() {
             importer,
             split_check_scheduler,
             AutoSplitController::default(),
-            ConcurrencyManager::new(1.into()),
+            ConcurrencyManager::new_for_test(1.into()),
             CollectorRegHandle::new_for_test(),
             None,
+            DiskCheckRunner::dummy(),
             GrpcServiceManager::dummy(),
             Arc::new(AtomicU64::new(0)),
         )
@@ -1929,7 +1930,7 @@ fn test_prewrite_check_max_commit_ts() {
     let (cluster, client, ctx) = new_cluster();
 
     let cm = cluster.sim.read().unwrap().get_concurrency_manager(1);
-    cm.update_max_ts(100.into());
+    cm.update_max_ts(100.into(), "").unwrap();
 
     let mut req = PrewriteRequest::default();
     req.set_context(ctx.clone());
@@ -3630,4 +3631,38 @@ fn test_check_cluster_id_for_batch_cmds() {
             }
         }
     }
+}
+
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
+fn test_prewrite_future_execution_time() {
+    let (cluster, client, ctx) = new_cluster();
+
+    let start_ts = block_on(cluster.pd_client.get_tso()).unwrap();
+    let mut req = PrewriteRequest::default();
+    req.set_context(ctx.clone());
+    req.set_primary_lock(b"key".to_vec());
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(b"key".to_vec());
+    mutation.set_value(b"value".to_vec());
+    req.mut_mutations().push(mutation);
+    req.set_start_version(start_ts.into_inner());
+    req.set_lock_ttl(20000);
+    req.set_use_async_commit(true);
+    let resp = client.kv_prewrite(&req).unwrap();
+
+    assert!(
+        resp.get_exec_details_v2()
+            .get_time_detail_v2()
+            .get_process_wall_time_ns()
+            != 0
+            && resp
+                .get_exec_details_v2()
+                .get_time_detail_v2()
+                .get_process_suspend_wall_time_ns()
+                != 0,
+        "{:?}",
+        resp
+    );
 }

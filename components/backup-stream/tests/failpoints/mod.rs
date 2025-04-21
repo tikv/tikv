@@ -9,6 +9,7 @@ pub use suite::*;
 
 mod all {
 
+    use core::panic;
     use std::{
         sync::{
             atomic::{AtomicBool, Ordering},
@@ -18,20 +19,24 @@ mod all {
     };
 
     use backup_stream::{
+        errors::Error,
         metadata::{
             keys::MetaKey,
             store::{Keys, MetaStore},
+            PauseStatus,
         },
+        router::TaskSelector,
         GetCheckpointResult, RegionCheckpointOperation, RegionSet, Task,
     };
     use encryption::{FileConfig, MasterKeyConfig};
     use futures::executor::block_on;
     use kvproto::encryptionpb::EncryptionMethod;
-    use raftstore::coprocessor::ObserveHandle;
+    use serde_json::Value;
     use tempfile::TempDir;
     use tikv_util::{
+        box_err,
         config::{ReadableDuration, ReadableSize},
-        defer,
+        defer, HandyRwLock,
     };
     use txn_types::Key;
     use walkdir::WalkDir;
@@ -116,7 +121,6 @@ mod all {
         suite.run(|| {
             Task::ModifyObserve(backup_stream::ObserveOp::Start {
                 region: suite.cluster.get_region(&make_record_key(1, 886)),
-                handle: ObserveHandle::new(),
             })
         });
         fail::cfg("scan_after_get_snapshot", "off").unwrap();
@@ -484,5 +488,94 @@ mod all {
         suite.sync();
         // Make sure our suite doesn't panic.
         suite.sync();
+    }
+
+    #[test]
+    fn fatal_error() {
+        let mut suite = SuiteBuilder::new_named("fatal_error").nodes(3).build();
+        suite.must_register_task(1, "test_fatal_error");
+        suite.sync();
+        run_async_test(suite.write_records(0, 1, 1));
+        suite.force_flush_files("test_fatal_error");
+        suite.wait_for_flush();
+        run_async_test(suite.advance_global_checkpoint("test_fatal_error")).unwrap();
+        fail::cfg("log-backup-upload-error", "1*return(not my fault)->off").unwrap();
+        let (victim, endpoint) = suite.endpoints.iter().next().unwrap();
+        endpoint
+            .scheduler()
+            .schedule(Task::FatalError(
+                TaskSelector::ByName("test_fatal_error".to_owned()),
+                Box::new(Error::Other(box_err!("everything is alright"))),
+            ))
+            .unwrap();
+        suite.sync();
+        fail::remove("log-backup-upload-error");
+        // Wait retry...
+        std::thread::sleep(Duration::from_secs(6));
+        suite.sync();
+        let cli = suite.get_meta_cli();
+        let err = run_async_test(cli.get_last_error_of("test_fatal_error", *victim))
+            .unwrap()
+            .unwrap();
+
+        let pause = match run_async_test(cli.pause_status("test_fatal_error")).unwrap() {
+            PauseStatus::PausedV2Json(pause) => pause,
+            val => {
+                panic!("not paused: {:?}", val);
+            }
+        };
+        let val = serde_json::from_str::<Value>(&pause).unwrap();
+        assert_eq!(val["severity"].as_str().unwrap(), "ERROR");
+        assert_eq!(
+            val["operation_hostname"].as_str().unwrap(),
+            tikv_util::sys::hostname().unwrap()
+        );
+        assert_eq!(
+            val["operation_pid"].as_u64().unwrap(),
+            std::process::id() as u64
+        );
+        assert_eq!(
+            val["payload_type"].as_str().unwrap(),
+            "application/x-protobuf;messageType=brpb.StreamBackupError"
+        );
+
+        assert_eq!(err.error_code, error_code::backup_stream::OTHER.code);
+        assert!(err.error_message.contains("everything is alright"));
+        assert_eq!(err.store_id, *victim);
+        let paused =
+            run_async_test(suite.get_meta_cli().check_task_paused("test_fatal_error")).unwrap();
+        assert!(paused);
+        let safepoints = suite.cluster.pd_client.gc_safepoints.rl();
+        let checkpoint = suite.global_checkpoint();
+
+        assert!(
+            safepoints.iter().any(|sp| {
+                sp.service.contains(&format!("{}", victim))
+                    && sp.ttl >= Duration::from_secs(60 * 60 * 24)
+                    && sp.safepoint.into_inner() == checkpoint - 1
+            }),
+            "{:?}",
+            safepoints
+        );
+    }
+
+    #[test]
+    fn pending_flush_when_force_flush() {
+        let mut suite = SuiteBuilder::new_named("pending_flush").nodes(1).build();
+        fail::cfg("delay_on_flush", "sleep(5000)").unwrap();
+        suite.must_register_task(1, "pending_flush");
+        suite.sync();
+        let keyset = run_async_test(suite.write_records(0, 1, 1));
+        suite.force_flush_files("pending_flush");
+        suite.for_each_log_backup_cli(|_id, c| {
+            let res = c.flush_now(Default::default()).unwrap();
+            assert_eq!(res.results.len(), 1, "{:?}", res.results);
+            assert!(res.results[0].error_message.is_empty(), "{:?}", res);
+            assert!(res.results[0].success, "{:?}", res);
+        });
+        suite.check_for_write_records(
+            suite.flushed_files.path(),
+            keyset.iter().map(|v| v.as_slice()),
+        )
     }
 }

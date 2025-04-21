@@ -11,7 +11,8 @@ use engine_traits::{CompactExt, CF_DEFAULT, CF_WRITE};
 use file_system::{set_io_type, IoType};
 use futures::{sink::SinkExt, stream::TryStreamExt, FutureExt, TryFutureExt};
 use grpcio::{
-    ClientStreamingSink, RequestStream, RpcContext, ServerStreamingSink, UnarySink, WriteFlags,
+    ClientStreamingSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink,
+    UnarySink, WriteFlags,
 };
 use kvproto::{
     encryptionpb::EncryptionMethod,
@@ -28,6 +29,7 @@ use raftstore::{
     RegionInfoAccessor,
 };
 use raftstore_v2::StoreMeta;
+use rand::Rng;
 use resource_control::{with_resource_limiter, ResourceGroupManager};
 use sst_importer::{
     error_inc, metrics::*, sst_importer::DownloadExt, Config, ConfigManager, Error, Result,
@@ -37,8 +39,11 @@ use tikv_kv::{Engine, LocalTablets, Modify, WriteData};
 use tikv_util::{
     config::ReadableSize,
     future::{create_stream_with_buffer, paired_future_callback},
-    resizable_threadpool::{ResizableRuntime, ResizableRuntimeHandle},
-    sys::disk::{get_disk_status, DiskUsage},
+    resizable_threadpool::{DeamonRuntimeHandle, ResizableRuntime},
+    sys::{
+        disk::{get_disk_status, DiskUsage},
+        get_global_memory_usage, SysQuota,
+    },
     time::{Instant, Limiter},
     HandyRwLock,
 };
@@ -89,6 +94,63 @@ const WRITER_GC_INTERVAL: Duration = Duration::from_secs(300);
 const SUSPEND_REQUEST_MAX_SECS: u64 = // 6h
     6 * 60 * 60;
 
+const REJECT_SERVE_MEMORY_USAGE: u64 = 1024 * 1024 * 1024; //1G
+// consider block cache and raft store. the memory usage will be
+const HIGH_IMPORT_MEMORY_WATER_RATIO: f64 = 0.95;
+
+/// Check if the system has enough resources for import tasks
+async fn check_import_resources(mem_limit: u64) -> Result<()> {
+    #[cfg(feature = "failpoints")]
+    let mem_limit = (|| {
+        fail_point!("mock_memory_limit", |t| {
+            t.unwrap().parse::<u64>().unwrap()
+        });
+        mem_limit
+    })();
+    #[cfg(not(feature = "failpoints"))]
+    let mem_limit = mem_limit;
+
+    // these error(memory or disk) cannot be recover at a short time,
+    // in case client retry immediately, sleep for a while
+    async fn sleep_with_jitter() {
+        let jitter = rand::thread_rng().gen_range(1000, 2000);
+        tokio::time::sleep(Duration::from_millis(jitter)).await;
+    }
+    // Check disk space first
+    if get_disk_status(0) != DiskUsage::Normal {
+        sleep_with_jitter().await;
+        return Err(Error::DiskSpaceNotEnough);
+    }
+
+    let usage = get_global_memory_usage();
+    if mem_limit == 0 || mem_limit < usage {
+        // make it through when cannot get correct memory
+        warn!(
+            "Memory limit isn't correct. skip next check, limit is {} bytes, usage is {} bytes",
+            mem_limit, usage
+        );
+        return Ok(());
+    }
+
+    let available_memory = mem_limit - usage;
+    let min_required_memory = std::cmp::min(
+        REJECT_SERVE_MEMORY_USAGE,
+        ((1.0 - HIGH_IMPORT_MEMORY_WATER_RATIO) * mem_limit as f64) as u64,
+    );
+
+    // Reject ONLY if BOTH:
+    // - Available memory is below REJECT_SERVE_MEMORY_USAGE
+    // - Memory usage ratio is 95%+
+    if available_memory < min_required_memory {
+        sleep_with_jitter().await;
+        return Err(Error::ResourceNotEnough(format!(
+            "Memory usage too high, usage: {} bytes, mem limit {} bytes",
+            usage, mem_limit
+        )));
+    }
+    Ok(())
+}
+
 fn transfer_error(err: storage::Error) -> ImportPbError {
     let mut e = ImportPbError::default();
     if let Some(region_error) = extract_region_error_from_error(&err) {
@@ -118,8 +180,10 @@ pub struct ImportSstService<E: Engine> {
     cfg: ConfigManager,
     tablets: LocalTablets<E::Local>,
     engine: E,
-    // TODO: (Ris) change to ResizableRuntime
-    threads: ResizableRuntimeHandle,
+    threads: DeamonRuntimeHandle,
+    // threads_ref is for safely cleanning
+    #[allow(dead_code)]
+    threads_ref: Arc<Mutex<ResizableRuntime>>,
     importer: Arc<SstImporter<E::Local>>,
     limiter: Limiter,
     ingest_latch: Arc<IngestLatch>,
@@ -134,6 +198,8 @@ pub struct ImportSstService<E: Engine> {
 
     // When less than now, don't accept any requests.
     suspend: Arc<SuspendDeadline>,
+
+    mem_limit: u64,
 }
 
 struct RequestCollector {
@@ -343,17 +409,20 @@ impl<E: Engine> ImportSstService<E> {
                 .build()
         };
 
-        let mut threads =
-            ResizableRuntime::new("import", Box::new(create_tokio_runtime), Box::new(|_| ()));
-        // There would be 4 initial threads running forever.
-        threads.adjust_with(4);
-        let handle = ResizableRuntimeHandle::new(threads);
+        let threads = ResizableRuntime::new(
+            4,
+            "impwkr",
+            Box::new(create_tokio_runtime),
+            Box::new(|_| ()),
+        );
+
+        let handle = threads.handle();
+        let threads_clone = Arc::new(Mutex::new(threads));
         if let LocalTablets::Singleton(tablet) = &tablets {
             importer.start_switch_mode_check(&handle.clone(), Some(tablet.clone()));
         } else {
             importer.start_switch_mode_check(&handle.clone(), None);
         }
-
         let writer = raft_writer::ThrottledTlsEngineWriter::default();
         let gc_handle = writer.clone();
         handle.spawn(async move {
@@ -361,16 +430,18 @@ impl<E: Engine> ImportSstService<E> {
                 tokio::time::sleep(WRITER_GC_INTERVAL).await;
             }
         });
-
-        let cfg_mgr = ConfigManager::new(cfg, handle.clone());
+        let num_threads = cfg.num_threads;
+        let cfg_mgr = ConfigManager::new(cfg, Arc::downgrade(&threads_clone));
         handle.spawn(Self::tick(importer.clone(), cfg_mgr.clone()));
         // Drop the initial pool to accept new tasks
-        handle.adjust_with(cfg_mgr.rl().num_threads);
+        threads_clone.lock().unwrap().adjust_with(num_threads);
 
+        let mem_limit = SysQuota::memory_limit_in_bytes();
         ImportSstService {
             cfg: cfg_mgr,
             tablets,
             threads: handle.clone(),
+            threads_ref: threads_clone,
             engine,
             importer,
             limiter: Limiter::new(f64::INFINITY),
@@ -381,6 +452,7 @@ impl<E: Engine> ImportSstService<E> {
             store_meta,
             resource_manager,
             suspend: Arc::default(),
+            mem_limit,
         }
     }
 
@@ -530,6 +602,7 @@ macro_rules! impl_write {
         ) {
             let import = self.importer.clone();
             let tablets = self.tablets.clone();
+            let mem_limit = self.mem_limit;
             let region_info_accessor = self.region_info_accessor.clone();
             let (rx, buf_driver) =
                 create_stream_with_buffer(stream, self.cfg.rl().stream_channel_window);
@@ -544,7 +617,7 @@ macro_rules! impl_write {
                         Ok(r) => r,
                         Err(e) => return (Err(e), Some(rx)),
                     };
-                    let (meta, resource_limiter) = match first_req {
+                    let (meta, resource_limiter, txn_source) = match first_req {
                         Some(r) => {
                             let limiter = resource_manager.as_ref().and_then(|m| {
                                 m.get_background_resource_limiter(
@@ -554,8 +627,9 @@ macro_rules! impl_write {
                                     r.get_context().get_request_source(),
                                 )
                             });
+                            let txn_source = r.get_context().get_txn_source();
                             match r.chunk {
-                                Some($chunk_ty::Meta(m)) => (m, limiter),
+                                Some($chunk_ty::Meta(m)) => (m, limiter, txn_source),
                                 _ => return (Err(Error::InvalidChunk), Some(rx)),
                             }
                         }
@@ -601,8 +675,12 @@ macro_rules! impl_write {
                             );
                         }
                     };
+                    if let Err(e) = check_import_resources(mem_limit).await {
+                        warn!("Write failed due to not enough resource {:?}", e);
+                        return (Err(e), Some(rx));
+                    }
 
-                    let writer = match import.$writer_fn(&*tablet, meta) {
+                    let writer = match import.$writer_fn(&*tablet, meta, txn_source) {
                         Ok(w) => w,
                         Err(e) => {
                             error!("build writer failed {:?}", e);
@@ -613,11 +691,6 @@ macro_rules! impl_write {
                         .try_fold(
                             (writer, resource_limiter),
                             |(mut writer, limiter), req| async move {
-                                if get_disk_status(0) != DiskUsage::Normal {
-                                    warn!("Upload failed due to not enough disk space");
-                                    return Err(Error::DiskSpaceNotEnough);
-                                }
-
                                 let batch = match req.chunk {
                                     Some($chunk_ty::Batch(b)) => b,
                                     _ => return Err(Error::InvalidChunk),
@@ -748,6 +821,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let label = "upload";
         let timer = Instant::now_coarse();
         let import = self.importer.clone();
+        let mem_limit = self.mem_limit;
         let (rx, buf_driver) =
             create_stream_with_buffer(stream, self.cfg.rl().stream_channel_window);
         let mut map_rx = rx.map_err(Error::from);
@@ -762,13 +836,12 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                     _ => return Err(Error::InvalidChunk),
                 };
                 let file = import.create(meta)?;
+                if let Err(e) = check_import_resources(mem_limit).await {
+                    warn!("Upload failed due to not enough resource {:?}", e);
+                    return Err(e);
+                }
                 let mut file = rx
                     .try_fold(file, |mut file, chunk| async move {
-                        if get_disk_status(0) != DiskUsage::Normal {
-                            warn!("Upload failed due to not enough disk space");
-                            return Err(Error::DiskSpaceNotEnough);
-                        }
-
                         let start = Instant::now_coarse();
                         let data = chunk.get_data();
                         if data.is_empty() {
@@ -831,6 +904,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let start = Instant::now();
         let importer = self.importer.clone();
         let limiter = self.limiter.clone();
+        let mem_limit = self.mem_limit;
         let max_raft_size = self.raft_entry_max_size.0 as usize;
         let applier = self.writer.clone();
 
@@ -842,9 +916,13 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 .observe(start.saturating_elapsed().as_secs_f64());
 
             let mut resp = ApplyResponse::default();
-            if get_disk_status(0) != DiskUsage::Normal {
-                resp.set_error(Error::DiskSpaceNotEnough.into());
-                return send_rpc_response!(Ok(resp), sink, label, start);
+            match check_import_resources(mem_limit).await {
+                Ok(()) => (),
+                Err(e) => {
+                    resp.set_error(e.into());
+                    crate::send_rpc_response!(Ok(resp), sink, label, start);
+                    return;
+                }
             }
 
             match Self::do_apply(req, importer, applier, limiter, max_raft_size).await {
@@ -871,6 +949,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let timer = Instant::now_coarse();
         let importer = Arc::clone(&self.importer);
         let limiter = self.limiter.clone();
+        let mem_limit = self.mem_limit;
         let region_id = req.get_sst().get_region_id();
         let tablets = self.tablets.clone();
         let start = Instant::now();
@@ -889,10 +968,15 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             sst_importer::metrics::IMPORTER_DOWNLOAD_DURATION
                 .with_label_values(&["queue"])
                 .observe(start.saturating_elapsed().as_secs_f64());
-            if get_disk_status(0) != DiskUsage::Normal {
-                let mut resp = DownloadResponse::default();
-                resp.set_error(Error::DiskSpaceNotEnough.into());
-                return crate::send_rpc_response!(Ok(resp), sink, label, timer);
+
+            let mut resp = DownloadResponse::default();
+            match check_import_resources(mem_limit).await {
+                Ok(()) => (),
+                Err(e) => {
+                    resp.set_error(e.into());
+                    crate::send_rpc_response!(Ok(resp), sink, label, timer);
+                    return;
+                }
             }
 
             // FIXME: download() should be an async fn, to allow BR to cancel
@@ -914,7 +998,8 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                     ));
                     let mut resp = DownloadResponse::default();
                     resp.set_error(error.into());
-                    return crate::send_rpc_response!(Ok(resp), sink, label, timer);
+                    crate::send_rpc_response!(Ok(resp), sink, label, timer);
+                    return;
                 }
             };
 
@@ -1145,15 +1230,18 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                             IMPORT_RPC_DURATION
                                 .with_label_values(&[label, "ok"])
                                 .observe(timer.saturating_elapsed_secs());
+                            let _ = sink.close().await;
                         }
                         Err(e) => {
                             warn!(
                                 "connection send message fail";
                                 "err" => %e
                             );
+                            let status =
+                                RpcStatus::with_message(RpcStatusCode::UNKNOWN, format!("{:?}", e));
+                            let _ = sink.fail(status).await;
                         }
                     }
-                    let _ = sink.close().await;
                     return;
                 }
             };
@@ -1169,7 +1257,10 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                         "connection send message fail";
                         "err" => %e
                     );
-                    break;
+                    let status =
+                        RpcStatus::with_message(RpcStatusCode::UNKNOWN, format!("{:?}", e));
+                    let _ = sink.fail(status).await;
+                    return;
                 }
             }
             let _ = sink.close().await;

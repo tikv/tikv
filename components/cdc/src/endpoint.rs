@@ -157,6 +157,7 @@ type InitCallback = Box<dyn FnOnce() + Send>;
 pub enum Validate {
     Region(u64, Box<dyn FnOnce(Option<&Delegate>) + Send>),
     OldValueCache(Box<dyn FnOnce(&OldValueCache) + Send>),
+    UnresolvedRegion(Box<dyn FnOnce(usize) + Send>),
 }
 
 pub enum Task {
@@ -286,6 +287,7 @@ impl fmt::Debug for Task {
             Task::Validate(validate) => match validate {
                 Validate::Region(region_id, _) => de.field("region_id", &region_id).finish(),
                 Validate::OldValueCache(_) => de.finish(),
+                Validate::UnresolvedRegion(_) => de.finish(),
             },
             Task::ChangeConfig(change) => de
                 .field("type", &"change_config")
@@ -1122,7 +1124,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             // optimizations like async commit is enabled.
             // Note: This step must be done before scheduling `Task::MinTs` task, and the
             // resolver must be checked in or after `Task::MinTs`' execution.
-            cm.update_max_ts(min_ts);
+            cm.update_max_ts(min_ts, "cdc").unwrap();
             if let Some(min_mem_lock_ts) = cm.global_min_lock_ts() {
                 if min_mem_lock_ts < min_ts {
                     min_ts = min_mem_lock_ts;
@@ -1287,6 +1289,9 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                 }
                 Validate::OldValueCache(validate) => {
                     validate(&self.old_value_cache);
+                }
+                Validate::UnresolvedRegion(validate) => {
+                    validate(self.unresolved_region_count);
                 }
             },
             Task::ChangeConfig(change) => self.on_change_cfg(change),
@@ -1512,7 +1517,7 @@ mod tests {
             })),
             CdcObserver::new(task_sched, memory_quota.clone()),
             Arc::new(StdMutex::new(store_meta)),
-            ConcurrencyManager::new(1.into()),
+            ConcurrencyManager::new_for_test(1.into()),
             env,
             security_mgr,
             memory_quota,

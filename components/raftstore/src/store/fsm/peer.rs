@@ -77,7 +77,6 @@ use crate::{
     store::{
         cmd_resp::{bind_term, new_error},
         demote_failed_voters_request,
-        entry_storage::MAX_WARMED_UP_CACHE_KEEP_TIME,
         fsm::{
             apply,
             store::{PollContext, StoreMeta},
@@ -88,11 +87,8 @@ use crate::{
         local_metrics::{RaftMetrics, TimeTracker},
         memory::*,
         metrics::*,
-        msg::{Callback, ExtCallback, InspectedRaftMessage},
-        peer::{
-            ConsistencyState, Peer, PersistSnapshotResult, StaleState,
-            TRANSFER_LEADER_COMMAND_REPLY_CTX,
-        },
+        msg::{Callback, CampaignType, ExtCallback, InspectedRaftMessage},
+        peer::{ConsistencyState, Peer, PersistSnapshotResult, StaleState, TransferLeaderContext},
         region_meta::RegionMeta,
         snapshot_backup::{AbortReason, SnapshotBrState, SnapshotBrWaitApplyRequest},
         transport::Transport,
@@ -133,6 +129,10 @@ enum DelayReason {
 /// in most case.
 const MAX_REGIONS_IN_ERROR: usize = 10;
 const REGION_SPLIT_SKIP_MAX_COUNT: usize = 3;
+/// Limits the request size that can be batched in a single RaftCmdRequest.
+// todo: this fugure maybe changed to a more suitable value.
+#[allow(clippy::identity_op)]
+const MAX_BATCH_SIZE_LIMIT: u64 = 1 * 1024 * 1024;
 const UNSAFE_RECOVERY_STATE_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub const MAX_PROPOSAL_SIZE_RATIO: f64 = 0.4;
@@ -197,6 +197,11 @@ where
     propose_checked: Option<bool>,
     request: Option<RaftCmdRequest>,
     callbacks: Vec<Callback<E::Snapshot>>,
+
+    // Ref: https://github.com/tikv/tikv/issues/16818.
+    // Check for duplicate key entries batching proposed commands.
+    // TODO: remove this field when the cause of issue 16818 is located.
+    lock_cf_keys: HashSet<Vec<u8>>,
 }
 
 impl<EK, ER> Drop for PeerFsm<EK, ER>
@@ -260,6 +265,7 @@ where
         engines: Engines<EK, ER>,
         region: &metapb::Region,
         wait_data: bool,
+        raft_metrics: &RaftMetrics,
     ) -> Result<SenderFsmPair<EK, ER>> {
         let meta_peer = match find_peer(region, store_id) {
             None => {
@@ -292,6 +298,7 @@ where
                     meta_peer,
                     wait_data,
                     None,
+                    raft_metrics,
                 )?,
                 tick_registry: [false; PeerTick::VARIANT_COUNT],
                 missing_ticks: 0,
@@ -323,6 +330,7 @@ where
         region_id: u64,
         peer: metapb::Peer,
         create_by_peer: metapb::Peer,
+        raft_metrics: &RaftMetrics,
     ) -> Result<SenderFsmPair<EK, ER>> {
         // We will remove tombstone key when apply snapshot
         info!(
@@ -352,6 +360,7 @@ where
                     peer,
                     false,
                     Some(create_by_peer),
+                    raft_metrics,
                 )?,
                 tick_registry: [false; PeerTick::VARIANT_COUNT],
                 missing_ticks: 0,
@@ -435,6 +444,7 @@ where
             propose_checked: None,
             request: None,
             callbacks: vec![],
+            lock_cf_keys: HashSet::default(),
         }
     }
 
@@ -442,8 +452,13 @@ where
         // No batch request whose size exceed 20% of raft_entry_max_size,
         // so total size of request in batch_raft_request would not exceed
         // (40% + 20%) of raft_entry_max_size
+        // Also, to prevent the write batch size from becoming too large when
+        // raft_entry_max_size is set too high (all requests in a RaftCmdRequest will be
+        // written in one RocksDB write batch), we use MAX_APPLY_BATCH_SIZE to
+        // limit the number of requests batched within a single RaftCmdRequest.
         if req.get_requests().is_empty()
             || req_size as u64 > (cfg.raft_entry_max_size.0 as f64 * 0.2) as u64
+            || (self.batch_req_size + req_size as u64) > MAX_BATCH_SIZE_LIMIT
         {
             return false;
         }
@@ -470,6 +485,21 @@ where
             mut callback,
             ..
         } = cmd;
+        // Ref: https://github.com/tikv/tikv/issues/16818.
+        // Check for duplicate key entries batching proposed commands.
+        // TODO: remove this check when the cause of issue 16818 is located.
+        for req in request.get_requests() {
+            if req.has_put() && req.get_put().get_cf() == CF_LOCK {
+                let key = req.get_put().get_key();
+                if !self.lock_cf_keys.insert(key.to_vec()) {
+                    panic!(
+                        "found duplicate key in Lock CF PUT request between batched requests. \
+                            key: {:?}, existing batch request: {:?}, new request to add: {:?}",
+                        key, self.request, request
+                    );
+                }
+            }
+        }
         if let Some(batch_req) = self.request.as_mut() {
             let requests: Vec<_> = request.take_requests().into();
             for q in requests {
@@ -512,6 +542,7 @@ where
             self.batch_req_size = 0;
             self.has_proposed_cb = false;
             self.propose_checked = None;
+            self.lock_cf_keys = HashSet::default();
             if self.callbacks.len() == 1 {
                 let cb = self.callbacks.pop().unwrap();
                 return Some((req, cb));
@@ -638,6 +669,14 @@ where
         };
 
         for m in msgs.drain(..) {
+            // skip handling remain messages if fsm is destroyed. This can aviod handling
+            // arbitary messages(e.g. CasualMessage::ForceCompactRaftLogs) that may need
+            // to read raft logs which maybe lead to panic.
+            // We do not skip RaftCommand because raft commond callback should always be
+            // handled or it will cause panic.
+            if self.fsm.stopped && !matches!(&m, PeerMsg::RaftCommand(_)) {
+                continue;
+            }
             distribution[m.discriminant()] += 1;
             match m {
                 PeerMsg::RaftMessage(msg, sent_time) => {
@@ -674,6 +713,22 @@ where
                     if let Some(Err(e)) = cmd.extra_opts.deadline.map(|deadline| deadline.check()) {
                         cmd.callback.invoke_with_response(new_error(e.into()));
                         continue;
+                    }
+
+                    // Ref: https://github.com/tikv/tikv/issues/16818.
+                    // Check for duplicate key entries within the to be proposed raft cmd.
+                    // TODO: remove this check when the cause of issue 16818 is located.
+                    let mut keys_set = std::collections::HashSet::new();
+                    for req in cmd.request.get_requests() {
+                        if req.has_put() && req.get_put().get_cf() == CF_LOCK {
+                            let key = req.get_put().get_key();
+                            if !keys_set.insert(key.to_vec()) {
+                                panic!(
+                                    "found duplicate key in Lock CF PUT request, key: {:?}, cmd: {:?}",
+                                    key, cmd
+                                );
+                            }
+                        }
                     }
 
                     let req_size = cmd.request.compute_size();
@@ -784,6 +839,9 @@ where
             if self.fsm.batch_req_builder.request.is_some() {
                 self.ctx.raft_metrics.ready.propose_delay.inc();
             }
+        }
+        if self.fsm.peer.maybe_ack_transfer_leader_msg(self.ctx) {
+            self.fsm.has_ready = true;
         }
     }
 
@@ -1292,8 +1350,18 @@ where
                     self.maybe_destroy();
                 }
             }
-            CasualMessage::Campaign => {
-                let _ = self.fsm.peer.raft_group.campaign();
+            CasualMessage::Campaign(campaign_type) => {
+                match campaign_type {
+                    CampaignType::ForceLeader => {
+                        // Forcely campaign to be the leader of the region.
+                        let _ = self.fsm.peer.raft_group.campaign();
+                    }
+                    CampaignType::UnsafeSplitCampaign => {
+                        // If the message is sent by the parent, it means that the parent is already
+                        // the leader of the parent region.
+                        let _ = self.fsm.peer.maybe_campaign(true);
+                    }
+                }
                 self.fsm.has_ready = true;
             }
             CasualMessage::InMemoryEngineLoadRegion {
@@ -1890,7 +1958,9 @@ where
             // follower state
             let _ = self.ctx.router.send(
                 self.region_id(),
-                PeerMsg::CasualMessage(Box::new(CasualMessage::Campaign)),
+                PeerMsg::CasualMessage(Box::new(CasualMessage::Campaign(
+                    CampaignType::ForceLeader,
+                ))),
             );
         }
         self.fsm.has_ready = true;
@@ -2010,17 +2080,30 @@ where
         }
     }
 
+    #[inline]
+    /// Check whether the peer has any uncleared records in the
+    /// uncampaigned_new_regions list.
+    fn check_uncampaigned_regions(&mut self) {
+        fail_point!("on_skip_check_uncampaigned_regions", |_| {});
+        let has_uncompaigned_regions = !self
+            .fsm
+            .peer
+            .uncampaigned_new_regions
+            .as_ref()
+            .map_or(false, |r| r.is_empty());
+        // If the peer has any uncleared records in the uncampaigned_new_regions list,
+        // and there has valid leader in the region, it's safely to clear the records.
+        if has_uncompaigned_regions && self.fsm.peer.has_valid_leader() {
+            self.fsm.peer.uncampaigned_new_regions = None;
+        }
+    }
+
     fn on_raft_log_fetched(&mut self, context: GetEntriesContext, res: Box<RaftlogFetchResult>) {
         let low = res.low;
         // If the peer is not the leader anymore and it's not in entry cache warmup
         // state, or it is being destroyed, ignore the result.
-        if !self.fsm.peer.is_leader()
-            && self
-                .fsm
-                .peer
-                .get_store()
-                .entry_cache_warmup_state()
-                .is_none()
+        let cache_warmup_state = &self.fsm.peer.transfer_leader_state.cache_warmup_state;
+        if !self.fsm.peer.is_leader() && cache_warmup_state.is_none()
             || self.fsm.peer.pending_remove
         {
             self.fsm.peer.mut_store().clean_async_fetch_res(low);
@@ -2030,17 +2113,12 @@ where
         if self.fsm.peer.term() != res.term {
             // term has changed, the result may be not correct.
             self.fsm.peer.mut_store().clean_async_fetch_res(low);
-        } else if self
-            .fsm
-            .peer
-            .get_store()
-            .entry_cache_warmup_state()
-            .is_some()
-        {
-            if self.fsm.peer.mut_store().maybe_warm_up_entry_cache(*res) {
-                self.fsm.peer.ack_transfer_leader_msg(false);
-                self.fsm.has_ready = true;
-            }
+        } else if let Some(state) = &self.fsm.peer.transfer_leader_state.cache_warmup_state {
+            self.fsm
+                .peer
+                .raft_group
+                .mut_store()
+                .on_async_warm_up_entry_cache_fetched(*res, state.range());
             self.fsm.peer.mut_store().clean_async_fetch_res(low);
             return;
         } else {
@@ -2479,6 +2557,9 @@ where
                     .peer
                     .region_buckets_info_mut()
                     .add_bucket_flow(&res.bucket_stat);
+                // Update the state whether the peer is pending on applying raft
+                // logs if necesssary.
+                self.on_check_peer_complete_apply_logs();
 
                 self.fsm.has_ready |= self.fsm.peer.post_apply(
                     self.ctx,
@@ -2845,6 +2926,8 @@ where
 
         result?;
 
+        self.check_uncampaigned_regions();
+
         if self.fsm.peer.any_new_peer_catch_up(from_peer_id) {
             self.fsm.peer.heartbeat_pd(self.ctx);
             self.fsm.peer.should_wake_up = true;
@@ -3033,9 +3116,6 @@ where
     }
 
     fn on_extra_message(&mut self, mut msg: RaftMessage) {
-        self.ctx
-            .coprocessor_host
-            .on_extra_message(self.fsm.peer.region(), msg.get_extra_msg());
         match msg.get_extra_msg().get_type() {
             ExtraMessageType::MsgRegionWakeUp | ExtraMessageType::MsgCheckStalePeer => {
                 if msg.get_extra_msg().forcely_awaken {
@@ -3706,6 +3786,8 @@ where
     fn on_transfer_leader_msg(&mut self, msg: &eraftpb::Message, peer_disk_usage: DiskUsage) {
         // log_term is set by original leader, represents the term last log is written
         // in, which should be equal to the original leader's term.
+        //
+        // See more in `Peer::pre_transfer_leader`.
         if msg.get_log_term() != self.fsm.peer.term() {
             return;
         }
@@ -3733,6 +3815,10 @@ where
                 None => {
                     self.propose_pending_batch_raft_command();
                     if self.propose_locks_before_transfer_leader(msg) {
+                        fail_point!(
+                            "finish_proposing_transfer_cmd_after_proposing_locks",
+                            |_| {}
+                        );
                         // If some pessimistic locks are just proposed, we propose another
                         // TransferLeader command instead of transferring leader immediately.
                         info!("propose transfer leader command";
@@ -3767,9 +3853,13 @@ where
             .fsm
             .peer
             .maybe_reject_transfer_leader_msg(self.ctx, msg, peer_disk_usage)
-            && self.fsm.peer.pre_ack_transfer_leader_msg(self.ctx, msg)
         {
-            self.fsm.peer.ack_transfer_leader_msg(false);
+            self.fsm
+                .peer
+                .set_pending_transfer_leader_msg(&self.ctx.cfg, msg);
+            if self.fsm.peer.maybe_ack_transfer_leader_msg(self.ctx) {
+                self.fsm.has_ready = true;
+            }
         }
     }
 
@@ -3786,14 +3876,25 @@ where
         let txn_ext = self.fsm.peer.txn_ext.clone();
         let mut pessimistic_locks = txn_ext.pessimistic_locks.write();
 
-        // If the message context == TRANSFER_LEADER_COMMAND_REPLY_CTX, the message
+        // If the message context == TransferLeaderContext::CommandReply, the message
         // is a reply to a transfer leader command before. If the locks status remain
         // in the TransferringLeader status, we can safely initiate transferring leader
         // now.
         // If it's not in TransferringLeader status now, it is probably because several
         // ticks have passed after proposing the locks in the last time and we
         // reactivate the memory locks. Then, we should propose the locks again.
-        if msg.get_context() == TRANSFER_LEADER_COMMAND_REPLY_CTX
+        let context = match TransferLeaderContext::from_bytes(msg.get_context()) {
+            Ok(ctx) => ctx,
+            Err(e) => {
+                warn!("failed to decode transfer leader context";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "from" => ?msg.get_from(),
+                    "err" => ?e);
+                TransferLeaderContext::None
+            }
+        };
+        if matches!(context, TransferLeaderContext::CommandReply)
             && pessimistic_locks.status == LocksStatus::TransferringLeader
         {
             return false;
@@ -3931,6 +4032,7 @@ where
             )
             .flush()
             .when_done(move || {
+                fail_point!("destroy_region_before_gc_flush");
                 if let Err(e) = mb.force_send(PeerMsg::SignificantMsg(Box::new(
                     SignificantMsg::RaftLogGcFlushed,
                 ))) {
@@ -3942,6 +4044,7 @@ where
                         region_id, peer_id, e
                     );
                 }
+                fail_point!("destroy_region_after_gc_flush");
             });
             if let Err(e) = self.ctx.raftlog_gc_scheduler.schedule(task) {
                 if tikv_util::thread_group::is_shutdown(!cfg!(test)) {
@@ -4110,6 +4213,7 @@ where
             &mut self.ctx.raft_perf_context,
             merged_by_target,
             &self.ctx.pending_create_peers,
+            &self.ctx.raft_metrics,
         ) {
             // If not panic here, the peer will be recreated in the next restart,
             // then it will be gc again. But if some overlap region is created
@@ -4373,8 +4477,8 @@ where
     fn on_ready_compact_log(&mut self, first_index: u64, state: RaftTruncatedState) {
         // Since this peer may be warming up the entry cache, log compaction should be
         // temporarily skipped. Otherwise, the warmup task may fail.
-        if let Some(state) = self.fsm.peer.mut_store().entry_cache_warmup_state_mut() {
-            if !state.check_stale(MAX_WARMED_UP_CACHE_KEEP_TIME) {
+        if let Some(state) = &mut self.fsm.peer.transfer_leader_state.cache_warmup_state {
+            if !state.check_stale() {
                 return;
             }
         }
@@ -4387,7 +4491,11 @@ where
         let compact_to = state.get_index() + 1;
         self.fsm.peer.schedule_raftlog_gc(self.ctx, compact_to);
         self.fsm.peer.last_compacted_idx = compact_to;
-        self.fsm.peer.mut_store().on_compact_raftlog(compact_to);
+        let transfer_leader_state = &mut self.fsm.peer.transfer_leader_state;
+        self.fsm.peer.raft_group.mut_store().on_compact_raftlog(
+            compact_to,
+            transfer_leader_state.cache_warmup_state.as_mut(),
+        );
         if self.fsm.peer.is_witness() {
             self.fsm.peer.last_compacted_time = Instant::now();
         }
@@ -4446,7 +4554,7 @@ where
         );
         self.fsm.peer.post_split();
 
-        let is_leader = self.fsm.peer.is_leader();
+        let (is_leader, is_follower) = (self.fsm.peer.is_leader(), self.fsm.peer.is_follower());
         if is_leader {
             if share_source_region_size {
                 self.fsm.peer.set_approximate_size(share_size);
@@ -4552,6 +4660,7 @@ where
                 self.ctx.engines.clone(),
                 &new_region,
                 false,
+                &self.ctx.raft_metrics,
             ) {
                 Ok((sender, new_peer)) => (sender, new_peer),
                 Err(e) => {
@@ -4612,6 +4721,18 @@ where
                 .unwrap();
 
             if !campaigned {
+                // The new peer has not campaigned yet, record it for later campaign.
+                if is_follower && self.fsm.peer.region().get_peers().len() > 1 {
+                    if self.fsm.peer.uncampaigned_new_regions.is_none() {
+                        self.fsm.peer.uncampaigned_new_regions = Some(vec![]);
+                    }
+                    self.fsm
+                        .peer
+                        .uncampaigned_new_regions
+                        .as_mut()
+                        .unwrap()
+                        .push(new_region_id);
+                }
                 if let Some(msg) = meta
                     .pending_msgs
                     .swap_remove_front(|m| m.get_to_peer() == &meta_peer)
@@ -4649,6 +4770,11 @@ where
             .get_id();
 
         let state_key = keys::region_state_key(target_region_id);
+        let _timer = self
+            .ctx
+            .raft_metrics
+            .io_read_peer_check_merge_target_stale
+            .start_timer();
         if let Some(target_state) = self
             .ctx
             .engines
@@ -5490,10 +5616,12 @@ where
                     raft_engine.consume(&mut batch, true).unwrap();
 
                     {
-                        let peer_store = self.fsm.peer.mut_store();
+                        self.fsm.peer.transfer_leader_state.cache_warmup_state = None;
+                        let cache_warmup_state =
+                            &mut self.fsm.peer.transfer_leader_state.cache_warmup_state;
+                        let peer_store = self.fsm.peer.raft_group.mut_store();
                         peer_store.set_apply_state(apply_state);
-                        peer_store.clear_entry_cache_warmup_state();
-                        peer_store.compact_entry_cache(last_index + 1);
+                        peer_store.compact_entry_cache(last_index + 1, cache_warmup_state.as_mut());
                         peer_store.raft_state_mut().mut_hard_state().commit = last_index;
                         peer_store.raft_state_mut().last_index = last_index;
                     }
@@ -5962,7 +6090,7 @@ where
         }
         fail_point!("on_raft_log_gc_tick_1", self.fsm.peer_id() == 1, |_| {});
         fail_point!("on_raft_gc_log_tick", |_| {});
-        debug_assert!(!self.fsm.stopped);
+        assert!(!self.fsm.stopped);
 
         // As leader, we would not keep caches for the peers that didn't response
         // heartbeat in the last few seconds. That happens probably because
@@ -6026,10 +6154,11 @@ where
 
         // leader may call `get_term()` on the latest replicated index, so compact
         // entries before `alive_cache_idx` instead of `alive_cache_idx + 1`.
-        self.fsm
-            .peer
-            .mut_store()
-            .compact_entry_cache(std::cmp::min(alive_cache_idx, applied_idx + 1));
+        let transfer_leader_state = &mut self.fsm.peer.transfer_leader_state;
+        self.fsm.peer.raft_group.mut_store().on_compact_raftlog(
+            std::cmp::min(alive_cache_idx, applied_idx + 1),
+            transfer_leader_state.cache_warmup_state.as_mut(),
+        );
         if needs_evict_entry_cache(self.ctx.cfg.evict_cache_on_memory_ratio) {
             self.fsm.peer.mut_store().evict_entry_cache(true);
             if !self.fsm.peer.get_store().is_entry_cache_empty() {
@@ -7562,5 +7691,74 @@ mod tests {
         for flag in cbs_flags {
             assert!(flag.load(Ordering::Acquire));
         }
+    }
+
+    #[test]
+    fn test_batch_raft_cmd_request_builder_size_limit() {
+        let mut cfg = Config::default();
+        cfg.raft_entry_max_size = ReadableSize::gb(1);
+        let mut q = Request::default();
+        let mut builder = BatchRaftCmdRequestBuilder::<KvTestEngine>::new();
+
+        let mut req = RaftCmdRequest::default();
+        let mut put = PutRequest::default();
+        put.set_key(b"aaaa".to_vec());
+        let val = (0..200_000).map(|_| 0).collect_vec();
+        put.set_value(val);
+        q.set_cmd_type(CmdType::Put);
+        q.set_put(put);
+        req.mut_requests().push(q.clone());
+        let _ = q.take_put();
+        let req_size = req.compute_size();
+        assert!(builder.can_batch(&cfg, &req, req_size));
+        let cb = Callback::write_ext(Box::new(move |_| {}), None, None);
+        let cmd = RaftCommand::new(req.clone(), cb);
+        builder.add(cmd, req_size);
+
+        let mut req = RaftCmdRequest::default();
+        let mut put = PutRequest::default();
+        put.set_key(b"aaaa".to_vec());
+        let val = (0..900_000).map(|_| 0).collect_vec();
+        put.set_value(val);
+        q.set_cmd_type(CmdType::Put);
+        q.set_put(put);
+        req.mut_requests().push(q.clone());
+        let _ = q.take_put();
+        let req_size = req.compute_size();
+        assert!(!builder.can_batch(&cfg, &req, req_size));
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_batch_build_with_duplicate_lock_cf_keys() {
+        let mut builder = BatchRaftCmdRequestBuilder::<KvTestEngine>::new();
+
+        // Create first request.
+        let mut req1 = RaftCmdRequest::default();
+        let mut put1 = Request::default();
+        let mut put_req1 = PutRequest::default();
+        put_req1.set_cf(CF_LOCK.to_string());
+        put_req1.set_key(b"key1".to_vec());
+        put_req1.set_value(b"value1".to_vec());
+        put1.set_cmd_type(CmdType::Put);
+        put1.set_put(put_req1);
+        req1.mut_requests().push(put1);
+
+        // Create second request with same key in Lock CF.
+        let mut req2 = RaftCmdRequest::default();
+        let mut put2 = Request::default();
+        let mut put_req2 = PutRequest::default();
+        put_req2.set_cf(CF_LOCK.to_string());
+        put_req2.set_key(b"key1".to_vec());
+        put_req2.set_value(b"value2".to_vec());
+        put2.set_cmd_type(CmdType::Put);
+        put2.set_put(put_req2);
+        req2.mut_requests().push(put2);
+
+        // Add both requests to batch builder, should cause panic.
+        let size = req1.compute_size();
+        builder.add(RaftCommand::new(req1, Callback::None), size);
+        let size = req2.compute_size();
+        builder.add(RaftCommand::new(req2, Callback::None), size);
     }
 }

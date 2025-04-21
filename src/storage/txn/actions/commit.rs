@@ -179,7 +179,7 @@ pub mod tests {
         };
         let snapshot = engine.snapshot(snap_ctx).unwrap();
         let start_ts = start_ts.into();
-        let cm = ConcurrencyManager::new(start_ts);
+        let cm = ConcurrencyManager::new_for_test(start_ts);
         let mut txn = MvccTxn::new(start_ts, cm);
         let mut reader = SnapshotReader::new(start_ts, snapshot, true);
         let res = commit(&mut txn, &mut reader, Key::from_raw(key), commit_ts.into()).unwrap();
@@ -195,7 +195,7 @@ pub mod tests {
     ) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let start_ts = start_ts.into();
-        let cm = ConcurrencyManager::new(start_ts);
+        let cm = ConcurrencyManager::new_for_test(start_ts);
         let mut txn = MvccTxn::new(start_ts, cm);
         let mut reader = SnapshotReader::new(start_ts, snapshot, true);
         commit(&mut txn, &mut reader, Key::from_raw(key), commit_ts.into()).unwrap_err();

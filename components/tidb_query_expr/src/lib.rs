@@ -14,6 +14,7 @@
 #![feature(specialization)]
 #![feature(test)]
 #![feature(const_mut_refs)]
+#![feature(round_ties_even)]
 
 #[macro_use(box_err, box_try, try_opt)]
 extern crate tikv_util;
@@ -930,6 +931,14 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::SubDateDurationRealDatetime => sub_date_time_duration_interval_any_as_datetime_fn_meta::<Real>(),
         ScalarFuncSig::AddDateDurationDecimalDatetime => add_date_time_duration_interval_any_as_datetime_fn_meta::<Decimal>(),
         ScalarFuncSig::SubDateDurationDecimalDatetime => sub_date_time_duration_interval_any_as_datetime_fn_meta::<Decimal>(),
+        ScalarFuncSig::FromUnixTime1Arg => from_unixtime_1_arg_fn_meta(),
+        ScalarFuncSig::FromUnixTime2Arg => from_unixtime_2_arg_fn_meta(),
+        ScalarFuncSig::UnixTimestampInt => unix_timestamp_int_fn_meta(),
+        ScalarFuncSig::UnixTimestampDec => unix_timestamp_decimal_fn_meta(),
+        ScalarFuncSig::StrToDateDate => str_to_date_date_fn_meta(),
+        ScalarFuncSig::StrToDateDatetime => str_to_date_datetime_fn_meta(),
+        ScalarFuncSig::StrToDateDuration => str_to_date_duration_fn_meta(),
+        ScalarFuncSig::TimestampDiff => timestamp_diff_fn_meta(),
         _ => return Err(other_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value

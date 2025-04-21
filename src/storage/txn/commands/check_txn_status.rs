@@ -90,7 +90,12 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
         if !self.caller_start_ts.is_max() && self.caller_start_ts > new_max_ts {
             new_max_ts = self.caller_start_ts;
         }
-        context.concurrency_manager.update_max_ts(new_max_ts);
+        context.concurrency_manager.update_max_ts(new_max_ts, || {
+            format!(
+                "check_txn_status-{}-{}-{}",
+                self.lock_ts, self.current_ts, self.caller_start_ts
+            )
+        })?;
 
         let mut txn = MvccTxn::new(self.lock_ts, context.concurrency_manager);
         let mut reader = ReaderWithStats::new(
@@ -204,7 +209,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let current_ts = current_ts.into();
-        let cm = ConcurrencyManager::new(current_ts);
+        let cm = ConcurrencyManager::new_for_test(current_ts);
         let lock_ts: TimeStamp = lock_ts.into();
         let command = crate::storage::txn::commands::CheckTxnStatus {
             ctx: Context::default(),
@@ -258,7 +263,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let current_ts = current_ts.into();
-        let cm = ConcurrencyManager::new(current_ts);
+        let cm = ConcurrencyManager::new_for_test(current_ts);
         let lock_ts: TimeStamp = lock_ts.into();
         let command = crate::storage::txn::commands::CheckTxnStatus {
             ctx,
