@@ -363,8 +363,17 @@ impl MiscExt for RocksEngine {
         self.as_inner().sync_wal().map_err(r2e)
     }
 
+    /// Disables all manual compaction operations.
+    ///
+    /// After calling this function:
+    /// - All incoming manual compaction requests will be rejected
+    /// - All pending manual compaction jobs will not be executed
+    /// - All in-progress manual compaction jobs will be stopped
+    ///
+    /// This function should only be used during shutdown to ensure clean
+    /// termination.
     fn disable_manual_compaction(&self) -> Result<()> {
-        self.as_inner().disable_manual_compaction();
+        self.as_inner().disable_manual_compaction(true);
         Ok(())
     }
 
@@ -376,7 +385,10 @@ impl MiscExt for RocksEngine {
     fn pause_background_work(&self) -> Result<()> {
         // This will make manual compaction return error instead of waiting. In practice
         // we might want to identify this case by parsing error message.
-        self.disable_manual_compaction()?;
+        // WARNING: Setting global manual compaction canceled to false when multiple DB
+        // instances exist, as it affects the global state shared across all instances.
+        // This could lead to unexpected behavior in other instances.
+        self.as_inner().disable_manual_compaction(false);
         self.as_inner().pause_bg_work();
         Ok(())
     }
