@@ -439,7 +439,6 @@ where
             propose_checked: None,
             request: None,
             callbacks: vec![],
-            lock_cf_keys: HashSet::default(),
         }
     }
 
@@ -522,7 +521,6 @@ where
             self.batch_req_size = 0;
             self.has_proposed_cb = false;
             self.propose_checked = None;
-            self.lock_cf_keys = HashSet::default();
             if self.callbacks.len() == 1 {
                 let cb = self.callbacks.pop().unwrap();
                 return Some((req, cb));
