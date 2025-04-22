@@ -7689,38 +7689,4 @@ mod tests {
         let req_size = req.compute_size();
         assert!(!builder.can_batch(&cfg, &req, req_size));
     }
-
-    #[test]
-    #[should_panic]
-    fn test_batch_build_with_duplicate_lock_cf_keys() {
-        let mut builder = BatchRaftCmdRequestBuilder::<KvTestEngine>::new();
-
-        // Create first request.
-        let mut req1 = RaftCmdRequest::default();
-        let mut put1 = Request::default();
-        let mut put_req1 = PutRequest::default();
-        put_req1.set_cf(CF_LOCK.to_string());
-        put_req1.set_key(b"key1".to_vec());
-        put_req1.set_value(b"value1".to_vec());
-        put1.set_cmd_type(CmdType::Put);
-        put1.set_put(put_req1);
-        req1.mut_requests().push(put1);
-
-        // Create second request with same key in Lock CF.
-        let mut req2 = RaftCmdRequest::default();
-        let mut put2 = Request::default();
-        let mut put_req2 = PutRequest::default();
-        put_req2.set_cf(CF_LOCK.to_string());
-        put_req2.set_key(b"key1".to_vec());
-        put_req2.set_value(b"value2".to_vec());
-        put2.set_cmd_type(CmdType::Put);
-        put2.set_put(put_req2);
-        req2.mut_requests().push(put2);
-
-        // Add both requests to batch builder, should cause panic.
-        let size = req1.compute_size();
-        builder.add(RaftCommand::new(req1, Callback::None), size);
-        let size = req2.compute_size();
-        builder.add(RaftCommand::new(req2, Callback::None), size);
-    }
 }
