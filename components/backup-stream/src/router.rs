@@ -1286,10 +1286,10 @@ impl StreamTaskInfo {
                 .iter()
                 .map(|d| (d.length, d.data_files_info.len()))
                 .collect::<Vec<_>>();
-            self.fill_region_info(cx, &mut metadata_info);
             // flush meta file to storage.
-            self.flush_meta(metadata_info).await?;
+            self.fill_region_info(cx, &mut metadata_info);
             // flush backup metadata to external storage.
+            self.flush_meta(metadata_info).await?;
             crate::metrics::FLUSH_DURATION
                 .with_label_values(&["save_files"])
                 .observe(sw.lap().as_secs_f64());
