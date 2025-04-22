@@ -197,11 +197,6 @@ where
     propose_checked: Option<bool>,
     request: Option<RaftCmdRequest>,
     callbacks: Vec<Callback<E::Snapshot>>,
-
-    // Ref: https://github.com/tikv/tikv/issues/16818.
-    // Check for duplicate key entries batching proposed commands.
-    // TODO: remove this field when the cause of issue 16818 is located.
-    lock_cf_keys: HashSet<Vec<u8>>,
 }
 
 impl<EK, ER> Drop for PeerFsm<EK, ER>
@@ -485,21 +480,6 @@ where
             mut callback,
             ..
         } = cmd;
-        // Ref: https://github.com/tikv/tikv/issues/16818.
-        // Check for duplicate key entries batching proposed commands.
-        // TODO: remove this check when the cause of issue 16818 is located.
-        for req in request.get_requests() {
-            if req.has_put() && req.get_put().get_cf() == CF_LOCK {
-                let key = req.get_put().get_key();
-                if !self.lock_cf_keys.insert(key.to_vec()) {
-                    panic!(
-                        "found duplicate key in Lock CF PUT request between batched requests. \
-                            key: {:?}, existing batch request: {:?}, new request to add: {:?}",
-                        key, self.request, request
-                    );
-                }
-            }
-        }
         if let Some(batch_req) = self.request.as_mut() {
             let requests: Vec<_> = request.take_requests().into();
             for q in requests {
@@ -713,22 +693,6 @@ where
                     if let Some(Err(e)) = cmd.extra_opts.deadline.map(|deadline| deadline.check()) {
                         cmd.callback.invoke_with_response(new_error(e.into()));
                         continue;
-                    }
-
-                    // Ref: https://github.com/tikv/tikv/issues/16818.
-                    // Check for duplicate key entries within the to be proposed raft cmd.
-                    // TODO: remove this check when the cause of issue 16818 is located.
-                    let mut keys_set = std::collections::HashSet::new();
-                    for req in cmd.request.get_requests() {
-                        if req.has_put() && req.get_put().get_cf() == CF_LOCK {
-                            let key = req.get_put().get_key();
-                            if !keys_set.insert(key.to_vec()) {
-                                panic!(
-                                    "found duplicate key in Lock CF PUT request, key: {:?}, cmd: {:?}",
-                                    key, cmd
-                                );
-                            }
-                        }
                     }
 
                     let req_size = cmd.request.compute_size();
