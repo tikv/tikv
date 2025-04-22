@@ -2543,9 +2543,7 @@ mod tests {
         // performs the download.
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let importer =
-            SstImporter::<TestEngine>::new(&cfg, &importer_dir, None, ApiVersion::V1, false)
-                .unwrap();
+        let importer = SstImporter::new(&cfg, &importer_dir, None, ApiVersion::V1, false).unwrap();
 
         // creates a sample SST file.
         let (_ext_sst_dir, backend, meta) = create_sample_external_sst_file_txn_default().unwrap();
@@ -2604,9 +2602,7 @@ mod tests {
         // performs the download.
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let importer =
-            SstImporter::<TestEngine>::new(&cfg, &importer_dir, None, ApiVersion::V1, false)
-                .unwrap();
+        let importer = SstImporter::new(&cfg, &importer_dir, None, ApiVersion::V1, false).unwrap();
 
         // creates a sample SST file.
         let (_ext_sst_dir, backend, meta) = create_sample_external_sst_file_txn_write().unwrap();
