@@ -2226,7 +2226,7 @@ mod tests {
         must_register_table(router.as_ref(), task, 1).await;
         router.must_mut_task_info("flush_failure", |i| {
             i.storage = Arc::new(ErrorStorage::with_always_error(i.storage.clone()))
-        });
+        }).await;
         let cx = FlushContext {
             task_name: "flush_failure",
             store_id: 42,
