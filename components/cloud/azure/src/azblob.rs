@@ -15,17 +15,11 @@ use azure_identity::{ClientSecretCredential, TokenCredentialOptions};
 use azure_storage::{prelude::*, ConnectionString, ConnectionStringBuilder};
 use azure_storage_blobs::{blob::operations::PutBlockBlobBuilder, prelude::*};
 use cloud::blob::{
-    none_to_empty, unimplemented, BlobConfig, BlobObject, BlobStorage, BucketConf,
+    none_to_empty, read_to_end, unimplemented, BlobConfig, BlobObject, BlobStorage, BucketConf,
     DeletableStorage, IterableStorage, PutResource, StringNonEmpty,
 };
 use futures::TryFutureExt;
-use futures_util::{
-    future::FutureExt,
-    io::{AsyncRead, AsyncReadExt},
-    stream,
-    stream::StreamExt,
-    TryStreamExt,
-};
+use futures_util::{future::FutureExt, io::AsyncRead, stream, stream::StreamExt, TryStreamExt};
 pub use kvproto::brpb::{AzureBlobStorage as InputConfig, AzureCustomerKey};
 use oauth2::{ClientId, ClientSecret};
 use tikv_util::{
@@ -309,7 +303,7 @@ impl AzureUploader {
     ) -> io::Result<()> {
         // upload the entire data.
         let mut data = Vec::with_capacity(est_len as usize);
-        reader.read_to_end(&mut data).await?;
+        read_to_end(reader, &mut data).await?;
         retry(|| self.upload(&data)).await?;
         Ok(())
     }
