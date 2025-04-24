@@ -908,10 +908,7 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                             )))
                         },
                     );
-                    if !matches!(
-                        res,
-                        Err(txn_types::Error(box txn_types::ErrorInner::KeyIsLocked(_)))
-                    ) {
+                    if let (Ok(_)) = res {
                         rctx.read_index_safe_ts = Some(start_ts.into_inner());
                     }
                 }
