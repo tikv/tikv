@@ -351,4 +351,30 @@ mod tests {
 
         client.assert_requests_match(&[]);
     }
+
+    #[tokio::test]
+    #[cfg(FALSE)]
+    // FIXME: enable this (or move this to an integration test)
+    async fn test_aws_kms_localstack() {
+        let config = Config {
+            key_id: KeyId::new("cbf4ef24-982d-4fd3-a75b-b95aaec84860".to_string()).unwrap(),
+            vendor: String::new(),
+            location: Location {
+                region: "us-east-1".to_string(),
+                endpoint: "http://localhost:4566".to_string(),
+            },
+            azure: None,
+            gcp: None,
+        };
+
+        let creds =
+            Credentials::from_keys("testUser".to_string(), "testAccessKey".to_string(), None);
+        let aws_kms =
+            AwsKms::new_with_creds_client(config, util::new_http_client(), creds).unwrap();
+
+        let data_key = aws_kms.generate_data_key().await.unwrap();
+        let plaintext = aws_kms.decrypt_data_key(&data_key.encrypted).await.unwrap();
+
+        assert_eq!(plaintext, data_key.plaintext.clone());
+    }
 }
