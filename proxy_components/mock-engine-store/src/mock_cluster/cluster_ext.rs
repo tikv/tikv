@@ -39,6 +39,19 @@ pub struct FFIHelperSet {
 pub struct TestData {
     pub expected_leader_safe_ts: u64,
     pub expected_self_safe_ts: u64,
+    pub updated_leader_safe_ts: u64,
+    pub updated_self_safe_ts: u64,
+    pub checked_time: u64,
+}
+
+impl TestData {
+    pub fn reset(&mut self) {
+        self.expected_leader_safe_ts = 0;
+        self.expected_self_safe_ts = 0;
+        self.updated_leader_safe_ts = 0;
+        self.updated_self_safe_ts = 0;
+        self.checked_time = 0;
+    }
 }
 
 #[allow(clippy::type_complexity)]

@@ -72,9 +72,10 @@ impl TestSuite {
         req.set_regions(regions.into());
         req.set_ts(resolved_ts.into_inner());
 
-        let _check_leader_resp = self
+        let check_leader_resp = self
             .get_client_from_store_id(store_id)
             .check_leader(&req)
             .unwrap();
+        info!("check_leader_resp: {:?}", check_leader_resp);
     }
 }

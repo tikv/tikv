@@ -1236,6 +1236,10 @@ impl<ER: RaftEngine, F: KvFormat> TiKvServer<ER, F> {
         }
         let importer = Arc::new(importer);
 
+        // Must be registered before `CheckLeaderRunner`, to get safe_ts updates.
+        let mut tiflash_ob = engine_store_ffi::observer::TiFlashObserver::default();
+        tiflash_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+
         let check_leader_runner = CheckLeaderRunner::new(
             engines.store_meta.clone(),
             self.coprocessor_host.clone().unwrap(),
@@ -1283,7 +1287,7 @@ impl<ER: RaftEngine, F: KvFormat> TiKvServer<ER, F> {
             pd_endpoints: self.core.config.pd.endpoints.clone(),
             snap_handle_pool_size: self.proxy_config.raft_store.snap_handle_pool_size,
         };
-        let tiflash_ob = engine_store_ffi::observer::TiFlashObserver::new(
+        tiflash_ob.init_forwarder(
             node.id(),
             self.engines.as_ref().unwrap().engines.kv.clone(),
             self.engines.as_ref().unwrap().engines.raft.clone(),
@@ -1294,7 +1298,6 @@ impl<ER: RaftEngine, F: KvFormat> TiKvServer<ER, F> {
             DebugStruct::default(),
             self.core.encryption_key_manager.clone(),
         );
-        tiflash_ob.register_to(self.coprocessor_host.as_mut().unwrap());
 
         cfg_controller.register(
             tikv::config::Module::Server,

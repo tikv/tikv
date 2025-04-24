@@ -24,7 +24,6 @@ elif [[ $M == "testold" ]]; then
     echo "Finish tikv code consistency"
     exit # If we depend TiKV as a Cargo component, the following is not necessary, and can fail.
     # TODO we have to let tests support openssl-vendored.
-    yum install openssl openssl-devel -y
     cargo test --features "$ENABLE_FEATURES" --package tests --test failpoints cases::test_normal
     cargo test --features "$ENABLE_FEATURES" --package tests --test failpoints cases::test_bootstrap
     cargo test --features "$ENABLE_FEATURES" --package tests --test failpoints cases::test_compact_log

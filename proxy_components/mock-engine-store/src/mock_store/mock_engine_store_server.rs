@@ -598,17 +598,28 @@ unsafe extern "C" fn ffi_handle_destroy(
 
 unsafe extern "C" fn ffi_handle_safe_ts_update(
     arg1: *mut interfaces_ffi::EngineStoreServerWrap,
-    _region_id: u64,
+    region_id: u64,
     self_safe_ts: u64,
     leader_safe_ts: u64,
 ) {
-    let store = into_engine_store_server_wrap(arg1);
-    let cluster_ext = store.cluster_ext_ptr as *const mock_cluster::ClusterExt;
-    assert_eq!(self_safe_ts, (*cluster_ext).test_data.expected_self_safe_ts);
-    assert_eq!(
-        leader_safe_ts,
-        (*cluster_ext).test_data.expected_leader_safe_ts
+    info!(
+        "ffi_handle_safe_ts_update region_id {}, self_safe_ts {} leader_safe_ts {}",
+        region_id, self_safe_ts, leader_safe_ts
     );
+    let store = into_engine_store_server_wrap(arg1);
+    let cluster_ext = store.cluster_ext_ptr as *mut mock_cluster::ClusterExt;
+    if (*cluster_ext).test_data.expected_self_safe_ts != 0 {
+        assert_eq!(self_safe_ts, (*cluster_ext).test_data.expected_self_safe_ts);
+    }
+    if (*cluster_ext).test_data.expected_leader_safe_ts != 0 {
+        assert_eq!(
+            leader_safe_ts,
+            (*cluster_ext).test_data.expected_leader_safe_ts
+        );
+    }
+    (*cluster_ext).test_data.updated_leader_safe_ts = leader_safe_ts;
+    (*cluster_ext).test_data.updated_self_safe_ts = self_safe_ts;
+    (*cluster_ext).test_data.checked_time += 1;
 }
 
 unsafe extern "C" fn ffi_handle_compute_store_stats(

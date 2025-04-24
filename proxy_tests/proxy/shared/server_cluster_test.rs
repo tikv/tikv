@@ -101,6 +101,159 @@ fn test_safe_ts_basic() {
         .cluster_ext
         .set_expected_safe_ts(physical_time, physical_time);
     suite.must_check_leader(1, TimeStamp::new(physical_time), 1, 1);
+    assert_eq!(suite.cluster.cluster_ext.test_data.checked_time, 1);
 
     suite.stop();
+}
+
+const INVALID_TIMESTAMP: u64 = u64::MAX;
+
+#[test]
+fn test_safe_ts_updates() {
+    let mut suite = TestSuite::new(1);
+
+    suite.cluster.cluster_ext.test_data.reset();
+
+    let states = collect_all_states(&suite.cluster.cluster_ext, 1);
+    let applied_index = states
+        .get(&1)
+        .unwrap()
+        .in_memory_apply_state
+        .get_applied_index();
+
+    let physical_time = 646454654654;
+    suite.must_check_leader(1, TimeStamp::new(physical_time), applied_index + 1, 1);
+
+    assert_ne!(
+        suite.cluster.cluster_ext.test_data.updated_self_safe_ts,
+        physical_time
+    );
+
+    suite.cluster.must_put(b"k1", b"v1");
+
+    let eng_ids = suite
+        .cluster
+        .engines
+        .iter()
+        .map(|e| e.0.to_owned())
+        .collect::<Vec<_>>();
+
+    check_key(
+        &*(suite.cluster),
+        b"k1",
+        b"v1",
+        Some(true),
+        None,
+        Some(vec![eng_ids[0]]),
+    );
+
+    assert_eq!(
+        suite.cluster.cluster_ext.test_data.updated_self_safe_ts,
+        physical_time
+    );
+    assert_eq!(
+        suite.cluster.cluster_ext.test_data.updated_leader_safe_ts,
+        INVALID_TIMESTAMP
+    );
+
+    let physical_time2 = 666454654654;
+    suite.must_check_leader(1, TimeStamp::new(physical_time2), applied_index + 2, 1);
+
+    assert_eq!(
+        suite.cluster.cluster_ext.test_data.updated_self_safe_ts,
+        physical_time
+    );
+    assert_eq!(
+        suite.cluster.cluster_ext.test_data.updated_leader_safe_ts,
+        physical_time2
+    );
+
+    suite.cluster.must_put(b"k2", b"v1");
+
+    check_key(
+        &*(suite.cluster),
+        b"k2",
+        b"v1",
+        Some(true),
+        None,
+        Some(vec![eng_ids[0]]),
+    );
+
+    assert_eq!(
+        suite.cluster.cluster_ext.test_data.updated_self_safe_ts,
+        physical_time2
+    );
+    assert_eq!(
+        suite.cluster.cluster_ext.test_data.updated_leader_safe_ts,
+        INVALID_TIMESTAMP
+    );
+    suite.stop();
+}
+
+#[test]
+fn test_raft_message_observer() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.pd_client.disable_default_operator();
+    let r1 = cluster.run_conf_change();
+
+    cluster.must_put(b"k1", b"v1");
+
+    fail::cfg("tiflash_force_reject_raft_append_message", "return").unwrap();
+    fail::cfg("tiflash_force_reject_raft_snapshot_message", "return").unwrap();
+
+    cluster.pd_client.add_peer(r1, new_peer(2, 2));
+
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    check_key(
+        &cluster,
+        b"k1",
+        b"v",
+        Some(false),
+        Some(false),
+        Some(vec![2]),
+    );
+
+    fail::remove("tiflash_force_reject_raft_append_message");
+    fail::remove("tiflash_force_reject_raft_snapshot_message");
+
+    cluster.pd_client.must_have_peer(r1, new_peer(2, 2));
+    cluster.pd_client.must_add_peer(r1, new_peer(3, 3));
+
+    check_key(
+        &cluster,
+        b"k1",
+        b"v1",
+        Some(true),
+        Some(true),
+        Some(vec![2, 3]),
+    );
+
+    fail::cfg("tiflash_force_reject_raft_append_message", "return").unwrap();
+
+    let _ = cluster.async_put(b"k2", b"v2").unwrap();
+
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    check_key(
+        &cluster,
+        b"k3",
+        b"v3",
+        Some(false),
+        Some(false),
+        Some(vec![2, 3]),
+    );
+
+    fail::remove("tiflash_force_reject_raft_append_message");
+
+    cluster.must_put(b"k3", b"v3");
+    check_key(
+        &cluster,
+        b"k3",
+        b"v3",
+        Some(true),
+        Some(true),
+        Some(vec![1, 2, 3]),
+    );
+    cluster.shutdown();
 }

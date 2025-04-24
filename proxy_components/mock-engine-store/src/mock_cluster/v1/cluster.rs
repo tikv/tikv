@@ -13,7 +13,7 @@ use encryption::DataKeyManager;
 // mock cluster
 use engine_traits::{Engines, KvEngine, CF_DEFAULT};
 use file_system::IoRateLimiter;
-use futures::executor::block_on;
+use futures::{executor::block_on, future::BoxFuture, StreamExt};
 use kvproto::{
     errorpb::Error as PbError,
     metapb::{self, PeerRole, RegionEpoch, StoreLabel},
@@ -43,7 +43,7 @@ use resource_control::ResourceGroupManager;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{
-    is_error_response, new_admin_request, new_delete_cmd, new_peer, new_put_cf_cmd,
+    is_error_response, new_admin_request, new_delete_cmd, new_peer, new_put_cf_cmd, new_put_cmd,
     new_region_leader_cmd, new_request, new_status_request, new_store, new_tikv_config,
     new_transfer_leader_cmd, sleep_ms,
 };
@@ -1120,5 +1120,41 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
         if !result_rx.await.unwrap() {
             panic!("Flashback call msg failed");
         }
+    }
+
+    pub fn async_request(
+        &mut self,
+        req: RaftCmdRequest,
+    ) -> Result<BoxFuture<'static, RaftCmdResponse>> {
+        self.async_request_with_opts(req, Default::default())
+    }
+
+    pub fn async_request_with_opts(
+        &mut self,
+        mut req: RaftCmdRequest,
+        opts: RaftCmdExtraOpts,
+    ) -> Result<BoxFuture<'static, RaftCmdResponse>> {
+        let region_id = req.get_header().get_region_id();
+        let leader = self.leader_of_region(region_id).unwrap();
+        req.mut_header().set_peer(leader.clone());
+        let (cb, mut rx) = make_cb::<TiFlashEngine>(&req);
+        self.sim
+            .rl()
+            .async_command_on_node_with_opts(leader.get_store_id(), req, cb, opts)?;
+        Ok(Box::pin(async move {
+            let fut = rx.next();
+            fut.await.unwrap()
+        }))
+    }
+
+    pub fn async_put(
+        &mut self,
+        key: &[u8],
+        value: &[u8],
+    ) -> Result<BoxFuture<'static, RaftCmdResponse>> {
+        let mut region = self.get_region(key);
+        let reqs = vec![new_put_cmd(key, value)];
+        let put = new_request(region.get_id(), region.take_region_epoch(), reqs, false);
+        self.async_request(put)
     }
 }
