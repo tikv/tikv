@@ -908,7 +908,7 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                             )))
                         },
                     );
-                    if let (Ok(_)) = res {
+                    if res.is_ok() {
                         rctx.read_index_safe_ts = Some(start_ts.into_inner());
                     }
                 }
