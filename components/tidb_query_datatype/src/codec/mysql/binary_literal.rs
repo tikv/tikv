@@ -2,11 +2,12 @@
 
 use std::{
     cmp::{Eq, Ord, Ordering, PartialEq, PartialOrd},
+    fmt,
     string::ToString,
 };
 
 use crate::{
-    codec::{error::Error, Result},
+    codec::{Result, error::Error},
     expr::EvalContext,
 };
 
@@ -171,12 +172,9 @@ impl BinaryLiteral {
     }
 }
 
-impl ToString for BinaryLiteral {
-    fn to_string(&self) -> String {
-        if self.0.is_empty() {
-            return String::new();
-        }
-        format!("0x{}", hex::encode(self.0.as_slice()))
+impl fmt::Display for BinaryLiteral {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "0x{}", hex::encode(self.0.as_slice()))
     }
 }
 

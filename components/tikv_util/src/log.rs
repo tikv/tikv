@@ -97,7 +97,7 @@ macro_rules! info_or_debug{
 
 use std::fmt::{self, Display, Write};
 
-use slog::{BorrowedKV, OwnedKVList, Record, KV};
+use slog::{BorrowedKV, KV, OwnedKVList, Record};
 
 struct FormatKeyValueList<'a, W> {
     buffer: &'a mut W,

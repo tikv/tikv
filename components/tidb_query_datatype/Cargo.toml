@@ -28,7 +28,7 @@ log_wrappers = { workspace = true }
 match-template = "0.0.1"
 nom = { version = "7.1.0", default-features = false, features = ["std"] }
 num = { version = "0.3", default-features = false }
-num-derive = "0.3"
+num-derive = "0.4"
 num-traits = "0.2"
 ordered-float = "2.0"
 protobuf = "2"

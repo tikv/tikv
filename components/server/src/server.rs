@@ -16,28 +16,27 @@ use std::{
     convert::TryFrom,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::{atomic::AtomicU64, mpsc, Arc, Mutex},
+    sync::{Arc, Mutex, atomic::AtomicU64, mpsc},
     time::Duration,
-    u64,
 };
 
-use api_version::{dispatch_api_version, KvFormat};
+use api_version::{KvFormat, dispatch_api_version};
 use backup_stream::{
-    config::BackupStreamConfigManager, metadata::store::PdStore, observer::BackupStreamObserver,
-    BackupStreamResolver,
+    BackupStreamResolver, config::BackupStreamConfigManager, metadata::store::PdStore,
+    observer::BackupStreamObserver,
 };
 use causal_ts::CausalTsProviderImpl;
 use cdc::CdcConfigManager;
 use concurrency_manager::{ConcurrencyManager, LIMIT_VALID_TIME_MULTIPLIER};
 use engine_rocks::{
-    from_rocks_compression_type, RocksCompactedEvent, RocksEngine, RocksStatistics,
+    RocksCompactedEvent, RocksEngine, RocksStatistics, from_rocks_compression_type,
 };
-use engine_rocks_helper::sst_recovery::{RecoveryRunner, DEFAULT_CHECK_INTERVAL};
+use engine_rocks_helper::sst_recovery::{DEFAULT_CHECK_INTERVAL, RecoveryRunner};
 use engine_traits::{
-    Engines, KvEngine, MiscExt, RaftEngine, SingletonFactory, TabletContext, TabletRegistry,
-    CF_DEFAULT, CF_WRITE,
+    CF_DEFAULT, CF_WRITE, Engines, KvEngine, MiscExt, RaftEngine, SingletonFactory, TabletContext,
+    TabletRegistry,
 };
-use file_system::{get_io_rate_limiter, BytesFetcher, MetricsManager as IoMetricsManager};
+use file_system::{BytesFetcher, MetricsManager as IoMetricsManager, get_io_rate_limiter};
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
 use health_controller::HealthController;
@@ -46,8 +45,8 @@ use hybrid_engine::observer::{
     RegionCacheWriteBatchObserver,
 };
 use in_memory_engine::{
-    config::InMemoryEngineConfigManager, InMemoryEngineContext, InMemoryEngineStatistics,
-    RegionCacheMemoryEngine,
+    InMemoryEngineContext, InMemoryEngineStatistics, RegionCacheMemoryEngine,
+    config::InMemoryEngineConfigManager,
 };
 use kvproto::{
     brpb::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
@@ -56,32 +55,32 @@ use kvproto::{
     resource_usage_agent::create_resource_metering_pub_sub,
 };
 use pd_client::{
+    PdClient, RpcClient,
     meta_storage::{Checked, Sourced},
     metrics::STORE_SIZE_EVENT_INT_VEC,
-    PdClient, RpcClient,
 };
 use raft_log_engine::RaftLogEngine;
 use raftstore::{
+    RaftRouterCompactedEventSender,
     coprocessor::{
-        config::SplitCheckConfigManager, BoxConsistencyCheckObserver, ConsistencyCheckMethod,
-        CoprocessorHost, RawConsistencyCheckObserver, RegionInfoAccessor,
+        BoxConsistencyCheckObserver, ConsistencyCheckMethod, CoprocessorHost,
+        RawConsistencyCheckObserver, RegionInfoAccessor, config::SplitCheckConfigManager,
     },
     router::{CdcRaftRouter, ServerRaftStoreRouter},
     store::{
+        AutoSplitController, CheckLeaderRunner, DiskCheckRunner, LocalReader, SnapManager,
+        SnapManagerBuilder, SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
         config::RaftstoreConfigManager,
         fsm,
         fsm::store::{
-            RaftBatchSystem, RaftRouter, StoreMeta, MULTI_FILES_SNAPSHOT_FEATURE, PENDING_MSG_CAP,
+            MULTI_FILES_SNAPSHOT_FEATURE, PENDING_MSG_CAP, RaftBatchSystem, RaftRouter, StoreMeta,
         },
         memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE,
         snapshot_backup::PrepareDiskSnapObserver,
-        AutoSplitController, CheckLeaderRunner, DiskCheckRunner, LocalReader, SnapManager,
-        SnapManagerBuilder, SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
     },
-    RaftRouterCompactedEventSender,
 };
 use resolved_ts::{LeadershipResolver, Task};
-use resource_control::{config::ResourceContrlCfgMgr, ResourceGroupManager};
+use resource_control::{ResourceGroupManager, config::ResourceContrlCfgMgr};
 use security::{SecurityConfigManager, SecurityManager};
 use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
 use snap_recovery::RecoveryService;
@@ -93,9 +92,11 @@ use tikv::{
     coprocessor_v2,
     import::{ImportSstService, SstImporter},
     read_pool::{
-        build_yatp_read_pool, ReadPool, ReadPoolConfigManager, UPDATE_EWMA_TIME_SLICE_INTERVAL,
+        ReadPool, ReadPoolConfigManager, UPDATE_EWMA_TIME_SLICE_INTERVAL, build_yatp_read_pool,
     },
     server::{
+        CPU_CORES_QUOTA_GAUGE, GRPC_THREAD_PREFIX, KvEngineFactoryBuilder, MEMORY_LIMIT_GAUGE,
+        MultiRaftServer, RaftKv, Server,
         config::{Config as ServerConfig, ServerConfigManager},
         debug::{Debugger, DebuggerImpl},
         gc_worker::{AutoGcConfig, GcWorker},
@@ -106,11 +107,9 @@ use tikv::{
         status_server::StatusServer,
         tablet_snap::NoSnapshotCache,
         ttl::TtlChecker,
-        KvEngineFactoryBuilder, MultiRaftServer, RaftKv, Server, CPU_CORES_QUOTA_GAUGE,
-        GRPC_THREAD_PREFIX, MEMORY_LIMIT_GAUGE,
     },
     storage::{
-        self,
+        self, Engine, Storage,
         config::EngineType,
         config_manager::StorageConfigManger,
         kv::LocalTablets,
@@ -119,31 +118,29 @@ use tikv::{
             flow_controller::{EngineFlowController, FlowController},
             txn_status_cache::TxnStatusCache,
         },
-        Engine, Storage,
     },
 };
 use tikv_alloc::{
     add_thread_memory_accessor, remove_thread_memory_accessor, thread_allocate_exclusive_arena,
 };
 use tikv_util::{
-    check_environment_variables,
+    Either, check_environment_variables,
     config::VersionTrack,
     memory::MemoryQuota,
     mpsc as TikvMpsc,
     quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
-    sys::{disk, path_in_diff_mount_point, register_memory_usage_high_water, SysQuota},
+    sys::{SysQuota, disk, path_in_diff_mount_point, register_memory_usage_high_water},
     thread_group::GroupProperties,
     time::{Instant, Monitor},
     worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
     yatp_pool::CleanupMethod,
-    Either,
 };
 use tokio::runtime::Builder;
 
 use crate::{
     common::{
-        build_hybrid_engine, ConfiguredRaftEngine, DiskUsageChecker, EngineMetricsManager,
-        EnginesResourceInfo, TikvServerCore,
+        ConfiguredRaftEngine, DiskUsageChecker, EngineMetricsManager, EnginesResourceInfo,
+        TikvServerCore, build_hybrid_engine,
     },
     memory::*,
     setup::*,
@@ -1384,7 +1381,7 @@ where
             self.tablet_registry.clone().unwrap(),
             self.kv_statistics.clone(),
             self.in_memory_engine_statistics.clone(),
-            self.core.config.rocksdb.titan.enabled.map_or(false, |v| v),
+            self.core.config.rocksdb.titan.enabled.is_some_and(|v| v),
             self.engines.as_ref().unwrap().engines.raft.clone(),
             self.raft_statistics.clone(),
         );
@@ -1835,7 +1832,7 @@ mod test {
 
     use engine_rocks::raw::Env;
     use engine_traits::{
-        FlowControlFactorsExt, MiscExt, SyncMutable, TabletContext, TabletRegistry, CF_DEFAULT,
+        CF_DEFAULT, FlowControlFactorsExt, MiscExt, SyncMutable, TabletContext, TabletRegistry,
     };
     use tempfile::Builder;
     use tikv::{config::TikvConfig, server::KvEngineFactoryBuilder};

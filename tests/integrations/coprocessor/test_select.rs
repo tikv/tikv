@@ -14,7 +14,7 @@ use test_raftstore::*;
 use test_raftstore_macro::test_case;
 use test_storage::*;
 use tidb_query_datatype::{
-    codec::{datum, Datum},
+    codec::{Datum, datum},
     expr::EvalContext,
 };
 use tikv::{
@@ -23,9 +23,9 @@ use tikv::{
     storage::TestEngineBuilder,
 };
 use tikv_util::{
+    HandyRwLock,
     codec::number::*,
     config::{ReadableDuration, ReadableSize},
-    HandyRwLock,
 };
 use tipb::{
     AnalyzeColumnsReq, AnalyzeReq, AnalyzeType, ChecksumRequest, Chunk, Expr, ExprType,

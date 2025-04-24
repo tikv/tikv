@@ -9,7 +9,7 @@ use std::{
 };
 
 use engine_traits::{
-    CfName, IterOptions, Iterable, Iterator, KvEngine, TabletRegistry, CF_WRITE, LARGE_CFS,
+    CF_WRITE, CfName, IterOptions, Iterable, Iterator, KvEngine, LARGE_CFS, TabletRegistry,
 };
 use file_system::{IoType, WithIoType};
 use itertools::Itertools;
@@ -20,18 +20,18 @@ use kvproto::{
 use online_config::{ConfigChange, OnlineConfig};
 use pd_client::{BucketMeta, BucketStat};
 use tikv_util::{
-    box_err, debug, error, info, keybuilder::KeyBuilder, warn, worker::Runnable, Either,
+    Either, box_err, debug, error, info, keybuilder::KeyBuilder, warn, worker::Runnable,
 };
 use txn_types::Key;
 
 use super::metrics::*;
 use crate::{
+    Result,
     coprocessor::{
+        Config, CoprocessorHost, SplitCheckerHost,
         dispatcher::StoreHandle,
         split_observer::{is_valid_split_key, strip_timestamp_if_exists},
-        Config, CoprocessorHost, SplitCheckerHost,
     },
-    Result,
 };
 
 #[derive(PartialEq, Eq)]

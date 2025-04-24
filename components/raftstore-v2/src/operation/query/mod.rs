@@ -21,13 +21,13 @@ use kvproto::{
 };
 use raft::{Ready, StateRole};
 use raftstore::{
+    Error, Result,
     errors::RAFTSTORE_IS_BUSY,
     store::{
-        cmd_resp, local_metrics::RaftMetrics, metrics::RAFT_READ_INDEX_PENDING_COUNT,
-        msg::ErrorCallback, region_meta::RegionMeta, util, util::LeaseState, GroupState,
-        ReadIndexContext, ReadProgress, RequestPolicy,
+        GroupState, ReadIndexContext, ReadProgress, RequestPolicy, cmd_resp,
+        local_metrics::RaftMetrics, metrics::RAFT_READ_INDEX_PENDING_COUNT, msg::ErrorCallback,
+        region_meta::RegionMeta, util, util::LeaseState,
     },
-    Error, Result,
 };
 use slog::{debug, info};
 use tikv_util::{box_err, log::SlogFormat};
@@ -38,7 +38,7 @@ use crate::{
     fsm::PeerFsmDelegate,
     raft::Peer,
     router::{
-        message::RaftRequest, DebugInfoChannel, PeerMsg, QueryResChannel, QueryResult, ReadResponse,
+        DebugInfoChannel, PeerMsg, QueryResChannel, QueryResult, ReadResponse, message::RaftRequest,
     },
 };
 

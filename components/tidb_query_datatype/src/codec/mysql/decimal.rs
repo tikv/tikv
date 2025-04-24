@@ -3,7 +3,7 @@
 use std::{
     cmp,
     cmp::Ordering,
-    fmt::{self, Display, Formatter},
+    fmt,
     hash::{Hash, Hasher},
     intrinsics::copy_nonoverlapping,
     mem,
@@ -17,10 +17,10 @@ use tikv_util::escape;
 
 use crate::{
     codec::{
+        Error, Result, TEN_POW,
         convert::{self, ConvertTo},
         data_type::*,
         mysql::DEFAULT_DIV_FRAC_INCR,
-        Error, Result, TEN_POW,
     },
     expr::EvalContext,
 };
@@ -157,7 +157,11 @@ macro_rules! word_cnt {
             // when $len is negative and $t is unsigned
             0 as $t
         } else {
-            ($len as $t + DIGITS_PER_WORD as $t - 1) / (DIGITS_PER_WORD as $t)
+            // feature `int_roundings` is not stable.
+            #[allow(clippy::manual_div_ceil)]
+            {
+                ($len as $t + DIGITS_PER_WORD as $t - 1) / (DIGITS_PER_WORD as $t)
+            }
         }
     }};
 }
@@ -996,9 +1000,9 @@ impl Decimal {
 
     /// Given a precision count 'prec', get:
     ///  1. the index of first non-zero word in self.word_buf to hold the
-    /// leading 'prec' number of     digits
+    ///     leading 'prec' number of     digits
     ///  2. the number of remained digits if we remove all leading zeros for the
-    /// leading 'prec'     number of digits
+    ///     leading 'prec'     number of digits
     fn remove_leading_zeroes(&self, prec: u8) -> (usize, u8) {
         let mut cnt = prec;
         let mut i = ((cnt + DIGITS_PER_WORD - 1) % DIGITS_PER_WORD) + 1;
@@ -1919,8 +1923,8 @@ impl FromStr for Decimal {
     }
 }
 
-impl ToString for Decimal {
-    fn to_string(&self) -> String {
+impl fmt::Display for Decimal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let (mut buf, word_start_idx, int_len, int_cnt, frac_cnt) = self.prepare_buf();
         if self.negative {
             buf.push(b'-');
@@ -1960,17 +1964,8 @@ impl ToString for Decimal {
                 buf.push(b'0');
             }
         }
-        unsafe { String::from_utf8_unchecked(buf) }
-    }
-}
 
-impl Display for Decimal {
-    fn fmt(&self, fmt: &mut Formatter<'_>) -> fmt::Result {
-        let mut dec = *self;
-        dec = dec
-            .round(self.result_frac_cnt as i8, RoundMode::HalfEven)
-            .unwrap();
-        fmt.write_str(&dec.to_string())
+        f.write_str(unsafe { str::from_utf8_unchecked(&buf) })
     }
 }
 
@@ -2334,7 +2329,7 @@ impl Ord for Decimal {
     }
 }
 
-impl<'a, 'b> Add<&'a Decimal> for &'b Decimal {
+impl<'a> Add<&'a Decimal> for &Decimal {
     type Output = Res<Decimal>;
 
     fn add(self, rhs: &'a Decimal) -> Res<Decimal> {
@@ -2349,7 +2344,7 @@ impl<'a, 'b> Add<&'a Decimal> for &'b Decimal {
     }
 }
 
-impl<'a, 'b> Sub<&'a Decimal> for &'b Decimal {
+impl<'a> Sub<&'a Decimal> for &Decimal {
     type Output = Res<Decimal>;
 
     fn sub(self, rhs: &'a Decimal) -> Res<Decimal> {
@@ -2364,7 +2359,7 @@ impl<'a, 'b> Sub<&'a Decimal> for &'b Decimal {
     }
 }
 
-impl<'a, 'b> Mul<&'a Decimal> for &'b Decimal {
+impl<'a> Mul<&'a Decimal> for &Decimal {
     type Output = Res<Decimal>;
 
     fn mul(self, rhs: &'a Decimal) -> Res<Decimal> {
@@ -2372,7 +2367,7 @@ impl<'a, 'b> Mul<&'a Decimal> for &'b Decimal {
     }
 }
 
-impl<'a, 'b> Div<&'a Decimal> for &'b Decimal {
+impl<'a> Div<&'a Decimal> for &Decimal {
     type Output = Option<Res<Decimal>>;
 
     fn div(self, rhs: &'a Decimal) -> Self::Output {
@@ -2389,7 +2384,7 @@ impl Rem for Decimal {
     }
 }
 
-impl<'a, 'b> Rem<&'a Decimal> for &'b Decimal {
+impl<'a> Rem<&'a Decimal> for &Decimal {
     type Output = Option<Res<Decimal>>;
     fn rem(self, rhs: &'a Decimal) -> Self::Output {
         let result_frac_cnt = cmp::max(self.result_frac_cnt, rhs.result_frac_cnt);
@@ -2460,7 +2455,7 @@ mod tests {
 
         for (num, exp) in cases {
             let dec: Decimal = num.into();
-            let dec_str = format!("{}", dec);
+            let dec_str = dec.to_string();
             assert_eq!(dec_str, exp);
         }
     }
@@ -2475,7 +2470,7 @@ mod tests {
 
         for (num, exp) in cases {
             let dec: Decimal = num.into();
-            let dec_str = format!("{}", dec);
+            let dec_str = dec.to_string();
             assert_eq!(dec_str, exp);
         }
     }
@@ -2620,7 +2615,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         for (dec_str, exp) in cases {
             let dec = dec_str.parse::<Decimal>().unwrap();
-            let res = format!("{}", dec);
+            let res = dec.to_string();
             assert_eq!(res, dec_str);
 
             let f: f64 = dec.convert(&mut ctx).unwrap();
@@ -3653,12 +3648,12 @@ mod tests {
         for (pos, neg) in cases {
             let pos_dec: Decimal = pos.parse().unwrap();
             let res = -pos_dec;
-            assert_eq!(format!("{}", res), neg);
+            assert_eq!(res.to_string(), neg);
             assert!((&pos_dec + &res).is_zero());
 
             let neg_dec: Decimal = neg.parse().unwrap();
             let res = -neg_dec;
-            assert_eq!(format!("{}", res), pos);
+            assert_eq!(res.to_string(), pos);
             assert!((&neg_dec + &res).is_zero());
         }
 
@@ -3771,7 +3766,11 @@ mod tests {
         ];
         for (s, expect) in cases {
             let got: Decimal = s.convert(&mut ctx).unwrap();
-            assert_eq!(got, expect, "from {:?}, expect: {} got: {}", s, expect, got);
+            assert_eq!(
+                got, expect,
+                "from {:?}, expect: {:?} got: {:?}",
+                s, expect, got
+            );
         }
 
         // OVERFLOWING
@@ -3784,7 +3783,7 @@ mod tests {
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING)));
         let val: Decimal = big.as_bytes().convert(&mut ctx).unwrap();
         let max = max_decimal(WORD_BUF_LEN * DIGITS_PER_WORD, 0);
-        assert_eq!(val, max, "expect: {}, got: {}", val, max);
+        assert_eq!(val, max, "expect: {:?}, got: {:?}", val, max);
         assert_eq!(ctx.warnings.warning_cnt, 1);
         assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_DATA_OUT_OF_RANGE);
 
@@ -3814,7 +3813,11 @@ mod tests {
                 EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING),
             ));
             let got: Decimal = s.convert(&mut truncate_as_warning_ctx).unwrap();
-            assert_eq!(got, expect, "from {:?}, expect: {} got: {}", s, expect, got);
+            assert_eq!(
+                got, expect,
+                "from {:?}, expect: {:?} got: {:?}",
+                s, expect, got
+            );
             assert_eq!(truncate_as_warning_ctx.warnings.warning_cnt, 1);
         }
     }

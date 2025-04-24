@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{char, str, u32};
+use std::{char, str};
 
 use super::{super::Result, JsonRef, JsonType};
 

@@ -24,38 +24,38 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
 
 use encryption_export::DataKeyManager;
-use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry, ALL_CFS};
+use engine_traits::{ALL_CFS, KvEngine, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry};
 use fail::fail_point;
 use kvproto::{
     metapb::PeerRole,
     raft_serverpb::{PeerState, RaftSnapshotData},
 };
 use protobuf::Message;
-use raft::{eraftpb::Snapshot, StateRole};
+use raft::{StateRole, eraftpb::Snapshot};
 use raftstore::{
     coprocessor::RegionChangeEvent,
     store::{
+        GenSnapRes, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM, ReadTask, TabletSnapKey,
+        TabletSnapManager, Transport, WriteTask,
         metrics::STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER, worker_metrics::SNAP_COUNTER,
-        GenSnapRes, ReadTask, TabletSnapKey, TabletSnapManager, Transport, WriteTask,
-        RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
     },
 };
 use slog::{debug, error, info, warn};
 use tikv_util::{box_err, log::SlogFormat, slog_panic, store::find_peer_by_id};
 
 use crate::{
+    Result, StoreContext,
     fsm::ApplyResReporter,
-    operation::{command::temp_split_path, SharedReadTablet},
+    operation::{SharedReadTablet, command::temp_split_path},
     raft::{Apply, Peer, Storage},
     router::ApplyTask,
     worker::tablet,
-    Result, StoreContext,
 };
 
 /// Snapshot generating task state.
@@ -322,9 +322,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
             self.read_progress_mut().update_applied_core(snapshot_index);
             let split = self.storage_mut().split_init_mut().take();
-            if split.as_ref().map_or(true, |s| {
-                !s.scheduled || snapshot_index != RAFT_INIT_LOG_INDEX
-            }) {
+            if split
+                .as_ref()
+                .is_none_or(|s| !s.scheduled || snapshot_index != RAFT_INIT_LOG_INDEX)
+            {
                 info!(self.logger, "apply tablet snapshot completely");
                 // Tablet sent from region leader should have already be trimmed.
                 self.storage_mut().set_has_dirty_data(false);

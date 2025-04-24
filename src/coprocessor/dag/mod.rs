@@ -14,7 +14,7 @@ use tipb::{DagRequest, SelectResponse, StreamResponse};
 
 pub use self::storage_impl::TikvStorage;
 use crate::{
-    coprocessor::{metrics::*, Deadline, RequestHandler, Result},
+    coprocessor::{Deadline, RequestHandler, Result, metrics::*},
     storage::{Statistics, Store},
     tikv_util::quota_limiter::QuotaLimiter,
 };

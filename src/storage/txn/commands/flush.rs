@@ -4,21 +4,21 @@ use std::mem;
 
 use kvproto::kvrpcpb::{AssertionLevel, ExtraOp, PrewriteRequestPessimisticAction};
 // #[PerformanceCriticalPath]
-use txn_types::{insert_old_value_if_resolved, Mutation, OldValues, TimeStamp, TxnExtra};
+use txn_types::{Mutation, OldValues, TimeStamp, TxnExtra, insert_old_value_if_resolved};
 
 use crate::storage::{
+    Command, ProcessResult, Result as StorageResult, Snapshot, TypedCommand,
     kv::WriteData,
     lock_manager::LockManager,
     mvcc::{MvccTxn, SnapshotReader},
     txn::{
+        CommitKind, Error, ErrorInner, Result, TransactionKind, TransactionProperties,
         actions::{common::check_committed_record_on_err, prewrite::prewrite_with_generation},
         commands::{
             CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, WriteCommand, WriteContext,
             WriteResult,
         },
-        CommitKind, Error, ErrorInner, Result, TransactionKind, TransactionProperties,
     },
-    Command, ProcessResult, Result as StorageResult, Snapshot, TypedCommand,
 };
 
 command! {
@@ -224,20 +224,20 @@ mod tests {
     use txn_types::TimeStamp;
 
     use crate::storage::{
+        ProcessResult, TestEngineBuilder,
         mvcc::{
-            tests::{must_get, must_locked},
             Error as MvccError, ErrorInner as MvccErrorInner,
+            tests::{must_get, must_locked},
         },
         txn,
         txn::{
+            Error, ErrorInner,
             tests::{
                 flush_put_impl, flush_put_impl_with_assertion, must_acquire_pessimistic_lock,
                 must_acquire_pessimistic_lock_err, must_commit, must_flush_put,
                 must_pessimistic_locked, must_prewrite_put, must_prewrite_put_err,
             },
-            Error, ErrorInner,
         },
-        ProcessResult, TestEngineBuilder,
     };
 
     pub fn must_flush_put_with_assertion<E: Engine>(

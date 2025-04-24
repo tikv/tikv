@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{Iterable, Iterator, KvEngine, CF_DEFAULT};
+use engine_traits::{CF_DEFAULT, Iterable, Iterator, KvEngine};
 use panic_hook::recover_safe;
 
 use super::default_engine;

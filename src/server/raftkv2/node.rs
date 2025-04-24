@@ -11,22 +11,22 @@ use pd_client::PdClient;
 use raftstore::{
     coprocessor::CoprocessorHost,
     store::{
-        AutoSplitController, GlobalReplicationState, RefreshConfigTask, TabletSnapManager,
-        Transport, RAFT_INIT_LOG_INDEX,
+        AutoSplitController, GlobalReplicationState, RAFT_INIT_LOG_INDEX, RefreshConfigTask,
+        TabletSnapManager, Transport,
     },
 };
-use raftstore_v2::{router::RaftRouter, Bootstrap, PdTask, StoreRouter, StoreSystem};
+use raftstore_v2::{Bootstrap, PdTask, StoreRouter, StoreSystem, router::RaftRouter};
 use resource_control::ResourceController;
 use resource_metering::CollectorRegHandle;
 use service::service_manager::GrpcServiceManager;
-use slog::{info, o, Logger};
+use slog::{Logger, info, o};
 use sst_importer::SstImporter;
 use tikv_util::{
     config::VersionTrack,
     worker::{LazyWorker, Scheduler, Worker},
 };
 
-use crate::server::{raft_server::init_store, Result};
+use crate::server::{Result, raft_server::init_store};
 
 // TODO: we will rename another better name like RaftStore later.
 pub struct NodeV2<C: PdClient + 'static, EK: KvEngine, ER: RaftEngine> {

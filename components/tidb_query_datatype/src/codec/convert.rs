@@ -5,18 +5,18 @@ use std::{borrow::Cow, fmt::Display};
 use tipb::FieldType;
 
 use super::{
-    mysql::{charset::MULTI_BYTES_CHARSETS, RoundMode, DEFAULT_FSP},
     Error, Result,
+    mysql::{DEFAULT_FSP, RoundMode, charset::MULTI_BYTES_CHARSETS},
 };
 // use crate::{self, FieldTypeTp, UNSPECIFIED_LENGTH};
 use crate::{
+    Collation, FieldTypeAccessor, FieldTypeTp, UNSPECIFIED_LENGTH,
     codec::{
         data_type::*,
         error::ERR_DATA_OUT_OF_RANGE,
-        mysql::{decimal::max_or_min_dec, Res},
+        mysql::{Res, decimal::max_or_min_dec},
     },
     expr::{EvalContext, Flag},
-    Collation, FieldTypeAccessor, FieldTypeTp, UNSPECIFIED_LENGTH,
 };
 
 /// A trait for converting a value to an `Int`.
@@ -431,7 +431,7 @@ impl ToInt for Decimal {
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
         let dec = round_decimal_with_ctx(ctx, *self)?;
         let val = dec.as_i64();
-        let err = Error::truncated_wrong_val("DECIMAL", dec);
+        let err = Error::truncated_wrong_val("DECIMAL", dec.to_string());
         let r = val.into_result_with_overflow_err(ctx, err)?;
         r.to_int(ctx, tp)
     }
@@ -440,7 +440,7 @@ impl ToInt for Decimal {
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
         let dec = round_decimal_with_ctx(ctx, *self)?;
         let val = dec.as_u64();
-        let err = Error::truncated_wrong_val("DECIMAL", dec);
+        let err = Error::truncated_wrong_val("DECIMAL", dec.to_string());
         let r = val.into_result_with_overflow_err(ctx, err)?;
         r.to_uint(ctx, tp)
     }
@@ -560,7 +560,7 @@ fn round_decimal_with_ctx(ctx: &mut EvalContext, dec: Decimal) -> Result<Decimal
 #[inline]
 fn decimal_as_u64(ctx: &mut EvalContext, dec: Decimal, tp: FieldTypeTp) -> Result<u64> {
     dec.as_u64()
-        .into_result_with_overflow_err(ctx, Error::overflow("DECIMAL", dec))?
+        .into_result_with_overflow_err(ctx, Error::overflow("DECIMAL", dec.to_string()))?
         .to_uint(ctx, tp)
 }
 
@@ -1011,7 +1011,7 @@ fn exp_float_str_to_int_str<'a>(
     let int_cnt: i64;
     match dot_idx {
         None => {
-            digits.extend_from_slice(valid_float[..e_idx].as_bytes());
+            digits.extend_from_slice(&valid_float.as_bytes()[..e_idx]);
             // if digits.len() > i64::MAX,
             // then the input str has at least 9223372036854775808 chars,
             // which make the str >= 8388608.0 TB,
@@ -1019,9 +1019,9 @@ fn exp_float_str_to_int_str<'a>(
             int_cnt = digits.len() as i64;
         }
         Some(dot_idx) => {
-            digits.extend_from_slice(valid_float[..dot_idx].as_bytes());
+            digits.extend_from_slice(&valid_float.as_bytes()[..dot_idx]);
             int_cnt = digits.len() as i64;
-            digits.extend_from_slice(valid_float[(dot_idx + 1)..e_idx].as_bytes());
+            digits.extend_from_slice(&valid_float.as_bytes()[(dot_idx + 1)..e_idx]);
         }
     }
     // make `digits` immutable
@@ -1138,15 +1138,15 @@ mod tests {
 
     use super::*;
     use crate::{
+        Collation, FieldTypeFlag,
         codec::{
             error::{
                 ERR_DATA_OUT_OF_RANGE, ERR_M_BIGGER_THAN_D, ERR_TRUNCATE_WRONG_VALUE,
                 WARN_DATA_TRUNCATED,
             },
-            mysql::{charset, Res, UNSPECIFIED_FSP},
+            mysql::{Res, UNSPECIFIED_FSP, charset},
         },
         expr::{EvalConfig, EvalContext, Flag},
-        Collation, FieldTypeFlag,
     };
 
     #[test]
@@ -2383,7 +2383,11 @@ mod tests {
                 nd.frac_cnt(),
                 nd.result_frac_cnt()
             );
-            assert_eq!(nd, want, "{}, {}, {}, {}, {}", dec, nd, want, flen, decimal);
+            assert_eq!(
+                nd, want,
+                "{:?}, {:?}, {:?}, {}, {}",
+                dec, nd, want, flen, decimal
+            );
         }
     }
 
@@ -2774,7 +2778,7 @@ mod tests {
                 let rs = r.as_ref().map(|x| x.to_string());
                 let expect_str = expect.as_ref().map(|x| x.to_string());
                 let log = format!(
-                    "input: {}, origin_flen: {}, origin_decimal: {}, \
+                    "input: {:?}, origin_flen: {}, origin_decimal: {}, \
                      res_flen: {}, res_decimal: {}, is_unsigned: {}, \
                      in_dml: {}, in_dml_flag(if in_dml is false, it will take no effect): {:?}, \
                      expect: {:?}, expect: {:?}",

@@ -7,11 +7,11 @@ use external_storage::ExternalStorage;
 use tokio::runtime::Handle;
 
 use crate::{
+    Error,
     compaction::{Subcompaction, SubcompactionResult},
     errors::Result,
     execute::Execution,
     statistic::{CollectSubcompactionStatistic, LoadMetaStatistic},
-    Error,
 };
 
 pub struct NoHooks;

@@ -1,6 +1,6 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use tidb_query_datatype::codec::mysql::VectorFloat32Ref;
 
 fn bench_l1_distance_3d(c: &mut Criterion) {

@@ -8,14 +8,14 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use raftstore::{
     coprocessor::{Cmd, CmdBatch, ObserveHandle, ObserveLevel},
     store::{
-        cmd_resp,
+        RegionSnapshot, cmd_resp,
         fsm::{
-            apply::{notify_stale_req_with_msg, ObserverType, SHRINK_PENDING_CMD_QUEUE_CAP},
-            new_read_index_request, ChangeObserver,
+            ChangeObserver,
+            apply::{ObserverType, SHRINK_PENDING_CMD_QUEUE_CAP, notify_stale_req_with_msg},
+            new_read_index_request,
         },
         msg::ErrorCallback,
         util::compare_region_epoch,
-        RegionSnapshot,
     },
 };
 use slog::info;
@@ -24,7 +24,7 @@ use txn_types::WriteBatchFlags;
 use crate::{
     fsm::{ApplyResReporter, PeerFsmDelegate},
     raft::Apply,
-    router::{message::CaptureChange, ApplyTask, QueryResChannel, QueryResult},
+    router::{ApplyTask, QueryResChannel, QueryResult, message::CaptureChange},
 };
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
@@ -185,8 +185,8 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 #[cfg(test)]
 mod test {
     use std::sync::{
-        mpsc::{channel, Receiver, Sender},
         Arc, Mutex,
+        mpsc::{Receiver, Sender, channel},
     };
 
     use engine_test::{
@@ -194,7 +194,7 @@ mod test {
         kv::{KvTestEngine, TestTabletFactory},
     };
     use engine_traits::{
-        FlushState, Peekable, SstApplyState, TabletContext, TabletRegistry, CF_DEFAULT, DATA_CFS,
+        CF_DEFAULT, DATA_CFS, FlushState, Peekable, SstApplyState, TabletContext, TabletRegistry,
     };
     use futures::executor::block_on;
     use kvproto::{
@@ -217,8 +217,8 @@ mod test {
     use super::*;
     use crate::{
         operation::{
-            test_util::{create_tmp_importer, new_put_entry, MockReporter},
             CommittedEntries,
+            test_util::{MockReporter, create_tmp_importer, new_put_entry},
         },
         raft::Apply,
         router::build_any_channel,

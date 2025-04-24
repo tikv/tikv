@@ -4,8 +4,8 @@
 use std::{
     mem,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -27,25 +27,24 @@ use kvproto::{coprocessor::*, kvrpcpb::*, mpp::*, raft_serverpb::*, tikvpb::*};
 use protobuf::RepeatedField;
 use raft::eraftpb::MessageType;
 use raftstore::{
+    Error as RaftStoreError, Result as RaftStoreResult,
     store::{
-        get_memory_usage_entry_cache,
+        CheckLeaderTask, get_memory_usage_entry_cache,
         memory::{MEMTRACE_APPLYS, MEMTRACE_RAFT_ENTRIES, MEMTRACE_RAFT_MESSAGES},
         metrics::MESSAGE_RECV_BY_STORE,
-        CheckLeaderTask,
     },
-    Error as RaftStoreError, Result as RaftStoreResult,
 };
 use resource_control::ResourceGroupManager;
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_kv::{RaftExtension, StageLatencyStats};
 use tikv_util::{
     future::{paired_future_callback, poll_future_notify},
-    mpsc::future::{unbounded, BatchReceiver, Sender, WakePolicy},
+    mpsc::future::{BatchReceiver, Sender, WakePolicy, unbounded},
     sys::memory_usage_reaches_high_water,
-    time::{nanos_to_secs, Instant},
+    time::{Instant, nanos_to_secs},
     worker::Scheduler,
 };
-use tracker::{set_tls_tracker_token, RequestInfo, RequestType, Tracker, GLOBAL_TRACKERS};
+use tracker::{GLOBAL_TRACKERS, RequestInfo, RequestType, Tracker, set_tls_tracker_token};
 use txn_types::{self, Key};
 
 use super::batch::{BatcherBuilder, ReqBatcher};
@@ -53,18 +52,17 @@ use crate::{
     coprocessor::Endpoint,
     coprocessor_v2, forward_duplex, forward_unary, log_net_error,
     server::{
-        gc_worker::GcWorker, load_statistics::ThreadLoadPool, metrics::*, snap::Task as SnapTask,
-        Error, MetadataSourceStoreId, Proxy, Result as ServerResult,
+        Error, MetadataSourceStoreId, Proxy, Result as ServerResult, gc_worker::GcWorker,
+        load_statistics::ThreadLoadPool, metrics::*, snap::Task as SnapTask,
     },
     storage::{
-        self,
+        self, SecondaryLocksStatus, Storage, TxnStatus,
         errors::{
             extract_committed, extract_key_error, extract_key_errors, extract_kv_pairs,
             extract_region_error, extract_region_error_from_error, map_kv_pairs,
         },
         kv::Engine,
         lock_manager::LockManager,
-        SecondaryLocksStatus, Storage, TxnStatus,
     },
 };
 
@@ -1398,7 +1396,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
                         .with_label_values(&[ resource_control_ctx.get_resource_group_name(), resource_control_ctx.get_resource_group_name()])
                         .inc();
-                    if batcher.as_mut().map_or(false, |req_batch| {
+                    if batcher.as_mut().is_some_and(|req_batch| {
                         req_batch.can_batch_get(&req)
                     }) {
                         batcher.as_mut().unwrap().add_get_request(req, id);
@@ -1422,7 +1420,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
                     .with_label_values(&[resource_control_ctx.get_resource_group_name(), resource_control_ctx.get_resource_group_name()])
                     .inc();
-                    if batcher.as_mut().map_or(false, |req_batch| {
+                    if batcher.as_mut().is_some_and(|req_batch| {
                         req_batch.can_batch_raw_get(&req)
                     }) {
                         batcher.as_mut().unwrap().add_raw_get_request(req, id);
@@ -1859,6 +1857,7 @@ fn future_scan_lock<E: Engine, L: LockManager, F: KvFormat>(
     }
 }
 
+#[allow(clippy::unused_async)]
 async fn future_gc(_: GcRequest) -> ServerResult<GcResponse> {
     Err(Error::Grpc(GrpcError::RpcFailure(RpcStatus::new(
         RpcStatusCode::UNIMPLEMENTED,

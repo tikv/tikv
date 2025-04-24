@@ -1,34 +1,34 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
     path::Path,
-    sync::{atomic::AtomicU64, mpsc::sync_channel, Arc, Mutex},
+    sync::{Arc, Mutex, atomic::AtomicU64, mpsc::sync_channel},
     time::Duration,
 };
 
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{
-    DbOptionsExt, Engines, MiscExt, Peekable, RaftEngine, RaftEngineReadOnly, ALL_CFS, CF_DEFAULT,
-    CF_LOCK, CF_RAFT, CF_WRITE,
+    ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DbOptionsExt, Engines, MiscExt, Peekable,
+    RaftEngine, RaftEngineReadOnly,
 };
 use health_controller::HealthController;
 use kvproto::{kvrpcpb::ApiVersion, metapb, raft_serverpb::RegionLocalState};
 use raftstore::{
     coprocessor::CoprocessorHost,
     store::{
-        bootstrap_store, fsm, fsm::store::StoreMeta, AutoSplitController, DiskCheckRunner,
-        SnapManager,
+        AutoSplitController, DiskCheckRunner, SnapManager, bootstrap_store, fsm,
+        fsm::store::StoreMeta,
     },
 };
 use raftstore_v2::router::PeerMsg;
 use resource_metering::CollectorRegHandle;
 use service::service_manager::GrpcServiceManager;
 use tempfile::Builder;
-use test_pd_client::{bootstrap_with_first_region, TestPdClient};
+use test_pd_client::{TestPdClient, bootstrap_with_first_region};
 use test_raftstore::*;
 use tikv::{import::SstImporter, server::MultiRaftServer};
 use tikv_util::{
     config::VersionTrack,
-    worker::{dummy_scheduler, Builder as WorkerBuilder, LazyWorker},
+    worker::{Builder as WorkerBuilder, LazyWorker, dummy_scheduler},
 };
 
 fn test_bootstrap_idempotent<T: Simulator>(cluster: &mut Cluster<T>) {

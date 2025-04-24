@@ -10,7 +10,7 @@ use txn_types::{Key, LastChange, Lock, LockType, TimeStamp, TsSet, Value, WriteR
 
 use crate::storage::{
     kv::{Cursor, CursorBuilder, ScanMode, Snapshot, Statistics},
-    mvcc::{default_not_found_error, ErrorInner::WriteConflict, NewerTsCheckState, Result},
+    mvcc::{ErrorInner::WriteConflict, NewerTsCheckState, Result, default_not_found_error},
     need_check_locks,
 };
 
@@ -428,8 +428,8 @@ mod tests {
     use kvproto::kvrpcpb::{Assertion, AssertionLevel, PrewriteRequestPessimisticAction::*};
     use tidb_query_datatype::{
         codec::row::v2::{
-            encoder_for_test::{prepare_cols_for_test, RowEncoder},
             RowSlice,
+            encoder_for_test::{RowEncoder, prepare_cols_for_test},
         },
         expr::EvalContext,
     };

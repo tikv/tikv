@@ -1,7 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    io::{Error, ErrorKind, Result},
+    io::{Error, Result},
     sync::Mutex,
     time::Duration,
 };
@@ -9,9 +9,9 @@ use std::{
 use collections::HashMap;
 use procinfo::pid;
 use prometheus::{
-    self,
+    self, GaugeVec, IntGaugeVec, Opts,
     core::{Collector, Desc},
-    proto, GaugeVec, IntGaugeVec, Opts,
+    proto,
 };
 
 use crate::{
@@ -265,7 +265,7 @@ fn state_to_str(state: &pid::State) -> &str {
 }
 
 fn to_io_err(s: String) -> Error {
-    Error::new(ErrorKind::Other, s)
+    Error::other(s)
 }
 
 #[inline]

@@ -3,7 +3,7 @@
 //! This module contains functions that relates to peer liftime management and
 //! are shared with raftstore and raftstore v2.
 
-use engine_traits::{KvEngine, CF_RAFT};
+use engine_traits::{CF_RAFT, KvEngine};
 use kvproto::raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState};
 use tikv_util::warn;
 

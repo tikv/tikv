@@ -5,11 +5,11 @@ use std::{
     fmt::{self, Display, Formatter},
 };
 
-use engine_traits::{KvEngine, ManualCompactionOptions, TabletRegistry, CF_WRITE};
+use engine_traits::{CF_WRITE, KvEngine, ManualCompactionOptions, TabletRegistry};
 use fail::fail_point;
 use keys::{DATA_MAX_KEY, DATA_MIN_KEY};
-use raftstore::store::{need_compact, CompactThreshold};
-use slog::{debug, error, info, warn, Logger};
+use raftstore::store::{CompactThreshold, need_compact};
+use slog::{Logger, debug, error, info, warn};
 use thiserror::Error;
 use tikv_util::{box_try, worker::Runnable};
 
@@ -190,7 +190,7 @@ mod tests {
         ctor::{CfOptions, DbOptions},
         kv::{KvTestEngine, TestTabletFactory},
     };
-    use engine_traits::{MiscExt, SyncMutable, TabletContext, TabletRegistry, CF_DEFAULT, CF_LOCK};
+    use engine_traits::{CF_DEFAULT, CF_LOCK, MiscExt, SyncMutable, TabletContext, TabletRegistry};
     use keys::data_key;
     use kvproto::metapb::Region;
     use tempfile::Builder;

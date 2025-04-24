@@ -14,7 +14,7 @@ impl Json {
     /// 2. adjacent object are merged to a single object;
     /// 3. a scalar value is autowrapped as an array before merge;
     /// 4. an adjacent array and object are merged by autowrapping the object as
-    /// an array.
+    ///    an array.
     ///
     /// See `MergeBinary()` in TiDB `json/binary_function.go`
     #[allow(clippy::comparison_chain)]

@@ -15,8 +15,8 @@ use codec::prelude::*;
 use num::Unsigned;
 
 use crate::codec::{
-    data_type::{Bytes, BytesGuard, BytesRef, BytesWriter},
     Result,
+    data_type::{Bytes, BytesGuard, BytesRef, BytesWriter},
 };
 
 #[macro_export]
@@ -197,7 +197,10 @@ where
     #[allow(clippy::transmute_ptr_to_ptr)]
     pub fn new_ref(inner: &T) -> Result<&Self> {
         C::Charset::validate(inner.as_ref())?;
-        Ok(unsafe { std::mem::transmute(inner) })
+        Ok(unsafe {
+            #[allow(clippy::missing_transmute_annotations)]
+            std::mem::transmute(inner)
+        })
     }
 
     #[inline]
@@ -206,7 +209,10 @@ where
         if let Some(inner) = inner {
             C::Charset::validate(inner.as_ref())?;
         }
-        Ok(unsafe { std::mem::transmute(inner) })
+        Ok(unsafe {
+            #[allow(clippy::missing_transmute_annotations)]
+            std::mem::transmute(inner)
+        })
     }
 
     #[inline]

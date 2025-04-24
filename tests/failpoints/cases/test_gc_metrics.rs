@@ -1,13 +1,13 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{atomic::AtomicU64, mpsc, Arc},
+    sync::{Arc, atomic::AtomicU64, mpsc},
     thread,
     time::Duration,
 };
 
 use api_version::{ApiV2, KvFormat, RawValue};
-use engine_rocks::{raw::FlushOptions, util::get_cf_handle, RocksEngine};
+use engine_rocks::{RocksEngine, raw::FlushOptions, util::get_cf_handle};
 use engine_traits::{CF_DEFAULT, CF_WRITE};
 use kvproto::{
     kvrpcpb::*,
@@ -16,28 +16,27 @@ use kvproto::{
 use pd_client::FeatureGate;
 use raft::StateRole;
 use raftstore::{
-    coprocessor::{
-        region_info_accessor::MockRegionInfoProvider, CoprocessorHost, RegionChangeEvent,
-    },
     RegionInfoAccessor,
+    coprocessor::{
+        CoprocessorHost, RegionChangeEvent, region_info_accessor::MockRegionInfoProvider,
+    },
 };
 use tikv::{
     config::DbConfig,
     server::gc_worker::{
+        AutoGcConfig, GcConfig, GcWorker, MockSafePointProvider, PrefixedEngine, STAT_RAW_KEYMODE,
+        STAT_TXN_KEYMODE, TestGcRunner,
         compaction_filter::{
-            GC_COMPACTION_FILTERED, GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED,
-            GC_COMPACTION_FILTER_MVCC_DELETION_MET, GC_COMPACTION_FILTER_PERFORM,
-            GC_COMPACTION_FILTER_SKIP,
+            GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED, GC_COMPACTION_FILTER_MVCC_DELETION_MET,
+            GC_COMPACTION_FILTER_PERFORM, GC_COMPACTION_FILTER_SKIP, GC_COMPACTION_FILTERED,
         },
         rawkv_compaction_filter::make_key,
-        AutoGcConfig, GcConfig, GcWorker, MockSafePointProvider, PrefixedEngine, TestGcRunner,
-        STAT_RAW_KEYMODE, STAT_TXN_KEYMODE,
     },
     storage::{
-        kv::{Modify, TestEngineBuilder, WriteData},
-        mvcc::{tests::must_get, MVCC_VERSIONS_HISTOGRAM},
-        txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put},
         Engine,
+        kv::{Modify, TestEngineBuilder, WriteData},
+        mvcc::{MVCC_VERSIONS_HISTOGRAM, tests::must_get},
+        txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put},
     },
 };
 use txn_types::{Key, TimeStamp};

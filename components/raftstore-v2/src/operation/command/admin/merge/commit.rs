@@ -64,15 +64,15 @@ use kvproto::{
     raft_serverpb::{MergedRecord, PeerState, RegionLocalState},
 };
 use protobuf::Message;
-use raft::{GetEntriesContext, Storage, INVALID_ID, NO_LIMIT};
+use raft::{GetEntriesContext, INVALID_ID, NO_LIMIT, Storage};
 use raftstore::{
+    Result,
     coprocessor::RegionChangeReason,
     store::{
-        fsm::new_admin_request, metrics::PEER_ADMIN_CMD_COUNTER, util, ProposalContext, Transport,
+        ProposalContext, Transport, fsm::new_admin_request, metrics::PEER_ADMIN_CMD_COUNTER, util,
     },
-    Result,
 };
-use slog::{debug, error, info, Logger};
+use slog::{Logger, debug, error, info};
 use tikv_util::{
     config::ReadableDuration,
     log::SlogFormat,
@@ -81,7 +81,7 @@ use tikv_util::{
     time::Instant,
 };
 
-use super::{merge_source_path, PrepareStatus};
+use super::{PrepareStatus, merge_source_path};
 use crate::{
     batch::StoreContext,
     fsm::ApplyResReporter,

@@ -57,17 +57,14 @@ impl MySqlFormatter {
     }
 }
 
-impl<'a> ToString for JsonRef<'a> {
-    /// This function is a simple combination and rewrite of serde_json's
-    /// `to_writer_pretty`
-    fn to_string(&self) -> String {
+impl<'a> fmt::Display for JsonRef<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut writer = Vec::with_capacity(128);
         let mut ser = JsonSerializer::with_formatter(&mut writer, MySqlFormatter::new());
         self.serialize(&mut ser).unwrap();
-        unsafe {
-            // serde_json will not emit invalid UTF-8
-            String::from_utf8_unchecked(writer)
-        }
+
+        // serde_json will not emit invalid UTF-8
+        f.write_str(unsafe { str::from_utf8_unchecked(&writer) })
     }
 }
 
@@ -141,12 +138,6 @@ impl<'a> Serialize for JsonRef<'a> {
                 serializer.serialize_str(&duration.to_string())
             }
         }
-    }
-}
-
-impl ToString for Json {
-    fn to_string(&self) -> String {
-        self.as_ref().to_string()
     }
 }
 

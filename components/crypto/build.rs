@@ -3,7 +3,7 @@
 use std::env;
 
 fn main() {
-    if !option_env!("ENABLE_FIPS").map_or(false, |v| v == "1") {
+    if option_env!("ENABLE_FIPS").is_none_or(|v| v != "1") {
         println!("cargo:rustc-cfg=disable_fips");
         return;
     }

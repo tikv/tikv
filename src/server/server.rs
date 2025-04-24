@@ -1,7 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    i32,
     net::{IpAddr, SocketAddr},
     str::FromStr,
     sync::Arc,
@@ -17,23 +16,24 @@ use grpcio::{
     },
     Environment, ResourceQuota, Server as GrpcServer, ServerBuilder,
 };
-use grpcio_health::{create_health, HealthService};
+use grpcio_health::{HealthService, create_health};
 use health_controller::HealthController;
 use kvproto::tikvpb::*;
 use raftstore::store::{CheckLeaderTask, SnapManager, TabletSnapManager};
 use resource_control::ResourceGroupManager;
 use security::SecurityManager;
 use tikv_util::{
+    Either,
     config::VersionTrack,
     sys::{get_global_memory_usage, record_global_memory_usage},
     timer::GLOBAL_TIMER_HANDLE,
     worker::{LazyWorker, Scheduler, Worker},
-    Either,
 };
 use tokio::runtime::{Builder as RuntimeBuilder, Handle as RuntimeHandle, Runtime};
 use tokio_timer::timer::Handle;
 
 use super::{
+    Config, Error, Result,
     load_statistics::*,
     metrics::{MEMORY_USAGE_GAUGE, SERVER_INFO_GAUGE_VEC},
     raft_client::{ConnectionBuilder, RaftClient},
@@ -42,14 +42,13 @@ use super::{
     snap::{Runner as SnapHandler, Task as SnapTask},
     tablet_snap::SnapCacheBuilder,
     transport::ServerTransport,
-    Config, Error, Result,
 };
 use crate::{
     coprocessor::Endpoint,
     coprocessor_v2,
     read_pool::ReadPool,
-    server::{config::GrpcCompressionType, gc_worker::GcWorker, tablet_snap::TabletRunner, Proxy},
-    storage::{lock_manager::LockManager, Engine, Storage},
+    server::{Proxy, config::GrpcCompressionType, gc_worker::GcWorker, tablet_snap::TabletRunner},
+    storage::{Engine, Storage, lock_manager::LockManager},
     tikv_util::sys::thread::ThreadBuildWrapper,
 };
 
@@ -468,7 +467,7 @@ pub mod test_router {
 
     use engine_rocks::{RocksEngine, RocksSnapshot};
     use kvproto::raft_serverpb::RaftMessage;
-    use raftstore::{router::RaftStoreRouter, store::*, Result as RaftStoreResult};
+    use raftstore::{Result as RaftStoreResult, router::RaftStoreRouter, store::*};
     use tikv_util::time::Instant as TiInstant;
 
     use super::*;
@@ -557,7 +556,7 @@ mod tests {
     use grpcio::EnvBuilder;
     use kvproto::raft_serverpb::RaftMessage;
     use raftstore::{
-        coprocessor::{region_info_accessor::MockRegionInfoProvider, CoprocessorHost},
+        coprocessor::{CoprocessorHost, region_info_accessor::MockRegionInfoProvider},
         router::RaftStoreRouter,
         store::{transport::Transport, *},
     };
@@ -568,16 +567,16 @@ mod tests {
 
     use super::{
         super::{
-            resolve::{self, Callback as ResolveCallback, StoreAddrResolver},
             Config,
+            resolve::{self, Callback as ResolveCallback, StoreAddrResolver},
         },
         *,
     };
     use crate::{
         config::CoprReadPoolConfig,
         coprocessor::{self, readpool_impl},
-        server::{raftkv::RaftRouterWrap, tablet_snap::NoSnapshotCache, TestRaftStoreRouter},
-        storage::{lock_manager::MockLockManager, TestEngineBuilder, TestStorageBuilderApiV1},
+        server::{TestRaftStoreRouter, raftkv::RaftRouterWrap, tablet_snap::NoSnapshotCache},
+        storage::{TestEngineBuilder, TestStorageBuilderApiV1, lock_manager::MockLockManager},
     };
 
     #[derive(Clone)]

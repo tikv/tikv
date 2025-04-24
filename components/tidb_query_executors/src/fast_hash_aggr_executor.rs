@@ -5,15 +5,16 @@ use std::{convert::TryFrom, hash::Hash, sync::Arc};
 use async_trait::async_trait;
 use collections::HashMap;
 use tidb_query_aggr::*;
-use tidb_query_common::{storage::IntervalRange, Result};
+use tidb_query_common::{Result, storage::IntervalRange};
 use tidb_query_datatype::{
+    Collation, EvalType, FieldTypeAccessor,
     codec::{
         batch::{LazyBatchColumn, LazyBatchColumnVec},
         collation::SortKey,
         data_type::*,
     },
     expr::{EvalConfig, EvalContext},
-    match_template_collator, Collation, EvalType, FieldTypeAccessor,
+    match_template_collator,
 };
 use tidb_query_expr::{RpnExpression, RpnExpressionBuilder, RpnStackNode};
 use tikv_util::box_try;
@@ -469,18 +470,18 @@ where
 #[cfg(test)]
 mod tests {
     use futures::executor::block_on;
-    use tidb_query_datatype::{expr::EvalWarnings, FieldTypeTp};
+    use tidb_query_datatype::{FieldTypeTp, expr::EvalWarnings};
     use tidb_query_expr::{
-        impl_arithmetic::{arithmetic_fn_meta, RealPlus},
         RpnExpression, RpnExpressionBuilder,
+        impl_arithmetic::{RealPlus, arithmetic_fn_meta},
     };
     use tipb::{ExprType, ScalarFuncSig};
     use tipb_helper::ExprDefBuilder;
 
     use super::*;
     use crate::{
-        util::{aggr_executor::tests::*, mock_executor::MockExecutor},
         BatchSlowHashAggregationExecutor,
+        util::{aggr_executor::tests::*, mock_executor::MockExecutor},
     };
 
     // Test cases also cover BatchSlowHashAggregationExecutor.

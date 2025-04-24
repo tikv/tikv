@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{mpsc::Sender, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc::Sender};
 
 use collections::hash_set_with_capacity;
 use rocksdb::{CompactionJobInfo, EventListener, FlushJobInfo, IngestionInfo};
@@ -122,8 +122,7 @@ impl EventListener for FlowListener {
                     }
                 }
 
-                let diff = if output < input { input - output } else { 0 };
-
+                let diff = input.saturating_sub(output);
                 let _ = self
                     .flow_info_sender
                     .lock()

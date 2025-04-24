@@ -109,15 +109,15 @@ impl_into!(ConfigChange, Module);
 /// The OnlineConfig trait
 ///
 /// There are four type of fields inside derived OnlineConfig struct:
-/// 1. `#[online_config(skip)]` field, these fields will not return
-/// by `diff` method and have not effect of `update` method
+/// 1. `#[online_config(skip)]` field, these fields will not return by `diff`
+///    method and have not effect of `update` method
 /// 2. `#[online_config(hidden)]` field, these fields have the same effect of
-/// `#[online_config(skip)]` field, in addition, these fields will not appear
-/// at the output of serializing `Self::Encoder`
+///    `#[online_config(skip)]` field, in addition, these fields will not appear
+///    at the output of serializing `Self::Encoder`
 /// 3. `#[online_config(submodule)]` field, these fields represent the
-/// submodule, and should also derive `OnlineConfig`
-/// 4. normal fields, the type of these fields should be implment
-/// `Into` and `From`/`TryFrom` for `ConfigValue`
+///    submodule, and should also derive `OnlineConfig`
+/// 4. normal fields, the type of these fields should be implment `Into` and
+///    `From`/`TryFrom` for `ConfigValue`
 pub trait OnlineConfig<'a> {
     type Encoder: serde::Serialize;
     /// Compare to other config, return the difference

@@ -80,27 +80,27 @@ pub mod json_unquote;
 use std::{
     collections::BTreeMap,
     convert::{TryFrom, TryInto},
-    str,
+    fmt, str,
 };
 
-use codec::number::{NumberCodec, F64_SIZE, I64_SIZE};
+use codec::number::{F64_SIZE, I64_SIZE, NumberCodec};
 use constants::{JSON_LITERAL_FALSE, JSON_LITERAL_NIL, JSON_LITERAL_TRUE};
 use tikv_util::is_even;
 
 pub use self::{
     jcodec::{JsonDatumPayloadChunkEncoder, JsonDecoder, JsonEncoder},
     json_modify::ModifyType,
-    path_expr::{parse_json_path_expr, PathExpression},
+    path_expr::{PathExpression, parse_json_path_expr},
 };
-use super::super::{datum::Datum, Error, Result};
+use super::super::{Error, Result, datum::Datum};
 use crate::{
+    FieldTypeTp,
     codec::{
         convert::ConvertTo,
         data_type::{BytesRef, Decimal, Real},
         mysql::{Duration, Time, TimeType},
     },
     expr::EvalContext,
-    FieldTypeTp,
 };
 
 const ERR_CONVERT_FAILED: &str = "Can not covert from ";
@@ -300,16 +300,13 @@ pub struct Json {
     pub value: Vec<u8>,
 }
 
-use std::fmt::{Display, Formatter};
-
 use codec::prelude::NumberEncoder;
 
 use crate::codec::mysql::{TimeDecoder, TimeEncoder};
 
-impl Display for Json {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let s = serde_json::to_string(&self.as_ref()).unwrap();
-        write!(f, "{}", s)
+impl fmt::Display for Json {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_ref())
     }
 }
 

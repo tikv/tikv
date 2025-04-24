@@ -10,7 +10,7 @@ use futures::executor::block_on;
 use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use test_raftstore::*;
-use tikv_util::{time::Instant, HandyRwLock};
+use tikv_util::{HandyRwLock, time::Instant};
 
 #[test]
 fn test_proposal_prevent_sleep() {

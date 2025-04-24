@@ -10,7 +10,7 @@ use test_sst_importer::*;
 use tikv::config::TikvConfig;
 use tikv_util::{
     config::ReadableSize,
-    sys::disk::{set_disk_status, DiskUsage},
+    sys::disk::{DiskUsage, set_disk_status},
 };
 
 use super::util::*;

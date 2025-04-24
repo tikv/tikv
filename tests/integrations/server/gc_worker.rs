@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use engine_traits::{Peekable, CF_WRITE};
+use engine_traits::{CF_WRITE, Peekable};
 use grpcio::{ChannelBuilder, Environment};
 use keys::data_key;
 use kvproto::{kvrpcpb::*, tikvpb::TikvClient};

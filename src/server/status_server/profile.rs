@@ -8,9 +8,9 @@ use std::{
 };
 
 use futures::{
+    Future, FutureExt,
     future::BoxFuture,
     task::{Context, Poll},
-    Future, FutureExt,
 };
 use lazy_static::lazy_static;
 use pprof::protos::Message;
@@ -21,9 +21,9 @@ use tikv_alloc::dump_prof;
 use tikv_util::defer;
 
 #[cfg(test)]
-use self::test_utils::dump_prof;
-#[cfg(test)]
 pub use self::test_utils::TEST_PROFILE_MUTEX;
+#[cfg(test)]
+use self::test_utils::dump_prof;
 
 lazy_static! {
     // If it's some it means there are already a CPU profiling.
@@ -207,6 +207,7 @@ fn extract_thread_name(thread_name: &str) -> String {
 mod test_utils {
     use std::sync::Mutex;
 
+    use lazy_static::lazy_static;
     use tikv_alloc::error::ProfResult;
 
     lazy_static! {
@@ -240,7 +241,7 @@ mod tests {
     fn test_profile_guard_concurrency() {
         use std::{thread, time::Duration};
 
-        use futures::{channel::oneshot, TryFutureExt};
+        use futures::{TryFutureExt, channel::oneshot};
 
         let _test_guard = TEST_PROFILE_MUTEX.lock().unwrap();
         let rt = runtime::Builder::new_multi_thread()

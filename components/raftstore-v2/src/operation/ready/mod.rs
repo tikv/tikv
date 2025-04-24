@@ -25,42 +25,42 @@ use std::{
     cmp,
     fmt::{self, Debug, Formatter},
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
     time::Instant,
 };
 
-use engine_traits::{KvEngine, RaftEngine, DATA_CFS};
+use engine_traits::{DATA_CFS, KvEngine, RaftEngine};
 use error_code::ErrorCodeExt;
 use kvproto::{
     raft_cmdpb::AdminCmdType,
     raft_serverpb::{ExtraMessageType, RaftMessage},
 };
 use protobuf::Message as _;
-use raft::{eraftpb, prelude::MessageType, Ready, SnapshotStatus, StateRole, INVALID_ID};
+use raft::{INVALID_ID, Ready, SnapshotStatus, StateRole, eraftpb, prelude::MessageType};
 use raftstore::{
     coprocessor::{RegionChangeEvent, RoleChange},
     store::{
+        FetchedLogs, ReadProgress, Transport, WriteCallback, WriteTask,
         fsm::store::StoreRegionMeta,
         local_metrics::IoType,
         needs_evict_entry_cache,
         util::{self, is_first_append_entry, is_initial_msg},
         worker_metrics::SNAP_COUNTER,
-        FetchedLogs, ReadProgress, Transport, WriteCallback, WriteTask,
     },
 };
-use slog::{debug, error, info, warn, Logger};
+use slog::{Logger, debug, error, info, warn};
 use tikv_util::{
     log::SlogFormat,
     slog_panic,
     store::find_peer,
     sys::disk::DiskUsage,
-    time::{duration_to_sec, monotonic_raw_now, Duration, Instant as TiInstant},
+    time::{Duration, Instant as TiInstant, duration_to_sec, monotonic_raw_now},
 };
 
 pub use self::{
-    apply_trace::{write_initial_states, ApplyTrace, DataTrace, StateStorage},
+    apply_trace::{ApplyTrace, DataTrace, StateStorage, write_initial_states},
     async_writer::AsyncWriter,
     snapshot::{GenSnapTask, SnapState},
 };
@@ -966,7 +966,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let now = Instant::now();
         for i in old_index + 1..=new_index {
             if let Some((term, trackers)) = self.proposals().find_trackers(i) {
-                if self.entry_storage().term(i).map_or(false, |t| t == term) {
+                if self.entry_storage().term(i) == Ok(term) {
                     for tracker in trackers {
                         tracker.observe(now, &ctx.raft_metrics.wf_persist_log, |t| {
                             &mut t.metrics.wf_persist_log_nanos
@@ -991,7 +991,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let health_stats = &mut ctx.raft_metrics.health_stats;
         for i in old_index + 1..=new_index {
             if let Some((term, trackers)) = self.proposals().find_trackers(i) {
-                if self.entry_storage().term(i).map_or(false, |t| t == term) {
+                if self.entry_storage().term(i) == Ok(term) {
                     let commit_persisted = i <= self.persisted_index();
                     let hist = if commit_persisted {
                         &ctx.raft_metrics.wf_commit_log
@@ -1260,7 +1260,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             disk_full_peers.is_empty()
                 || disk_full_peers
                     .get(peer_id)
-                    .map_or(true, |x| x != msg.disk_usage)
+                    .is_none_or(|x| x != msg.disk_usage)
         };
 
         if refill_disk_usages || self.has_region_merge_proposal {

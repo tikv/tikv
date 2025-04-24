@@ -3,8 +3,8 @@
 use std::{
     str::FromStr,
     sync::{
-        atomic::{AtomicU32, AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicU32, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -16,8 +16,8 @@ use strum::EnumCount;
 use tikv_util::time::Instant;
 
 use super::{
-    metrics::{tls_collect_rate_limiter_request_wait, RATE_LIMITER_MAX_BYTES_PER_SEC},
     IoOp, IoPriority, IoType,
+    metrics::{RATE_LIMITER_MAX_BYTES_PER_SEC, tls_collect_rate_limiter_request_wait},
 };
 
 const DEFAULT_REFILL_PERIOD: Duration = Duration::from_millis(50);
@@ -263,8 +263,7 @@ macro_rules! request_imp {
                 // Bytes served by next epoch (and skipped epochs) during refill are subtracted
                 // from pending_bytes, round up the rest.
                 DEFAULT_REFILL_PERIOD
-                    * ((locked.pending_bytes[priority_idx] + cached_bytes_per_epoch - 1)
-                        / cached_bytes_per_epoch) as u32
+                    * locked.pending_bytes[priority_idx].div_ceil(cached_bytes_per_epoch) as u32
             } else {
                 // `(a-1)/b` is equivalent to `roundup(a.saturating_sub(b)/b)`.
                 locked.next_refill_time - now

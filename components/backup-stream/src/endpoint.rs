@@ -15,7 +15,7 @@ use dashmap::DashMap;
 use encryption::BackupEncryptionManager;
 use engine_traits::KvEngine;
 use error_code::ErrorCodeExt;
-use futures::{stream::AbortHandle, FutureExt, TryFutureExt};
+use futures::{FutureExt, TryFutureExt, stream::AbortHandle};
 use kvproto::{
     brpb::{StreamBackupError, StreamBackupTaskInfo},
     metapb::{Region, RegionEpoch},
@@ -26,13 +26,13 @@ use raftstore::{
     coprocessor::{CmdBatch, ObserveHandle, RegionInfoProvider},
     router::CdcHandle,
 };
-use resolved_ts::{resolve_by_raft, LeadershipResolver};
+use resolved_ts::{LeadershipResolver, resolve_by_raft};
 use tikv::{
     config::{BackupStreamConfig, ResolvedTsConfig},
     storage::txn::txn_status_cache::TxnStatusCache,
 };
 use tikv_util::{
-    box_err,
+    HandyRwLock, box_err,
     config::ReadableDuration,
     debug, defer, error, info,
     memory::MemoryQuota,
@@ -40,12 +40,11 @@ use tikv_util::{
     time::{Instant, Limiter},
     warn,
     worker::{Runnable, Scheduler},
-    HandyRwLock,
 };
 use tokio::{
     io::Result as TokioResult,
     runtime::{Handle, Runtime},
-    sync::{mpsc::Sender, Semaphore},
+    sync::{Semaphore, mpsc::Sender},
 };
 use tokio_stream::StreamExt;
 use tracing::instrument;
@@ -62,7 +61,7 @@ use crate::{
     errors::{Error, ReportableResult, Result},
     event_loader::InitialDataLoader,
     future,
-    metadata::{store::MetaStore, MetadataClient, MetadataEvent, StreamTask},
+    metadata::{MetadataClient, MetadataEvent, StreamTask, store::MetaStore},
     metrics::{self, TaskStatus},
     observer::BackupStreamObserver,
     router::{self, ApplyEvents, FlushContext, Router, TaskSelector, TaskSelectorRef},
@@ -186,7 +185,7 @@ where
             ),
             accessor.clone(),
             meta_client.clone(),
-            ((config.num_threads + 1) / 2).max(1),
+            (config.num_threads.div_ceil(2)).max(1),
             resolver,
             resolved_ts_config.advance_ts_interval.0,
         );

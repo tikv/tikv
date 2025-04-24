@@ -7,7 +7,7 @@ use tidb_query_datatype::expr::EvalConfig;
 use tidb_query_executors::BatchTopNExecutor;
 use tipb::Expr;
 
-use crate::util::{bencher::Bencher, FixtureBuilder};
+use crate::util::{FixtureBuilder, bencher::Bencher};
 
 pub trait TopNBencher<M>
 where

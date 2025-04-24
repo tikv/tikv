@@ -21,12 +21,12 @@ where
             continue;
         }
         if start < index {
-            writer.write_all(file_name[start..index].as_bytes())?;
+            writer.write_all(&file_name.as_bytes()[start..index])?;
         }
         start = index + 1;
     }
     if start < bytes.len() {
-        writer.write_all(file_name[start..].as_bytes())?;
+        writer.write_all(&file_name.as_bytes()[start..])?;
     }
     Ok(())
 }

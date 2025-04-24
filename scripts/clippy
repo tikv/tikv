@@ -50,6 +50,7 @@ CLIPPY_LINTS=(
     -D clippy::assertions_on_result_states \
     -A clippy::non_canonical_partial_ord_impl \
     -A clippy::arc_with_non_send_sync \
+    -A private_macro_use \
 )
 
 # TODO: Enables `clippy::needless_return_with_question_mark` after

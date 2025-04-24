@@ -7,9 +7,9 @@ use kvproto::raft_cmdpb::{CmdType, PutRequest, RaftCmdRequest, Request};
 use raft::prelude::MessageType;
 use raftstore::store::Callback;
 use test_backup::disk_snap::{
-    assert_failure, assert_failure_because, assert_success, must_wait_apply_success, Suite,
+    Suite, assert_failure, assert_failure_because, assert_success, must_wait_apply_success,
 };
-use test_raftstore::{must_contains_error, Direction, RegionPacketFilter, Simulator};
+use test_raftstore::{Direction, RegionPacketFilter, Simulator, must_contains_error};
 use test_util::eventually;
 use tikv_util::HandyRwLock;
 

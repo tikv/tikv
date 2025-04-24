@@ -2,7 +2,7 @@
 
 use std::{
     collections::HashMap,
-    sync::{mpsc::sync_channel, Mutex},
+    sync::{Mutex, mpsc::sync_channel},
     time::Duration,
 };
 
@@ -12,10 +12,10 @@ use test_raftstore::*;
 use test_raftstore_macro::test_case;
 use tikv::config::ConfigurableDb;
 use tikv_util::{
+    HandyRwLock,
     config::ReadableDuration,
     sys::thread::{self, Pid},
     time::Instant,
-    HandyRwLock,
 };
 
 #[test]

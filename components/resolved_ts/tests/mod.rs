@@ -8,7 +8,7 @@ use kvproto::{import_sstpb_grpc::ImportSstClient, kvrpcpb::*, tikvpb::TikvClient
 use online_config::ConfigValue;
 use resolved_ts::Task;
 use test_raftstore::*;
-use tikv_util::{config::ReadableDuration, HandyRwLock};
+use tikv_util::{HandyRwLock, config::ReadableDuration};
 use txn_types::TimeStamp;
 
 static INIT: Once = Once::new();

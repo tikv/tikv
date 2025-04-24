@@ -31,7 +31,7 @@ impl StoreGroup {
         if self
             .labels
             .get(&store.id)
-            .map_or(false, |l| store.get_labels() == &**l)
+            .is_some_and(|l| store.get_labels() == &**l)
         {
             return;
         }

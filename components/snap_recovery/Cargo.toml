@@ -23,7 +23,7 @@ keys = { workspace = true }
 kvproto = { workspace = true }
 lazy_static = "1.4"
 pd_client = { workspace = true }
-prometheus = { version = "0.13", default_features = false, features = ["nightly"] }
+prometheus = { version = "0.13", default-features = false, features = ["nightly"] }
 prometheus-static-metric = "0.5"
 raft_log_engine = { workspace = true }
 raftstore = { workspace = true }

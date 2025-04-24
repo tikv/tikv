@@ -2,7 +2,7 @@
 
 use std::{
     cell::RefCell,
-    sync::{mpsc, Arc},
+    sync::{Arc, mpsc},
     thread,
     time::Duration,
 };
@@ -12,7 +12,7 @@ use grpcio::EnvBuilder;
 use kvproto::metapb::*;
 use pd_client::{PdClientV2, RegionInfo, RpcClientV2};
 use security::{SecurityConfig, SecurityManager};
-use test_pd::{mocker::*, util::*, Server as MockServer};
+use test_pd::{Server as MockServer, mocker::*, util::*};
 use tikv_util::config::ReadableDuration;
 use txn_types::TimeStamp;
 
