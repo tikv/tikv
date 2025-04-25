@@ -12,8 +12,6 @@
 
 #[cfg(test)]
 extern crate test;
-#[macro_use]
-extern crate derivative;
 #[cfg(feature = "engine_rocks")]
 pub mod compacted_event_sender;
 

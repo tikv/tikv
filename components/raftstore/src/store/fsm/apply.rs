@@ -27,7 +27,7 @@ use batch_system::{
 };
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
-use derive_more::Debug;
+use derive_more::Debug as DebugMore;
 use engine_traits::{
     ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DeleteStrategy, KvEngine, Mutable,
     PerfContext, PerfContextKind, RaftEngine, RaftEngineReadOnly, Range as EngineRange, Snapshot,
@@ -1010,7 +1010,7 @@ pub struct NewSplitPeer {
 /// Region. The apply worker receives all the apply tasks of different Regions
 /// located at this store, and it will get the corresponding apply delegate to
 /// handle the apply task to make the code logic more clear.
-#[derive(Debug)]
+#[derive(DebugMore)]
 pub struct ApplyDelegate<EK>
 where
     EK: KvEngine,
