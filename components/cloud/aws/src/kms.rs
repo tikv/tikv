@@ -365,6 +365,7 @@ mod tests {
             },
             azure: None,
             gcp: None,
+            aws: None,
         };
 
         let creds =
