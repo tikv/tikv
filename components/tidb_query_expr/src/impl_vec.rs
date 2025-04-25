@@ -183,7 +183,6 @@ mod tests {
                 .unwrap();
             match (output, expected_output.map(|x| Real::new(x).unwrap())) {
                 (Some(output_val), Some(expected_val)) => {
-                    // 直接解构 Real 类型获取内部值
                     let diff = (output_val - expected_val).abs();
                     assert!(
                         diff < 1e-8,
@@ -193,7 +192,7 @@ mod tests {
                         diff
                     );
                 }
-                (None, None) => {} // 两者均为 None 时通过
+                (None, None) => {}
                 _ => panic!(
                     "Mismatched variants: output {:?}, expected {:?}",
                     output, expected_output
