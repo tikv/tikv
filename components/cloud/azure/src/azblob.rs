@@ -14,6 +14,7 @@ use azure_core::{
 use azure_identity::{ClientSecretCredential, TokenCredentialOptions};
 use azure_storage::{prelude::*, ConnectionString, ConnectionStringBuilder};
 use azure_storage_blobs::{blob::operations::PutBlockBlobBuilder, prelude::*};
+<<<<<<< HEAD
 use cloud::blob::{
     none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty,
 };
@@ -27,11 +28,24 @@ use futures_util::{
 pub use kvproto::brpb::{
     AzureBlobStorage as InputConfig, AzureCustomerKey, Bucket as InputBucket, CloudDynamic,
 };
+=======
+use cloud::{
+    blob::{
+        none_to_empty, read_to_end, unimplemented, BlobConfig, BlobObject, BlobStorage, BucketConf,
+        DeletableStorage, IterableStorage, PutResource, StringNonEmpty,
+    },
+    metrics::AZBLOB_UPLOAD_DURATION,
+};
+use futures::TryFutureExt;
+use futures_util::{future::FutureExt, io::AsyncRead, stream, stream::StreamExt, TryStreamExt};
+pub use kvproto::brpb::{AzureBlobStorage as InputConfig, AzureCustomerKey};
+>>>>>>> 97a8901a61 (azblob: use `copy` to implement `read_to_end` (#18411))
 use oauth2::{ClientId, ClientSecret};
 use openssl::sha::Sha256;
 use tikv_util::{
-    debug,
+    debug, defer,
     stream::{retry, RetryError},
+    time::Instant,
 };
 use time::OffsetDateTime;
 use tokio::{
@@ -343,8 +357,12 @@ impl AzureUploader {
         est_len: u64,
     ) -> io::Result<()> {
         // upload the entire data.
+        let begin = Instant::now_coarse();
+        defer! {
+            AZBLOB_UPLOAD_DURATION.observe(begin.saturating_elapsed().as_secs_f64())
+        }
         let mut data = Vec::with_capacity(est_len as usize);
-        reader.read_to_end(&mut data).await?;
+        read_to_end(reader, &mut data).await?;
         retry(|| self.upload(&data)).await?;
         Ok(())
     }

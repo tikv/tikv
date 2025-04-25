@@ -3,6 +3,7 @@ use std::{convert::TryInto, fmt::Display, io, sync::Arc};
 
 use async_trait::async_trait;
 use cloud::{
+<<<<<<< HEAD
     blob::{none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty},
     metrics,
 };
@@ -10,6 +11,18 @@ use futures_util::{
     future::TryFutureExt,
     io::{self as async_io, AsyncRead, Cursor},
     stream::{StreamExt, TryStreamExt},
+=======
+    blob::{
+        none_to_empty, read_to_end, BlobConfig, BlobObject, BlobStorage, BucketConf,
+        DeletableStorage, IterableStorage, PutResource, StringNonEmpty,
+    },
+    metrics,
+};
+use futures_util::{
+    future::{FutureExt, LocalBoxFuture, TryFutureExt},
+    io::Cursor,
+    stream::{self, Stream, StreamExt, TryStreamExt},
+>>>>>>> 97a8901a61 (azblob: use `copy` to implement `read_to_end` (#18411))
 };
 use http::HeaderValue;
 use hyper::{client::HttpConnector, Body, Client, Request, Response, StatusCode};
@@ -440,14 +453,6 @@ fn parse_predefined_acl(acl: &str) -> Result<Option<PredefinedAcl>, &str> {
     }))
 }
 
-/// Like AsyncReadExt::read_to_end, but only try to initialize the buffer once.
-/// Check https://github.com/rust-lang/futures-rs/issues/2658 for the reason we cannot
-/// directly use it.
-async fn read_to_end<R: AsyncRead>(r: R, v: &mut Vec<u8>) -> std::io::Result<u64> {
-    let mut c = Cursor::new(v);
-    async_io::copy(r, &mut c).await
-}
-
 const STORAGE_NAME: &str = "gcs";
 
 #[async_trait]
@@ -524,10 +529,6 @@ impl BlobStorage for GcsStorage {
 
 #[cfg(test)]
 mod tests {
-    extern crate test;
-    use std::task::Poll;
-
-    use futures_util::AsyncReadExt;
     use matches::assert_matches;
 
     use super::*;
@@ -617,6 +618,7 @@ mod tests {
             "http://endpoint.com/bucket/backup%2002/prefix/"
         );
     }
+<<<<<<< HEAD
 
     #[test]
     fn test_config_round_trip() {
@@ -734,4 +736,6 @@ mod tests {
         cd.set_bucket(bucket);
         cd
     }
+=======
+>>>>>>> 97a8901a61 (azblob: use `copy` to implement `read_to_end` (#18411))
 }

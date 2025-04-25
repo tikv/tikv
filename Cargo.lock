@@ -1047,12 +1047,17 @@ dependencies = [
  "futures-io",
  "kvproto",
  "lazy_static",
+<<<<<<< HEAD
  "openssl",
+=======
+ "pin-project",
+>>>>>>> 97a8901a61 (azblob: use `copy` to implement `read_to_end` (#18411))
  "prometheus",
  "protobuf",
  "rusoto_core",
  "thiserror",
  "tikv_util",
+ "tokio",
  "url",
 ]
 
@@ -2339,7 +2344,13 @@ dependencies = [
  "hyper-tls",
  "kvproto",
  "matches",
+<<<<<<< HEAD
  "pin-project",
+=======
+ "regex",
+ "serde",
+ "serde_json",
+>>>>>>> 97a8901a61 (azblob: use `copy` to implement `read_to_end` (#18411))
  "slog",
  "slog-global",
  "tame-gcs",

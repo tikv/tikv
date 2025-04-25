@@ -13,11 +13,19 @@ use std::{
         Arc, Mutex as BlockMutex,
     },
     task::{ready, Context, Poll},
+    time::Instant,
 };
 
+<<<<<<< HEAD
 use futures::TryFutureExt;
 use kvproto::brpb::CompressionType;
 use tikv_util::warn;
+=======
+use encryption::{BackupEncryptionManager, DecrypterReader, EncrypterWriter, Iv};
+use futures::{AsyncWriteExt, TryFutureExt};
+use kvproto::{brpb::CompressionType, encryptionpb::EncryptionMethod};
+use tikv_util::{defer, warn};
+>>>>>>> 97a8901a61 (azblob: use `copy` to implement `read_to_end` (#18411))
 use tokio::{
     fs::File as OsFile,
     io::{AsyncRead, AsyncWrite},
@@ -27,7 +35,8 @@ use crate::{
     annotate,
     errors::Result,
     metrics::{
-        IN_DISK_TEMP_FILE_SIZE, TEMP_FILE_COUNT, TEMP_FILE_MEMORY_USAGE, TEMP_FILE_SWAP_OUT_BYTES,
+        IN_DISK_TEMP_FILE_SIZE, TEMP_FILE_COUNT, TEMP_FILE_MEMORY_USAGE,
+        TEMP_FILE_READ_POLL_DURATION, TEMP_FILE_SWAP_OUT_BYTES,
     },
     utils::{CompressionWriter, ZstdCompressionWriter},
 };
@@ -542,7 +551,11 @@ impl AsyncRead for ForRead {
         cx: &mut Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
+        let begin = Instant::now();
         let this = self.get_mut();
+        defer! {
+            TEMP_FILE_READ_POLL_DURATION.observe(begin.elapsed().as_secs_f64())
+        }
         if this.read == 0 && this.myfile.is_some() {
             let old = buf.remaining();
             let ext_file = Pin::new(this.myfile.as_mut().unwrap());
