@@ -223,7 +223,8 @@ pub trait ApplySnapshotObserver: Coprocessor {
         false
     }
 
-    // Hook when apply snapshot is committed on disk.
+    // Hook when apply snapshot is ingested, and the state has been changed to Normal and persisted.
+    // The snapshot will not be re-iningested after the restart if this hook is called.
     fn on_apply_snapshot_committed(
         &self,
         _: &mut ObserverContext<'_>,
