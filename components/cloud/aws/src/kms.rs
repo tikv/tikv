@@ -352,8 +352,8 @@ mod tests {
         client.assert_requests_match(&[]);
     }
 
+    #[ignore = "no available aws ksm backend for the test env."]
     #[tokio::test]
-    #[cfg(FALSE)]
     // FIXME: enable this (or move this to an integration test)
     async fn test_aws_kms_localstack() {
         let config = Config {

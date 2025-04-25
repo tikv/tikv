@@ -890,9 +890,8 @@ mod tests {
         env::remove_var(ENV_CLIENT_SECRET);
     }
 
+    #[ignore = "no available azure cloud service for the test env."]
     #[tokio::test]
-    #[allow(unexpected_cfgs)]
-    #[cfg(feature = "azurite")]
     // test in Azurite emulator
     async fn test_azblob_storage() {
         use futures_util::stream;
