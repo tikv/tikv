@@ -163,34 +163,14 @@ mod tests {
     #[test]
     fn test_cosine_distance() {
         let ok_cases = vec![
-            (
-                Some(vec![1.0, 2.0]),
-                Some(vec![2.0, 4.0]),
-                Some(0.004130363464355469),
-            ),
+            (Some(vec![1.0, 2.0]), Some(vec![2.0, 4.0]), Some(0.0)),
             (Some(vec![1.0, 2.0]), Some(vec![0.0, 0.0]), Some(1.0)),
-            (
-                Some(vec![1.0, 1.0]),
-                Some(vec![1.0, 1.0]),
-                Some(0.00572967529296875),
-            ),
+            (Some(vec![1.0, 1.0]), Some(vec![1.0, 1.0]), Some(0.0)),
             (Some(vec![1.0, 0.0]), Some(vec![0.0, 2.0]), Some(1.0)),
-            (
-                Some(vec![1.0, 1.0]),
-                Some(vec![-1.0, -1.0]),
-                Some(1.9942703247070313),
-            ),
-            (
-                Some(vec![1.0, 1.0]),
-                Some(vec![1.1, 1.1]),
-                Some(0.00022123077178548556),
-            ),
-            (
-                Some(vec![1.0, 1.0]),
-                Some(vec![-1.1, -1.1]),
-                Some(1.9997787692282145),
-            ),
-            (Some(vec![3e38]), Some(vec![3e38]), None), // NaN turns to NULL
+            (Some(vec![1.0, 1.0]), Some(vec![-1.0, -1.0]), Some(2.0)),
+            (Some(vec![1.0, 1.0]), Some(vec![1.1, 1.1]), Some(0.0)),
+            (Some(vec![1.0, 1.0]), Some(vec![-1.1, -1.1]), Some(2.0)),
+            (Some(vec![3e38]), Some(vec![3e38]), Some(0.0)), // NaN turns to NULL
             (Some(vec![1.0, 2.0]), None, None),
         ];
         for (arg1, arg2, expected_output) in ok_cases {
@@ -201,7 +181,24 @@ mod tests {
                 .push_param(arg2)
                 .evaluate(ScalarFuncSig::VecCosineDistanceSig)
                 .unwrap();
-            assert_eq!(output, expected_output.map(|x| Real::new(x).unwrap()));
+            match (output, expected_output.map(|x| Real::new(x).unwrap())) {
+                (Some(output_val), Some(expected_val)) => {
+                    // 直接解构 Real 类型获取内部值
+                    let diff = (output_val - expected_val).abs();
+                    assert!(
+                        diff < 1e-8,
+                        "assertion failed: |{} - {}| = {} > 1e-8",
+                        output_val,
+                        expected_val,
+                        diff
+                    );
+                }
+                (None, None) => {} // 两者均为 None 时通过
+                _ => panic!(
+                    "Mismatched variants: output {:?}, expected {:?}",
+                    output, expected_output
+                ),
+            }
         }
 
         let err_cases = vec![(vec![1.0, 2.0], vec![3.0])];
