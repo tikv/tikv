@@ -16,4 +16,10 @@ lazy_static! {
         &["cloud", "error"]
     )
     .unwrap();
+    pub static ref AZBLOB_UPLOAD_DURATION: Histogram = register_histogram!(
+        "tikv_cloud_azblob_upload_duration_seconds",
+        "Bucketed histogram of azblob upload duration",
+        exponential_buckets(0.01, 2.0, 16).unwrap()
+    )
+    .unwrap();
 }
