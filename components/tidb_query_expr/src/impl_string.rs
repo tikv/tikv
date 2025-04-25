@@ -3,6 +3,7 @@
 use std::{cmp::Ordering, iter, str};
 
 use bstr::ByteSlice;
+use memchr::memmem;
 use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
 use tidb_query_datatype::{
@@ -109,7 +110,7 @@ pub fn unhex(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
 
 #[inline]
 fn find_str(text: &str, pattern: &str) -> Option<usize> {
-    twoway::find_str(text, pattern).map(|i| text[..i].chars().count())
+    memmem::find(text.as_bytes(), pattern.as_bytes()).map(|i| text[..i].chars().count())
 }
 
 #[rpn_fn]
@@ -423,7 +424,7 @@ pub fn replace(
     }
     let mut last = 0;
     let mut writer = writer.begin();
-    while let Some(mut start) = twoway::find_bytes(&s[last..], from_str) {
+    while let Some(mut start) = memmem::find(&s[last..], from_str) {
         start += last;
         writer.partial_write(&s[last..start]);
         writer.partial_write(to_str);
@@ -595,9 +596,7 @@ pub fn hex_str_arg(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
 #[rpn_fn]
 #[inline]
 pub fn locate_2_args(substr: BytesRef, s: BytesRef) -> Result<Option<i64>> {
-    Ok(twoway::find_bytes(s, substr)
-        .map(|i| 1 + i as i64)
-        .or(Some(0)))
+    Ok(memmem::find(s, substr).map(|i| 1 + i as i64).or(Some(0)))
 }
 
 #[rpn_fn(writer)]
@@ -614,7 +613,7 @@ pub fn locate_3_args(substr: BytesRef, s: BytesRef, pos: &Int) -> Result<Option<
     if *pos < 1 || *pos as usize > s.len() + 1 {
         return Ok(Some(0));
     }
-    Ok(twoway::find_bytes(&s[*pos as usize - 1..], substr)
+    Ok(memmem::find(&s[*pos as usize - 1..], substr)
         .map(|i| pos + i as i64)
         .or(Some(0)))
 }
@@ -744,9 +743,9 @@ pub fn substring_index(
         return Ok(writer.write_ref(Some(b"")));
     }
     let finder = if count > 0 {
-        twoway::find_bytes
+        memmem::find
     } else {
-        twoway::rfind_bytes
+        memmem::rfind
     };
     let mut remaining = s;
     let mut remaining_pattern_count = count.abs();
@@ -791,9 +790,7 @@ pub fn strcmp<C: Collator>(left: BytesRef, right: BytesRef) -> Result<Option<i64
 #[rpn_fn]
 #[inline]
 pub fn instr(s: BytesRef, substr: BytesRef) -> Result<Option<Int>> {
-    Ok(twoway::find_bytes(s, substr)
-        .map(|i| 1 + i as i64)
-        .or(Some(0)))
+    Ok(memmem::find(s, substr).map(|i| 1 + i as i64).or(Some(0)))
 }
 
 #[rpn_fn]
@@ -801,10 +798,13 @@ pub fn instr(s: BytesRef, substr: BytesRef) -> Result<Option<Int>> {
 pub fn instr_utf8(s: BytesRef, substr: BytesRef) -> Result<Option<Int>> {
     let s = String::from_utf8_lossy(s);
     let substr = String::from_utf8_lossy(substr);
-    let index = twoway::find_str(&s.to_lowercase(), &substr.to_lowercase())
-        .map(|i| s[..i].chars().count())
-        .map(|i| 1 + i as i64)
-        .or(Some(0));
+    let index = memmem::find(
+        s.to_lowercase().as_bytes(),
+        substr.to_lowercase().as_bytes(),
+    )
+    .map(|i| s[..i].chars().count())
+    .map(|i| 1 + i as i64)
+    .or(Some(0));
     Ok(index)
 }
 
@@ -963,11 +963,11 @@ fn line_wrap(buf: &mut [u8], input_len: usize) {
     let line_with_ending_len = line_len + 1;
     let mut old_start = input_len - last_line_len;
     let mut new_start = buf.len() - last_line_len;
-    safemem::copy_over(buf, old_start, new_start, last_line_len);
+    buf.copy_within(old_start..old_start + last_line_len, new_start);
     for _ in 0..lines_with_ending {
         old_start -= line_len;
         new_start -= line_with_ending_len;
-        safemem::copy_over(buf, old_start, new_start, line_len);
+        buf.copy_within(old_start..old_start + line_len, new_start);
         buf[new_start + line_len] = BASE64_LINE_WRAP;
     }
 }
