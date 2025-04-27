@@ -6302,6 +6302,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "simsimd"
+version = "6.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56838e1a0aceaef39fc1327227033efa84a294f54a39b356eefa5c60c885e9f0"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "siphasher"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7247,6 +7256,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "simsimd",
  "slog",
  "slog-global",
  "static_assertions",
@@ -7998,7 +8008,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
- "cfg-if 0.1.10",
+ "cfg-if 1.0.0",
  "static_assertions",
 ]
 
