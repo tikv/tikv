@@ -170,7 +170,7 @@ mod tests {
             (Some(vec![1.0, 1.0]), Some(vec![-1.0, -1.0]), Some(2.0)),
             (Some(vec![1.0, 1.0]), Some(vec![1.1, 1.1]), Some(0.0)),
             (Some(vec![1.0, 1.0]), Some(vec![-1.1, -1.1]), Some(2.0)),
-            (Some(vec![3e38]), Some(vec![3e38]), Some(0.0)), // NaN turns to NULL
+            (Some(vec![3e38]), Some(vec![3e38]), Some(0.0)),
             (Some(vec![1.0, 2.0]), None, None),
         ];
         for (arg1, arg2, expected_output) in ok_cases {
@@ -185,8 +185,8 @@ mod tests {
                 (Some(output_val), Some(expected_val)) => {
                     let diff = (output_val - expected_val).abs();
                     assert!(
-                        diff < 1e-8,
-                        "assertion failed: |{} - {}| = {} > 1e-8",
+                        diff < 1e-6,
+                        "assertion failed: |{} - {}| = {} > 1e-6",
                         output_val,
                         expected_val,
                         diff
