@@ -16,16 +16,9 @@ use std::{
     time::Instant,
 };
 
-<<<<<<< HEAD
 use futures::TryFutureExt;
 use kvproto::brpb::CompressionType;
-use tikv_util::warn;
-=======
-use encryption::{BackupEncryptionManager, DecrypterReader, EncrypterWriter, Iv};
-use futures::{AsyncWriteExt, TryFutureExt};
-use kvproto::{brpb::CompressionType, encryptionpb::EncryptionMethod};
 use tikv_util::{defer, warn};
->>>>>>> 97a8901a61 (azblob: use `copy` to implement `read_to_end` (#18411))
 use tokio::{
     fs::File as OsFile,
     io::{AsyncRead, AsyncWrite},

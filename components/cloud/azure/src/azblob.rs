@@ -14,32 +14,18 @@ use azure_core::{
 use azure_identity::{ClientSecretCredential, TokenCredentialOptions};
 use azure_storage::{prelude::*, ConnectionString, ConnectionStringBuilder};
 use azure_storage_blobs::{blob::operations::PutBlockBlobBuilder, prelude::*};
-<<<<<<< HEAD
-use cloud::blob::{
-    none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty,
-};
-use futures::TryFutureExt;
-use futures_util::{
-    io::{AsyncRead, AsyncReadExt},
-    stream,
-    stream::StreamExt,
-    TryStreamExt,
-};
-pub use kvproto::brpb::{
-    AzureBlobStorage as InputConfig, AzureCustomerKey, Bucket as InputBucket, CloudDynamic,
-};
-=======
 use cloud::{
     blob::{
-        none_to_empty, read_to_end, unimplemented, BlobConfig, BlobObject, BlobStorage, BucketConf,
-        DeletableStorage, IterableStorage, PutResource, StringNonEmpty,
+        none_to_empty, read_to_end, BlobConfig, BlobStorage, BucketConf, PutResource,
+        StringNonEmpty,
     },
     metrics::AZBLOB_UPLOAD_DURATION,
 };
 use futures::TryFutureExt;
-use futures_util::{future::FutureExt, io::AsyncRead, stream, stream::StreamExt, TryStreamExt};
-pub use kvproto::brpb::{AzureBlobStorage as InputConfig, AzureCustomerKey};
->>>>>>> 97a8901a61 (azblob: use `copy` to implement `read_to_end` (#18411))
+use futures_util::{io::AsyncRead, stream, stream::StreamExt, TryStreamExt};
+pub use kvproto::brpb::{
+    AzureBlobStorage as InputConfig, AzureCustomerKey, Bucket as InputBucket, CloudDynamic,
+};
 use oauth2::{ClientId, ClientSecret};
 use openssl::sha::Sha256;
 use tikv_util::{
