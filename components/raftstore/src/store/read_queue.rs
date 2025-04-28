@@ -378,7 +378,7 @@ impl ReadIndexContext {
                     res.locked = Some(locked);
                 }
                 READ_INDEX_SAFE_TS_FLAG => {
-                    let len = decode_var_u64(&mut bytes)? as usize;
+                    let len = decode_u64(&mut bytes)? as usize;
                     let read_index_safe_ts = u64::from_le_bytes(bytes[..len].try_into().unwrap());
                     bytes = &bytes[len..];
                     res.read_index_safe_ts = Some(read_index_safe_ts);
@@ -427,7 +427,7 @@ impl ReadIndexContext {
         }
         if let Some(read_index_safe_ts) = read_index_safe_ts {
             b.push(READ_INDEX_SAFE_TS_FLAG);
-            b.encode_var_u64(read_index_safe_ts_size.unwrap() as u64)
+            b.encode_u64(read_index_safe_ts_size.unwrap() as u64)
                 .unwrap();
             b.extend_from_slice(&read_index_safe_ts.to_le_bytes());
         }
