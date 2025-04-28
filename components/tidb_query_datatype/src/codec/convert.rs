@@ -27,6 +27,20 @@ pub trait ToInt {
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64>;
 }
 
+/// A trait for converting a value to a `String`.
+///
+/// NOTE: we can't resue the `ToString` trait becuase this trait may return
+/// different value with `fmt::Display`.
+pub trait ToStringValue {
+    fn to_string_value(&self) -> String;
+}
+
+impl<T: ToString> ToStringValue for T {
+    default fn to_string_value(&self) -> String {
+        self.to_string()
+    }
+}
+
 /// A trait for converting a value to `T`
 pub trait ConvertTo<T> {
     /// Converts the given value to `T` value
@@ -78,22 +92,22 @@ where
 
 impl<T> ConvertTo<String> for T
 where
-    T: ToString + EvaluableRet,
+    T: ToStringValue + EvaluableRet,
 {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<String> {
         // FIXME: There is an additional step `ProduceStrWithSpecifiedTp` in TiDB.
-        Ok(self.to_string())
+        Ok(self.to_string_value())
     }
 }
 
 impl<T> ConvertTo<Bytes> for T
 where
-    T: ToString + EvaluableRet,
+    T: ToStringValue + EvaluableRet,
 {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Bytes> {
-        Ok(self.to_string().into_bytes())
+        Ok(self.to_string_value().into_bytes())
     }
 }
 
@@ -110,21 +124,21 @@ impl<'a> ConvertTo<String> for JsonRef<'a> {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<String> {
         // FIXME: There is an additional step `ProduceStrWithSpecifiedTp` in TiDB.
-        Ok(self.to_string())
+        Ok(self.to_string_value())
     }
 }
 
 impl<'a> ConvertTo<Bytes> for JsonRef<'a> {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Bytes> {
-        Ok(self.to_string().into_bytes())
+        Ok(self.to_string_value().into_bytes())
     }
 }
 
 impl<'a> ConvertTo<Bytes> for EnumRef<'a> {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Bytes> {
-        Ok(self.to_string().into_bytes())
+        Ok(self.to_string_value().into_bytes())
     }
 }
 
@@ -431,7 +445,7 @@ impl ToInt for Decimal {
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
         let dec = round_decimal_with_ctx(ctx, *self)?;
         let val = dec.as_i64();
-        let err = Error::truncated_wrong_val("DECIMAL", dec.to_string());
+        let err = Error::truncated_wrong_val("DECIMAL", dec);
         let r = val.into_result_with_overflow_err(ctx, err)?;
         r.to_int(ctx, tp)
     }
@@ -440,7 +454,7 @@ impl ToInt for Decimal {
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
         let dec = round_decimal_with_ctx(ctx, *self)?;
         let val = dec.as_u64();
-        let err = Error::truncated_wrong_val("DECIMAL", dec.to_string());
+        let err = Error::truncated_wrong_val("DECIMAL", dec);
         let r = val.into_result_with_overflow_err(ctx, err)?;
         r.to_uint(ctx, tp)
     }
@@ -516,7 +530,10 @@ impl<'a> ToInt for JsonRef<'a> {
             JsonType::Double => self.get_double().to_int(ctx, tp),
             JsonType::String => self.get_str_bytes()?.to_int(ctx, tp),
             _ => Ok(ctx
-                .handle_truncate_err(Error::truncated_wrong_val("Integer", self.to_string()))
+                .handle_truncate_err(Error::truncated_wrong_val(
+                    "Integer",
+                    self.to_string_value(),
+                ))
                 .map(|_| 0)?),
         }?;
         val.to_int(ctx, tp)
@@ -532,7 +549,10 @@ impl<'a> ToInt for JsonRef<'a> {
             JsonType::Double => self.get_double().to_uint(ctx, tp),
             JsonType::String => self.get_str_bytes()?.to_uint(ctx, tp),
             _ => Ok(ctx
-                .handle_truncate_err(Error::truncated_wrong_val("Integer", self.to_string()))
+                .handle_truncate_err(Error::truncated_wrong_val(
+                    "Integer",
+                    self.to_string_value(),
+                ))
                 .map(|_| 0)?),
         }?;
         val.to_uint(ctx, tp)
@@ -560,7 +580,7 @@ fn round_decimal_with_ctx(ctx: &mut EvalContext, dec: Decimal) -> Result<Decimal
 #[inline]
 fn decimal_as_u64(ctx: &mut EvalContext, dec: Decimal, tp: FieldTypeTp) -> Result<u64> {
     dec.as_u64()
-        .into_result_with_overflow_err(ctx, Error::overflow("DECIMAL", dec.to_string()))?
+        .into_result_with_overflow_err(ctx, Error::overflow("DECIMAL", dec))?
         .to_uint(ctx, tp)
 }
 
@@ -2775,10 +2795,10 @@ mod tests {
                 let r = produce_dec_with_specified_tp(&mut ctx, input, &rft);
 
                 // make log
-                let rs = r.as_ref().map(|x| x.to_string());
-                let expect_str = expect.as_ref().map(|x| x.to_string());
+                let rs = r.as_ref().map(|x| x.to_string_value());
+                let expect_str = expect.as_ref().map(|x| x.to_string_value());
                 let log = format!(
-                    "input: {:?}, origin_flen: {}, origin_decimal: {}, \
+                    "input: {}, origin_flen: {}, origin_decimal: {}, \
                      res_flen: {}, res_decimal: {}, is_unsigned: {}, \
                      in_dml: {}, in_dml_flag(if in_dml is false, it will take no effect): {:?}, \
                      expect: {:?}, expect: {:?}",

@@ -9,7 +9,7 @@ use serde::{
 use serde_json::Serializer as JsonSerializer;
 
 use super::{Json, JsonRef, JsonType};
-use crate::codec::Error;
+use crate::codec::{Error, convert::ToStringValue};
 
 /// MySQL formatter follows the implementation in TiDB
 /// https://github.com/pingcap/tidb/blob/master/types/json/binary.go
@@ -57,14 +57,17 @@ impl MySqlFormatter {
     }
 }
 
-impl<'a> fmt::Display for JsonRef<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl<'a> ToStringValue for JsonRef<'a> {
+    /// This function is a simple combination and rewrite of serde_json's
+    /// `to_writer_pretty`
+    fn to_string_value(&self) -> String {
         let mut writer = Vec::with_capacity(128);
         let mut ser = JsonSerializer::with_formatter(&mut writer, MySqlFormatter::new());
         self.serialize(&mut ser).unwrap();
-
-        // serde_json will not emit invalid UTF-8
-        f.write_str(unsafe { str::from_utf8_unchecked(&writer) })
+        unsafe {
+            // serde_json will not emit invalid UTF-8
+            String::from_utf8_unchecked(writer)
+        }
     }
 }
 
@@ -138,6 +141,12 @@ impl<'a> Serialize for JsonRef<'a> {
                 serializer.serialize_str(&duration.to_string())
             }
         }
+    }
+}
+
+impl ToStringValue for Json {
+    fn to_string_value(&self) -> String {
+        self.as_ref().to_string_value()
     }
 }
 
@@ -246,7 +255,7 @@ mod tests {
     fn test_from_str_for_object() {
         let jstr1 = r#"{"a": [1, "2", {"aa": "bb"}, 4.0, null], "c": null,"b": true}"#;
         let j1: Json = jstr1.parse().unwrap();
-        let jstr2 = j1.to_string();
+        let jstr2 = j1.to_string_value();
         let expect_str = r#"{"a": [1, "2", {"aa": "bb"}, 4.0, null], "b": true, "c": null}"#;
         assert_eq!(jstr2, expect_str);
     }
@@ -327,7 +336,7 @@ mod tests {
         ];
 
         for (json, json_str) in legal_cases {
-            assert_eq!(json.to_string(), json_str);
+            assert_eq!(json.to_string_value(), json_str);
         }
     }
 }

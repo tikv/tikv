@@ -29,6 +29,7 @@ use crate::{
     FieldTypeAccessor, FieldTypeFlag, FieldTypeTp,
     codec::{
         Error, Result,
+        convert::ToStringValue,
         data_type::ScalarValue,
         mysql::{Duration, decimal::DecimalEncoder, json::JsonEncoder},
     },
@@ -217,7 +218,7 @@ impl Column {
                         "invalid type: {:?}",
                         self.ft,
                     )))?
-                    .to_string();
+                    .to_string_value();
                 buf.write_u32_le(res.len() as u32)?;
                 buf.write_bytes(res.as_bytes())?;
             }

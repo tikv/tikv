@@ -26,7 +26,7 @@ use super::{
 use crate::{
     FieldTypeTp,
     codec::{
-        convert::{ConvertTo, ToInt},
+        convert::{ConvertTo, ToInt, ToStringValue},
         data_type::AsMySqlBool,
     },
     expr::EvalContext,
@@ -408,10 +408,10 @@ impl Datum {
             Datum::Bytes(ref bs) => String::from_utf8(bs.to_vec())?,
             Datum::Time(t) => format!("{}", t),
             Datum::Dur(ref d) => format!("{}", d),
-            Datum::Dec(ref d) => d.to_string(),
-            Datum::Json(ref d) => d.to_string(),
-            Datum::Enum(ref e) => e.to_string(),
-            Datum::Set(ref s) => s.to_string(),
+            Datum::Dec(ref d) => format!("{}", d),
+            Datum::Json(ref d) => d.to_string_value(),
+            Datum::Enum(ref e) => e.to_string_value(),
+            Datum::Set(ref s) => s.to_string_value(),
             ref d => return Err(invalid_type!("can't convert {} to string", d)),
         };
         Ok(s)

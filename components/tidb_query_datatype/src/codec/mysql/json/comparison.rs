@@ -6,6 +6,7 @@ use std::{
 };
 
 use super::{super::Result, ERR_CONVERT_FAILED, Json, JsonRef, JsonType, constants::*};
+use crate::codec::convert::ToStringValue;
 
 fn compare<T: Ord>(x: T, y: T) -> Ordering {
     x.cmp(&y)
@@ -57,7 +58,7 @@ impl<'a> JsonRef<'a> {
             _ => Err(invalid_type!(
                 "{} from {} to f64",
                 ERR_CONVERT_FAILED,
-                self.to_string()
+                self.to_string_value()
             )),
         }
     }

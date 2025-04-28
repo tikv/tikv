@@ -96,7 +96,7 @@ use super::super::{Error, Result, datum::Datum};
 use crate::{
     FieldTypeTp,
     codec::{
-        convert::ConvertTo,
+        convert::{ConvertTo, ToStringValue},
         data_type::{BytesRef, Decimal, Real},
         mysql::{Duration, Time, TimeType},
     },
@@ -306,7 +306,8 @@ use crate::codec::mysql::{TimeDecoder, TimeEncoder};
 
 impl fmt::Display for Json {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.as_ref())
+        let s = serde_json::to_string(&self.as_ref()).unwrap();
+        write!(f, "{}", s)
     }
 }
 
@@ -502,7 +503,7 @@ impl<'a> ConvertTo<f64> for JsonRef<'a> {
                 .map_or(0f64, |x| if x { 1f64 } else { 0f64 }),
             JsonType::String => self.get_str_bytes()?.convert(ctx)?,
             _ => ctx
-                .handle_truncate_err(Error::truncated_wrong_val("Float", self.to_string()))
+                .handle_truncate_err(Error::truncated_wrong_val("Float", self.to_string_value()))
                 .map(|_| 0f64)?,
         };
         Ok(d)

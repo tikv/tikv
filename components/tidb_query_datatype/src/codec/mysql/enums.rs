@@ -10,7 +10,10 @@ use tipb::FieldType;
 
 use crate::{
     FieldTypeTp,
-    codec::{Result, convert::ToInt},
+    codec::{
+        Result,
+        convert::{ToInt, ToStringValue},
+    },
     expr::EvalContext,
 };
 
@@ -182,6 +185,12 @@ impl<'a> ToInt for EnumRef<'a> {
 
     fn to_uint(&self, _ctx: &mut EvalContext, _tp: FieldTypeTp) -> Result<u64> {
         Ok(*self.value)
+    }
+}
+
+impl<'a> ToStringValue for EnumRef<'a> {
+    fn to_string_value(&self) -> String {
+        String::from_utf8_lossy(self.name).to_string()
     }
 }
 

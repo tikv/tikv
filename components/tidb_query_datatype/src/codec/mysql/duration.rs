@@ -976,7 +976,7 @@ mod tests {
         for (input, fsp, exp) in cases {
             let t = Duration::parse(&mut EvalContext::default(), input, fsp).unwrap();
             let dec: Decimal = t.convert(&mut ctx).unwrap();
-            let res = dec.to_string();
+            let res = format!("{}", dec);
             assert_eq!(exp, res);
         }
         let cases = vec![

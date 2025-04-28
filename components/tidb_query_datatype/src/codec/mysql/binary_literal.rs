@@ -174,6 +174,9 @@ impl BinaryLiteral {
 
 impl fmt::Display for BinaryLiteral {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.0.is_empty() {
+            return Ok(());
+        }
         write!(f, "0x{}", hex::encode(self.0.as_slice()))
     }
 }
