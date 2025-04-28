@@ -815,8 +815,9 @@ impl DeletableStorage for AzureStorage {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use futures::AsyncReadExt;
+
+    use super::*;
 
     #[test]
     fn test_url_of_backend() {
