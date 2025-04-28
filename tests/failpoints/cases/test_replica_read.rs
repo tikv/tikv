@@ -864,7 +864,7 @@ fn test_read_index_cache() {
         )
         .unwrap();
 
-        let _ = sync_get_snapshot(
+        let _ = get_snapshot(
             &mut cluster,
             new_peer(2, 2),
             r1.clone(),
@@ -874,7 +874,7 @@ fn test_read_index_cache() {
         );
     }
     //  read it again after removing the lock
-    let _ = sync_get_snapshot(
+    let _ = get_snapshot(
         &mut cluster,
         new_peer(2, 2),
         r1.clone(),
@@ -890,7 +890,7 @@ fn test_read_index_cache() {
         "panic(reading_from_leader_not_allowed)",
     )
     .unwrap();
-    let _ = sync_get_snapshot(
+    let _ = get_snapshot(
         &mut cluster,
         new_peer(2, 2),
         r1.clone(),
@@ -906,7 +906,7 @@ fn test_read_index_cache() {
         "panic(reading_from_cache_not_allowed)",
     )
     .unwrap();
-    let _ = sync_get_snapshot(
+    let _ = get_snapshot(
         &mut cluster,
         new_peer(2, 2),
         r1.clone(),
