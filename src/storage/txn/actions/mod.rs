@@ -15,5 +15,6 @@ pub mod commit;
 pub mod common;
 pub mod flashback_to_version;
 pub mod gc;
+pub mod mvcc;
 pub mod prewrite;
 pub mod tests;

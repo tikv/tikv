@@ -17,7 +17,7 @@ use crate::storage::{
 
 /// `MvccInfo` stores all mvcc information of given key.
 /// Used by `MvccGetByKey` and `MvccGetByStartTs`.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct MvccInfo {
     pub lock: Option<Lock>,
     /// commit_ts and write

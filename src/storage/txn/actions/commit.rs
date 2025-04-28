@@ -1,13 +1,14 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use txn_types::{Key, TimeStamp, Write, WriteType};
+use txn_types::{CommitRole, Key, TimeStamp, Write, WriteType};
 
 use crate::storage::{
     mvcc::{
         metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
-        ErrorInner, MvccTxn, ReleasedLock, Result as MvccResult, SnapshotReader,
+        ErrorInner, MvccInfo, MvccTxn, ReleasedLock, Result as MvccResult, SnapshotReader,
     },
+    txn::actions::mvcc::collect_mvcc_info_for_debug,
     Snapshot,
 };
 
@@ -16,6 +17,7 @@ pub fn commit<S: Snapshot>(
     reader: &mut SnapshotReader<S>,
     key: Key,
     commit_ts: TimeStamp,
+    commit_role: Option<CommitRole>,
 ) -> MvccResult<Option<ReleasedLock>> {
     fail_point!("commit", |err| Err(
         crate::storage::mvcc::txn::make_txn_error(err, &key, reader.start_ts,).into()
@@ -62,19 +64,36 @@ pub fn commit<S: Snapshot>(
         _ => {
             return match reader.get_txn_commit_record(&key)?.info() {
                 Some((_, WriteType::Rollback)) | None => {
-                    MVCC_CONFLICT_COUNTER.commit_lock_not_found.inc();
                     // None: related Rollback has been collapsed.
                     // Rollback: rollback by concurrent transaction.
-                    info!(
+                    MVCC_CONFLICT_COUNTER.commit_lock_not_found.inc();
+                    // The lock is expected to be present for secondary commits.
+                    // If not, there maybe something wrong with the txn state, and we should
+                    // collect more information for debugging.
+                    let unexpected = matches!(commit_role, Some(CommitRole::Secondary));
+                    // only collect the mvcc information if an unexpected case happens.
+                    let mvcc_info = unexpected
+                        .then(|| collect_mvcc_info_for_debug(&mut reader.reader, &key))
+                        .unwrap_or(None)
+                        .map(|(lock, writes, values)| MvccInfo {
+                            lock,
+                            writes,
+                            values,
+                        });
+
+                    info_or_error!(
+                        !unexpected;
                         "txn conflict (lock not found)";
                         "key" => %key,
                         "start_ts" => reader.start_ts,
                         "commit_ts" => commit_ts,
+                        "mvcc_info" => ?mvcc_info,
                     );
                     Err(ErrorInner::TxnLockNotFound {
                         start_ts: reader.start_ts,
                         commit_ts,
                         key: key.into_raw()?,
+                        mvcc_info,
                     }
                     .into())
                 }
@@ -116,6 +135,9 @@ pub fn commit<S: Snapshot>(
 }
 
 pub mod tests {
+    #[cfg(test)]
+    use std::assert_matches::assert_matches;
+
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
     #[cfg(test)]
@@ -127,9 +149,9 @@ pub mod tests {
     use super::*;
     #[cfg(test)]
     use crate::storage::txn::tests::{
-        must_acquire_pessimistic_lock_for_large_txn, must_prewrite_delete, must_prewrite_lock,
-        must_prewrite_put, must_prewrite_put_for_large_txn, must_prewrite_put_impl,
-        must_prewrite_put_with_txn_soucre, must_rollback,
+        must_acquire_pessimistic_lock_for_large_txn, must_find_mvcc_infos, must_prewrite_delete,
+        must_prewrite_lock, must_prewrite_put, must_prewrite_put_for_large_txn,
+        must_prewrite_put_impl, must_prewrite_put_with_txn_soucre, must_rollback,
     };
     #[cfg(test)]
     use crate::storage::{
@@ -139,7 +161,7 @@ pub mod tests {
         TestEngineBuilder, TxnStatus,
     };
     use crate::storage::{
-        mvcc::{tests::*, MvccTxn},
+        mvcc::{tests::*, Error, MvccTxn},
         Engine,
     };
 
@@ -182,7 +204,14 @@ pub mod tests {
         let cm = ConcurrencyManager::new_for_test(start_ts);
         let mut txn = MvccTxn::new(start_ts, cm);
         let mut reader = SnapshotReader::new(start_ts, snapshot, true);
-        let res = commit(&mut txn, &mut reader, Key::from_raw(key), commit_ts.into()).unwrap();
+        let res = commit(
+            &mut txn,
+            &mut reader,
+            Key::from_raw(key),
+            commit_ts.into(),
+            None,
+        )
+        .unwrap();
         write(engine, &ctx, txn.into_modifies());
         res
     }
@@ -192,13 +221,21 @@ pub mod tests {
         key: &[u8],
         start_ts: impl Into<TimeStamp>,
         commit_ts: impl Into<TimeStamp>,
-    ) {
+        commit_role: Option<CommitRole>,
+    ) -> Error {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let start_ts = start_ts.into();
         let cm = ConcurrencyManager::new_for_test(start_ts);
         let mut txn = MvccTxn::new(start_ts, cm);
         let mut reader = SnapshotReader::new(start_ts, snapshot, true);
-        commit(&mut txn, &mut reader, Key::from_raw(key), commit_ts.into()).unwrap_err();
+        commit(
+            &mut txn,
+            &mut reader,
+            Key::from_raw(key),
+            commit_ts.into(),
+            commit_role,
+        )
+        .unwrap_err()
     }
 
     #[cfg(test)]
@@ -235,13 +272,13 @@ pub mod tests {
         let mut engine = TestEngineBuilder::new().build().unwrap();
 
         // Not prewrite yet
-        must_err(&mut engine, k, 1, 2);
+        must_err(&mut engine, k, 1, 2, None);
         must_prewrite_put(&mut engine, k, v, k, 5);
         // start_ts not match
-        must_err(&mut engine, k, 4, 5);
+        must_err(&mut engine, k, 4, 5, None);
         must_rollback(&mut engine, k, 5, false);
         // commit after rollback
-        must_err(&mut engine, k, 5, 6);
+        must_err(&mut engine, k, 5, 6, None);
     }
 
     #[test]
@@ -282,9 +319,10 @@ pub mod tests {
             false,
             uncommitted(100, ts(20, 1)),
         );
+
         // The min_commit_ts should be ts(20, 1)
-        must_err(&mut engine, k, ts(10, 0), ts(15, 0));
-        must_err(&mut engine, k, ts(10, 0), ts(20, 0));
+        must_err(&mut engine, k, ts(10, 0), ts(15, 0), None);
+        must_err(&mut engine, k, ts(10, 0), ts(20, 0), None);
         must_succeed(&mut engine, k, ts(10, 0), ts(20, 1));
 
         must_prewrite_put_for_large_txn(&mut engine, k, v, k, ts(30, 0), 100, 0);
@@ -334,7 +372,7 @@ pub mod tests {
         );
         // The min_commit_ts is ts(70, 0) other than ts(60, 1) in prewrite request.
         must_large_txn_locked(&mut engine, k, ts(60, 0), 100, ts(70, 1), false);
-        must_err(&mut engine, k, ts(60, 0), ts(65, 0));
+        must_err(&mut engine, k, ts(60, 0), ts(65, 0), None);
         must_succeed(&mut engine, k, ts(60, 0), ts(80, 0));
     }
 
@@ -402,5 +440,84 @@ pub mod tests {
         must_written(&mut engine, k1, 10, 20, WriteType::Put);
         must_not_have_write(&mut engine, k2, 20);
         must_not_have_write(&mut engine, k2, 10);
+    }
+
+    #[test]
+    fn test_commit_txn_lock_not_found() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let (start_ts, commit_ts) = (TimeStamp::new(10), TimeStamp::new(20));
+        let (k1, k2, k3) = (b"k1", b"k2", b"k3");
+        must_prewrite_put(&mut engine, k1, b"v1", k1, start_ts);
+        must_rollback(&mut engine, k1, start_ts, false);
+        must_prewrite_put(&mut engine, k2, b"v2", k1, start_ts);
+        must_rollback(&mut engine, k2, start_ts, false);
+
+        // Do not collect mvcc case
+        for k in [k1, k2, k3] {
+            let key_str = String::from_utf8_lossy(k);
+            let role = if k == k1 {
+                // CommitRole is `Primary` and lock rollback.
+                // It is an expected case (rollback by other txn) and should not collect mvcc.
+                Some(CommitRole::Primary)
+            } else {
+                // When cannot determine the commit role, do not collect mvcc because it may be
+                // the primary commit and it is an expected case.
+                None
+            };
+            let err = must_err(&mut engine, k, start_ts, commit_ts, role);
+            assert_matches!(
+                err,
+                Error(box ErrorInner::TxnLockNotFound {
+                    start_ts,
+                    commit_ts,
+                    key,
+                    mvcc_info,
+                }) if {
+                    assert_eq!(key, k.to_vec());
+                    assert_eq!(start_ts,  10.into(), "key: {}", key_str);
+                    assert_eq!( commit_ts,  20.into(), "key: {}", key_str);
+                    assert_matches!(mvcc_info.clone(), None, "key: {}", key_str);
+                    true
+                }
+            );
+        }
+
+        // Should collect mvcc for debugging when secondary commit returns an error
+        // TxnLockNotFound.
+        // - k2, lock rollback.
+        // - k3, no lock.
+        for k in [k2, k3] {
+            let key_str = String::from_utf8_lossy(k);
+            let (expected_lock, expected_writes, expected_values) =
+                must_find_mvcc_infos(&mut engine, k, TimeStamp::max());
+            let err = must_err(
+                &mut engine,
+                k,
+                start_ts,
+                commit_ts,
+                Some(CommitRole::Secondary),
+            );
+            assert_matches!(
+                err,
+                Error(box ErrorInner::TxnLockNotFound {
+                    start_ts,
+                    commit_ts,
+                    key,
+                    mvcc_info: Some(MvccInfo {
+                        lock,
+                        writes,
+                        values,
+                    }),
+                }) if {
+                    assert_eq!(key, k.to_vec());
+                    assert_eq!(start_ts, 10.into(), "key: {}", key_str);
+                    assert_eq!( commit_ts,  20.into(), "key: {}", key_str);
+                    assert_eq!(lock.clone(),  expected_lock, "key: {}", key_str);
+                    assert_eq!(writes.clone(),  expected_writes, "key: {}", key_str);
+                    assert_eq!(values.clone(), expected_values, "key: {}", key_str);
+                    true
+                }
+            );
+        }
     }
 }

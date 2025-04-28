@@ -126,7 +126,7 @@ fn mvcc_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config: &Ben
             for key in keys {
                 let mut txn = mvcc::MvccTxn::new(1.into(), cm.clone());
                 let mut reader = SnapshotReader::new(1.into(), snapshot.clone(), true);
-                black_box(commit(&mut txn, &mut reader, key, 1.into())).unwrap();
+                black_box(commit(&mut txn, &mut reader, key, 1.into(), None)).unwrap();
             }
         },
         BatchSize::SmallInput,
