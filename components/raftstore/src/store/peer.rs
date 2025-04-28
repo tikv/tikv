@@ -6180,7 +6180,7 @@ pub enum RequestPolicy {
     ProposeTransferLeader,
     ProposeConfChange,
     // It shoud be ONLY used by the follower-read path and it checks the read index cache first
-    // before sending read index message it to leader.
+    // before sending read index message to leader.
     ReadIndexReplicaRead,
 }
 
