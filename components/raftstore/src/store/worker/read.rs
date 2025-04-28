@@ -593,7 +593,7 @@ impl ReadDelegate {
 
         // it is updated by read index message. detailed design is
         // https://github.com/tikv/rfcs/blob/master/text/0113-follower-read-cache.md
-        if (read_index_safe_ts > 0) && (read_index_safe_ts >= read_ts) {
+        if read_index_safe_ts >= read_ts {
             return Ok(());
         }
 
