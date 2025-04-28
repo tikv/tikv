@@ -1147,7 +1147,7 @@ pub fn cast_json_as_duration(
         JsonType::Time => Ok(Some(v.get_duration()?)),
         JsonType::String => cast_bytes_like_as_duration(ctx, extra, v.unquote()?.as_bytes(), false),
         _ => {
-            ctx.handle_truncate_err(Error::truncated_wrong_val("TIME", v.to_string()))?;
+            ctx.handle_truncate_err(Error::truncated_wrong_val("TIME", v.to_string_value()))?;
             Ok(None)
         }
     }
@@ -1341,7 +1341,7 @@ pub fn cast_json_as_time(
         }
         JsonType::String => cast_bytes_like_as_time(ctx, extra, v.unquote()?.as_bytes()),
         _ => {
-            ctx.handle_truncate_err(Error::truncated_wrong_val("DURATION", v.to_string()))?;
+            ctx.handle_truncate_err(Error::truncated_wrong_val("DURATION", v.to_string_value()))?;
             Ok(None)
         }
     }
