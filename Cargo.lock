@@ -1454,10 +1454,12 @@ dependencies = [
  "futures-io",
  "kvproto",
  "lazy_static",
+ "pin-project",
  "prometheus",
  "protobuf",
  "thiserror",
  "tikv_util",
+ "tokio",
  "url",
  "uuid 0.8.2",
 ]
@@ -2856,7 +2858,6 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "matches",
- "pin-project",
  "regex",
  "serde",
  "serde_json",
@@ -6273,6 +6274,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "simsimd"
+version = "6.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56838e1a0aceaef39fc1327227033efa84a294f54a39b356eefa5c60c885e9f0"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "siphasher"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7218,6 +7228,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "simsimd",
  "slog",
  "slog-global",
  "static_assertions",
