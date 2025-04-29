@@ -10,10 +10,6 @@ use std::{
 
 use api_version::KvFormat;
 use futures::{compat::Stream01CompatExt, stream::StreamExt};
-<<<<<<< HEAD
-use grpcio::{ChannelBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder};
-use grpcio_health::{create_health, HealthService, ServingStatus};
-=======
 use grpcio::{
     ChannelBuilder,
     CompressionLevel::{
@@ -21,9 +17,7 @@ use grpcio::{
     },
     Environment, ResourceQuota, Server as GrpcServer, ServerBuilder,
 };
-use grpcio_health::{create_health, HealthService};
-use health_controller::HealthController;
->>>>>>> a4b905d47f (server: do not set defualt compression algorithm for grpc channel (#18379))
+use grpcio_health::{create_health, HealthService, ServingStatus};
 use kvproto::tikvpb::*;
 use raftstore::store::{CheckLeaderTask, SnapManager, TabletSnapManager};
 use resource_control::ResourceGroupManager;
