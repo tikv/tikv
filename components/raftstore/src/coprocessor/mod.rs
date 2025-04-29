@@ -222,6 +222,18 @@ pub trait ApplySnapshotObserver: Coprocessor {
     fn should_pre_apply_snapshot(&self) -> bool {
         false
     }
+
+    // Hook when apply snapshot is ingested, and the state has been changed to
+    // Normal and persisted. The snapshot will not be re-iningested after the
+    // restart if this hook is called.
+    fn on_apply_snapshot_committed(
+        &self,
+        _: &mut ObserverContext<'_>,
+        _: u64,
+        _: &crate::store::SnapKey,
+        _: Option<&crate::store::Snapshot>,
+    ) {
+    }
 }
 
 /// SplitChecker is invoked during a split check scan, and decides to use
