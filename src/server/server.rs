@@ -10,7 +10,13 @@ use std::{
 
 use api_version::KvFormat;
 use futures::{compat::Stream01CompatExt, stream::StreamExt};
-use grpcio::{ChannelBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder};
+use grpcio::{
+    ChannelBuilder,
+    CompressionLevel::{
+        GRPC_COMPRESS_LEVEL_HIGH, GRPC_COMPRESS_LEVEL_LOW, GRPC_COMPRESS_LEVEL_NONE,
+    },
+    Environment, ResourceQuota, Server as GrpcServer, ServerBuilder,
+};
 use grpcio_health::{create_health, HealthService};
 use health_controller::HealthController;
 use kvproto::tikvpb::*;
@@ -42,7 +48,7 @@ use crate::{
     coprocessor::Endpoint,
     coprocessor_v2,
     read_pool::ReadPool,
-    server::{gc_worker::GcWorker, tablet_snap::TabletRunner, Proxy},
+    server::{config::GrpcCompressionType, gc_worker::GcWorker, tablet_snap::TabletRunner, Proxy},
     storage::{lock_manager::LockManager, Engine, Storage},
     tikv_util::sys::thread::ThreadBuildWrapper,
 };
@@ -93,6 +99,21 @@ where
         let ip: String = format!("{}", addr.ip());
         let mem_quota = ResourceQuota::new(Some("ServerMemQuota"))
             .resize_memory(self.cfg.value().grpc_memory_pool_quota.0 as usize);
+
+        // Best-effort algorithm selection: If the client doesn't support the specified
+        // algorithm, the server may fall back to a different one or disable
+        // compression entirely.
+        //
+        // This is a bit hacky to map Low and High to gzip and deflate respectively.
+        // See CompressionAlgorithmForLevel in gRPC implementation for details.
+        //
+        // We cannot set default compression algorithm here, because it won't check
+        // whether the client side supports the algorithm
+        let compression_level = match self.cfg.value().grpc_compression_type {
+            GrpcCompressionType::None => GRPC_COMPRESS_LEVEL_NONE,
+            GrpcCompressionType::Deflate => GRPC_COMPRESS_LEVEL_HIGH,
+            GrpcCompressionType::Gzip => GRPC_COMPRESS_LEVEL_LOW,
+        };
         let channel_args = ChannelBuilder::new(Arc::clone(&env))
             .stream_initial_window_size(self.cfg.value().grpc_stream_initial_window_size.0 as i32)
             .max_concurrent_stream(self.cfg.value().grpc_concurrent_stream)
@@ -102,8 +123,8 @@ where
             .http2_max_ping_strikes(i32::MAX) // For pings without data from clients.
             .keepalive_time(self.cfg.value().grpc_keepalive_time.into())
             .keepalive_timeout(self.cfg.value().grpc_keepalive_timeout.into())
-            .default_compression_algorithm(self.cfg.value().grpc_compression_algorithm())
             .default_gzip_compression_level(self.cfg.value().grpc_gzip_compression_level)
+            .default_compression_level(compression_level)
             .build_args();
 
         let sb = ServerBuilder::new(Arc::clone(&env))
