@@ -55,6 +55,9 @@ pub fn commit<S: Snapshot>(
                     "key" => %key,
                     "start_ts" => reader.start_ts,
                     "commit_ts" => commit_ts,
+                    // Though it may not be a bug here, but we still want to collect the mvcc
+                    // info here for further debugging if needed.
+                    "mvcc_info" => ?collect_mvcc_info_for_debug(&mut reader.reader, &key),
                 );
                 (lock, false)
             } else {
@@ -445,12 +448,13 @@ pub mod tests {
     #[test]
     fn test_commit_txn_lock_not_found() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
-        let (start_ts, commit_ts) = (TimeStamp::new(10), TimeStamp::new(20));
-        let (k1, k2, k3) = (b"k1", b"k2", b"k3");
+        let (start_ts, commit_ts) = (10, 20);
+        let (k1, k2, k3, k4) = (b"k1", b"k2", b"k3", b"k4");
         must_prewrite_put(&mut engine, k1, b"v1", k1, start_ts);
         must_rollback(&mut engine, k1, start_ts, false);
         must_prewrite_put(&mut engine, k2, b"v2", k1, start_ts);
         must_rollback(&mut engine, k2, start_ts, false);
+        must_prewrite_put(&mut engine, k4, b"v4", k1, start_ts + 1);
 
         // Do not collect mvcc case
         for k in [k1, k2, k3] {
@@ -486,7 +490,8 @@ pub mod tests {
         // TxnLockNotFound.
         // - k2, lock rollback.
         // - k3, no lock.
-        for k in [k2, k3] {
+        // - k4, lock but start_ts not match
+        for k in [k2, k3, k4] {
             let key_str = String::from_utf8_lossy(k);
             let (expected_lock, expected_writes, expected_values) =
                 must_find_mvcc_infos(&mut engine, k, TimeStamp::max());
