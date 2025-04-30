@@ -21,6 +21,7 @@ use raftstore::{
     },
     RegionInfoAccessor,
 };
+use raftstore::store::KeyspaceArchivedManager;
 use tikv::{
     config::DbConfig,
     server::gc_worker::{
@@ -145,6 +146,7 @@ fn test_txn_gc_keys_handled() {
         GcConfig::default(),
         feature_gate,
         Arc::new(MockRegionInfoProvider::new(vec![])),
+        Arc::new(KeyspaceArchivedManager::new(None,None)),
     );
     let coprocessor_host = CoprocessorHost::default();
     gc_worker.start(store_id, coprocessor_host).unwrap();
@@ -291,6 +293,7 @@ fn test_raw_gc_keys_handled() {
         GcConfig::default(),
         feature_gate,
         Arc::new(MockRegionInfoProvider::new(vec![])),
+        Arc::new(KeyspaceArchivedManager::new(None,None)),
     );
     let coprocessor_host = CoprocessorHost::default();
     gc_worker.start(store_id, coprocessor_host).unwrap();

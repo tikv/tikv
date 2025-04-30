@@ -91,6 +91,7 @@ use tikv_util::{
     HandyRwLock,
 };
 use tokio::runtime::Builder as TokioBuilder;
+use raftstore::store::KeyspaceArchivedManager;
 use txn_types::TxnExtraScheduler;
 
 use super::*;
@@ -403,6 +404,7 @@ impl ServerCluster {
             cfg.gc.clone(),
             Default::default(),
             Arc::new(region_info_accessor.clone()),
+            Arc::new(KeyspaceArchivedManager::new(None,None)),
         );
         gc_worker.start(node_id, coprocessor_host.clone()).unwrap();
 

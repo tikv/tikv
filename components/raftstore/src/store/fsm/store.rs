@@ -120,6 +120,7 @@ use crate::{
     },
     Error, Result,
 };
+use crate::store::KeyspaceArchivedManager;
 
 type Key = Vec<u8>;
 
@@ -1695,6 +1696,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         mut disk_check_runner: DiskCheckRunner,
         grpc_service_mgr: GrpcServiceManager,
         safe_point: Arc<AtomicU64>,
+        keyspace_archived_manager:Arc<KeyspaceArchivedManager>,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1859,6 +1861,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             causal_ts_provider,
             snap_generator_pool,
             grpc_service_mgr,
+            keyspace_archived_manager,
         )?;
         Ok(())
     }
@@ -1877,6 +1880,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         snap_generator_pool: FuturePool,
         grpc_service_mgr: GrpcServiceManager,
+        keyspace_archived_manager:Arc<KeyspaceArchivedManager>,
     ) -> Result<()> {
         let cfg = builder.cfg.value().clone();
         let store = builder.store.clone();
@@ -1968,6 +1972,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             coprocessor_host,
             causal_ts_provider,
             grpc_service_mgr,
+            keyspace_archived_manager,
         );
         assert!(workers.pd_worker.start(pd_runner));
 

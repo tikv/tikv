@@ -83,6 +83,7 @@ tracker = { workspace = true }
 txn_types = { workspace = true }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 yatp = { workspace = true }
+dashmap = "5.2.0"
 
 [dev-dependencies]
 encryption_export = { workspace = true }

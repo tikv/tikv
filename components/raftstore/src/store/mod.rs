@@ -90,7 +90,7 @@ pub use self::{
         BucketRange, BucketStatsInfo, CachedReadDelegate, CheckLeaderRunner, CheckLeaderTask,
         CompactThreshold, DiskCheckRunner, FlowStatistics, FlowStatsReporter,
         FullCompactController, KeyEntry, LocalReadContext, LocalReader, LocalReaderCore,
-        PdStatsMonitor, PdTask, ReadDelegate, ReadExecutor, ReadExecutorProvider, ReadProgress,
+        PdStatsMonitor, PdTask, KeyspaceArchivedManager,  ReadDelegate, ReadExecutor, ReadExecutorProvider, ReadProgress,
         ReadStats, RefreshConfigTask, RegionTask, SnapGenTask, SplitCheckRunner, SplitCheckTask,
         SplitConfig, SplitConfigManager, SplitInfo, StoreMetaDelegate, StoreStatsReporter,
         TrackVer, WriteStats, WriterContoller, BIG_REGION_CPU_OVERLOAD_THRESHOLD_RATIO,

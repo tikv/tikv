@@ -36,6 +36,7 @@ use tikv_util::{
 };
 use txn_types::{Key, TimeStamp};
 use yatp::{task::future::TaskCell, Remote};
+use raftstore::store::KeyspaceArchivedManager;
 
 use super::{
     check_need_gc,
@@ -1212,6 +1213,8 @@ where
 
     gc_manager_handle: Arc<Mutex<Option<GcManagerHandle>>>,
     feature_gate: FeatureGate,
+
+    keyspace_archived_manager: Arc<KeyspaceArchivedManager>
 }
 
 impl<E: Engine> Clone for GcWorker<E> {
@@ -1229,6 +1232,7 @@ impl<E: Engine> Clone for GcWorker<E> {
             gc_manager_handle: self.gc_manager_handle.clone(),
             feature_gate: self.feature_gate.clone(),
             region_info_provider: self.region_info_provider.clone(),
+            keyspace_archived_manager: self.keyspace_archived_manager.clone(),
         }
     }
 }
@@ -1302,6 +1306,7 @@ impl<E: Engine> GcWorker<E> {
         cfg: GcConfig,
         feature_gate: FeatureGate,
         region_info_provider: Arc<dyn RegionInfoProvider>,
+        archived_keyspaces: Arc<KeyspaceArchivedManager>,
     ) -> Self {
         let worker_builder = WorkerBuilder::new("gc-worker")
             .pending_capacity(GC_MAX_PENDING_TASKS)
@@ -1321,6 +1326,7 @@ impl<E: Engine> GcWorker<E> {
             gc_manager_handle: Arc::new(Mutex::new(None)),
             feature_gate,
             region_info_provider,
+            keyspace_archived_manager: archived_keyspaces,
         }
     }
 
@@ -1764,6 +1770,7 @@ mod tests {
             gc_config,
             gate,
             Arc::new(MockRegionInfoProvider::new(vec![region1, region2])),
+            Arc::new(KeyspaceArchivedManager::new(None,None)),
         );
         let coprocessor_host = CoprocessorHost::default();
         gc_worker.start(store_id, coprocessor_host).unwrap();
@@ -1943,6 +1950,7 @@ mod tests {
             gc_config,
             feature_gate,
             Arc::new(ri_provider.clone()),
+            Arc::new(KeyspaceArchivedManager::new(None,None)),
         );
         let coprocessor_host = CoprocessorHost::default();
         gc_worker.start(store_id, coprocessor_host).unwrap();
@@ -2352,6 +2360,7 @@ mod tests {
             gc_config,
             gate,
             Arc::new(MockRegionInfoProvider::new(vec![region.clone()])),
+            Arc::new(KeyspaceArchivedManager::new(None,None)),
         );
 
         // Before starting gc_worker, fill the scheduler to full.
@@ -2919,6 +2928,7 @@ mod tests {
             gc_config,
             gate,
             Arc::new(MockRegionInfoProvider::new(vec![])),
+            Arc::new(KeyspaceArchivedManager::new(None,None)),
         );
         let mut config_change = ConfigChange::new();
         config_change.insert(String::from("num_threads"), ConfigValue::Usize(5));

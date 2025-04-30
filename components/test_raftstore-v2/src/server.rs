@@ -85,6 +85,7 @@ use tikv_util::{
     Either, HandyRwLock,
 };
 use tokio::runtime::{Builder as TokioBuilder, Handle};
+use raftstore::store::KeyspaceArchivedManager;
 use txn_types::TxnExtraScheduler;
 
 use crate::{Cluster, RaftStoreRouter, SimulateTransport, Simulator, SnapshotRouter};
@@ -470,6 +471,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
             cfg.gc.clone(),
             Default::default(),
             Arc::new(region_info_accessor.clone()),
+            Arc::new(KeyspaceArchivedManager::new(None,None)),
         );
         gc_worker.start(node_id, coprocessor_host.clone()).unwrap();
 

@@ -6,6 +6,7 @@ use std::{
 };
 
 use raftstore::coprocessor::{region_info_accessor::MockRegionInfoProvider, CoprocessorHost};
+use raftstore::store::KeyspaceArchivedManager;
 use tikv::{
     config::{ConfigController, Module, TikvConfig},
     server::gc_worker::{GcConfig, GcTask, GcWorker},
@@ -34,6 +35,7 @@ fn setup_cfg_controller(
         cfg.gc.clone(),
         Default::default(),
         Arc::new(MockRegionInfoProvider::new(Vec::new())),
+        Arc::new(KeyspaceArchivedManager::new(None,None)),
     );
     let coprocessor_host = CoprocessorHost::default();
     gc_worker.start(0, coprocessor_host).unwrap();

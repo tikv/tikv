@@ -24,6 +24,7 @@ use raftstore::{
         GlobalReplicationState, PdTask, RefreshConfigTask, SnapManager, SplitCheckTask, Transport,
     },
 };
+use raftstore::store::KeyspaceArchivedManager;
 use resource_metering::CollectorRegHandle;
 use service::service_manager::GrpcServiceManager;
 use tikv_util::{
@@ -175,6 +176,7 @@ where
         disk_check_runner: DiskCheckRunner,
         grpc_service_mgr: GrpcServiceManager,
         safe_point: Arc<AtomicU64>,
+        keyspace_archived_manager:Arc<KeyspaceArchivedManager>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -215,6 +217,7 @@ where
             disk_check_runner,
             grpc_service_mgr,
             safe_point,
+            keyspace_archived_manager,
         )?;
 
         Ok(())
@@ -465,6 +468,7 @@ where
         disk_check_runner: DiskCheckRunner,
         grpc_service_mgr: GrpcServiceManager,
         safe_point: Arc<AtomicU64>,
+        keyspace_archived_manager: Arc<KeyspaceArchivedManager>
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -501,6 +505,7 @@ where
             disk_check_runner,
             grpc_service_mgr,
             safe_point,
+            keyspace_archived_manager,
         )?;
         Ok(())
     }

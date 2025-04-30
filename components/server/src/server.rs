@@ -77,6 +77,7 @@ use raftstore::{
         snapshot_backup::PrepareDiskSnapObserver,
         AutoSplitController, CheckLeaderRunner, DiskCheckRunner, LocalReader, SnapManager,
         SnapManagerBuilder, SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
+        KeyspaceArchivedManager,
     },
     RaftRouterCompactedEventSender,
 };
@@ -515,6 +516,7 @@ where
 
     fn init_gc_worker(
         &mut self,
+        archived_keyspaces: Arc<KeyspaceArchivedManager>,
     ) -> GcWorker<RaftKv<RocksEngine, ServerRaftStoreRouter<RocksEngine, ER>>> {
         let engines = self.engines.as_ref().unwrap();
         let gc_worker = GcWorker::new(
@@ -523,6 +525,7 @@ where
             self.core.config.gc.clone(),
             self.pd_client.feature_gate().clone(),
             Arc::new(self.region_info_accessor.clone().unwrap()),
+            archived_keyspaces,
         );
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
@@ -540,7 +543,11 @@ where
             self.engines.as_ref().unwrap().engine.kv_engine().unwrap(),
             self.core.flow_info_receiver.take().unwrap(),
         )));
-        let mut gc_worker = self.init_gc_worker();
+
+
+        let keysapce_archive_manager=Arc::new(KeyspaceArchivedManager::new(None,None));
+
+        let mut gc_worker = self.init_gc_worker(keysapce_archive_manager.clone());
         let mut ttl_checker = Box::new(LazyWorker::new("ttl-checker"));
         let ttl_scheduler = ttl_checker.scheduler();
 
@@ -1073,6 +1080,7 @@ where
                 disk_check_runner,
                 self.grpc_service_mgr.clone(),
                 safe_point.clone(),
+                keysapce_archive_manager.clone(),
             )
             .unwrap_or_else(|e| fatal!("failed to start raft_server: {}", e));
 
