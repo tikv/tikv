@@ -1380,6 +1380,7 @@ pub struct RegionReadProgress {
     // The fast path to read `safe_ts` without acquiring the mutex
     // on `core`
     safe_ts: AtomicU64,
+    pub read_index_safe_ts: AtomicU64,
 }
 
 impl RegionReadProgress {
@@ -1397,6 +1398,7 @@ impl RegionReadProgress {
                 peer_id,
             )),
             safe_ts: AtomicU64::from(0),
+            read_index_safe_ts: AtomicU64::from(0),
         }
     }
 
@@ -1553,6 +1555,27 @@ impl RegionReadProgress {
 
     pub fn safe_ts(&self) -> u64 {
         self.safe_ts.load(AtomicOrdering::Acquire)
+    }
+
+    pub fn update_read_index_safe_ts(&self, start_ts: u64) {
+        let current_ts: u64 = self.read_index_safe_ts();
+        if start_ts > current_ts {
+            let compare_exchange = self.read_index_safe_ts.compare_exchange(
+                current_ts,
+                start_ts,
+                AtomicOrdering::SeqCst,
+                AtomicOrdering::Relaxed,
+            );
+            // it is a single threaded function
+            debug_assert!(
+                compare_exchange.is_ok(),
+                "read index safe ts is updeated in multiple threads",
+            );
+        }
+    }
+
+    pub fn read_index_safe_ts(&self) -> u64 {
+        self.read_index_safe_ts.load(AtomicOrdering::Relaxed)
     }
 
     // `safe_ts` is calculated from the `resolved_ts`, they are the same thing

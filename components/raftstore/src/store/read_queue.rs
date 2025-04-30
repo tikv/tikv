@@ -334,12 +334,14 @@ impl<C: ErrorCallback> ReadIndexQueue<C> {
 const UUID_LEN: usize = 16;
 const REQUEST_FLAG: u8 = b'r';
 const LOCKED_FLAG: u8 = b'l';
+const READ_INDEX_SAFE_TS_FLAG: u8 = b'm';
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReadIndexContext {
     pub id: Uuid,
     pub request: Option<raft_cmdpb::ReadIndexRequest>,
     pub locked: Option<LockInfo>,
+    pub read_index_safe_ts: Option<u64>,
 }
 
 impl ReadIndexContext {
@@ -356,6 +358,7 @@ impl ReadIndexContext {
             id: Uuid::from_slice(&bytes[..UUID_LEN]).unwrap(),
             request: None,
             locked: None,
+            read_index_safe_ts: None,
         };
         let mut bytes = &bytes[UUID_LEN..];
         while !bytes.is_empty() {
@@ -374,6 +377,12 @@ impl ReadIndexContext {
                     bytes = &bytes[len..];
                     res.locked = Some(locked);
                 }
+                READ_INDEX_SAFE_TS_FLAG => {
+                    let len = decode_u64(&mut bytes)? as usize;
+                    let read_index_safe_ts = u64::from_le_bytes(bytes[..len].try_into().unwrap());
+                    bytes = &bytes[len..];
+                    res.read_index_safe_ts = Some(read_index_safe_ts);
+                }
                 // just break for forward compatibility
                 _ => break,
             }
@@ -382,18 +391,28 @@ impl ReadIndexContext {
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
-        Self::fields_to_bytes(self.id, self.request.as_ref(), self.locked.as_ref())
+        Self::fields_to_bytes(
+            self.id,
+            self.request.as_ref(),
+            self.locked.as_ref(),
+            self.read_index_safe_ts,
+        )
     }
 
     pub fn fields_to_bytes(
         id: Uuid,
         request: Option<&raft_cmdpb::ReadIndexRequest>,
         locked: Option<&LockInfo>,
+        read_index_safe_ts: Option<u64>,
     ) -> Vec<u8> {
         let request_size = request.map(Message::compute_size);
         let locked_size = locked.map(Message::compute_size);
+        let read_index_safe_ts_size = read_index_safe_ts.map(|_| std::mem::size_of::<u64>() as u32);
         let field_size = |s: Option<u32>| s.map(|s| 1 + MAX_VAR_U64_LEN + s as usize).unwrap_or(0);
-        let cap = UUID_LEN + field_size(request_size) + field_size(locked_size);
+        let cap = UUID_LEN
+            + field_size(request_size)
+            + field_size(locked_size)
+            + field_size(read_index_safe_ts_size);
         let mut b = Vec::with_capacity(cap);
         b.extend_from_slice(id.as_bytes());
         if let Some(request) = request {
@@ -405,6 +424,12 @@ impl ReadIndexContext {
             b.push(LOCKED_FLAG);
             b.encode_var_u64(locked_size.unwrap() as u64).unwrap();
             locked.write_to_vec(&mut b).unwrap();
+        }
+        if let Some(read_index_safe_ts) = read_index_safe_ts {
+            b.push(READ_INDEX_SAFE_TS_FLAG);
+            b.encode_u64(read_index_safe_ts_size.unwrap() as u64)
+                .unwrap();
+            b.extend_from_slice(&read_index_safe_ts.to_le_bytes());
         }
         b
     }
@@ -455,6 +480,7 @@ mod read_index_ctx_tests {
                 id,
                 request: None,
                 locked: None,
+                read_index_safe_ts: None,
             }
         );
 
@@ -475,6 +501,7 @@ mod read_index_ctx_tests {
             id,
             request: Some(request),
             locked: Some(locked),
+            read_index_safe_ts: Some(1),
         };
         let bytes = ctx.to_bytes();
         let parsed_ctx = ReadIndexContext::parse(&bytes).unwrap();

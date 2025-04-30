@@ -814,3 +814,104 @@ fn test_read_index_lock_checking_on_false_leader() {
     let resp = block_on_timeout(resp.as_mut(), Duration::from_secs(2)).unwrap();
     assert!(resp.get_header().has_error());
 }
+
+#[test_case(test_raftstore::new_node_cluster)]
+fn test_read_index_cache() {
+    let mut cluster = new_cluster(0, 5);
+    // Use long election timeout and short lease.
+    configure_for_lease_read(&mut cluster.cfg, Some(50), Some(200));
+    cluster.cfg.raft_store.raft_store_max_leader_lease =
+        ReadableDuration(Duration::from_millis(100));
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let rid = cluster.run_conf_change();
+    cluster.must_put(b"k1", b"v1");
+    for i in 2..=5 {
+        pd_client.must_add_peer(rid, new_peer(i, i));
+        must_get_equal(&cluster.get_engine(i), b"k1", b"v1");
+    }
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    let leader_id = 1;
+    let r1 = cluster.get_region(b"k1");
+
+    // k1 has a memory lock on the new leader
+    let leader_cm = cluster.sim.rl().get_concurrency_manager(leader_id);
+    let lock = Lock::new(
+        LockType::Put,
+        b"k1".to_vec(),
+        10.into(),
+        20000,
+        None,
+        10.into(),
+        1,
+        20.into(),
+        false,
+    )
+    .use_async_commit(vec![]);
+    {
+        let guard = block_on(leader_cm.lock_key(&Key::from_raw(b"k1")));
+        guard.with_lock(|l| *l = Some(lock.clone()));
+
+        // Read index from peer 2, the read index message will be sent to the old leader
+        // peer 1. But the lease of peer 1 has expired and it cannot get majority of
+        // heartbeat. So, we cannot get the result here.
+        fail::cfg(
+            "reading_from_cache",
+            "panic(reading_from_cache_not_allowed)",
+        )
+        .unwrap();
+
+        let _ = get_snapshot(
+            &mut cluster,
+            new_peer(2, 2),
+            r1.clone(),
+            b"k1",
+            Some(2),
+            Duration::from_millis(2000),
+        );
+    }
+    //  read it again after removing the lock
+    let _ = get_snapshot(
+        &mut cluster,
+        new_peer(2, 2),
+        r1.clone(),
+        b"k1",
+        Some(2),
+        Duration::from_millis(2000),
+    );
+
+    // this read should be from cache
+    fail::remove("reading_from_cache");
+    fail::cfg(
+        "reading_from_leader",
+        "panic(reading_from_leader_not_allowed)",
+    )
+    .unwrap();
+    let _ = get_snapshot(
+        &mut cluster,
+        new_peer(2, 2),
+        r1.clone(),
+        b"k1",
+        Some(2),
+        Duration::from_millis(2000),
+    );
+
+    // this read should be from leader
+    fail::remove("reading_from_leader");
+    fail::cfg(
+        "reading_from_cache",
+        "panic(reading_from_cache_not_allowed)",
+    )
+    .unwrap();
+    let _ = get_snapshot(
+        &mut cluster,
+        new_peer(2, 2),
+        r1.clone(),
+        b"k1",
+        Some(2),
+        Duration::from_millis(2000),
+    );
+}
