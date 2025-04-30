@@ -57,7 +57,7 @@ pub fn commit<S: Snapshot>(
                     "commit_ts" => commit_ts,
                     // Though it may not be a bug here, but we still want to collect the mvcc
                     // info here for further debugging if needed.
-                    "mvcc_info" => ?collect_mvcc_info_for_debug(&mut reader.reader, &key),
+                    "mvcc_info" => ?collect_mvcc_info_for_debug(reader.reader.snapshot().clone(), &key),
                 );
                 (lock, false)
             } else {
@@ -76,8 +76,10 @@ pub fn commit<S: Snapshot>(
                     let unexpected = matches!(commit_role, Some(CommitRole::Secondary));
                     // only collect the mvcc information if an unexpected case happens.
                     let mvcc_info = unexpected
-                        .then(|| collect_mvcc_info_for_debug(&mut reader.reader, &key))
-                        .unwrap_or(None)
+                        .then(|| {
+                            collect_mvcc_info_for_debug(reader.reader.snapshot().clone(), &key)
+                        })
+                        .flatten()
                         .map(|(lock, writes, values)| MvccInfo {
                             lock,
                             writes,
@@ -494,7 +496,7 @@ pub mod tests {
         for k in [k2, k3, k4] {
             let key_str = String::from_utf8_lossy(k);
             let (expected_lock, expected_writes, expected_values) =
-                must_find_mvcc_infos(&mut engine, k, TimeStamp::max());
+                must_find_mvcc_infos(&mut engine, k);
             let err = must_err(
                 &mut engine,
                 k,

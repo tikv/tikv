@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use tikv_kv::Snapshot;
+use tikv_kv::{ScanMode, Snapshot};
 use txn_types::{Key, TimeStamp, Value, Write};
 
 use crate::storage::mvcc::{Lock as MvccLock, MvccReader};
@@ -14,11 +14,12 @@ type LockWritesVals = (
 pub fn find_mvcc_infos_by_key<S: Snapshot>(
     reader: &mut MvccReader<S>,
     key: &Key,
-    mut ts: TimeStamp,
+    // TODO: add some argument such as `limit` to limit the max size of mvcc info
 ) -> crate::storage::txn::Result<LockWritesVals> {
     let mut writes = vec![];
     let mut values = vec![];
     let lock = reader.load_lock(key)?;
+    let mut ts = TimeStamp::max();
     loop {
         let opt = reader.seek_write(key, ts)?;
         match opt {
@@ -38,11 +39,9 @@ pub fn find_mvcc_infos_by_key<S: Snapshot>(
     Ok((lock, writes, values))
 }
 
-pub fn collect_mvcc_info_for_debug<S: Snapshot>(
-    reader: &mut MvccReader<S>,
-    key: &Key,
-) -> Option<LockWritesVals> {
-    match find_mvcc_infos_by_key(reader, key, TimeStamp::max()) {
+pub fn collect_mvcc_info_for_debug<S: Snapshot>(snapshot: S, key: &Key) -> Option<LockWritesVals> {
+    let mut reader = MvccReader::new(snapshot, Some(ScanMode::Forward), false);
+    match find_mvcc_infos_by_key(&mut reader, key) {
         Ok(mvcc_info) => Some(mvcc_info),
         Err(e) => {
             warn!(
@@ -62,9 +61,9 @@ pub mod tests {
     use tikv_kv::Engine;
     #[cfg(test)]
     use tikv_kv::Snapshot;
-    use txn_types::{Key, TimeStamp};
+    use txn_types::Key;
     #[cfg(test)]
-    use txn_types::{Lock, Value, Write, SHORT_VALUE_MAX_LEN};
+    use txn_types::{Lock, TimeStamp, Value, Write, SHORT_VALUE_MAX_LEN};
 
     use crate::storage::txn::actions::mvcc::{find_mvcc_infos_by_key, LockWritesVals, MvccReader};
     #[cfg(test)]
@@ -80,14 +79,10 @@ pub mod tests {
     #[cfg(test)]
     const LONG_VALUE_MIN_LEN: usize = SHORT_VALUE_MAX_LEN + 1;
 
-    pub fn must_find_mvcc_infos<E: Engine>(
-        engine: &mut E,
-        key: &[u8],
-        ts: impl Into<TimeStamp>,
-    ) -> LockWritesVals {
+    pub fn must_find_mvcc_infos<E: Engine>(engine: &mut E, key: &[u8]) -> LockWritesVals {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true);
-        find_mvcc_infos_by_key(&mut reader, &Key::from_raw(key), ts.into()).unwrap()
+        find_mvcc_infos_by_key(&mut reader, &Key::from_raw(key)).unwrap()
     }
 
     #[test]
@@ -162,27 +157,9 @@ pub mod tests {
         must_commit(&mut engine, k, 11, 20);
         must_prewrite_put(&mut engine, k, b"v3", k, 21);
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = SnapshotReader::new(TimeStamp::max(), snapshot, true);
+        let mut reader = SnapshotReader::new(TimeStamp::max(), snapshot.clone(), true);
 
-        // with ts 12, can only read the write/default CF before 12.
-        // lock is always read.
-        let (lock, writes, values) = must_find_mvcc_infos(&mut engine, k, 12);
-        assert!(lock.is_some());
-        assert_eq!(writes.len(), 1);
-        assert_eq!(values.len(), 1);
-        check_lock(lock.unwrap(), k, 21, &mut reader);
-        check_write(
-            writes[0].clone(),
-            k,
-            1,
-            10,
-            big_val,
-            Some(values[0].clone()),
-            &mut reader,
-        );
-
-        // with ts 22, can read all the writes/default CF before 22.
-        let (lock, writes, values) = must_find_mvcc_infos(&mut engine, k, 22);
+        let (lock, writes, values) = must_find_mvcc_infos(&mut engine, k);
         assert!(lock.is_some());
         assert_eq!(writes.len(), 2);
         assert_eq!(values.len(), 1);
@@ -208,7 +185,7 @@ pub mod tests {
 
         // collect_mvcc_info_for_debug should collect all mvcc info
         assert_eq!(
-            collect_mvcc_info_for_debug(&mut reader.reader, &Key::from_raw(k)).unwrap(),
+            collect_mvcc_info_for_debug(snapshot, &Key::from_raw(k)).unwrap(),
             (lock, writes, values),
         )
     }

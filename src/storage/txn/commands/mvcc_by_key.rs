@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use txn_types::{Key, TimeStamp};
+use txn_types::Key;
 
 use crate::storage::{
     mvcc::MvccReader,
@@ -42,7 +42,7 @@ impl CommandExt for MvccByKey {
 impl<S: Snapshot> ReadCommand<S> for MvccByKey {
     fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult> {
         let mut reader = MvccReader::new_with_ctx(snapshot, None, &self.ctx);
-        let result = find_mvcc_infos_by_key(&mut reader, &self.key, TimeStamp::max());
+        let result = find_mvcc_infos_by_key(&mut reader, &self.key);
         statistics.add(&reader.statistics);
         let (lock, writes, values) = result?;
         Ok(ProcessResult::MvccKey {
