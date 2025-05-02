@@ -75,7 +75,7 @@ impl<EK: KvEngine, ER: RaftEngine> SnapshotBrHandle for Arc<Mutex<RaftRouter<EK,
     fn broadcast_wait_apply(&self, req: SnapshotBrWaitApplyRequest) -> crate::Result<()> {
         let msg_gen = || {
             metrics::SNAP_BR_WAIT_APPLY_EVENT.sent.inc();
-            PeerMsg::SignificantMsg(SignificantMsg::SnapshotBrWaitApply(req.clone()))
+            PeerMsg::SignificantMsg(Box::new(SignificantMsg::SnapshotBrWaitApply(req.clone())))
         };
         self.lock().unwrap().broadcast_normal(msg_gen);
         Ok(())
@@ -86,7 +86,7 @@ impl<EK: KvEngine, ER: RaftEngine> SnapshotBrHandle for Arc<Mutex<RaftRouter<EK,
         tx: UnboundedSender<CheckAdminResponse>,
     ) -> crate::Result<()> {
         self.lock().unwrap().broadcast_normal(|| {
-            PeerMsg::SignificantMsg(SignificantMsg::CheckPendingAdmin(tx.clone()))
+            PeerMsg::SignificantMsg(Box::new(SignificantMsg::CheckPendingAdmin(tx.clone())))
         });
         Ok(())
     }
