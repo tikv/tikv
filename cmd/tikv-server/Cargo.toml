@@ -30,6 +30,7 @@ test-engines-panic = ["server/test-engines-panic"]
 nortcheck = ["server/nortcheck"]
 
 pprof-fp = ["tikv/pprof-fp"]
+linearizability-track = ["server/linearizability-track", "tikv/linearizability-track"]
 
 [dependencies]
 clap = { workspace = true }

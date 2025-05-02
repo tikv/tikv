@@ -7628,6 +7628,7 @@ dependencies = [
  "toml",
  "tracker",
  "url",
+ "uuid 0.8.2",
  "yatp",
 ]
 
@@ -7941,6 +7942,7 @@ dependencies = [
 name = "tracker"
 version = "0.0.1"
 dependencies = [
+ "chrono",
  "crossbeam-utils",
  "kvproto",
  "lazy_static",
@@ -7949,6 +7951,7 @@ dependencies = [
  "prometheus",
  "slab",
  "slog",
+ "uuid 0.8.2",
 ]
 
 [[package]]

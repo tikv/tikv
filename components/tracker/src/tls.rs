@@ -7,6 +7,8 @@ use std::{
     task::{Context, Poll},
 };
 
+#[cfg(feature = "linearizability-track")]
+pub use linearizability_track::*;
 use pin_project::pin_project;
 
 use crate::{GLOBAL_TRACKERS, INVALID_TRACKER_TOKEN, Tracker, slab::TrackerToken};
@@ -68,5 +70,29 @@ impl<F: Future> Future for TlsTrackedFuture<F> {
             c.set(INVALID_TRACKER_TOKEN);
             res
         })
+    }
+}
+
+#[cfg(feature = "linearizability-track")]
+mod linearizability_track {
+    use super::*;
+    use crate::linearizability_track::{PeerStateDebug, INVALID_PEER_STATE};
+
+    thread_local! {
+        static TLS_PEER_STATE: Cell<PeerStateDebug> = const { Cell::new(INVALID_PEER_STATE) };
+    }
+
+    pub fn set_tls_peer_state(peer: PeerStateDebug) {
+        TLS_PEER_STATE.with(|c| {
+            c.set(peer);
+        })
+    }
+
+    pub fn clear_tls_peer_state() {
+        set_tls_peer_state(INVALID_PEER_STATE);
+    }
+
+    pub fn get_tls_peer_state() -> PeerStateDebug {
+        TLS_PEER_STATE.with(|c| c.get())
     }
 }

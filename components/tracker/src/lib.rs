@@ -9,6 +9,8 @@ use std::time::Instant;
 
 use kvproto::kvrpcpb as pb;
 
+#[cfg(feature = "linearizability-track")]
+pub use self::linearizability_track::*;
 pub use self::{
     future::{FutureTrack, track},
     slab::{GLOBAL_TRACKERS, INVALID_TRACKER_TOKEN, TrackerToken, TrackerTokenArray},
@@ -19,13 +21,31 @@ pub use self::{
 pub struct Tracker {
     pub req_info: RequestInfo,
     pub metrics: RequestMetrics,
+    #[cfg(feature = "linearizability-track")]
+    pub linearizability_track: Option<LinearizabilityDebug>,
 }
 
 impl Tracker {
     pub fn new(req_info: RequestInfo) -> Self {
-        Self {
-            req_info,
-            metrics: Default::default(),
+        #[cfg(not(feature = "linearizability-track"))]
+        {
+            Self {
+                req_info,
+                metrics: Default::default(),
+            }
+        }
+        #[cfg(feature = "linearizability-track")]
+        {
+            let debug = if req_info.is_external_req {
+                Some(Default::default())
+            } else {
+                None
+            };
+            Self {
+                req_info,
+                metrics: Default::default(),
+                linearizability_track: debug,
+            }
         }
     }
 
@@ -199,4 +219,287 @@ pub struct RequestMetrics {
     pub apply_thread_wait_nanos: u64,
     pub apply_write_wal_nanos: u64,
     pub apply_write_memtable_nanos: u64,
+}
+
+#[cfg(feature = "linearizability-track")]
+mod linearizability_track {
+    use std::{default::Default, fmt::Debug, mem};
+
+    use chrono::{DateTime, Local};
+    use uuid::Uuid;
+
+    use super::*;
+    use crate::tls::get_tls_peer_state;
+
+    pub const INVALID_PEER_STATE: PeerStateDebug = PeerStateDebug {
+        region_id: 0,
+        peer_id: 0,
+        term: 0,
+        committed_index: 0,
+        applied_index: 0,
+    };
+
+    #[derive(Debug, Default, PartialEq, Clone, Copy)]
+    pub struct PeerStateDebug {
+        pub region_id: u64,
+        pub peer_id: u64,
+        pub term: u64,
+        pub committed_index: u64,
+        pub applied_index: u64,
+    }
+
+    impl Tracker {
+        pub fn track_propose_skip(&mut self, reason: &'static str) {
+            match self.linearizability_track.as_mut() {
+                Some(debug) => {
+                    debug.propose_state =
+                        ProposeState::Skip(chrono::offset::Local::now(), reason.to_owned());
+                }
+                _ => {}
+            }
+        }
+
+        pub fn track_propose_amend(&mut self, amend_to: Uuid) {
+            match self.linearizability_track.as_mut() {
+                Some(debug) => {
+                    debug.propose_state = ProposeState::Amend(
+                        chrono::offset::Local::now(),
+                        amend_to,
+                        get_tls_peer_state(),
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        pub fn track_propose_read_index(&mut self, uuid: Uuid) {
+            match self.linearizability_track.as_mut() {
+                Some(debug) => {
+                    debug.propose_state = ProposeState::ReadIndex(
+                        chrono::offset::Local::now(),
+                        uuid,
+                        get_tls_peer_state(),
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        pub fn track_propose_normal(&mut self) {
+            match self.linearizability_track.as_mut() {
+                Some(debug) => {
+                    debug.propose_state =
+                        ProposeState::Normal(chrono::offset::Local::now(), get_tls_peer_state());
+                }
+                _ => {}
+            }
+        }
+
+        pub fn prpose_must_checked(&self) {
+            match self.linearizability_track.as_ref() {
+                Some(debug) => {
+                    assert_ne!(debug.propose_state, ProposeState::None);
+                }
+                _ => {}
+            }
+        }
+
+        pub fn track_ready_committed(&mut self) {
+            match self.linearizability_track.as_mut() {
+                Some(debug) => {
+                    assert_eq!(debug.ready_state, ReadyState::None);
+                    debug.ready_state =
+                        ReadyState::Committed(chrono::offset::Local::now(), get_tls_peer_state());
+                }
+                _ => {}
+            }
+        }
+
+        pub fn track_ready_replica_read(&mut self, read_index: Option<u64>) {
+            match self.linearizability_track.as_mut() {
+                Some(debug) => {
+                    assert_eq!(debug.ready_state, ReadyState::None);
+                    debug.ready_state = ReadyState::ReplicaRead(
+                        chrono::offset::Local::now(),
+                        read_index,
+                        get_tls_peer_state(),
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        pub fn track_apply_applied(&mut self) {
+            match self.linearizability_track.as_mut() {
+                Some(debug) => {
+                    assert_eq!(debug.apply_state, ApplyState::None);
+                    debug.apply_state =
+                        ApplyState::Applied(chrono::offset::Local::now(), get_tls_peer_state());
+                }
+                _ => {}
+            }
+        }
+
+        pub fn track_flush_scheduler_snapshot(&mut self) {
+            match self.linearizability_track.as_mut() {
+                Some(debug) => {
+                    debug.scheduler_snapshot_states = Some((
+                        mem::replace(&mut debug.propose_state, ProposeState::None),
+                        mem::replace(&mut debug.ready_state, ReadyState::None),
+                    ));
+                }
+                _ => {}
+            }
+        }
+
+        pub fn track_snapshot_seq_no(&mut self, seq_no: u64) {
+            match self.linearizability_track.as_mut() {
+                Some(debug) => {
+                    debug.snapshot_seq_no = Some(seq_no);
+                }
+                _ => {}
+            }
+        }
+
+        pub fn track_success(&mut self) {
+            match self.linearizability_track.as_mut() {
+                Some(debug) => {
+                    debug.success = true;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    impl PeerStateDebug {
+        pub fn new(
+            region_id: u64,
+            peer_id: u64,
+            term: u64,
+            committed_index: u64,
+            applied_index: u64,
+        ) -> Self {
+            Self {
+                region_id,
+                peer_id,
+                term,
+                committed_index,
+                applied_index,
+            }
+        }
+    }
+
+    #[derive(Debug, Default)]
+    pub struct LinearizabilityDebug {
+        // general states
+        pub success: bool,
+
+        // gRPC pool states
+        pub grpc_process_at: Option<DateTime<Local>>,
+
+        // Scheduler or Read Pool states
+        pub scheduler_snapshot_states: Option<(ProposeState, ReadyState)>,
+        pub snapshot_seq_no: Option<u64>,
+
+        // RaftPool states
+        pub propose_state: ProposeState,
+        pub ready_state: ReadyState,
+
+        // ApplyPool states
+        pub apply_state: ApplyState,
+        // RocksDB states
+    }
+
+    #[derive(PartialEq)]
+    pub enum ProposeState {
+        None,
+        Skip(DateTime<Local>, String),
+        Amend(DateTime<Local>, Uuid, PeerStateDebug),
+        ReadIndex(DateTime<Local>, Uuid, PeerStateDebug),
+        Normal(DateTime<Local>, PeerStateDebug),
+    }
+
+    impl Default for ProposeState {
+        fn default() -> Self {
+            ProposeState::None
+        }
+    }
+
+    impl Debug for ProposeState {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                ProposeState::None => write!(f, "None"),
+                ProposeState::Skip(time, reason) => {
+                    write!(f, "skip at {:?}, reason {}", time, reason)
+                }
+                ProposeState::Amend(time, uuid, state) => write!(
+                    f,
+                    "amend at {:?}, to {:?}, peer_state {:?}",
+                    time, uuid, state
+                ),
+                ProposeState::ReadIndex(time, uuid, state) => write!(
+                    f,
+                    "propose read-index at {:?}, uuid: {:?}, peer_state {:?}",
+                    time, uuid, state
+                ),
+                ProposeState::Normal(time, state) => {
+                    write!(f, "propose normal at {:?}, peer_state {:?}", time, state)
+                }
+            }
+        }
+    }
+
+    #[derive(PartialEq)]
+    pub enum ReadyState {
+        None,
+        Committed(DateTime<Local>, PeerStateDebug),
+        ReplicaRead(DateTime<Local>, Option<u64>, PeerStateDebug),
+    }
+
+    impl Default for ReadyState {
+        fn default() -> Self {
+            ReadyState::None
+        }
+    }
+
+    impl Debug for ReadyState {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                ReadyState::None => write!(f, "None"),
+                ReadyState::Committed(time, state) => {
+                    write!(f, "committed at {:?}, peer_state {:?}", time, state)
+                }
+                ReadyState::ReplicaRead(time, read_index, state) => {
+                    write!(
+                        f,
+                        "replica-read at {:?}, read_index: {:?}, peer_state {:?}",
+                        time, read_index, state
+                    )
+                }
+            }
+        }
+    }
+
+    #[derive(PartialEq)]
+    pub enum ApplyState {
+        None,
+        Applied(DateTime<Local>, PeerStateDebug),
+    }
+
+    impl Default for ApplyState {
+        fn default() -> Self {
+            ApplyState::None
+        }
+    }
+
+    impl Debug for ApplyState {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                ApplyState::None => write!(f, "None"),
+                ApplyState::Applied(time, state) => {
+                    write!(f, "applied at {:?}, peer_state {:?}", time, state)
+                }
+            }
+        }
+    }
 }
