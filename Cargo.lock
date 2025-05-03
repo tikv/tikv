@@ -862,6 +862,7 @@ dependencies = [
  "slog-global",
  "tempfile",
  "thiserror",
+ "tidb_query_datatype",
  "tikv",
  "tikv_alloc",
  "tikv_util",
