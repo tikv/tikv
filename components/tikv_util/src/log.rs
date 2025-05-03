@@ -2,7 +2,8 @@
 
 /// Logs a critical level message using the slog global logger.
 #[macro_export]
-macro_rules! crit( ($($args:tt)+) => {
+#[clippy::format_args]
+macro_rules! crit(($($args:tt)+) => {
     ::slog_global::crit!($($args)+)
 };);
 
@@ -14,6 +15,7 @@ macro_rules! crit( ($($args:tt)+) => {
 /// macros. Require `slog_global` dependency and
 /// `#![feature(min_speacilization)]` in all crates.
 #[macro_export]
+// Note that this macro does not satisfy #[clippy::format_args] requirements
 macro_rules! error {
     (?$e:expr; $l:literal) => {
         ::slog_global::error!($l; "err" => ?$e,"err_code" => %error_code::ErrorCodeExt::error_code(&$e))
@@ -41,6 +43,7 @@ macro_rules! error {
 // This is for errors that do not implement ErrorCodeExt
 // It is recommended to implement ErrorCodeExt instead of using this macro
 #[macro_export]
+// Note that this macro does not satisfy #[clippy::format_args] requirements
 macro_rules! error_unknown {
     (?$e:expr; $l:literal) => {
         ::slog_global::error!($l; "err" => ?$e,"err_code" => %error_code::UNKNOWN)
@@ -61,30 +64,35 @@ macro_rules! error_unknown {
 
 /// Logs a warning level message using the slog global logger.
 #[macro_export]
+#[clippy::format_args]
 macro_rules! warn(($($args:tt)+) => {
     ::slog_global::warn!($($args)+)
 };);
 
 /// Logs a info level message using the slog global logger.
 #[macro_export]
+#[clippy::format_args]
 macro_rules! info(($($args:tt)+) => {
     ::slog_global::info!($($args)+)
 };);
 
 /// Logs a debug level message using the slog global logger.
 #[macro_export]
+#[clippy::format_args]
 macro_rules! debug(($($args:tt)+) => {
     ::slog_global::debug!($($args)+)
 };);
 
 /// Logs a trace level message using the slog global logger.
 #[macro_export]
+#[clippy::format_args]
 macro_rules! trace(($($args:tt)+) => {
     ::slog_global::trace!($($args)+)
 };);
 
 /// Logs a infor or debug level message using the slog global logger.
 #[macro_export]
+#[clippy::format_args]
 macro_rules! info_or_debug{
   ($cond:expr; $($args:tt)+) => {
         if $cond {
@@ -158,6 +166,7 @@ pub fn format_kv_list(buffer: &mut String, kv_list: &OwnedKVList, borrow_list: B
 ///
 /// Similar to `SlogFormat`, but just panic.
 #[macro_export]
+// Note that this macro does not satisfy #[clippy::format_args] requirements
 macro_rules! slog_panic {
     ($logger:expr, $msg:expr, $borrowed_kv:expr) => {{
         let owned_kv = ($logger).list();
