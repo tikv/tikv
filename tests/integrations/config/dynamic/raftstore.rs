@@ -23,6 +23,7 @@ use raftstore::{
 use resource_metering::CollectorRegHandle;
 use service::service_manager::GrpcServiceManager;
 use tempfile::TempDir;
+use raftstore::store::KeyspaceArchivedManager;
 use test_pd_client::TestPdClient;
 use tikv::{
     config::{ConfigController, Module, TikvConfig},
@@ -117,7 +118,7 @@ fn start_raftstore(
             DiskCheckRunner::dummy(),
             GrpcServiceManager::dummy(),
             Arc::new(AtomicU64::new(0)),
-            ,
+            Arc::new(KeyspaceArchivedManager::new(None,None))
         )
         .unwrap();
 
