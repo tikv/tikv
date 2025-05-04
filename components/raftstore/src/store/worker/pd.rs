@@ -1282,9 +1282,9 @@ where
         let mut snap_mgr = self.snap_mgr.clone();
 
         if let Some(report) = &mut store_report {
-            //  report.destroy_keyspace= self.keyspace_archived_manager.snapshot_destroyed_archived()
+            report.destroyed_keyspace_ids= self.keyspace_archived_manager.snapshot_destroyed_archived()
         } else {
-            let mut new_report = pdpb::StoreReport::default();
+            let new_report = pdpb::StoreReport::default();
            //  new_report.destroy_keyspace= self.keyspace_archived_manager.snapshot_destroyed_archived()
             store_report = Some(new_report);
         }
@@ -1292,6 +1292,10 @@ where
         let resp = self
             .pd_client
             .store_heartbeat(stats, store_report, dr_autosync_status);
+
+        // archived keyspace
+        let keyspace_archived_manager=self.keyspace_archived_manager.clone();
+
         let f = async move {
             match resp.await {
                 Ok(mut resp) => {
@@ -1370,17 +1374,10 @@ where
                             warn!("fail to schedule control grpc task"; "err" => ?e);
                         }
                     }
-                    // todo(ystaticy): insert archived keyspace
-                    if let Some(status) = resp.awaken_regions.take() {
-                        let keyspace_id=1 as u32;// get from heartbeat response.
-                    //    self.keyspace_archived_manager.insert_archived_batch(keyspace_ids)
-                    }
 
-                    // todo(ystaticy): batch remove tombstone keyspace
-                    if let Some(status) = resp.awaken_regions.take() {
-                        let keyspace_id=1 as u32;// get from heartbeat response.
-                       //  self.keyspace_archived_manager.remove_tombstone_archived_batch()
-                    }
+                    // archived keyspace
+                    keyspace_archived_manager.insert_archived_batch(&resp.archived_keyspace_ids);
+                    keyspace_archived_manager.remove_tombstone_archived_batch(&resp.tombstone_keyspace_ids);
 
                     // -----------------------------------------------
                     // NodeState for this store.
@@ -2554,12 +2551,12 @@ fn get_read_query_num(stat: &pdpb::QueryStats) -> u64 {
     stat.get_get() + stat.get_coprocessor() + stat.get_scan()
 }
 
-use dashmap::DashMap;
+use dashmap::DashSet;
 use std::sync::{Arc, RwLock};
 
 pub struct KeyspaceArchivedManager {
-    archived_keyspaces: Arc<DashMap<u32, u32>>,
-    destroyed_archived_keyspaces: Arc<DashMap<u32, u32>>,
+    archived_keyspaces: Arc<DashSet<u32>>,
+    destroyed_archived_keyspaces: Arc<DashSet<u32>>,
 
     /// RwLock to protect archived_keyspaces access
     archived_lock: RwLock<()>,
@@ -2569,12 +2566,12 @@ pub struct KeyspaceArchivedManager {
 
 impl KeyspaceArchivedManager {
     pub fn new(
-        archived: Option<Arc<DashMap<u32, u32>>>,
-        destroyed: Option<Arc<DashMap<u32, u32>>>,
+        archived: Option<Arc<DashSet<u32>>>,
+        destroyed: Option<Arc<DashSet<u32>>>,
     ) -> Self {
         Self {
-            archived_keyspaces: archived.unwrap_or_else(|| Arc::new(DashMap::new())),
-            destroyed_archived_keyspaces: destroyed.unwrap_or_else(|| Arc::new(DashMap::new())),
+            archived_keyspaces: archived.unwrap_or_else(|| Arc::new(DashSet::new())),
+            destroyed_archived_keyspaces: destroyed.unwrap_or_else(|| Arc::new(DashSet::new())),
             archived_lock: RwLock::new(()),
             destroyed_lock: RwLock::new(()),
         }
@@ -2593,59 +2590,50 @@ impl KeyspaceArchivedManager {
     }
 
     /// Insert into archived_keyspaces with write lock
-    pub fn insert_archived(&self, key: u32, val: u32) {
+    pub fn insert_archived(&self, key: u32) {
         let _lock = self.archived_lock.write().unwrap();
-        self.archived_keyspaces.insert(key, val);
+        self.archived_keyspaces.insert(key);
     }
 
     /// Batch insert into archived_keyspaces with write lock
-    pub fn insert_archived_batch(&self, pairs: &[(u32, u32)]) {
+    pub fn insert_archived_batch(&self, keys: &[u32]) {
         let _lock = self.archived_lock.write().unwrap();
-        for &(key, val) in pairs {
-            self.archived_keyspaces.insert(key, val);
+        for &key in keys {
+            self.archived_keyspaces.insert(key);
         }
     }
 
     /// Insert into destroyed_archived_keyspaces with write lock
-    pub fn insert_destroyed(&self, key: u32, val: u32) {
+    pub fn insert_destroyed(&self, key: u32) {
         let _lock = self.destroyed_lock.write().unwrap();
-        self.destroyed_archived_keyspaces.insert(key, val);
+        self.destroyed_archived_keyspaces.insert(key);
     }
 
     /// Returns a read-only snapshot copy of archived_keyspaces.
-    /// The snapshot is a separate HashMap and will not be affected by concurrent inserts.
-    pub fn snapshot_archived(&self) -> HashMap<u32, u32> {
+    pub fn snapshot_archived(&self) -> HashSet<u32> {
         let _read_lock = self.archived_lock.read().unwrap();
-        self.archived_keyspaces.iter()
-            .map(|entry| (*entry.key(), *entry.value()))
-            .collect()
+        self.archived_keyspaces.iter().map(|k| *k).collect()
     }
 
     /// Returns a read-only snapshot copy of destroyed_archived_keyspaces.
-    /// The snapshot is a separate HashMap and will not be affected by concurrent inserts.
-    pub fn snapshot_destroyed_archived(&self) -> HashMap<u32, u32> {
+    pub fn snapshot_destroyed_archived(&self) -> Vec<u32> {
         let _read_lock = self.destroyed_lock.read().unwrap();
-        self.destroyed_archived_keyspaces.iter()
-            .map(|entry| (*entry.key(), *entry.value()))
-            .collect()
+        self.destroyed_archived_keyspaces.iter().map(|k| *k).collect()
     }
 
     /// Remove a specified key from archived_keyspaces safely
     pub fn remove_archived(&self, key: &u32) -> Option<u32> {
         let _write_lock = self.archived_lock.write().unwrap();
-        self.archived_keyspaces.remove(key).map(|(_, v)| v)
+        self.archived_keyspaces.remove(key)
     }
 
-    /// Remove multiple keys from destroyed_archived_keyspaces safely, returning removed entries count
+    /// Remove multiple keys from destroyed_archived_keyspaces safely, returning removed count
     pub fn remove_tombstone_archived_batch(&self, keys: &[u32]) -> usize {
         let _write_lock = self.destroyed_lock.write().unwrap();
-        let mut removed_count = 0;
-        for key in keys {
-            if self.destroyed_archived_keyspaces.remove(key).is_some() {
-                removed_count += 1;
-            }
-        }
-        removed_count
+
+        keys.iter()
+            .filter(|key| self.destroyed_archived_keyspaces.remove(key).is_some())
+            .count()
     }
 }
 
