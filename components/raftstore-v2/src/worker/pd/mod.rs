@@ -40,7 +40,6 @@ mod store;
 
 pub use region::RegionHeartbeatTask;
 
-
 type RecordPairVec = Vec<pdpb::RecordPair>;
 
 pub enum Task {

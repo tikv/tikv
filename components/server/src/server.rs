@@ -75,9 +75,9 @@ use raftstore::{
         },
         memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE,
         snapshot_backup::PrepareDiskSnapObserver,
-        AutoSplitController, CheckLeaderRunner, DiskCheckRunner, LocalReader, SnapManager,
-        SnapManagerBuilder, SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
-        KeyspaceArchivedManager,
+        AutoSplitController, CheckLeaderRunner, DiskCheckRunner, KeyspaceArchivedManager,
+        LocalReader, SnapManager, SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
+        StoreMetaDelegate,
     },
     RaftRouterCompactedEventSender,
 };
@@ -544,8 +544,7 @@ where
             self.core.flow_info_receiver.take().unwrap(),
         )));
 
-
-        let keysapce_archive_manager=Arc::new(KeyspaceArchivedManager::new(None,None));
+        let keysapce_archive_manager = Arc::new(KeyspaceArchivedManager::new(None, None));
 
         let mut gc_worker = self.init_gc_worker(keysapce_archive_manager.clone());
         let mut ttl_checker = Box::new(LazyWorker::new("ttl-checker"));

@@ -33,6 +33,7 @@ clap = { workspace = true }
 collections = { workspace = true }
 concurrency_manager = { workspace = true }
 crossbeam = { workspace = true }
+dashmap = "5.2.0"
 encryption = { workspace = true }
 encryption_export = { workspace = true }
 engine_rocks = { workspace = true }
@@ -72,7 +73,6 @@ tikv_alloc = { workspace = true }
 tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["rt-multi-thread"] }
 yatp = { workspace = true }
-dashmap = "5.2.0"
 
 [target.'cfg(unix)'.dependencies]
 signal-hook = "0.3"

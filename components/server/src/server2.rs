@@ -60,7 +60,8 @@ use raftstore::{
     },
     store::{
         config::RaftstoreConfigManager, memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE,
-        AutoSplitController, CheckLeaderRunner, SplitConfigManager, TabletSnapManager,
+        AutoSplitController, CheckLeaderRunner, KeyspaceArchivedManager, SplitConfigManager,
+        TabletSnapManager,
     },
     RegionInfoAccessor,
 };
@@ -126,7 +127,6 @@ use tikv_util::{
     Either,
 };
 use tokio::runtime::Builder;
-use raftstore::store::KeyspaceArchivedManager;
 
 use crate::{
     common::{
@@ -435,7 +435,7 @@ where
             self.core.config.gc.clone(),
             self.pd_client.feature_gate().clone(),
             Arc::new(self.region_info_accessor.clone().unwrap()),
-            Arc::new(KeyspaceArchivedManager::new(None,None)),
+            Arc::new(KeyspaceArchivedManager::new(None, None)),
         );
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();

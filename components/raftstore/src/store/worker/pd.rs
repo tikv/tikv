@@ -918,7 +918,7 @@ where
         coprocessor_host: CoprocessorHost<EK>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         grpc_service_manager: GrpcServiceManager,
-        keyspace_archived_manager:Arc<KeyspaceArchivedManager>
+        keyspace_archived_manager: Arc<KeyspaceArchivedManager>,
     ) -> Runner<EK, ER, T> {
         let mut store_stat = StoreStat::default();
         store_stat.set_cpu_quota(SysQuota::cpu_cores_quota(), cfg.inspect_cpu_util_thd);
@@ -1282,10 +1282,12 @@ where
         let mut snap_mgr = self.snap_mgr.clone();
 
         if let Some(report) = &mut store_report {
-            report.destroyed_keyspace_ids= self.keyspace_archived_manager.snapshot_destroyed_archived()
+            report.destroyed_keyspace_ids =
+                self.keyspace_archived_manager.snapshot_destroyed_archived()
         } else {
             let new_report = pdpb::StoreReport::default();
-           //  new_report.destroy_keyspace= self.keyspace_archived_manager.snapshot_destroyed_archived()
+            //  new_report.destroy_keyspace=
+            // self.keyspace_archived_manager.snapshot_destroyed_archived()
             store_report = Some(new_report);
         }
 
@@ -1294,7 +1296,7 @@ where
             .store_heartbeat(stats, store_report, dr_autosync_status);
 
         // archived keyspace
-        let keyspace_archived_manager=self.keyspace_archived_manager.clone();
+        let keyspace_archived_manager = self.keyspace_archived_manager.clone();
 
         let f = async move {
             match resp.await {
@@ -1377,7 +1379,8 @@ where
 
                     // archived keyspace
                     keyspace_archived_manager.insert_archived_batch(&resp.archived_keyspace_ids);
-                    keyspace_archived_manager.remove_tombstone_archived_batch(&resp.tombstone_keyspace_ids);
+                    keyspace_archived_manager
+                        .remove_tombstone_archived_batch(&resp.tombstone_keyspace_ids);
 
                     // -----------------------------------------------
                     // NodeState for this store.
@@ -2551,8 +2554,9 @@ fn get_read_query_num(stat: &pdpb::QueryStats) -> u64 {
     stat.get_get() + stat.get_coprocessor() + stat.get_scan()
 }
 
-use dashmap::DashSet;
 use std::sync::{Arc, RwLock};
+
+use dashmap::DashSet;
 
 pub struct KeyspaceArchivedManager {
     archived_keyspaces: Arc<DashSet<u32>>,
@@ -2565,10 +2569,7 @@ pub struct KeyspaceArchivedManager {
 }
 
 impl KeyspaceArchivedManager {
-    pub fn new(
-        archived: Option<Arc<DashSet<u32>>>,
-        destroyed: Option<Arc<DashSet<u32>>>,
-    ) -> Self {
+    pub fn new(archived: Option<Arc<DashSet<u32>>>, destroyed: Option<Arc<DashSet<u32>>>) -> Self {
         Self {
             archived_keyspaces: archived.unwrap_or_else(|| Arc::new(DashSet::new())),
             destroyed_archived_keyspaces: destroyed.unwrap_or_else(|| Arc::new(DashSet::new())),
@@ -2618,7 +2619,10 @@ impl KeyspaceArchivedManager {
     /// Returns a read-only snapshot copy of destroyed_archived_keyspaces.
     pub fn snapshot_destroyed_archived(&self) -> Vec<u32> {
         let _read_lock = self.destroyed_lock.read().unwrap();
-        self.destroyed_archived_keyspaces.iter().map(|k| *k).collect()
+        self.destroyed_archived_keyspaces
+            .iter()
+            .map(|k| *k)
+            .collect()
     }
 
     /// Remove a specified key from archived_keyspaces safely
@@ -2627,7 +2631,8 @@ impl KeyspaceArchivedManager {
         self.archived_keyspaces.remove(key)
     }
 
-    /// Remove multiple keys from destroyed_archived_keyspaces safely, returning removed count
+    /// Remove multiple keys from destroyed_archived_keyspaces safely, returning
+    /// removed count
     pub fn remove_tombstone_archived_batch(&self, keys: &[u32]) -> usize {
         let _write_lock = self.destroyed_lock.write().unwrap();
 

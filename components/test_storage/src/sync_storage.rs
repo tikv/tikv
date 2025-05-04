@@ -13,10 +13,12 @@ use kvproto::{
     kvrpcpb::{ChecksumAlgorithm, Context, GetRequest, KeyRange, LockInfo, RawGetRequest},
     metapb,
 };
-use raftstore::coprocessor::{
-    region_info_accessor::MockRegionInfoProvider, CoprocessorHost, RegionInfoProvider,
+use raftstore::{
+    coprocessor::{
+        region_info_accessor::MockRegionInfoProvider, CoprocessorHost, RegionInfoProvider,
+    },
+    store::KeyspaceArchivedManager,
 };
-use raftstore::store::KeyspaceArchivedManager;
 use tikv::{
     server::gc_worker::{AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker},
     storage::{
@@ -128,7 +130,7 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
             config,
             Default::default(),
             Arc::new(MockRegionInfoProvider::new(Vec::new())),
-            Arc::new(KeyspaceArchivedManager::new(None,None)),
+            Arc::new(KeyspaceArchivedManager::new(None, None)),
         );
         let coprocessor = CoprocessorHost::default();
         gc_worker.start(store_id, coprocessor)?;

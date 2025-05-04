@@ -42,9 +42,9 @@ use raftstore::{
     store::{
         fsm::{store::StoreMeta, ApplyRouter, RaftBatchSystem, RaftRouter},
         msg::RaftCmdExtraOpts,
-        AutoSplitController, Callback, CheckLeaderRunner, DiskCheckRunner, LocalReader,
-        RegionSnapshot, SnapManager, SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
-        StoreMetaDelegate,
+        AutoSplitController, Callback, CheckLeaderRunner, DiskCheckRunner, KeyspaceArchivedManager,
+        LocalReader, RegionSnapshot, SnapManager, SnapManagerBuilder, SplitCheckRunner,
+        SplitConfigManager, StoreMetaDelegate,
     },
     Result,
 };
@@ -91,7 +91,6 @@ use tikv_util::{
     HandyRwLock,
 };
 use tokio::runtime::Builder as TokioBuilder;
-use raftstore::store::KeyspaceArchivedManager;
 use txn_types::TxnExtraScheduler;
 
 use super::*;
@@ -404,7 +403,7 @@ impl ServerCluster {
             cfg.gc.clone(),
             Default::default(),
             Arc::new(region_info_accessor.clone()),
-            Arc::new(KeyspaceArchivedManager::new(None,None)),
+            Arc::new(KeyspaceArchivedManager::new(None, None)),
         );
         gc_worker.start(node_id, coprocessor_host.clone()).unwrap();
 
