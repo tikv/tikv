@@ -1,25 +1,25 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use api_version::{match_template_api_version, KvFormat, RawValue};
-use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName};
+use api_version::{KvFormat, RawValue, match_template_api_version};
+use engine_traits::{CfName, raw_ttl::ttl_to_expire_ts};
 use kvproto::kvrpcpb::ApiVersion;
 use raw::RawStore;
 use tikv_kv::Statistics;
 use txn_types::{Key, Value};
 
 use crate::storage::{
+    ProcessResult, Snapshot,
     kv::{Modify, WriteData},
     lock_manager::LockManager,
     raw,
     txn::{
+        Result,
         commands::{
             Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand,
             WriteContext, WriteResult,
         },
-        Result,
     },
-    ProcessResult, Snapshot,
 };
 
 // TODO: consider add `KvFormat` generic parameter.
@@ -131,7 +131,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
 mod tests {
     use std::sync::Arc;
 
-    use api_version::{test_kv_format_impl, ApiV2};
+    use api_version::{ApiV2, test_kv_format_impl};
     use causal_ts::CausalTsProviderImpl;
     use concurrency_manager::ConcurrencyManager;
     use engine_traits::CF_DEFAULT;
@@ -140,9 +140,9 @@ mod tests {
 
     use super::*;
     use crate::storage::{
+        Engine, Statistics, TestEngineBuilder,
         lock_manager::MockLockManager,
         txn::{scheduler::get_raw_ext, txn_status_cache::TxnStatusCache},
-        Engine, Statistics, TestEngineBuilder,
     };
 
     #[test]

@@ -4,7 +4,7 @@ use std::path::Path;
 
 use engine_traits::{Checkpointable, Checkpointer, Result};
 
-use crate::{r2e, RocksEngine};
+use crate::{RocksEngine, r2e};
 
 impl Checkpointable for RocksEngine {
     type Checkpointer = RocksEngineCheckpointer;
@@ -44,7 +44,7 @@ impl Checkpointer for RocksEngineCheckpointer {
 
 #[cfg(test)]
 mod tests {
-    use engine_traits::{Checkpointable, Checkpointer, MiscExt, Peekable, SyncMutable, ALL_CFS};
+    use engine_traits::{ALL_CFS, Checkpointable, Checkpointer, MiscExt, Peekable, SyncMutable};
     use tempfile::tempdir;
 
     use crate::util::new_engine;

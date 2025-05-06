@@ -27,11 +27,10 @@ use std::{
     marker::PhantomData,
     mem,
     sync::{
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     time::Duration,
-    u64,
 };
 
 use causal_ts::CausalTsProviderImpl;
@@ -39,7 +38,7 @@ use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use crossbeam::utils::CachePadded;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use futures::{compat::Future01CompatExt, FutureExt as _, StreamExt};
+use futures::{FutureExt as _, StreamExt, compat::Future01CompatExt};
 use kvproto::{
     kvrpcpb::{self, CommandPri, Context, DiskFullOpt},
     pdpb::QueryKind,
@@ -49,49 +48,47 @@ use pd_client::{Feature, FeatureGate};
 use raftstore::store::TxnExt;
 use resource_control::{ResourceController, ResourceGroupManager, TaskMetadata};
 use resource_metering::{FutureExt, ResourceTagFactory};
-use smallvec::{smallvec, SmallVec};
+use smallvec::{SmallVec, smallvec};
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData, WriteEvent};
 use tikv_util::{
     memory::MemoryQuota, quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE,
 };
-use tracker::{set_tls_tracker_token, track, TrackerToken, TrackerTokenArray, GLOBAL_TRACKERS};
+use tracker::{GLOBAL_TRACKERS, TrackerToken, TrackerTokenArray, set_tls_tracker_token, track};
 use txn_types::TimeStamp;
 
 use super::task::Task;
 use crate::{
     server::lock_manager::waiter_manager,
     storage::{
+        DynamicConfigs, Error as StorageError, ErrorInner as StorageErrorInner,
+        PessimisticLockKeyResult, PessimisticLockResults,
         config::Config,
         errors::SharedError,
         get_causal_ts, get_priority_tag, get_raw_key_guard,
         kv::{
-            self, with_tls_engine, Engine, FlowStatsReporter, Result as EngineResult, SnapContext,
-            Statistics,
+            self, Engine, FlowStatsReporter, Result as EngineResult, SnapContext, Statistics,
+            with_tls_engine,
         },
         lock_manager::{
-            self,
+            self, DiagnosticContext, LockManager, LockWaitToken,
             lock_wait_context::{LockWaitContext, PessimisticLockKeyCallback},
             lock_waiting_queue::{DelayedNotifyAllFuture, LockWaitEntry, LockWaitQueues},
-            DiagnosticContext, LockManager, LockWaitToken,
         },
         metrics::*,
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, ReleasedLock},
         txn::{
-            commands,
+            Error, ErrorInner, ProcessResult, commands,
             commands::{
                 Command, RawExt, ReleasedLocks, ResponsePolicy, WriteContext, WriteResult,
                 WriteResultLockInfo,
             },
             flow_controller::FlowController,
             latch::{Latches, Lock},
-            sched_pool::{tls_collect_query, tls_collect_scan_details, SchedPool},
+            sched_pool::{SchedPool, tls_collect_query, tls_collect_scan_details},
             tracker::TlsFutureTracker,
             txn_status_cache::TxnStatusCache,
-            Error, ErrorInner, ProcessResult,
         },
         types::StorageCallback,
-        DynamicConfigs, Error as StorageError, ErrorInner as StorageErrorInner,
-        PessimisticLockKeyResult, PessimisticLockResults,
     },
     tikv_util::time::InstantExt,
 };
@@ -2198,6 +2195,7 @@ mod tests {
 
     use super::*;
     use crate::storage::{
+        RocksEngine, SecondaryLocksStatus, TestEngineBuilder, TxnStatus,
         kv::{Error as KvError, ErrorInner as KvErrorInner},
         lock_manager::{MockLockManager, WaitTimeout},
         mvcc::{self, Mutation},
@@ -2208,7 +2206,6 @@ mod tests {
             flow_controller::{EngineFlowController, FlowController},
             latch::*,
         },
-        RocksEngine, SecondaryLocksStatus, TestEngineBuilder, TxnStatus,
     };
 
     #[derive(Clone)]

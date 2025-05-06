@@ -14,9 +14,9 @@ use std::{
     cell::RefCell,
     cmp,
     collections::{
+        HashMap,
         hash_map::Entry,
         vec_deque::{Iter, VecDeque},
-        HashMap,
     },
     convert::AsRef,
     env,
@@ -24,8 +24,8 @@ use std::{
     ops::{Deref, DerefMut},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc, RwLock, RwLockReadGuard, RwLockWriteGuard,
+        atomic::{AtomicBool, Ordering},
     },
     thread,
     time::Duration,
@@ -33,8 +33,8 @@ use std::{
 
 use lazy_static::lazy_static;
 use nix::{
-    sys::wait::{wait, WaitStatus},
-    unistd::{fork, ForkResult},
+    sys::wait::{WaitStatus, wait},
+    unistd::{ForkResult, fork},
 };
 use serde::Serialize;
 
@@ -529,7 +529,7 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
 
     let data_dir = data_dir.to_string();
 
-    panic::set_hook(Box::new(move |info: &panic::PanicInfo<'_>| {
+    panic::set_hook(Box::new(move |info: &panic::PanicHookInfo<'_>| {
         let msg = match info.payload().downcast_ref::<&'static str>() {
             Some(s) => *s,
             None => match info.payload().downcast_ref::<String>() {
@@ -645,7 +645,7 @@ pub fn empty_shared_slice<T>() -> Arc<[T]> {
 
 /// A useful hook to check if master branch is being built.
 pub fn build_on_master_branch() -> bool {
-    option_env!("TIKV_BUILD_GIT_BRANCH").map_or(false, |b| "master" == b)
+    option_env!("TIKV_BUILD_GIT_BRANCH").is_some_and(|b| "master" == b)
 }
 
 /// Set the capacity of a vector to the given capacity.

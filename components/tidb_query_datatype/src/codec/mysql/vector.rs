@@ -132,12 +132,6 @@ impl std::fmt::Debug for VectorFloat32Ref<'_> {
     }
 }
 
-impl ToString for VectorFloat32Ref<'_> {
-    fn to_string(&self) -> String {
-        format!("{}", self)
-    }
-}
-
 // Vector distance and functions
 impl<'a> VectorFloat32Ref<'a> {
     #[inline]

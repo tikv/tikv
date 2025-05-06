@@ -28,7 +28,7 @@ use std::{
     fs::{self, File},
     io::{self, BorrowedBuf, Read, Seek, SeekFrom, Write},
     path::Path,
-    sync::{atomic::Ordering, Arc},
+    sync::{Arc, atomic::Ordering},
     time::Duration,
 };
 
@@ -55,23 +55,23 @@ use kvproto::{
 };
 use protobuf::Message;
 use raftstore::store::{
-    snap::{ReceivingGuard, TabletSnapKey, TabletSnapManager},
     SnapManager,
+    snap::{ReceivingGuard, TabletSnapKey, TabletSnapManager},
 };
 use security::SecurityManager;
 use tikv_kv::RaftExtension;
 use tikv_util::{
+    DeferContext, Either,
     config::{ReadableSize, Tracker, VersionTrack},
     time::Instant,
     worker::Runnable,
-    DeferContext, Either,
 };
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 
 use super::{
-    metrics::*,
-    snap::{Task, DEFAULT_POOL_SIZE},
     Config, Error, Result,
+    metrics::*,
+    snap::{DEFAULT_POOL_SIZE, Task},
 };
 use crate::tikv_util::{sys::thread::ThreadBuildWrapper, time::Limiter};
 
@@ -246,9 +246,9 @@ fn protocol_error(exp: &str, act: impl Debug) -> Error {
 /// It's considered matched when:
 /// 1. Have the same file size;
 /// 2. The first `PREVIEW_CHUNK_LEN` bytes are the same, this contains the
-/// actual data of an SST;
+///    actual data of an SST;
 /// 3. The last `PREVIEW_CHUNK_LEN` bytes are the same, this contains checksum,
-/// properties and other medata of an SST.
+///    properties and other medata of an SST.
 async fn is_sst_match_preview(
     preview_meta: &TabletSnapshotFileMeta,
     target: &Path,
@@ -538,7 +538,7 @@ async fn recv_snap_imp<'a>(
     if let Some(m) = snap_mgr.key_manager() {
         m.link_file(path.to_str().unwrap(), final_path.to_str().unwrap())?;
     }
-    fs::rename(&path, &final_path).map_err(|e| {
+    fs::rename(&path, &final_path).inspect_err(|_e| {
         if let Some(m) = snap_mgr.key_manager() {
             if let Err(e) = m.remove_dir(&final_path, Some(&path)) {
                 error!(
@@ -549,7 +549,6 @@ async fn recv_snap_imp<'a>(
                 );
             }
         }
-        e
     })?;
     if let Some(m) = snap_mgr.key_manager() {
         m.remove_dir(&path, Some(&final_path))?;
@@ -1056,11 +1055,10 @@ pub fn copy_tablet_snapshot(
             let _ = m.remove_dir(&final_path, None);
         }
     }
-    fs::rename(&recv_path, &final_path).map_err(|e| {
+    fs::rename(&recv_path, &final_path).inspect_err(|_e| {
         if let Some(m) = recver_snap_mgr.key_manager() {
             let _ = m.remove_dir(&final_path, Some(&recv_path));
         }
-        e
     })?;
     if let Some(m) = recver_snap_mgr.key_manager() {
         m.remove_dir(&recv_path, Some(&final_path))?;

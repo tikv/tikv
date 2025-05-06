@@ -6,14 +6,13 @@ use std::{
     error,
     ops::{Deref, DerefMut},
     sync::{
+        Arc,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         mpsc::{self, Receiver, TryRecvError},
-        Arc,
     },
-    u64,
 };
 
-use engine_traits::{Engines, KvEngine, Mutable, Peekable, RaftEngine, RaftLogBatch, CF_RAFT};
+use engine_traits::{CF_RAFT, Engines, KvEngine, Mutable, Peekable, RaftEngine, RaftLogBatch};
 use fail::fail_point;
 use into_other::into_other;
 use keys::{self, enc_end_key, enc_start_key};
@@ -25,9 +24,8 @@ use kvproto::{
 };
 use protobuf::Message;
 use raft::{
-    self,
+    self, Error as RaftError, GetEntriesContext, RaftState, Ready, Storage, StorageError,
     eraftpb::{self, ConfState, Entry, HardState, Snapshot},
-    Error as RaftError, GetEntriesContext, RaftState, Ready, Storage, StorageError,
 };
 use rand::Rng;
 use tikv_util::{
@@ -39,9 +37,10 @@ use tikv_util::{
 };
 
 use super::{
-    local_metrics::RaftMetrics, metrics::*, worker::RegionTask, SnapEntry, SnapKey, SnapManager,
+    SnapEntry, SnapKey, SnapManager, local_metrics::RaftMetrics, metrics::*, worker::RegionTask,
 };
 use crate::{
+    Error, Result,
     store::{
         async_io::{read::ReadTask, write::WriteTask},
         entry_storage::{CacheWarmupState, EntryStorage},
@@ -49,7 +48,6 @@ use crate::{
         peer::PersistSnapshotResult,
         util,
     },
-    Error, Result,
 };
 
 // The maximum tick interval between precheck requests. The tick interval helps
@@ -488,7 +486,7 @@ where
             ));
         }
 
-        if find_peer_by_id(&self.region, to).map_or(false, |p| p.is_witness) {
+        if find_peer_by_id(&self.region, to).is_some_and(|p| p.is_witness) {
             // Although we always sending snapshot task behind apply task to get latest
             // snapshot, we can't use `last_applying_idx` here, as below the judgment
             // condition will generate an witness snapshot directly, the new non-witness
@@ -1270,31 +1268,31 @@ pub mod tests {
         raft::RaftTestEngine,
     };
     use engine_traits::{
-        Engines, Iterable, RaftEngineDebug, RaftEngineReadOnly, SyncMutable, WriteBatch,
-        WriteBatchExt, ALL_CFS, CF_DEFAULT,
+        ALL_CFS, CF_DEFAULT, Engines, Iterable, RaftEngineDebug, RaftEngineReadOnly, SyncMutable,
+        WriteBatch, WriteBatchExt,
     };
     use kvproto::raft_serverpb::RaftSnapshotData;
     use metapb::{Peer, Store, StoreLabel};
     use pd_client::PdClient;
     use raft::{
-        eraftpb::{ConfState, Entry, HardState},
         Error as RaftError, GetEntriesContext, StorageError,
+        eraftpb::{ConfState, Entry, HardState},
     };
     use tempfile::{Builder, TempDir};
     use tikv_util::{
         store::{new_peer, new_witness_peer},
-        worker::{dummy_scheduler, LazyWorker, Scheduler, Worker},
+        worker::{LazyWorker, Scheduler, Worker, dummy_scheduler},
     };
 
     use super::*;
     use crate::store::{
+        AsyncReadNotifier, FetchedLogs, GenSnapRes,
         async_io::{read::ReadRunner, write::write_to_db_for_test},
         bootstrap_store,
         entry_storage::tests::validate_cache,
         fsm::apply::compact_raft_log,
         initial_region, prepare_bootstrap_cluster,
         worker::{RegionTask, SnapGenRunner, SnapGenTask},
-        AsyncReadNotifier, FetchedLogs, GenSnapRes,
     };
 
     fn new_storage(
@@ -1546,7 +1544,7 @@ pub mod tests {
             new_entry(5, 5),
             new_entry(6, 6),
         ];
-        let max_u64 = u64::max_value();
+        let max_u64 = u64::MAX;
         let mut tests = vec![
             (
                 2,

@@ -1,9 +1,9 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
     sync::{
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
         mpsc::{self, channel, sync_channel},
-        Arc, Mutex,
     },
     thread,
     time::Duration,
@@ -24,21 +24,21 @@ use kvproto::{
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use raftstore::{
+    Result,
     store::{
+        Callback, PeerMsg, WriteResponse,
         config::Config as RaftstoreConfig,
         util::{is_initial_msg, is_vote_msg},
-        Callback, PeerMsg, WriteResponse,
     },
-    Result,
 };
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
-use tikv::storage::{kv::SnapshotExt, Snapshot};
+use tikv::storage::{Snapshot, kv::SnapshotExt};
 use tikv_util::{
-    config::{ReadableDuration, ReadableSize},
-    mpsc::{unbounded, Sender},
-    time::Instant,
     HandyRwLock,
+    config::{ReadableDuration, ReadableSize},
+    mpsc::{Sender, unbounded},
+    time::Instant,
 };
 use txn_types::{Key, LastChange, PessimisticLock, TimeStamp};
 
@@ -329,7 +329,11 @@ struct PrevoteRangeFilter {
 impl Filter for PrevoteRangeFilter {
     fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
         self.filter.before(msgs)?;
-        if let Some(msg) = msgs.iter().filter(|m| is_vote_msg(m.get_message())).last() {
+        if let Some(msg) = msgs
+            .iter()
+            .filter(|m| is_vote_msg(m.get_message()))
+            .next_back()
+        {
             let start_key = msg.get_start_key().to_owned();
             let end_key = msg.get_end_key().to_owned();
             if let Some(before) = self.before.as_ref() {

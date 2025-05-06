@@ -23,7 +23,7 @@ use encryption::{DecrypterReader, FileEncryptionInfo, Iv};
 use file_system::{File, Sha256Reader};
 use futures::io::BufReader;
 use futures_io::AsyncRead;
-use futures_util::{future::LocalBoxFuture, stream::LocalBoxStream, AsyncReadExt};
+use futures_util::{AsyncReadExt, future::LocalBoxFuture, stream::LocalBoxStream};
 use kvproto::brpb::CompressionType;
 use openssl::hash::{Hasher, MessageDigest};
 use tikv_util::{
@@ -94,13 +94,10 @@ pub fn compression_reader_dispatcher(
             // So here regard Unkown(0) as uncompressed type.
             CompressionType::Unknown => Ok(inner),
             CompressionType::Zstd => Ok(Box::new(ZstdDecoder::new(BufReader::new(inner)))),
-            _ => Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!(
-                    "the compression type is unimplemented, compression type id {:?}",
-                    c
-                ),
-            )),
+            _ => Err(io::Error::other(format!(
+                "the compression type is unimplemented, compression type id {:?}",
+                c
+            ))),
         },
         None => Ok(inner),
     }
@@ -492,30 +489,23 @@ pub async fn read_external_storage_info_buff(
 }
 
 fn build_hasher() -> Result<Hasher, io::Error> {
-    Hasher::new(MessageDigest::sha256()).map_err(|err| {
-        io::Error::new(
-            io::ErrorKind::Other,
-            format!("openssl hasher failed to init: {}", err),
-        )
-    })
+    Hasher::new(MessageDigest::sha256())
+        .map_err(|err| io::Error::other(format!("openssl hasher failed to init: {}", err)))
 }
 
 fn update_hasher(hasher: &mut Hasher, data: &[u8]) -> Result<(), io::Error> {
-    hasher.update(data).map_err(|err| {
-        io::Error::new(
-            io::ErrorKind::Other,
-            format!("openssl hasher update failed: {}", err),
-        )
-    })
+    hasher
+        .update(data)
+        .map_err(|err| io::Error::other(format!("openssl hasher update failed: {}", err)))
 }
 
 fn finish_hasher(mut hasher: Hasher) -> Result<Vec<u8>, io::Error> {
     hasher.finish().map_or_else(
         |err| {
-            Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("openssl hasher finish failed: {}", err),
-            ))
+            Err(io::Error::other(format!(
+                "openssl hasher finish failed: {}",
+                err
+            )))
         },
         |bytes| Ok(bytes.to_vec()),
     )
@@ -529,10 +519,10 @@ fn calc_and_compare_checksums(
         if let Some(hasher) = opt_encrypted_file_hasher {
             let calc_checksum = hasher.lock().unwrap().finish().map_or_else(
                 |err| {
-                    Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("openssl hasher finish failed: {}", err),
-                    ))
+                    Err(io::Error::other(format!(
+                        "openssl hasher finish failed: {}",
+                        err
+                    )))
                 },
                 |bytes| Ok(bytes.to_vec()),
             )?;

@@ -219,8 +219,7 @@ impl ExternalStorage for LocalStorage {
                     .path()
                     .strip_prefix(&self.base);
                     match rel {
-                        Err(_) => futures::future::err(io::Error::new(
-                            io::ErrorKind::Other,
+                        Err(_) => futures::future::err(io::Error::other(
                             format!("unknown: we found something not match the prefix... it is {}, our prefix is {}", v.path().display(), self.base.display()),
                         )),
                         Ok(item) => futures::future::ok(BlobObject{

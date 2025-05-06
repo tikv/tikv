@@ -2,18 +2,18 @@
 
 use std::{
     fs::{self, File},
-    io::{Error, ErrorKind, Result},
+    io::{Error, Result},
     path::Path,
 };
 
 use external_storage::{
-    create_storage, make_azblob_backend, make_gcs_backend, make_hdfs_backend, make_local_backend,
-    make_noop_backend, make_s3_backend, ExternalStorage, UnpinReader,
+    ExternalStorage, UnpinReader, create_storage, make_azblob_backend, make_gcs_backend,
+    make_hdfs_backend, make_local_backend, make_noop_backend, make_s3_backend,
 };
-use futures_util::io::{copy, AllowStdIo};
+use futures_util::io::{AllowStdIo, copy};
 use ini::ini::Ini;
-use kvproto::brpb::{AzureBlobStorage, Gcs, StorageBackend, S3};
-use structopt::{clap::arg_enum, StructOpt};
+use kvproto::brpb::{AzureBlobStorage, Gcs, S3, StorageBackend};
+use structopt::{StructOpt, clap::arg_enum};
 use tikv_util::stream::block_on_external_io;
 use tokio::runtime::Runtime;
 
@@ -77,22 +77,18 @@ fn create_s3_storage(opt: &Opt) -> Result<StorageBackend> {
     let mut config = S3::default();
 
     if let Some(credential_file) = &opt.credential_file {
-        let ini = Ini::load_from_file(credential_file).map_err(|e| {
-            Error::new(
-                ErrorKind::Other,
-                format!("Failed to parse credential file as ini: {}", e),
-            )
-        })?;
+        let ini = Ini::load_from_file(credential_file)
+            .map_err(|e| Error::other(format!("Failed to parse credential file as ini: {}", e)))?;
         let props = ini
             .section(Some("default"))
-            .ok_or_else(|| Error::new(ErrorKind::Other, "fail to parse section"))?;
+            .ok_or_else(|| Error::other("fail to parse section"))?;
         config.access_key = props
             .get("aws_access_key_id")
-            .ok_or_else(|| Error::new(ErrorKind::Other, "fail to parse credential"))?
+            .ok_or_else(|| Error::other("fail to parse credential"))?
             .clone();
         config.secret_access_key = props
             .get("aws_secret_access_key")
-            .ok_or_else(|| Error::new(ErrorKind::Other, "fail to parse credential"))?
+            .ok_or_else(|| Error::other("fail to parse credential"))?
             .clone();
     }
 
@@ -102,12 +98,12 @@ fn create_s3_storage(opt: &Opt) -> Result<StorageBackend> {
     if let Some(region) = &opt.region {
         config.region = region.to_string();
     } else {
-        return Err(Error::new(ErrorKind::Other, "missing region"));
+        return Err(Error::other("missing region"));
     }
     if let Some(bucket) = &opt.bucket {
         config.bucket = bucket.to_string();
     } else {
-        return Err(Error::new(ErrorKind::Other, "missing bucket"));
+        return Err(Error::other("missing bucket"));
     }
     if let Some(prefix) = &opt.prefix {
         config.prefix = prefix.to_string();
@@ -127,7 +123,7 @@ fn create_gcs_storage(opt: &Opt) -> Result<StorageBackend> {
     if let Some(bucket) = &opt.bucket {
         config.bucket = bucket.to_string();
     } else {
-        return Err(Error::new(ErrorKind::Other, "missing bucket"));
+        return Err(Error::other("missing bucket"));
     }
     if let Some(prefix) = &opt.prefix {
         config.prefix = prefix.to_string();
@@ -139,22 +135,18 @@ fn create_azure_storage(opt: &Opt) -> Result<StorageBackend> {
     let mut config = AzureBlobStorage::default();
 
     if let Some(credential_file) = &opt.credential_file {
-        let ini = Ini::load_from_file(credential_file).map_err(|e| {
-            Error::new(
-                ErrorKind::Other,
-                format!("Failed to parse credential file as ini: {}", e),
-            )
-        })?;
+        let ini = Ini::load_from_file(credential_file)
+            .map_err(|e| Error::other(format!("Failed to parse credential file as ini: {}", e)))?;
         let props = ini
             .section(Some("default"))
-            .ok_or_else(|| Error::new(ErrorKind::Other, "fail to parse section"))?;
+            .ok_or_else(|| Error::other("fail to parse section"))?;
         config.account_name = props
             .get("azure_storage_name")
-            .ok_or_else(|| Error::new(ErrorKind::Other, "fail to parse credential"))?
+            .ok_or_else(|| Error::other("fail to parse credential"))?
             .clone();
         config.shared_key = props
             .get("azure_storage_key")
-            .ok_or_else(|| Error::new(ErrorKind::Other, "fail to parse credential"))?
+            .ok_or_else(|| Error::other("fail to parse credential"))?
             .clone();
     }
     if let Some(endpoint) = &opt.endpoint {
@@ -163,7 +155,7 @@ fn create_azure_storage(opt: &Opt) -> Result<StorageBackend> {
     if let Some(bucket) = &opt.bucket {
         config.bucket = bucket.to_string();
     } else {
-        return Err(Error::new(ErrorKind::Other, "missing bucket"));
+        return Err(Error::other("missing bucket"));
     }
     if let Some(prefix) = &opt.prefix {
         config.prefix = prefix.to_string();

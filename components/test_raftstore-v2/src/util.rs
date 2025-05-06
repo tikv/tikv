@@ -7,10 +7,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use encryption_export::{data_key_manager_from_config, DataKeyManager};
+use encryption_export::{DataKeyManager, data_key_manager_from_config};
 use engine_rocks::{RocksEngine, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
-use engine_traits::{CfName, KvEngine, TabletRegistry, CF_DEFAULT};
+use engine_traits::{CF_DEFAULT, CfName, KvEngine, TabletRegistry};
 use file_system::IoRateLimiter;
 use futures::future::BoxFuture;
 use grpcio::{ChannelBuilder, Environment};
@@ -21,26 +21,27 @@ use kvproto::{
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse},
     tikvpb::TikvClient,
 };
-use raftstore::{store::ReadResponse, Result};
-use rand::{prelude::SliceRandom, RngCore};
+use raftstore::{Result, store::ReadResponse};
+use rand::{RngCore, prelude::SliceRandom};
 use server::common::ConfiguredRaftEngine;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
-use test_raftstore::{new_get_cmd, new_put_cf_cmd, new_request, new_snap_cmd, sleep_ms, Config};
+use test_raftstore::{Config, new_get_cmd, new_put_cf_cmd, new_request, new_snap_cmd, sleep_ms};
 use tikv::{
     server::KvEngineFactoryBuilder,
     storage::{
+        Engine, Snapshot,
         kv::{SnapContext, SnapshotExt},
-        point_key_range, Engine, Snapshot,
+        point_key_range,
     },
 };
 use tikv_util::{
-    config::ReadableDuration, escape, future::block_on_timeout, time::InstantExt,
-    worker::LazyWorker, HandyRwLock,
+    HandyRwLock, config::ReadableDuration, escape, future::block_on_timeout, time::InstantExt,
+    worker::LazyWorker,
 };
 use txn_types::Key;
 
-use crate::{bootstrap_store, cluster::Cluster, ServerCluster, Simulator};
+use crate::{ServerCluster, Simulator, bootstrap_store, cluster::Cluster};
 
 pub fn create_test_engine(
     // TODO: pass it in for all cases.
@@ -459,7 +460,7 @@ pub fn wait_down_peers<T: Simulator<EK>, EK: KvEngine>(
 ) {
     let mut peers = cluster.get_down_peers();
     for _ in 1..1000 {
-        if peers.len() == count as usize && peer.as_ref().map_or(true, |p| peers.contains_key(p)) {
+        if peers.len() == count as usize && peer.as_ref().is_none_or(|p| peers.contains_key(p)) {
             return;
         }
         std::thread::sleep(Duration::from_millis(10));

@@ -13,8 +13,8 @@ use std::{
     pin::Pin,
     result,
     sync::{
-        atomic::{AtomicU8, Ordering},
         Arc, RwLock,
+        atomic::{AtomicU8, Ordering},
     },
     task::Poll,
     time::Duration,
@@ -23,7 +23,7 @@ use std::{
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot};
-use futures::{future::BoxFuture, task::AtomicWaker, Future, Stream, StreamExt, TryFutureExt};
+use futures::{Future, Stream, StreamExt, TryFutureExt, future::BoxFuture, task::AtomicWaker};
 use hybrid_engine::HybridEngineSnapshot;
 use in_memory_engine::RegionCacheMemoryEngine;
 use kvproto::{
@@ -35,29 +35,29 @@ use kvproto::{
     },
 };
 use raft::{
-    eraftpb::{self, MessageType},
     StateRole,
+    eraftpb::{self, MessageType},
 };
 pub use raft_extension::RaftRouterWrap;
 use raftstore::{
     coprocessor::{
-        dispatcher::BoxReadIndexObserver, Coprocessor, CoprocessorHost, ReadIndexObserver,
+        Coprocessor, CoprocessorHost, ReadIndexObserver, dispatcher::BoxReadIndexObserver,
     },
     errors::Error as RaftServerError,
     router::{LocalReadRouter, RaftStoreRouter, ReadContext},
     store::{
-        self, util::encode_start_ts_into_flag_data, Callback as StoreCallback, RaftCmdExtraOpts,
-        ReadIndexContext, ReadResponse, RegionSnapshot, StoreMsg, WriteResponse,
+        self, Callback as StoreCallback, RaftCmdExtraOpts, ReadIndexContext, ReadResponse,
+        RegionSnapshot, StoreMsg, WriteResponse, util::encode_start_ts_into_flag_data,
     },
 };
 use thiserror::Error;
-use tikv_kv::{write_modifies, OnAppliedCb, WriteEvent};
+use tikv_kv::{OnAppliedCb, WriteEvent, write_modifies};
 use tikv_util::{
     callback::must_call,
     future::{paired_future_callback, paired_must_called_future_callback},
     time::Instant,
 };
-use tracker::{get_tls_tracker_token, GLOBAL_TRACKERS};
+use tracker::{GLOBAL_TRACKERS, get_tls_tracker_token};
 use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 
 use super::metrics::*;
@@ -687,7 +687,7 @@ where
 
     let mut req = Request::default();
     req.set_cmd_type(CmdType::Snap);
-    if !ctx.key_ranges.is_empty() && ctx.start_ts.map_or(false, |ts| !ts.is_zero()) {
+    if !ctx.key_ranges.is_empty() && ctx.start_ts.is_some_and(|ts| !ts.is_zero()) {
         req.mut_read_index()
             .set_start_ts(ctx.start_ts.as_ref().unwrap().into_inner());
         req.mut_read_index()
@@ -699,7 +699,7 @@ where
 
     let mut header = new_request_header(ctx.pb_ctx);
     let mut flags = 0;
-    let need_encoded_start_ts = ctx.start_ts.map_or(true, |ts| !ts.is_zero());
+    let need_encoded_start_ts = ctx.start_ts.is_none_or(|ts| !ts.is_zero());
     if ctx.pb_ctx.get_stale_read() && need_encoded_start_ts {
         flags |= WriteBatchFlags::STALE_READ.bits();
     }

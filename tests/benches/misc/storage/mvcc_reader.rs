@@ -3,7 +3,7 @@
 use kvproto::kvrpcpb::Context;
 use test_storage::{SyncTestStorageApiV1, SyncTestStorageBuilderApiV1};
 use tidb_query_datatype::codec::table;
-use tikv::storage::{kv::RocksEngine, mvcc::SnapshotReader, Engine};
+use tikv::storage::{Engine, kv::RocksEngine, mvcc::SnapshotReader};
 use txn_types::{Key, Mutation};
 
 fn prepare_mvcc_data(key: &Key, n: u64) -> SyncTestStorageApiV1<RocksEngine> {

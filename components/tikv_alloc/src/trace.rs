@@ -23,8 +23,8 @@ use std::{
     num::NonZeroU64,
     ops::{Add, Deref, DerefMut},
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 

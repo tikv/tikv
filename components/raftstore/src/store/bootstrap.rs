@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{Engines, KvEngine, Mutable, RaftEngine, WriteBatch, CF_DEFAULT, CF_RAFT};
+use engine_traits::{CF_DEFAULT, CF_RAFT, Engines, KvEngine, Mutable, RaftEngine, WriteBatch};
 use kvproto::{
     metapb,
     raft_serverpb::{RaftLocalState, RegionLocalState, StoreIdent},
@@ -8,7 +8,7 @@ use kvproto::{
 use tikv_util::{box_err, box_try, store::new_peer};
 
 use super::peer_storage::{
-    write_initial_apply_state, write_initial_raft_state, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
+    INIT_EPOCH_CONF_VER, INIT_EPOCH_VER, write_initial_apply_state, write_initial_raft_state,
 };
 use crate::Result;
 
@@ -123,7 +123,7 @@ pub fn clear_prepare_bootstrap_key(
 #[cfg(test)]
 mod tests {
     use engine_traits::{
-        Engines, Peekable, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch, CF_DEFAULT,
+        CF_DEFAULT, Engines, Peekable, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch,
     };
     use tempfile::Builder;
 

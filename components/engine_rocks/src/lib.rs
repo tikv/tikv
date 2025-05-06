@@ -17,7 +17,6 @@
 
 #![cfg_attr(test, feature(test))]
 #![feature(let_chains)]
-#![feature(option_get_or_insert_default)]
 #![feature(path_file_prefix)]
 
 #[allow(unused_extern_crates)]
@@ -108,8 +107,8 @@ pub mod file_system;
 mod raft_engine;
 
 pub use rocksdb::{
-    set_perf_flags, set_perf_level, PerfContext, PerfFlag, PerfFlags, PerfLevel,
-    Statistics as RocksStatistics,
+    PerfContext, PerfFlag, PerfFlags, PerfLevel, Statistics as RocksStatistics, set_perf_flags,
+    set_perf_level,
 };
 
 pub mod flow_control_factors;

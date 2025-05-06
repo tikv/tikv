@@ -83,10 +83,7 @@ impl ClientPool {
     ) -> Option<Client> {
         if self.last_pos == self.pool.len() {
             if self.last_pos < cfg.forward_max_connections_per_address {
-                let env = match env.upgrade() {
-                    Some(e) => e,
-                    None => return None,
-                };
+                let env = env.upgrade()?;
                 let cb = ChannelBuilder::new(env)
                     .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
                     .max_receive_message_len(-1)

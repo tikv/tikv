@@ -6,25 +6,24 @@ use chrono::{self, DurationRound, Offset, TimeZone};
 use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
 use tidb_query_datatype::{
+    FieldTypeAccessor, FieldTypeFlag,
     codec::{
+        Error, Result as CodecResult,
         convert::ConvertTo,
         data_type::*,
         mysql::{
-            check_fsp,
+            Duration, MAX_FSP, RoundMode, Time, TimeType, Tz, check_fsp,
             duration::{
                 MAX_HOUR_PART, MAX_MINUTE_PART, MAX_NANOS, MAX_NANOS_PART, MAX_SECOND_PART,
                 NANOS_PER_SEC,
             },
             time::{
-                extension::DateTimeExtension, interval::*, weekmode::WeekMode, WeekdayExtension,
-                MONTH_NAMES,
+                MONTH_NAMES, WeekdayExtension, extension::DateTimeExtension, interval::*,
+                weekmode::WeekMode,
             },
-            Duration, RoundMode, Time, TimeType, Tz, MAX_FSP,
         },
-        Error, Result as CodecResult,
     },
     expr::{EvalContext, SqlMode},
-    FieldTypeAccessor, FieldTypeFlag,
 };
 use tipb::{Expr, ExprType};
 
@@ -200,7 +199,7 @@ pub fn year_week_with_mode(ctx: &mut EvalContext, t: &DateTime, mode: &Int) -> R
     let (year, week) = t.year_week(WeekMode::from_bits_truncate(*mode as u32));
     let result = i64::from(week + year * 100);
     if result < 0 {
-        return Ok(Some(i64::from(u32::max_value())));
+        return Ok(Some(i64::from(u32::MAX)));
     }
     Ok(Some(result))
 }
@@ -219,7 +218,7 @@ pub fn year_week_without_mode(ctx: &mut EvalContext, t: &DateTime) -> Result<Opt
     let (year, week) = t.year_week(WeekMode::from_bits_truncate(0u32));
     let result = i64::from(week + year * 100);
     if result < 0 {
-        return Ok(Some(i64::from(u32::max_value())));
+        return Ok(Some(i64::from(u32::MAX)));
     }
     Ok(Some(result))
 }
@@ -1710,10 +1709,7 @@ fn get_micro_timestamp(time: &DateTime, tz: &Tz) -> Result<i64> {
 #[rpn_fn(capture = [ctx])]
 #[inline]
 pub fn unix_timestamp_int(ctx: &mut EvalContext, time: &DateTime) -> Result<Option<i64>> {
-    let timestamp = match get_micro_timestamp(time, &ctx.cfg.tz) {
-        Ok(val) => val,
-        Err(err) => return Err(err),
-    };
+    let timestamp = get_micro_timestamp(time, &ctx.cfg.tz)?;
 
     let res: std::result::Result<i64, Error> =
         unix_timestamp_to_mysql_unix_timestamp(ctx, timestamp, 1)?
@@ -1729,10 +1725,7 @@ pub fn unix_timestamp_decimal(
     extra: &RpnFnCallExtra,
     time: &DateTime,
 ) -> Result<Option<Decimal>> {
-    let timestamp = match get_micro_timestamp(time, &ctx.cfg.tz) {
-        Ok(val) => val,
-        Err(err) => return Err(err),
-    };
+    let timestamp = get_micro_timestamp(time, &ctx.cfg.tz)?;
 
     let res = unix_timestamp_to_mysql_unix_timestamp(
         ctx,
@@ -1862,21 +1855,21 @@ mod tests {
     use std::{str::FromStr, sync::Arc};
 
     use tidb_query_datatype::{
+        FieldTypeTp,
         builder::FieldTypeBuilder,
         codec::{
             batch::LazyBatchColumnVec,
             data_type::*,
             error::ERR_TRUNCATE_WRONG_VALUE,
-            mysql::{Time, MAX_FSP},
+            mysql::{MAX_FSP, Time},
         },
         expr::EvalConfig,
-        FieldTypeTp,
     };
     use tipb::{FieldType, ScalarFuncSig};
     use tipb_helper::ExprDefBuilder;
 
     use super::*;
-    use crate::{types::test_util::RpnFnScalarEvaluator, RpnExpressionBuilder};
+    use crate::{RpnExpressionBuilder, types::test_util::RpnFnScalarEvaluator};
 
     #[test]
     fn test_add_duration_and_duration() {

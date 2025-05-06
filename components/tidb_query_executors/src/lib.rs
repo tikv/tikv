@@ -11,7 +11,7 @@
 #![allow(incomplete_features)]
 #![feature(proc_macro_hygiene)]
 #![feature(specialization)]
-#![feature(const_mut_refs)]
+#![feature(stmt_expr_attributes)]
 
 #[macro_use(box_try, warn)]
 extern crate tikv_util;

@@ -1,32 +1,31 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{
-    data_cf_offset, name_to_cf, KvEngine, Mutable, RaftEngine, ALL_CFS, CF_DEFAULT,
+    ALL_CFS, CF_DEFAULT, KvEngine, Mutable, RaftEngine, data_cf_offset, name_to_cf,
 };
 use fail::fail_point;
 use futures::channel::oneshot;
 use kvproto::raft_cmdpb::RaftRequestHeader;
 use raftstore::{
+    Error, Result,
     store::{
-        cmd_resp,
-        fsm::{apply, MAX_PROPOSAL_SIZE_RATIO},
+        RaftCmdExtraOpts, cmd_resp,
+        fsm::{MAX_PROPOSAL_SIZE_RATIO, apply},
         metrics::PEER_WRITE_CMD_COUNTER,
         msg::ErrorCallback,
         util::{self},
-        RaftCmdExtraOpts,
     },
-    Error, Result,
 };
 use slog::{error, info};
 use tikv_util::{box_err, slog_panic, time::Instant};
 
 use crate::{
+    TabletTask,
     batch::StoreContext,
     fsm::ApplyResReporter,
     operation::SimpleWriteReqEncoder,
     raft::{Apply, Peer},
     router::{ApplyTask, CmdResChannel},
-    TabletTask,
 };
 
 mod ingest;
@@ -254,7 +253,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             cf = CF_DEFAULT;
         }
 
-        if !ALL_CFS.iter().any(|x| *x == cf) {
+        if !ALL_CFS.contains(&cf) {
             return Err(box_err!("invalid delete range command, cf: {:?}", cf));
         }
 
@@ -316,7 +315,7 @@ mod test {
         kv::{KvTestEngine, TestTabletFactory},
     };
     use engine_traits::{
-        FlushState, Peekable, SstApplyState, TabletContext, TabletRegistry, CF_DEFAULT, DATA_CFS,
+        CF_DEFAULT, DATA_CFS, FlushState, Peekable, SstApplyState, TabletContext, TabletRegistry,
     };
     use futures::executor::block_on;
     use kvproto::{
@@ -331,14 +330,14 @@ mod test {
     use tempfile::TempDir;
     use tikv_util::{
         store::new_peer,
-        worker::{dummy_scheduler, Worker},
+        worker::{Worker, dummy_scheduler},
         yatp_pool::{DefaultTicker, YatpPoolBuilder},
     };
 
     use crate::{
         operation::{
-            test_util::{create_tmp_importer, new_delete_range_entry, new_put_entry, MockReporter},
             CommittedEntries,
+            test_util::{MockReporter, create_tmp_importer, new_delete_range_entry, new_put_entry},
         },
         raft::Apply,
         worker::tablet,

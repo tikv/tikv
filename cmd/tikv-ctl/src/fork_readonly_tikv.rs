@@ -8,7 +8,7 @@ use std::{
 };
 
 use encryption_export::data_key_manager_from_config;
-use raft_engine::{env::DefaultFileSystem, Engine as RaftEngine};
+use raft_engine::{Engine as RaftEngine, env::DefaultFileSystem};
 use regex::Regex;
 use tikv::config::TikvConfig;
 

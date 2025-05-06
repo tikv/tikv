@@ -13,7 +13,7 @@
 fn test_merge() {
     use std::time::Duration;
 
-    use test_backup::disk_snap::{assert_success, Suite};
+    use test_backup::disk_snap::{Suite, assert_success};
 
     let mut suite = Suite::new(1);
     suite.split(b"k");

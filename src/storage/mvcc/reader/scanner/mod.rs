@@ -6,13 +6,13 @@ mod forward;
 
 use std::ops::Bound;
 
-use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE, CfName};
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
 use txn_types::{
     Key, Lock, LockType, OldValue, TimeStamp, TsSet, Value, Write, WriteRef, WriteType,
 };
 
-pub use self::forward::{test_util, DeltaScanner, EntryScanner};
+pub use self::forward::{DeltaScanner, EntryScanner, test_util};
 use self::{
     backward::BackwardKvScanner,
     forward::{
@@ -23,7 +23,7 @@ use crate::storage::{
     kv::{
         CfStatistics, Cursor, CursorBuilder, Iterator, LoadDataHint, ScanMode, Snapshot, Statistics,
     },
-    mvcc::{default_not_found_error, NewerTsCheckState, Result},
+    mvcc::{NewerTsCheckState, Result, default_not_found_error},
     need_check_locks,
     txn::{Result as TxnResult, Scanner as StoreScanner},
 };
@@ -612,10 +612,10 @@ mod tests {
 
     use super::*;
     use crate::storage::{
-        kv::{Engine, RocksEngine, TestEngineBuilder, SEEK_BOUND},
-        mvcc::{tests::*, Error as MvccError, ErrorInner as MvccErrorInner},
+        kv::{Engine, RocksEngine, SEEK_BOUND, TestEngineBuilder},
+        mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, tests::*},
         txn::{
-            tests::*, Error as TxnError, ErrorInner as TxnErrorInner, TxnEntry, TxnEntryScanner,
+            Error as TxnError, ErrorInner as TxnErrorInner, TxnEntry, TxnEntryScanner, tests::*,
         },
     };
 

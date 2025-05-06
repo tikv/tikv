@@ -3,8 +3,8 @@
 use std::{
     mem,
     sync::{
-        atomic::{AtomicIsize, AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicIsize, AtomicUsize, Ordering},
     },
 };
 
@@ -164,13 +164,12 @@ impl HeapSize for kvrpcpb::Context {
         self.resolved_locks.capacity() * mem::size_of::<u64>()
             + self.committed_locks.capacity() * mem::size_of::<u64>()
             + self.resource_group_tag.capacity()
-            + self.request_source.as_bytes().len()
+            + self.request_source.len()
             + self
                 .get_resource_control_context()
                 .resource_group_name
-                .as_bytes()
                 .len()
-            + self.get_source_stmt().session_alias.as_bytes().len()
+            + self.get_source_stmt().session_alias.len()
     }
 }
 

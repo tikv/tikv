@@ -31,7 +31,10 @@ impl KeyHandle {
         // Safety: `_mutex_guard` is declared before `handle_ref` in `KeyHandleGuard`.
         // So the mutex guard will be released earlier than the `Arc<KeyHandle>`.
         // Then we can make sure the mutex guard doesn't point to released memory.
-        let mutex_guard = unsafe { mem::transmute(self.mutex.lock().await) };
+        let mutex_guard = unsafe {
+            #[allow(clippy::missing_transmute_annotations)]
+            mem::transmute(self.mutex.lock().await)
+        };
         KeyHandleGuard {
             _mutex_guard: mutex_guard,
             handle: self,

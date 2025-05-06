@@ -10,8 +10,8 @@ use std::time::Instant;
 use kvproto::kvrpcpb as pb;
 
 pub use self::{
-    future::{track, FutureTrack},
-    slab::{TrackerToken, TrackerTokenArray, GLOBAL_TRACKERS, INVALID_TRACKER_TOKEN},
+    future::{FutureTrack, track},
+    slab::{GLOBAL_TRACKERS, INVALID_TRACKER_TOKEN, TrackerToken, TrackerTokenArray},
     tls::*,
 };
 

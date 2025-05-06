@@ -1,7 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(test)]
-#![feature(duration_consts_float)]
 
 #[macro_use]
 extern crate lazy_static;
@@ -15,9 +14,9 @@ use std::cell::Cell;
 pub use std::{
     convert::TryFrom,
     fs::{
-        canonicalize, create_dir, create_dir_all, hard_link, metadata, read_dir, read_link,
-        remove_dir, remove_dir_all, remove_file, rename, set_permissions, symlink_metadata,
-        DirBuilder, DirEntry, FileType, Metadata, Permissions, ReadDir,
+        DirBuilder, DirEntry, FileType, Metadata, Permissions, ReadDir, canonicalize, create_dir,
+        create_dir_all, hard_link, metadata, read_dir, read_link, remove_dir, remove_dir_all,
+        remove_file, rename, set_permissions, symlink_metadata,
     },
 };
 use std::{
@@ -26,7 +25,7 @@ use std::{
     pin::Pin,
     str::FromStr,
     sync::{Arc, Mutex},
-    task::{ready, Context, Poll},
+    task::{Context, Poll, ready},
 };
 
 pub use file::{File, OpenOptions};
@@ -41,8 +40,8 @@ use openssl::{
     hash::{self, Hasher, MessageDigest},
 };
 pub use rate_limiter::{
-    get_io_rate_limiter, set_io_rate_limiter, IoBudgetAdjustor, IoRateLimitMode, IoRateLimiter,
-    IoRateLimiterStatistics,
+    IoBudgetAdjustor, IoRateLimitMode, IoRateLimiter, IoRateLimiterStatistics, get_io_rate_limiter,
+    set_io_rate_limiter,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use strum::{EnumCount, EnumIter};
@@ -583,7 +582,7 @@ impl<R: AsyncRead + Unpin> AsyncRead for Sha256Reader<R> {
             .lock()
             .expect("failed to lock hasher in Sha256Reader async read");
         if let Err(e) = hasher.update(new_data) {
-            return Poll::Ready(Err(io::Error::new(ErrorKind::Other, e)));
+            return Poll::Ready(Err(io::Error::other(e)));
         }
 
         Poll::Ready(Ok(()))
@@ -622,7 +621,7 @@ pub fn reserve_space_for_recover<P: AsRef<Path>>(data_dir: P, file_size: u64) ->
 mod tests {
     use std::{io::Write, iter};
 
-    use rand::{distributions::Alphanumeric, thread_rng, Rng};
+    use rand::{Rng, distributions::Alphanumeric, thread_rng};
     use tempfile::{Builder, TempDir};
 
     use super::*;

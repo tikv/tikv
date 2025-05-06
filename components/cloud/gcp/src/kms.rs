@@ -4,9 +4,10 @@ use std::{fmt, result::Result as StdResult};
 
 use async_trait::async_trait;
 use cloud::{
+    KeyId,
     error::{Error as CloudError, KmsError, Result},
     kms::{Config, CryptographyType, DataKeyPair, EncryptedKey, KmsProvider, PlainKey},
-    metrics, KeyId,
+    metrics,
 };
 use futures_util::stream::StreamExt;
 use http::Method;
@@ -18,8 +19,8 @@ use tame_gcs::error::HttpStatusError;
 use tikv_util::{box_err, stream::RetryError, time::Instant};
 
 use crate::{
-    client::{GcpClient, RequestError},
     STORAGE_VENDOR_NAME_GCP,
+    client::{GcpClient, RequestError},
 };
 
 // generated random encryption data key length.

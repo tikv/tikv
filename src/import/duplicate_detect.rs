@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{IterOptions, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN};
+use engine_traits::{CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN, IterOptions};
 use kvproto::import_sstpb::{DuplicateDetectResponse, KvPair};
 use sst_importer::{Error, Result};
 use tikv_kv::{Iterator as kvIterator, Snapshot};
@@ -247,9 +247,9 @@ mod tests {
 
     use super::*;
     use crate::storage::{
+        Storage, TestStorageBuilderApiV1,
         lock_manager::{LockManager, MockLockManager},
         txn::commands,
-        Storage, TestStorageBuilderApiV1,
     };
 
     fn prewrite_data<E: Engine, L: LockManager, F: KvFormat>(

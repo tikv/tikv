@@ -149,9 +149,9 @@ impl<E> Default for RetryExt<E> {
 #[doc(hidden)]
 pub mod __macro_helper {
     #[doc(hidden)]
-    pub use rand::thread_rng as __thread_rng;
-    #[doc(hidden)]
     pub use rand::Rng as __rand_Rng;
+    #[doc(hidden)]
+    pub use rand::thread_rng as __thread_rng;
     #[doc(hidden)]
     pub use tokio::time::sleep as __tokio_sleep;
 }
@@ -182,7 +182,7 @@ macro_rules! retry_expr {
     };
     ($action:expr, $ext:expr) => {
         async {
-            use $crate::stream::{RetryError, __macro_helper};
+            use $crate::stream::{__macro_helper, RetryError};
 
             let mut ext: $crate::stream::RetryExt<_> = $ext;
             let max_retry_times = ext.max_retry_times;
@@ -218,10 +218,7 @@ macro_rules! retry_expr {
 
 /// Retires a future execution. Comparing to `retry`, this version allows more
 /// configurations.
-pub async fn retry_all_ext<'a, G, T, F, E>(
-    mut action: G,
-    ext: RetryExt<JustRetry<E>>,
-) -> Result<T, E>
+pub async fn retry_all_ext<G, T, F, E>(mut action: G, ext: RetryExt<JustRetry<E>>) -> Result<T, E>
 where
     G: FnMut() -> F,
     F: Future<Output = Result<T, E>>,
@@ -287,6 +284,7 @@ mod tests {
 
     #[test]
     fn test_retry_is_send_even_return_type_not_sync() {
+        #[allow(dead_code)]
         struct BangSync(Option<RefCell<()>>);
         let fut = retry(|| futures::future::ok::<_, TriviallyRetry>(BangSync(None)));
         assert_send(fut)

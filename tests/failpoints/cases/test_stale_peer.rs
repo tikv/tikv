@@ -3,7 +3,7 @@
 use std::{
     fs,
     path::Path,
-    sync::{atomic::AtomicBool, mpsc, Arc},
+    sync::{Arc, atomic::AtomicBool, mpsc},
     thread,
     time::Duration,
 };
@@ -15,7 +15,7 @@ use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
-use tikv_util::{config::ReadableDuration, time::Instant, HandyRwLock};
+use tikv_util::{HandyRwLock, config::ReadableDuration, time::Instant};
 
 #[test]
 fn test_one_node_leader_missing() {

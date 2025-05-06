@@ -2,7 +2,7 @@
 
 use std::{error::Error, net::SocketAddr, sync::Arc};
 
-use hyper::{body, Client, StatusCode, Uri};
+use hyper::{Client, StatusCode, Uri, body};
 use raftstore::store::region_meta::RegionMeta;
 use security::SecurityConfig;
 use service::service_manager::GrpcServiceManager;

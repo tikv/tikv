@@ -5,19 +5,18 @@ use std::{
     collections::HashMap,
     io::Read,
     ops::{Deref, DerefMut},
-    u64,
 };
 
 use api_version::{ApiV2, KeyMode, KvFormat};
-use engine_traits::{raw_ttl::ttl_current_ts, MvccProperties, Range, RangeStats};
+use engine_traits::{MvccProperties, Range, RangeStats, raw_ttl::ttl_current_ts};
 use rocksdb::{
     DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex,
     UserCollectedProperties,
 };
 use tikv_util::{
     codec::{
-        number::{self, NumberEncoder},
         Error, Result,
+        number::{self, NumberEncoder},
     },
     info,
 };
@@ -574,7 +573,7 @@ pub fn get_range_stats(
 #[cfg(test)]
 mod tests {
     use api_version::RawValue;
-    use engine_traits::{MiscExt, SyncMutable, CF_WRITE, LARGE_CFS};
+    use engine_traits::{CF_WRITE, LARGE_CFS, MiscExt, SyncMutable};
     use rand::Rng;
     use tempfile::Builder;
     use test::Bencher;
@@ -582,8 +581,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        raw::{DBEntryType, TablePropertiesCollector},
         RocksCfOptions, RocksDbOptions,
+        raw::{DBEntryType, TablePropertiesCollector},
     };
 
     #[allow(clippy::many_single_char_names)]

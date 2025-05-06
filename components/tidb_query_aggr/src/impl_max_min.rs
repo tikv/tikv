@@ -5,9 +5,10 @@ use std::{cmp::Ordering, convert::TryFrom};
 use tidb_query_codegen::AggrFunction;
 use tidb_query_common::Result;
 use tidb_query_datatype::{
+    Collation, EvalType, FieldTypeAccessor, FieldTypeFlag,
     codec::{collation::Collator, data_type::*},
     expr::EvalContext,
-    match_template_collator, Collation, EvalType, FieldTypeAccessor, FieldTypeFlag,
+    match_template_collator,
 };
 use tidb_query_expr::RpnExpression;
 use tipb::{Expr, ExprType, FieldType};
@@ -259,10 +260,12 @@ where
         _ctx: &mut EvalContext,
         value: Option<EnumRef<'_>>,
     ) -> Result<()> {
-        let extreme_ref = self
-            .extremum
-            .as_ref()
-            .map(|x| EnumRef::from_owned_value(unsafe { std::mem::transmute(x) }));
+        let extreme_ref = self.extremum.as_ref().map(|x| {
+            EnumRef::from_owned_value(unsafe {
+                #[allow(clippy::missing_transmute_annotations)]
+                std::mem::transmute(x)
+            })
+        });
 
         if value.is_some()
             && (self.extremum.is_none()
@@ -344,10 +347,12 @@ where
     /// ref: https://dev.mysql.com/doc/refman/5.7/en/aggregate-functions.html#function_max
     #[inline]
     fn update_concrete(&mut self, _ctx: &mut EvalContext, value: Option<SetRef<'_>>) -> Result<()> {
-        let extreme_ref = self
-            .extremum
-            .as_ref()
-            .map(|x| SetRef::from_owned_value(unsafe { std::mem::transmute(x) }));
+        let extreme_ref = self.extremum.as_ref().map(|x| {
+            SetRef::from_owned_value(unsafe {
+                #[allow(clippy::missing_transmute_annotations)]
+                std::mem::transmute(x)
+            })
+        });
 
         if value.is_some()
             && (self.extremum.is_none()
@@ -434,10 +439,12 @@ where
     where
         TT: EvaluableRef<'a, EvaluableType = T::EvaluableType> + Ord,
     {
-        let extreme_ref = self
-            .extremum_value
-            .as_ref()
-            .map(|x| TT::from_owned_value(unsafe { std::mem::transmute(x) }));
+        let extreme_ref = self.extremum_value.as_ref().map(|x| {
+            TT::from_owned_value(unsafe {
+                #[allow(clippy::missing_transmute_annotations)]
+                std::mem::transmute(x)
+            })
+        });
         if value.is_some() && (self.extremum_value.is_none() || extreme_ref.cmp(&value) == E::ORD) {
             self.extremum_value = value.map(|x| x.into_owned_value());
         }
@@ -553,14 +560,14 @@ mod tests {
     use std::sync::Arc;
 
     use tidb_query_datatype::{
-        codec::batch::{LazyBatchColumn, LazyBatchColumnVec},
         EvalType, FieldTypeAccessor, FieldTypeTp,
+        codec::batch::{LazyBatchColumn, LazyBatchColumnVec},
     };
     use tikv_util::buffer_vec::BufferVec;
     use tipb_helper::ExprDefBuilder;
 
     use super::*;
-    use crate::{parser::AggrDefinitionParser, AggrFunction};
+    use crate::{AggrFunction, parser::AggrDefinitionParser};
 
     #[test]
     fn test_max() {

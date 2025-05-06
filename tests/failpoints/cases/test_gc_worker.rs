@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{atomic::AtomicU64, Arc},
+    sync::{Arc, atomic::AtomicU64},
     thread,
     time::Duration,
 };
@@ -17,7 +17,7 @@ use test_raftstore::*;
 use test_raftstore_macro::test_case;
 use tikv::{
     server::gc_worker::{
-        sync_gc, AutoGcConfig, GcSafePointProvider, GcTask, Result as GcWorkerResult, TestGcRunner,
+        AutoGcConfig, GcSafePointProvider, GcTask, Result as GcWorkerResult, TestGcRunner, sync_gc,
     },
     storage::{
         kv::TestEngineBuilder,

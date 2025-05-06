@@ -1,14 +1,14 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{mpsc, Mutex},
+    sync::{Mutex, mpsc},
     time::Duration,
 };
 
 use collections::HashMap;
 use engine_rocks::{raw::Range, util::get_cf_handle};
-use engine_traits::{CachedTablet, MiscExt, CF_WRITE};
-use keys::{data_key, DATA_MAX_KEY};
+use engine_traits::{CF_WRITE, CachedTablet, MiscExt};
+use keys::{DATA_MAX_KEY, data_key};
 use test_raftstore::*;
 use tikv::storage::mvcc::{TimeStamp, Write, WriteType};
 use tikv_util::config::*;

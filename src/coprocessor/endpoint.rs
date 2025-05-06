@@ -6,9 +6,9 @@ use std::{
 };
 
 use ::tracker::{
-    set_tls_tracker_token, track, with_tls_tracker, RequestInfo, RequestType, GLOBAL_TRACKERS,
+    GLOBAL_TRACKERS, RequestInfo, RequestType, set_tls_tracker_token, track, with_tls_tracker,
 };
-use api_version::{dispatch_api_version, KvFormat};
+use api_version::{KvFormat, dispatch_api_version};
 use async_stream::try_stream;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::PerfLevel;
@@ -44,10 +44,10 @@ use crate::{
     read_pool::ReadPoolHandle,
     server::Config,
     storage::{
-        self,
-        kv::{self, with_tls_engine, SnapContext},
+        self, Engine, Snapshot, SnapshotStore,
+        kv::{self, SnapContext, with_tls_engine},
         mvcc::Error as MvccError,
-        need_check_locks, need_check_locks_in_replica_read, Engine, Snapshot, SnapshotStore,
+        need_check_locks, need_check_locks_in_replica_read,
     },
     tikv_util::time::InstantExt,
 };
@@ -996,7 +996,7 @@ mod tests {
         config::CoprReadPoolConfig,
         coprocessor::readpool_impl::build_read_pool_for_test,
         read_pool::ReadPool,
-        storage::{kv::RocksEngine, TestEngineBuilder},
+        storage::{TestEngineBuilder, kv::RocksEngine},
     };
 
     /// A unary `RequestHandler` that always produces a fixture.

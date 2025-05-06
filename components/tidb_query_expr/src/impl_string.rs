@@ -3,6 +3,7 @@
 use std::{cmp::Ordering, iter, str};
 
 use bstr::ByteSlice;
+use memchr::memmem;
 use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
 use tidb_query_datatype::{
@@ -109,7 +110,7 @@ pub fn unhex(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
 
 #[inline]
 fn find_str(text: &str, pattern: &str) -> Option<usize> {
-    twoway::find_str(text, pattern).map(|i| text[..i].chars().count())
+    memmem::find(text.as_bytes(), pattern.as_bytes()).map(|i| text[..i].chars().count())
 }
 
 #[rpn_fn]
@@ -294,7 +295,7 @@ pub fn lpad_utf8(
         Some(0) => Ok(writer.write_ref(Some(b""))),
         Some(target_len) if target_len < input_len => {
             let utf8_byte_end = get_utf8_byte_index(input, target_len);
-            Ok(writer.write_ref(Some(input[..utf8_byte_end].as_bytes())))
+            Ok(writer.write_ref(Some(&input.as_bytes()[..utf8_byte_end])))
         }
         Some(target_len) => {
             let mut writer = writer.begin();
@@ -307,7 +308,7 @@ pub fn lpad_utf8(
             // Write last incomplete pad (might be none)
             let last_pad_len = (target_len - input_len) % pad_len;
             let utf8_byte_end = get_utf8_byte_index(pad, last_pad_len);
-            writer.partial_write(pad[..utf8_byte_end].as_bytes());
+            writer.partial_write(&pad.as_bytes()[..utf8_byte_end]);
 
             writer.partial_write(input.as_bytes());
             Ok(writer.finish())
@@ -360,7 +361,7 @@ pub fn rpad_utf8(
         Some(0) => Ok(writer.write_ref(Some(b""))),
         Some(target_len) if target_len < input_len => {
             let utf8_byte_end = get_utf8_byte_index(input, target_len);
-            Ok(writer.write_ref(Some(input[..utf8_byte_end].as_bytes())))
+            Ok(writer.write_ref(Some(&input.as_bytes()[..utf8_byte_end])))
         }
         Some(target_len) => {
             let mut writer = writer.begin();
@@ -375,7 +376,7 @@ pub fn rpad_utf8(
             // Write last incomplete pad (might be none)
             let last_pad_len = (target_len - input_len) % pad_len;
             let utf8_byte_end = get_utf8_byte_index(pad, last_pad_len);
-            writer.partial_write(pad[..utf8_byte_end].as_bytes());
+            writer.partial_write(&pad.as_bytes()[..utf8_byte_end]);
             Ok(writer.finish())
         }
     }
@@ -423,7 +424,7 @@ pub fn replace(
     }
     let mut last = 0;
     let mut writer = writer.begin();
-    while let Some(mut start) = twoway::find_bytes(&s[last..], from_str) {
+    while let Some(mut start) = memmem::find(&s[last..], from_str) {
         start += last;
         writer.partial_write(&s[last..start]);
         writer.partial_write(to_str);
@@ -457,7 +458,7 @@ pub fn left_utf8(lhs: BytesRef, rhs: &Int, writer: BytesWriter) -> Result<BytesG
     let len = s.chars().count();
     let result = if len > rhs {
         let idx = get_utf8_byte_index(s, rhs);
-        s[..idx].as_bytes()
+        &s.as_bytes()[..idx]
     } else {
         s.as_bytes()
     };
@@ -530,9 +531,9 @@ pub fn insert_utf8(
         ulen = slen - upos + 1;
     }
     let mut pw = writer.begin();
-    pw.partial_write(s[0..upos - 1].as_bytes());
+    pw.partial_write(&s.as_bytes()[0..upos - 1]);
     pw.partial_write(newstr.as_bytes());
-    pw.partial_write(s[upos + ulen - 1..].as_bytes());
+    pw.partial_write(&s.as_bytes()[upos + ulen - 1..]);
     Ok(pw.finish())
 }
 
@@ -549,7 +550,7 @@ pub fn right_utf8(lhs: BytesRef, rhs: &Int, writer: BytesWriter) -> Result<Bytes
     let len = s.chars().count();
     let result = if len > rhs {
         let idx = get_utf8_byte_index(s, len - rhs);
-        s[idx..].as_bytes()
+        &s.as_bytes()[idx..]
     } else {
         s.as_bytes()
     };
@@ -595,9 +596,7 @@ pub fn hex_str_arg(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
 #[rpn_fn]
 #[inline]
 pub fn locate_2_args(substr: BytesRef, s: BytesRef) -> Result<Option<i64>> {
-    Ok(twoway::find_bytes(s, substr)
-        .map(|i| 1 + i as i64)
-        .or(Some(0)))
+    Ok(memmem::find(s, substr).map(|i| 1 + i as i64).or(Some(0)))
 }
 
 #[rpn_fn(writer)]
@@ -614,7 +613,7 @@ pub fn locate_3_args(substr: BytesRef, s: BytesRef, pos: &Int) -> Result<Option<
     if *pos < 1 || *pos as usize > s.len() + 1 {
         return Ok(Some(0));
     }
-    Ok(twoway::find_bytes(&s[*pos as usize - 1..], substr)
+    Ok(memmem::find(&s[*pos as usize - 1..], substr)
         .map(|i| pos + i as i64)
         .or(Some(0)))
 }
@@ -744,9 +743,9 @@ pub fn substring_index(
         return Ok(writer.write_ref(Some(b"")));
     }
     let finder = if count > 0 {
-        twoway::find_bytes
+        memmem::find
     } else {
-        twoway::rfind_bytes
+        memmem::rfind
     };
     let mut remaining = s;
     let mut remaining_pattern_count = count.abs();
@@ -791,9 +790,7 @@ pub fn strcmp<C: Collator>(left: BytesRef, right: BytesRef) -> Result<Option<i64
 #[rpn_fn]
 #[inline]
 pub fn instr(s: BytesRef, substr: BytesRef) -> Result<Option<Int>> {
-    Ok(twoway::find_bytes(s, substr)
-        .map(|i| 1 + i as i64)
-        .or(Some(0)))
+    Ok(memmem::find(s, substr).map(|i| 1 + i as i64).or(Some(0)))
 }
 
 #[rpn_fn]
@@ -801,10 +798,13 @@ pub fn instr(s: BytesRef, substr: BytesRef) -> Result<Option<Int>> {
 pub fn instr_utf8(s: BytesRef, substr: BytesRef) -> Result<Option<Int>> {
     let s = String::from_utf8_lossy(s);
     let substr = String::from_utf8_lossy(substr);
-    let index = twoway::find_str(&s.to_lowercase(), &substr.to_lowercase())
-        .map(|i| s[..i].chars().count())
-        .map(|i| 1 + i as i64)
-        .or(Some(0));
+    let index = memmem::find(
+        s.to_lowercase().as_bytes(),
+        substr.to_lowercase().as_bytes(),
+    )
+    .map(|i| s[..i].chars().count())
+    .map(|i| 1 + i as i64)
+    .or(Some(0));
     Ok(index)
 }
 
@@ -963,11 +963,11 @@ fn line_wrap(buf: &mut [u8], input_len: usize) {
     let line_with_ending_len = line_len + 1;
     let mut old_start = input_len - last_line_len;
     let mut new_start = buf.len() - last_line_len;
-    safemem::copy_over(buf, old_start, new_start, last_line_len);
+    buf.copy_within(old_start..old_start + last_line_len, new_start);
     for _ in 0..lines_with_ending {
         old_start -= line_len;
         new_start -= line_with_ending_len;
-        safemem::copy_over(buf, old_start, new_start, line_len);
+        buf.copy_within(old_start..old_start + line_len, new_start);
         buf[new_start + line_len] = BASE64_LINE_WRAP;
     }
 }
@@ -1128,7 +1128,7 @@ fn substring(input: BytesRef, pos: Int, len: Int, writer: BytesWriter) -> Result
 
 #[cfg(test)]
 mod tests {
-    use std::{f64, i64};
+    use std::f64;
 
     use tidb_query_datatype::{
         builder::FieldTypeBuilder,
@@ -1159,11 +1159,11 @@ mod tests {
             (Some(1024), Some(b"10000000000".to_vec())),
             (None, None),
             (
-                Some(Int::max_value()),
+                Some(Int::MAX),
                 Some(b"111111111111111111111111111111111111111111111111111111111111111".to_vec()),
             ),
             (
-                Some(Int::min_value()),
+                Some(Int::MIN),
                 Some(b"1000000000000000000000000000000000000000000000000000000000000000".to_vec()),
             ),
             (
@@ -2486,7 +2486,7 @@ mod tests {
             ),
             (
                 Some("数据库".as_bytes().to_vec()),
-                Some(i64::max_value()),
+                Some(i64::MAX),
                 Some("数据库".as_bytes().to_vec()),
             ),
             (None, Some(-1), None),
@@ -2531,7 +2531,7 @@ mod tests {
             ),
             (
                 Some("数据库".as_bytes().to_vec()),
-                Some(i64::max_value()),
+                Some(i64::MAX),
                 Some("数据库".as_bytes().to_vec()),
             ),
             (None, Some(-1), None),
@@ -2576,7 +2576,7 @@ mod tests {
             ),
             (
                 Some("数据库".as_bytes().to_vec()),
-                Some(i64::max_value()),
+                Some(i64::MAX),
                 Some("数据库".as_bytes().to_vec()),
             ),
             (None, Some(-1), None),
@@ -2821,7 +2821,7 @@ mod tests {
             ),
             (
                 Some("数据库".as_bytes().to_vec()),
-                Some(i64::max_value()),
+                Some(i64::MAX),
                 Some("数据库".as_bytes().to_vec()),
             ),
             (None, Some(-1), None),
@@ -3366,7 +3366,7 @@ mod tests {
             (Some(0), Some(b"".to_vec())),
             (Some(3), Some(b"   ".to_vec())),
             (Some(-1), Some(b"".to_vec())),
-            (Some(i64::max_value()), None),
+            (Some(i64::MAX), None),
             (
                 Some(i64::from(tidb_query_datatype::MAX_BLOB_WIDTH) + 1),
                 None,
@@ -4453,10 +4453,10 @@ mod tests {
         }
 
         let unsigned_cases = vec![
-            (u64::max_value(), 10, 1, false, None),
-            (u64::max_value(), 10, 4, false, None),
-            (u64::max_value(), 10, 1, true, None),
-            (u64::max_value(), 10, 4, true, None),
+            (u64::MAX, 10, 1, false, None),
+            (u64::MAX, 10, 4, false, None),
+            (u64::MAX, 10, 1, true, None),
+            (u64::MAX, 10, 4, true, None),
             (12u64, 10, 4, false, Some(12)),
         ];
         for case in unsigned_cases {
@@ -4521,12 +4521,12 @@ mod tests {
             ),
             (
                 Some("Sakila".as_bytes().to_vec()),
-                Some(i64::max_value()),
+                Some(i64::MAX),
                 Some("".as_bytes().to_vec()),
             ),
             (
                 Some("Sakila".as_bytes().to_vec()),
-                Some(i64::min_value()),
+                Some(i64::MIN),
                 Some("".as_bytes().to_vec()),
             ),
             (
@@ -4712,12 +4712,12 @@ mod tests {
             ),
             (
                 Some("Sakila".as_bytes().to_vec()),
-                Some(i64::max_value()),
+                Some(i64::MAX),
                 Some("".as_bytes().to_vec()),
             ),
             (
                 Some("Sakila".as_bytes().to_vec()),
-                Some(i64::min_value()),
+                Some(i64::MIN),
                 Some("".as_bytes().to_vec()),
             ),
             (
@@ -4808,24 +4808,24 @@ mod tests {
             (
                 Some("中文a测a试".as_bytes().to_vec()),
                 Some(100),
-                Some(i64::min_value()),
+                Some(i64::MIN),
                 Some("".as_bytes().to_vec()),
             ),
             (
                 Some("中文a测a试".as_bytes().to_vec()),
                 Some(100),
-                Some(i64::max_value()),
+                Some(i64::MAX),
                 Some("".as_bytes().to_vec()),
             ),
             (
                 Some("中文a测a试".as_bytes().to_vec()),
-                Some(i64::min_value()),
+                Some(i64::MIN),
                 Some(1),
                 Some("".as_bytes().to_vec()),
             ),
             (
                 Some("中文a测a试".as_bytes().to_vec()),
-                Some(i64::max_value()),
+                Some(i64::MAX),
                 Some(1),
                 Some("".as_bytes().to_vec()),
             ),

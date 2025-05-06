@@ -9,7 +9,7 @@ use engine_test::{
     ctor::{CfOptions, DbOptions, KvEngineConstructorExt},
     kv::KvTestEngine,
 };
-use engine_traits::{KvEngine, Peekable, SyncMutable, ALL_CFS, CF_DEFAULT};
+use engine_traits::{ALL_CFS, CF_DEFAULT, KvEngine, Peekable, SyncMutable};
 
 use super::tempdir;
 

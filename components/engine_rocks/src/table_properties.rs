@@ -2,7 +2,7 @@
 
 use engine_traits::{Range, Result};
 
-use crate::{r2e, util, RangeProperties, RocksEngine};
+use crate::{RangeProperties, RocksEngine, r2e, util};
 
 #[repr(transparent)]
 pub struct UserCollectedProperties(rocksdb::UserCollectedProperties);
@@ -27,7 +27,10 @@ impl engine_traits::TablePropertiesCollection for TablePropertiesCollection {
         F: FnMut(&Self::UserCollectedProperties) -> bool,
     {
         for (_, props) in self.0.into_iter() {
-            let props = unsafe { std::mem::transmute(props.user_collected_properties()) };
+            let props = unsafe {
+                #[allow(clippy::missing_transmute_annotations)]
+                std::mem::transmute(props.user_collected_properties())
+            };
             if !f(props) {
                 break;
             }

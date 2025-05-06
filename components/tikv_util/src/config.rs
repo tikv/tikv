@@ -9,21 +9,21 @@ use std::{
     path::{Path, PathBuf},
     str::{self, FromStr},
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc, RwLock, RwLockReadGuard,
+        atomic::{AtomicU64, Ordering},
     },
     time::Duration,
 };
 
 use chrono::{
-    format::{self, Fixed, Item, Parsed},
     DateTime, FixedOffset, Local, NaiveTime, TimeZone, Timelike,
+    format::{self, Fixed, Item, Parsed},
 };
 pub use heck::KebabCase;
 use online_config::ConfigValue;
 use serde::{
-    de::{self, Unexpected, Visitor},
     Deserialize, Deserializer, Serialize, Serializer,
+    de::{self, Unexpected, Visitor},
 };
 use serde_json::Value;
 use thiserror::Error;
@@ -974,7 +974,7 @@ mod check_data_dir {
 
     use lazy_static::lazy_static;
 
-    use super::{canonicalize_path, ConfigError};
+    use super::{ConfigError, canonicalize_path};
 
     #[derive(Debug, Default)]
     struct FsInfo {
@@ -1497,7 +1497,7 @@ impl TomlWriter {
     fn write_current_table(&mut self, change: &mut HashMap<String, String>) {
         let keys: Vec<_> = change
             .keys()
-            .filter_map(|k| k.split('.').last())
+            .filter_map(|k| k.split('.').next_back())
             .map(str::to_owned)
             .collect();
         for k in keys {
@@ -1814,7 +1814,7 @@ impl RaftDataStateMachine {
         fs::read_dir(path).unwrap().any(|entry| {
             if let Ok(e) = entry {
                 let p = e.path();
-                p.is_file() && p.extension().map_or(false, |ext| ext == "raftlog")
+                p.is_file() && p.extension().is_some_and(|ext| ext == "raftlog")
             } else {
                 false
             }
@@ -2250,7 +2250,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn test_check_kernel() {
-        use super::check_kernel::{check_kernel_params, Checker};
+        use super::check_kernel::{Checker, check_kernel_params};
 
         // The range of vm.swappiness is from 0 to 100.
         let table: Vec<(&str, i64, Box<Checker>, bool)> = vec![

@@ -1,11 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::{btree_map, BTreeMap},
+    collections::{BTreeMap, btree_map},
     sync::Arc,
 };
 
-use super::{range::*, Result};
+use super::{Result, range::*};
 
 type ErrorBuilder = Box<dyn Send + Sync + Fn() -> crate::error::StorageError>;
 
@@ -61,8 +61,12 @@ impl super::Storage for FixtureStorage {
         let data_view = self
             .data
             .range(range.lower_inclusive..range.upper_exclusive);
+
         // Erase the lifetime to be 'static.
-        self.data_view_unsafe = unsafe { Some(std::mem::transmute(data_view)) };
+        self.data_view_unsafe = unsafe {
+            #[allow(clippy::missing_transmute_annotations)]
+            Some(std::mem::transmute(data_view))
+        };
         self.is_backward_scan = is_backward_scan;
         self.is_key_only = is_key_only;
         Ok(())

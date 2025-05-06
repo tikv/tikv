@@ -3,9 +3,9 @@
 // #[PerformanceCriticalPath]
 use std::{
     sync::{
+        Arc, RwLock,
         atomic::{AtomicU32, Ordering},
         mpsc::{self, Receiver, RecvTimeoutError, SyncSender},
-        Arc, RwLock,
     },
     thread::{Builder, JoinHandle},
     time::Duration,
@@ -13,7 +13,7 @@ use std::{
 
 use collections::{HashMap, HashMapEntry};
 use engine_rocks::FlowInfo;
-use engine_traits::{CfNamesExt, FlowControlFactorsExt, TabletRegistry, DATA_CFS};
+use engine_traits::{CfNamesExt, DATA_CFS, FlowControlFactorsExt, TabletRegistry};
 use online_config::{ConfigChange, OnlineConfig};
 use rand::Rng;
 use tikv_util::{config::VersionTrack, sys::thread::StdThreadBuildWrapper, time::Limiter};
@@ -446,7 +446,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        super::{singleton_flow_controller::tests::*, FlowController},
+        super::{FlowController, singleton_flow_controller::tests::*},
         *,
     };
 

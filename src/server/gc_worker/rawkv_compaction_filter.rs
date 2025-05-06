@@ -3,18 +3,18 @@
 use std::{
     ffi::CString,
     mem,
-    sync::{atomic::Ordering, Arc},
+    sync::{Arc, atomic::Ordering},
 };
 
 use api_version::{ApiV2, KeyMode, KvFormat};
 use engine_rocks::{
+    RocksEngine,
     raw::{
         CompactionFilter, CompactionFilterContext, CompactionFilterDecision,
         CompactionFilterFactory, CompactionFilterValueType,
     },
-    RocksEngine,
 };
-use engine_traits::{raw_ttl::ttl_current_ts, MiscExt};
+use engine_traits::{MiscExt, raw_ttl::ttl_current_ts};
 use prometheus::local::LocalHistogramVec;
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::worker::{ScheduleError, Scheduler};
@@ -22,13 +22,13 @@ use txn_types::Key;
 
 use crate::{
     server::gc_worker::{
-        compaction_filter::{
-            check_need_gc, CompactionFilterStats, DEFAULT_DELETE_BATCH_COUNT,
-            GC_COMPACTION_FAILURE, GC_COMPACTION_FILTERED, GC_COMPACTION_FILTER_MVCC_DELETION_MET,
-            GC_COMPACTION_FILTER_ORPHAN_VERSIONS, GC_COMPACTION_FILTER_PERFORM,
-            GC_COMPACTION_FILTER_SKIP, GC_CONTEXT,
-        },
         GcTask, STAT_RAW_KEYMODE,
+        compaction_filter::{
+            CompactionFilterStats, DEFAULT_DELETE_BATCH_COUNT, GC_COMPACTION_FAILURE,
+            GC_COMPACTION_FILTER_MVCC_DELETION_MET, GC_COMPACTION_FILTER_ORPHAN_VERSIONS,
+            GC_COMPACTION_FILTER_PERFORM, GC_COMPACTION_FILTER_SKIP, GC_COMPACTION_FILTERED,
+            GC_CONTEXT, check_need_gc,
+        },
     },
     storage::mvcc::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM},
 };
@@ -74,7 +74,7 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
         if gc_context
             .db
             .as_ref()
-            .map_or(false, RocksEngine::is_stalled_or_stopped)
+            .is_some_and(RocksEngine::is_stalled_or_stopped)
         {
             debug!("skip gc in compaction filter because the DB is stalled");
             return None;
@@ -357,7 +357,7 @@ pub mod tests {
     use std::time::Duration;
 
     use api_version::RawValue;
-    use engine_traits::{DeleteStrategy, Peekable, Range, WriteOptions, CF_DEFAULT};
+    use engine_traits::{CF_DEFAULT, DeleteStrategy, Peekable, Range, WriteOptions};
     use kvproto::kvrpcpb::{ApiVersion, Context};
     use tikv_kv::{Engine, Modify, WriteData};
     use txn_types::TimeStamp;

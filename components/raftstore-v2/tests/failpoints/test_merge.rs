@@ -1,7 +1,7 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{mpsc, Mutex},
+    sync::{Mutex, mpsc},
     time::Duration,
 };
 
@@ -10,10 +10,10 @@ use raftstore_v2::router::{PeerMsg, PeerTick};
 use tikv_util::{config::ReadableDuration, info, store::new_peer};
 
 use crate::cluster::{
+    Cluster,
     life_helper::assert_peer_not_exist,
     merge_helper::merge_region,
     split_helper::{put, split_region},
-    Cluster,
 };
 
 #[test]

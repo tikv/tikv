@@ -5,7 +5,6 @@ use std::{
     },
     sync::{Arc, Mutex},
 };
-
 /// A structure used to manage range-based latch with mutual exclusion.
 ///
 /// Currently used to ensure mutual exclusion between compaction filter and
@@ -104,6 +103,7 @@ impl RangeLatch {
                 // Safety: `_mutex_guard` is declared before `handle` in `KeyHandleGuard`.
                 // So the mutex guard will be released earlier than the `Arc<KeyHandle>`.
                 // Then we can make sure the mutex guard doesn't point to released memory.
+                #[allow(clippy::missing_transmute_annotations)]
                 let mutex_guard = unsafe { std::mem::transmute(mutex_guard) };
 
                 return RangeLatchGuard {
@@ -148,8 +148,8 @@ mod tests {
     use std::{
         collections::HashSet,
         sync::{
-            atomic::{AtomicBool, Ordering},
             Arc,
+            atomic::{AtomicBool, Ordering},
         },
         thread,
         time::Duration,

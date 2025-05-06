@@ -9,12 +9,12 @@ use kvproto::{metapb::Region, pdpb::CheckPolicy};
 use tikv_util::box_try;
 
 pub use self::{
-    half::{get_region_approximate_middle, HalfCheckObserver},
-    keys::{get_region_approximate_keys, KeysCheckObserver},
-    size::{get_region_approximate_size, SizeCheckObserver},
+    half::{HalfCheckObserver, get_region_approximate_middle},
+    keys::{KeysCheckObserver, get_region_approximate_keys},
+    size::{SizeCheckObserver, get_region_approximate_size},
     table::TableCheckObserver,
 };
-use super::{config::Config, error::Result, Bucket, KeyEntry, ObserverContext, SplitChecker};
+use super::{Bucket, KeyEntry, ObserverContext, SplitChecker, config::Config, error::Result};
 
 pub struct Host<'a, E> {
     checkers: Vec<Box<dyn SplitChecker<E>>>,

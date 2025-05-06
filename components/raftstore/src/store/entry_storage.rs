@@ -15,7 +15,7 @@ use std::{
 };
 
 use collections::HashMap;
-use engine_traits::{KvEngine, RaftEngine, RAFT_LOG_MULTI_GET_CNT};
+use engine_traits::{KvEngine, RAFT_LOG_MULTI_GET_CNT, RaftEngine};
 use fail::fail_point;
 use kvproto::{
     metapb,
@@ -23,15 +23,15 @@ use kvproto::{
 };
 use prometheus::local::LocalHistogram;
 use protobuf::Message;
-use raft::{prelude::*, util::limit_size, GetEntriesContext, StorageError};
+use raft::{GetEntriesContext, StorageError, prelude::*, util::limit_size};
 use tikv_alloc::TraceEvent;
 use tikv_util::{box_err, debug, error, info, time::Instant, warn, worker::Scheduler};
 
 use super::{
-    local_metrics::RaftMetrics, metrics::*, peer_storage::storage_error, WriteTask,
-    MEMTRACE_ENTRY_CACHE, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
+    MEMTRACE_ENTRY_CACHE, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM, WriteTask,
+    local_metrics::RaftMetrics, metrics::*, peer_storage::storage_error,
 };
-use crate::{bytes_capacity, store::ReadTask, Result};
+use crate::{Result, bytes_capacity, store::ReadTask};
 
 const MAX_ASYNC_FETCH_TRY_CNT: usize = 3;
 const SHRINK_CACHE_CAPACITY: usize = 64;
@@ -482,7 +482,7 @@ fn validate_states<ER: RaftEngine>(
     // If so, forward the commit index.
     if commit_index < recorded_commit_index {
         let entry = raft_engine.get_entry(region_id, recorded_commit_index)?;
-        if entry.map_or(true, |e| e.get_term() != apply_state.get_commit_term()) {
+        if entry.is_none_or(|e| e.get_term() != apply_state.get_commit_term()) {
             return Err(box_err!(
                 "log at recorded commit index [{}] {} doesn't exist, may lose data, {}",
                 apply_state.get_commit_term(),
@@ -1298,7 +1298,7 @@ pub mod tests {
     use protobuf::Message;
     use raft::{GetEntriesContext, StorageError};
     use tempfile::Builder;
-    use tikv_util::worker::{dummy_scheduler, LazyWorker, Worker};
+    use tikv_util::worker::{LazyWorker, Worker, dummy_scheduler};
 
     use super::*;
     use crate::store::peer_storage::tests::{append_ents, new_entry, new_storage_from_ents};
@@ -1444,7 +1444,7 @@ pub mod tests {
 
         let mut store = new_storage_from_ents(region_scheduler, dummy_scheduler, &td, &ents);
 
-        let max_u64 = u64::max_value();
+        let max_u64 = u64::MAX;
         let mut tests = vec![
             // already compacted
             (
@@ -1708,7 +1708,7 @@ pub mod tests {
             append_ents(&mut store, &entries);
             let li = store.last_index().unwrap();
             let actual_entries = store
-                .entries(4, li + 1, u64::max_value(), GetEntriesContext::empty(false))
+                .entries(4, li + 1, u64::MAX, GetEntriesContext::empty(false))
                 .unwrap();
             if actual_entries != wentries {
                 panic!("#{}: want {:?}, got {:?}", i, wentries, actual_entries);
@@ -1727,7 +1727,7 @@ pub mod tests {
         store.cache.cache.clear();
         // empty cache should fetch data from rocksdb directly.
         let mut res = store
-            .entries(4, 6, u64::max_value(), GetEntriesContext::empty(false))
+            .entries(4, 6, u64::MAX, GetEntriesContext::empty(false))
             .unwrap();
         assert_eq!(*res, ents[1..]);
 
@@ -1737,7 +1737,7 @@ pub mod tests {
 
         // direct cache access
         res = store
-            .entries(6, 8, u64::max_value(), GetEntriesContext::empty(false))
+            .entries(6, 8, u64::MAX, GetEntriesContext::empty(false))
             .unwrap();
         assert_eq!(res, entries);
 
@@ -1765,7 +1765,7 @@ pub mod tests {
         for low in 4..9 {
             for high in low..9 {
                 let res = store
-                    .entries(low, high, u64::max_value(), GetEntriesContext::empty(false))
+                    .entries(low, high, u64::MAX, GetEntriesContext::empty(false))
                     .unwrap();
                 assert_eq!(*res, exp_res[low as usize - 4..high as usize - 4]);
             }

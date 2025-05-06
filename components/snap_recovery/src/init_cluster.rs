@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp, error::Error as StdError, i32, result, sync::Arc, thread, time::Duration};
+use std::{cmp, error::Error as StdError, result, sync::Arc, thread, time::Duration};
 
 use encryption_export::data_key_manager_from_config;
 use engine_rocks::util::new_engine_opt;
@@ -12,7 +12,7 @@ use raftstore::store::initial_region;
 use thiserror::Error;
 use tikv::{
     config::TikvConfig,
-    server::{config::Config as ServerConfig, KvEngineFactoryBuilder},
+    server::{KvEngineFactoryBuilder, config::Config as ServerConfig},
 };
 use tikv_util::{
     config::{ReadableDuration, ReadableSize, VersionTrack},
@@ -53,7 +53,7 @@ const MAX_SPLIT_KEY: u64 = 1 << 31;
 /// 2. peer valid during a recovery time even without leader in its region
 /// 3. PD can not put any peer into tombstone
 /// 4. must ensure all region data with ts less than backup ts (below commit
-/// index) are safe
+///    index) are safe
 pub fn enter_snap_recovery_mode(config: &mut TikvConfig) {
     // TOOD: if we do not have to restart TiKV, then, we need exit the recovery mode
     // and bring the following parameter back.

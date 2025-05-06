@@ -4,15 +4,15 @@ use std::{
     borrow::Cow,
     cell::RefCell,
     fmt,
-    sync::{atomic::*, mpsc, Arc, Mutex, RwLock},
+    sync::{Arc, Mutex, RwLock, atomic::*, mpsc},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use async_channel::SendError;
 use causal_ts::{CausalTsProvider, CausalTsProviderImpl};
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{name_to_cf, raw_ttl::ttl_current_ts, CfName, KvEngine, SstCompressionType};
-use external_storage::{create_storage, BackendConfig, ExternalStorage, HdfsConfig};
+use engine_traits::{CfName, KvEngine, SstCompressionType, name_to_cf, raw_ttl::ttl_current_ts};
+use external_storage::{BackendConfig, ExternalStorage, HdfsConfig, create_storage};
 use futures::{channel::mpsc::*, executor::block_on};
 use kvproto::{
     brpb::*,
@@ -23,15 +23,15 @@ use kvproto::{
 use online_config::OnlineConfig;
 use raft::StateRole;
 use raftstore::coprocessor::RegionInfoProvider;
-use resource_control::{with_resource_limiter, ResourceGroupManager, ResourceLimiter};
+use resource_control::{ResourceGroupManager, ResourceLimiter, with_resource_limiter};
 use tikv::{
     config::BackupConfig,
     storage::{
+        Snapshot, Statistics,
         kv::{CursorBuilder, Engine, LocalTablets, ScanMode, SnapContext},
         mvcc::Error as MvccError,
         raw::raw_mvcc::RawMvccSnapshot,
         txn::{EntryBatch, Error as TxnError, SnapshotStore, TxnEntryScanner, TxnEntryStore},
-        Snapshot, Statistics,
     },
 };
 use tikv_util::{
@@ -48,11 +48,12 @@ use tokio::runtime::{Handle, Runtime};
 use txn_types::{Key, Lock, TimeStamp, TsSet};
 
 use crate::{
+    Error,
     metrics::*,
     softlimit::{CpuStatistics, SoftLimit, SoftLimitByCpu},
     utils::KeyValueCodec,
     writer::{BackupWriterBuilder, CfNameWrap},
-    Error, *,
+    *,
 };
 
 const BACKUP_BATCH_LIMIT: usize = 1024;
@@ -1339,7 +1340,7 @@ pub mod tests {
         time::Duration,
     };
 
-    use api_version::{api_v2::RAW_KEY_PREFIX, dispatch_api_version, KvFormat, RawValue};
+    use api_version::{KvFormat, RawValue, api_v2::RAW_KEY_PREFIX, dispatch_api_version};
     use collections::HashSet;
     use engine_rocks::RocksSstReader;
     use engine_traits::{IterOptions, Iterator, MiscExt, RefIterable, SstReader};
@@ -1354,9 +1355,9 @@ pub mod tests {
     use tikv::{
         coprocessor::checksum_crc64_xor,
         storage::{
+            RocksEngine, TestEngineBuilder,
             kv::LocalTablets,
             txn::tests::{must_commit, must_prewrite_put},
-            RocksEngine, TestEngineBuilder,
         },
     };
     use tikv_util::{config::ReadableSize, info, store::new_peer};

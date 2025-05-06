@@ -3,9 +3,8 @@
 use codec::byte::MemComparableByteCodec;
 use engine_traits::Result;
 use tikv_util::codec::{
-    bytes,
+    Error, bytes,
     number::{self, NumberEncoder},
-    Error,
 };
 use txn_types::{Key, TimeStamp};
 

@@ -9,15 +9,15 @@ use api_version::{ApiV1, KvFormat};
 use encryption_export::data_key_manager_from_config;
 use engine_rocks::util::{db_exist, new_engine_opt};
 use engine_traits::{
-    Engines, Error as EngineError, RaftEngine, TabletRegistry, ALL_CFS, CF_DEFAULT, CF_LOCK,
-    CF_WRITE, DATA_CFS,
+    ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS, Engines, Error as EngineError, RaftEngine,
+    TabletRegistry,
 };
 use file_system::read_dir;
 use futures::{
+    StreamExt, TryStreamExt,
     executor::block_on,
     future,
     stream::{self, BoxStream},
-    StreamExt, TryStreamExt,
 };
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
@@ -31,7 +31,7 @@ use pd_client::{Config as PdConfig, PdClient, RpcClient};
 use protobuf::Message;
 use raft::eraftpb::{ConfChange, ConfChangeV2, Entry, EntryType};
 use raft_log_engine::RaftLogEngine;
-use raftstore::store::{util::build_key_range, INIT_EPOCH_CONF_VER};
+use raftstore::store::{INIT_EPOCH_CONF_VER, util::build_key_range};
 use security::SecurityManager;
 use serde_json::json;
 use server::fatal;
@@ -39,15 +39,15 @@ use slog_global::crit;
 use tikv::{
     config::{ConfigController, TikvConfig},
     server::{
+        KvEngineFactoryBuilder,
         debug::{BottommostLevelCompaction, Debugger, DebuggerImpl, RegionInfo},
         debug2::DebuggerImplV2,
-        KvEngineFactoryBuilder,
     },
     storage::{
+        Engine,
         config::EngineType,
         kv::MockEngine,
         lock_manager::{LockManager, MockLockManager},
-        Engine,
     },
 };
 use tikv_util::escape;
@@ -223,7 +223,7 @@ pub trait DebugExecutor {
             let r = self.get_region_info(region_id);
             if skip_tombstone {
                 let region_state = r.region_local_state.as_ref();
-                if region_state.map_or(false, |s| s.get_state() == PeerState::Tombstone) {
+                if region_state.is_some_and(|s| s.get_state() == PeerState::Tombstone) {
                     continue;
                 }
             }
@@ -386,21 +386,21 @@ pub trait DebugExecutor {
                     println!("key: {}", escape(&key));
                     if cfs.contains(&CF_LOCK) && mvcc.has_lock() {
                         let lock_info = mvcc.get_lock();
-                        if start_ts.map_or(true, |ts| lock_info.get_start_ts() == ts) {
+                        if start_ts.is_none_or(|ts| lock_info.get_start_ts() == ts) {
                             println!("\tlock cf value: {:?}", lock_info);
                         }
                     }
                     if cfs.contains(&CF_DEFAULT) {
                         for value_info in mvcc.get_values() {
-                            if commit_ts.map_or(true, |ts| value_info.get_start_ts() == ts) {
+                            if commit_ts.is_none_or(|ts| value_info.get_start_ts() == ts) {
                                 println!("\tdefault cf value: {:?}", value_info);
                             }
                         }
                     }
                     if cfs.contains(&CF_WRITE) {
                         for write_info in mvcc.get_writes() {
-                            if start_ts.map_or(true, |ts| write_info.get_start_ts() == ts)
-                                && commit_ts.map_or(true, |ts| write_info.get_commit_ts() == ts)
+                            if start_ts.is_none_or(|ts| write_info.get_start_ts() == ts)
+                                && commit_ts.is_none_or(|ts| write_info.get_commit_ts() == ts)
                             {
                                 println!("\t write cf value: {:?}", write_info);
                             }

@@ -2,14 +2,13 @@
 
 use std::{
     path::Path,
-    sync::{atomic::AtomicU64, mpsc::Receiver, Arc, Mutex, RwLock},
+    sync::{Arc, Mutex, RwLock, atomic::AtomicU64, mpsc::Receiver},
     thread,
     time::Duration,
-    usize,
 };
 
 use ::server::common::build_hybrid_engine;
-use api_version::{dispatch_api_version, KvFormat};
+use api_version::{KvFormat, dispatch_api_version};
 use causal_ts::CausalTsProviderImpl;
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
@@ -26,7 +25,7 @@ use hybrid_engine::observer::{
 use in_memory_engine::{InMemoryEngineConfig, InMemoryEngineContext, RegionCacheMemoryEngine};
 use kvproto::{
     deadlock::create_deadlock,
-    debugpb::{create_debug, DebugClient},
+    debugpb::{DebugClient, create_debug},
     import_sstpb::create_import_sst,
     kvrpcpb::{ApiVersion, Context},
     metapb,
@@ -36,17 +35,17 @@ use kvproto::{
 };
 use pd_client::PdClient;
 use raftstore::{
+    Result,
     coprocessor::{CoprocessorHost, RegionInfoAccessor},
     errors::Error as RaftError,
     router::{CdcRaftRouter, LocalReadRouter, RaftStoreRouter, ReadContext, ServerRaftStoreRouter},
     store::{
-        fsm::{store::StoreMeta, ApplyRouter, RaftBatchSystem, RaftRouter},
-        msg::RaftCmdExtraOpts,
         AutoSplitController, Callback, CheckLeaderRunner, DiskCheckRunner, LocalReader,
         RegionSnapshot, SnapManager, SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
         StoreMetaDelegate,
+        fsm::{ApplyRouter, RaftBatchSystem, RaftRouter, store::StoreMeta},
+        msg::RaftCmdExtraOpts,
     },
-    Result,
 };
 use resource_control::ResourceGroupManager;
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
@@ -61,6 +60,8 @@ use tikv::{
     import::{ImportSstService, SstImporter},
     read_pool::ReadPool,
     server::{
+        ConnectionBuilder, Error, MultiRaftServer, PdStoreAddrResolver, RaftClient, RaftKv,
+        Result as ServerResult, Server, ServerTransport,
         debug::DebuggerImpl,
         gc_worker::GcWorker,
         load_statistics::ThreadLoadPool,
@@ -69,26 +70,23 @@ use tikv::{
         resolve::{self, StoreAddrResolver},
         service::{DebugService, DefaultGrpcMessageFilter},
         tablet_snap::NoSnapshotCache,
-        ConnectionBuilder, Error, MultiRaftServer, PdStoreAddrResolver, RaftClient, RaftKv,
-        Result as ServerResult, Server, ServerTransport,
     },
     storage::{
-        self,
+        self, Engine, Storage,
         kv::{FakeExtension, LocalTablets, SnapContext},
         txn::{
             flow_controller::{EngineFlowController, FlowController},
             txn_status_cache::TxnStatusCache,
         },
-        Engine, Storage,
     },
 };
 use tikv_util::{
+    HandyRwLock,
     config::VersionTrack,
     quota_limiter::QuotaLimiter,
     sys::thread::ThreadBuildWrapper,
     time::ThreadReadId,
     worker::{Builder as WorkerBuilder, LazyWorker, Scheduler},
-    HandyRwLock,
 };
 use tokio::runtime::Builder as TokioBuilder;
 use txn_types::TxnExtraScheduler;

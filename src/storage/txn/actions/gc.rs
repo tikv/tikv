@@ -5,8 +5,8 @@ use txn_types::{Key, TimeStamp, Write, WriteType};
 use crate::{
     server::gc_worker::STAT_TXN_KEYMODE,
     storage::{
-        mvcc::{GcInfo, MvccReader, MvccTxn, Result as MvccResult, MAX_TXN_WRITE_SIZE},
         Snapshot,
+        mvcc::{GcInfo, MAX_TXN_WRITE_SIZE, MvccReader, MvccTxn, Result as MvccResult},
     },
 };
 
@@ -129,12 +129,12 @@ pub mod tests {
     use txn_types::SHORT_VALUE_MAX_LEN;
 
     use super::*;
-    use crate::storage::{kv::SnapContext, mvcc::tests::write, Engine, ScanMode};
+    use crate::storage::{Engine, ScanMode, kv::SnapContext, mvcc::tests::write};
     #[cfg(test)]
     use crate::storage::{
+        RocksEngine, TestEngineBuilder,
         mvcc::tests::{must_get, must_get_none},
         txn::tests::*,
-        RocksEngine, TestEngineBuilder,
     };
 
     pub fn must_succeed<E: Engine>(engine: &mut E, key: &[u8], safe_point: impl Into<TimeStamp>) {

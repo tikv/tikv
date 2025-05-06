@@ -2,7 +2,7 @@
 
 use std::{iter::*, sync::*, thread, time::*};
 
-use api_version::{test_kv_format_impl, KvFormat};
+use api_version::{KvFormat, test_kv_format_impl};
 use engine_traits::{CF_LOCK, CF_WRITE};
 use kvproto::{
     raft_cmdpb::CmdType,
@@ -10,11 +10,11 @@ use kvproto::{
 };
 use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
-use raftstore::store::{metrics::RAFT_ENABLE_UNPERSISTED_APPLY_GAUGE, Callback, LocksStatus};
+use raftstore::store::{Callback, LocksStatus, metrics::RAFT_ENABLE_UNPERSISTED_APPLY_GAUGE};
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
-use tikv::storage::{kv::SnapshotExt, Snapshot};
-use tikv_util::{config::*, future::block_on_timeout, HandyRwLock};
+use tikv::storage::{Snapshot, kv::SnapshotExt};
+use tikv_util::{HandyRwLock, config::*, future::block_on_timeout};
 use txn_types::{Key, LastChange, PessimisticLock};
 
 /// Test if merge is working as expected in a general condition.
@@ -344,7 +344,7 @@ fn test_node_merge_prerequisites_check() {
     )));
     let mut large_bytes = vec![b'k', b'3'];
     // 3M
-    large_bytes.extend(repeat(b'0').take(1024 * 1024 * 3));
+    large_bytes.extend(repeat_n(b'0', 1024 * 1024 * 3));
     cluster.must_put(&large_bytes, &large_bytes);
     cluster.must_put(&large_bytes, &large_bytes);
     // So log gap now contains 12M data, which exceeds the default max entry size.

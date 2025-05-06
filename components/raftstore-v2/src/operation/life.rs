@@ -40,23 +40,23 @@ use kvproto::{
 };
 use raft::eraftpb::MessageType;
 use raftstore::{
+    Error, Result,
     store::{
+        DiskFullPeers, Transport, WriteTask,
         fsm::{
-            apply,
+            Proposal, apply,
             life::{build_peer_destroyed_report, forward_destroy_to_source_peer},
-            Proposal,
         },
         local_metrics::IoType as InspectIoType,
         metrics::RAFT_PEER_PENDING_DURATION,
-        util, DiskFullPeers, Transport, WriteTask,
+        util,
     },
-    Error, Result,
 };
 use slog::{debug, error, info, warn};
 use tikv_util::{
     store::find_peer,
     sys::disk::DiskUsage,
-    time::{duration_to_sec, Instant},
+    time::{Instant, duration_to_sec},
 };
 
 use super::command::SplitInit;
@@ -251,7 +251,7 @@ fn check_if_to_peer_destroyed<ER: RaftEngine>(
         .get_removed_records()
         .iter()
         .find(|p| p.get_store_id() == store_id)
-        .map_or(false, |p| to_peer.id <= p.get_id())
+        .is_some_and(|p| to_peer.id <= p.get_id())
     {
         return Ok(true);
     }

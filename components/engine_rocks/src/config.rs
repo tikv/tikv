@@ -65,9 +65,9 @@ pub mod compression_type_level_serde {
 
     use rocksdb::DBCompressionType;
     use serde::{
+        Deserializer, Serializer,
         de::{Error, SeqAccess, Unexpected, Visitor},
         ser::SerializeSeq,
-        Deserializer, Serializer,
     };
 
     pub fn serialize<S>(ts: &[DBCompressionType; 7], serializer: S) -> Result<S::Ok, S::Error>
@@ -152,8 +152,8 @@ pub mod compression_type_serde {
 
     use rocksdb::DBCompressionType;
     use serde::{
-        de::{Error, Unexpected, Visitor},
         Deserializer, Serializer,
+        de::{Error, Unexpected, Visitor},
     };
 
     pub fn serialize<S>(t: &DBCompressionType, serializer: S) -> Result<S::Ok, S::Error>
@@ -257,8 +257,8 @@ pub mod checksum_serde {
 
     use rocksdb::ChecksumType;
     use serde::{
-        de::{Error, Unexpected, Visitor},
         Deserializer, Serializer,
+        de::{Error, Unexpected, Visitor},
     };
 
     pub fn serialize<S>(t: &ChecksumType, serializer: S) -> Result<S::Ok, S::Error>
@@ -317,8 +317,8 @@ pub mod prepopulate_block_cache_serde {
 
     use rocksdb::PrepopulateBlockCache;
     use serde::{
-        de::{Error, Unexpected, Visitor},
         Deserializer, Serializer,
+        de::{Error, Unexpected, Visitor},
     };
 
     pub fn serialize<S>(t: &PrepopulateBlockCache, serializer: S) -> Result<S::Ok, S::Error>

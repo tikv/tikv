@@ -8,10 +8,9 @@ use std::{
     fmt::{Debug, Display},
     option::Option,
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering},
         Arc, Mutex, MutexGuard,
+        atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering},
     },
-    u64,
 };
 
 use collections::HashSet;
@@ -26,27 +25,26 @@ use kvproto::{
 };
 use protobuf::{self, CodedInputStream, Message};
 use raft::{
+    Changer, INVALID_INDEX, RawNode,
     eraftpb::{self, ConfChangeType, ConfState, Entry, EntryType, MessageType, Snapshot},
-    Changer, RawNode, INVALID_INDEX,
 };
 use raft_proto::ConfChangeI;
 use tikv_util::{
-    box_err,
-    codec::number::{decode_u64, NumberEncoder},
+    Either, box_err,
+    codec::number::{NumberEncoder, decode_u64},
     debug, info,
     store::{find_peer_by_id, region},
-    time::{monotonic_raw_now, Instant},
-    Either,
+    time::{Instant, monotonic_raw_now},
 };
 use time::{Duration, Timespec};
 use tokio::sync::Notify;
 use txn_types::WriteBatchFlags;
 
-use super::{metrics::PEER_ADMIN_CMD_COUNTER_VEC, peer_storage, Config};
+use super::{Config, metrics::PEER_ADMIN_CMD_COUNTER_VEC, peer_storage};
 use crate::{
+    Error, Result,
     coprocessor::CoprocessorHost,
     store::{simple_write::SimpleWriteReqDecoder, snap::SNAPSHOT_VERSION},
-    Error, Result,
 };
 
 const INVALID_TIMESTAMP: u64 = u64::MAX;
@@ -941,7 +939,7 @@ pub trait ChangePeerI {
     fn to_confchange(&self, _: Vec<u8>) -> Self::CC;
 }
 
-impl<'a> ChangePeerI for &'a ChangePeerRequest {
+impl ChangePeerI for &ChangePeerRequest {
     type CC = eraftpb::ConfChange;
     type CP = Vec<ChangePeerRequest>;
 
@@ -1055,7 +1053,7 @@ pub fn check_conf_change(
             .get_peers()
             .iter()
             .find(|p| p.get_id() == peer.get_id())
-            .map_or(false, |p| p.get_is_witness() != peer.get_is_witness())
+            .is_some_and(|p| p.get_is_witness() != peer.get_is_witness())
         {
             return Err(box_err!(
                 "invalid conf change request: {:?}, can not switch witness in conf change",
@@ -1151,9 +1149,7 @@ fn check_availability_by_last_heartbeats(
             .get_peers()
             .iter()
             .find(|p| p.get_id() == *id)
-            .map_or(false, |p| {
-                p.role == PeerRole::Voter || p.role == PeerRole::IncomingVoter
-            })
+            .is_some_and(|p| p.role == PeerRole::Voter || p.role == PeerRole::IncomingVoter)
         {
             // leader itself is not a slow peer
             if *id == leader_id || last_heartbeat.elapsed() <= slow_voter_threshold {
@@ -1178,9 +1174,7 @@ fn check_availability_by_last_heartbeats(
             .get_peers()
             .iter()
             .find(|p| p.get_id() == peer.get_id())
-            .map_or(false, |p| {
-                p.role == PeerRole::Voter || p.role == PeerRole::IncomingVoter
-            });
+            .is_some_and(|p| p.role == PeerRole::Voter || p.role == PeerRole::IncomingVoter);
         if !is_voter && change_type == ConfChangeType::AddNode {
             // exiting peers, promoting from learner to voter
             if let Some(last_heartbeat) = peer_heartbeats.get(&peer.get_id()) {
@@ -1678,7 +1672,7 @@ impl RegionReadProgressCore {
         peer_id: u64,
     ) -> RegionReadProgressCore {
         // forbids stale read for witness
-        let is_witness = find_peer_by_id(region, peer_id).map_or(false, |p| p.is_witness);
+        let is_witness = find_peer_by_id(region, peer_id).is_some_and(|p| p.is_witness);
         RegionReadProgressCore {
             peer_id,
             region_id: region.get_id(),

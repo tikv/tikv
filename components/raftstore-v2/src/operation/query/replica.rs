@@ -4,14 +4,14 @@ use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_cmdpb::{self, RaftCmdRequest, RaftCmdResponse};
 use pd_client::INVALID_ID;
 use raftstore::{
+    Error,
     store::{
-        cmd_resp,
+        Config, ReadIndexContext, ReadIndexRequest, cmd_resp,
         fsm::apply::notify_stale_req,
         metrics::RAFT_READ_INDEX_PENDING_COUNT,
         msg::{ErrorCallback, ReadCallback},
-        propose_read_index, Config, ReadIndexContext, ReadIndexRequest,
+        propose_read_index,
     },
-    Error,
 };
 use slog::debug;
 use tikv_util::time::monotonic_raw_now;

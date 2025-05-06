@@ -14,10 +14,10 @@ use std::{fmt, str::FromStr, sync::atomic::Ordering};
 use atomic::Atomic;
 use online_config::ConfigValue;
 use protobuf::atomic_flags::{
-    set_redact_level as proto_set_redact_level, RedactLevel, DEFAULT_REDACT_MARKER_HEAD,
-    DEFAULT_REDACT_MARKER_TAIL,
+    DEFAULT_REDACT_MARKER_HEAD, DEFAULT_REDACT_MARKER_TAIL, RedactLevel,
+    set_redact_level as proto_set_redact_level,
 };
-use serde::{de, Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Serialize, Serializer, de};
 
 pub use crate::hex::*;
 

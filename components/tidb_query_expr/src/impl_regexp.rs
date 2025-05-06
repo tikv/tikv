@@ -5,7 +5,7 @@ use std::{borrow::Cow, collections::HashSet};
 use regex::Regex;
 use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
-use tidb_query_datatype::codec::{collation::Collator, data_type::*, Error};
+use tidb_query_datatype::codec::{Error, collation::Collator, data_type::*};
 use tipb::{Expr, ExprType};
 
 const PATTERN_IDX: usize = 1;
@@ -423,18 +423,18 @@ pub fn regexp_replace<C: Collator>(
         for capture in regex.captures_iter(trimmed) {
             // unwrap on 0 is OK because captures only reports matches.
             let m = capture.get(0).unwrap();
-            result.extend(trimmed[last_match..m.start()].as_bytes());
+            result.extend(&trimmed.as_bytes()[last_match..m.start()]);
             last_match = m.end();
             replace_work(&capture, &mut result)?;
         }
     } else if let Some(capture) = regex.captures_iter(trimmed).nth((occurrence - 1) as usize) {
         // unwrap on 0 is OK because captures only reports matches.
         let m = capture.get(0).unwrap();
-        result.extend(trimmed[0..m.start()].as_bytes());
+        result.extend(&trimmed.as_bytes()[0..m.start()]);
         last_match = m.end();
         replace_work(&capture, &mut result)?;
     }
-    result.extend(trimmed[last_match..].as_bytes());
+    result.extend(&trimmed.as_bytes()[last_match..]);
 
     Ok(Some(result))
 }
@@ -442,9 +442,9 @@ pub fn regexp_replace<C: Collator>(
 #[cfg(test)]
 mod tests {
     use tidb_query_datatype::{
+        EvalType, FieldTypeTp,
         codec::batch::{LazyBatchColumn, LazyBatchColumnVec},
         expr::EvalContext,
-        EvalType, FieldTypeTp,
     };
     use tipb::ScalarFuncSig;
     use tipb_helper::ExprDefBuilder;

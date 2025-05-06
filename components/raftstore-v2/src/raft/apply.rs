@@ -3,15 +3,15 @@
 use std::{mem, sync::Arc};
 
 use engine_traits::{
-    FlushState, KvEngine, PerfContextKind, SstApplyState, TabletRegistry, WriteBatch, DATA_CFS_LEN,
+    DATA_CFS_LEN, FlushState, KvEngine, PerfContextKind, SstApplyState, TabletRegistry, WriteBatch,
 };
 use kvproto::{metapb, raft_cmdpb::RaftCmdResponse, raft_serverpb::RegionLocalState};
 use pd_client::BucketStat;
 use raftstore::{
     coprocessor::{Cmd, CmdObserveInfo, CoprocessorHost, ObserveLevel},
     store::{
-        fsm::{apply::DEFAULT_APPLY_WB_SIZE, ApplyMetrics},
         Config, ReadTask,
+        fsm::{ApplyMetrics, apply::DEFAULT_APPLY_WB_SIZE},
     },
 };
 use slog::Logger;
@@ -19,9 +19,9 @@ use sst_importer::SstImporter;
 use tikv_util::{log::SlogFormat, worker::Scheduler, yatp_pool::FuturePool};
 
 use crate::{
+    TabletTask,
     operation::{AdminCmdResult, ApplyFlowControl, DataTrace},
     router::{CmdResChannel, SstApplyIndex},
-    TabletTask,
 };
 
 pub(crate) struct Observe {
@@ -239,7 +239,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     #[inline]
     pub fn set_tablet(&mut self, tablet: EK) {
         assert!(
-            self.write_batch.as_ref().map_or(true, |wb| wb.is_empty()),
+            self.write_batch.as_ref().is_none_or(|wb| wb.is_empty()),
             "{} setting tablet while still have dirty write batch",
             SlogFormat(&self.logger)
         );
@@ -290,7 +290,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     #[inline]
     pub fn release_memory(&mut self) {
         mem::take(&mut self.key_buffer);
-        if self.write_batch.as_ref().map_or(false, |wb| wb.is_empty()) {
+        if self.write_batch.as_ref().is_some_and(|wb| wb.is_empty()) {
             self.write_batch = None;
         }
     }

@@ -6,9 +6,9 @@ use std::{
     time::Duration,
 };
 
-use api_version::{test_kv_format_impl, KvFormat};
+use api_version::{KvFormat, test_kv_format_impl};
 use engine_traits::MiscExt;
-use futures::{executor::block_on, SinkExt, StreamExt};
+use futures::{SinkExt, StreamExt, executor::block_on};
 use grpcio::*;
 use kvproto::{kvrpcpb::*, pdpb::QueryKind, tikvpb::*, tikvpb_grpc::TikvClient};
 use pd_client::PdClient;
@@ -733,9 +733,7 @@ fn check_split_key(
             let region = cluster.pd_client.get_region(&start_key).unwrap();
             assert!(
                 start_key == region.get_start_key()
-                    || end_key
-                        .as_ref()
-                        .map_or(false, |k| k == region.get_end_key()),
+                    || end_key.as_ref().is_some_and(|k| k == region.get_end_key()),
                 "region: {:?}, start_key: {:?}, end_key: {:?}",
                 region,
                 start_key,

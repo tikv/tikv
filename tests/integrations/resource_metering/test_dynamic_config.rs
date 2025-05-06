@@ -105,8 +105,7 @@ pub fn test_max_resource_groups() {
 
     // Workload
     // [req-{1..3} * 6, req-{4..5} * 1]
-    let mut wl = iter::repeat(1..=3)
-        .take(6)
+    let mut wl = iter::repeat_n(1..=3, 6)
         .flatten()
         .chain(4..=5)
         .map(|n| format!("req-{}", n))

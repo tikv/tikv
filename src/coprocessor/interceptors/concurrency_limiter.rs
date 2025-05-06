@@ -53,6 +53,7 @@ where
 enum LimitationState<'a> {
     NotLimited,
     Acquiring,
+    #[allow(dead_code)]
     Acuqired(SemaphorePermit<'a>),
 }
 
@@ -128,8 +129,8 @@ where
 mod tests {
     use std::{
         sync::{
-            atomic::{AtomicBool, Ordering},
             Arc,
+            atomic::{AtomicBool, Ordering},
         },
         thread,
     };

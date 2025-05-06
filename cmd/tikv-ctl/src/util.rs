@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{borrow::ToOwned, error::Error, str, str::FromStr, u64};
+use std::{borrow::ToOwned, error::Error, str, str::FromStr};
 
 use kvproto::kvrpcpb::KeyRange;
 use server::setup::initial_logger;

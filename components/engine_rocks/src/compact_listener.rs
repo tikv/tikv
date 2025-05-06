@@ -138,11 +138,8 @@ impl RocksCompactedEvent {
 
 impl CompactedEvent for RocksCompactedEvent {
     fn total_bytes_declined(&self) -> u64 {
-        if self.total_input_bytes > self.total_output_bytes {
-            self.total_input_bytes - self.total_output_bytes
-        } else {
-            0
-        }
+        self.total_input_bytes
+            .saturating_sub(self.total_output_bytes)
     }
 
     fn is_size_declining_trivial(&self, split_check_diff: u64) -> bool {

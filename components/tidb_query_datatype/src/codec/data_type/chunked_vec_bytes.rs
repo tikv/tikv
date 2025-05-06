@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::{bit_vec::BitVec, Bytes, BytesRef, ChunkRef, ChunkedVec, UnsafeRefInto};
+use super::{Bytes, BytesRef, ChunkRef, ChunkedVec, UnsafeRefInto, bit_vec::BitVec};
 use crate::impl_chunked_vec_common;
 
 #[derive(Debug, PartialEq, Clone)]
@@ -213,7 +213,7 @@ impl From<Vec<Option<Bytes>>> for ChunkedVecBytes {
     }
 }
 
-impl<'a> UnsafeRefInto<&'static ChunkedVecBytes> for &'a ChunkedVecBytes {
+impl UnsafeRefInto<&'static ChunkedVecBytes> for &ChunkedVecBytes {
     unsafe fn unsafe_into(self) -> &'static ChunkedVecBytes {
         std::mem::transmute(self)
     }

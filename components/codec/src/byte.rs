@@ -3,9 +3,9 @@
 use std::{intrinsics::unlikely, io::Read};
 
 use crate::{
+    ErrorInner, Result,
     buffer::BufferReader,
     number::{self, NumberCodec, NumberDecoder, NumberEncoder},
-    ErrorInner, Result,
 };
 
 const MEMCMP_GROUP_SIZE: usize = 8;

@@ -26,10 +26,10 @@ use std::{any::Any, convert::TryFrom, marker::PhantomData};
 
 use static_assertions::assert_eq_size;
 use tidb_query_common::Result;
-use tidb_query_datatype::{codec::data_type::*, expr::EvalContext, EvalType, FieldTypeAccessor};
+use tidb_query_datatype::{EvalType, FieldTypeAccessor, codec::data_type::*, expr::EvalContext};
 use tipb::{Expr, FieldType};
 
-use super::{expr_eval::LogicalRows, RpnStackNode};
+use super::{RpnStackNode, expr_eval::LogicalRows};
 
 /// Metadata of an RPN function.
 #[derive(Clone, Copy)]

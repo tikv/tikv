@@ -10,12 +10,13 @@ use rocksdb::{FlushOptions, Range as RocksRange};
 use tikv_util::{box_try, keybuilder::KeyBuilder};
 
 use crate::{
+    RocksSstWriter,
     engine::RocksEngine,
     r2e,
     rocks_metrics::{RocksStatisticsReporter, STORE_ENGINE_EVENT_COUNTER_VEC},
     rocks_metrics_defs::*,
     sst::RocksSstWriterBuilder,
-    util, RocksSstWriter,
+    util,
 };
 
 pub const MAX_DELETE_COUNT_BY_KEY: usize = 2048;
@@ -46,7 +47,7 @@ impl RocksEngine {
             // There may be a range overlap with next range
             if last_end_key
                 .as_ref()
-                .map_or(false, |key| key.as_slice() > r.start_key)
+                .is_some_and(|key| key.as_slice() > r.start_key)
             {
                 written |= self.delete_all_in_range_cf_by_key(wopts, cf, r)?;
                 continue;
@@ -211,7 +212,7 @@ impl MiscExt for RocksEngine {
                     .map(|(_, time)| (handle, time))
             })
             .min_by(|(_, a), (_, b)| a.cmp(b))
-            && age_threshold.map_or(true, |threshold| time <= threshold)
+            && age_threshold.is_none_or(|threshold| time <= threshold)
         {
             let mut fopts = FlushOptions::default();
             fopts.set_wait(wait);
@@ -509,16 +510,16 @@ impl MiscExt for RocksEngine {
 #[cfg(test)]
 mod tests {
     use engine_traits::{
-        CompactExt, DeleteStrategy, Iterable, Iterator, ManualCompactionOptions, Mutable,
-        SyncMutable, WriteBatchExt, ALL_CFS,
+        ALL_CFS, CompactExt, DeleteStrategy, Iterable, Iterator, ManualCompactionOptions, Mutable,
+        SyncMutable, WriteBatchExt,
     };
     use tempfile::Builder;
 
     use super::*;
     use crate::{
+        RocksCfOptions, RocksDbOptions,
         engine::RocksEngine,
         util::{new_engine, new_engine_opt},
-        RocksCfOptions, RocksDbOptions,
     };
 
     fn check_data(db: &RocksEngine, cfs: &[&str], expected: &[(&[u8], &[u8])]) {

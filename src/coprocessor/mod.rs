@@ -45,7 +45,7 @@ use lazy_static::lazy_static;
 use metrics::ReqTag;
 use rand::prelude::*;
 use tidb_query_common::execute_stats::ExecSummary;
-use tikv_alloc::{mem_trace, Id, MemoryTrace, MemoryTraceGuard};
+use tikv_alloc::{Id, MemoryTrace, MemoryTraceGuard, mem_trace};
 use tikv_util::{deadline::Deadline, memory::HeapSize, time::Duration};
 use txn_types::TsSet;
 
@@ -53,7 +53,7 @@ pub use self::{
     endpoint::Endpoint,
     error::{Error, Result},
 };
-use crate::storage::{mvcc::TimeStamp, Statistics};
+use crate::storage::{Statistics, mvcc::TimeStamp};
 
 pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;
@@ -154,7 +154,7 @@ impl HeapSize for ReqContext {
     fn approximate_heap_size(&self) -> usize {
         self.context.approximate_heap_size()
             + self.ranges.approximate_heap_size()
-            + self.peer.as_ref().map_or(0, |p| p.as_bytes().len())
+            + self.peer.as_ref().map_or(0, |p| p.len())
             + self.lower_bound.approximate_heap_size()
             + self.upper_bound.approximate_heap_size()
     }
@@ -222,8 +222,8 @@ impl ReqContext {
 
     pub fn build_task_id(&self) -> u64 {
         const ID_SHIFT: u32 = 16;
-        const MASK: u64 = u64::max_value() >> ID_SHIFT;
-        const MAX_TS: u64 = u64::max_value();
+        const MASK: u64 = u64::MAX >> ID_SHIFT;
+        const MAX_TS: u64 = u64::MAX;
         let base = match self.txn_start_ts.into_inner() {
             0 | MAX_TS => thread_rng().next_u64(),
             start_ts => start_ts,

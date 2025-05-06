@@ -2,21 +2,21 @@
 
 use std::time::Duration;
 
-use engine_traits::{RaftEngineReadOnly, CF_DEFAULT};
+use engine_traits::{CF_DEFAULT, RaftEngineReadOnly};
 use futures::executor::block_on;
 use kvproto::{raft_cmdpb::AdminCmdType, raft_serverpb::RaftMessage};
 use raft::prelude::{ConfChangeType, MessageType};
 use raftstore_v2::{
-    router::{PeerMsg, PeerTick},
     SimpleWriteEncoder,
+    router::{PeerMsg, PeerTick},
 };
 use tikv_util::store::{new_learner_peer, new_peer};
 
 use crate::cluster::{
+    Cluster,
     life_helper::{
         assert_peer_not_exist, assert_tombstone, assert_tombstone_msg, assert_valid_report,
     },
-    Cluster,
 };
 
 /// Test a peer can be created by general raft message and destroyed tombstone

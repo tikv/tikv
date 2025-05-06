@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{mpsc::channel, Arc, Mutex},
+    sync::{Arc, Mutex, mpsc::channel},
     time::Duration,
 };
 
@@ -9,10 +9,10 @@ use futures::{executor::block_on, stream::StreamExt};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{disk_usage::DiskUsage, import_sstpb::*, tikvpb_grpc::TikvClient};
 use tempfile::{Builder, TempDir};
-use test_raftstore::{must_raw_put, Simulator};
+use test_raftstore::{Simulator, must_raw_put};
 use test_sst_importer::*;
 use tikv::config::TikvConfig;
-use tikv_util::{config::ReadableSize, sys::disk, HandyRwLock};
+use tikv_util::{HandyRwLock, config::ReadableSize, sys::disk};
 
 #[allow(dead_code)]
 #[path = "../../integrations/import/util.rs"]

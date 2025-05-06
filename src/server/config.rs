@@ -1,13 +1,14 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp, i32, isize, sync::Arc, time::Duration};
+use std::{cmp, sync::Arc, time::Duration};
 
 use collections::HashMap;
-use engine_traits::{perf_level_serde, PerfLevel};
+use engine_traits::{PerfLevel, perf_level_serde};
 use grpcio::{CompressionAlgorithms, ResourceQuota};
+use lazy_static::lazy_static;
 use online_config::{ConfigChange, ConfigManager, OnlineConfig};
-use raftstore::store::config::DEFAULT_SNAP_MAX_BYTES_PER_SEC;
 pub use raftstore::store::Config as RaftStoreConfig;
+use raftstore::store::config::DEFAULT_SNAP_MAX_BYTES_PER_SEC;
 use regex::Regex;
 use tikv_util::{
     config::{self, ReadableDuration, ReadableSize, VersionTrack},
@@ -15,7 +16,7 @@ use tikv_util::{
     worker::Scheduler,
 };
 
-use super::{snap::Task as SnapTask, Result};
+use super::{Result, snap::Task as SnapTask};
 pub use crate::storage::config::Config as StorageConfig;
 
 pub const DEFAULT_CLUSTER_ID: u64 = 0;

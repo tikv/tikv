@@ -30,8 +30,6 @@
 //!   that are specific to different modules, increasing the complexity and
 //!   possibility to misuse of `HealthController`.
 
-#![feature(div_duration)]
-
 pub mod reporters;
 pub mod slow_score;
 pub mod trend;
@@ -41,8 +39,8 @@ use std::{
     collections::HashSet,
     ops::Deref,
     sync::{
-        atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
 };
 
@@ -322,7 +320,7 @@ impl<T: Clone> RollingRetriever<T> {
 #[cfg(test)]
 mod tests {
     use std::{
-        sync::mpsc::{sync_channel, RecvTimeoutError},
+        sync::mpsc::{RecvTimeoutError, sync_channel},
         time::Duration,
     };
 

@@ -5,11 +5,11 @@ use tikv_kv::SnapshotExt;
 use txn_types::{Key, Lock, TimeStamp, Write, WriteType};
 
 use crate::storage::{
-    mvcc::{
-        metrics::MVCC_CHECK_TXN_STATUS_COUNTER_VEC, reader::OverlappedWrite, ErrorInner, LockType,
-        MvccTxn, ReleasedLock, Result, SnapshotReader, TxnCommitRecord,
-    },
     Snapshot, TxnStatus,
+    mvcc::{
+        ErrorInner, LockType, MvccTxn, ReleasedLock, Result, SnapshotReader, TxnCommitRecord,
+        metrics::MVCC_CHECK_TXN_STATUS_COUNTER_VEC, reader::OverlappedWrite,
+    },
 };
 
 // The returned `TxnStatus` is Some(..) if the transaction status is already
@@ -71,26 +71,24 @@ fn check_txn_status_from_pessimistic_primary_lock(
 /// 'start_ts'.
 ///
 /// 1. Validate whether the existing lock indeed corresponds to the
-/// primary lock. The primary key may switch under certain circumstances. If
-/// it's a stale lock, the transaction status should not be determined by it.
-/// Refer to https://github.com/pingcap/tidb/issues/42937 for additional information.
+///    primary lock. The primary key may switch under certain circumstances. If
+///    it's a stale lock, the transaction status should not be determined by it.
+///    Refer to https://github.com/pingcap/tidb/issues/42937 for additional information.
 ///    Note that the primary key should remain unaltered if the transaction is
-/// already in the commit or 2PC phase.
+///    already in the commit or 2PC phase.
 ///
-/// 2. Manage the check in accordance with the primary lock type:
-/// 2.1 For the pessimistic type:
-/// 2.1.1 If it's a forced lock, validate the storage data initially to ensure
-/// the forced lock isn't stale.
-/// 2.1.2 If it's a regular lock, verify the lock's TTL and the current
-/// timestamp to determine the status. If the `resolving_pessimistic` parameter
-/// is true, perform a pessimistic rollback, else carry out a real rollback.
-/// 2.2 For the prewrite type, verify the lock's TTL and the current timestamp
-/// to decide the status.
-///
+/// 2. Manage the check in accordance with the primary lock type: 2.1 For the
+///    pessimistic type: 2.1.1 If it's a forced lock, validate the storage data
+///    initially to ensure the forced lock isn't stale. 2.1.2 If it's a regular
+///    lock, verify the lock's TTL and the current timestamp to determine the
+///    status. If the `resolving_pessimistic` parameter is true, perform a
+///    pessimistic rollback, else carry out a real rollback. 2.2 For the
+///    prewrite type, verify the lock's TTL and the current timestamp to decide
+///    the status.
 /// 3. Perform required operations on the valid primary lock, such as
-/// incrementing `min_commit_ts`. The actual procedure for executing the
-/// rollback differs based on the presence or absence of an overlapping write
-/// record.
+///    incrementing `min_commit_ts`. The actual procedure for executing the
+///    rollback differs based on the presence or absence of an overlapping write
+///    record.
 pub fn check_txn_status_lock_exists(
     txn: &mut MvccTxn,
     reader: &mut SnapshotReader<impl Snapshot>,

@@ -31,14 +31,14 @@ use std::{convert::TryFrom, sync::Arc};
 
 use async_trait::async_trait;
 use tidb_query_aggr::*;
-use tidb_query_common::{storage::IntervalRange, Result};
+use tidb_query_common::{Result, storage::IntervalRange};
 use tidb_query_datatype::{
+    EvalType, FieldTypeAccessor,
     codec::{
         batch::{LazyBatchColumn, LazyBatchColumnVec},
         data_type::*,
     },
     expr::{EvalConfig, EvalContext},
-    EvalType, FieldTypeAccessor,
 };
 use tidb_query_expr::RpnExpression;
 use tipb::{Expr, FieldType};
@@ -370,10 +370,10 @@ pub mod tests {
     use tidb_query_codegen::AggrFunction;
     use tidb_query_common::Result;
     use tidb_query_datatype::{
+        Collation, FieldTypeTp,
         builder::FieldTypeBuilder,
         codec::{batch::LazyBatchColumnVec, data_type::*},
         expr::{EvalContext, EvalWarnings},
-        Collation, FieldTypeTp,
     };
 
     use crate::{interface::*, util::mock_executor::MockExecutor};

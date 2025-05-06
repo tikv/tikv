@@ -200,7 +200,7 @@ mod tests {
     use tikv_util::sys::thread::StdThreadBuildWrapper;
 
     use super::*;
-    use crate::{io_stats::A512, OpenOptions, WithIoType};
+    use crate::{OpenOptions, WithIoType, io_stats::A512};
 
     #[test]
     fn test_read_bytes() {

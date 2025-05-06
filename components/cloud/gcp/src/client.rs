@@ -8,13 +8,13 @@ use std::{
     sync::Arc,
 };
 
-use hyper::{client::HttpConnector, Body, Client, Request, Response, StatusCode};
+use hyper::{Body, Client, Request, Response, StatusCode, client::HttpConnector};
 use hyper_tls::HttpsConnector;
 use serde::Deserialize;
 use tame_oauth::gcp::{
-    end_user::EndUserCredentialsInner, service_account::ServiceAccountProviderInner,
     EndUserCredentialsInfo, ServiceAccountInfo, TokenOrRequest, TokenProvider,
-    TokenProviderWrapper, TokenProviderWrapperInner,
+    TokenProviderWrapper, TokenProviderWrapperInner, end_user::EndUserCredentialsInner,
+    service_account::ServiceAccountProviderInner,
 };
 use tikv_util::stream::RetryError;
 
@@ -166,6 +166,7 @@ trait ResultExt {
 
     // Maps the error of this result as an `std::io::Error` with `Other` error
     // kind.
+    #[allow(dead_code)]
     fn or_io_error<D: Display>(self, msg: D) -> io::Result<Self::Ok>;
 
     // Maps the error of this result as an `std::io::Error` with `InvalidInput`
@@ -176,7 +177,7 @@ trait ResultExt {
 impl<T, E: Display> ResultExt for StdResult<T, E> {
     type Ok = T;
     fn or_io_error<D: Display>(self, msg: D) -> io::Result<T> {
-        self.map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}: {}", msg, e)))
+        self.map_err(|e| io::Error::other(format!("{}: {}", msg, e)))
     }
     fn or_invalid_input<D: Display>(self, msg: D) -> io::Result<T> {
         self.map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}: {}", msg, e)))

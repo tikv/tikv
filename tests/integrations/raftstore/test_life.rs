@@ -1,7 +1,7 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{mpsc::channel, Arc, Mutex},
+    sync::{Arc, Mutex, mpsc::channel},
     time::Duration,
 };
 
@@ -12,11 +12,11 @@ use kvproto::{
 use raft::{eraftpb::ConfChangeType, prelude::MessageType};
 use raftstore::errors::Result;
 use test_raftstore::{
-    new_admin_request, new_change_peer_request, new_learner_peer, new_peer, Direction, Filter,
-    FilterFactory, RegionPacketFilter, Simulator as S1,
+    Direction, Filter, FilterFactory, RegionPacketFilter, Simulator as S1, new_admin_request,
+    new_change_peer_request, new_learner_peer, new_peer,
 };
 use test_raftstore_v2::Simulator as S2;
-use tikv_util::{config::ReadableDuration, time::Instant, HandyRwLock};
+use tikv_util::{HandyRwLock, config::ReadableDuration, time::Instant};
 
 struct ForwardFactory {
     node_id: u64,

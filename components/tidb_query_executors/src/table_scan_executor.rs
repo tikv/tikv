@@ -8,16 +8,16 @@ use collections::HashMap;
 use kvproto::coprocessor::KeyRange;
 use smallvec::SmallVec;
 use tidb_query_common::{
-    storage::{IntervalRange, Storage},
     Result,
+    storage::{IntervalRange, Storage},
 };
 use tidb_query_datatype::{
+    EvalType, FieldTypeAccessor,
     codec::{
         batch::{LazyBatchColumn, LazyBatchColumnVec},
         row, table,
     },
     expr::{EvalConfig, EvalContext},
-    EvalType, FieldTypeAccessor,
 };
 use tipb::{ColumnInfo, FieldType, TableScan};
 
@@ -449,9 +449,9 @@ mod tests {
         execute_stats::*, storage::test_fixture::FixtureStorage, util::convert_to_prefix_next,
     };
     use tidb_query_datatype::{
-        codec::{batch::LazyBatchColumnVec, data_type::*, datum, table, Datum},
-        expr::EvalConfig,
         Collation, EvalType, FieldTypeAccessor, FieldTypeTp,
+        codec::{Datum, batch::LazyBatchColumnVec, data_type::*, datum, table},
+        expr::EvalConfig,
     };
     use tipb::{ColumnInfo, FieldType};
 

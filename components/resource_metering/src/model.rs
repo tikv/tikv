@@ -3,8 +3,8 @@
 use std::{
     cell::Cell,
     sync::{
-        atomic::{AtomicU32, Ordering::Relaxed},
         Arc,
+        atomic::{AtomicU32, Ordering::Relaxed},
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };

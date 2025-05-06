@@ -32,8 +32,8 @@ use tikv::{
     config::*,
     import::Config as ImportConfig,
     server::{
-        config::GrpcCompressionType, gc_worker::GcConfig,
-        lock_manager::Config as PessimisticTxnConfig, Config as ServerConfig,
+        Config as ServerConfig, config::GrpcCompressionType, gc_worker::GcConfig,
+        lock_manager::Config as PessimisticTxnConfig,
     },
     storage::config::{
         BlockCacheConfig, Config as StorageConfig, EngineType, FlowControlConfig,

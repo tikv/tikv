@@ -2,12 +2,12 @@
 
 use collections::HashMap;
 use crossbeam::channel::TrySendError;
-use engine_traits::{data_cf_offset, KvEngine, RaftEngine, DATA_CFS_LEN};
+use engine_traits::{DATA_CFS_LEN, KvEngine, RaftEngine, data_cf_offset};
 use kvproto::import_sstpb::SstMeta;
 use pd_client::metrics::STORE_SIZE_EVENT_INT_VEC;
 use raftstore::{
-    store::{check_sst_for_ingestion, metrics::PEER_WRITE_CMD_COUNTER, util},
     Result,
+    store::{check_sst_for_ingestion, metrics::PEER_WRITE_CMD_COUNTER, util},
 };
 use slog::{error, info};
 use sst_importer::range_overlaps;

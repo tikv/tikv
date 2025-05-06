@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use tikv_util::{warn, worker::Scheduler};
 
-use crate::{metrics::IGNORED_DATA_COUNTER, Collector, RawRecords, Task};
+use crate::{Collector, RawRecords, Task, metrics::IGNORED_DATA_COUNTER};
 
 /// A [Collector] implementation for scheduling [RawRecords].
 ///

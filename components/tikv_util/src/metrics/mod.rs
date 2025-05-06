@@ -10,7 +10,7 @@ use prometheus_static_metric::*;
 #[cfg(target_os = "linux")]
 mod threads_linux;
 #[cfg(target_os = "linux")]
-pub use self::threads_linux::{monitor_threads, ThreadInfoStatistics};
+pub use self::threads_linux::{ThreadInfoStatistics, monitor_threads};
 
 #[cfg(target_os = "linux")]
 mod process_linux;
@@ -20,7 +20,7 @@ pub use self::process_linux::monitor_process;
 #[cfg(not(target_os = "linux"))]
 mod threads_dummy;
 #[cfg(not(target_os = "linux"))]
-pub use self::threads_dummy::{monitor_threads, ThreadInfoStatistics};
+pub use self::threads_dummy::{ThreadInfoStatistics, monitor_threads};
 
 #[cfg(not(target_os = "linux"))]
 mod process_dummy;

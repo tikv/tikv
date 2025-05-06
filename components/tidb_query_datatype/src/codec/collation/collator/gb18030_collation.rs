@@ -148,8 +148,8 @@ const GB18030_CHINESE_CI_TABLE: &[u8; TABLE_SIZE_FOR_GB18030] =
 #[cfg(test)]
 mod tests {
     use crate::codec::collation::{
-        collator::{CollatorGb18030Bin, CollatorGb18030ChineseCi},
         Collator,
+        collator::{CollatorGb18030Bin, CollatorGb18030ChineseCi},
     };
 
     #[test]

@@ -21,6 +21,7 @@ fi
 # - `derive_partial_eq_without_eq` has compilation overhead.
 # - Blocking issue for enabling `result_large_err` is the protobuf messages.
 # - Blocking issue for clippy::large_enum_variant is the raftstore peer message.
+# - Allow `unexpected_cfgs` as have defines many compiling cfg for unsupported test cases.
 CLIPPY_LINTS=(
     -A clippy::module_inception  \
     -A clippy::result_large_err \
@@ -50,6 +51,7 @@ CLIPPY_LINTS=(
     -D clippy::assertions_on_result_states \
     -A clippy::non_canonical_partial_ord_impl \
     -A clippy::arc_with_non_send_sync \
+    -A unexpected_cfgs \
 )
 
 # TODO: Enables `clippy::needless_return_with_question_mark` after

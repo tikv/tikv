@@ -12,7 +12,7 @@ use kvproto::{
 use pd_client::BucketMeta;
 use raftstore::{
     coprocessor::RegionChangeEvent,
-    store::{util, Bucket, BucketRange, ReadProgress, SplitCheckTask, Transport},
+    store::{Bucket, BucketRange, ReadProgress, SplitCheckTask, Transport, util},
 };
 use slog::{error, info};
 
