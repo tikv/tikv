@@ -44,7 +44,7 @@ use protobuf::RepeatedField;
 use raft::eraftpb::ConfChangeType;
 use raftstore::{
     RaftRouterCompactedEventSender, Result,
-    store::{fsm::RaftRouter, *},
+    store::{fsm::RaftRouter, util::encode_start_ts_into_flag_data, *},
 };
 use rand::{RngCore, seq::SliceRandom};
 use server::common::ConfiguredRaftEngine;
@@ -65,6 +65,7 @@ use tikv_util::{
     HandyRwLock,
     config::*,
     escape,
+    future::block_on_timeout,
     mpsc::future,
     time::{Instant, ThreadReadId},
     worker::LazyWorker,
@@ -587,6 +588,55 @@ pub fn async_read_index_on_peer<T: Simulator>(
         vec![cmd],
         read_quorum,
     );
+    request.mut_header().set_peer(peer);
+    let (tx, mut rx) = future::bounded(1, future::WakePolicy::Immediately);
+    let cb = Callback::read(Box::new(move |resp| drop(tx.send(resp.response))));
+    cluster.sim.wl().async_read(node_id, None, request, cb);
+    Box::pin(async move {
+        let fut = rx.next();
+        fut.await.unwrap()
+    })
+}
+
+pub fn get_snapshot<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    peer: metapb::Peer,
+    region: metapb::Region,
+    key: &[u8],
+    start_ts: Option<u64>,
+    timeout: Duration,
+) -> RaftCmdResponse {
+    block_on_timeout(
+        async_get_snapshot(cluster, peer, region, key, start_ts),
+        timeout,
+    )
+    .unwrap()
+}
+
+pub fn async_get_snapshot<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    peer: metapb::Peer,
+    region: metapb::Region,
+    key: &[u8],
+    start_ts: Option<u64>,
+) -> BoxFuture<'static, RaftCmdResponse> {
+    let node_id = peer.get_store_id();
+    let mut cmd = new_snap_cmd();
+    cmd.mut_read_index()
+        .set_start_ts(start_ts.unwrap_or(u64::MAX));
+    cmd.mut_read_index()
+        .mut_key_ranges()
+        .push(point_key_range(Key::from_raw(key)));
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![cmd],
+        true,
+    );
+    request.mut_header().set_replica_read(true);
+    if let Some(start_ts) = start_ts {
+        encode_start_ts_into_flag_data(request.mut_header(), start_ts);
+    }
     request.mut_header().set_peer(peer);
     let (tx, mut rx) = future::bounded(1, future::WakePolicy::Immediately);
     let cb = Callback::read(Box::new(move |resp| drop(tx.send(resp.response))));

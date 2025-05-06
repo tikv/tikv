@@ -222,6 +222,18 @@ pub trait ApplySnapshotObserver: Coprocessor {
     fn should_pre_apply_snapshot(&self) -> bool {
         false
     }
+
+    // Hook when apply snapshot is ingested, and the state has been changed to
+    // Normal and persisted. The snapshot will not be re-iningested after the
+    // restart if this hook is called.
+    fn on_apply_snapshot_committed(
+        &self,
+        _: &mut ObserverContext<'_>,
+        _: u64,
+        _: &crate::store::SnapKey,
+        _: Option<&crate::store::Snapshot>,
+    ) {
+    }
 }
 
 /// SplitChecker is invoked during a split check scan, and decides to use
@@ -589,7 +601,14 @@ pub trait CmdObserver<E>: Coprocessor {
 
 pub trait ReadIndexObserver: Coprocessor {
     // Hook to call when stepping in raft and the message is a read index message.
-    fn on_step(&self, _msg: &mut eraftpb::Message, _role: StateRole) {}
+    fn on_step(
+        &self,
+        _msg: &mut eraftpb::Message,
+        _role: StateRole,
+        _region_start_key: Option<&[u8]>,
+        _region_end_key: Option<&[u8]>,
+    ) {
+    }
 }
 
 pub trait UpdateSafeTsObserver: Coprocessor {

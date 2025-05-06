@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath] called by Fsm on_ready_compute_hash
-use std::{borrow::Cow, marker::PhantomData, mem, ops::Deref};
+use std::{borrow::Cow, marker::PhantomData, mem, ops::Deref, option::Option::Some};
 
 use engine_traits::{CfName, KvEngine, WriteBatch};
 use kvproto::{
@@ -819,6 +819,20 @@ impl<E: KvEngine> CoprocessorHost<E> {
         }
     }
 
+    pub fn on_apply_snapshot_committed(
+        &self,
+        region: &Region,
+        peer_id: u64,
+        snap_key: &crate::store::SnapKey,
+        snap: Option<&crate::store::Snapshot>,
+    ) {
+        let mut ctx = ObserverContext::new(region);
+        for observer in &self.registry.apply_snapshot_observers {
+            let observer = observer.observer.inner();
+            observer.on_apply_snapshot_committed(&mut ctx, peer_id, snap_key, snap);
+        }
+    }
+
     pub fn new_split_checker_host<'a>(
         &'a self,
         region: &Region,
@@ -978,9 +992,18 @@ impl<E: KvEngine> CoprocessorHost<E> {
         }
     }
 
-    pub fn on_step_read_index(&self, msg: &mut eraftpb::Message, role: StateRole) {
+    pub fn on_step_read_index(
+        &self,
+        msg: &mut eraftpb::Message,
+        role: StateRole,
+        region_start_key: Option<&[u8]>,
+        region_end_key: Option<&[u8]>,
+    ) {
         for step_ob in &self.registry.read_index_observers {
-            step_ob.observer.inner().on_step(msg, role);
+            step_ob
+                .observer
+                .inner()
+                .on_step(msg, role, region_start_key, region_end_key);
         }
     }
 
@@ -1087,6 +1110,7 @@ mod tests {
         PreWriteApplyState = 25,
         OnRaftMessage = 26,
         CancelApplySnapshot = 27,
+        ApplySnapshotCommitted = 28,
     }
 
     impl Coprocessor for TestCoprocessor {}
@@ -1312,6 +1336,19 @@ mod tests {
                 Ordering::SeqCst,
             );
         }
+
+        fn on_apply_snapshot_committed(
+            &self,
+            _: &mut ObserverContext<'_>,
+            _: u64,
+            _: &crate::store::SnapKey,
+            _: Option<&crate::store::Snapshot>,
+        ) {
+            self.called.fetch_add(
+                ObserverIndex::ApplySnapshotCommitted as usize,
+                Ordering::SeqCst,
+            );
+        }
     }
 
     impl CmdObserver<PanicEngine> for TestCoprocessor {
@@ -1504,6 +1541,15 @@ mod tests {
 
         host.cancel_apply_snapshot(region.get_id(), 0);
         index += ObserverIndex::CancelApplySnapshot as usize;
+        assert_all!([&ob.called], &[index]);
+
+        let sk = SnapKey {
+            region_id: region.get_id(),
+            term: 0,
+            idx: 0,
+        };
+        host.on_apply_snapshot_committed(&region, 0, &sk, None);
+        index += ObserverIndex::ApplySnapshotCommitted as usize;
         assert_all!([&ob.called], &[index]);
     }
 
