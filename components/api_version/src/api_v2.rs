@@ -245,6 +245,18 @@ impl ApiV2 {
         apiv2_key
     }
 
+    pub fn get_txn_keyspace_range(keyspace_id: u32) -> (Vec<u8>, Vec<u8>) {
+        let start_key = Self::get_txn_keyspace_prefix(keyspace_id);
+        let end_key = Self::get_txn_keyspace_prefix(keyspace_id + 1);
+        (start_key, end_key)
+    }
+
+    pub fn get_txn_keyspace_prefix(keyspace_id: u32) -> Vec<u8> {
+        let mut start_key = keyspace_id.to_be_bytes();
+        start_key[0] = TXN_KEY_PREFIX;
+        start_key.to_vec()
+    }
+
     pub const ENCODED_LOGICAL_DELETE: [u8; 1] = [ValueMeta::DELETE_FLAG.bits];
 }
 

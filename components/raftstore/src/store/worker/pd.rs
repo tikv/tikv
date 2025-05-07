@@ -8,7 +8,7 @@ use std::{
     sync::{
         atomic::Ordering,
         mpsc::{self, Receiver, Sender, SyncSender},
-        Arc, Mutex,
+        Mutex,
     },
     thread::{Builder, JoinHandle},
     time::{Duration, Instant},
@@ -893,6 +893,8 @@ where
 
     // Service manager for grpc service.
     grpc_service_manager: GrpcServiceManager,
+
+    keyspace_archived_manager: Arc<KeyspaceArchivedManager>,
 }
 
 impl<EK, ER, T> Runner<EK, ER, T>
@@ -916,6 +918,7 @@ where
         coprocessor_host: CoprocessorHost<EK>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         grpc_service_manager: GrpcServiceManager,
+        keyspace_archived_manager: Arc<KeyspaceArchivedManager>,
     ) -> Runner<EK, ER, T> {
         let mut store_stat = StoreStat::default();
         store_stat.set_cpu_quota(SysQuota::cpu_cores_quota(), cfg.inspect_cpu_util_thd);
@@ -980,6 +983,7 @@ where
             coprocessor_host,
             causal_ts_provider,
             grpc_service_manager,
+            keyspace_archived_manager,
         }
     }
 
@@ -1179,7 +1183,7 @@ where
         &mut self,
         mut stats: pdpb::StoreStats,
         is_fake_heartbeat: bool,
-        store_report: Option<pdpb::StoreReport>,
+        mut store_report: Option<pdpb::StoreReport>,
         dr_autosync_status: Option<StoreDrAutoSyncStatus>,
     ) {
         let mut report_peers = HashMap::default();
@@ -1276,9 +1280,24 @@ where
         let scheduler = self.scheduler.clone();
         let router = self.router.clone();
         let mut snap_mgr = self.snap_mgr.clone();
+
+        if let Some(report) = &mut store_report {
+            report.destroyed_keyspace_ids =
+                self.keyspace_archived_manager.snapshot_destroyed_archived();
+        } else {
+            let mut new_report = pdpb::StoreReport::default();
+            new_report.destroyed_keyspace_ids =
+                self.keyspace_archived_manager.snapshot_destroyed_archived();
+            store_report = Some(new_report);
+        }
+
         let resp = self
             .pd_client
             .store_heartbeat(stats, store_report, dr_autosync_status);
+
+        // archived keyspace
+        let keyspace_archived_manager = self.keyspace_archived_manager.clone();
+
         let f = async move {
             match resp.await {
                 Ok(mut resp) => {
@@ -1357,6 +1376,13 @@ where
                             warn!("fail to schedule control grpc task"; "err" => ?e);
                         }
                     }
+
+                    // archived keyspace
+                    keyspace_archived_manager.insert_archived_batch(&resp.archived_keyspace_ids);
+                    keyspace_archived_manager
+                        .remove_tombstone_archived_batch(&resp.tombstone_keyspace_ids);
+
+                    // -----------------------------------------------
                     // NodeState for this store.
                     {
                         let state = (|| {
@@ -2526,6 +2552,106 @@ fn collect_engine_size<EK: KvEngine>(coprocessor_host: &CoprocessorHost<EK>) -> 
 
 fn get_read_query_num(stat: &pdpb::QueryStats) -> u64 {
     stat.get_get() + stat.get_coprocessor() + stat.get_scan()
+}
+
+use std::sync::{Arc, RwLock};
+
+use dashmap::DashSet;
+
+pub struct KeyspaceArchivedManager {
+    archived_keyspaces: Arc<DashSet<u32>>,
+    destroyed_archived_keyspaces: Arc<DashSet<u32>>,
+
+    /// RwLock to protect archived_keyspaces access
+    archived_lock: RwLock<()>,
+    /// RwLock to protect destroyed_archived_keyspaces access
+    destroyed_lock: RwLock<()>,
+}
+
+impl KeyspaceArchivedManager {
+    pub fn new(archived: Option<Arc<DashSet<u32>>>, destroyed: Option<Arc<DashSet<u32>>>) -> Self {
+        Self {
+            archived_keyspaces: archived.unwrap_or_else(|| Arc::new(DashSet::new())),
+            destroyed_archived_keyspaces: destroyed.unwrap_or_else(|| Arc::new(DashSet::new())),
+            archived_lock: RwLock::new(()),
+            destroyed_lock: RwLock::new(()),
+        }
+    }
+
+    /// Clear archived_keyspaces with exclusive write lock
+    pub fn clear_archived(&self) {
+        let _lock = self.archived_lock.write().unwrap();
+        self.archived_keyspaces.clear();
+    }
+
+    /// Clear destroyed_archived_keyspaces with exclusive write lock
+    pub fn clear_destroyed_archived(&self) {
+        let _lock = self.destroyed_lock.write().unwrap();
+        self.destroyed_archived_keyspaces.clear();
+    }
+
+    /// Insert into archived_keyspaces with write lock
+    pub fn insert_archived(&self, key: u32) {
+        let _lock = self.archived_lock.write().unwrap();
+        self.archived_keyspaces.insert(key);
+    }
+
+    /// Batch insert into archived_keyspaces with write lock
+    pub fn insert_archived_batch(&self, keys: &[u32]) {
+        let _lock = self.archived_lock.write().unwrap();
+        for &key in keys {
+            self.archived_keyspaces.insert(key);
+        }
+    }
+
+    /// Insert into destroyed_archived_keyspaces with write lock
+    pub fn insert_destroyed(&self, key: u32) {
+        let _lock = self.destroyed_lock.write().unwrap();
+        self.destroyed_archived_keyspaces.insert(key);
+    }
+
+    /// Returns a read-only snapshot copy of archived_keyspaces.
+    pub fn snapshot_archived(&self) -> HashSet<u32> {
+        let _read_lock = self.archived_lock.read().unwrap();
+        self.archived_keyspaces.iter().map(|k| *k).collect()
+    }
+
+    /// Returns a read-only snapshot copy of destroyed_archived_keyspaces.
+    pub fn snapshot_destroyed_archived(&self) -> Vec<u32> {
+        let _read_lock = self.destroyed_lock.read().unwrap();
+        self.destroyed_archived_keyspaces
+            .iter()
+            .map(|k| *k)
+            .collect()
+    }
+
+    /// Remove a specified key from archived_keyspaces safely
+    pub fn remove_archived(&self, key: &u32) -> Option<u32> {
+        let _write_lock = self.archived_lock.write().unwrap();
+        self.archived_keyspaces.remove(key)
+    }
+
+    /// Remove multiple keys from destroyed_archived_keyspaces safely, returning
+    /// removed count
+    pub fn remove_tombstone_archived_batch(&self, keys: &[u32]) -> usize {
+        let _write_lock = self.destroyed_lock.write().unwrap();
+
+        keys.iter()
+            .filter(|key| self.destroyed_archived_keyspaces.remove(key).is_some())
+            .count()
+    }
+
+    /// Thread-safe move of a keyspace from archived to destroyed set.
+    pub fn move_archived_to_destroyed(&self, keyspace: u32) -> bool {
+        let _archived_guard = self.archived_lock.write().unwrap();
+        let _destroyed_guard = self.destroyed_lock.write().unwrap();
+        if self.archived_keyspaces.remove(&keyspace).is_some() {
+            self.destroyed_archived_keyspaces.insert(keyspace);
+            true
+        } else {
+            false
+        }
+    }
 }
 
 #[cfg(test)]

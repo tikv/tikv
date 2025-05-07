@@ -32,6 +32,7 @@ causal_ts = { workspace = true }
 collections = { workspace = true }
 concurrency_manager = { workspace = true }
 crossbeam = { workspace = true }
+dashmap = "5.2.0"
 encryption_export = { workspace = true }
 engine_traits = { workspace = true }
 error_code = { workspace = true }

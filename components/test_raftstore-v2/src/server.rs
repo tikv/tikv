@@ -35,8 +35,8 @@ use raftstore::{
     coprocessor::CoprocessorHost,
     errors::Error as RaftError,
     store::{
-        region_meta, AutoSplitController, CheckLeaderRunner, FlowStatsReporter, ReadStats,
-        RegionSnapshot, TabletSnapManager, WriteStats,
+        region_meta, AutoSplitController, CheckLeaderRunner, FlowStatsReporter,
+        KeyspaceArchivedManager, ReadStats, RegionSnapshot, TabletSnapManager, WriteStats,
     },
     RegionInfoAccessor,
 };
@@ -470,6 +470,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
             cfg.gc.clone(),
             Default::default(),
             Arc::new(region_info_accessor.clone()),
+            Arc::new(KeyspaceArchivedManager::new(None, None)),
         );
         gc_worker.start(node_id, coprocessor_host.clone()).unwrap();
 

@@ -3754,7 +3754,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#258e68e813aa1af3a9817ce87630e2ec638851cd"
+source = "git+https://github.com/ystaticy/kvproto.git?branch=ystaticy_ks_archiv#650923bf77badecec0bb1fde1fa4f40dda097286"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -5285,6 +5285,7 @@ dependencies = [
  "concurrency_manager",
  "crc32fast",
  "crossbeam",
+ "dashmap",
  "derivative",
  "encryption",
  "encryption_export",
@@ -5352,6 +5353,7 @@ dependencies = [
  "collections",
  "concurrency_manager",
  "crossbeam",
+ "dashmap",
  "encryption_export",
  "engine_rocks",
  "engine_test",
@@ -6181,6 +6183,7 @@ dependencies = [
  "collections",
  "concurrency_manager",
  "crossbeam",
+ "dashmap",
  "encryption",
  "encryption_export",
  "engine_rocks",

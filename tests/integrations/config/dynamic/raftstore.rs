@@ -16,7 +16,8 @@ use raftstore::{
     store::{
         config::{Config, RaftstoreConfigManager},
         fsm::{StoreMeta, *},
-        AutoSplitController, DiskCheckRunner, SnapManager, StoreMsg, Transport,
+        AutoSplitController, DiskCheckRunner, KeyspaceArchivedManager, SnapManager, StoreMsg,
+        Transport,
     },
     Result,
 };
@@ -117,6 +118,7 @@ fn start_raftstore(
             DiskCheckRunner::dummy(),
             GrpcServiceManager::dummy(),
             Arc::new(AtomicU64::new(0)),
+            Arc::new(KeyspaceArchivedManager::new(None, None)),
         )
         .unwrap();
 

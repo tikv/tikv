@@ -655,6 +655,7 @@ mod tests {
             Default::default(),
             Default::default(),
             Arc::new(MockRegionInfoProvider::new(Vec::new())),
+            Arc::new(KeyspaceArchivedManager::new(None, None)),
         );
         let coprocessor_host = CoprocessorHost::default();
         gc_worker.start(mock_store_id, coprocessor_host).unwrap();

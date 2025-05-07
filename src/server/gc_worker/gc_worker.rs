@@ -24,7 +24,10 @@ use file_system::{IoType, WithIoType};
 use futures::executor::block_on;
 use kvproto::{kvrpcpb::Context, metapb::Region};
 use pd_client::{FeatureGate, PdClient};
-use raftstore::coprocessor::{CoprocessorHost, RegionInfoProvider};
+use raftstore::{
+    coprocessor::{CoprocessorHost, RegionInfoProvider},
+    store::KeyspaceArchivedManager,
+};
 use tikv_kv::{CfStatistics, CursorBuilder, Modify, SnapContext};
 use tikv_util::{
     config::{Tracker, VersionTrack},
@@ -1047,6 +1050,9 @@ impl<E: Engine> GcRunnerCore<E> {
                 let res =
                     self.unsafe_destroy_range(&ctx, &start_key, &end_key, region_info_provider);
                 update_metrics(res.is_err());
+                if res.is_ok() {
+                    info!("[test-yjy] unsafe destroy range.")
+                }
                 callback(res);
                 slow_log!(
                     T timer,
@@ -1212,6 +1218,8 @@ where
 
     gc_manager_handle: Arc<Mutex<Option<GcManagerHandle>>>,
     feature_gate: FeatureGate,
+
+    keyspace_archived_manager: Arc<KeyspaceArchivedManager>,
 }
 
 impl<E: Engine> Clone for GcWorker<E> {
@@ -1229,6 +1237,7 @@ impl<E: Engine> Clone for GcWorker<E> {
             gc_manager_handle: self.gc_manager_handle.clone(),
             feature_gate: self.feature_gate.clone(),
             region_info_provider: self.region_info_provider.clone(),
+            keyspace_archived_manager: self.keyspace_archived_manager.clone(),
         }
     }
 }
@@ -1302,6 +1311,7 @@ impl<E: Engine> GcWorker<E> {
         cfg: GcConfig,
         feature_gate: FeatureGate,
         region_info_provider: Arc<dyn RegionInfoProvider>,
+        archived_keyspaces: Arc<KeyspaceArchivedManager>,
     ) -> Self {
         let worker_builder = WorkerBuilder::new("gc-worker")
             .pending_capacity(GC_MAX_PENDING_TASKS)
@@ -1321,6 +1331,7 @@ impl<E: Engine> GcWorker<E> {
             gc_manager_handle: Arc::new(Mutex::new(None)),
             feature_gate,
             region_info_provider,
+            keyspace_archived_manager: archived_keyspaces,
         }
     }
 
@@ -1397,6 +1408,35 @@ impl<E: Engine> GcWorker<E> {
                 region_info_provider: self.region_info_provider.clone(),
             })
             .or_else(handle_gc_task_schedule_error)
+    }
+
+    pub fn archive_keyspace_range(&self) -> Result<()> {
+        let keyspace_archived_manager = self.keyspace_archived_manager.clone();
+        keyspace_archived_manager.insert_archived(2);
+
+        // get archived keyspace
+        let archived_keyspaces = keyspace_archived_manager.snapshot_archived();
+
+        for keyspace in archived_keyspaces.iter().copied() {
+            let ks_archived_manager = keyspace_archived_manager.clone();
+            info!("[test-yjy]archive keyspace {}", keyspace);
+            let ctx = Context::default();
+            let (start_key, end_key) = ApiV2::get_txn_keyspace_range(keyspace);
+            self.unsafe_destroy_range(
+                ctx,
+                Key::from_encoded(start_key),
+                Key::from_encoded(end_key),
+                Box::new(move |res| match res {
+                    Ok(_) => {
+                        info!("[test-yjy]success");
+                        ks_archived_manager.move_archived_to_destroyed(keyspace);
+                    }
+                    Err(e) => warn!("[test-yjy]warning: {:?}", e),
+                }),
+            )
+            .unwrap();
+        }
+        Ok(())
     }
 
     pub fn get_config_manager(&self) -> GcWorkerConfigManager {
@@ -1764,6 +1804,7 @@ mod tests {
             gc_config,
             gate,
             Arc::new(MockRegionInfoProvider::new(vec![region1, region2])),
+            Arc::new(KeyspaceArchivedManager::new(None, None)),
         );
         let coprocessor_host = CoprocessorHost::default();
         gc_worker.start(store_id, coprocessor_host).unwrap();
@@ -1943,6 +1984,7 @@ mod tests {
             gc_config,
             feature_gate,
             Arc::new(ri_provider.clone()),
+            Arc::new(KeyspaceArchivedManager::new(None, None)),
         );
         let coprocessor_host = CoprocessorHost::default();
         gc_worker.start(store_id, coprocessor_host).unwrap();
@@ -2352,6 +2394,7 @@ mod tests {
             gc_config,
             gate,
             Arc::new(MockRegionInfoProvider::new(vec![region.clone()])),
+            Arc::new(KeyspaceArchivedManager::new(None, None)),
         );
 
         // Before starting gc_worker, fill the scheduler to full.
@@ -2919,6 +2962,7 @@ mod tests {
             gc_config,
             gate,
             Arc::new(MockRegionInfoProvider::new(vec![])),
+            Arc::new(KeyspaceArchivedManager::new(None, None)),
         );
         let mut config_change = ConfigChange::new();
         config_change.insert(String::from("num_threads"), ConfigValue::Usize(5));

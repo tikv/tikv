@@ -31,8 +31,8 @@ pub use self::{
     disk_check::{Runner as DiskCheckRunner, Task as DiskCheckTask},
     pd::{
         new_change_peer_v2_request, FlowStatistics, FlowStatsReporter, HeartbeatTask,
-        Runner as PdRunner, StatsMonitor as PdStatsMonitor, StoreStatsReporter, Task as PdTask,
-        NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
+        KeyspaceArchivedManager, Runner as PdRunner, StatsMonitor as PdStatsMonitor,
+        StoreStatsReporter, Task as PdTask, NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
     },
     raftlog_gc::{Runner as RaftlogGcRunner, Task as RaftlogGcTask},
     read::{

@@ -27,11 +27,15 @@ pub fn paired_future_callback<T>() -> (Box<dyn FnOnce(T) + Send>, futures_onesho
 where
     T: Send + 'static,
 {
+    info!("[test-yjy] paired_future_callback");
     let (tx, future) = futures_oneshot::channel::<T>();
     let callback = Box::new(move |result| {
         let r = tx.send(result);
         if r.is_err() {
             warn!("paired_future_callback: Failed to send result to the future rx, discarded.");
+        }
+        if r.is_ok() {
+            info!("[test-yjy] success");
         }
     });
     (callback, future)
