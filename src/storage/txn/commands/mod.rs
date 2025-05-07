@@ -64,7 +64,7 @@ pub use rollback::Rollback;
 use tikv_util::{deadline::Deadline, memory::HeapSize};
 use tracker::RequestType;
 pub use txn_heart_beat::TxnHeartBeat;
-use txn_types::{Key, TimeStamp, Value, Write};
+use txn_types::{CommitRole as TxnCommitRole, Key, TimeStamp};
 
 use crate::storage::{
     kv::WriteData,
@@ -73,7 +73,7 @@ use crate::storage::{
         WaitTimeout,
     },
     metrics,
-    mvcc::{Lock as MvccLock, MvccReader, ReleasedLock, SnapshotReader},
+    mvcc::{ReleasedLock, SnapshotReader},
     txn::{latch, txn_status_cache::TxnStatusCache, ProcessResult, Result},
     types::{
         MvccInfo, PessimisticLockParameters, PessimisticLockResults, PrewriteResult,
@@ -256,6 +256,11 @@ impl From<CommitRequest> for TypedCommand<TxnStatus> {
             keys,
             req.get_start_version().into(),
             req.get_commit_version().into(),
+            match req.get_commit_role() {
+                CommitRole::Unknown => None,
+                CommitRole::Primary => Some(TxnCommitRole::Primary),
+                CommitRole::Secondary => Some(TxnCommitRole::Secondary),
+            },
             req.take_context(),
         )
     }
@@ -559,39 +564,6 @@ impl ReleasedLocks {
     pub fn into_iter(self) -> impl Iterator<Item = ReleasedLock> {
         self.0.into_iter()
     }
-}
-
-type LockWritesVals = (
-    Option<MvccLock>,
-    Vec<(TimeStamp, Write)>,
-    Vec<(TimeStamp, Value)>,
-);
-
-fn find_mvcc_infos_by_key<S: Snapshot>(
-    reader: &mut MvccReader<S>,
-    key: &Key,
-    mut ts: TimeStamp,
-) -> Result<LockWritesVals> {
-    let mut writes = vec![];
-    let mut values = vec![];
-    let lock = reader.load_lock(key)?;
-    loop {
-        let opt = reader.seek_write(key, ts)?;
-        match opt {
-            Some((commit_ts, write)) => {
-                writes.push((commit_ts, write));
-                if commit_ts.is_zero() {
-                    break;
-                }
-                ts = commit_ts.prev();
-            }
-            None => break,
-        };
-    }
-    for (ts, v) in reader.scan_values_in_default(key)? {
-        values.push((ts, v));
-    }
-    Ok((lock, writes, values))
 }
 
 pub trait CommandExt: Display {
@@ -1082,6 +1054,7 @@ pub mod test_util {
             keys,
             TimeStamp::from(lock_ts),
             TimeStamp::from(commit_ts),
+            None,
             ctx,
         );
 

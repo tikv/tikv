@@ -407,10 +407,42 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
         }
         // failed in commit
         Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-            box MvccErrorInner::TxnLockNotFound { .. },
+            box MvccErrorInner::TxnLockNotFound {
+                start_ts,
+                commit_ts,
+                key,
+                mvcc_info,
+            },
         ))))) => {
-            warn!("txn conflicts"; "err" => ?err);
-            key_error.set_retryable(format!("{:?}", err));
+            // use an error without mvcc_info to construct error the error message
+            let err_without_mvcc = &Error::from(TxnError::from(MvccError::from(
+                MvccErrorInner::TxnLockNotFound {
+                    start_ts: *start_ts,
+                    commit_ts: *commit_ts,
+                    key: key.clone(),
+                    mvcc_info: None,
+                },
+            )));
+
+            warn!("txn conflicts"; "err" => ?err_without_mvcc);
+            key_error.set_retryable(format!("{:?}", err_without_mvcc));
+            let mut txn_lock_not_found = kvrpcpb::TxnLockNotFound::default();
+            txn_lock_not_found.set_key(key.clone());
+            key_error.set_txn_lock_not_found(txn_lock_not_found);
+            // if mvcc_info is present, fill the debug_info for client's further debugging.
+            if let Some(mvcc_info) = mvcc_info {
+                // remove the values in default CF to reduce the size of the response.
+                let mut mvcc_info = mvcc_info.clone();
+                mvcc_info.values.clear();
+
+                let mut mvcc_debug_info = kvrpcpb::MvccDebugInfo::default();
+                mvcc_debug_info.set_key(key.clone());
+                mvcc_debug_info.set_mvcc(mvcc_info.into_proto());
+
+                let mut debug_info = kvrpcpb::DebugInfo::default();
+                debug_info.set_mvcc_info(vec![mvcc_debug_info].into());
+                key_error.set_debug_info(debug_info);
+            }
         }
         Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
             box MvccErrorInner::TxnNotFound { start_ts, key },
@@ -571,8 +603,10 @@ impl TryFrom<SharedError> for Error {
 #[cfg(test)]
 mod test {
     use kvproto::kvrpcpb::WriteConflictReason;
+    use txn_types::{Lock, LockType, Write, WriteType};
 
     use super::*;
+    use crate::storage::types::MvccInfo;
 
     #[test]
     fn test_extract_key_error_write_conflict() {
@@ -601,6 +635,70 @@ mod test {
         write_conflict.set_reason(WriteConflictReason::LazyUniquenessCheck);
         expect.set_conflict(write_conflict);
         expect.set_retryable(format!("{:?}", case));
+
+        let got = extract_key_error(&case);
+        assert_eq!(got, expect);
+    }
+
+    #[test]
+    fn test_extract_key_error_txn_lock_not_found() {
+        let key = b"key".to_vec();
+        let mvcc_info = MvccInfo {
+            lock: Some(Lock::new(
+                LockType::Lock,
+                b"k".to_vec(),
+                10.into(),
+                100,
+                None,
+                10.into(),
+                1,
+                10.into(),
+                false,
+            )),
+            writes: vec![(
+                TimeStamp::new(8),
+                Write::new(WriteType::Lock, 7.into(), None),
+            )],
+            values: vec![(TimeStamp::new(7), b"v".to_vec())],
+        };
+
+        let case = Error::from(TxnError::from(MvccError::from(
+            MvccErrorInner::TxnLockNotFound {
+                start_ts: TimeStamp::new(123),
+                commit_ts: TimeStamp::new(456),
+                key: key.clone(),
+                mvcc_info: Some(mvcc_info.clone()),
+            },
+        )));
+
+        let mut expect = kvrpcpb::KeyError::default();
+        let mut txn_lock_not_found = kvrpcpb::TxnLockNotFound::default();
+        txn_lock_not_found.set_key(key.clone());
+        expect.set_txn_lock_not_found(txn_lock_not_found);
+        let expected_retryable_msg = format!(
+            "{:?}",
+            Error::from(TxnError::from(MvccError::from(
+                MvccErrorInner::TxnLockNotFound {
+                    start_ts: TimeStamp::new(123),
+                    commit_ts: TimeStamp::new(456),
+                    key: key.clone(),
+                    mvcc_info: None,
+                }
+            ))),
+        );
+        expect.set_retryable(expected_retryable_msg);
+        let mut expect_pb_mvcc_info = mvcc_info.clone().into_proto();
+        // should clear the values in default CF to reduce the size of the response.
+        expect_pb_mvcc_info.values.clear();
+        expect.set_debug_info(kvrpcpb::DebugInfo {
+            mvcc_info: vec![kvrpcpb::MvccDebugInfo {
+                key: key.clone(),
+                mvcc: Some(expect_pb_mvcc_info).into(),
+                ..Default::default()
+            }]
+            .into(),
+            ..Default::default()
+        });
 
         let got = extract_key_error(&case);
         assert_eq!(got, expect);

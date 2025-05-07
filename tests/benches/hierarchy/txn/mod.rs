@@ -124,7 +124,7 @@ fn txn_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config: &Benc
                 let snapshot = engine.snapshot(Default::default()).unwrap();
                 let mut txn = mvcc::MvccTxn::new(1.into(), cm.clone());
                 let mut reader = SnapshotReader::new(1.into(), snapshot, true);
-                commit(&mut txn, &mut reader, key, 2.into()).unwrap();
+                commit(&mut txn, &mut reader, key, 2.into(), None).unwrap();
                 let write_data = WriteData::from_modifies(txn.into_modifies());
                 black_box(engine.write(&ctx, write_data)).unwrap();
             }

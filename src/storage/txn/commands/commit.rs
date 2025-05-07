@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use txn_types::Key;
+use txn_types::{CommitRole, Key};
 
 use crate::storage::{
     kv::WriteData,
@@ -31,6 +31,8 @@ command! {
             lock_ts: txn_types::TimeStamp,
             /// The commit timestamp.
             commit_ts: txn_types::TimeStamp,
+            /// The commit role of the transaction.
+            commit_role: Option<CommitRole>,
         }
         in_heap => {
             keys,
@@ -64,7 +66,13 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Commit {
         // Pessimistic txn needs key_hashes to wake up waiters
         let mut released_locks = ReleasedLocks::new();
         for k in self.keys {
-            released_locks.push(commit(&mut txn, &mut reader, k, self.commit_ts)?);
+            released_locks.push(commit(
+                &mut txn,
+                &mut reader,
+                k,
+                self.commit_ts,
+                self.commit_role,
+            )?);
         }
 
         let pr = ProcessResult::TxnStatus {
