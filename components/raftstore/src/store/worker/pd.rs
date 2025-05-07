@@ -1283,7 +1283,7 @@ where
 
         if let Some(report) = &mut store_report {
             report.destroyed_keyspace_ids =
-                self.keyspace_archived_manager.snapshot_destroyed_archived()
+                self.keyspace_archived_manager.snapshot_destroyed_archived();
         } else {
             let mut new_report = pdpb::StoreReport::default();
             new_report.destroyed_keyspace_ids =
