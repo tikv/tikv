@@ -1050,6 +1050,9 @@ impl<E: Engine> GcRunnerCore<E> {
                 let res =
                     self.unsafe_destroy_range(&ctx, &start_key, &end_key, region_info_provider);
                 update_metrics(res.is_err());
+                if res.is_ok(){
+                    info!("[test-yjy] unsafe destroy range.")
+                }
                 callback(res);
                 slow_log!(
                     T timer,

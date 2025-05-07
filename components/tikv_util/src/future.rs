@@ -33,6 +33,9 @@ where
         if r.is_err() {
             warn!("paired_future_callback: Failed to send result to the future rx, discarded.");
         }
+        if r.is_ok() {
+            info!("[test-yjy] success");
+        }
     });
     (callback, future)
 }

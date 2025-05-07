@@ -1286,8 +1286,8 @@ where
                 self.keyspace_archived_manager.snapshot_destroyed_archived()
         } else {
             let mut new_report = pdpb::StoreReport::default();
-             new_report.destroyed_keyspace_ids =
-            self.keyspace_archived_manager.snapshot_destroyed_archived();
+            new_report.destroyed_keyspace_ids =
+                self.keyspace_archived_manager.snapshot_destroyed_archived();
             store_report = Some(new_report);
         }
 
