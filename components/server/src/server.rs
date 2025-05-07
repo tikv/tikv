@@ -55,7 +55,6 @@ use kvproto::{
     kvrpcpb::ApiVersion, logbackuppb::create_log_backup, recoverdatapb::create_recover_data,
     resource_usage_agent::create_resource_metering_pub_sub,
 };
-use kvproto::kvrpcpb::Context;
 use pd_client::{
     meta_storage::{Checked, Sourced},
     metrics::STORE_SIZE_EVENT_INT_VEC,
@@ -141,8 +140,6 @@ use tikv_util::{
     Either,
 };
 use tokio::runtime::Builder;
-use tikv::storage::mvcc::Key;
-use tikv_util::future::paired_future_callback;
 
 use crate::{
     common::{
@@ -556,13 +553,7 @@ where
             DEFAULT_METRICS_FLUSH_INTERVAL,
             move || {
                 info!("[test-yjy] start consumer archived keyspaces.");
-                let (cb, f) = paired_future_callback();
-                let res = gc_worker_clone.unsafe_destroy_range(
-                    Context::default(),
-                    Key::from_raw(b"test_a"),
-                    Key::from_raw(b"test_b"),
-                    cb,
-                );
+                gc_worker_clone.archive_keyspace_range().unwrap();
             },
         );
         let mut ttl_checker = Box::new(LazyWorker::new("ttl-checker"));

@@ -1050,7 +1050,7 @@ impl<E: Engine> GcRunnerCore<E> {
                 let res =
                     self.unsafe_destroy_range(&ctx, &start_key, &end_key, region_info_provider);
                 update_metrics(res.is_err());
-                if res.is_ok(){
+                if res.is_ok() {
                     info!("[test-yjy] unsafe destroy range.")
                 }
                 callback(res);
@@ -1408,6 +1408,35 @@ impl<E: Engine> GcWorker<E> {
                 region_info_provider: self.region_info_provider.clone(),
             })
             .or_else(handle_gc_task_schedule_error)
+    }
+
+    pub fn archive_keyspace_range(&self) -> Result<()> {
+        let keyspace_archived_manager = self.keyspace_archived_manager.clone();
+        keyspace_archived_manager.insert_archived(2);
+
+        // get archived keyspace
+        let archived_keyspaces = keyspace_archived_manager.snapshot_archived();
+
+        for keyspace in archived_keyspaces.iter().copied() {
+            let ks_archived_manager = keyspace_archived_manager.clone();
+            info!("[test-yjy]archive keyspace {}", keyspace);
+            let ctx = Context::default();
+            let (start_key, end_key) = ApiV2::get_txn_keyspace_range(keyspace);
+            self.unsafe_destroy_range(
+                ctx,
+                Key::from_encoded(start_key),
+                Key::from_encoded(end_key),
+                Box::new(move |res| match res {
+                    Ok(_) => {
+                        info!("[test-yjy]success");
+                        ks_archived_manager.move_archived_to_destroyed(keyspace);
+                    }
+                    Err(e) => warn!("[test-yjy]warning: {:?}", e),
+                }),
+            )
+            .unwrap();
+        }
+        Ok(())
     }
 
     pub fn get_config_manager(&self) -> GcWorkerConfigManager {

@@ -2640,6 +2640,18 @@ impl KeyspaceArchivedManager {
             .filter(|key| self.destroyed_archived_keyspaces.remove(key).is_some())
             .count()
     }
+
+    /// Thread-safe move of a keyspace from archived to destroyed set.
+    pub fn move_archived_to_destroyed(&self, keyspace: u32) -> bool {
+        let _archived_guard = self.archived_lock.write().unwrap();
+        let _destroyed_guard = self.destroyed_lock.write().unwrap();
+        if self.archived_keyspaces.remove(&keyspace).is_some() {
+            self.destroyed_archived_keyspaces.insert(keyspace);
+            true
+        } else {
+            false
+        }
+    }
 }
 
 #[cfg(test)]
