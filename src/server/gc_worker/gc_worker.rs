@@ -2525,6 +2525,51 @@ mod tests {
     }
 
     #[test]
+    fn test_destroy_keyspace() {
+        let store_id = 1;
+        let mut engine = PrefixedEngine(TestEngineBuilder::new().build().unwrap());
+
+        let test_key=&vec![b'x', 0, 0, 1];
+        must_prewrite_put(&mut engine, test_key, b"value", test_key, 10);
+        must_commit(&mut engine, test_key, 10, 20);
+        let db = engine.kv_engine().unwrap().as_inner().clone();
+        let cf = get_cf_handle(&db, CF_WRITE).unwrap();
+        let mut fopts = FlushOptions::default();
+        fopts.set_wait(true);
+        db.flush_cf(cf, &fopts).unwrap();
+
+        let gate = FeatureGate::default();
+        gate.set_version("5.0.0").unwrap();
+        let (tx, _rx) = mpsc::channel();
+
+        let mut region = Region::default();
+        region.mut_peers().push(new_peer(store_id, 1));
+
+        let mut gc_config = GcConfig::default();
+        gc_config.num_threads = 2;
+
+        let archived_keyspaces=Arc::new(DashSet::new());
+        archived_keyspaces.insert(1);
+        let mut gc_worker = GcWorker::new(
+            engine.clone(),
+            tx,
+            gc_config,
+            gate,
+            Arc::new(MockRegionInfoProvider::new(vec![region.clone()])),
+            Arc::new(KeyspaceArchivedManager::new(Some(archived_keyspaces), None)),
+        );
+
+        let coprocessor_host = CoprocessorHost::default();
+        gc_worker.start(store_id, coprocessor_host).unwrap();
+
+        gc_worker.archive_keyspace_range();
+
+        thread::sleep(Duration::from_secs(15));
+
+        must_get_none(&mut engine, test_key, 30);
+    }
+
+    #[test]
     fn test_keys_in_regions_iteration() {
         fn init_region(start_key: &[u8], end_key: &[u8]) -> Region {
             let start_key = Key::from_raw(start_key);
