@@ -2578,36 +2578,12 @@ impl KeyspaceArchivedManager {
         }
     }
 
-    /// Clear archived_keyspaces with exclusive write lock
-    pub fn clear_archived(&self) {
-        let _lock = self.archived_lock.write().unwrap();
-        self.archived_keyspaces.clear();
-    }
-
-    /// Clear destroyed_archived_keyspaces with exclusive write lock
-    pub fn clear_destroyed_archived(&self) {
-        let _lock = self.destroyed_lock.write().unwrap();
-        self.destroyed_archived_keyspaces.clear();
-    }
-
-    /// Insert into archived_keyspaces with write lock
-    pub fn insert_archived(&self, key: u32) {
-        let _lock = self.archived_lock.write().unwrap();
-        self.archived_keyspaces.insert(key);
-    }
-
     /// Batch insert into archived_keyspaces with write lock
     pub fn insert_archived_batch(&self, keys: &[u32]) {
         let _lock = self.archived_lock.write().unwrap();
         for &key in keys {
             self.archived_keyspaces.insert(key);
         }
-    }
-
-    /// Insert into destroyed_archived_keyspaces with write lock
-    pub fn insert_destroyed(&self, key: u32) {
-        let _lock = self.destroyed_lock.write().unwrap();
-        self.destroyed_archived_keyspaces.insert(key);
     }
 
     /// Returns a read-only snapshot copy of archived_keyspaces.
@@ -2625,17 +2601,10 @@ impl KeyspaceArchivedManager {
             .collect()
     }
 
-    /// Remove a specified key from archived_keyspaces safely
-    pub fn remove_archived(&self, key: &u32) -> Option<u32> {
-        let _write_lock = self.archived_lock.write().unwrap();
-        self.archived_keyspaces.remove(key)
-    }
-
     /// Remove multiple keys from destroyed_archived_keyspaces safely, returning
     /// removed count
     pub fn remove_tombstone_archived_batch(&self, keys: &[u32]) -> usize {
         let _write_lock = self.destroyed_lock.write().unwrap();
-
         keys.iter()
             .filter(|key| self.destroyed_archived_keyspaces.remove(key).is_some())
             .count()

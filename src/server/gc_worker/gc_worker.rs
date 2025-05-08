@@ -1050,9 +1050,6 @@ impl<E: Engine> GcRunnerCore<E> {
                 let res =
                     self.unsafe_destroy_range(&ctx, &start_key, &end_key, region_info_provider);
                 update_metrics(res.is_err());
-                if res.is_ok() {
-                    info!("[test-yjy] unsafe destroy range.")
-                }
                 callback(res);
                 slow_log!(
                     T timer,
@@ -1639,9 +1636,9 @@ mod tests {
         thread,
         time::Duration,
     };
-    use dashmap::DashSet;
 
     use api_version::{ApiV1, ApiV2, KvFormat, RawValue};
+    use dashmap::DashSet;
     use engine_rocks::{raw::FlushOptions, util::get_cf_handle, RocksEngine};
     use engine_traits::Peekable as _;
     use futures::executor::block_on;
@@ -1697,34 +1694,6 @@ mod tests {
             region.mut_peers()[0].set_store_id(store_id);
         }
         region
-    }
-
-    #[test]
-    fn test_archived_keyspace(){
-        let archived: Option<Arc<DashSet<u32>>> = Some(Arc::new(DashSet::new()));
-
-        if let Some(set_arc) = &archived {
-            set_arc.insert(2);
-            set_arc.insert(3);
-        }
-
-        test_destroy_range_impl(
-            &[
-                b"key1".to_vec(),
-                b"key2".to_vec(),
-                b"key3".to_vec(),
-                b"key4".to_vec(),
-                b"key5".to_vec(),
-            ],
-            5,
-            10,
-            b"key2",
-            b"key4",
-            b"key3",
-            archived,
-        )
-            .unwrap();
-
     }
 
     #[test]
@@ -1792,40 +1761,6 @@ mod tests {
         assert!(all_equal);
     }
 
-    fn get_destroy_range_gc_worker(store_id: u64, split_key: &[u8]) -> (Storage<tikv_kv::RocksEngine, MockLockManager, ApiV1>, GcWorker<tikv_kv::RocksEngine>) {
-// Return Result from this function so we can use the `wait_op` macro here.
-        let engine = TestEngineBuilder::new().build().unwrap();
-        let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(
-            engine.clone(),
-            MockLockManager::new(),
-        )
-            .build()
-            .unwrap();
-        let gate = FeatureGate::default();
-        gate.set_version("5.0.0").unwrap();
-
-        let (tx, _rx) = mpsc::channel();
-
-        let mut region1 = Region::default();
-        region1.mut_peers().push(new_peer(store_id, 1));
-        region1.set_end_key(split_key.to_vec());
-
-        let mut region2 = Region::default();
-        region2.mut_peers().push(new_peer(store_id, 2));
-        region2.set_start_key(split_key.to_vec());
-
-        let mut gc_config = GcConfig::default();
-        gc_config.num_threads = 2;
-        return (storage,GcWorker::new(
-            engine,
-            tx,
-            gc_config,
-            gate,
-            Arc::new(MockRegionInfoProvider::new(vec![region1, region2])),
-            Arc::new(KeyspaceArchivedManager::new(None, None)),
-        ));
-    }
-
     fn test_destroy_range_impl(
         init_keys: &[Vec<u8>],
         start_ts: impl Into<TimeStamp>,
@@ -1833,10 +1768,9 @@ mod tests {
         start_key: &[u8],
         end_key: &[u8],
         split_key: &[u8],
-        archived: Option<Arc<DashSet<u32>>>,
     ) -> Result<()> {
-        // // Return Result from this function so we can use the `wait_op` macro here.
-         let store_id = 1 as u64;
+        // Return Result from this function so we can use the `wait_op` macro here.
+        let store_id = 1;
 
         let engine = TestEngineBuilder::new().build().unwrap();
         let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(
@@ -1866,10 +1800,9 @@ mod tests {
             gc_config,
             gate,
             Arc::new(MockRegionInfoProvider::new(vec![region1, region2])),
-            Arc::new(KeyspaceArchivedManager::new(archived.clone(), None)),
+            Arc::new(KeyspaceArchivedManager::new(None, None)),
         );
 
-       // let (storage,mut gc_worker)= get_destroy_range_gc_worker(store_id,split_key);
         let coprocessor_host = CoprocessorHost::default();
         gc_worker.start(store_id, coprocessor_host).unwrap();
 
@@ -1925,19 +1858,15 @@ mod tests {
             .filter(|(k, _)| k < start_key.as_encoded() || k >= end_key.as_encoded())
             .collect();
 
-
-        if archived.is_none(){
-            info!("test-yjy test_archive_ks none");
             // Invoke unsafe destroy range.
-            wait_op!(|cb| gc_worker.unsafe_destroy_range(Context::default(), start_key, end_key, cb))
-                .unwrap()
-                .unwrap();
-        }else{
-            info!("test-yjy test_archive_ks");
-            gc_worker.archive_keyspace_range().unwrap();
-        }
-
-        info!("test-yjy test_archive_ks end");
+            wait_op!(|cb| gc_worker.unsafe_destroy_range(
+                Context::default(),
+                start_key,
+                end_key,
+                cb
+            ))
+            .unwrap()
+            .unwrap();
 
         // Check remaining data is as expected.
         check_data(&storage, &data);
@@ -2529,7 +2458,7 @@ mod tests {
         let store_id = 1;
         let mut engine = PrefixedEngine(TestEngineBuilder::new().build().unwrap());
 
-        let test_key=&vec![b'x', 0, 0, 1];
+        let test_key = &vec![b'x', 0, 0, 1];
         must_prewrite_put(&mut engine, test_key, b"value", test_key, 10);
         must_commit(&mut engine, test_key, 10, 20);
         let db = engine.kv_engine().unwrap().as_inner().clone();
@@ -2548,7 +2477,7 @@ mod tests {
         let mut gc_config = GcConfig::default();
         gc_config.num_threads = 2;
 
-        let archived_keyspaces=Arc::new(DashSet::new());
+        let archived_keyspaces = Arc::new(DashSet::new());
         archived_keyspaces.insert(1);
         let mut gc_worker = GcWorker::new(
             engine.clone(),
