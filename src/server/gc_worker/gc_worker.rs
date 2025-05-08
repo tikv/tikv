@@ -1637,7 +1637,7 @@ mod tests {
         time::Duration,
     };
 
-    use api_version::{ApiV1, ApiV2, KvFormat, RawValue};
+    use api_version::{ApiV2, KvFormat, RawValue};
     use dashmap::DashSet;
     use engine_rocks::{raw::FlushOptions, util::get_cf_handle, RocksEngine};
     use engine_traits::Peekable as _;
@@ -1662,7 +1662,7 @@ mod tests {
             kv::{metrics::GcKeyMode, Modify, TestEngineBuilder, WriteData},
             lock_manager::MockLockManager,
             mvcc::{
-                tests::{must_get_none, must_get_none_on_region, must_get_on_region},
+                tests::{must_get, must_get_none, must_get_none_on_region, must_get_on_region},
                 MAX_TXN_WRITE_SIZE,
             },
             txn::{
@@ -1889,7 +1889,6 @@ mod tests {
             b"key2",
             b"key4",
             b"key3",
-            None,
         )
         .unwrap();
 
@@ -1900,7 +1899,6 @@ mod tests {
             b"key3",
             b"key7",
             b"key5",
-            None,
         )
         .unwrap();
 
@@ -1917,7 +1915,6 @@ mod tests {
             b"key1",
             b"key9",
             b"key5",
-            None,
         )
         .unwrap();
 
@@ -1934,7 +1931,6 @@ mod tests {
             b"key2\x00",
             b"key4",
             b"key3",
-            None,
         )
         .unwrap();
 
@@ -1950,7 +1946,6 @@ mod tests {
             b"key1\x00",
             b"key1\x00\x00",
             b"key1",
-            None,
         )
         .unwrap();
 
@@ -1966,7 +1961,6 @@ mod tests {
             b"key1\x00",
             b"key1\x00",
             b"key1",
-            None,
         )
         .unwrap();
     }
@@ -2454,18 +2448,33 @@ mod tests {
     }
 
     #[test]
-    fn test_destroy_keyspace() {
+    fn test_unsafe_destroy_archived_keyspaces_ranges() {
+        // Write keyspace_id(1) Txn data and Txn data for other keyspaces.
+        // set archived keyspace = keyspace_id(1).
+        // check keyspace_id(1) data already deleted.
+        // check other keyspaces data is preserved.
+
+        // Step1: write keyspace_id(1) Txn data and Txn data for other keyspaces.
         let store_id = 1;
         let mut engine = PrefixedEngine(TestEngineBuilder::new().build().unwrap());
 
-        let test_key = &vec![b'x', 0, 0, 1];
-        must_prewrite_put(&mut engine, test_key, b"value", test_key, 10);
-        must_commit(&mut engine, test_key, 10, 20);
+        // keyspace id is 1.
+        let test_ks1_key = &vec![b'x', 0, 0, 1];
+        must_prewrite_put(&mut engine, test_ks1_key, b"value", test_ks1_key, 10);
+        must_commit(&mut engine, test_ks1_key, 10, 20);
+
+        // keyspace id is 2.
+        let test_key_ks2 = &vec![b'x', 0, 0, 2];
+        must_prewrite_put(&mut engine, test_key_ks2, b"value", test_key_ks2, 10);
+        must_commit(&mut engine, test_key_ks2, 10, 20);
+
         let db = engine.kv_engine().unwrap().as_inner().clone();
         let cf = get_cf_handle(&db, CF_WRITE).unwrap();
         let mut fopts = FlushOptions::default();
         fopts.set_wait(true);
         db.flush_cf(cf, &fopts).unwrap();
+
+        // ------------ write data end ------------
 
         let gate = FeatureGate::default();
         gate.set_version("5.0.0").unwrap();
@@ -2477,6 +2486,7 @@ mod tests {
         let mut gc_config = GcConfig::default();
         gc_config.num_threads = 2;
 
+        // Step2: set archived keyspace = keyspace_id(1).
         let archived_keyspaces = Arc::new(DashSet::new());
         archived_keyspaces.insert(1);
         let mut gc_worker = GcWorker::new(
@@ -2491,11 +2501,16 @@ mod tests {
         let coprocessor_host = CoprocessorHost::default();
         gc_worker.start(store_id, coprocessor_host).unwrap();
 
-        gc_worker.archive_keyspace_range();
-
+        // Step3 : wait archive_keyspace_range finished.
+        gc_worker.archive_keyspace_range().unwrap();
         thread::sleep(Duration::from_secs(15));
 
-        must_get_none(&mut engine, test_key, 30);
+        // keyspace_id(1) data is deleted.
+        must_get_none(&mut engine, test_ks1_key, 30);
+
+        // other keyspaces data is preserved.
+        must_get(&mut engine, test_key_ks2, 30, b"value");
+
     }
 
     #[test]
