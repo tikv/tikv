@@ -35,7 +35,6 @@ use futures::{executor::block_on, future::try_join_all};
 use gag::BufferRedirect;
 use grpcio::{CallOption, ChannelBuilder, Environment};
 use kvproto::{
-    brpb,
     debugpb::{Db as DbType, *},
     encryptionpb::EncryptionMethod,
     kvrpcpb::SplitRegionRequest,
@@ -402,6 +401,7 @@ fn main() {
             until_ts,
             max_concurrent_compactions: max_compaction_num,
             storage_base64,
+            master_key_service_base64,
             compression,
             compression_level,
             name,
@@ -410,26 +410,14 @@ fn main() {
         } => {
             let tmp_engine =
                 TemporaryRocks::new(&cfg).expect("failed to create temp engine for writing SSTs.");
-            let maybe_external_storage = base64::decode(storage_base64)
-                .map_err(|err| format!("cannot parse base64: {}", err))
-                .and_then(|storage_bytes| {
-                    let mut ext_storage = brpb::StorageBackend::new();
-                    ext_storage
-                        .merge_from_bytes(&storage_bytes)
-                        .map_err(|err| format!("cannot parse bytes as StorageBackend: {}", err))?;
-                    Result::Ok(ext_storage)
-                });
-            let external_storage = match maybe_external_storage {
-                Ok(s) => s,
-                Err(err) => {
-                    clap::Error {
-                        message: format!("(-s, --storage-base64) is invalid: {:?}", err),
-                        kind: ErrorKind::InvalidValue,
-                        info: None,
-                    }
-                    .exit();
-                }
-            };
+
+            let external_storage_pb =
+                util::unmarshal_message_or_fail(&storage_base64, "-s, --storage-base64");
+            let master_key_pb = util::unmarshal_message_or_fail(
+                &master_key_service_base64,
+                "--master-key-service-base64",
+            );
+
             let ccfg = compact_log::ExecutionConfig {
                 from_ts,
                 until_ts,
@@ -440,8 +428,9 @@ fn main() {
                 out_prefix: ccfg.recommended_prefix(&name),
                 cfg: ccfg,
                 max_concurrent_subcompaction: max_compaction_num,
-                external_storage,
+                external_storage: external_storage_pb,
                 db: Some(tmp_engine.rocks),
+                master_key: master_key_pb,
             };
 
             use tikv::server::status_server::lite::Server as StatusServerLite;

@@ -29,7 +29,7 @@ use crate::{
 
 /// The state of executing a subcompaction.
 pub struct SubcompactionExec<DB> {
-    source: Source,
+    pub source: Source,
     output: Arc<dyn ExternalStorage>,
     co: Cooperate,
     out_prefix: PathBuf,
@@ -403,14 +403,21 @@ where
 
 #[cfg(test)]
 mod test {
+    use encryption::MultiMasterKeyBackend;
+    use engine_rocks::RocksEngine;
+    use kvproto::encryptionpb::EncryptionMethod;
     use tidb_query_datatype::codec::table::encode_row_key;
     use txn_types::Key;
 
     use crate::{
-        compaction::Subcompaction,
+        compaction::{
+            exec::{SubcompactExt, SubcompactionExec},
+            Subcompaction,
+        },
         storage::{Epoch, MetaFile},
         test_util::{
-            gen_step, save_many_log_files, CompactInMem, KvGen, LogFileBuilder, TmpStorage,
+            enable_encryption, gen_step, save_many_log_files, CompactInMem, KvGen, LogFileBuilder,
+            TmpStorage,
         },
     };
 
@@ -471,6 +478,42 @@ mod test {
         let ml = MetaFile::from(meta);
         let c = Subcompaction::of_many(ml.into_logs());
         let res = st.run_subcompaction(c).await;
+        st.verify_result(res, cm);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_compact_from_one_file_encrypted() {
+        let st = TmpStorage::create();
+        let cm = CompactInMem::default();
+        let mut enc = MultiMasterKeyBackend::new();
+        enable_encryption(&mut enc).await;
+
+        let s1 = KvGen::new(gen_step(1, 0, 2).take(100), |_| b"value".to_vec());
+        let mut i1 = LogFileBuilder::new(|v| {
+            v.name = "a.log".to_owned();
+        });
+        i1.encrypt_by_master_key(&enc, EncryptionMethod::Aes256Ctr)
+            .await;
+        cm.tap_on(s1)
+            .for_each(|kv| i1.add_encoded(&kv.key, &kv.value));
+
+        let s2 = KvGen::new(gen_step(1, 1, 2).take(128), |_| b"value".to_vec());
+        let mut i2 = LogFileBuilder::new(|v| v.name = "b.log".to_owned());
+        i2.encrypt_by_master_key(&enc, EncryptionMethod::Aes256Ctr)
+            .await;
+        cm.tap_on(s2)
+            .for_each(|kv| i2.add_encoded(&kv.key, &kv.value));
+
+        let meta = save_many_log_files("data.log", [i1, i2], st.storage().as_ref())
+            .await
+            .unwrap();
+        let mut logs: Vec<_> = MetaFile::from(meta).into_logs().collect();
+        for log in &mut logs {
+            log.encryption.resolve(&enc).await.unwrap();
+        }
+        let c = Subcompaction::of_many(logs.into_iter());
+        let cw = SubcompactionExec::<RocksEngine>::default_config(st.storage().clone());
+        let res = cw.run(c, SubcompactExt::default()).await.unwrap();
         st.verify_result(res, cm);
     }
 

@@ -674,6 +674,15 @@ pub enum Cmd {
         )]
         storage_base64: String,
         #[structopt(
+            long = "master-key-service-base64",
+            help(
+                "the base-64 encoded protocol buffer message `MasterKeyBackend`. \
+                `br` CLI should provide a subcommand that converts an URL to it. \
+                This service will be used to read the encrypted backup log files."
+            )
+        )]
+        master_key_service_base64: String,
+        #[structopt(
             long,
             default_value = "lz4",
             help(

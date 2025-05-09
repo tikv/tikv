@@ -7,6 +7,8 @@ mod test;
 use std::{borrow::Cow, cell::Cell, path::Path, sync::Arc};
 
 use chrono::Utc;
+use encryption::MultiMasterKeyBackend;
+use encryption_export::create_async_backend;
 use engine_rocks::RocksEngine;
 pub use engine_traits::SstCompressionType;
 use engine_traits::SstExt;
@@ -15,7 +17,7 @@ use futures::stream::{self, StreamExt};
 use hooking::{
     AfterFinishCtx, BeforeStartCtx, CId, ExecHooks, SubcompactionFinishCtx, SubcompactionStartCtx,
 };
-use kvproto::brpb::StorageBackend;
+use kvproto::{brpb::StorageBackend, encryptionpb::MasterKey};
 use tikv_util::config::ReadableSize;
 use tokio::runtime::Handle;
 use tracing::{trace_span, Instrument};
@@ -126,6 +128,8 @@ pub struct Execution<DB: SstExt = RocksEngine> {
     pub db: Option<DB>,
     /// The prefix of the artifices.
     pub out_prefix: String,
+    /// The encryption config.
+    pub master_key: MasterKey,
 }
 
 struct ExecuteCtx<'a, H: ExecHooks> {
@@ -157,6 +161,12 @@ impl Execution {
             parent: next_compaction.clone(),
             "load_meta_file_names"
         ));
+        if self.master_key.backend.is_some() {
+            let mk = MultiMasterKeyBackend::new();
+            mk.update_from_proto_if_needed(vec![self.master_key.clone()], create_async_backend)
+                .await?;
+            ext.resolve_with_master_key = Some(mk);
+        }
 
         let ExecuteCtx {
             ref storage,
