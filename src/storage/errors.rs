@@ -364,11 +364,15 @@ pub fn extract_committed(err: &Error) -> Option<TimeStamp> {
     }
 }
 
-fn ensure_debug_info_for_key_error(err: &mut kvrpcpb::KeyError) -> &mut kvrpcpb::DebugInfo {
-    if err.debug_info.is_none() {
-        err.set_debug_info(kvrpcpb::DebugInfo::default());
+fn get_or_insert_default_for_key_error_debug_info(
+    err: &mut kvrpcpb::KeyError,
+) -> &mut kvrpcpb::DebugInfo {
+    let debug_info = &mut err.debug_info;
+    if debug_info.is_none() {
+        debug_info.set_default()
+    } else {
+        debug_info.as_mut().unwrap()
     }
-    err.debug_info.as_mut().unwrap()
 }
 
 fn add_debug_mvcc_for_key_error(
@@ -377,7 +381,7 @@ fn add_debug_mvcc_for_key_error(
     mvcc_info: Option<types::MvccInfo>,
 ) {
     if let Some(mut mvcc) = mvcc_info {
-        let debug_info = ensure_debug_info_for_key_error(err);
+        let debug_info = get_or_insert_default_for_key_error_debug_info(err);
         // remove the values in default CF to reduce the size of the response.
         mvcc.values.clear();
         // set mvcc info to debug_info
