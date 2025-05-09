@@ -135,6 +135,7 @@ pub enum ErrorInner {
         commit_ts: TimeStamp,
         key: Vec<u8>,
         min_commit_ts: TimeStamp,
+        mvcc_info: Option<MvccInfo>,
     },
 
     #[error("bad format key(version)")]
@@ -265,11 +266,13 @@ impl ErrorInner {
                 commit_ts,
                 key,
                 min_commit_ts,
+                mvcc_info,
             } => Some(ErrorInner::CommitTsExpired {
                 start_ts: *start_ts,
                 commit_ts: *commit_ts,
                 key: key.clone(),
                 min_commit_ts: *min_commit_ts,
+                mvcc_info: mvcc_info.clone(),
             }),
             ErrorInner::KeyVersion => Some(ErrorInner::KeyVersion),
             ErrorInner::Committed {

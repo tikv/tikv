@@ -304,6 +304,7 @@ pub(crate) fn make_txn_error(
                 commit_ts: TimeStamp::zero(),
                 key: key.to_raw().unwrap(),
                 min_commit_ts: TimeStamp::zero(),
+                mvcc_info: None,
             },
             "pessimisticlocknotfound" => ErrorInner::PessimisticLockNotFound {
                 start_ts,
