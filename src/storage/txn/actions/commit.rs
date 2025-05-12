@@ -413,8 +413,8 @@ pub mod tests {
             ts(10, 0),
             ts(20, 0),
             ts(20, 1),
-            // The secondary key should not collect mvcc because it may be a bug.
-            // Although the commit role is none, we can get it from the lock.
+            // The mvcc info should be collected committing secondary keys as it could be a bug.
+            // Although the commit role is none, the primary key could be read from the lock.
             true,
         );
         must_succeed(&mut engine, k, ts(10, 0), ts(20, 1));
