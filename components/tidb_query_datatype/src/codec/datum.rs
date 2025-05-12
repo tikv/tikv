@@ -1267,8 +1267,8 @@ mod tests {
                 ),
             ],
             vec![
-                Datum::VectorFloat32(VectorFloat32::copy_from_f32(&[1.0, 2.0, 3.0])),
-                Datum::VectorFloat32(VectorFloat32::copy_from_f32(&[])),
+                Datum::VectorFloat32(VectorFloat32::from_f32(vec![1.0, 2.0, 3.0]).unwrap()),
+                Datum::VectorFloat32(VectorFloat32::from_f32(vec![]).unwrap()),
             ],
         ];
         for vs in table {
