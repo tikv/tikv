@@ -973,6 +973,8 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             match check_import_resources(mem_limit).await {
                 Ok(()) => (),
                 Err(e) => {
+                    let jitter: u64 = rand::thread_rng().gen_range(0, 3); 
+                    tokio::time::sleep(Duration::from_secs(1 + jitter)).await;
                     resp.set_error(e.into());
                     crate::send_rpc_response!(Ok(resp), sink, label, timer);
                     return;
