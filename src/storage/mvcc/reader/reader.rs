@@ -10,7 +10,7 @@ use kvproto::{
 };
 use raftstore::store::{LocksStatus, PeerPessimisticLocks};
 use tikv_kv::{SnapshotExt, SEEK_BOUND};
-use tikv_util::time::Instant;
+use tikv_util::{log::BAD_DATA_STR, metrics::CRITICAL_ERROR, time::Instant};
 use txn_types::{
     Key, LastChange, Lock, OldValue, PessimisticLock, TimeStamp, TxnLockRef, Value, Write,
     WriteRef, WriteType,
@@ -24,7 +24,7 @@ use crate::storage::{
         default_not_found_error,
         metrics::{ScanLockReadTimeSource, SCAN_LOCK_READ_TIME_VEC},
         reader::{OverlappedWrite, TxnCommitRecord},
-        Result,
+        Error, ErrorInner, Result,
     },
 };
 
@@ -465,6 +465,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             self.write_cursor.take();
         }
         self.create_write_cursor()?;
+
         let cursor = self.write_cursor.as_mut().unwrap();
         // find a `ts` encoded key which is less than the `ts` encoded version of the
         // `key`
@@ -474,6 +475,21 @@ impl<S: EngineSnapshot> MvccReader<S> {
         }
         let write_key = cursor.key(&mut self.statistics.write);
         let commit_ts = Key::decode_ts_from(write_key)?;
+        if commit_ts.is_zero() {
+            // assert!(!commit_ts.is_zero());
+            bad_data_error!("write with invalid commit-ts"; "key" => ?Key::from_encoded(write_key.to_vec()), "commit-ts" => ?commit_ts);
+            CRITICAL_ERROR.with_label_values(&[BAD_DATA_STR]).inc();
+            return Err(Error::from(ErrorInner::Other(
+                format!(
+
+                    "bad data, invalid commit-ts:{}, key:{}",
+                    commit_ts.into_inner(),
+                    Key::from_encoded(write_key.to_vec())
+                )
+                .into(),
+            )));
+        }
+
         // check whether the found written_key's "real key" part equals the `key` we
         // want to find
         if !Key::is_user_key_eq(write_key, key.as_encoded()) {
