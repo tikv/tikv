@@ -693,18 +693,6 @@ impl Config {
         // to inspect kvdb.
         if !separated_raft_mount_path {
             self.inspect_kvdb_interval = ReadableDuration::ZERO;
-        } else {
-            // If the inspect_kvdb_interval is less than inspect_interval, it should
-            // use `inspect_interval` * 10 as an empirical inspect interval for KvDB Disk
-            // I/O.
-            let inspect_kvdb_interval = if self.inspect_kvdb_interval < self.inspect_interval
-                && self.inspect_kvdb_interval != ReadableDuration::ZERO
-            {
-                self.inspect_interval * 10
-            } else {
-                self.inspect_kvdb_interval
-            };
-            self.inspect_kvdb_interval = inspect_kvdb_interval;
         }
     }
 
@@ -1653,6 +1641,6 @@ mod tests {
         cfg.inspect_kvdb_interval = ReadableDuration::millis(1);
         cfg.inspect_interval = ReadableDuration::millis(100);
         cfg.optimize_inspector(true);
-        assert_eq!(cfg.inspect_kvdb_interval, ReadableDuration::secs(1));
+        assert_eq!(cfg.inspect_kvdb_interval, ReadableDuration::millis(1));
     }
 }
