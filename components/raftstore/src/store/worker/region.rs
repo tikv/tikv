@@ -464,7 +464,7 @@ where
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
         check_abort(&abort)?;
-        self.clean_overlap_ranges(start_key, end_key)?;
+        self.clean_overlap_ranges(start_key, end_key).unwrap();
         check_abort(&abort)?;
         fail_point!("apply_snap_cleanup_range");
 
@@ -687,6 +687,9 @@ where
                 error!("failed to delete files in range"; "err" => %e);
             })
             .unwrap();
+        println!("delete files in range because of stale ");
+        fail_point!("after_delete_files_in_range", |_| {});
+        println!("delete blobs in range because of stale after return ");
         if let Err(e) = self.delete_all_in_range(&ranges) {
             error!("failed to cleanup stale range"; "err" => %e);
             return;

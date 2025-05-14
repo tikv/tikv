@@ -1,8 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{any::Any, sync::Arc};
+use std::{any::Any, backtrace::Backtrace, clone, collections::HashMap, sync::Arc};
 
 use engine_traits::{IterOptions, Iterable, KvEngine, Peekable, ReadOptions, Result, SyncMutable};
+use lazy_static::lazy_static;
 use rocksdb::{DBIterator, Writable, DB};
 
 use crate::{
@@ -141,23 +142,92 @@ mod trace {
         }
     }
 }
+struct RocksEngineTrace {
+    id: usize,
+    thread: String,
+    backtrace: Backtrace,
+}
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct RocksEngine {
     db: Arc<DB>,
     support_multi_batch_write: bool,
     #[cfg(feature = "trace-lifetime")]
     _id: trace::TabletTraceId,
+    id: usize,
+}
+
+static ROCKS_ENGINE_REF_COUNT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+lazy_static! {
+    static ref ROCKS_ENGINE_REF_COLLECTIONS: std::sync::Mutex<HashMap<usize, RocksEngineTrace>> =
+        std::sync::Mutex::new(Default::default());
+}
+pub fn print_all_rocks_traces() {
+    println!("rocks engine restart");
+    let collections = ROCKS_ENGINE_REF_COLLECTIONS.lock().unwrap();
+    for trace in collections.values() {
+        println!(
+            "rocksdb engine ref count: id {}, thread {}, backtrace {:?}",
+            trace.id, &trace.thread, trace.backtrace
+        );
+    }
+}
+
+impl Clone for RocksEngine {
+    fn clone(&self) -> Self {
+        let id = ROCKS_ENGINE_REF_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let mut collections = ROCKS_ENGINE_REF_COLLECTIONS.lock().unwrap();
+        collections.insert(
+            id,
+            RocksEngineTrace {
+                id,
+                thread: std::thread::current()
+                    .name()
+                    .unwrap_or("unknown")
+                    .to_owned(),
+                backtrace: Backtrace::capture(),
+            },
+        );
+        RocksEngine {
+            db: self.db.clone(),
+            support_multi_batch_write: self.support_multi_batch_write,
+            id,
+        }
+    }
+}
+
+impl Drop for RocksEngine {
+    fn drop(&mut self) {
+        println!("rocks engine drop");
+        let id = self.id;
+        let mut collections = ROCKS_ENGINE_REF_COLLECTIONS.lock().unwrap();
+        if let Some(trace) = collections.remove(&id) {}
+    }
 }
 
 impl RocksEngine {
     pub fn new(db: DB) -> RocksEngine {
         let db = Arc::new(db);
+        let id = ROCKS_ENGINE_REF_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let mut collections = ROCKS_ENGINE_REF_COLLECTIONS.lock().unwrap();
+        collections.insert(
+            id,
+            RocksEngineTrace {
+                id,
+                thread: std::thread::current()
+                    .name()
+                    .unwrap_or("unknown")
+                    .to_owned(),
+                backtrace: Backtrace::capture(),
+            },
+        );
         RocksEngine {
             support_multi_batch_write: db.get_db_options().is_enable_multi_batch_write(),
             #[cfg(feature = "trace-lifetime")]
             _id: trace::TabletTraceId::new(db.path(), &db),
             db,
+            id,
         }
     }
 

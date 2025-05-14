@@ -233,8 +233,8 @@ procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "7693954bd1dd86e
 # kvproto = { git = "https://github.com/your_github_id/kvproto", branch = "your_branch" }
 #
 # After the PR to rust-rocksdb is merged, remember to comment this out and run `cargo update -p rocksdb`.
-# [patch.'https://github.com/tikv/rust-rocksdb']
-# rocksdb = { git = "https://github.com/your_github_id/rust-rocksdb", branch = "your_branch" }
+[patch.'https://github.com/tikv/rust-rocksdb']
+rocksdb = { git = "https://github.com/v01dstar/rust-rocksdb", branch = "fix-compile-7.5" }
 
 [workspace]
 # See https://github.com/rust-lang/rfcs/blob/master/text/2957-cargo-features2.md
@@ -392,10 +392,10 @@ txn_types = { path = "components/txn_types" }
 raft = { version = "0.7.0", default-features = false, features = [
   "protobuf-codec",
 ] }
-raft-engine = { git = "https://github.com/tikv/raft-engine.git", branch = "tikv-7.5", features = [
+raft-engine = { git = "https://github.com/v01dstar/raft-engine.git", branch = "add-drop-7.5", features = [
   "swap",
 ] }
-raft-engine-ctl = { git = "https://github.com/tikv/raft-engine.git", branch = "tikv-7.5" }
+raft-engine-ctl = { git = "https://github.com/v01dstar/raft-engine.git", branch = "add-drop-7.5" }
 grpcio = { version = "0.10.4", default-features = false, features = [
   "openssl-vendored",
   "protobuf-codec",
@@ -437,7 +437,7 @@ opt-level = 1
 
 [profile.dev]
 opt-level = 0
-debug = 0
+debug = true
 codegen-units = 4
 lto = false
 incremental = true
@@ -448,7 +448,7 @@ rpath = false
 
 [profile.release]
 opt-level = 3
-debug = false
+debug = true 
 codegen-units = 1
 lto = "thin"
 incremental = false
@@ -463,7 +463,7 @@ codegen-units = 4
 
 [profile.test]
 opt-level = 0
-debug = 0
+debug = true
 codegen-units = 16
 lto = false
 incremental = true

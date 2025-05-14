@@ -17,7 +17,7 @@ use futures::{
     compat::{Future01CompatExt, Stream01CompatExt},
     executor::block_on,
     future::FutureExt,
-    stream::StreamExt,
+    stream::{FusedStream, StreamExt},
 };
 use prometheus::IntGauge;
 use yatp::Remote;
@@ -442,6 +442,7 @@ impl Worker {
 
     /// Stops the worker thread.
     pub fn stop(&self) {
+        println!("stopping worker");
         self.stop.store(true, Ordering::Release);
         self.pool.shutdown();
     }
@@ -474,6 +475,9 @@ impl Worker {
         let _ = self.pool.spawn(async move {
             let mut handle = RunnableWrapper { inner: runner };
             while let Some(msg) = receiver.next().await {
+                if receiver.is_terminated() {
+                    break;
+                }
                 match msg {
                     Msg::Task(task) => {
                         handle.inner.run(task);
@@ -514,6 +518,7 @@ impl Worker {
                     }
                 }
             }
+            println!("worker thread exiting");
         });
     }
 }

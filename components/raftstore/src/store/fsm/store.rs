@@ -1594,6 +1594,8 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
     coprocessor_host: CoprocessorHost<EK>,
 
     refresh_config_worker: LazyWorker<RefreshConfigTask>,
+
+    on_stop: Vec<Box<dyn FnOnce() + Send>>,
 }
 
 pub struct RaftBatchSystem<EK: KvEngine, ER: RaftEngine> {
@@ -1680,7 +1682,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             None
         };
 
-        let workers = Workers {
+        let mut workers = Workers {
             pd_worker,
             background_worker,
             cleanup_worker: Worker::new("cleanup-worker"),
@@ -1689,7 +1691,12 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             raftlog_fetch_worker: Worker::new("raftlog-fetch-worker"),
             coprocessor_host: coprocessor_host.clone(),
             refresh_config_worker: LazyWorker::new("refreash-config-worker"),
+            on_stop: vec![],
         };
+        let split_check_scheduler_clone = split_check_scheduler.clone();
+        workers.on_stop.push(Box::new(move || {
+            split_check_scheduler_clone.stop();
+        }));
         mgr.init()?;
         let region_runner = RegionRunner::new(
             engines.kv.clone(),
@@ -1703,6 +1710,10 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let region_scheduler = workers
             .region_worker
             .start_with_timer("snapshot-worker", region_runner);
+        let region_scheduler_clone = region_scheduler.clone();
+        workers.on_stop.push(Box::new(move || {
+            region_scheduler_clone.stop();
+        }));
 
         let raftlog_gc_runner = RaftlogGcRunner::new(
             engines.clone(),
@@ -1711,6 +1722,11 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let raftlog_gc_scheduler = workers
             .background_worker
             .start_with_timer("raft-gc-worker", raftlog_gc_runner);
+        let reftlog_gc_scheduler_clone = raftlog_gc_scheduler.clone();
+
+        workers.on_stop.push(Box::new(move || {
+            reftlog_gc_scheduler_clone.stop();
+        }));
 
         let raftlog_fetch_scheduler = workers.raftlog_fetch_worker.start(
             "raftlog-fetch-worker",
@@ -1919,6 +1935,9 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             return;
         }
         let mut workers = self.workers.take().unwrap();
+        for f in workers.on_stop.drain(..) {
+            f();
+        }
         // Wait all workers finish.
         workers.pd_worker.stop();
 

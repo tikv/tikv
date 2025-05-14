@@ -25,5 +25,6 @@ mod engine;
 mod perf_context;
 
 pub use engine::{
-    ManagedFileSystem, RaftEngineConfig, RaftLogBatch, RaftLogEngine, ReadableSize, RecoveryMode,
+    print_all_traces, ManagedFileSystem, RaftEngineConfig, RaftLogBatch, RaftLogEngine,
+    ReadableSize, RecoveryMode,
 };
