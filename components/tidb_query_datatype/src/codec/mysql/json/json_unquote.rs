@@ -65,9 +65,20 @@ pub fn unquote_string(s: &str) -> Result<String> {
                     if unicode.len() != ESCAPED_UNICODE_BYTES_SIZE {
                         return Err(box_err!("Invalid unicode, char len too short: {}", unicode));
                     }
-                    let utf8 = decode_escaped_unicode(unicode)?;
-                    ret.push(utf8);
-                    for _ in 0..ESCAPED_UNICODE_BYTES_SIZE {
+                    let mut utf8 = decode_escaped_unicode(unicode);
+                    let mut len = ESCAPED_UNICODE_BYTES_SIZE;
+                    if utf8.is_err() && b.len() >= ESCAPED_UNICODE_BYTES_SIZE * 2 + 2 {
+                        let combined: Vec<u8> = b[0..ESCAPED_UNICODE_BYTES_SIZE]
+                            .iter()
+                            .chain(b[ESCAPED_UNICODE_BYTES_SIZE + 2..ESCAPED_UNICODE_BYTES_SIZE * 2 + 2].iter())
+                            .copied()
+                            .collect();
+                        let unicode = str::from_utf8(&combined)?;
+                        utf8 = decode_escaped_unicode(unicode);
+                        len = 2 * ESCAPED_UNICODE_BYTES_SIZE + 2;
+                    }
+                    ret.push(utf8?);
+                    for _ in 0..len {
                         chars.next();
                     }
                 }
@@ -84,8 +95,21 @@ pub fn unquote_string(s: &str) -> Result<String> {
 }
 
 fn decode_escaped_unicode(s: &str) -> Result<char> {
-    let u = box_try!(u32::from_str_radix(s, 16));
-    char::from_u32(u).ok_or(box_err!("invalid char from: {}", s))
+    if s.len() == 4 {
+        let u = box_try!(u32::from_str_radix(s, 16));
+        char::from_u32(u).ok_or(box_err!("invalid char from: {}", s))
+    } else if s.len() == 8 {
+        // Decode as UTF-16 surrogate pair
+        let high = box_try!(u16::from_str_radix(&s[0..4], 16));
+        let low = box_try!(u16::from_str_radix(&s[4..8], 16));
+        let utf16 = [high, low];
+        match std::char::decode_utf16(utf16.iter().copied()).next() {
+            Some(Ok(c)) => Ok(c),
+            Some(Err(_)) | None => Err(box_err!("invalid UTF-16 surrogate pair: {}", s)),
+        }
+    } else {
+        Err(box_err!("invalid unicode length: {}", s.len()))
+    }
 }
 
 #[cfg(test)]
@@ -109,6 +133,7 @@ mod tests {
             ("660e", '明'),
             ("6708", '月'),
             ("5149", '光'),
+            ("d83edd21", '🤡'),
         ];
         for (i, (escaped, expected)) in test_cases.drain(..).enumerate() {
             let d = decode_escaped_unicode(escaped);
@@ -136,6 +161,7 @@ mod tests {
             ("0\\u597d0", true, Some("0好0")),
             ("\\a", true, Some("a")),
             ("[", true, Some("[")),
+            ("\\ud83e\\udd21", true, Some("🤡")),
             // invalid input
             ("\\", false, None),
             ("\\u59", false, None),
