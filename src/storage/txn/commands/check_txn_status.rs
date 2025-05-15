@@ -4,18 +4,18 @@
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
+    ProcessResult, Snapshot, TxnStatus,
     kv::WriteData,
     lock_manager::LockManager,
     mvcc::{MvccTxn, SnapshotReader},
     txn::{
+        Result,
         actions::check_txn_status::*,
         commands::{
             Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
             WriteCommand, WriteContext, WriteResult,
         },
-        Result,
     },
-    ProcessResult, Snapshot, TxnStatus,
 };
 
 command! {
@@ -179,20 +179,20 @@ pub mod tests {
 
     use super::{TxnStatus::*, *};
     use crate::storage::{
+        ProcessResult, TestEngineBuilder,
         kv::Engine,
         lock_manager::MockLockManager,
         mvcc,
-        mvcc::{tests::*, ErrorInner},
+        mvcc::{ErrorInner, tests::*},
         txn::{
             self,
             actions::acquire_pessimistic_lock::tests::acquire_pessimistic_lock_allow_lock_with_conflict,
-            commands::{pessimistic_rollback, WriteCommand, WriteContext},
+            commands::{WriteCommand, WriteContext, pessimistic_rollback},
             scheduler::DEFAULT_EXECUTION_DURATION_LIMIT,
             tests::*,
             txn_status_cache::TxnStatusCache,
         },
         types::TxnStatus,
-        ProcessResult, TestEngineBuilder,
     };
 
     pub fn must_success<E: Engine>(
@@ -954,7 +954,7 @@ pub mod tests {
             WriteType::Rollback,
         );
 
-        // Rollback when current_ts is u64::max_value()
+        // Rollback when current_ts is u64::MAX
         must_prewrite_put_for_large_txn(&mut engine, k, v, k, ts(270, 0), 100, 0);
         must_large_txn_locked(&mut engine, k, ts(270, 0), 100, ts(270, 1), false);
         must_success(

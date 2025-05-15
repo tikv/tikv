@@ -193,9 +193,9 @@ pub trait RaftLogBatch: Send {
     ///
     /// There are two types of apply index:
     /// 1. Normal apply index that only related to single tablet. These apply
-    /// indexes    are recorded using its own CF.
+    ///    indexes are recorded using its own CF.
     /// 2. Apply index that can affect other tablets, like split, merge. These
-    /// apply indexes are recorded using special Raft CF.
+    ///    apply indexes are recorded using special Raft CF.
     ///
     /// Because a peer may have multiple tablets (only one is latest), we use
     /// `tablet_index` to avoid conflicts.

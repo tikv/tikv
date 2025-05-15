@@ -2,7 +2,7 @@
 
 use std::{
     path::{Path, PathBuf},
-    sync::{atomic::AtomicU64, Arc, Mutex, RwLock},
+    sync::{Arc, Mutex, RwLock, atomic::AtomicU64},
 };
 
 use collections::{HashMap, HashSet};
@@ -19,17 +19,18 @@ use kvproto::{
     raft_serverpb::{self, RaftMessage},
 };
 use protobuf::Message;
-use raft::{eraftpb::MessageType, SnapshotStatus};
+use raft::{SnapshotStatus, eraftpb::MessageType};
 use raftstore::{
-    coprocessor::{config::SplitCheckConfigManager, CoprocessorHost},
+    Result,
+    coprocessor::{CoprocessorHost, config::SplitCheckConfigManager},
     errors::Error as RaftError,
     router::{LocalReadRouter, RaftStoreRouter, ReadContext, ServerRaftStoreRouter},
     store::{
+        SnapManagerBuilder,
         config::RaftstoreConfigManager,
-        fsm::{store::StoreMeta, ApplyRouter, RaftBatchSystem, RaftRouter},
-        SnapManagerBuilder, *,
+        fsm::{ApplyRouter, RaftBatchSystem, RaftRouter, store::StoreMeta},
+        *,
     },
-    Result,
 };
 use resource_control::ResourceGroupManager;
 use resource_metering::CollectorRegHandle;
@@ -39,7 +40,7 @@ use test_pd_client::TestPdClient;
 use tikv::{
     config::{ConfigController, Module},
     import::SstImporter,
-    server::{raftkv::ReplicaReadLockChecker, MultiRaftServer, Result as ServerResult},
+    server::{MultiRaftServer, Result as ServerResult, raftkv::ReplicaReadLockChecker},
 };
 use tikv_util::{
     config::VersionTrack,

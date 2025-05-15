@@ -1,16 +1,16 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    io::{Error as IoError, ErrorKind, Read, Result as IoResult, Seek, SeekFrom, Write},
+    io::{Error as IoError, Read, Result as IoResult, Seek, SeekFrom, Write},
     pin::Pin,
     task::ready,
 };
 
 use file_system::File;
 use futures_util::{
+    AsyncWrite,
     io::AsyncRead,
     task::{Context, Poll},
-    AsyncWrite,
 };
 use kvproto::encryptionpb::EncryptionMethod;
 use openssl::symm::{Cipher as OCipher, Crypter as OCrypter, Mode};
@@ -564,13 +564,10 @@ impl CrypterCore {
         let crypter_count = crypter.update(&partial_block, &mut self.buffer)?;
         if crypter_count != partial_offset {
             self.lazy_reset_crypter(offset);
-            return Err(IoError::new(
-                ErrorKind::Other,
-                format!(
-                    "crypter output size mismatch, expect {} vs actual {}",
-                    partial_offset, crypter_count,
-                ),
-            ));
+            return Err(IoError::other(format!(
+                "crypter output size mismatch, expect {} vs actual {}",
+                partial_offset, crypter_count,
+            )));
         }
         self.offset = offset;
         self.crypter = Some(crypter);
@@ -596,14 +593,11 @@ impl CrypterCore {
             let crypter_count = crypter.update(&buf[encrypted..target], &mut self.buffer)?;
             if crypter_count != target - encrypted {
                 self.crypter.take();
-                return Err(IoError::new(
-                    ErrorKind::Other,
-                    format!(
-                        "crypter output size mismatch, expect {} vs actual {}",
-                        target - encrypted,
-                        crypter_count,
-                    ),
-                ));
+                return Err(IoError::other(format!(
+                    "crypter output size mismatch, expect {} vs actual {}",
+                    target - encrypted,
+                    crypter_count,
+                )));
             }
             buf[encrypted..target].copy_from_slice(&self.buffer[..crypter_count]);
             encrypted += crypter_count;
@@ -630,13 +624,10 @@ impl CrypterCore {
         let crypter_count = crypter.update(buf, &mut self.buffer)?;
         if crypter_count != count {
             self.crypter.take();
-            return Err(IoError::new(
-                ErrorKind::Other,
-                format!(
-                    "crypter output size mismatch, expect {} vs actual {}",
-                    count, crypter_count,
-                ),
-            ));
+            return Err(IoError::other(format!(
+                "crypter output size mismatch, expect {} vs actual {}",
+                count, crypter_count,
+            )));
         }
         self.offset += count as u64;
         Ok(&self.buffer[..count])
@@ -1077,7 +1068,7 @@ mod tests {
         let key = generate_data_key(method).unwrap().1;
         let mut wt = EncrypterWriter::new(YieldOnce::new(buf), method, &key, iv).unwrap();
         let waker = Waker::noop();
-        let mut cx = Context::from_waker(&waker);
+        let mut cx = Context::from_waker(waker);
         assert_matches!(
             Pin::new(&mut wt).poll_write(&mut cx, &plain_text[..size / 2]),
             Poll::Pending

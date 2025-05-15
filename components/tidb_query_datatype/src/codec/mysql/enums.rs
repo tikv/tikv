@@ -9,9 +9,12 @@ use codec::prelude::*;
 use tipb::FieldType;
 
 use crate::{
-    codec::{convert::ToInt, Result},
-    expr::EvalContext,
     FieldTypeTp,
+    codec::{
+        Result,
+        convert::{ToInt, ToStringValue},
+    },
+    expr::EvalContext,
 };
 
 #[derive(Clone, Debug)]
@@ -185,8 +188,8 @@ impl<'a> ToInt for EnumRef<'a> {
     }
 }
 
-impl<'a> ToString for EnumRef<'a> {
-    fn to_string(&self) -> String {
+impl<'a> ToStringValue for EnumRef<'a> {
+    fn to_string_value(&self) -> String {
         String::from_utf8_lossy(self.name).to_string()
     }
 }

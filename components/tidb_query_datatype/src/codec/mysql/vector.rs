@@ -251,7 +251,7 @@ impl<'a> VectorFloat32Ref<'a> {
         let similarity = (distance as f64) / ((norma as f64) * (normb as f64)).sqrt();
         if similarity.is_nan() {
             // Divide by zero
-            return Ok(std::f64::NAN);
+            return Ok(f64::NAN);
         }
         let similarity = similarity.clamp(-1.0, 1.0);
         Ok(1.0 - similarity)
@@ -317,34 +317,28 @@ impl std::fmt::Debug for VectorFloat32Ref<'_> {
     }
 }
 
-impl ToString for VectorFloat32Ref<'_> {
-    fn to_string(&self) -> String {
-        format!("{}", self)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_nan_inf() {
-        let v = VectorFloat32::from_f32(vec![1.0, std::f32::NAN]);
+        let v = VectorFloat32::from_f32(vec![1.0, f32::NAN]);
         v.unwrap_err();
 
-        let v = VectorFloat32::from_f32(vec![1.0, std::f32::INFINITY]);
+        let v = VectorFloat32::from_f32(vec![1.0, f32::INFINITY]);
         v.unwrap_err();
 
-        let v = VectorFloat32::from_f32(vec![1.0, std::f32::NEG_INFINITY]);
+        let v = VectorFloat32::from_f32(vec![1.0, f32::NEG_INFINITY]);
         v.unwrap_err();
 
-        let v = VectorFloat32Ref::from_f32(&[1.0, std::f32::NAN]);
+        let v = VectorFloat32Ref::from_f32(&[1.0, f32::NAN]);
         v.unwrap_err();
 
-        let v = VectorFloat32Ref::from_f32(&[1.0, std::f32::INFINITY]);
+        let v = VectorFloat32Ref::from_f32(&[1.0, f32::INFINITY]);
         v.unwrap_err();
 
-        let v = VectorFloat32Ref::from_f32(&[1.0, std::f32::NEG_INFINITY]);
+        let v = VectorFloat32Ref::from_f32(&[1.0, f32::NEG_INFINITY]);
         v.unwrap_err();
     }
 

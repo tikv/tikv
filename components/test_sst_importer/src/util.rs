@@ -9,7 +9,7 @@ use std::{
 
 use engine_traits::CF_DEFAULT;
 use external_storage::{ExternalStorage, UnpinReader};
-use futures::{executor::block_on, io::Cursor as AsyncCursor, stream, SinkExt};
+use futures::{SinkExt, executor::block_on, io::Cursor as AsyncCursor, stream};
 use grpcio::{Result, WriteFlags};
 use kvproto::{
     brpb::{Local, StorageBackend},

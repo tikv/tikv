@@ -10,7 +10,7 @@ use tikv::storage::RocksEngine;
 use tipb::{ExprType, ScalarFuncSig};
 use tipb_helper::ExprDefBuilder;
 
-use crate::util::{executor_descriptor::*, store::*, BenchCase};
+use crate::util::{BenchCase, executor_descriptor::*, store::*};
 
 /// SELECT COUNT(1) FROM Table, or SELECT COUNT(PrimaryKey) FROM Table
 fn bench_select_count_1<M>(b: &mut criterion::Bencher<'_, M>, input: &Input<M>)

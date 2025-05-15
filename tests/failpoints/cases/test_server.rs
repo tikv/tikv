@@ -3,11 +3,11 @@
 use std::{sync::Arc, thread, time::Duration};
 
 use grpcio::{ChannelBuilder, Environment, ServerBuilder};
-use grpcio_health::{create_health, proto::HealthCheckRequest, HealthClient, ServingStatus};
+use grpcio_health::{HealthClient, ServingStatus, create_health, proto::HealthCheckRequest};
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
-use tikv_util::{config::ReadableDuration, HandyRwLock};
+use tikv_util::{HandyRwLock, config::ReadableDuration};
 
 /// When encountering raft/batch_raft mismatch store id error, the service is
 /// expected to drop connections in order to let raft_client re-resolve store

@@ -2,9 +2,9 @@
 
 // #[PerformanceCriticalPath]
 use engine_traits::{
-    Error, Iterable, KvEngine, MiscExt, Mutable, Peekable, RaftEngine, RaftEngineDebug,
-    RaftEngineReadOnly, RaftLogBatch, Result, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT,
-    RAFT_LOG_MULTI_GET_CNT,
+    CF_DEFAULT, Error, Iterable, KvEngine, MiscExt, Mutable, Peekable, RAFT_LOG_MULTI_GET_CNT,
+    RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch, Result, WriteBatch,
+    WriteBatchExt, WriteOptions,
 };
 use kvproto::{
     metapb::Region,
@@ -16,7 +16,7 @@ use protobuf::Message;
 use raft::eraftpb::Entry;
 use tikv_util::{box_err, box_try};
 
-use crate::{util, RocksEngine, RocksWriteBatchVec};
+use crate::{RocksEngine, RocksWriteBatchVec, util};
 
 impl RaftEngineReadOnly for RocksEngine {
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>> {

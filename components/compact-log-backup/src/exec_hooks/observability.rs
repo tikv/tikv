@@ -6,6 +6,7 @@ use tokio::{io::AsyncWriteExt, signal::unix::SignalKind};
 
 use super::CollectStatistic;
 use crate::{
+    ErrorKind,
     errors::Result,
     execute::hooking::{
         AbortedCtx, AfterFinishCtx, BeforeStartCtx, CId, ExecHooks, SubcompactionFinishCtx,
@@ -14,7 +15,6 @@ use crate::{
     statistic::prom,
     storage::StreamMetaStorage,
     util::storage_url,
-    ErrorKind,
 };
 
 /// The hooks that used for an execution from a TTY. Providing the basic
