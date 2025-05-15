@@ -627,9 +627,9 @@ where
                 DEFAULT_LOAD_BASE_SPLIT_CHECK_INTERVAL,
                 interval,
             ),
-            // Use `inspect_latency_interval` as the minimal limitation for collecting tick.
+            // Use the smallest inspect latency as the minimal limitation for collecting tick.
             collect_tick_interval: cmp::min(
-                inspect_latency_interval,
+                cmp::min(inspect_latency_interval, inspect_kvdb_latency_interval),
                 cmp::min(default_collect_tick_interval(), interval),
             ),
             inspect_latency_interval,
@@ -646,7 +646,10 @@ where
     ) -> Result<(), io::Error> {
         if self.collect_tick_interval
             < cmp::min(
-                self.inspect_latency_interval,
+                cmp::min(
+                    self.inspect_latency_interval,
+                    self.inspect_kvdb_latency_interval,
+                ),
                 default_collect_tick_interval(),
             )
         {
