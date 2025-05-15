@@ -76,7 +76,7 @@ use tikv_util::{
 };
 use time::{self, Timespec};
 #[cfg(feature = "linearizability-track")]
-use tracker::{clear_tls_peer_state, set_tls_peer_state, PeerStateDebug};
+use tracker::{clear_tls_peer_state, set_tls_peer_state, PeerStateTracker};
 
 use crate::{
     Error, Result, bytes_capacity,
@@ -1079,7 +1079,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         let mut handle_result = HandleResult::KeepProcessing;
         #[cfg(feature = "linearizability-track")]
         {
-            set_tls_peer_state(PeerStateDebug::new(
+            set_tls_peer_state(PeerStateTracker::new(
                 peer.region_id(),
                 peer.peer_id(),
                 peer.get_peer().term(),

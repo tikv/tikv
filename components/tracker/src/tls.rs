@@ -76,13 +76,13 @@ impl<F: Future> Future for TlsTrackedFuture<F> {
 #[cfg(feature = "linearizability-track")]
 mod linearizability_track {
     use super::*;
-    use crate::linearizability_track::{PeerStateDebug, INVALID_PEER_STATE};
+    use crate::linearizability_track::{PeerStateTracker, INVALID_PEER_STATE};
 
     thread_local! {
-        static TLS_PEER_STATE: Cell<PeerStateDebug> = const { Cell::new(INVALID_PEER_STATE) };
+        static TLS_PEER_STATE: Cell<PeerStateTracker> = const { Cell::new(INVALID_PEER_STATE) };
     }
 
-    pub fn set_tls_peer_state(peer: PeerStateDebug) {
+    pub fn set_tls_peer_state(peer: PeerStateTracker) {
         TLS_PEER_STATE.with(|c| {
             c.set(peer);
         })
@@ -92,7 +92,7 @@ mod linearizability_track {
         set_tls_peer_state(INVALID_PEER_STATE);
     }
 
-    pub fn get_tls_peer_state() -> PeerStateDebug {
+    pub fn get_tls_peer_state() -> PeerStateTracker {
         TLS_PEER_STATE.with(|c| c.get())
     }
 }

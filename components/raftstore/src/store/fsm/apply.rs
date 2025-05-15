@@ -72,7 +72,7 @@ use tikv_util::{
 };
 use time::Timespec;
 #[cfg(feature = "linearizability-track")]
-use tracker::{clear_tls_peer_state, set_tls_peer_state, PeerStateDebug};
+use tracker::{clear_tls_peer_state, set_tls_peer_state, PeerStateTracker};
 use tracker::{GLOBAL_TRACKERS, TrackerToken, TrackerTokenArray};
 use uuid::Builder as UuidBuilder;
 
@@ -4534,12 +4534,13 @@ where
                                 }
                             });
                         });
-                        let before_seq_no = if min_index <= max_index {
-                            Some(apply_ctx.engine.get_latest_sequence_number())
-                        } else {
-                            None
-                        };
                     }
+                    #[cfg(feature = "linearizability-track")]
+                    let before_seq_no = if min_index <= max_index {
+                        Some(apply_ctx.engine.get_latest_sequence_number())
+                    } else {
+                        None
+                    };
 
                     if let Some(batch) = batch_apply.as_mut() {
                         if batch.try_batch(&mut apply) {
@@ -4771,7 +4772,7 @@ where
     fn handle_normal(&mut self, normal: &mut impl DerefMut<Target = ApplyFsm<EK>>) -> HandleResult {
         #[cfg(feature = "linearizability-track")]
         {
-            set_tls_peer_state(PeerStateDebug::new(
+            set_tls_peer_state(PeerStateTracker::new(
                 normal.delegate.region_id(),
                 normal.delegate.id(),
                 normal.delegate.term,

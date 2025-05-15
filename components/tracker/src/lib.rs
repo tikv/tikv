@@ -231,7 +231,7 @@ mod linearizability_track {
     use super::*;
     use crate::tls::get_tls_peer_state;
 
-    pub const INVALID_PEER_STATE: PeerStateDebug = PeerStateDebug {
+    pub const INVALID_PEER_STATE: PeerStateTracker = PeerStateTracker {
         region_id: 0,
         peer_id: 0,
         term: 0,
@@ -240,7 +240,7 @@ mod linearizability_track {
     };
 
     #[derive(Debug, Default, PartialEq, Clone, Copy)]
-    pub struct PeerStateDebug {
+    pub struct PeerStateTracker {
         pub region_id: u64,
         pub peer_id: u64,
         pub term: u64,
@@ -371,7 +371,7 @@ mod linearizability_track {
         }
     }
 
-    impl PeerStateDebug {
+    impl PeerStateTracker {
         pub fn new(
             region_id: u64,
             peer_id: u64,
@@ -414,9 +414,9 @@ mod linearizability_track {
     pub enum ProposeState {
         None,
         Skip(DateTime<Local>, String),
-        Amend(DateTime<Local>, Uuid, PeerStateDebug),
-        ReadIndex(DateTime<Local>, Uuid, PeerStateDebug),
-        Normal(DateTime<Local>, PeerStateDebug),
+        Amend(DateTime<Local>, Uuid, PeerStateTracker),
+        ReadIndex(DateTime<Local>, Uuid, PeerStateTracker),
+        Normal(DateTime<Local>, PeerStateTracker),
     }
 
     impl Default for ProposeState {
@@ -452,8 +452,8 @@ mod linearizability_track {
     #[derive(PartialEq)]
     pub enum ReadyState {
         None,
-        Committed(DateTime<Local>, PeerStateDebug),
-        ReplicaRead(DateTime<Local>, Option<u64>, PeerStateDebug),
+        Committed(DateTime<Local>, PeerStateTracker),
+        ReplicaRead(DateTime<Local>, Option<u64>, PeerStateTracker),
     }
 
     impl Default for ReadyState {
@@ -483,7 +483,7 @@ mod linearizability_track {
     #[derive(PartialEq)]
     pub enum ApplyState {
         None,
-        Applied(DateTime<Local>, PeerStateDebug),
+        Applied(DateTime<Local>, PeerStateTracker),
     }
 
     impl Default for ApplyState {
