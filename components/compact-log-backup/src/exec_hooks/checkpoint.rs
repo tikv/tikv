@@ -7,9 +7,9 @@ use futures::stream::TryStreamExt;
 use tikv_util::{info, time::Instant, warn};
 
 use crate::{
+    ErrorKind, OtherErrExt, Result, TraceResultExt,
     compaction::META_OUT_REL,
     execute::hooking::{BeforeStartCtx, CId, ExecHooks, SubcompactionStartCtx},
-    ErrorKind, OtherErrExt, Result, TraceResultExt,
 };
 
 #[derive(Default)]

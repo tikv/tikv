@@ -5,8 +5,8 @@ use std::{
     io::{self, Error as IoError, ErrorKind, Result as IoResult},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
     },
     thread::JoinHandle,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -21,6 +21,7 @@ use protobuf::Message;
 use tikv_util::{box_err, debug, error, info, sys::thread::StdThreadBuildWrapper, thd_name, warn};
 
 use crate::{
+    Error, Result,
     config::EncryptionConfig,
     crypter::{self, FileEncryptionInfo, Iv},
     encrypted_file::EncryptedFile,
@@ -28,7 +29,6 @@ use crate::{
     io::{DecrypterReader, EncrypterWriter},
     master_key::Backend,
     metrics::*,
-    Error, Result,
 };
 
 const KEY_DICT_NAME: &str = "key.dict";
@@ -383,7 +383,7 @@ fn check_stale_file_exist(
     file_dict: &mut FileDictionary,
     file_dict_file: &mut FileDictionaryFile,
 ) -> Result<()> {
-    if file_dict.files.get(fname).is_some() {
+    if file_dict.files.contains_key(fname) {
         if Path::new(fname).exists() {
             return Err(Error::Io(IoError::new(
                 ErrorKind::AlreadyExists,
@@ -816,10 +816,10 @@ impl DataKeyManager {
         while let Some(e) = iter.next() {
             let e = e?;
             if e.path().is_symlink() {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("unexpected symbolic link: {}", e.path().display()),
-                ));
+                return Err(io::Error::other(format!(
+                    "unexpected symbolic link: {}",
+                    e.path().display()
+                )));
             }
             let fname = e.path().to_str().unwrap();
             let sync = iter.peek().is_none();
@@ -933,10 +933,10 @@ impl DataKeyManager {
             while let Some(e) = iter.next() {
                 let e = e?;
                 if e.path().is_symlink() {
-                    return Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("unexpected symbolic link: {}", e.path().display()),
-                    ));
+                    return Err(io::Error::other(format!(
+                        "unexpected symbolic link: {}",
+                        e.path().display()
+                    )));
                 }
                 let sub_path = e.path().strip_prefix(src_path).unwrap();
                 let src = e.path().to_str().unwrap();
@@ -1130,7 +1130,7 @@ impl<'a> Drop for DataKeyImporter<'a> {
 
 #[cfg(test)]
 mod tests {
-    use file_system::{remove_file, File};
+    use file_system::{File, remove_file};
     use kvproto::encryptionpb::EncryptionMethod;
     use matches::assert_matches;
     use tempfile::TempDir;
@@ -1138,8 +1138,8 @@ mod tests {
 
     use super::*;
     use crate::master_key::{
-        tests::{decrypt_called, encrypt_called, MockBackend},
         FileBackend, PlaintextBackend,
+        tests::{MockBackend, decrypt_called, encrypt_called},
     };
 
     lazy_static::lazy_static! {

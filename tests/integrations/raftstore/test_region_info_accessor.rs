@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{mpsc::channel, Arc},
+    sync::{Arc, mpsc::channel},
     thread,
     time::Duration,
 };
@@ -9,10 +9,10 @@ use std::{
 use kvproto::metapb::Region;
 use raft::StateRole;
 use raftstore::coprocessor::{RangeKey, RegionInfo, RegionInfoAccessor};
-use test_raftstore::{configure_for_merge, new_node_cluster, Cluster, NodeCluster};
+use test_raftstore::{Cluster, NodeCluster, configure_for_merge, new_node_cluster};
 use tikv_util::{
-    store::{find_peer, new_peer},
     HandyRwLock,
+    store::{find_peer, new_peer},
 };
 
 fn dump(c: &RegionInfoAccessor) -> Vec<(Region, StateRole)> {

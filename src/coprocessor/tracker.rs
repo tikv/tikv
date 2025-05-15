@@ -2,7 +2,7 @@
 
 use std::{cell::RefCell, marker::PhantomData};
 
-use ::tracker::{get_tls_tracker_token, with_tls_tracker, FutureTrack};
+use ::tracker::{FutureTrack, get_tls_tracker_token, with_tls_tracker};
 use engine_traits::{PerfContext, PerfContextExt, PerfContextKind};
 use kvproto::{kvrpcpb, kvrpcpb::ScanDetailV2};
 use pd_client::BucketMeta;
@@ -367,11 +367,7 @@ impl<E: Engine> Tracker<E> {
         let region_id = self.req_ctx.context.get_region_id();
         let start_key = Key::from_raw(&self.req_ctx.lower_bound);
         let end_key = Key::from_raw(&self.req_ctx.upper_bound);
-        let reverse_scan = if let Some(reverse_scan) = self.req_ctx.is_desc_scan {
-            reverse_scan
-        } else {
-            false
-        };
+        let reverse_scan = self.req_ctx.is_desc_scan.unwrap_or(false);
 
         // only collect metrics for select and index, exclude transient read flow such
         // like analyze and checksum.
@@ -523,7 +519,7 @@ mod tests {
     use pd_client::BucketMeta;
     use tikv_kv::RocksEngine;
 
-    use super::{PerfLevel, ReqContext, ReqTag, TimeStamp, Tracker, TLS_COP_METRICS};
+    use super::{PerfLevel, ReqContext, ReqTag, TLS_COP_METRICS, TimeStamp, Tracker};
     use crate::storage::Statistics;
 
     #[test]
@@ -594,13 +590,12 @@ mod tests {
                             .read_keys[0]
                     );
                 } else {
-                    assert!(m.borrow().local_read_stats().region_infos.get(&1).is_none());
+                    assert!(!m.borrow().local_read_stats().region_infos.contains_key(&1));
                     assert!(
-                        m.borrow()
+                        !m.borrow()
                             .local_read_stats()
                             .region_buckets
-                            .get(&1)
-                            .is_none()
+                            .contains_key(&1)
                     );
                 }
 

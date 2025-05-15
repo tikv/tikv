@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use rand::{thread_rng, RngCore};
+use rand::{RngCore, thread_rng};
 use test::Bencher;
 use tikv_util::keybuilder::KeyBuilder;
 

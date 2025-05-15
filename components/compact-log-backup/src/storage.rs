@@ -6,7 +6,7 @@ use std::{
     path::Path,
     pin::Pin,
     sync::Arc,
-    task::{ready, Context, Poll},
+    task::{Context, Poll, ready},
 };
 
 use derive_more::Display;
@@ -28,14 +28,14 @@ use tikv_util::{
     time::Instant,
 };
 use tokio_stream::Stream;
-use tracing::{span::Entered, Span};
+use tracing::{Span, span::Entered};
 use tracing_active_tree::frame;
 
 use super::{
     errors::{Error, Result},
     statistic::LoadMetaStatistic,
 };
-use crate::{compaction::EpochHint, errors::ErrorKind, util, OtherErrExt};
+use crate::{OtherErrExt, compaction::EpochHint, errors::ErrorKind, util};
 
 pub const METADATA_PREFIX: &str = "v1/backupmeta";
 pub const DEFAULT_COMPACTION_OUT_PREFIX: &str = "v1/compaction_out";
@@ -788,7 +788,7 @@ mod test {
     use super::{LoadFromExt, MetaFile, StreamMetaStorage};
     use crate::{
         storage::MigrationStorageWrapper,
-        test_util::{gen_step, KvGen, LogFileBuilder, TmpStorage},
+        test_util::{KvGen, LogFileBuilder, TmpStorage, gen_step},
     };
 
     async fn construct_storage(

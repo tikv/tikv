@@ -12,14 +12,15 @@ use std::{
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::{errorpb, kvrpcpb, kvrpcpb::ApiVersion};
 use thiserror::Error;
-use tikv_util::deadline::{set_deadline_exceeded_busy_error, DeadlineError};
+use tikv_util::deadline::{DeadlineError, set_deadline_exceeded_busy_error};
 use txn_types::{KvPair, TimeStamp};
 
 use crate::storage::{
+    CommandKind, Result,
     kv::{self, Error as KvError, ErrorInner as KvErrorInner},
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
     txn::{self, Error as TxnError, ErrorInner as TxnErrorInner},
-    types, CommandKind, Result,
+    types,
 };
 
 #[derive(Debug, Error)]

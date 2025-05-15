@@ -9,8 +9,8 @@ use futures::stream::TryStreamExt;
 use kvproto::brpb::{self, DeleteSpansOfFile};
 
 use super::{
-    collector::CollectSubcompactionConfig, EpochHint, Subcompaction, SubcompactionCollectKey,
-    SubcompactionResult, UnformedSubcompaction,
+    EpochHint, Subcompaction, SubcompactionCollectKey, SubcompactionResult, UnformedSubcompaction,
+    collector::CollectSubcompactionConfig,
 };
 use crate::{
     errors::Result,
@@ -358,8 +358,8 @@ mod test {
 
     use super::CompactionRunInfoBuilder;
     use crate::{
-        compaction::{exec::SubcompactionExec, Subcompaction, SubcompactionResult},
-        test_util::{gen_min_max, KvGen, LogFileBuilder, TmpStorage},
+        compaction::{Subcompaction, SubcompactionResult, exec::SubcompactionExec},
+        test_util::{KvGen, LogFileBuilder, TmpStorage, gen_min_max},
     };
 
     impl CompactionRunInfoBuilder {

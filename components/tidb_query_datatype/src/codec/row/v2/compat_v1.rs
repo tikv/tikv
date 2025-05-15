@@ -5,8 +5,8 @@
 use codec::{number::NumberCodec, prelude::BufferWriter};
 
 use crate::{
-    codec::{datum, datum_codec::DatumFlagAndPayloadEncoder, Error, Result},
     FieldTypeAccessor, FieldTypeTp,
+    codec::{Error, Result, datum, datum_codec::DatumFlagAndPayloadEncoder},
 };
 
 #[inline]
@@ -141,16 +141,14 @@ impl<T: BufferWriter> V1CompatibleEncoder for T {}
 /// not always equals the encoded-bytes using v1 directly.
 #[cfg(test)]
 mod tests {
-    use std::{f64, i16, i32, i64, i8, u16, u32, u64, u8};
-
     use super::{
         super::encoder_for_test::{Column, ScalarValueEncoder},
         V1CompatibleEncoder,
     };
     use crate::{
+        FieldTypeTp,
         codec::{data_type::*, datum_codec::RawDatumDecoder},
         expr::EvalContext,
-        FieldTypeTp,
     };
 
     fn encode_to_v1_compatible(ctx: &mut EvalContext, col: &Column) -> Vec<u8> {

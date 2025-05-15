@@ -67,8 +67,8 @@ use std::{
     marker::PhantomData,
     mem,
     sync::{
-        atomic::{self, AtomicBool, AtomicU64, Ordering},
         Arc,
+        atomic::{self, AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, SystemTime},
 };
@@ -78,7 +78,7 @@ use causal_ts::{CausalTsProvider, CausalTsProviderImpl};
 use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use engine_traits::{
-    raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS, DATA_CFS_LEN,
+    CF_DEFAULT, CF_LOCK, CF_WRITE, CfName, DATA_CFS, DATA_CFS_LEN, raw_ttl::ttl_to_expire_ts,
 };
 use futures::{future::Either, prelude::*};
 use kvproto::{
@@ -90,7 +90,7 @@ use kvproto::{
     pdpb::QueryKind,
 };
 use pd_client::FeatureGate;
-use raftstore::store::{util::build_key_range, ReadStats, TxnExt, WriteStats};
+use raftstore::store::{ReadStats, TxnExt, WriteStats, util::build_key_range};
 use rand::prelude::*;
 use resource_control::{ResourceController, ResourceGroupManager, ResourceLimiter, TaskMetadata};
 use resource_metering::{FutureExt, ResourceTagFactory};
@@ -99,17 +99,17 @@ use tikv_util::{
     deadline::Deadline,
     future::try_poll,
     quota_limiter::QuotaLimiter,
-    time::{duration_to_ms, duration_to_sec, Instant, InstantExt, ThreadReadId},
+    time::{Instant, InstantExt, ThreadReadId, duration_to_ms, duration_to_sec},
 };
 use tracker::{
-    clear_tls_tracker_token, set_tls_tracker_token, with_tls_tracker, TlsTrackedFuture,
-    TrackerToken,
+    TlsTrackedFuture, TrackerToken, clear_tls_tracker_token, set_tls_tracker_token,
+    with_tls_tracker,
 };
 use txn_types::{Key, KvPair, Lock, LockType, TimeStamp, TsSet, Value};
 
 use self::kv::SnapContext;
 pub use self::{
-    errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
+    errors::{Error, ErrorHeaderKind, ErrorInner, get_error_kind_from_header, get_tag_from_header},
     kv::{
         CfStatistics, Cursor, CursorBuilder, Engine, FlowStatistics, FlowStatsReporter, Iterator,
         RocksEngine, ScanMode, Snapshot, StageLatencyStats, Statistics, TestEngineBuilder,
@@ -127,17 +127,17 @@ use crate::{
     server::{lock_manager::waiter_manager, metrics::ResourcePriority},
     storage::{
         config::Config,
-        kv::{with_tls_engine, Modify, WriteData},
+        kv::{Modify, WriteData, with_tls_engine},
         lock_manager::{LockManager, MockLockManager},
         metrics::{CommandKind, *},
-        mvcc::{metrics::ScanLockReadTimeSource::resolve_lock, MvccReader, PointGetterBuilder},
+        mvcc::{MvccReader, PointGetterBuilder, metrics::ScanLockReadTimeSource::resolve_lock},
         test_util::latest_feature_gate,
         txn::{
+            Command, Error as TxnError, ErrorInner as TxnErrorInner,
             commands::{RawAtomicStore, RawCompareAndSwap, TypedCommand},
             flow_controller::{EngineFlowController, FlowController},
             scheduler::TxnScheduler,
             txn_status_cache::{TxnState, TxnStatusCache},
-            Command, Error as TxnError, ErrorInner as TxnErrorInner,
         },
         types::StorageCallbackType,
     },
@@ -462,6 +462,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     /// When config.api_version = V2: accept the following:
     ///   * Request of V1 from TiDB, for compatibility.
     ///   * Request of V2 with legal prefix.
+    ///
     /// See the following for detail:
     ///   * rfc: https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md.
     ///   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto,
@@ -696,9 +697,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             .get(&key, &mut statistics)
                             // map storage::txn::Error -> storage::Error
                             .map_err(Error::from)
-                            .map(|r| {
+                            .inspect(|_r| {
                                 KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
-                                r
                             })
                     });
                     if let Err(
@@ -2061,8 +2061,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         get.get_context().api_version,
                         CMD,
                         [get.get_key()],
-                    )
-                    .map_err(Error::from)?;
+                    )?;
                 }
 
                 let command_duration = Instant::now();
@@ -2935,7 +2934,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             buckets.as_ref(),
                         );
                         statistics.add(&stats);
-                        result.extend(pairs.into_iter().map(|res| res.map_err(Error::from)));
+                        result.extend(pairs);
                     }
 
                     tls_collect_query_batch(
@@ -3081,11 +3080,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         self.sched_raw_command(metadata, priority, CMD, async move {
             let key = F::encode_raw_key_owned(key, None);
             let cmd = RawCompareAndSwap::new(cf, key, previous_value, value, ttl, api_version, ctx);
-            Self::sched_raw_atomic_command(
-                sched,
-                cmd,
-                Box::new(|res| callback(res.map_err(Error::from))),
-            );
+            Self::sched_raw_atomic_command(sched, cmd, Box::new(|res| callback(res)));
         })
     }
 
@@ -3114,11 +3109,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         self.sched_raw_command(metadata, priority, CMD, async move {
             let modifies = Self::raw_batch_put_requests_to_modifies(cf, pairs, ttls, None);
             let cmd = RawAtomicStore::new(cf, modifies, ctx);
-            Self::sched_raw_atomic_command(
-                sched,
-                cmd,
-                Box::new(|res| callback(res.map_err(Error::from))),
-            );
+            Self::sched_raw_atomic_command(sched, cmd, Box::new(|res| callback(res)));
         })
     }
 
@@ -3143,11 +3134,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 .map(|k| Self::raw_delete_request_to_modify(cf, k, None))
                 .collect();
             let cmd = RawAtomicStore::new(cf, modifies, ctx);
-            Self::sched_raw_atomic_command(
-                sched,
-                cmd,
-                Box::new(|res| callback(res.map_err(Error::from))),
-            );
+            Self::sched_raw_atomic_command(sched, cmd, Box::new(|res| callback(res)));
         })
     }
 
@@ -3514,7 +3501,9 @@ impl<E: Engine> Engine for TxnTestEngine<E> {
     }
 
     type IMSnap = Self::Snap;
-    type IMSnapshotRes = Self::SnapshotRes;
+    // TODO: revert this once https://github.com/rust-lang/rust/issues/140222 is fixed.
+    // type IMSnapshotRes = Self::SnapshotRes;
+    type IMSnapshotRes = impl Future<Output = tikv_kv::Result<Self::Snap>> + Send;
     fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
         self.async_snapshot(ctx)
     }
@@ -3539,7 +3528,10 @@ pub struct TxnTestSnapshot<S: Snapshot> {
 
 impl<S: Snapshot> Snapshot for TxnTestSnapshot<S> {
     type Iter = S::Iter;
-    type Ext<'a> = TxnTestSnapshotExt<'a> where S: 'a;
+    type Ext<'a>
+        = TxnTestSnapshotExt<'a>
+    where
+        S: 'a;
 
     fn get(&self, key: &Key) -> tikv_kv::Result<Option<Value>> {
         self.snapshot.get(key)
@@ -3778,8 +3770,8 @@ pub mod test_util {
     use std::{
         fmt::Debug,
         sync::{
-            mpsc::{channel, Sender},
             Mutex,
+            mpsc::{Sender, channel},
         },
     };
 
@@ -4246,17 +4238,17 @@ mod tests {
     use std::{
         iter::Iterator,
         sync::{
-            atomic::{AtomicBool, Ordering},
-            mpsc::{channel, Sender},
             Arc,
+            atomic::{AtomicBool, Ordering},
+            mpsc::{Sender, channel},
         },
         thread,
         time::Duration,
     };
 
-    use api_version::{test_kv_format_impl, ApiV2};
+    use api_version::{ApiV2, test_kv_format_impl};
     use collections::HashMap;
-    use engine_traits::{raw_ttl::ttl_current_ts, CF_LOCK, CF_RAFT, CF_WRITE};
+    use engine_traits::{CF_LOCK, CF_RAFT, CF_WRITE, raw_ttl::ttl_current_ts};
     use error_code::ErrorCodeExt;
     use errors::extract_key_error;
     use futures::executor::block_on;
@@ -4267,15 +4259,15 @@ mod tests {
     use parking_lot::Mutex;
     use tikv_util::config::ReadableSize;
     use tracker::INVALID_TRACKER_TOKEN;
-    use txn_types::{LastChange, Mutation, PessimisticLock, WriteType, SHORT_VALUE_MAX_LEN};
+    use txn_types::{LastChange, Mutation, PessimisticLock, SHORT_VALUE_MAX_LEN, WriteType};
 
     use super::{
         config::EngineType,
         mvcc::tests::{must_unlocked, must_written},
         test_util::*,
         txn::{
-            commands::{new_flashback_rollback_lock_cmd, new_flashback_write_cmd},
             FLASHBACK_BATCH_SIZE,
+            commands::{new_flashback_rollback_lock_cmd, new_flashback_write_cmd},
         },
         *,
     };
@@ -4291,13 +4283,12 @@ mod tests {
                 CancellationCallback, DiagnosticContext, KeyLockWaitInfo, LockDigest,
                 LockWaitToken, UpdateWaitForEvent, WaitTimeout,
             },
-            mvcc::{tests::must_locked, LockType},
+            mvcc::{LockType, tests::must_locked},
             txn::{
-                commands,
+                Error as TxnError, ErrorInner as TxnErrorInner, commands,
                 commands::{AcquirePessimisticLock, Prewrite},
                 tests::must_rollback,
                 txn_status_cache::TxnStatusCache,
-                Error as TxnError, ErrorInner as TxnErrorInner,
             },
             types::{PessimisticLockKeyResult, PessimisticLockResults},
         },
@@ -9642,18 +9633,25 @@ mod tests {
     #[allow(clippy::large_enum_variant)]
     pub enum Msg {
         WaitFor {
+            #[allow(dead_code)]
             token: LockWaitToken,
+            #[allow(dead_code)]
             region_id: u64,
+            #[allow(dead_code)]
             region_epoch: RegionEpoch,
+            #[allow(dead_code)]
             term: u64,
             start_ts: TimeStamp,
             wait_info: KeyLockWaitInfo,
             is_first_lock: bool,
             timeout: Option<WaitTimeout>,
+            #[allow(dead_code)]
             cancel_callback: CancellationCallback,
+            #[allow(dead_code)]
             diag_ctx: DiagnosticContext,
         },
         RemoveLockWait {
+            #[allow(dead_code)]
             token: LockWaitToken,
         },
     }

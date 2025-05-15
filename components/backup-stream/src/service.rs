@@ -8,10 +8,11 @@ use kvproto::{logbackuppb::*, metapb::Region};
 use tikv_util::{info, warn, worker::Scheduler};
 
 use crate::{
+    Task,
     checkpoint_manager::{GetCheckpointResult, RegionIdWithVersion},
     endpoint::{RegionCheckpointOperation, RegionSet},
     router::TaskSelector,
-    try_send, Task,
+    try_send,
 };
 
 #[derive(Clone)]

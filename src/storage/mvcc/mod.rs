@@ -15,8 +15,8 @@ use kvproto::kvrpcpb::{self, Assertion, IsolationLevel};
 use thiserror::Error;
 use tikv_util::{metrics::CRITICAL_ERROR, panic_when_unexpected_key_or_data, set_panic_mark};
 pub use txn_types::{
-    Key, Lock, LockType, Mutation, TimeStamp, Value, Write, WriteRef, WriteType,
-    SHORT_VALUE_MAX_LEN,
+    Key, Lock, LockType, Mutation, SHORT_VALUE_MAX_LEN, TimeStamp, Value, Write, WriteRef,
+    WriteType,
 };
 
 pub use self::{
@@ -25,7 +25,7 @@ pub use self::{
     },
     metrics::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM},
     reader::*,
-    txn::{GcInfo, MvccTxn, ReleasedLock, MAX_TXN_WRITE_SIZE},
+    txn::{GcInfo, MAX_TXN_WRITE_SIZE, MvccTxn, ReleasedLock},
 };
 pub use crate::storage::types::MvccInfo;
 

@@ -5,15 +5,15 @@ use std::sync::Arc;
 use kvproto::kvrpcpb::ExtraOp;
 use tikv_kv::Snapshot;
 use tikv_util::memory::{HeapSize, MemoryQuota, MemoryQuotaExceeded, OwnedAllocated};
-use tracker::{get_tls_tracker_token, TrackerToken};
+use tracker::{TrackerToken, get_tls_tracker_token};
 
 use crate::storage::{
     kv::Statistics,
     lock_manager::LockManager,
     metrics::*,
     txn::{
-        commands::{Command, WriteContext, WriteResult},
         ProcessResult,
+        commands::{Command, WriteContext, WriteResult},
     },
 };
 

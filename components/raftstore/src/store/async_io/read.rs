@@ -4,8 +4,8 @@ use std::{
     fmt,
     marker::PhantomData,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
 };
 
@@ -14,15 +14,15 @@ use fail::fail_point;
 use file_system::{IoType, WithIoType};
 use kvproto::raft_serverpb::{PeerState, RaftSnapshotData, RegionLocalState};
 use protobuf::Message;
-use raft::{eraftpb::Snapshot, GetEntriesContext};
+use raft::{GetEntriesContext, eraftpb::Snapshot};
 use tikv_util::{error, info, time::Instant, worker::Runnable};
 
 use crate::store::{
+    MAX_INIT_ENTRY_COUNT, RaftlogFetchResult, TabletSnapKey, TabletSnapManager,
     metrics::{SNAPSHOT_KV_COUNT_HISTOGRAM, SNAPSHOT_SIZE_HISTOGRAM},
     snap::TABLET_SNAPSHOT_VERSION,
     util,
     worker::metrics::{SNAP_COUNTER, SNAP_HISTOGRAM},
-    RaftlogFetchResult, TabletSnapKey, TabletSnapManager, MAX_INIT_ENTRY_COUNT,
 };
 
 pub enum ReadTask<EK> {

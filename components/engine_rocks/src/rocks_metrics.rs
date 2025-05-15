@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use collections::HashMap;
-use engine_traits::{StatisticsReporter, CF_DEFAULT};
+use engine_traits::{CF_DEFAULT, StatisticsReporter};
 use lazy_static::lazy_static;
 use prometheus::*;
 use prometheus_static_metric::*;
@@ -9,7 +9,7 @@ use rocksdb::{
     DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType, HistogramData,
 };
 
-use crate::{engine::RocksEngine, rocks_metrics_defs::*, RocksStatistics};
+use crate::{RocksStatistics, engine::RocksEngine, rocks_metrics_defs::*};
 
 make_auto_flush_static_metric! {
     pub label_enum TickerName {

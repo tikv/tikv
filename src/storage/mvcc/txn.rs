@@ -321,17 +321,17 @@ pub(crate) fn make_txn_error(
 #[cfg(test)]
 pub(crate) mod tests {
     use kvproto::kvrpcpb::{AssertionLevel, Context, PrewriteRequestPessimisticAction::*};
-    use txn_types::{TimeStamp, WriteType, SHORT_VALUE_MAX_LEN};
+    use txn_types::{SHORT_VALUE_MAX_LEN, TimeStamp, WriteType};
 
     use super::*;
     use crate::storage::{
-        kv::{Engine, RocksEngine, ScanMode, TestEngineBuilder, WriteData},
-        mvcc::{tests::*, Error, ErrorInner, Mutation, MvccReader, SnapshotReader},
-        txn::{
-            commands::*, commit, prewrite, tests::*, CommitKind, TransactionKind,
-            TransactionProperties,
-        },
         SecondaryLocksStatus, TxnStatus,
+        kv::{Engine, RocksEngine, ScanMode, TestEngineBuilder, WriteData},
+        mvcc::{Error, ErrorInner, Mutation, MvccReader, SnapshotReader, tests::*},
+        txn::{
+            CommitKind, TransactionKind, TransactionProperties, commands::*, commit, prewrite,
+            tests::*,
+        },
     };
 
     fn test_mvcc_txn_read_imp(k1: &[u8], k2: &[u8], v: &[u8]) {
@@ -356,9 +356,9 @@ pub(crate) mod tests {
         // should read pending locks
         must_get_err(&mut engine, k1, 7);
         // should ignore the primary lock and get none when reading the latest record
-        must_get_none(&mut engine, k1, u64::max_value());
+        must_get_none(&mut engine, k1, u64::MAX);
         // should read secondary locks even when reading the latest record
-        must_get_err(&mut engine, k2, u64::max_value());
+        must_get_err(&mut engine, k2, u64::MAX);
 
         must_commit(&mut engine, k1, 5, 10);
         must_commit(&mut engine, k2, 5, 10);
@@ -367,12 +367,12 @@ pub(crate) mod tests {
         must_get_none(&mut engine, k1, 7);
         // should read with ts > commit_ts
         must_get(&mut engine, k1, 13, v);
-        // should read the latest record if `ts == u64::max_value()`
-        must_get(&mut engine, k1, u64::max_value(), v);
+        // should read the latest record if `ts == u64::MAX`
+        must_get(&mut engine, k1, u64::MAX, v);
 
         must_prewrite_delete(&mut engine, k1, k1, 15);
         // should ignore the lock and get previous record when reading the latest record
-        must_get(&mut engine, k1, u64::max_value(), v);
+        must_get(&mut engine, k1, u64::MAX, v);
         must_commit(&mut engine, k1, 15, 20);
         must_get_none(&mut engine, k1, 3);
         must_get_none(&mut engine, k1, 7);
@@ -389,9 +389,9 @@ pub(crate) mod tests {
         must_get(&mut engine, k1, 30, v);
         must_pessimistic_prewrite_delete(&mut engine, k1, k1, 23, 29, DoPessimisticCheck);
         must_get_err(&mut engine, k1, 30);
-        // should read the latest record when `ts == u64::max_value()`
+        // should read the latest record when `ts == u64::MAX`
         // even if lock.start_ts(23) < latest write.commit_ts(27)
-        must_get(&mut engine, k1, u64::max_value(), v);
+        must_get(&mut engine, k1, u64::MAX, v);
         must_commit(&mut engine, k1, 23, 31);
         must_get(&mut engine, k1, 30, v);
         must_get_none(&mut engine, k1, 32);

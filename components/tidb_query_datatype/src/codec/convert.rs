@@ -5,18 +5,18 @@ use std::{borrow::Cow, fmt::Display};
 use tipb::FieldType;
 
 use super::{
-    mysql::{charset::MULTI_BYTES_CHARSETS, RoundMode, DEFAULT_FSP},
     Error, Result,
+    mysql::{DEFAULT_FSP, RoundMode, charset::MULTI_BYTES_CHARSETS},
 };
 // use crate::{self, FieldTypeTp, UNSPECIFIED_LENGTH};
 use crate::{
+    Collation, FieldTypeAccessor, FieldTypeTp, UNSPECIFIED_LENGTH,
     codec::{
         data_type::*,
         error::ERR_DATA_OUT_OF_RANGE,
-        mysql::{decimal::max_or_min_dec, Res},
+        mysql::{Res, decimal::max_or_min_dec},
     },
     expr::{EvalContext, Flag},
-    Collation, FieldTypeAccessor, FieldTypeTp, UNSPECIFIED_LENGTH,
 };
 
 /// A trait for converting a value to an `Int`.
@@ -25,6 +25,20 @@ pub trait ToInt {
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64>;
     /// Converts the given value to an `u64`
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64>;
+}
+
+/// A trait for converting a value to a `String`.
+///
+/// NOTE: we can't resue the `ToString` trait becuase this trait may return
+/// different value with `fmt::Display`.
+pub trait ToStringValue {
+    fn to_string_value(&self) -> String;
+}
+
+impl<T: ToString> ToStringValue for T {
+    default fn to_string_value(&self) -> String {
+        self.to_string()
+    }
 }
 
 /// A trait for converting a value to `T`
@@ -78,22 +92,22 @@ where
 
 impl<T> ConvertTo<String> for T
 where
-    T: ToString + EvaluableRet,
+    T: ToStringValue + EvaluableRet,
 {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<String> {
         // FIXME: There is an additional step `ProduceStrWithSpecifiedTp` in TiDB.
-        Ok(self.to_string())
+        Ok(self.to_string_value())
     }
 }
 
 impl<T> ConvertTo<Bytes> for T
 where
-    T: ToString + EvaluableRet,
+    T: ToStringValue + EvaluableRet,
 {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Bytes> {
-        Ok(self.to_string().into_bytes())
+        Ok(self.to_string_value().into_bytes())
     }
 }
 
@@ -110,21 +124,21 @@ impl<'a> ConvertTo<String> for JsonRef<'a> {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<String> {
         // FIXME: There is an additional step `ProduceStrWithSpecifiedTp` in TiDB.
-        Ok(self.to_string())
+        Ok(self.to_string_value())
     }
 }
 
 impl<'a> ConvertTo<Bytes> for JsonRef<'a> {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Bytes> {
-        Ok(self.to_string().into_bytes())
+        Ok(self.to_string_value().into_bytes())
     }
 }
 
 impl<'a> ConvertTo<Bytes> for EnumRef<'a> {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Bytes> {
-        Ok(self.to_string().into_bytes())
+        Ok(self.to_string_value().into_bytes())
     }
 }
 
@@ -516,7 +530,10 @@ impl<'a> ToInt for JsonRef<'a> {
             JsonType::Double => self.get_double().to_int(ctx, tp),
             JsonType::String => self.get_str_bytes()?.to_int(ctx, tp),
             _ => Ok(ctx
-                .handle_truncate_err(Error::truncated_wrong_val("Integer", self.to_string()))
+                .handle_truncate_err(Error::truncated_wrong_val(
+                    "Integer",
+                    self.to_string_value(),
+                ))
                 .map(|_| 0)?),
         }?;
         val.to_int(ctx, tp)
@@ -532,7 +549,10 @@ impl<'a> ToInt for JsonRef<'a> {
             JsonType::Double => self.get_double().to_uint(ctx, tp),
             JsonType::String => self.get_str_bytes()?.to_uint(ctx, tp),
             _ => Ok(ctx
-                .handle_truncate_err(Error::truncated_wrong_val("Integer", self.to_string()))
+                .handle_truncate_err(Error::truncated_wrong_val(
+                    "Integer",
+                    self.to_string_value(),
+                ))
                 .map(|_| 0)?),
         }?;
         val.to_uint(ctx, tp)
@@ -1011,7 +1031,7 @@ fn exp_float_str_to_int_str<'a>(
     let int_cnt: i64;
     match dot_idx {
         None => {
-            digits.extend_from_slice(valid_float[..e_idx].as_bytes());
+            digits.extend_from_slice(&valid_float.as_bytes()[..e_idx]);
             // if digits.len() > i64::MAX,
             // then the input str has at least 9223372036854775808 chars,
             // which make the str >= 8388608.0 TB,
@@ -1019,9 +1039,9 @@ fn exp_float_str_to_int_str<'a>(
             int_cnt = digits.len() as i64;
         }
         Some(dot_idx) => {
-            digits.extend_from_slice(valid_float[..dot_idx].as_bytes());
+            digits.extend_from_slice(&valid_float.as_bytes()[..dot_idx]);
             int_cnt = digits.len() as i64;
-            digits.extend_from_slice(valid_float[(dot_idx + 1)..e_idx].as_bytes());
+            digits.extend_from_slice(&valid_float.as_bytes()[(dot_idx + 1)..e_idx]);
         }
     }
     // make `digits` immutable
@@ -1138,15 +1158,15 @@ mod tests {
 
     use super::*;
     use crate::{
+        Collation, FieldTypeFlag,
         codec::{
             error::{
                 ERR_DATA_OUT_OF_RANGE, ERR_M_BIGGER_THAN_D, ERR_TRUNCATE_WRONG_VALUE,
                 WARN_DATA_TRUNCATED,
             },
-            mysql::{charset, Res, UNSPECIFIED_FSP},
+            mysql::{Res, UNSPECIFIED_FSP, charset},
         },
         expr::{EvalConfig, EvalContext, Flag},
-        Collation, FieldTypeFlag,
     };
 
     #[test]
@@ -2383,7 +2403,11 @@ mod tests {
                 nd.frac_cnt(),
                 nd.result_frac_cnt()
             );
-            assert_eq!(nd, want, "{}, {}, {}, {}, {}", dec, nd, want, flen, decimal);
+            assert_eq!(
+                nd, want,
+                "{:?}, {:?}, {:?}, {}, {}",
+                dec, nd, want, flen, decimal
+            );
         }
     }
 
@@ -2771,8 +2795,8 @@ mod tests {
                 let r = produce_dec_with_specified_tp(&mut ctx, input, &rft);
 
                 // make log
-                let rs = r.as_ref().map(|x| x.to_string());
-                let expect_str = expect.as_ref().map(|x| x.to_string());
+                let rs = r.as_ref().map(|x| x.to_string_value());
+                let expect_str = expect.as_ref().map(|x| x.to_string_value());
                 let log = format!(
                     "input: {}, origin_flen: {}, origin_decimal: {}, \
                      res_flen: {}, res_decimal: {}, is_unsigned: {}, \

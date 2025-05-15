@@ -3,10 +3,10 @@
 use std::result;
 
 use cloud::{
-    kms::{SubConfigAws, SubConfigAzure, SubConfigGcp},
     Config as CloudConfig,
+    kms::{SubConfigAws, SubConfigAzure, SubConfigGcp},
 };
-use kvproto::encryptionpb::{EncryptionMethod, MasterKey, MasterKeyKms, MasterKey_oneof_backend};
+use kvproto::encryptionpb::{EncryptionMethod, MasterKey, MasterKey_oneof_backend, MasterKeyKms};
 use online_config::OnlineConfig;
 use serde_derive::{Deserialize, Serialize};
 use tikv_util::{box_err, config::ReadableDuration};
@@ -266,8 +266,8 @@ mod encryption_method_serde {
     use std::fmt;
 
     use serde::{
-        de::{self, Unexpected, Visitor},
         Deserializer, Serializer,
+        de::{self, Unexpected, Visitor},
     };
 
     use super::EncryptionMethod;

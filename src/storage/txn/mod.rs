@@ -27,11 +27,11 @@ pub use self::{
         cleanup::cleanup,
         commit::commit,
         flashback_to_version::{
-            flashback_to_version_read_lock, flashback_to_version_read_write,
-            flashback_to_version_write, rollback_locks, FLASHBACK_BATCH_SIZE,
+            FLASHBACK_BATCH_SIZE, flashback_to_version_read_lock, flashback_to_version_read_write,
+            flashback_to_version_write, rollback_locks,
         },
         gc::gc,
-        prewrite::{prewrite, CommitKind, TransactionKind, TransactionProperties},
+        prewrite::{CommitKind, TransactionKind, TransactionProperties, prewrite},
     },
     commands::{Command, RESOLVE_LOCK_BATCH_SIZE},
     latch::{Latches, Lock},
@@ -42,9 +42,9 @@ pub use self::{
     },
 };
 use crate::storage::{
+    Error as StorageError, Result as StorageResult,
     mvcc::Error as MvccError,
     types::{MvccInfo, PessimisticLockResults, PrewriteResult, SecondaryLocksStatus, TxnStatus},
-    Error as StorageError, Result as StorageResult,
 };
 
 /// Process result of a command.

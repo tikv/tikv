@@ -46,8 +46,8 @@ pub use compare_and_swap::RawCompareAndSwap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 pub use flashback_to_version::FlashbackToVersion;
 pub use flashback_to_version_read_phase::{
-    new_flashback_rollback_lock_cmd, new_flashback_write_cmd, FlashbackToVersionReadPhase,
-    FlashbackToVersionState,
+    FlashbackToVersionReadPhase, FlashbackToVersionState, new_flashback_rollback_lock_cmd,
+    new_flashback_write_cmd,
 };
 pub use flush::Flush;
 use kvproto::kvrpcpb::*;
@@ -56,8 +56,8 @@ pub use mvcc_by_start_ts::MvccByStartTs;
 pub use pause::Pause;
 pub use pessimistic_rollback::PessimisticRollback;
 pub use pessimistic_rollback_read_phase::PessimisticRollbackReadPhase;
-pub use prewrite::{one_pc_commit, Prewrite, PrewritePessimistic};
-pub use resolve_lock::{ResolveLock, RESOLVE_LOCK_BATCH_SIZE};
+pub use prewrite::{Prewrite, PrewritePessimistic, one_pc_commit};
+pub use resolve_lock::{RESOLVE_LOCK_BATCH_SIZE, ResolveLock};
 pub use resolve_lock_lite::ResolveLockLite;
 pub use resolve_lock_readphase::ResolveLockReadPhase;
 pub use rollback::Rollback;
@@ -67,19 +67,19 @@ pub use txn_heart_beat::TxnHeartBeat;
 use txn_types::{CommitRole as TxnCommitRole, Key, TimeStamp};
 
 use crate::storage::{
+    Result as StorageResult, Snapshot, Statistics,
     kv::WriteData,
     lock_manager::{
-        self, lock_wait_context::LockWaitContextSharedState, LockManager, LockWaitToken,
-        WaitTimeout,
+        self, LockManager, LockWaitToken, WaitTimeout,
+        lock_wait_context::LockWaitContextSharedState,
     },
     metrics,
     mvcc::{ReleasedLock, SnapshotReader},
-    txn::{latch, txn_status_cache::TxnStatusCache, ProcessResult, Result},
+    txn::{ProcessResult, Result, latch, txn_status_cache::TxnStatusCache},
     types::{
         MvccInfo, PessimisticLockParameters, PessimisticLockResults, PrewriteResult,
         SecondaryLocksStatus, StorageCallbackType, TxnStatus,
     },
-    Result as StorageResult, Snapshot, Statistics,
 };
 
 /// Store Transaction scheduler commands.
@@ -122,20 +122,20 @@ pub enum Command {
 /// converted to this type via a series of transformations. That process is
 /// described below using `CommitRequest` as an example:
 /// 1. A `CommitRequest` is handled by the `future_commit` method in kv.rs,
-/// where it needs to be transformed to a `TypedCommand` before being passed to
-/// the `storage.sched_txn_command` method.
+///    where it needs to be transformed to a `TypedCommand` before being passed
+///    to the `storage.sched_txn_command` method.
 /// 2. The `From<CommitRequest>` impl for `TypedCommand` gets chosen, and its
-/// generic parameter indicates that the result type for this instance of
-/// `TypedCommand` is going to be `TxnStatus` - one of the variants of the
-/// `StorageCallback` enum.
-/// 3. In the above `from` method, the details of the
-/// commit request are captured by creating an instance of the struct
-/// `storage::txn::commands::commit::Command` via its `new` method.
+///    generic parameter indicates that the result type for this instance of
+///    `TypedCommand` is going to be `TxnStatus` - one of the variants of the
+///    `StorageCallback` enum.
+/// 3. In the above `from` method, the details of the commit request are
+///    captured by creating an instance of the struct
+///    `storage::txn::commands::commit::Command` via its `new` method.
 /// 4. This struct is wrapped in a variant of the enum
-/// `storage::txn::commands::Command`. This enum exists to facilitate generic
-/// operations over different commands. 5. Finally, the `Command` enum variant
-/// for `Commit` is converted to the `TypedCommand` using the `From<Command>`
-/// impl for `TypedCommand`.
+///    `storage::txn::commands::Command`. This enum exists to facilitate generic
+///    operations over different commands. 5. Finally, the `Command` enum
+///    variant for `Commit` is converted to the `TypedCommand` using the
+///    `From<Command>` impl for `TypedCommand`.
 ///
 /// For other requests, see the corresponding `future_` method, the `From` trait
 /// implementation and so on.
@@ -882,9 +882,9 @@ pub mod test_util {
 
     use super::*;
     use crate::storage::{
+        Engine, MockLockManager,
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
         txn::{Error, ErrorInner, Result},
-        Engine, MockLockManager,
     };
 
     // Some utils for tests that may be used in multiple source code files.

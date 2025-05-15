@@ -13,3 +13,6 @@ openssl-sys = { workspace = true }
 slog = { workspace = true }
 # better to not use slog-global, but pass in the logger
 slog-global = { workspace = true }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(ossl1)', 'cfg(ossl3)', 'cfg(disable_fips)'] }

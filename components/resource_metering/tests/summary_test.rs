@@ -8,7 +8,7 @@ use std::{
 
 use collections::HashMap;
 use kvproto::{kvrpcpb::Context, resource_usage_agent::ResourceUsageRecord};
-use resource_metering::{error::Result, init_recorder, init_reporter, Config, DataSink};
+use resource_metering::{Config, DataSink, error::Result, init_recorder, init_reporter};
 use tikv_util::config::ReadableDuration;
 
 const PRECISION_MS: u64 = 1000;

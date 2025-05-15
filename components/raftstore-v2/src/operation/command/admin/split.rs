@@ -42,30 +42,30 @@ use kvproto::{
     raft_serverpb::{RaftMessage, RaftSnapshotData},
 };
 use protobuf::Message;
-use raft::{prelude::Snapshot, INVALID_ID};
+use raft::{INVALID_ID, prelude::Snapshot};
 use raftstore::{
+    Result,
     coprocessor::RegionChangeReason,
     store::{
+        PeerPessimisticLocks, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM, SplitCheckTask, Transport,
         cmd_resp,
-        fsm::{apply::validate_batch_split, ApplyMetrics},
+        fsm::{ApplyMetrics, apply::validate_batch_split},
         metrics::PEER_ADMIN_CMD_COUNTER,
         snap::TABLET_SNAPSHOT_VERSION,
         util::{self, KeysInfoFormatter},
-        PeerPessimisticLocks, SplitCheckTask, Transport, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
     },
-    Result,
 };
 use slog::{error, info, warn};
 use tikv_util::{box_err, log::SlogFormat, slog_panic, time::Instant};
 
 use crate::{
+    Error,
     batch::StoreContext,
     fsm::{ApplyResReporter, PeerFsmDelegate},
     operation::{AdminCmdResult, SharedReadTablet},
     raft::{Apply, Peer},
     router::{CmdResChannel, PeerMsg, PeerTick, StoreMsg},
     worker::tablet,
-    Error,
 };
 
 pub const SPLIT_PREFIX: &str = "split";
@@ -1005,8 +1005,8 @@ mod test {
         kv::{KvTestEngine, TestTabletFactory},
     };
     use engine_traits::{
-        FlushState, Peekable, SstApplyState, TabletContext, TabletRegistry, WriteBatch, CF_DEFAULT,
-        DATA_CFS,
+        CF_DEFAULT, DATA_CFS, FlushState, Peekable, SstApplyState, TabletContext, TabletRegistry,
+        WriteBatch,
     };
     use futures::executor::block_on;
     use kvproto::{
@@ -1016,7 +1016,7 @@ mod test {
     };
     use raftstore::{
         coprocessor::CoprocessorHost,
-        store::{cmd_resp::new_error, Config},
+        store::{Config, cmd_resp::new_error},
     };
     use slog::o;
     use tempfile::TempDir;
@@ -1028,7 +1028,7 @@ mod test {
 
     use super::*;
     use crate::{
-        operation::test_util::{create_tmp_importer, MockReporter},
+        operation::test_util::{MockReporter, create_tmp_importer},
         raft::Apply,
     };
 

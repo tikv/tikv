@@ -2,9 +2,9 @@
 
 use std::{
     sync::{
-        atomic::{AtomicBool, Ordering},
-        mpsc::{channel, RecvTimeoutError},
         Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{RecvTimeoutError, channel},
     },
     thread,
     time::Duration,
@@ -28,21 +28,20 @@ use test_raftstore_macro::test_case;
 use tikv::{
     config::{ConfigController, Module},
     storage::{
-        self,
+        self, Error as StorageError, ErrorInner as StorageErrorInner,
         config_manager::StorageConfigManger,
         kv::{Error as KvError, ErrorInner as KvErrorInner, SnapContext, SnapshotExt},
         lock_manager::MockLockManager,
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
         test_util::*,
         txn::{
-            commands,
+            Error as TxnError, ErrorInner as TxnErrorInner, commands,
             flow_controller::{EngineFlowController, FlowController},
-            Error as TxnError, ErrorInner as TxnErrorInner,
         },
-        Error as StorageError, ErrorInner as StorageErrorInner, *,
+        *,
     },
 };
-use tikv_util::{future::paired_future_callback, worker::dummy_scheduler, HandyRwLock};
+use tikv_util::{HandyRwLock, future::paired_future_callback, worker::dummy_scheduler};
 use txn_types::{Key, Mutation, TimeStamp};
 
 #[test_case(test_raftstore::new_server_cluster)]

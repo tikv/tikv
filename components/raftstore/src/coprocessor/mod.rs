@@ -3,8 +3,8 @@
 use std::{
     fmt::{self, Debug, Formatter},
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     vec::IntoIter,
 };
@@ -20,7 +20,7 @@ use kvproto::{
     raft_serverpb::RaftApplyState,
 };
 use pd_client::RegionStat;
-use raft::{eraftpb, StateRole};
+use raft::{StateRole, eraftpb};
 
 pub mod config;
 mod consistency_check;
@@ -52,9 +52,9 @@ pub use self::{
         RegionInfoProvider, SeekRegionCallback,
     },
     split_check::{
-        get_region_approximate_keys, get_region_approximate_middle, get_region_approximate_size,
         HalfCheckObserver, Host as SplitCheckerHost, KeysCheckObserver, SizeCheckObserver,
-        TableCheckObserver,
+        TableCheckObserver, get_region_approximate_keys, get_region_approximate_middle,
+        get_region_approximate_size,
     },
 };
 pub use crate::store::{Bucket, KeyEntry};

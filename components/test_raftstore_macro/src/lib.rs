@@ -2,8 +2,8 @@
 
 use proc_macro::TokenStream;
 use proc_macro2::{TokenStream as TokenStream2, TokenTree};
-use quote::{quote, ToTokens};
-use syn::{parse_macro_input, parse_quote, Ident, ItemFn, Path};
+use quote::{ToTokens, quote};
+use syn::{Ident, ItemFn, Path, parse_macro_input, parse_quote};
 
 /// test_case generate test cases using cluster creation method provided.
 /// It also import the package related util module, which means we should locate

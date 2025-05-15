@@ -4,24 +4,24 @@ use std::{
     fmt::Write,
     path::Path,
     str::FromStr,
-    sync::{mpsc, Arc, Mutex},
+    sync::{Arc, Mutex, mpsc},
     thread,
     time::Duration,
 };
 
 use collections::HashMap;
 use encryption_export::{
-    data_key_manager_from_config, DataKeyManager, FileConfig, MasterKeyConfig,
+    DataKeyManager, FileConfig, MasterKeyConfig, data_key_manager_from_config,
 };
-use engine_rocks::{config::BlobRunMode, RocksEngine, RocksSnapshot, RocksStatistics};
+use engine_rocks::{RocksEngine, RocksSnapshot, RocksStatistics, config::BlobRunMode};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    CfName, CfNamesExt, Engines, Iterable, KvEngine, Peekable, RaftEngineDebug, RaftEngineReadOnly,
-    CF_DEFAULT, CF_RAFT, CF_WRITE,
+    CF_DEFAULT, CF_RAFT, CF_WRITE, CfName, CfNamesExt, Engines, Iterable, KvEngine, Peekable,
+    RaftEngineDebug, RaftEngineReadOnly,
 };
 use fail::fail_point;
 use file_system::IoRateLimiter;
-use futures::{executor::block_on, future::BoxFuture, StreamExt};
+use futures::{StreamExt, executor::block_on, future::BoxFuture};
 use grpcio::{ChannelBuilder, Environment};
 use hybrid_engine::HybridEngine;
 use in_memory_engine::RegionCacheMemoryEngine;
@@ -38,14 +38,15 @@ use kvproto::{
     },
     tikvpb::TikvClient,
 };
+use lazy_static::lazy_static;
 use pd_client::PdClient;
 use protobuf::RepeatedField;
 use raft::eraftpb::ConfChangeType;
 use raftstore::{
-    store::{fsm::RaftRouter, util::encode_start_ts_into_flag_data, *},
     RaftRouterCompactedEventSender, Result,
+    store::{fsm::RaftRouter, util::encode_start_ts_into_flag_data, *},
 };
-use rand::{seq::SliceRandom, RngCore};
+use rand::{RngCore, seq::SliceRandom};
 use server::common::ConfiguredRaftEngine;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
@@ -54,19 +55,20 @@ use tikv::{
     config::*,
     server::KvEngineFactoryBuilder,
     storage::{
+        Engine, Snapshot,
         kv::{SnapContext, SnapshotExt},
-        point_key_range, Engine, Snapshot,
+        point_key_range,
     },
 };
 pub use tikv_util::store::{find_peer, new_learner_peer, new_peer};
 use tikv_util::{
+    HandyRwLock,
     config::*,
     escape,
     future::block_on_timeout,
     mpsc::future,
     time::{Instant, ThreadReadId},
     worker::LazyWorker,
-    HandyRwLock,
 };
 use txn_types::Key;
 
@@ -1867,7 +1869,7 @@ pub fn put_with_timeout<T: Simulator>(
 pub fn wait_down_peers<T: Simulator>(cluster: &Cluster<T>, count: u64, peer: Option<u64>) {
     let mut peers = cluster.get_down_peers();
     for _ in 1..1000 {
-        if peers.len() == count as usize && peer.as_ref().map_or(true, |p| peers.contains_key(p)) {
+        if peers.len() == count as usize && peer.as_ref().is_none_or(|p| peers.contains_key(p)) {
             return;
         }
         std::thread::sleep(Duration::from_millis(10));

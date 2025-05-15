@@ -11,8 +11,8 @@ use futures::{
 use keys::{data_end_key, data_key};
 use kvproto::meta_storagepb::EventEventType;
 use pd_client::{
+    Error as PdError, PdClient, REGION_LABEL_PATH_PREFIX, RpcClient,
     meta_storage::{Checked, Get, MetaStorageClient, Sourced, Watch},
-    Error as PdError, PdClient, RpcClient, REGION_LABEL_PATH_PREFIX,
 };
 use serde::{Deserialize, Serialize};
 use tikv_util::{error, info, timer::GLOBAL_TIMER_HANDLE};
@@ -296,7 +296,7 @@ pub mod tests {
     use futures::executor::block_on;
     use pd_client::meta_storage::{Delete, Put};
     use security::{SecurityConfig, SecurityManager};
-    use test_pd::{mocker::MetaStorage, util::*, Server as MockServer};
+    use test_pd::{Server as MockServer, mocker::MetaStorage, util::*};
     use tikv_util::{config::ReadableDuration, worker::Builder};
 
     use super::*;

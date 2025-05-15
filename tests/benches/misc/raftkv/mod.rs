@@ -5,7 +5,7 @@ use std::sync::{Arc, RwLock};
 use collections::HashSet;
 use crossbeam::channel::TrySendError;
 use engine_rocks::{RocksEngine, RocksSnapshot};
-use engine_traits::{KvEngine, ALL_CFS, CF_DEFAULT};
+use engine_traits::{ALL_CFS, CF_DEFAULT, KvEngine};
 use futures::future::FutureExt;
 use kvproto::{
     kvrpcpb::{Context, ExtraOp as TxnExtraOp},
@@ -14,20 +14,20 @@ use kvproto::{
     raft_serverpb::RaftMessage,
 };
 use raftstore::{
+    Result,
     router::{LocalReadRouter, RaftStoreRouter, ReadContext},
     store::{
-        cmd_resp, Callback, CasualMessage, CasualRouter, PeerMsg, ProposalRouter, RaftCmdExtraOpts,
+        Callback, CasualMessage, CasualRouter, PeerMsg, ProposalRouter, RaftCmdExtraOpts,
         RaftCommand, ReadResponse, RegionSnapshot, SignificantMsg, SignificantRouter, StoreMsg,
-        StoreRouter, WriteResponse,
+        StoreRouter, WriteResponse, cmd_resp,
     },
-    Result,
 };
 use tempfile::{Builder, TempDir};
 use tikv::{
     server::raftkv::{CmdRes, RaftKv},
     storage::{
-        kv::{Callback as EngineCallback, Modify, SnapContext, WriteData},
         Engine,
+        kv::{Callback as EngineCallback, Modify, SnapContext, WriteData},
     },
 };
 use tikv_util::store::new_peer;

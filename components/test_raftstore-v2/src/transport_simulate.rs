@@ -10,12 +10,12 @@ use kvproto::{
 };
 use raft::SnapshotStatus;
 use raftstore::{
+    Result, Result as RaftStoreResult,
     router::handle_send_error,
     store::{RegionSnapshot, Transport},
-    Result, Result as RaftStoreResult,
 };
 use raftstore_v2::router::{PeerMsg, RaftRouter};
-use test_raftstore::{filter_send, Filter};
+use test_raftstore::{Filter, filter_send};
 use tikv_util::HandyRwLock;
 
 #[derive(Clone)]

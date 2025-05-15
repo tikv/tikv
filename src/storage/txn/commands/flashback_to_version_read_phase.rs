@@ -6,18 +6,18 @@ use std::ops::Bound;
 use txn_types::{Key, Lock, TimeStamp};
 
 use crate::storage::{
+    Context, ScanMode, Snapshot, Statistics,
     metrics::{CommandKind, KV_COMMAND_COUNTER_VEC_STATIC},
     mvcc::MvccReader,
     txn::{
+        Error, ErrorInner, Result,
         actions::flashback_to_version::{check_flashback_commit, get_first_user_key},
         commands::{
             Command, CommandExt, FlashbackToVersion, ProcessResult, ReadCommand, TypedCommand,
         },
         flashback_to_version_read_lock, flashback_to_version_read_write,
         sched_pool::tls_collect_keyread_histogram_vec,
-        Error, ErrorInner, Result,
     },
-    Context, ScanMode, Snapshot, Statistics,
 };
 
 #[derive(Debug)]
@@ -143,19 +143,19 @@ impl CommandExt for FlashbackToVersionReadPhase {
 
 /// The whole flashback progress contains four phases:
 ///   1. [PrepareFlashback] RollbackLock phase:
-///     - Scan all locks.
-///     - Rollback all these locks.
+///      - Scan all locks.
+///      - Rollback all these locks.
 ///   2. [PrepareFlashback] Prewrite phase:
-///     - Prewrite the first user key after `self.start_key` specifically to
-///       prevent the `resolved_ts` from advancing.
+///      - Prewrite the first user key after `self.start_key` specifically to
+///        prevent the `resolved_ts` from advancing.
 ///   3. [FinishFlashback] FlashbackWrite phase:
-///     - Scan all the latest writes and their corresponding values at
-///       `self.version`.
-///     - Write the old MVCC version writes again for all these keys with
-///       `self.commit_ts` excluding the first user key after `self.start_key`.
+///      - Scan all the latest writes and their corresponding values at
+///        `self.version`.
+///      - Write the old MVCC version writes again for all these keys with
+///        `self.commit_ts` excluding the first user key after `self.start_key`.
 ///   4. [FinishFlashback] Commit phase:
-///     - Commit the first user key after `self.start_key` we write at the
-///       second phase to finish the flashback.
+///      - Commit the first user key after `self.start_key` we write at the
+///        second phase to finish the flashback.
 impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
     fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult> {
         let tag = self.tag().get_str();

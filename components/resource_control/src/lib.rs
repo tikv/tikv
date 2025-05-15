@@ -8,12 +8,12 @@ use pd_client::RpcClient;
 
 mod resource_group;
 pub use resource_group::{
-    ResourceConsumeType, ResourceController, ResourceGroupManager, MIN_PRIORITY_UPDATE_INTERVAL,
+    MIN_PRIORITY_UPDATE_INTERVAL, ResourceConsumeType, ResourceController, ResourceGroupManager,
 };
 pub use tikv_util::resource_control::*;
 
 mod future;
-pub use future::{with_resource_limiter, ControlledFuture};
+pub use future::{ControlledFuture, with_resource_limiter};
 
 #[cfg(test)]
 extern crate test;
@@ -30,7 +30,7 @@ mod resource_limiter;
 pub use resource_limiter::ResourceLimiter;
 use tikv_util::worker::Worker;
 use worker::{
-    GroupQuotaAdjustWorker, PriorityLimiterAdjustWorker, BACKGROUND_LIMIT_ADJUST_DURATION,
+    BACKGROUND_LIMIT_ADJUST_DURATION, GroupQuotaAdjustWorker, PriorityLimiterAdjustWorker,
 };
 
 mod metrics;

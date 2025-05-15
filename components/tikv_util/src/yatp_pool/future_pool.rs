@@ -6,8 +6,8 @@
 use std::{
     future::Future,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
@@ -18,7 +18,7 @@ use prometheus::{IntCounter, IntGauge};
 use tracker::TlsTrackedFuture;
 use yatp::{queue::Extras, task::future};
 
-use crate::resource_control::{priority_from_task_meta, TaskPriority};
+use crate::resource_control::{TaskPriority, priority_from_task_meta};
 
 pub type ThreadPool = yatp::ThreadPool<future::TaskCell>;
 
@@ -154,7 +154,7 @@ impl PoolInner {
     fn scale_pool_size(&self, thread_count: usize) {
         self.pool.scale_workers(thread_count);
         let mut max_tasks = self.max_tasks.load(Ordering::Acquire);
-        if max_tasks != std::usize::MAX {
+        if max_tasks != usize::MAX {
             max_tasks = max_tasks
                 .saturating_div(self.pool_size.load(Ordering::Acquire))
                 .saturating_mul(thread_count);
@@ -188,7 +188,7 @@ impl PoolInner {
         }));
 
         let max_tasks = self.max_tasks.load(Ordering::Acquire);
-        if max_tasks == std::usize::MAX {
+        if max_tasks == usize::MAX {
             return Ok(());
         }
 
@@ -284,8 +284,9 @@ impl std::error::Error for Full {
 mod tests {
     use std::{
         sync::{
+            Mutex,
             atomic::{AtomicUsize, Ordering},
-            mpsc, Mutex,
+            mpsc,
         },
         thread,
         time::Duration,
@@ -294,7 +295,7 @@ mod tests {
     use futures::executor::block_on;
 
     use super::{
-        super::{DefaultTicker, PoolTicker, YatpPoolBuilder as Builder, TICK_INTERVAL},
+        super::{DefaultTicker, PoolTicker, TICK_INTERVAL, YatpPoolBuilder as Builder},
         *,
     };
 

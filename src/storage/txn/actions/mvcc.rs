@@ -63,17 +63,17 @@ pub mod tests {
     use tikv_kv::Snapshot;
     use txn_types::Key;
     #[cfg(test)]
-    use txn_types::{Lock, TimeStamp, Value, Write, SHORT_VALUE_MAX_LEN};
+    use txn_types::{Lock, SHORT_VALUE_MAX_LEN, TimeStamp, Value, Write};
 
-    use crate::storage::txn::actions::mvcc::{find_mvcc_infos_by_key, LockWritesVals, MvccReader};
+    use crate::storage::txn::actions::mvcc::{LockWritesVals, MvccReader, find_mvcc_infos_by_key};
     #[cfg(test)]
     use crate::storage::{
+        TestEngineBuilder,
         mvcc::SnapshotReader,
         txn::{
             actions::mvcc::collect_mvcc_info_for_debug,
             tests::{must_commit, must_prewrite_put},
         },
-        TestEngineBuilder,
     };
 
     #[cfg(test)]

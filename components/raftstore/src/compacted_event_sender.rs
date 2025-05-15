@@ -5,7 +5,7 @@ use engine_rocks::{CompactedEventSender, RocksCompactedEvent};
 use engine_traits::{KvEngine, RaftEngine};
 use tikv_util::error_unknown;
 
-use crate::store::{fsm::store::RaftRouter, StoreMsg};
+use crate::store::{StoreMsg, fsm::store::RaftRouter};
 
 // raftstore v1's implementation
 pub struct RaftRouterCompactedEventSender<EK, ER>

@@ -15,28 +15,28 @@ use azure_identity::{
     AutoRefreshingTokenCredential, ClientSecretCredential, DefaultAzureCredential,
     TokenCredentialOptions,
 };
-use azure_storage::{prelude::*, ConnectionString, ConnectionStringBuilder};
+use azure_storage::{ConnectionString, ConnectionStringBuilder, prelude::*};
 use azure_storage_blobs::{blob::operations::PutBlockBlobBuilder, prelude::*};
 use cloud::{
     blob::{
-        none_to_empty, read_to_end, unimplemented, BlobConfig, BlobObject, BlobStorage, BucketConf,
-        DeletableStorage, IterableStorage, PutResource, StringNonEmpty,
+        BlobConfig, BlobObject, BlobStorage, BucketConf, DeletableStorage, IterableStorage,
+        PutResource, StringNonEmpty, none_to_empty, read_to_end, unimplemented,
     },
     metrics::AZBLOB_UPLOAD_DURATION,
 };
 use futures::TryFutureExt;
-use futures_util::{future::FutureExt, io::AsyncRead, stream, stream::StreamExt, TryStreamExt};
+use futures_util::{TryStreamExt, future::FutureExt, io::AsyncRead, stream, stream::StreamExt};
 pub use kvproto::brpb::{AzureBlobStorage as InputConfig, AzureCustomerKey};
 use oauth2::{ClientId, ClientSecret};
 use tikv_util::{
     debug, defer,
-    stream::{retry, RetryError},
+    stream::{RetryError, retry},
     time::Instant,
 };
 use time::OffsetDateTime;
 use tokio::{
     sync::Mutex,
-    time::{timeout, Duration},
+    time::{Duration, timeout},
 };
 
 const ENV_CLIENT_ID: &str = "AZURE_CLIENT_ID";
@@ -239,12 +239,9 @@ impl BlobConfig for Config {
     }
 
     fn url(&self) -> io::Result<url::Url> {
-        self.bucket.url("azure").map_err(|s| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("error creating bucket url: {}", s),
-            )
-        })
+        self.bucket
+            .url("azure")
+            .map_err(|s| io::Error::other(format!("error creating bucket url: {}", s)))
     }
 }
 
@@ -818,6 +815,8 @@ impl DeletableStorage for AzureStorage {
 
 #[cfg(test)]
 mod tests {
+    use futures::AsyncReadExt;
+
     use super::*;
 
     #[test]
@@ -895,8 +894,8 @@ mod tests {
         env::remove_var(ENV_CLIENT_SECRET);
     }
 
+    #[ignore = "no available azure cloud service for the test env."]
     #[tokio::test]
-    #[cfg(feature = "azurite")]
     // test in Azurite emulator
     async fn test_azblob_storage() {
         use futures_util::stream;

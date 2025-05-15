@@ -4,7 +4,6 @@ use std::{
     fs,
     io::{self, BufReader, Read, Write},
     sync::Arc,
-    usize,
 };
 
 use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter, Iv};
@@ -243,7 +242,7 @@ where
                             as usize;
                 }
                 Err(e) => {
-                    let io_error = io::Error::new(io::ErrorKind::Other, e);
+                    let io_error = io::Error::other(e);
                     return Err(io_error.into());
                 }
             }
@@ -260,7 +259,7 @@ where
         }
 
         if let Err(e) = sst_writer.borrow_mut().put(key, value) {
-            let io_error = io::Error::new(io::ErrorKind::Other, e);
+            let io_error = io::Error::other(e);
             return Err(io_error.into());
         }
         file_length += entry_len;
@@ -527,7 +526,7 @@ mod tests {
     use tikv_util::time::Limiter;
 
     use super::*;
-    use crate::store::snap::{tests::*, SNAPSHOT_CFS, SST_FILE_SUFFIX};
+    use crate::store::snap::{SNAPSHOT_CFS, SST_FILE_SUFFIX, tests::*};
 
     struct TestStaleDetector;
     impl StaleDetector for TestStaleDetector {

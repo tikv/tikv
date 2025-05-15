@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 
 use tikv_util::time::Instant;
-use tracker::{FutureTrack, TrackerToken, GLOBAL_TRACKERS};
+use tracker::{FutureTrack, GLOBAL_TRACKERS, TrackerToken};
 
 use crate::storage::metrics::CommandKind;
 
@@ -155,8 +155,8 @@ impl FutureTrack for TlsFutureTracker {
 mod tests {
     use std::{
         sync::{
-            atomic::{AtomicUsize, Ordering},
             Arc,
+            atomic::{AtomicUsize, Ordering},
         },
         thread::sleep,
         time::Duration,

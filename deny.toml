@@ -41,11 +41,9 @@ deny = [
 multiple-versions = "allow"
 
 [advisories]
-vulnerability = "deny"
-unmaintained = "allow" # FIXME: Deny it.
-unsound = "deny"
+version = 2
 yanked = "deny"
-notice = "warn"
+unmaintained = 'workspace'
 ignore = [
     # Ignore time 0.1 RUSTSEC-2020-0071 as 1) we have taken measures (see
     # clippy.toml) to mitigate the issue and 2) time 0.1 has no fix availble.
@@ -87,6 +85,9 @@ ignore = [
     # also upgrade the OpenSSL to v3.x which causes performance degradation.
     # See https://github.com/openssl/openssl/issues/17064
     "RUSTSEC-2025-0022",
+    # Ignore RUSTSEC-2024-0436, as there is no widely used replacement of 
+    # package 'paste', and the package itself is very stable.
+    "RUSTSEC-2024-0436",
 ]
 
 # TiKV is licensed under Apache 2.0, according to ASF 3RD PARTY LICENSE POLICY,
@@ -94,8 +95,7 @@ ignore = [
 # under certain conditions.
 # See https://www.apache.org/legal/resolved.html.
 [licenses]
-unlicensed = "deny"
-copyleft = "deny"
+version = 2
 private = { ignore = false }
 # Allow licenses in Category A
 allow = ["0BSD", "Apache-2.0", "BSD-3-Clause", "CC0-1.0", "ISC", "MIT", "Zlib", "Unicode-3.0"]

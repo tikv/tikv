@@ -22,10 +22,10 @@ use std::{
     path::{Path, PathBuf},
     pin::Pin,
     sync::{
-        atomic::{AtomicU8, AtomicUsize, Ordering},
         Arc, Mutex as BlockMutex,
+        atomic::{AtomicU8, AtomicUsize, Ordering},
     },
-    task::{ready, Context, Poll},
+    task::{Context, Poll, ready},
     time::Instant,
 };
 
@@ -234,8 +234,7 @@ impl TempFilePool {
             }
         });
         if f.reader_count.load(Ordering::SeqCst) > 0 {
-            return Err(Error::new(
-                ErrorKind::Other,
+            return Err(Error::other(
                 "open_for_write isn't allowed when there are concurrent reading.",
             ));
         }
@@ -288,8 +287,7 @@ impl TempFilePool {
             // like cursors to allow the reader be able to access consistent
             // File snapshot even there are writers appending contents
             // to the file. But that isn't needed for now.
-            return Err(IoErr::new(
-                ErrorKind::Other,
+            return Err(IoErr::other(
                 format!(
                     "open_for_read isn't allowed when there are concurrent writing (there are still {} reads for file {}.).",
                     refc,
@@ -339,9 +337,8 @@ impl TempFilePool {
     fn create_relative(&self, p: &Path) -> std::io::Result<SwappedOut> {
         let abs_path = self.cfg.swap_files.join(p);
         #[cfg(test)]
-        match &self.override_swapout {
-            Some(f) => return Ok(SwappedOut::Dynamic(f(&abs_path))),
-            None => {}
+        if let Some(f) = &self.override_swapout {
+            return Ok(SwappedOut::Dynamic(f(&abs_path)));
         }
         let file = OsFile::from_std(SyncOsFile::create(&abs_path)?);
 
@@ -788,15 +785,15 @@ mod test {
         path::Path,
         pin::Pin,
         sync::{
-            atomic::{AtomicUsize, Ordering},
             Arc,
+            atomic::{AtomicUsize, Ordering},
         },
     };
 
     use async_compression::tokio::bufread::ZstdDecoder;
     use encryption::{BackupEncryptionManager, DataKeyManager, MultiMasterKeyBackend};
     use kvproto::{brpb::CompressionType, encryptionpb::EncryptionMethod};
-    use tempfile::{tempdir, TempDir};
+    use tempfile::{TempDir, tempdir};
     use test_util::new_test_key_manager;
     use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
     use walkdir::WalkDir;

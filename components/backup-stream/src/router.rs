@@ -7,8 +7,8 @@ use std::{
     path::{Path, PathBuf},
     result,
     sync::{
-        atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering},
         Arc, RwLock as SyncRwLock,
+        atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -16,8 +16,8 @@ use std::{
 use dashmap::DashMap;
 use encryption::{BackupEncryptionManager, EncrypterReader, Iv, MultiMasterKeyBackend};
 use encryption_export::create_async_backend;
-use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use external_storage::{create_storage, BackendConfig, ExternalStorage, UnpinReader};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE, CfName};
+use external_storage::{BackendConfig, ExternalStorage, UnpinReader, create_storage};
 use file_system::Sha256Reader;
 use futures::io::Cursor;
 use kvproto::{
@@ -36,14 +36,13 @@ use slog_global::debug;
 use tidb_query_datatype::codec::table::decode_table_id;
 use tikv::config::BackupStreamConfig;
 use tikv_util::{
-    box_err,
+    Either, HandyRwLock, box_err,
     codec::stream_event::EventEncoder,
     config::ReadableSize,
     error, info,
     time::{Instant, Limiter},
     warn,
     worker::Scheduler,
-    Either, HandyRwLock,
 };
 use tokio::{
     io::AsyncWriteExt,
@@ -1150,7 +1149,6 @@ impl StreamTaskHandler {
         )
         .await
         .into_iter()
-        .map(|r| r.map_err(Error::from))
         .fold(Ok(()), Result::and)?;
 
         let mut metadata = MetadataInfo::with_capacity(w.len() + wm.len());
@@ -1940,9 +1938,6 @@ impl std::fmt::Debug for DataFile {
     }
 }
 
-#[derive(Clone, Ord, PartialOrd, PartialEq, Eq, Debug)]
-struct KeyRange(Vec<u8>);
-
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
 struct TaskRange {
@@ -1957,7 +1952,7 @@ mod tests {
     use async_compression::tokio::bufread::ZstdDecoder;
     use encryption::{DecrypterReader, FileConfig, MasterKeyConfig, MultiMasterKeyBackend};
     use external_storage::{BlobObject, ExternalData, NoopStorage};
-    use futures::{future::LocalBoxFuture, stream::LocalBoxStream, AsyncReadExt};
+    use futures::{AsyncReadExt, future::LocalBoxFuture, stream::LocalBoxStream};
     use kvproto::{
         brpb::{CipherInfo, Noop, StorageBackend, StreamBackupTaskInfo},
         encryptionpb::EncryptionMethod,
@@ -1971,7 +1966,7 @@ mod tests {
             stream_event::{EventIterator, Iterator},
         },
         config::ReadableDuration,
-        worker::{dummy_scheduler, ReceiverWrapper},
+        worker::{ReceiverWrapper, dummy_scheduler},
     };
     use tokio::{fs::File, io::BufReader};
     use txn_types::{Write, WriteType};
@@ -2358,8 +2353,7 @@ mod tests {
                     let mut fst = first_time.lock().unwrap();
                     if *fst {
                         *fst = false;
-                        return Err(io::Error::new(
-                            io::ErrorKind::Other,
+                        return Err(io::Error::other(
                             "the absence of the result, is also a kind of result",
                         ));
                     }
@@ -2787,8 +2781,7 @@ mod tests {
             if data_len == content_length {
                 Ok(())
             } else {
-                Err(io::Error::new(
-                    io::ErrorKind::Other,
+                Err(io::Error::other(
                     "the length of content in reader is not equal with content_length",
                 ))
             }

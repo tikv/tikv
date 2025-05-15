@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp, convert::TryInto, io::Write, sync::Arc, u8};
+use std::{cmp, convert::TryInto, io::Write, sync::Arc};
 
 use api_version::KvFormat;
 use codec::prelude::*;
@@ -10,12 +10,11 @@ use tikv_util::codec::BytesSlice;
 use tipb::ColumnInfo;
 
 use super::{
-    datum,
+    Datum, Error, Result, datum,
     datum::DatumDecoder,
     mysql::{Duration, Time},
-    Datum, Error, Result,
 };
-use crate::{expr::EvalContext, prelude::*, FieldTypeTp};
+use crate::{FieldTypeTp, expr::EvalContext, prelude::*};
 
 // handle or index id
 pub const ID_LEN: usize = 8;
@@ -322,7 +321,7 @@ pub fn decode_row(
     cols: &HashMap<i64, ColumnInfo>,
 ) -> Result<HashMap<i64, Datum>> {
     let mut values = datum::decode(data)?;
-    if values.first().map_or(true, |d| *d == Datum::Null) {
+    if values.first().is_none_or(|d| *d == Datum::Null) {
         return Ok(HashMap::default());
     }
     if values.len() & 1 == 1 {
@@ -549,7 +548,7 @@ pub fn generate_index_data_for_test(
 
 #[cfg(test)]
 mod tests {
-    use std::{i64, iter::FromIterator};
+    use std::iter::FromIterator;
 
     use api_version::ApiV1;
     use collections::{HashMap, HashSet};

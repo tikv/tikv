@@ -4,8 +4,8 @@ use std::{fmt::Display, io};
 use async_trait::async_trait;
 use cloud::{
     blob::{
-        none_to_empty, read_to_end, BlobConfig, BlobObject, BlobStorage, BucketConf,
-        DeletableStorage, IterableStorage, PutResource, StringNonEmpty,
+        BlobConfig, BlobObject, BlobStorage, BucketConf, DeletableStorage, IterableStorage,
+        PutResource, StringNonEmpty, none_to_empty, read_to_end,
     },
     metrics,
 };
@@ -24,12 +24,12 @@ use tame_gcs::{
 };
 use tame_oauth::gcp::ServiceAccountInfo;
 use tikv_util::{
-    stream::{error_stream, AsyncReadAsSyncStreamOfBytes},
+    stream::{AsyncReadAsSyncStreamOfBytes, error_stream},
     time::Instant,
 };
 
 use crate::{
-    client::{status_code_error, GcpClient, RequestError},
+    client::{GcpClient, RequestError, status_code_error},
     utils::{self, retry},
 };
 
@@ -100,12 +100,9 @@ impl BlobConfig for Config {
     }
 
     fn url(&self) -> io::Result<url::Url> {
-        self.bucket.url("gcs").map_err(|s| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("error creating bucket url: {}", s),
-            )
-        })
+        self.bucket
+            .url("gcs")
+            .map_err(|s| io::Error::other(format!("error creating bucket url: {}", s)))
     }
 }
 
@@ -131,7 +128,7 @@ pub trait ResultExt {
 impl<T, E: Display> ResultExt for Result<T, E> {
     type Ok = T;
     fn or_io_error<D: Display>(self, msg: D) -> io::Result<T> {
-        self.map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}: {}", msg, e)))
+        self.map_err(|e| io::Error::other(format!("{}: {}", msg, e)))
     }
     fn or_invalid_input<D: Display>(self, msg: D) -> io::Result<T> {
         self.map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}: {}", msg, e)))
@@ -438,7 +435,7 @@ impl<'cli> GcsPrefixIter<'cli> {
             .cli
             .make_request(req.map(|_e| Body::empty()), tame_gcs::Scopes::ReadOnly)
             .await
-            .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+            .map_err(|err| io::Error::other(err))?;
         let resp = utils::read_from_http_body::<ListResponse>(res).await?;
         metrics::CLOUD_REQUEST_HISTOGRAM_VEC
             .with_label_values(&["gcp", "list"])

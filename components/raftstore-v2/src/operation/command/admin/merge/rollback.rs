@@ -8,9 +8,9 @@ use kvproto::{
     raft_serverpb::{PeerState, RegionLocalState},
 };
 use raftstore::{
-    coprocessor::RegionChangeReason,
-    store::{fsm::new_admin_request, metrics::PEER_ADMIN_CMD_COUNTER, LocksStatus, Transport},
     Result,
+    coprocessor::RegionChangeReason,
+    store::{LocksStatus, Transport, fsm::new_admin_request, metrics::PEER_ADMIN_CMD_COUNTER},
 };
 use slog::{error, info};
 use tikv_util::slog_panic;

@@ -3,9 +3,9 @@
 use txn_types::{Key, Lock, LockType, TimeStamp, Write, WriteType};
 
 use crate::storage::{
-    mvcc::{self, MvccReader, MvccTxn, SnapshotReader, MAX_TXN_WRITE_SIZE},
-    txn::{self, actions::check_txn_status::rollback_lock, Result as TxnResult},
     Snapshot,
+    mvcc::{self, MAX_TXN_WRITE_SIZE, MvccReader, MvccTxn, SnapshotReader},
+    txn::{self, Result as TxnResult, actions::check_txn_status::rollback_lock},
 };
 
 pub const FLASHBACK_BATCH_SIZE: usize = 256 + 1 /* To store the next key for multiple batches */;
@@ -297,10 +297,11 @@ pub mod tests {
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::{Context, PrewriteRequestPessimisticAction::DoPessimisticCheck};
     use tikv_kv::ScanMode;
-    use txn_types::{TimeStamp, SHORT_VALUE_MAX_LEN};
+    use txn_types::{SHORT_VALUE_MAX_LEN, TimeStamp};
 
     use super::*;
     use crate::storage::{
+        Engine, TestEngineBuilder,
         mvcc::tests::{must_get, must_get_none, write},
         txn::{
             actions::{
@@ -310,7 +311,6 @@ pub mod tests {
             },
             tests::{must_acquire_pessimistic_lock, must_pessimistic_prewrite_put_err},
         },
-        Engine, TestEngineBuilder,
     };
 
     fn must_rollback_lock<E: Engine>(

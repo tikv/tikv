@@ -10,8 +10,8 @@ use engine_rocks::RocksEngine;
 use engine_traits::CF_DEFAULT;
 use raftstore::{
     coprocessor::{
-        config::{Config, SplitCheckConfigManager},
         CoprocessorHost,
+        config::{Config, SplitCheckConfigManager},
     },
     store::{SplitCheckRunner as Runner, SplitCheckTask as Task},
 };

@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering;
 use engine_traits::{KvEngine, RaftEngine};
 use fail::fail_point;
 use kvproto::{metapb, pdpb};
-use raftstore::store::{metrics::STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC, Transport};
+use raftstore::store::{Transport, metrics::STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC};
 use slog::{debug, error};
 use tikv_util::{slog_panic, time::Instant};
 

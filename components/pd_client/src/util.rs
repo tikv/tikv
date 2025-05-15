@@ -3,7 +3,7 @@
 use core::panic;
 use std::{
     pin::Pin,
-    sync::{atomic::AtomicU64, Arc, RwLock},
+    sync::{Arc, RwLock, atomic::AtomicU64},
     thread,
     time::Duration,
 };
@@ -36,14 +36,14 @@ use kvproto::{
 };
 use security::SecurityManager;
 use tikv_util::{
-    box_err, debug, error, info, slow_log, time::Instant, timer::GLOBAL_TIMER_HANDLE, warn, Either,
-    HandyRwLock,
+    Either, HandyRwLock, box_err, debug, error, info, slow_log, time::Instant,
+    timer::GLOBAL_TIMER_HANDLE, warn,
 };
 use tokio_timer::timer::Handle;
 
 use super::{
-    metrics::*, tso::TimestampOracle, BucketMeta, Config, Error, FeatureGate, PdFuture, Result,
-    REQUEST_TIMEOUT,
+    BucketMeta, Config, Error, FeatureGate, PdFuture, REQUEST_TIMEOUT, Result, metrics::*,
+    tso::TimestampOracle,
 };
 
 const RETRY_INTERVAL: Duration = Duration::from_secs(1); // 1s

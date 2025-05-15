@@ -5,7 +5,6 @@
 //! [`Server`](crate::server::Server). The [`BTreeEngine`](kv::BTreeEngine) and
 //! [`RocksEngine`](RocksEngine) are used for testing only.
 
-#![feature(bound_map)]
 #![feature(min_specialization)]
 #![feature(type_alias_impl_trait)]
 #![feature(impl_trait_in_assoc_type)]
@@ -37,8 +36,8 @@ use std::{
 
 use collections::HashMap;
 use engine_traits::{
-    CfName, IterOptions, KvEngine as LocalEngine, MetricsExt, Mutable, MvccProperties, ReadOptions,
-    TabletRegistry, WriteBatch, CF_DEFAULT, CF_LOCK,
+    CF_DEFAULT, CF_LOCK, CfName, IterOptions, KvEngine as LocalEngine, MetricsExt, Mutable,
+    MvccProperties, ReadOptions, TabletRegistry, WriteBatch,
 };
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use futures::{future::BoxFuture, prelude::*};
@@ -65,8 +64,8 @@ pub use self::{
     raft_extension::{FakeExtension, RaftExtension},
     rocksdb_engine::{RocksEngine, RocksSnapshot},
     stats::{
-        CfStatistics, FlowStatistics, FlowStatsReporter, LoadDataHint, StageLatencyStats,
-        Statistics, StatisticsSummary, RAW_VALUE_TOMBSTONE,
+        CfStatistics, FlowStatistics, FlowStatsReporter, LoadDataHint, RAW_VALUE_TOMBSTONE,
+        StageLatencyStats, Statistics, StatisticsSummary,
     },
 };
 
@@ -1192,8 +1191,8 @@ pub mod tests {
                     Some((format!("key_{}", i / 2 * 2), format!("value_{}", i / 2)))
                 } else {
                     Some((
-                        format!("key_{}", (i + 1) / 2 * 2),
-                        format!("value_{}", (i + 1) / 2),
+                        format!("key_{}", i.div_ceil(2) * 2),
+                        format!("value_{}", i.div_ceil(2)),
                     ))
                 }
             } else if seek_mode != SeekMode::Normal {

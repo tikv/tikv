@@ -2,10 +2,8 @@
 
 #![cfg_attr(test, feature(test))]
 #![feature(cell_update)]
-#![feature(div_duration)]
 #![feature(min_specialization)]
 #![feature(box_patterns)]
-#![feature(hash_extract_if)]
 #![feature(let_chains)]
 #![feature(assert_matches)]
 #![feature(type_alias_impl_trait)]
@@ -14,8 +12,6 @@
 
 #[cfg(test)]
 extern crate test;
-#[macro_use]
-extern crate derivative;
 #[cfg(feature = "engine_rocks")]
 pub mod compacted_event_sender;
 

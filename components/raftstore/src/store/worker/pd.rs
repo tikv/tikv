@@ -6,9 +6,9 @@ use std::{
     fmt::{self, Display, Formatter},
     io, mem,
     sync::{
+        Arc, Mutex,
         atomic::Ordering,
         mpsc::{self, Receiver, Sender, SyncSender},
-        Arc, Mutex,
     },
     thread::{Builder, JoinHandle},
     time::{Duration, Instant},
@@ -19,11 +19,11 @@ use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{KvEngine, RaftEngine};
 use fail::fail_point;
-use futures::{compat::Future01CompatExt, FutureExt};
+use futures::{FutureExt, compat::Future01CompatExt};
 use health_controller::{
+    HealthController,
     reporters::{RaftstoreReporter, RaftstoreReporterConfig},
     types::{InspectFactor, LatencyInspector, RaftstoreDuration},
-    HealthController,
 };
 use kvproto::{
     kvrpcpb::DiskFullOpt,
@@ -35,23 +35,22 @@ use kvproto::{
     raft_serverpb::RaftMessage,
     replication_modepb::{RegionReplicationStatus, StoreDrAutoSyncStatus},
 };
-use pd_client::{metrics::*, BucketStat, Error, PdClient, RegionStat, RegionWriteCfCopDetail};
+use pd_client::{BucketStat, Error, PdClient, RegionStat, RegionWriteCfCopDetail, metrics::*};
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
 use resource_metering::{Collector, CollectorGuard, CollectorRegHandle, RawRecords};
 use service::service_manager::GrpcServiceManager;
 use tikv_util::{
-    box_err, debug, error, info,
+    GLOBAL_SERVER_READINESS, box_err, debug, error, info,
     metrics::ThreadInfoStatistics,
     store::QueryStats,
-    sys::{disk, thread::StdThreadBuildWrapper, SysQuota},
+    sys::{SysQuota, disk, thread::StdThreadBuildWrapper},
     thd_name,
     time::{Instant as TiInstant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
     topn::TopN,
     warn,
     worker::{Runnable, ScheduleError, Scheduler},
-    GLOBAL_SERVER_READINESS,
 };
 use yatp::Remote;
 
@@ -60,18 +59,18 @@ use crate::{
     coprocessor::CoprocessorHost,
     router::RaftStoreRouter,
     store::{
+        Callback, CasualMessage, Config, PeerMsg, RaftCmdExtraOpts, RaftCommand, RaftRouter,
+        SnapManager, StoreMsg, TxnExt,
         cmd_resp::new_error,
         metrics::*,
         unsafe_recovery::{
             UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryHandle,
         },
-        util::{is_epoch_stale, KeysInfoFormatter},
+        util::{KeysInfoFormatter, is_epoch_stale},
         worker::{
-            split_controller::{SplitInfo, TOP_N},
             AutoSplitController, ReadStats, SplitConfigChange, WriteStats,
+            split_controller::{SplitInfo, TOP_N},
         },
-        Callback, CasualMessage, Config, PeerMsg, RaftCmdExtraOpts, RaftCommand, RaftRouter,
-        SnapManager, StoreMsg, TxnExt,
     },
 };
 
@@ -2533,7 +2532,7 @@ mod tests {
     use std::thread::sleep;
 
     use kvproto::{kvrpcpb, pdpb::QueryKind};
-    use pd_client::{new_bucket_stats, BucketMeta};
+    use pd_client::{BucketMeta, new_bucket_stats};
     use tikv_util::worker::LazyWorker;
 
     use super::*;

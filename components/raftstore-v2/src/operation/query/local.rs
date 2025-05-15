@@ -4,7 +4,7 @@
 use std::{
     num::NonZeroU64,
     ops::Deref,
-    sync::{atomic, Arc, Mutex},
+    sync::{Arc, Mutex, atomic},
 };
 
 use batch_system::Router;
@@ -16,25 +16,24 @@ use kvproto::{
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse},
 };
 use raftstore::{
+    Result,
     errors::RAFTSTORE_IS_BUSY,
     store::{
-        cmd_resp,
+        LocalReaderCore, ReadDelegate, ReadExecutorProvider, RegionSnapshot, cmd_resp,
         util::LeaseState,
         worker_metrics::{self, TLS_LOCAL_READ_METRICS},
-        LocalReaderCore, ReadDelegate, ReadExecutorProvider, RegionSnapshot,
     },
-    Result,
 };
-use slog::{debug, Logger};
-use tikv_util::{box_err, codec::number::decode_u64, time::monotonic_raw_now, Either};
+use slog::{Logger, debug};
+use tikv_util::{Either, box_err, codec::number::decode_u64, time::monotonic_raw_now};
 use time::Timespec;
-use tracker::{get_tls_tracker_token, GLOBAL_TRACKERS};
+use tracker::{GLOBAL_TRACKERS, get_tls_tracker_token};
 use txn_types::WriteBatchFlags;
 
 use crate::{
+    StoreRouter,
     fsm::StoreMeta,
     router::{PeerMsg, QueryResult},
-    StoreRouter,
 };
 
 pub trait MsgRouter: Clone + Send + 'static {
@@ -57,15 +56,15 @@ pub type ReadDelegatePair<EK> = (ReadDelegate, SharedReadTablet<EK>);
 ///
 /// Though it looks like `CachedTablet`, but there are subtle differences.
 /// 1. `CachedTablet` always hold the latest version of the tablet. But
-/// `SharedReadTablet` should only hold the tablet that matches epoch. So it
-/// will be updated only when the epoch is updated.
+///    `SharedReadTablet` should only hold the tablet that matches epoch. So it
+///    will be updated only when the epoch is updated.
 /// 2. `SharedReadTablet` should always hold a tablet and the same tablet. If
-/// tablet is taken, then it should be considered as stale and should check
-/// again epoch to load the new `SharedReadTablet`.
+///    tablet is taken, then it should be considered as stale and should check
+///    again epoch to load the new `SharedReadTablet`.
 /// 3. `SharedReadTablet` may be cloned into thread local. So its cache should
-/// be released as soon as possible, so there should be no strong reference
-/// that prevents tablet from being dropped after it's marked as stale by other
-/// threads.
+///    be released as soon as possible, so there should be no strong reference
+///    that prevents tablet from being dropped after it's marked as stale by
+///    other threads.
 pub struct SharedReadTablet<EK> {
     tablet: Arc<Mutex<Option<EK>>>,
     cache: Option<EK>,
@@ -366,7 +365,7 @@ where
                                     || res
                                         .get_responses()
                                         .first()
-                                        .map_or(false, |r| r.get_read_index().has_locked()),
+                                        .is_some_and(|r| r.get_read_index().has_locked()),
                                 "{:?}",
                                 res
                             );
@@ -667,13 +666,13 @@ mod tests {
         ctor::{CfOptions, DbOptions},
         kv::{KvTestEngine, TestTabletFactory},
     };
-    use engine_traits::{MiscExt, SyncMutable, TabletContext, TabletRegistry, DATA_CFS};
+    use engine_traits::{DATA_CFS, MiscExt, SyncMutable, TabletContext, TabletRegistry};
     use futures::executor::block_on;
     use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb, raft_cmdpb::*};
     use pd_client::BucketMeta;
     use raftstore::store::{
-        util::Lease, worker_metrics::TLS_LOCAL_READ_METRICS, ReadCallback, ReadProgress,
-        RegionReadProgress, TrackVer, TxnExt,
+        ReadCallback, ReadProgress, RegionReadProgress, TrackVer, TxnExt, util::Lease,
+        worker_metrics::TLS_LOCAL_READ_METRICS,
     };
     use slog::o;
     use tempfile::Builder;
@@ -851,7 +850,7 @@ mod tests {
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.cache_miss.get()),
             1
         );
-        assert!(reader.local_reader.delegates.get(&1).is_none());
+        assert!(!reader.local_reader.delegates.contains_key(&1));
 
         // Register region 1
         lease.renew(monotonic_raw_now());

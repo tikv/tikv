@@ -8,13 +8,13 @@ use engine_rocks::{RocksEngine, RocksSnapshot};
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::{
     errors::{Error as RaftStoreError, Result as RaftStoreResult},
-    router::{handle_send_error, RaftStoreRouter},
+    router::{RaftStoreRouter, handle_send_error},
     store::{
-        msg::{CasualMessage, PeerMsg, SignificantMsg},
         CasualRouter, ProposalRouter, RaftCommand, SignificantRouter, StoreMsg, StoreRouter,
+        msg::{CasualMessage, PeerMsg, SignificantMsg},
     },
 };
-use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
+use tikv_util::mpsc::{LooseBoundedSender, Receiver, loose_bounded};
 
 #[derive(Clone)]
 #[allow(clippy::type_complexity)]

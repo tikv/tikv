@@ -4,8 +4,8 @@ use std::{
     ops::{Deref, DerefMut},
     path::Path,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
     thread,
     time::{Duration, Instant},
@@ -15,13 +15,13 @@ use causal_ts::CausalTsProviderImpl;
 use collections::HashSet;
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::{self, Receiver, Sender, TrySendError};
-use encryption_export::{data_key_manager_from_config, DataKeyImporter};
+use encryption_export::{DataKeyImporter, data_key_manager_from_config};
 use engine_test::{
     ctor::{CfOptions, DbOptions},
     kv::{KvTestEngine, KvTestSnapshot, TestTabletFactory},
     raft::RaftTestEngine,
 };
-use engine_traits::{TabletContext, TabletRegistry, DATA_CFS};
+use engine_traits::{DATA_CFS, TabletContext, TabletRegistry};
 use futures::executor::block_on;
 use kvproto::{
     kvrpcpb::ApiVersion,
@@ -34,20 +34,19 @@ use raft::eraftpb::MessageType;
 use raftstore::{
     coprocessor::{Config as CopConfig, CoprocessorHost, StoreHandle},
     store::{
+        AutoSplitController, Bucket, Config, RAFT_INIT_LOG_INDEX, RegionSnapshot, TabletSnapKey,
+        TabletSnapManager, Transport,
         region_meta::{RegionLocalState, RegionMeta},
-        AutoSplitController, Bucket, Config, RegionSnapshot, TabletSnapKey, TabletSnapManager,
-        Transport, RAFT_INIT_LOG_INDEX,
     },
 };
 use raftstore_v2::{
-    create_store_batch_system,
+    Bootstrap, SimpleWriteEncoder, StateStorage, StoreSystem, create_store_batch_system,
     router::{DebugInfoChannel, FlushChannel, PeerMsg, QueryResult, RaftRouter, StoreMsg},
-    Bootstrap, SimpleWriteEncoder, StateStorage, StoreSystem,
 };
 use resource_control::{ResourceController, ResourceGroupManager};
 use resource_metering::CollectorRegHandle;
 use service::service_manager::GrpcServiceManager;
-use slog::{debug, o, Logger};
+use slog::{Logger, debug, o};
 use sst_importer::SstImporter;
 use tempfile::TempDir;
 use test_pd::mocker::Service;
@@ -62,7 +61,7 @@ pub fn check_skip_wal(path: &str) {
     let mut found = false;
     for f in std::fs::read_dir(path).unwrap() {
         let e = f.unwrap();
-        if e.path().extension().map_or(false, |ext| ext == "log") {
+        if e.path().extension().is_some_and(|ext| ext == "log") {
             found = true;
             assert_eq!(e.metadata().unwrap().len(), 0, "{}", e.path().display());
         }
@@ -720,7 +719,7 @@ pub mod split_helper {
         raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, RaftCmdResponse, SplitRequest},
     };
     use raftstore::store::Bucket;
-    use raftstore_v2::{router::PeerMsg, SimpleWriteEncoder};
+    use raftstore_v2::{SimpleWriteEncoder, router::PeerMsg};
 
     use super::TestRouter;
 
