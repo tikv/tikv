@@ -17,7 +17,7 @@ use crate::storage::{
 
 /// `MvccInfo` stores all mvcc information of given key.
 /// Used by `MvccGetByKey` and `MvccGetByStartTs`.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct MvccInfo {
     pub lock: Option<Lock>,
     /// commit_ts and write
@@ -53,6 +53,11 @@ impl MvccInfo {
                     write_info.set_start_ts(write.start_ts.into_inner());
                     write_info.set_commit_ts(commit_ts.into_inner());
                     write_info.set_short_value(write.short_value.unwrap_or_default());
+                    write_info.set_has_overlapped_rollback(write.has_overlapped_rollback);
+                    if let Some(gc_fence) = write.gc_fence {
+                        write_info.set_has_gc_fence(true);
+                        write_info.set_gc_fence(gc_fence.into_inner());
+                    }
                     if !matches!(
                         write.last_change,
                         LastChange::NotExist | LastChange::Exist { .. }

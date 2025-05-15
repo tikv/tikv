@@ -63,7 +63,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLockLite {
         let mut released_locks = ReleasedLocks::new();
         for key in self.resolve_keys {
             released_locks.push(if !self.commit_ts.is_zero() {
-                commit(&mut txn, &mut reader, key, self.commit_ts)?
+                commit(&mut txn, &mut reader, key, self.commit_ts, None)?
             } else {
                 cleanup(&mut txn, &mut reader, key, TimeStamp::zero(), false)?
             });

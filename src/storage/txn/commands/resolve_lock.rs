@@ -111,7 +111,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
                 // Continue to resolve locks if the not found committed locks are pessimistic
                 // type. They could be left if the transaction is finally committed and
                 // pessimistic conflict retry happens during execution.
-                match commit(&mut txn, &mut reader, current_key.clone(), commit_ts) {
+                match commit(&mut txn, &mut reader, current_key.clone(), commit_ts, None) {
                     Ok(res) => {
                         known_txn_status.push((current_lock.ts, commit_ts));
                         res

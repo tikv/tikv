@@ -269,6 +269,7 @@ pub(crate) fn make_txn_error(
                 start_ts,
                 commit_ts: TimeStamp::zero(),
                 key: key.to_raw().unwrap(),
+                mvcc_info: None,
             },
             "txnnotfound" => ErrorInner::TxnNotFound {
                 start_ts,
@@ -303,6 +304,7 @@ pub(crate) fn make_txn_error(
                 commit_ts: TimeStamp::zero(),
                 key: key.to_raw().unwrap(),
                 min_commit_ts: TimeStamp::zero(),
+                mvcc_info: None,
             },
             "pessimisticlocknotfound" => ErrorInner::PessimisticLockNotFound {
                 start_ts,
@@ -830,7 +832,7 @@ pub(crate) mod tests {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut txn = MvccTxn::new(10.into(), cm);
         let mut reader = SnapshotReader::new(10.into(), snapshot, true);
-        commit(&mut txn, &mut reader, key, 15.into()).unwrap();
+        commit(&mut txn, &mut reader, key, 15.into(), None).unwrap();
         assert!(txn.write_size() > 0);
         engine
             .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
@@ -1243,7 +1245,7 @@ pub(crate) mod tests {
 
         let k = b"k";
         must_acquire_pessimistic_lock(&mut engine, k, k, 10, 10);
-        must_commit_err(&mut engine, k, 20, 30);
+        must_commit_err(&mut engine, k, 20, 30, None);
         must_commit(&mut engine, k, 10, 20);
         must_seek_write_none(&mut engine, k, 30);
     }

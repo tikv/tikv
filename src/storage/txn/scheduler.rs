@@ -2297,6 +2297,7 @@ mod tests {
                 vec![Key::from_raw(b"k")],
                 10.into(),
                 20.into(),
+                None,
                 Context::default(),
             )
             .into(),

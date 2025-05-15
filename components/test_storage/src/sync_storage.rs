@@ -260,7 +260,7 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
         commit_ts: impl Into<TimeStamp>,
     ) -> Result<TxnStatus> {
         wait_op!(|cb| self.store.sched_txn_command(
-            commands::Commit::new(keys, start_ts.into(), commit_ts.into(), ctx),
+            commands::Commit::new(keys, start_ts.into(), commit_ts.into(), None, ctx),
             cb,
         ))
         .unwrap()

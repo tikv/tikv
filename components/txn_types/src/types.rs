@@ -676,6 +676,14 @@ impl LastChange {
     }
 }
 
+#[derive(Debug, Copy, Clone)]
+pub enum CommitRole {
+    /// Indicates it commits the primary key in request.
+    Primary,
+    /// Indicates it commits the secondary key(s) in request.
+    Secondary,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

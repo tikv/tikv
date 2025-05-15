@@ -3750,7 +3750,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#258e68e813aa1af3a9817ce87630e2ec638851cd"
+source = "git+https://github.com/pingcap/kvproto.git#e89bec5a53cc25bc13bc3d4b75af97c95cdedb3d"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -6274,15 +6274,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "simsimd"
-version = "6.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56838e1a0aceaef39fc1327227033efa84a294f54a39b356eefa5c60c885e9f0"
-dependencies = [
- "cc",
-]
-
-[[package]]
 name = "siphasher"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7228,7 +7219,6 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
- "simsimd",
  "slog",
  "slog-global",
  "static_assertions",

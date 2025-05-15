@@ -223,6 +223,7 @@ pub fn commit_flashback_key(
             start_ts: flashback_start_ts,
             commit_ts: flashback_commit_ts,
             key: key_to_commit.to_raw()?,
+            mvcc_info: None,
         }));
     }
     Ok(())
