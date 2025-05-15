@@ -8,6 +8,7 @@ license = "Apache-2.0"
 [features]
 failpoints = ["fail/failpoints"]
 test-cgroup = []
+linearizability-track = []
 
 [dependencies]
 # TODO: use `async-speed-limit` in crates.io after new version(v0.4.2) is released.
@@ -66,6 +67,7 @@ tokio-timer = { workspace = true }
 tokio-util = { version = "0.7", features = ["rt"] }
 tracker = { workspace = true }
 url = "2"
+uuid = { version = "0.8.1", features = ["serde", "v4"] }
 yatp = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]

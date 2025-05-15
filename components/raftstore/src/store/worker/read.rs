@@ -1118,6 +1118,12 @@ where
                             &mut snap_updated,
                             last_valid_ts,
                         ) {
+                            #[cfg(feature = "linearizability-track")]
+                            cb.read_tracker().map(|tracker| {
+                                GLOBAL_TRACKERS.with_tracker(tracker, |t| {
+                                    t.track_propose_skip("localrouter-local-read");
+                                })
+                            });
                             read_resp
                         } else {
                             fail_point!("localreader_before_redirect", |_| {});
@@ -1140,6 +1146,12 @@ where
                             Ok(read_resp) => {
                                 TLS_LOCAL_READ_METRICS.with(|m| {
                                     m.borrow_mut().local_executed_stale_read_requests.inc()
+                                });
+                                #[cfg(feature = "linearizability-track")]
+                                cb.read_tracker().map(|tracker| {
+                                    GLOBAL_TRACKERS.with_tracker(tracker, |t| {
+                                        t.track_propose_skip("localrouter-stale-read");
+                                    })
                                 });
                                 read_resp
                             }
@@ -1177,6 +1189,12 @@ where
                                             .local_executed_stale_read_fallback_success_requests
                                             .inc()
                                     });
+                                    #[cfg(feature = "linearizability-track")]
+                                    cb.read_tracker().map(|tracker| {
+                                        GLOBAL_TRACKERS.with_tracker(tracker, |t| {
+                                            t.track_propose_skip("localrouter-fallback-local-read");
+                                        })
+                                    });
                                     read_resp
                                 } else {
                                     TLS_LOCAL_READ_METRICS.with(|m| {
@@ -1211,6 +1229,12 @@ where
                             TLS_LOCAL_READ_METRICS.with(|m| {
                                 m.borrow_mut().local_executed_follower_read_requests.inc()
                             });
+                            #[cfg(feature = "linearizability-track")]
+                            cb.read_tracker().map(|tracker| {
+                                GLOBAL_TRACKERS.with_tracker(tracker, |t| {
+                                    t.track_propose_skip("localrouter-local-follower-read");
+                                })
+                            });
                             read_resp
                         } else {
                             self.redirect(RaftCommand::new(req, cb));
@@ -1223,6 +1247,8 @@ where
                 cb.read_tracker().map(|tracker| {
                     GLOBAL_TRACKERS.with_tracker(tracker, |t| {
                         t.metrics.local_read = true;
+                        #[cfg(feature = "linearizability-track")]
+                        t.prpose_must_checked();
                     })
                 });
 

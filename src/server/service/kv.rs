@@ -37,6 +37,8 @@ use raftstore::{
 use resource_control::ResourceGroupManager;
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_kv::{RaftExtension, StageLatencyStats};
+#[cfg(feature = "linearizability-track")]
+use tikv_util::linearizability_track;
 use tikv_util::{
     future::{paired_future_callback, poll_future_notify},
     mpsc::future::{BatchReceiver, Sender, WakePolicy, unbounded},
@@ -1640,6 +1642,8 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
                     GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
                         tracker.write_scan_detail(exec_detail_v2.mut_scan_detail_v2());
                         tracker.merge_time_detail(exec_detail_v2.mut_time_detail_v2());
+                        #[cfg(feature = "linearizability-track")]
+                        tracker.track_success();
                     });
                     set_time_detail(exec_detail_v2, duration, &stats.latency_stats);
                     match val {
@@ -1650,6 +1654,8 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
                 Err(e) => resp.set_error(extract_key_error(&e)),
             }
         }
+        #[cfg(feature = "linearizability-track")]
+        linearizability_track::log(tracker);
         GLOBAL_TRACKERS.remove(tracker);
         Ok(resp)
     }
@@ -1710,6 +1716,10 @@ fn future_scan<E: Engine, L: LockManager, F: KvFormat>(
             match v {
                 Ok(kv_res) => {
                     resp.set_pairs(map_kv_pairs(kv_res).into());
+                    #[cfg(feature = "linearizability-track")]
+                    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+                        tracker.track_success();
+                    });
                 }
                 Err(e) => {
                     let key_error = extract_key_error(&e);
@@ -1721,6 +1731,8 @@ fn future_scan<E: Engine, L: LockManager, F: KvFormat>(
                 }
             }
         }
+        #[cfg(feature = "linearizability-track")]
+        linearizability_track::log(tracker);
         GLOBAL_TRACKERS.remove(tracker);
         Ok(resp)
     }
@@ -1757,6 +1769,8 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
                     GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
                         tracker.write_scan_detail(exec_detail_v2.mut_scan_detail_v2());
                         tracker.merge_time_detail(exec_detail_v2.mut_time_detail_v2());
+                        #[cfg(feature = "linearizability-track")]
+                        tracker.track_success();
                     });
                     set_time_detail(exec_detail_v2, duration, &stats.latency_stats);
                     resp.set_pairs(pairs.into());
@@ -1771,6 +1785,8 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
                 }
             }
         }
+        #[cfg(feature = "linearizability-track")]
+        linearizability_track::log(tracker);
         GLOBAL_TRACKERS.remove(tracker);
         Ok(resp)
     }
@@ -1805,6 +1821,8 @@ fn future_buffer_batch_get<E: Engine, L: LockManager, F: KvFormat>(
                     stats.stats.write_scan_detail(scan_detail_v2);
                     GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
                         tracker.write_scan_detail(scan_detail_v2);
+                        #[cfg(feature = "linearizability-track")]
+                        tracker.track_success();
                     });
                     set_time_detail(exec_detail_v2, duration, &stats.latency_stats);
                     resp.set_pairs(pairs.into());
@@ -1815,6 +1833,8 @@ fn future_buffer_batch_get<E: Engine, L: LockManager, F: KvFormat>(
                 }
             }
         }
+        #[cfg(feature = "linearizability-track")]
+        linearizability_track::log(tracker);
         GLOBAL_TRACKERS.remove(tracker);
         Ok(resp)
     }
@@ -1848,10 +1868,18 @@ fn future_scan_lock<E: Engine, L: LockManager, F: KvFormat>(
             resp.set_region_error(err);
         } else {
             match v {
-                Ok(locks) => resp.set_locks(locks.into()),
+                Ok(locks) => {
+                    #[cfg(feature = "linearizability-track")]
+                    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+                        tracker.track_success();
+                    });
+                    resp.set_locks(locks.into())
+                }
                 Err(e) => resp.set_error(extract_key_error(&e)),
             }
         }
+        #[cfg(feature = "linearizability-track")]
+        linearizability_track::log(tracker);
         GLOBAL_TRACKERS.remove(tracker);
         Ok(resp)
     }
@@ -2398,6 +2426,7 @@ macro_rules! txn_command_future {
 
             async move {
                 defer!{{
+                    #[cfg(feature="linearizability-track")] linearizability_track::log($tracker);
                     GLOBAL_TRACKERS.remove($tracker);
                 }};
                 let $v = match res {
@@ -2408,6 +2437,12 @@ macro_rules! txn_command_future {
                 if let Some(err) = extract_region_error(&$v) {
                     $resp.set_region_error(err);
                 } else {
+                    #[cfg(feature="linearizability-track")]
+                    if $v.is_ok() {
+                        GLOBAL_TRACKERS.with_tracker($tracker, |tracker| {
+                            tracker.track_success();
+                        });
+                    }
                     $else_branch
                 }
                 Ok($resp)

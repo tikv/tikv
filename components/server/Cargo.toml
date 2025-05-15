@@ -21,6 +21,7 @@ test-engines-rocksdb = ["tikv/test-engines-rocksdb"]
 test-engines-panic = ["tikv/test-engines-panic"]
 nortcheck = ["engine_rocks/nortcheck"]
 backup-stream-debug = ["backup-stream/backup-stream-debug"]
+linearizability-track = ["tikv/linearizability-track"]
 
 [dependencies]
 api_version = { workspace = true }
