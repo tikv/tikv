@@ -1800,9 +1800,9 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         // loop, that will not stop when shutting down the threadpool, causing the
         // reference to the raft engine inside the scheduler to be dangle. So we need
         // to stop the scheduler before shutting down the threadpool.
-        let reftlog_gc_scheduler_clone = raftlog_gc_scheduler.clone();
+        let raftlog_gc_scheduler_clone = raftlog_gc_scheduler.clone();
         workers.on_stop_hooks.push(Box::new(move || {
-            reftlog_gc_scheduler_clone.stop();
+            raftlog_gc_scheduler_clone.stop();
         }));
 
         let raftlog_fetch_scheduler = workers.raftlog_fetch_worker.start(
