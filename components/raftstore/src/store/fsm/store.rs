@@ -1637,6 +1637,8 @@ struct Workers<EK: KvEngine> {
     coprocessor_host: CoprocessorHost<EK>,
 
     refresh_config_worker: LazyWorker<RefreshConfigTask>,
+
+    on_stop_hooks: Vec<Box<dyn FnOnce() + Send>>,
 }
 
 pub struct RaftBatchSystem<EK: KvEngine, ER: RaftEngine> {
@@ -1727,7 +1729,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             .thread_count(cfg.value().snap_generator_pool_size)
             .thread_count_limits(1, SNAP_GENERATOR_MAX_POOL_SIZE)
             .create();
-        let workers = Workers {
+        let mut workers = Workers {
             pd_worker,
             background_worker,
             cleanup_worker: Worker::new("cleanup-worker"),
@@ -1737,7 +1739,20 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             raftlog_fetch_worker: Worker::new("raftlog-fetch-worker"),
             coprocessor_host: coprocessor_host.clone(),
             refresh_config_worker: LazyWorker::new("refreash-config-worker"),
+            on_stop_hooks: vec![],
         };
+        // Ideally, we should not stop split_check_scheduler when Workers stop, since
+        // Workers do not own it. But, no body owns it, it is shared. And, since the
+        // split check worker internally runs a infinite loop, it will not stop
+        // when shutting down the threadpool, causing the reference to the kv
+        // engine inside the scheduler to be dangle, so that the kv engine never
+        // closes until the process exits. If we want to restart engines in the same
+        // process, e.g. in a test that requires restarting the engines, we need to stop
+        // the scheduler first.
+        let split_check_scheduler_clone = split_check_scheduler.clone();
+        workers.on_stop_hooks.push(Box::new(move || {
+            split_check_scheduler_clone.stop();
+        }));
         mgr.init()?;
 
         let snap_gen_runner = SnapGenRunner::new(
@@ -1762,6 +1777,14 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let region_scheduler = workers
             .region_worker
             .start_with_timer("region-worker", region_runner);
+        // Same as split_check_scheduler, region worker also runs a infinite
+        // loop, that will not stop when shutting down the threadpool, causing the
+        // reference to the kv engine inside the scheduler to be dangle. So we need
+        // to stop the scheduler before shutting down the threadpool.
+        let region_scheduler_clone = region_scheduler.clone();
+        workers.on_stop_hooks.push(Box::new(move || {
+            region_scheduler_clone.stop();
+        }));
         let raftlog_gc_runner = RaftlogGcRunner::new(
             engines.clone(),
             cfg.value().raft_log_compact_sync_interval.0,
@@ -1769,6 +1792,14 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let raftlog_gc_scheduler = workers
             .background_worker
             .start_with_timer("raft-gc-worker", raftlog_gc_runner);
+        // Same as split_check_scheduler, raftlog_gc_scheduler also runs a infinite
+        // loop, that will not stop when shutting down the threadpool, causing the
+        // reference to the raft engine inside the scheduler to be dangle. So we need
+        // to stop the scheduler before shutting down the threadpool.
+        let raftlog_gc_scheduler_clone = raftlog_gc_scheduler.clone();
+        workers.on_stop_hooks.push(Box::new(move || {
+            raftlog_gc_scheduler_clone.stop();
+        }));
 
         let raftlog_fetch_scheduler = workers.raftlog_fetch_worker.start(
             "raftlog-fetch-worker",
@@ -1979,6 +2010,9 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             return;
         }
         let mut workers = self.workers.take().unwrap();
+        for hook in workers.on_stop_hooks.drain(..) {
+            hook();
+        }
         // Wait all workers finish.
         workers.pd_worker.stop();
 
