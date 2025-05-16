@@ -15,7 +15,7 @@ use std::{
 use collections::{HashMap, HashSet};
 use crossbeam::channel::TrySendError;
 use encryption_export::DataKeyManager;
-use engine_rocks::{RocksEngine, RocksSnapshot, RocksStatistics};
+use engine_rocks::{print_all_rocks_traces, RocksEngine, RocksSnapshot, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
     CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, RaftEngineReadOnly, SyncMutable,
@@ -36,6 +36,7 @@ use kvproto::{
 };
 use pd_client::{BucketStat, PdClient};
 use raft::eraftpb::ConfChangeType;
+use raft_log_engine::print_all_traces;
 use raftstore::{
     router::RaftStoreRouter,
     store::{
@@ -261,6 +262,61 @@ impl<T: Simulator> Cluster<T> {
         self.sst_workers.push(sst_worker);
         self.kv_statistics.push(kv_statistics);
         self.raft_statistics.push(raft_statistics);
+    }
+
+    pub fn restart_engines(&mut self, node_id: &Vec<u64>) {
+        let mut id_to_path = HashMap::default();
+
+        for id in node_id {
+            let path = self.paths.remove(0);
+            id_to_path.insert(*id, path);
+            drop(self.dbs.remove(0));
+            self.key_managers.remove(0);
+            self.sst_workers.remove(0);
+            self.kv_statistics.remove(0);
+            self.raft_statistics.remove(0);
+            drop(self.engines.remove(id));
+        }
+        sleep_ms(1000);
+        print_all_traces();
+        print_all_rocks_traces();
+        for (id, path) in id_to_path {
+            let (engines, key_manager, dir, sst_worker, kv_statistics, raft_statistics) =
+                start_test_engine(None, self.io_rate_limiter.clone(), &self.cfg, path);
+            self.dbs.push(engines);
+            self.key_managers.push(key_manager);
+            self.paths.push(dir);
+            self.sst_workers.push(sst_worker);
+            self.kv_statistics.push(kv_statistics);
+            self.raft_statistics.push(raft_statistics);
+            self.engines.insert(id, self.dbs.last().unwrap().clone());
+        }
+    }
+
+    pub fn restart_engine(&mut self, node_id: u64) {
+        let idx = node_id as usize - 1;
+        let path = self.paths.remove(idx);
+        {
+            drop(self.dbs.remove(idx));
+            self.key_managers.remove(idx);
+            self.sst_workers.remove(idx);
+            self.kv_statistics.remove(idx);
+            self.raft_statistics.remove(idx);
+            drop(self.engines.remove(&node_id));
+            sleep_ms(1000);
+        }
+        // print_all_traces();
+        // print_all_rocks_traces();
+        let (engines, key_manager, dir, sst_worker, kv_statistics, raft_statistics) =
+            start_test_engine(None, self.io_rate_limiter.clone(), &self.cfg, path);
+        self.dbs.push(engines);
+        self.key_managers.push(key_manager);
+        self.paths.push(dir);
+        self.sst_workers.push(sst_worker);
+        self.kv_statistics.push(kv_statistics);
+        self.raft_statistics.push(raft_statistics);
+        self.engines
+            .insert(node_id, self.dbs.last().unwrap().clone());
     }
 
     pub fn create_engines(&mut self) {
