@@ -551,7 +551,7 @@ impl Default for Config {
             region_split_size: ReadableSize(0),
             clean_stale_peer_delay: ReadableDuration::minutes(0),
             inspect_interval: ReadableDuration::millis(100),
-            inspect_kvdb_interval: ReadableDuration::secs(2),
+            inspect_kvdb_interval: ReadableDuration::millis(100),
             // The default value of `inspect_cpu_util_thd` is 0.4, which means
             // when the cpu utilization is greater than 40%, the store might be
             // regarded as a slow node if there exists delayed inspected messages.
