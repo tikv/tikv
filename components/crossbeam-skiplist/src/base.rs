@@ -2097,7 +2097,7 @@ impl<K, V> Drop for IntoIter<K, V> {
             unsafe {
                 // Unprotected loads are okay because this function is the only one currently using
                 // the skip list.
-                let next = (*self.node).tower[0].load(Ordering::Relaxed, epoch::unprotected());
+                let next = (&(*self.node).tower)[0].load(Ordering::Relaxed, epoch::unprotected());
 
                 // We can safely do this without deferring because references to
                 // keys & values that we give out never outlive the SkipList.
@@ -2128,7 +2128,7 @@ impl<K, V> Iterator for IntoIter<K, V> {
                 //
                 // Unprotected loads are okay because this function is the only one currently using
                 // the skip list.
-                let next = (*self.node).tower[0].load(Ordering::Relaxed, epoch::unprotected());
+                let next = (&(*self.node).tower)[0].load(Ordering::Relaxed, epoch::unprotected());
 
                 // Deallocate the current node and move to the next one.
                 Node::dealloc(self.node);
