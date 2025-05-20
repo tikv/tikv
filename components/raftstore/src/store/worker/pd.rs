@@ -485,6 +485,14 @@ where
 
 const DEFAULT_LOAD_BASE_SPLIT_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 const DEFAULT_COLLECT_TICK_INTERVAL: Duration = Duration::from_secs(1);
+/// The default interval for inspecting latency ticks.
+///
+/// This constant defines the minimum time interval between inspection
+/// operations. The actual interval should not be less than 100 microsecs
+/// since that is the minimum delay required for a single I/O operation. Setting
+/// an interval smaller than this threshold could lead to inefficient resource
+/// usage and potential performance degradation.
+const DEFAULT_INSPECT_LATENCY_TICK_INTERVAL: Duration = Duration::from_micros(100);
 
 fn default_collect_tick_interval() -> Duration {
     fail_point!("mock_collect_tick_interval", |_| {
@@ -627,7 +635,8 @@ where
             ),
             // Use the smallest inspect latency as the minimal limitation for collecting tick.
             collect_tick_interval: cmp::min(
-                cmp::min(inspect_latency_interval, inspect_kvdb_latency_interval),
+                cmp::min(inspect_latency_interval, inspect_kvdb_latency_interval)
+                    .max(DEFAULT_INSPECT_LATENCY_TICK_INTERVAL),
                 cmp::min(default_collect_tick_interval(), interval),
             ),
             inspect_latency_interval,
@@ -647,7 +656,8 @@ where
                 cmp::min(
                     self.inspect_latency_interval,
                     self.inspect_kvdb_latency_interval,
-                ),
+                )
+                .max(DEFAULT_INSPECT_LATENCY_TICK_INTERVAL),
                 default_collect_tick_interval(),
             )
         {
