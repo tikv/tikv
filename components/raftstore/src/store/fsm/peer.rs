@@ -4451,9 +4451,7 @@ where
             compact_to,
             transfer_leader_state.cache_warmup_state.as_mut(),
         );
-        if self.fsm.peer.is_witness() {
-            self.fsm.peer.last_compacted_time = Instant::now();
-        }
+        self.fsm.peer.last_compacted_time = Instant::now();
     }
 
     fn on_ready_split_region(
@@ -6123,6 +6121,17 @@ where
             && applied_idx - first_idx >= self.ctx.cfg.raft_log_gc_count_limit())
             || (self.fsm.peer.raft_log_size_hint >= self.ctx.cfg.raft_log_gc_size_limit().0)
         {
+            std::cmp::max(first_idx + (last_idx - first_idx) / 2, replicated_idx)
+        } else if applied_idx > first_idx
+            && applied_idx - first_idx >= self.ctx.cfg.raft_log_gc_count_limit() / 2
+            && self.fsm.peer.last_compacted_time.elapsed()
+                >= self.ctx.cfg.peer_stale_state_check_interval.0
+        {
+            self.ctx
+                .raft_metrics
+                .raft_log_gc_skipped
+                .half_thd_limit
+                .inc();
             std::cmp::max(first_idx + (last_idx - first_idx) / 2, replicated_idx)
         } else if replicated_idx < first_idx || last_idx - first_idx < 3 {
             // In the current implementation one compaction can't delete all stale Raft

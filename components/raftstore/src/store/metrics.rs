@@ -233,6 +233,7 @@ make_static_metric! {
         reserve_log,
         compact_idx_too_small,
         threshold_limit,
+        half_thd_limit,
     }
 
     pub label_enum LoadBaseSplitEventType {
