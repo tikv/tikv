@@ -6121,16 +6121,10 @@ where
             && applied_idx - first_idx >= self.ctx.cfg.raft_log_gc_count_limit())
             || (self.fsm.peer.raft_log_size_hint >= self.ctx.cfg.raft_log_gc_size_limit().0)
         {
-            std::cmp::max(first_idx + (last_idx - first_idx) / 2, replicated_idx)
-        } else if applied_idx > first_idx
-            && applied_idx - first_idx >= self.ctx.cfg.raft_log_gc_count_limit() / 2
-            && self.fsm.peer.last_compacted_time.elapsed()
-                >= self.ctx.cfg.peer_stale_state_check_interval.0
-        {
             self.ctx
                 .raft_metrics
                 .raft_log_gc_skipped
-                .half_thd_limit
+                .gc_count_limit
                 .inc();
             std::cmp::max(first_idx + (last_idx - first_idx) / 2, replicated_idx)
         } else if replicated_idx < first_idx || last_idx - first_idx < 3 {
@@ -6166,6 +6160,13 @@ where
         // Have no idea why subtract 1 here, but original code did this by magic.
         compact_idx -= 1;
         if compact_idx < first_idx {
+            if force_compact {
+                self.ctx
+                    .raft_metrics
+                    .raft_log_gc_skipped
+                    .force_compact
+                    .inc();
+            }
             // In case compact_idx == first_idx before subtraction.
             self.ctx
                 .raft_metrics
