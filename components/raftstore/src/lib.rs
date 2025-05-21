@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![cfg_attr(test, feature(test))]
-
+#![feature(cell_update)]
 #![feature(min_specialization)]
 #![feature(box_patterns)]
 #![feature(let_chains)]

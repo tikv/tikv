@@ -19,6 +19,7 @@
 #![crate_type = "lib"]
 #![cfg_attr(test, feature(test))]
 #![recursion_limit = "400"]
+#![feature(cell_update)]
 #![feature(proc_macro_hygiene)]
 #![feature(min_specialization)]
 #![feature(box_patterns)]
