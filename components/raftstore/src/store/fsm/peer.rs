@@ -4451,7 +4451,9 @@ where
             compact_to,
             transfer_leader_state.cache_warmup_state.as_mut(),
         );
-        self.fsm.peer.last_compacted_time = Instant::now();
+        if self.fsm.peer.is_witness() {
+            self.fsm.peer.last_compacted_time = Instant::now();
+        }
     }
 
     fn on_ready_split_region(
@@ -6067,15 +6069,18 @@ where
         let truncated_idx = self.fsm.peer.get_store().truncated_index();
         let first_idx = self.fsm.peer.get_store().first_index();
         let last_idx = self.fsm.peer.get_store().last_index();
+        let committed_idx = self.fsm.peer.get_store().commit_index();
 
         let mut voter_replicated_idx = last_idx;
         let (mut replicated_idx, mut alive_cache_idx) = (last_idx, last_idx);
+        let mut slowest_peer_id = self.fsm.peer_id();
         for (peer_id, p) in self.fsm.peer.raft_group.raft.prs().iter() {
             let peer = find_peer_by_id(self.region(), *peer_id).unwrap();
             if !is_learner(peer) && voter_replicated_idx > p.matched {
                 voter_replicated_idx = p.matched;
             }
             if replicated_idx > p.matched {
+                slowest_peer_id = *peer_id;
                 replicated_idx = p.matched;
             }
             if let Some(last_heartbeat) = self.fsm.peer.peer_heartbeats.get(peer_id) {
@@ -6116,6 +6121,7 @@ where
         }
 
         let mut compact_idx = if force_compact && replicated_idx > first_idx {
+            self.fsm.peer.last_compacted_slowest_peer = (self.fsm.peer_id(), Instant::now());
             replicated_idx
         } else if (applied_idx > first_idx
             && applied_idx - first_idx >= self.ctx.cfg.raft_log_gc_count_limit())
@@ -6126,6 +6132,14 @@ where
                 .raft_log_gc_skipped
                 .gc_count_limit
                 .inc();
+            // Update the last compacted slowest peer if it's not the slowest peer or the
+            // last compacted slowest peer is stale.
+            if self.fsm.peer.last_compacted_slowest_peer.0 != slowest_peer_id
+                || self.fsm.peer.last_compacted_slowest_peer.1.elapsed()
+                    > self.ctx.cfg.peer_stale_state_check_interval.0
+            {
+                self.fsm.peer.last_compacted_slowest_peer = (slowest_peer_id, Instant::now());
+            }
             std::cmp::max(first_idx + (last_idx - first_idx) / 2, replicated_idx)
         } else if replicated_idx < first_idx || last_idx - first_idx < 3 {
             // In the current implementation one compaction can't delete all stale Raft
@@ -6149,7 +6163,21 @@ where
             self.fsm.skip_gc_raft_log_ticks += 1;
             self.register_raft_gc_log_tick();
             return;
+        } else if self.fsm.peer.last_compacted_slowest_peer.0 != self.fsm.peer_id()
+            && self.fsm.peer.last_compacted_slowest_peer.0 == slowest_peer_id
+            && self.fsm.peer.last_compacted_slowest_peer.1.elapsed()
+                < self.ctx.cfg.peer_stale_state_check_interval.0
+        {
+            // The slowest peer is the same as the last uncompacted peer, so we can
+            // compact the log.
+            self.ctx
+                .raft_metrics
+                .raft_log_gc_skipped
+                .force_compact
+                .inc();
+            committed_idx
         } else {
+            self.fsm.peer.last_compacted_slowest_peer = (self.fsm.peer_id(), Instant::now());
             replicated_idx
         };
         // Avoid compacting unpersisted raft logs when persist is far behind apply.
@@ -6161,13 +6189,6 @@ where
         // Have no idea why subtract 1 here, but original code did this by magic.
         compact_idx -= 1;
         if compact_idx < first_idx {
-            if force_compact {
-                self.ctx
-                    .raft_metrics
-                    .raft_log_gc_skipped
-                    .force_compact
-                    .inc();
-            }
             // In case compact_idx == first_idx before subtraction.
             self.ctx
                 .raft_metrics
