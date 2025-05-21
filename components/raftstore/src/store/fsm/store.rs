@@ -801,8 +801,8 @@ struct StoreFsmDelegate<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T:
     ctx: &'a mut PollContext<EK, ER, T>,
 }
 
-impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
-    StoreFsmDelegate<'a, EK, ER, T>
+impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
+    StoreFsmDelegate<'_, EK, ER, T>
 {
     fn on_tick(&mut self, tick: StoreTick) {
         let timer = TiInstant::now_coarse();
@@ -2085,7 +2085,7 @@ enum CheckMsgStatus {
     NewPeerFirst,
 }
 
-impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER, T> {
+impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T> {
     /// Checks if the message is targeting a stale peer.
     fn check_msg(&mut self, msg: &RaftMessage) -> Result<CheckMsgStatus> {
         let region_id = msg.get_region_id();
@@ -3200,7 +3200,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 // we will remove 1-week old version 1 SST files.
 const VERSION_1_SST_CLEANUP_DURATION: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
-impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER, T> {
+impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T> {
     fn on_cleanup_import_sst(&mut self) -> Result<()> {
         let mut delete_ssts = Vec::new();
 

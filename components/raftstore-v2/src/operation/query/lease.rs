@@ -359,7 +359,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 }
 
-impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
+impl<EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'_, EK, ER, T> {
     fn register_check_leader_lease_tick(&mut self) {
         self.schedule_tick(PeerTick::CheckLeaderLease)
     }

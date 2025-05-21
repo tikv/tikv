@@ -1879,7 +1879,7 @@ impl ConvertTo<Decimal> for Json {
     }
 }
 
-impl<'a> ConvertTo<Decimal> for JsonRef<'a> {
+impl ConvertTo<Decimal> for JsonRef<'_> {
     /// Port from TiDB's types.ConvertJSONToDecimal
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {

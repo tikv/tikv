@@ -4,7 +4,7 @@ use std::cmp::Ordering;
 
 use super::{super::Result, JsonRef, JsonType};
 
-impl<'a> JsonRef<'a> {
+impl JsonRef<'_> {
     /// `member_of` is the implementation for MEMBER OF in mysql
     /// <https://dev.mysql.com/doc/refman/8.0/en/json-search-functions.html#operator_member-of>
     /// See `builtinJSONMemberOfSig` in TiDB `expression/builtin_json.go`

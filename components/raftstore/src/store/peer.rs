@@ -6293,7 +6293,7 @@ struct PollContextReader<'a, EK, ER> {
     engines: &'a Engines<EK, ER>,
 }
 
-impl<'a, EK, ER> ReadExecutor for PollContextReader<'a, EK, ER>
+impl<EK, ER> ReadExecutor for PollContextReader<'_, EK, ER>
 where
     EK: KvEngine,
     ER: RaftEngine,

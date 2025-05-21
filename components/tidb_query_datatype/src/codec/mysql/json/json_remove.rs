@@ -2,7 +2,7 @@
 
 use super::{super::Result, Json, JsonRef, modifier::BinaryModifier, path_expr::PathExpression};
 
-impl<'a> JsonRef<'a> {
+impl JsonRef<'_> {
     /// Removes elements from Json,
     /// All path expressions cannot contain * or ** wildcard.
     /// If any error occurs, the input won't be changed.

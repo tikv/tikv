@@ -13,7 +13,7 @@ const CHAR_LINEFEED: char = '\x0A';
 const CHAR_FORMFEED: char = '\x0C';
 const CHAR_CARRIAGE_RETURN: char = '\x0D';
 
-impl<'a> JsonRef<'a> {
+impl JsonRef<'_> {
     /// `unquote` recognizes the escape sequences shown in:
     /// <https://dev.mysql.com/doc/refman/5.7/en/json-modification-functions.html>
     /// json-unquote-character-escape-sequences

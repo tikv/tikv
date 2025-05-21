@@ -94,7 +94,7 @@ enum MergeUnit<'a> {
     Owned(Json),
 }
 
-impl<'a> MergeUnit<'a> {
+impl MergeUnit<'_> {
     fn as_ref(&self) -> JsonRef<'_> {
         match self {
             MergeUnit::Ref(r) => *r,

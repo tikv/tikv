@@ -122,7 +122,7 @@ pub mod prom {
 
     struct ShowPromHist<'a>(&'a Histogram);
 
-    impl<'a> Serialize for ShowPromHist<'a> {
+    impl Serialize for ShowPromHist<'_> {
         fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
         where
             S: serde::Serializer,

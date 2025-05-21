@@ -57,7 +57,7 @@ impl MySqlFormatter {
     }
 }
 
-impl<'a> ToStringValue for JsonRef<'a> {
+impl ToStringValue for JsonRef<'_> {
     /// This function is a simple combination and rewrite of serde_json's
     /// `to_writer_pretty`
     fn to_string_value(&self) -> String {
@@ -71,7 +71,7 @@ impl<'a> ToStringValue for JsonRef<'a> {
     }
 }
 
-impl<'a> Serialize for JsonRef<'a> {
+impl Serialize for JsonRef<'_> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,

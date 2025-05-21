@@ -629,7 +629,7 @@ impl<'a, S: Snapshot> ReaderWithStats<'a, S> {
     }
 }
 
-impl<'a, S: Snapshot> Deref for ReaderWithStats<'a, S> {
+impl<S: Snapshot> Deref for ReaderWithStats<'_, S> {
     type Target = SnapshotReader<S>;
 
     fn deref(&self) -> &Self::Target {
@@ -637,13 +637,13 @@ impl<'a, S: Snapshot> Deref for ReaderWithStats<'a, S> {
     }
 }
 
-impl<'a, S: Snapshot> DerefMut for ReaderWithStats<'a, S> {
+impl<S: Snapshot> DerefMut for ReaderWithStats<'_, S> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.reader
     }
 }
 
-impl<'a, S: Snapshot> Drop for ReaderWithStats<'a, S> {
+impl<S: Snapshot> Drop for ReaderWithStats<'_, S> {
     fn drop(&mut self) {
         self.statistics.add(&self.reader.take_statistics())
     }

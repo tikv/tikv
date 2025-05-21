@@ -105,7 +105,7 @@ impl CompactLogContext {
     }
 }
 
-impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
+impl<EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'_, EK, ER, T> {
     pub fn on_compact_log_tick(&mut self, force: bool) {
         // Might read raft logs.
         debug_assert!(self.fsm.peer().serving());
