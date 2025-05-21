@@ -235,6 +235,7 @@ make_static_metric! {
         threshold_limit,
         force_compact,
         gc_count_limit,
+        early_apply,
     }
 
     pub label_enum LoadBaseSplitEventType {

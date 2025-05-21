@@ -6154,6 +6154,7 @@ where
         };
         // Avoid compacting unpersisted raft logs when persist is far behind apply.
         if compact_idx > self.fsm.peer.raft_group.raft.raft_log.persisted {
+            self.ctx.raft_metrics.raft_log_gc_skipped.early_apply.inc();
             compact_idx = self.fsm.peer.raft_group.raft.raft_log.persisted;
         }
         assert!(compact_idx >= first_idx);
