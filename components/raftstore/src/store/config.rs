@@ -1680,7 +1680,6 @@ mod tests {
 
         cfg = Config::new();
         cfg.inspect_kvdb_interval = ReadableDuration::millis(1);
-        cfg.inspect_interval = ReadableDuration::millis(100);
         cfg.optimize_inspector(true);
         assert_eq!(cfg.inspect_kvdb_interval, ReadableDuration::millis(1));
     }
