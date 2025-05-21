@@ -1249,7 +1249,7 @@ struct Inspector<'r> {
     delegate: &'r ReadDelegate,
 }
 
-impl<'r> RequestInspector for Inspector<'r> {
+impl RequestInspector for Inspector<'_> {
     fn has_applied_to_current_term(&mut self) -> bool {
         if self.delegate.applied_term == self.delegate.term {
             true

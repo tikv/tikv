@@ -49,9 +49,7 @@ mod replica;
 
 pub(crate) use self::local::{LocalReader, ReadDelegatePair, SharedReadTablet};
 
-impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
-    PeerFsmDelegate<'a, EK, ER, T>
-{
+impl<EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport> PeerFsmDelegate<'_, EK, ER, T> {
     fn inspect_read(&mut self, req: &RaftCmdRequest) -> Result<RequestPolicy> {
         if req.get_header().get_read_quorum() {
             return Ok(RequestPolicy::ReadIndex);

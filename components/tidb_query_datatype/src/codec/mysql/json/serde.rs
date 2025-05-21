@@ -9,7 +9,7 @@ use serde::{
 use serde_json::Serializer as JsonSerializer;
 
 use super::{Json, JsonRef, JsonType};
-use crate::codec::Error;
+use crate::codec::{convert::ToStringValue, Error};
 
 /// MySQL formatter follows the implementation in TiDB
 /// https://github.com/pingcap/tidb/blob/master/types/json/binary.go
@@ -57,10 +57,10 @@ impl MySqlFormatter {
     }
 }
 
-impl<'a> ToString for JsonRef<'a> {
+impl ToStringValue for JsonRef<'_> {
     /// This function is a simple combination and rewrite of serde_json's
     /// `to_writer_pretty`
-    fn to_string(&self) -> String {
+    fn to_string_value(&self) -> String {
         let mut writer = Vec::with_capacity(128);
         let mut ser = JsonSerializer::with_formatter(&mut writer, MySqlFormatter::new());
         self.serialize(&mut ser).unwrap();
@@ -71,7 +71,7 @@ impl<'a> ToString for JsonRef<'a> {
     }
 }
 
-impl<'a> Serialize for JsonRef<'a> {
+impl Serialize for JsonRef<'_> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,

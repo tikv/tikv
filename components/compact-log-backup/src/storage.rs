@@ -210,13 +210,13 @@ pub struct LoadFromExt<'a> {
     pub prefetch_buffer_count: usize,
 }
 
-impl<'a> LoadFromExt<'a> {
+impl LoadFromExt<'_> {
     fn enter_load_span(&self) -> Option<Entered<'_>> {
         self.loading_content_span.as_ref().map(|span| span.enter())
     }
 }
 
-impl<'a> Default for LoadFromExt<'a> {
+impl Default for LoadFromExt<'_> {
     fn default() -> Self {
         Self {
             loading_content_span: None,
@@ -304,7 +304,7 @@ impl<F: Future> FusedFuture for Prefetch<F> {
     }
 }
 
-impl<'a> Stream for StreamMetaStorage<'a> {
+impl Stream for StreamMetaStorage<'_> {
     type Item = Result<MetaFile>;
 
     fn poll_next(

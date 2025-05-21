@@ -1374,6 +1374,9 @@ mod benches {
             }
 
             if desc {
+                // SEE: https://github.com/rust-lang/rust-clippy/issues/14685
+                // We can remove this after upgrading to a newer toolchain.
+                #[allow(clippy::manual_slice_fill)]
                 for k in &mut key {
                     *k = !*k;
                 }

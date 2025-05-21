@@ -185,7 +185,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 }
 
-impl<'a, EK, ER, T: Transport> PeerFsmDelegate<'a, EK, ER, T>
+impl<EK, ER, T: Transport> PeerFsmDelegate<'_, EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,

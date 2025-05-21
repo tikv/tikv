@@ -35,7 +35,7 @@ pub enum RpnStackNodeVectorValue<'a> {
     },
 }
 
-impl<'a> RpnStackNodeVectorValue<'a> {
+impl RpnStackNodeVectorValue<'_> {
     /// Gets a reference to the inner physical vector value.
     pub fn as_ref(&self) -> &VectorValue {
         match self {
@@ -120,7 +120,7 @@ pub enum RpnStackNode<'a> {
     },
 }
 
-impl<'a> RpnStackNode<'a> {
+impl RpnStackNode<'_> {
     /// Gets the field type.
     #[inline]
     pub fn field_type(&self) -> &FieldType {

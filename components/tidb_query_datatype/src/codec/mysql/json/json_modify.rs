@@ -13,7 +13,7 @@ pub enum ModifyType {
     Set,
 }
 
-impl<'a> JsonRef<'a> {
+impl JsonRef<'_> {
     /// Modifies a Json object by insert, replace or set.
     /// All path expressions cannot contain * or ** wildcard.
     /// If any error occurs, the input won't be changed.

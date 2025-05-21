@@ -97,7 +97,7 @@ where
     }
 }
 
-impl<'a> ConvertTo<Real> for JsonRef<'a> {
+impl ConvertTo<Real> for JsonRef<'_> {
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<Real> {
         let val = self.convert(ctx)?;
@@ -106,7 +106,7 @@ impl<'a> ConvertTo<Real> for JsonRef<'a> {
     }
 }
 
-impl<'a> ConvertTo<String> for JsonRef<'a> {
+impl ConvertTo<String> for JsonRef<'_> {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<String> {
         // FIXME: There is an additional step `ProduceStrWithSpecifiedTp` in TiDB.
@@ -114,14 +114,14 @@ impl<'a> ConvertTo<String> for JsonRef<'a> {
     }
 }
 
-impl<'a> ConvertTo<Bytes> for JsonRef<'a> {
+impl ConvertTo<Bytes> for JsonRef<'_> {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Bytes> {
         Ok(self.to_string().into_bytes())
     }
 }
 
-impl<'a> ConvertTo<Bytes> for EnumRef<'a> {
+impl ConvertTo<Bytes> for EnumRef<'_> {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Bytes> {
         Ok(self.to_string().into_bytes())
@@ -500,7 +500,7 @@ impl ToInt for Json {
     }
 }
 
-impl<'a> ToInt for JsonRef<'a> {
+impl ToInt for JsonRef<'_> {
     // Port from TiDB's types.ConvertJSONToInt
     #[inline]
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {

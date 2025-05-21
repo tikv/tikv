@@ -7173,7 +7173,7 @@ where
     }
 }
 
-impl<'a, EK, ER, T: Transport> PeerFsmDelegate<'a, EK, ER, T>
+impl<EK, ER, T: Transport> PeerFsmDelegate<'_, EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
@@ -7515,7 +7515,7 @@ fn new_compact_log_request(
     request
 }
 
-impl<'a, EK, ER, T: Transport> PeerFsmDelegate<'a, EK, ER, T>
+impl<EK, ER, T: Transport> PeerFsmDelegate<'_, EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,

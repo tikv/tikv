@@ -189,7 +189,7 @@ impl Default for TrackerToken {
 }
 
 pub struct TrackerTokenArray<'a>(&'a [TrackerToken]);
-impl<'a> slog::Value for TrackerTokenArray<'a> {
+impl slog::Value for TrackerTokenArray<'_> {
     fn serialize(
         &self,
         _record: &slog::Record<'_>,
