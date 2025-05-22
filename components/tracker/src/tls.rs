@@ -76,7 +76,7 @@ impl<F: Future> Future for TlsTrackedFuture<F> {
 #[cfg(feature = "linearizability-track")]
 mod linearizability_track {
     use super::*;
-    use crate::linearizability_track::{PeerStateTracker, INVALID_PEER_STATE};
+    use crate::linearizability_track::{INVALID_PEER_STATE, PeerStateTracker};
 
     thread_local! {
         static TLS_PEER_STATE: Cell<PeerStateTracker> = const { Cell::new(INVALID_PEER_STATE) };

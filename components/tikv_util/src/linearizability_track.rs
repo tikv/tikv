@@ -3,7 +3,7 @@ pub use linearizability_track::*;
 
 #[cfg(feature = "linearizability-track")]
 mod linearizability_track {
-    use tracker::{get_tls_peer_state, TrackerToken, GLOBAL_TRACKERS};
+    use tracker::{GLOBAL_TRACKERS, TrackerToken, get_tls_peer_state};
     use uuid::Uuid;
 
     pub fn log(token: TrackerToken) {

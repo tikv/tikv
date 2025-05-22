@@ -1248,7 +1248,7 @@ where
                     GLOBAL_TRACKERS.with_tracker(tracker, |t| {
                         t.metrics.local_read = true;
                         #[cfg(feature = "linearizability-track")]
-                        t.prpose_must_checked();
+                        t.propose_must_checked();
                     })
                 });
 

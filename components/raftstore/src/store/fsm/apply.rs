@@ -71,9 +71,9 @@ use tikv_util::{
     worker::Scheduler,
 };
 use time::Timespec;
-#[cfg(feature = "linearizability-track")]
-use tracker::{clear_tls_peer_state, set_tls_peer_state, PeerStateTracker};
 use tracker::{GLOBAL_TRACKERS, TrackerToken, TrackerTokenArray};
+#[cfg(feature = "linearizability-track")]
+use tracker::{PeerStateTracker, clear_tls_peer_state, set_tls_peer_state};
 use uuid::Builder as UuidBuilder;
 
 use self::memtrace::*;

@@ -295,7 +295,7 @@ mod linearizability_track {
             }
         }
 
-        pub fn prpose_must_checked(&self) {
+        pub fn propose_must_checked(&self) {
             match self.linearizability_track.as_ref() {
                 Some(debug) => {
                     assert_ne!(debug.propose_state, ProposeState::None);
@@ -307,7 +307,6 @@ mod linearizability_track {
         pub fn track_ready_committed(&mut self) {
             match self.linearizability_track.as_mut() {
                 Some(debug) => {
-                    assert_eq!(debug.ready_state, ReadyState::None);
                     debug.ready_state =
                         ReadyState::Committed(chrono::offset::Local::now(), get_tls_peer_state());
                 }

@@ -76,7 +76,7 @@ use tikv_util::{
 };
 use time::{self, Timespec};
 #[cfg(feature = "linearizability-track")]
-use tracker::{clear_tls_peer_state, set_tls_peer_state, PeerStateTracker};
+use tracker::{PeerStateTracker, clear_tls_peer_state, set_tls_peer_state};
 
 use crate::{
     Error, Result, bytes_capacity,
