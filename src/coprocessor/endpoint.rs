@@ -939,7 +939,10 @@ macro_rules! make_error_response_common {
             Error::InvalidMaxTsUpdate(e) => {
                 $tag = "invalid_max_ts_update";
                 let mut err = errorpb::Error::default();
-                err.set_message(e.to_string());
+                let mut invalid_max_ts_err = errorpb::InvalidMaxTsUpdate::default();
+                invalid_max_ts_err.set_attempted_ts(e.attempted_ts.into_inner());
+                invalid_max_ts_err.set_limit_ts(e.limit.into_inner());
+                err.set_invalid_max_ts_update(invalid_max_ts_err);
                 $resp.set_region_error(err);
             }
             Error::DefaultNotFound(_) => {

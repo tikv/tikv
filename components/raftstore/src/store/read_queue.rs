@@ -4,10 +4,7 @@
 use std::{cmp, collections::VecDeque, mem};
 
 use collections::HashMap;
-use kvproto::{
-    kvrpcpb::LockInfo,
-    raft_cmdpb::{self, RaftCmdRequest},
-};
+use kvproto::{errorpb, kvrpcpb::LockInfo, raft_cmdpb::{self, RaftCmdRequest}};
 use protobuf::Message;
 use tikv_util::{
     MustConsumeVec, box_err,
@@ -341,6 +338,7 @@ pub struct ReadIndexContext {
     pub request: Option<raft_cmdpb::ReadIndexRequest>,
     pub locked: Option<LockInfo>,
     pub read_index_safe_ts: Option<u64>,
+    pub region_error: Option<errorpb::Error>,
 }
 
 impl ReadIndexContext {
@@ -358,6 +356,7 @@ impl ReadIndexContext {
             request: None,
             locked: None,
             read_index_safe_ts: None,
+            region_error: None,
         };
         let mut bytes = &bytes[UUID_LEN..];
         while !bytes.is_empty() {
@@ -480,6 +479,7 @@ mod read_index_ctx_tests {
                 request: None,
                 locked: None,
                 read_index_safe_ts: None,
+                region_error: None,
             }
         );
 
@@ -501,6 +501,7 @@ mod read_index_ctx_tests {
             request: Some(request),
             locked: Some(locked),
             read_index_safe_ts: Some(1),
+            region_error: None,
         };
         let bytes = ctx.to_bytes();
         let parsed_ctx = ReadIndexContext::parse(&bytes).unwrap();
