@@ -6121,7 +6121,6 @@ where
         }
 
         let mut compact_idx = if force_compact && replicated_idx > first_idx {
-            self.fsm.peer.last_compacted_slowest_peer = (self.fsm.peer_id(), Instant::now());
             replicated_idx
         } else if (applied_idx > first_idx
             && applied_idx - first_idx >= self.ctx.cfg.raft_log_gc_count_limit())
@@ -6177,7 +6176,6 @@ where
                 .inc();
             committed_idx
         } else {
-            self.fsm.peer.last_compacted_slowest_peer = (self.fsm.peer_id(), Instant::now());
             replicated_idx
         };
         // Avoid compacting unpersisted raft logs when persist is far behind apply.
