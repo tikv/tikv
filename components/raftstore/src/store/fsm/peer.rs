@@ -6151,6 +6151,19 @@ where
                 self.fsm.peer.last_compacted_slowest_peer = (slowest_peer_id, Instant::now());
             }
             std::cmp::max(first_idx + (last_idx - first_idx) / 2, replicated_idx)
+        } else if self.fsm.peer.last_compacted_slowest_peer.0 != self.fsm.peer_id()
+            && self.fsm.peer.last_compacted_slowest_peer.0 == slowest_peer_id
+            && self.fsm.peer.last_compacted_slowest_peer.1.elapsed()
+                < self.ctx.cfg.peer_stale_state_check_interval.0
+        {
+            // The slowest peer is the same as the last uncompacted peer, so we can
+            // compact the log.
+            self.ctx
+                .raft_metrics
+                .raft_log_gc_skipped
+                .force_compact
+                .inc();
+            committed_idx
         } else if replicated_idx < first_idx || last_idx - first_idx < 3 {
             // In the current implementation one compaction can't delete all stale Raft
             // logs. There will be at least 3 entries left after one compaction:
@@ -6173,19 +6186,6 @@ where
             self.fsm.skip_gc_raft_log_ticks += 1;
             self.register_raft_gc_log_tick();
             return;
-        } else if self.fsm.peer.last_compacted_slowest_peer.0 != self.fsm.peer_id()
-            && self.fsm.peer.last_compacted_slowest_peer.0 == slowest_peer_id
-            && self.fsm.peer.last_compacted_slowest_peer.1.elapsed()
-                < self.ctx.cfg.peer_stale_state_check_interval.0
-        {
-            // The slowest peer is the same as the last uncompacted peer, so we can
-            // compact the log.
-            self.ctx
-                .raft_metrics
-                .raft_log_gc_skipped
-                .force_compact
-                .inc();
-            committed_idx
         } else {
             replicated_idx
         };
