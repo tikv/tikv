@@ -827,6 +827,9 @@ where
     /// the leader periodically whether `voter_replicated_index` is updated
     /// if CompactLog admin command isn't triggered for a while.
     pub last_compacted_time: Instant,
+    /// The peer id with the slowest persisted index and the time of the last
+    /// raft log compact.
+    pub last_compacted_slowest_peer: (u64, Instant),
     /// When the peer is witness, and there is any voter lagging behind, the
     /// log truncation of the witness shouldn't be triggered even if it's
     /// force mode, and this item will be set to `true`, after all pending
@@ -1044,6 +1047,7 @@ where
             min_safe_index_for_unpersisted_apply: last_index,
             last_compacted_idx: 0,
             last_compacted_time: Instant::now(),
+            last_compacted_slowest_peer: (peer_id, Instant::now()),
             has_pending_compact_cmd,
             last_urgent_proposal_idx: u64::MAX,
             last_committed_split_idx: 0,
