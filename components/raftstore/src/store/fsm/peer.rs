@@ -6142,6 +6142,12 @@ where
                     .raft_log_gc_skipped
                     .update_slowest_peer
                     .inc();
+                info!("update slowest peer";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "slowest_peer_id" => slowest_peer_id,
+                "last_compacted_slowest_peer" => self.fsm.peer.last_compacted_slowest_peer.0,
+                );
                 self.fsm.peer.last_compacted_slowest_peer = (slowest_peer_id, Instant::now());
             }
             std::cmp::max(first_idx + (last_idx - first_idx) / 2, replicated_idx)
