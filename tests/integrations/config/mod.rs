@@ -255,6 +255,7 @@ fn test_serde_custom_tikv_config() {
         io_reschedule_concurrent_max_count: 1234,
         io_reschedule_hotpot_duration: ReadableDuration::secs(4321),
         inspect_interval: ReadableDuration::millis(444),
+        inspect_kvdb_interval: ReadableDuration::millis(333),
         inspect_cpu_util_thd: 0.666,
         check_leader_lease_interval: ReadableDuration::millis(123),
         renew_leader_lease_advance_duration: ReadableDuration::millis(456),
