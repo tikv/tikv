@@ -6137,6 +6137,11 @@ where
                 || self.fsm.peer.last_compacted_slowest_peer.1.elapsed()
                     > self.ctx.cfg.peer_stale_state_check_interval.0
             {
+                self.ctx
+                    .raft_metrics
+                    .raft_log_gc_skipped
+                    .update_slowest_peer
+                    .inc();
                 self.fsm.peer.last_compacted_slowest_peer = (slowest_peer_id, Instant::now());
             }
             std::cmp::max(first_idx + (last_idx - first_idx) / 2, replicated_idx)

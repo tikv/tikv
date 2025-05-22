@@ -234,7 +234,10 @@ make_static_metric! {
         compact_idx_too_small,
         threshold_limit,
         force_compact,
+        //
         gc_count_limit,
+        update_slowest_peer,
+        //
         early_apply,
     }
 
