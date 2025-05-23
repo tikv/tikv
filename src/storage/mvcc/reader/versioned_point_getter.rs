@@ -19,25 +19,15 @@ pub struct VersionedPointGetterBuilder<S: Snapshot> {
     snapshot: S,
     fill_cache: bool,
     omit_value: bool,
-    isolation_level: IsolationLevel,
-    ts: TimeStamp,
-    bypass_locks: TsSet,
-    access_locks: TsSet,
-    check_has_newer_ts_data: bool,
 }
 
 impl<S: Snapshot> VersionedPointGetterBuilder<S> {
     /// Initialize a new `VersionedPointGetterBuilder`.
-    pub fn new(snapshot: S, ts: TimeStamp) -> Self {
+    pub fn new(snapshot: S) -> Self {
         Self {
             snapshot,
             fill_cache: true,
             omit_value: false,
-            isolation_level: IsolationLevel::Si,
-            ts,
-            bypass_locks: Default::default(),
-            access_locks: Default::default(),
-            check_has_newer_ts_data: false,
         }
     }
 
@@ -64,71 +54,13 @@ impl<S: Snapshot> VersionedPointGetterBuilder<S> {
         self
     }
 
-    /// Set the isolation level.
-    ///
-    /// Defaults to `IsolationLevel::Si`.
-    #[inline]
-    #[must_use]
-    pub fn isolation_level(mut self, isolation_level: IsolationLevel) -> Self {
-        self.isolation_level = isolation_level;
-        self
-    }
-
-    /// Set a set to locks that the reading process can bypass.
-    ///
-    /// Defaults to none.
-    #[inline]
-    #[must_use]
-    pub fn bypass_locks(mut self, locks: TsSet) -> Self {
-        self.bypass_locks = locks;
-        self
-    }
-
-    /// Set a set to locks that the reading process can access their values.
-    ///
-    /// Defaults to none.
-    #[inline]
-    #[must_use]
-    pub fn access_locks(mut self, locks: TsSet) -> Self {
-        self.access_locks = locks;
-        self
-    }
-
-    /// Check whether there is data with newer ts. The result of
-    /// `met_newer_ts_data` is Unknown if this option is not set.
-    ///
-    /// Default is false.
-    #[inline]
-    #[must_use]
-    pub fn check_has_newer_ts_data(mut self, enabled: bool) -> Self {
-        self.check_has_newer_ts_data = enabled;
-        self
-    }
-
     /// Build `VersionedPointGetter` from the current configuration.
     pub fn build(self) -> Result<VersionedPointGetter<S>> {
-        let write_cursor = CursorBuilder::new(&self.snapshot, CF_WRITE)
-            .fill_cache(self.fill_cache)
-            .prefix_seek(true)
-            .scan_mode(ScanMode::Mixed)
-            .build()?;
-
         Ok(VersionedPointGetter {
             snapshot: self.snapshot,
             omit_value: self.omit_value,
-            isolation_level: self.isolation_level,
-            ts: self.ts,
-            bypass_locks: self.bypass_locks,
-            access_locks: self.access_locks,
-            met_newer_ts_data: if self.check_has_newer_ts_data {
-                NewerTsCheckState::NotMetYet
-            } else {
-                NewerTsCheckState::Unknown
-            },
 
             statistics: Statistics::default(),
-
-            write_cursor,
         })
     }
 }
@@ -141,15 +73,8 @@ impl<S: Snapshot> VersionedPointGetterBuilder<S> {
 pub struct VersionedPointGetter<S: Snapshot> {
     snapshot: S,
     omit_value: bool,
-    isolation_level: IsolationLevel,
-    ts: TimeStamp,
-    bypass_locks: TsSet,
-    access_locks: TsSet,
-    met_newer_ts_data: NewerTsCheckState,
 
     statistics: Statistics,
-
-    write_cursor: Cursor<S::Iter>,
 }
 
 impl<S: Snapshot> VersionedPointGetter<S> {
@@ -159,139 +84,21 @@ impl<S: Snapshot> VersionedPointGetter<S> {
         std::mem::take(&mut self.statistics)
     }
 
-    /// Whether we met newer ts data.
-    /// The result is always `Unknown` if `check_has_newer_ts_data` is not set.
-    #[inline]
-    pub fn met_newer_ts_data(&self) -> NewerTsCheckState {
-        self.met_newer_ts_data
-    }
-
     /// Get the value of a user key.
-    pub fn get(&mut self, user_key: &Key) -> Result<Option<Value>> {
-        fail_point!("point_getter_get");
+    pub fn get(&mut self, user_key: &Key, version: TimeStamp) -> Result<Option<Value>> {
+        fail_point!("versioned_point_getter_get");
+        self.statistics.write.get += 1;
+        // don't need check lock here because all the target result is the committed
+        // data
+        // TODO: We can avoid this clone.
+        let write_value = self
+            .snapshot
+            .get_cf(CF_WRITE, &user_key.clone().append_ts(version))?;
 
-        if need_check_locks(self.isolation_level) {
-            // Check locks that signal concurrent writes for `Si` or more recent writes for
-            // `RcCheckTs`.
-            if let Some(lock) = self.load_and_check_lock(user_key)? {
-                return self.load_data_from_lock(user_key, lock);
-            }
-        }
-
-        self.load_data(user_key)
-    }
-
-    /// Get a lock of a user key in the lock CF. If lock exists, it will be
-    /// checked to see whether it conflicts with the given `ts` and return
-    /// an error if so. If the lock is in access_locks, it will be returned
-    /// and caller can read through it.
-    ///
-    /// In common cases we expect to get nothing in lock cf. Using a `get_cf`
-    /// instead of `seek` is fast in such cases due to no need for RocksDB
-    /// to continue move and skip deleted entries until find a user key.
-    fn load_and_check_lock(&mut self, user_key: &Key) -> Result<Option<Lock>> {
-        self.statistics.lock.get += 1;
-        let lock_value = self.snapshot.get_cf(CF_LOCK, user_key)?;
-
-        if let Some(ref lock_value) = lock_value {
-            let lock = Lock::parse(lock_value)?;
-            if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
-                self.met_newer_ts_data = NewerTsCheckState::Met;
-            }
-            if let Err(e) = Lock::check_ts_conflict(
-                Cow::Borrowed(&lock),
-                user_key,
-                self.ts,
-                &self.bypass_locks,
-                self.isolation_level,
-            ) {
-                self.statistics.lock.processed_keys += 1;
-                if self.access_locks.contains(lock.ts) {
-                    return Ok(Some(lock));
-                }
-                Err(e.into())
-            } else {
-                Ok(None)
-            }
-        } else {
-            Ok(None)
-        }
-    }
-
-    /// Load the value.
-    ///
-    /// First, a correct version info in the Write CF will be sought. Then,
-    /// value will be loaded from Default CF if necessary.
-    fn load_data(&mut self, user_key: &Key) -> Result<Option<Value>> {
-        let mut use_near_seek = false;
-        let mut seek_key = user_key.clone();
-
-        if self.met_newer_ts_data == NewerTsCheckState::NotMetYet
-            || self.isolation_level == IsolationLevel::RcCheckTs
-        {
-            seek_key = seek_key.append_ts(TimeStamp::max());
-            if !self
-                .write_cursor
-                .seek(&seek_key, &mut self.statistics.write)?
-            {
-                return Ok(None);
-            }
-            seek_key = seek_key.truncate_ts()?;
-            use_near_seek = true;
-
-            let cursor_key = self.write_cursor.key(&mut self.statistics.write);
-            // No need to compare user key because it uses prefix seek.
-            let key_commit_ts = Key::decode_ts_from(cursor_key)?;
-            if key_commit_ts > self.ts {
-                if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
-                    self.met_newer_ts_data = NewerTsCheckState::Met;
-                }
-                if self.isolation_level == IsolationLevel::RcCheckTs {
-                    // TODO: the more write recent version with `LOCK` or `ROLLBACK` write type
-                    //       could be skipped.
-                    return Err(WriteConflict {
-                        start_ts: self.ts,
-                        conflict_start_ts: Default::default(),
-                        conflict_commit_ts: key_commit_ts,
-                        key: cursor_key.into(),
-                        primary: vec![],
-                        reason: WriteConflictReason::RcCheckTs,
-                    }
-                    .into());
-                }
-            }
-        }
-
-        seek_key = seek_key.append_ts(self.ts);
-        let data_found = if use_near_seek {
-            if self.write_cursor.key(&mut self.statistics.write) >= seek_key.as_encoded().as_slice()
-            {
-                // we call near_seek with ScanMode::Mixed set, if the key() > seek_key,
-                // it will call prev() several times, whereas we just want to seek forward here
-                // so cmp them in advance
-                true
-            } else {
-                self.write_cursor
-                    .near_seek(&seek_key, &mut self.statistics.write)?
-            }
-        } else {
-            self.write_cursor
-                .seek(&seek_key, &mut self.statistics.write)?
-        };
-        if !data_found {
-            return Ok(None);
-        }
-
-        let mut write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))?;
-        let mut owned_value: Vec<u8>; // To work around lifetime problem
-        loop {
-            if !write.check_gc_fence_as_latest_version(self.ts) {
-                return Ok(None);
-            }
-
+        if let Some(write_value) = write_value {
+            let write = WriteRef::parse(&write_value)?;
             match write.write_type {
                 WriteType::Put => {
-                    self.statistics.write.processed_keys += 1;
                     resource_metering::record_read_keys(1);
 
                     if self.omit_value {
@@ -312,45 +119,20 @@ impl<S: Snapshot> VersionedPointGetter<S> {
                     }
                 }
                 WriteType::Delete => {
+                    // should not happen since all the target data is the committed data
+                    // todo add a warning here
                     return Ok(None);
                 }
                 WriteType::Lock | WriteType::Rollback => {
-                    match write.last_change {
-                        LastChange::NotExist => {
-                            return Ok(None);
-                        }
-                        LastChange::Exist {
-                            last_change_ts: commit_ts,
-                            estimated_versions_to_last_change,
-                        } if estimated_versions_to_last_change >= SEEK_BOUND => {
-                            let key_with_ts = user_key.clone().append_ts(commit_ts);
-                            match self.snapshot.get_cf(CF_WRITE, &key_with_ts)? {
-                                Some(v) => owned_value = v,
-                                None => return Ok(None),
-                            }
-                            self.statistics.write.get += 1;
-                            write = WriteRef::parse(&owned_value)?;
-                            assert!(
-                                write.write_type == WriteType::Put
-                                    || write.write_type == WriteType::Delete,
-                                "Write record pointed by last_change_ts {} should be Put or Delete, but got {:?}",
-                                commit_ts,
-                                write.write_type,
-                            );
-                            continue;
-                        }
-                        _ => {
-                            // Continue iterate next `write`.
-                        }
-                    }
+                    // should not happen since all the target data is the committed data
+                    // todo add a warning here
+                    return Ok(None);
                 }
             }
-
-            if !self.write_cursor.next(&mut self.statistics.write) {
-                return Ok(None);
-            }
-            // No need to compare user key because it uses prefix seek.
-            write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))?;
+        } else {
+            // maybe the target data is gc-ed
+            // todo add a warning here
+            Ok(None)
         }
     }
 
@@ -385,39 +167,6 @@ impl<S: Snapshot> VersionedPointGetter<S> {
                 user_key.clone().append_ts(write_start_ts).into_encoded(),
                 "load_data_from_default_cf",
             ))
-        }
-    }
-
-    /// Load the value from the lock.
-    ///
-    /// The lock belongs to a committed transaction and its commit_ts <= read's
-    /// start_ts.
-    fn load_data_from_lock(&mut self, user_key: &Key, lock: Lock) -> Result<Option<Value>> {
-        debug_assert!(lock.ts < self.ts && lock.min_commit_ts <= self.ts);
-        match lock.lock_type {
-            LockType::Put => {
-                if self.omit_value {
-                    return Ok(Some(vec![]));
-                }
-                match lock.short_value {
-                    Some(value) => {
-                        // Value is carried in `lock`.
-                        self.statistics.processed_size += user_key.len() + value.len();
-                        Ok(Some(value.to_vec()))
-                    }
-                    None => {
-                        let value = self.load_data_from_default_cf(lock.ts, user_key)?;
-                        self.statistics.processed_size += user_key.len() + value.len();
-                        Ok(Some(value))
-                    }
-                }
-            }
-            LockType::Delete => Ok(None),
-            LockType::Lock | LockType::Pessimistic => {
-                // Only when fails to call `Lock::check_ts_conflict()`, the function is called,
-                // so it's unreachable here.
-                unreachable!()
-            }
         }
     }
 }
