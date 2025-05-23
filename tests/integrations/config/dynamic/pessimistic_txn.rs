@@ -90,7 +90,7 @@ fn test_lock_manager_cfg_update() {
     cfg.pessimistic_txn.wake_up_delay_duration = ReadableDuration::millis(DEFAULT_DELAY);
     cfg.pessimistic_txn.pipelined = false;
     cfg.pessimistic_txn.in_memory = false;
-    cfg.validate().unwrap();
+    cfg.validate(None).unwrap();
     let (cfg_controller, waiter, deadlock, mut lock_mgr) = setup(cfg);
 
     // update of other module's config should not effect lock manager config
