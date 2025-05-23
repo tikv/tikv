@@ -3565,7 +3565,7 @@ impl<S: Snapshot> Snapshot for TxnTestSnapshot<S> {
 
 pub struct TxnTestSnapshotExt<'a>(&'a Arc<TxnExt>);
 
-impl<'a> SnapshotExt for TxnTestSnapshotExt<'a> {
+impl SnapshotExt for TxnTestSnapshotExt<'_> {
     fn get_txn_ext(&self) -> Option<&Arc<TxnExt>> {
         Some(self.0)
     }

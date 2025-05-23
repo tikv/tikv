@@ -637,7 +637,7 @@ pub trait ConvertToIntervalStr {
     ) -> Result<String>;
 }
 
-impl<'a> ConvertToIntervalStr for BytesRef<'a> {
+impl ConvertToIntervalStr for BytesRef<'_> {
     #[inline]
     fn to_interval_string(
         &self,

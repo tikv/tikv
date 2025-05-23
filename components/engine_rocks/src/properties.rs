@@ -121,7 +121,7 @@ impl DecodeProperties for UserProperties {
 // type until the engine abstraction situation is straightened out.
 pub struct UserCollectedPropertiesDecoder<'a>(pub &'a UserCollectedProperties);
 
-impl<'a> DecodeProperties for UserCollectedPropertiesDecoder<'a> {
+impl DecodeProperties for UserCollectedPropertiesDecoder<'_> {
     fn decode(&self, k: &str) -> Result<&[u8]> {
         match self.0.get(k.as_bytes()) {
             Some(v) => Ok(v),

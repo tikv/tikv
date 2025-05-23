@@ -151,7 +151,7 @@ impl Store {
     }
 }
 
-impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
+impl<EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'_, EK, ER, T> {
     /// Raft relies on periodic ticks to keep the state machine sync with other
     /// peers.
     pub fn on_raft_tick(&mut self) {

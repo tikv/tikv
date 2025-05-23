@@ -156,7 +156,7 @@ pub struct InternalKey<'a> {
     pub sequence: u64,
 }
 
-impl<'a> fmt::Debug for InternalKey<'a> {
+impl fmt::Debug for InternalKey<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,

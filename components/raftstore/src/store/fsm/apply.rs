@@ -7604,7 +7604,7 @@ mod tests {
         epoch: Rc<RefCell<RegionEpoch>>,
     }
 
-    impl<'a, E> SplitResultChecker<'a, E>
+    impl<E> SplitResultChecker<'_, E>
     where
         E: KvEngine,
     {

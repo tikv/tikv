@@ -174,7 +174,7 @@ struct TsoRequestStream<'a> {
     self_waker: Rc<AtomicWaker>,
 }
 
-impl<'a> Stream for TsoRequestStream<'a> {
+impl Stream for TsoRequestStream<'_> {
     type Item = (TsoRequest, WriteFlags);
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {

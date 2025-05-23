@@ -104,7 +104,7 @@ pub type SlotMap<K, V, S = RandomState> = RwLock<HashMap<K, Slot<V>, S>>;
 /// to DSTs.
 struct RangeToInclusiveRef<'a, T: ?Sized>(&'a T);
 
-impl<'a, T: ?Sized> RangeBounds<T> for RangeToInclusiveRef<'a, T> {
+impl<T: ?Sized> RangeBounds<T> for RangeToInclusiveRef<'_, T> {
     fn start_bound(&self) -> Bound<&T> {
         Bound::Unbounded
     }
@@ -116,7 +116,7 @@ impl<'a, T: ?Sized> RangeBounds<T> for RangeToInclusiveRef<'a, T> {
 
 struct RangeToExclusiveRef<'a, T: ?Sized>(&'a T);
 
-impl<'a, T: ?Sized> RangeBounds<T> for RangeToExclusiveRef<'a, T> {
+impl<T: ?Sized> RangeBounds<T> for RangeToExclusiveRef<'_, T> {
     fn start_bound(&self) -> Bound<&T> {
         Bound::Unbounded
     }
@@ -393,7 +393,7 @@ impl Drop for Work {
 
 pub struct WaitAll<'a>(&'a FutureWaitGroup);
 
-impl<'a> Future for WaitAll<'a> {
+impl Future for WaitAll<'_> {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -705,7 +705,7 @@ pub fn debug_key_range<'ret, 'a: 'ret, 'b: 'ret>(
 
 struct DebugKeyRange<'start, 'end>(&'start [u8], &'end [u8]);
 
-impl<'start, 'end> std::fmt::Debug for DebugKeyRange<'start, 'end> {
+impl std::fmt::Debug for DebugKeyRange<'_, '_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let end_key = if self.1.is_empty() {
             Either::Left("inf")
@@ -734,7 +734,7 @@ pub fn debug_region(r: &Region) -> impl std::fmt::Debug + '_ {
 
 struct DebugRegion<'a>(&'a Region);
 
-impl<'a> std::fmt::Debug for DebugRegion<'a> {
+impl std::fmt::Debug for DebugRegion<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let r = self.0;
         f.debug_struct("Region")
@@ -755,7 +755,7 @@ impl<'a> std::fmt::Debug for DebugRegion<'a> {
 
 struct SlogRegion<'a>(&'a Region);
 
-impl<'a> slog::KV for SlogRegion<'a> {
+impl slog::KV for SlogRegion<'_> {
     fn serialize(
         &self,
         _record: &slog::Record<'_>,

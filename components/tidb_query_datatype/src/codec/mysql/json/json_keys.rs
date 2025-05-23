@@ -4,7 +4,7 @@ use std::str;
 
 use super::{super::Result, Json, JsonRef, JsonType, path_expr::PathExpression};
 
-impl<'a> JsonRef<'a> {
+impl JsonRef<'_> {
     /// Evaluates a (possibly empty) list of values and returns a JSON array
     /// containing those values specified by `path_expr_list`
     pub fn keys(&self, path_expr_list: &[PathExpression]) -> Result<Option<Json>> {

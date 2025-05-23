@@ -81,7 +81,7 @@ impl<'de> Deserialize<'de> for IoRateLimitMode {
     {
         use serde::de::{Error, Unexpected, Visitor};
         struct StrVistor;
-        impl<'de> Visitor<'de> for StrVistor {
+        impl Visitor<'_> for StrVistor {
             type Value = IoRateLimitMode;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

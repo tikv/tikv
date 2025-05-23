@@ -25,7 +25,7 @@ use crate::{
     },
 };
 
-impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
+impl<EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'_, EK, ER, T> {
     pub fn register_compact_check_tick(&mut self) {
         self.schedule_tick(
             StoreTick::CompactCheck,

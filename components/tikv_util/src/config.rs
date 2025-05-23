@@ -237,7 +237,7 @@ impl<'de> Deserialize<'de> for ReadableSize {
     {
         struct SizeVisitor;
 
-        impl<'de> Visitor<'de> for SizeVisitor {
+        impl Visitor<'_> for SizeVisitor {
             type Value = ReadableSize;
 
             fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -516,7 +516,7 @@ impl<'de> Deserialize<'de> for ReadableDuration {
     {
         struct DurVisitor;
 
-        impl<'de> Visitor<'de> for DurVisitor {
+        impl Visitor<'_> for DurVisitor {
             type Value = ReadableDuration;
 
             fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -691,7 +691,7 @@ impl<'de> Deserialize<'de> for ReadableOffsetTime {
     {
         struct OffTimeVisitor;
 
-        impl<'de> Visitor<'de> for OffTimeVisitor {
+        impl Visitor<'_> for OffTimeVisitor {
             type Value = ReadableOffsetTime;
 
             fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -1544,7 +1544,7 @@ macro_rules! numeric_enum_serializing_mod {
             {
                 struct EnumVisitor;
 
-                impl<'de> Visitor<'de> for EnumVisitor {
+                impl Visitor<'_> for EnumVisitor {
                     type Value = $enum;
 
                     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {

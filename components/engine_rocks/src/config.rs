@@ -179,7 +179,7 @@ pub mod compression_type_serde {
         D: Deserializer<'de>,
     {
         struct StrVistor;
-        impl<'de> Visitor<'de> for StrVistor {
+        impl Visitor<'_> for StrVistor {
             type Value = DBCompressionType;
 
             fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -280,7 +280,7 @@ pub mod checksum_serde {
         D: Deserializer<'de>,
     {
         struct StrVistor;
-        impl<'de> Visitor<'de> for StrVistor {
+        impl Visitor<'_> for StrVistor {
             type Value = ChecksumType;
 
             fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -337,7 +337,7 @@ pub mod prepopulate_block_cache_serde {
         D: Deserializer<'de>,
     {
         struct StrVistor;
-        impl<'de> Visitor<'de> for StrVistor {
+        impl Visitor<'_> for StrVistor {
             type Value = PrepopulateBlockCache;
 
             fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {

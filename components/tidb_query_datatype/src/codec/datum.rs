@@ -854,7 +854,7 @@ impl<'a> From<&'a [u8]> for Datum {
     }
 }
 
-impl<'a> From<Cow<'a, [u8]>> for Datum {
+impl From<Cow<'_, [u8]>> for Datum {
     fn from(data: Cow<'_, [u8]>) -> Datum {
         data.into_owned().into()
     }

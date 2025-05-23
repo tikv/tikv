@@ -153,7 +153,7 @@ fn check_bit(e: u64, fired_bit: u64) -> Option<bool> {
     None
 }
 
-impl<'a, Res> Future for WaitEvent<'a, Res> {
+impl<Res> Future for WaitEvent<'_, Res> {
     type Output = bool;
 
     #[inline]
@@ -187,7 +187,7 @@ struct WaitResult<'a, Res> {
     sub: &'a BaseSubscriber<Res>,
 }
 
-impl<'a, Res> Future for WaitResult<'a, Res> {
+impl<Res> Future for WaitResult<'_, Res> {
     type Output = Option<Res>;
 
     #[inline]

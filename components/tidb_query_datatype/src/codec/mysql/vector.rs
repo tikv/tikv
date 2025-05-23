@@ -102,7 +102,7 @@ pub struct VectorFloat32Ref<'a> {
     value: &'a [u8],
 }
 
-impl<'a> Ord for VectorFloat32Ref<'a> {
+impl Ord for VectorFloat32Ref<'_> {
     fn cmp(&self, other: &Self) -> Ordering {
         let la = self.len();
         let lb = other.len();
@@ -118,7 +118,7 @@ impl<'a> Ord for VectorFloat32Ref<'a> {
     }
 }
 
-impl<'a> PartialOrd for VectorFloat32Ref<'a> {
+impl PartialOrd for VectorFloat32Ref<'_> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
