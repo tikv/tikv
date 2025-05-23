@@ -3,6 +3,7 @@
 mod point_getter;
 mod reader;
 mod scanner;
+mod versioned_point_getter;
 
 use txn_types::{TimeStamp, Write, WriteType};
 
@@ -15,6 +16,7 @@ pub use self::{
         DeltaScanner, EntryScanner, Scanner, ScannerBuilder, has_data_in_range,
         near_load_data_by_write, seek_for_valid_write, test_util,
     },
+    versioned_point_getter::{VersionedPointGetter, VersionedPointGetterBuilder},
 };
 
 #[derive(Debug, PartialEq, Clone, Copy)]
