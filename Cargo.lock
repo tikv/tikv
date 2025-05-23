@@ -6847,7 +6847,6 @@ dependencies = [
  "pd_client",
  "protobuf",
  "raft",
- "raft_log_engine",
  "raftstore",
  "rand 0.8.5",
  "resolved_ts",

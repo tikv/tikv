@@ -682,7 +682,7 @@ pub fn create_test_engine(
     Option<Arc<RocksStatistics>>,
 ) {
     let dir = test_util::temp_dir("test_cluster", cfg.prefer_mem);
-    return start_test_engine(router, limiter, cfg, dir);
+    start_test_engine(router, limiter, cfg, dir)
 }
 
 pub fn start_test_engine(
