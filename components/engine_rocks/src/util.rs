@@ -196,6 +196,18 @@ pub fn get_engine_cf_used_size(engine: &DB, handle: &CFHandle) -> u64 {
     cf_used_size
 }
 
+pub fn get_engine_cfs_used_size(engine: &DB) -> Result<u64> {
+    let mut cfs_used_size = 0;
+    for cf in engine.cf_names() {
+        let handle = engine
+            .cf_handle(cf)
+            .ok_or_else(|| format!("cf {} not found", cf))
+            .map_err(r2e)?;
+        cfs_used_size += get_engine_cf_used_size(engine, handle);
+    }
+    Ok(cfs_used_size)
+}
+
 /// Gets engine's compression ratio at given level.
 pub fn get_engine_compression_ratio_at_level(
     engine: &DB,
