@@ -341,7 +341,7 @@ impl Simulator for NodeCluster {
             bg_worker.spawn_interval_task(std::time::Duration::from_millis(1000), move || {
                 if let Some(rocks_engine) = rocks_engine.upgrade() {
                     let snap_size = snap_mgr.get_total_snap_size().unwrap();
-                    let kv_size = util::get_engine_cfs_used_size(&rocks_engine.as_ref())
+                    let kv_size = util::get_engine_cfs_used_size(rocks_engine.as_ref())
                         .expect("get kv engine size");
                     let used_size = snap_size + kv_size;
                     let (capacity, available) = disk::get_disk_space_stats(&data_dir).unwrap();
