@@ -3911,13 +3911,12 @@ where
             Ok(RequestPolicy::ReadLocal) | Ok(RequestPolicy::StaleRead) => {
                 #[cfg(feature = "linearizability-track")]
                 if let Some(tracker_token) = cb.as_tracker_token() {
-                    let reason = match policy {
-                        Ok(RequestPolicy::ReadLocal) => "raftrouter-local-read",
-                        Ok(RequestPolicy::StaleRead) => "raftrouter-stale-read",
-                        _ => unreachable!(),
-                    };
                     GLOBAL_TRACKERS.with_tracker(tracker_token, |t| {
-                        t.track_propose_skip(reason);
+                        t.track_propose_skip(match policy {
+                            Ok(RequestPolicy::ReadLocal) => "raftrouter-local-read",
+                            Ok(RequestPolicy::StaleRead) => "raftrouter-stale-read",
+                            _ => unreachable!(),
+                        });
                     });
                 }
                 self.read_local(ctx, req, cb);
@@ -4262,12 +4261,10 @@ where
                 let commit_index = self.get_store().commit_index();
                 if let Some(read) = self.pending_reads.back_mut() {
                     #[cfg(feature = "linearizability-track")]
-                    {
-                        if let Some(tracker_token) = cb.as_tracker_token() {
-                            GLOBAL_TRACKERS.with_tracker(tracker_token, |t| {
-                                t.track_propose_amend(read.id.clone());
-                            });
-                        }
+                    if let Some(tracker_token) = cb.as_tracker_token() {
+                        GLOBAL_TRACKERS.with_tracker(tracker_token, |t| {
+                            t.track_propose_amend(read.id.clone());
+                        });
                     }
                     // A read request proposed in the current lease is found; combine the new
                     // read request to that previous one, so that no proposing needed.
@@ -4332,14 +4329,10 @@ where
         }
 
         #[cfg(feature = "linearizability-track")]
-        {
-            if request.is_some() && !self.is_leader() {
-                if let Some(tracker_token) = cb.as_tracker_token() {
-                    GLOBAL_TRACKERS.with_tracker(tracker_token, |t| {
-                        t.track_propose_read_index(id);
-                    });
-                }
-            }
+        if let Some(tracker_token) = cb.as_tracker_token() {
+            GLOBAL_TRACKERS.with_tracker(tracker_token, |t| {
+                t.track_propose_read_index(id, self.is_leader());
+            });
         }
 
         let mut read = ReadIndexRequest::with_command(id, req, cb, now);

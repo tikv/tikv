@@ -272,11 +272,12 @@ mod linearizability_track {
             }
         }
 
-        pub fn track_propose_read_index(&mut self, uuid: Uuid) {
+        pub fn track_propose_read_index(&mut self, uuid: Uuid, is_leader: bool) {
             match self.linearizability_track.as_mut() {
                 Some(debug) => {
                     debug.propose_state = ProposeState::ReadIndex(
                         chrono::offset::Local::now(),
+                        is_leader,
                         uuid,
                         get_tls_peer_state(),
                     );
@@ -414,7 +415,7 @@ mod linearizability_track {
         None,
         Skip(DateTime<Local>, String),
         Amend(DateTime<Local>, Uuid, PeerStateTracker),
-        ReadIndex(DateTime<Local>, Uuid, PeerStateTracker),
+        ReadIndex(DateTime<Local>, bool, Uuid, PeerStateTracker),
         Normal(DateTime<Local>, PeerStateTracker),
     }
 
@@ -436,10 +437,10 @@ mod linearizability_track {
                     "amend at {:?}, to {:?}, peer_state {:?}",
                     time, uuid, state
                 ),
-                ProposeState::ReadIndex(time, uuid, state) => write!(
+                ProposeState::ReadIndex(time, is_leader, uuid, state) => write!(
                     f,
-                    "propose read-index at {:?}, uuid: {:?}, peer_state {:?}",
-                    time, uuid, state
+                    "propose read-index at {:?}, is_leader: {}, uuid: {:?}, peer_state {:?}",
+                    time, is_leader, uuid, state
                 ),
                 ProposeState::Normal(time, state) => {
                     write!(f, "propose normal at {:?}, peer_state {:?}", time, state)
