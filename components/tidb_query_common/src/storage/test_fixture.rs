@@ -108,6 +108,15 @@ impl super::Storage for FixtureStorage {
         }
     }
 
+    fn get_with_version(
+        &mut self,
+        _: u64,
+        is_key_only: bool,
+        range: PointRange,
+    ) -> Result<Option<super::OwnedKvPair>> {
+        self.get(is_key_only, range)
+    }
+
     fn collect_statistics(&mut self, _dest: &mut Self::Statistics) {}
 
     fn met_uncacheable_data(&self) -> Option<bool> {

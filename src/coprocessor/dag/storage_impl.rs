@@ -85,6 +85,15 @@ impl<S: Store> Storage for TikvStorage<S> {
         Ok(value.map(move |v| (key, v)))
     }
 
+    fn get_with_version(&mut self, version: u64, _is_key_only: bool, range: PointRange) -> QeResult<Option<OwnedKvPair>> {
+        let key = range.0;
+        let value = self
+            .store
+            .get_with_version(version, &Key::from_raw(&key))
+            .map_err(Error::from)?;
+        Ok(value.map(move |v| (key, v)))
+    }
+
     #[inline]
     fn met_uncacheable_data(&self) -> Option<bool> {
         if let Some(scanner) = &self.scanner {

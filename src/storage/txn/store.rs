@@ -10,6 +10,7 @@ use crate::storage::{
     mvcc::{
         EntryScanner, Error as MvccError, ErrorInner as MvccErrorInner, NewerTsCheckState,
         PointGetter, PointGetterBuilder, Scanner as MvccScanner, ScannerBuilder,
+        VersionedPointGetter, VersionedPointGetterBuilder,
     },
 };
 
@@ -19,6 +20,8 @@ pub trait Store: Send {
 
     /// Fetch the provided key.
     fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>>;
+
+    fn get_with_version(&mut self, version: u64, key: &Key) -> Result<Option<Value>>;
 
     /// Re-use last cursor to incrementally (if possible) fetch the provided
     /// key.
@@ -291,6 +294,8 @@ pub struct SnapshotStore<S: Snapshot> {
     check_has_newer_ts_data: bool,
 
     point_getter_cache: Option<PointGetter<S>>,
+
+    versioned_point_getter: Option<VersionedPointGetter<S>>,
 }
 
 impl<S: Snapshot> Store for SnapshotStore<S> {
@@ -306,6 +311,18 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         let v = point_getter.get(key)?;
         statistics.add(&point_getter.take_statistics());
         Ok(v)
+    }
+
+    fn get_with_version(&mut self, version: u64, key: &Key) -> Result<Option<Value>> {
+        if self.versioned_point_getter.is_none() {
+            self.versioned_point_getter =
+                Some(VersionedPointGetterBuilder::new(self.snapshot.clone()).build()?)
+        }
+        Ok(self
+            .versioned_point_getter
+            .as_mut()
+            .unwrap()
+            .get(key, TimeStamp::from(version))?)
     }
 
     fn incremental_get(&mut self, key: &Key) -> Result<Option<Value>> {
@@ -325,10 +342,15 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
 
     #[inline]
     fn incremental_get_take_statistics(&mut self) -> Statistics {
-        if self.point_getter_cache.is_none() {
-            Statistics::default()
-        } else {
+        if self.point_getter_cache.is_some() {
             self.point_getter_cache.as_mut().unwrap().take_statistics()
+        } else if self.versioned_point_getter.is_some() {
+            self.versioned_point_getter
+                .as_mut()
+                .unwrap()
+                .take_statistics()
+        } else {
+            Statistics::default()
         }
     }
 
@@ -443,6 +465,7 @@ impl<S: Snapshot> SnapshotStore<S> {
             check_has_newer_ts_data,
 
             point_getter_cache: None,
+            versioned_point_getter: None,
         }
     }
 
@@ -533,6 +556,12 @@ impl Store for FixtureStore {
             Some(Ok(v)) => Ok(Some(v.clone())),
             Some(Err(e)) => Err(e.maybe_clone().unwrap()),
         }
+    }
+
+    #[inline]
+    fn get_with_version(&mut self, _: u64, key: &Key) -> Result<Option<Vec<u8>>> {
+        let mut s = Statistics::default();
+        self.get(key, &mut s)
     }
 
     #[inline]
