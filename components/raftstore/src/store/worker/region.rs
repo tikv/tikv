@@ -740,13 +740,6 @@ where
             let strategy = if cf == CF_LOCK {
                 DeleteStrategy::DeleteByKey
             } else if self.use_delete_range {
-<<<<<<< HEAD
-                DeleteStrategy::DeleteByRange
-            } else {
-                DeleteStrategy::DeleteByWriter {
-                    sst_path: self.mgr.get_temp_path_for_ingest(),
-                }
-=======
                 (
                     DeleteStrategy::DeleteByRange,
                     &CLEAR_OVERLAP_REGION_DURATION.by_range,
@@ -769,7 +762,6 @@ where
                     },
                     &CLEAR_OVERLAP_REGION_DURATION.by_ingest_files,
                 )
->>>>>>> effe615237 (raftstore: remove stale ranges by DeleteByKeys rather than ingesting. (#18040))
             };
             box_try!(self.engine.delete_ranges_cf(&wopts, cf, strategy, ranges));
         }

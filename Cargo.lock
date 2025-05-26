@@ -2937,11 +2937,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-<<<<<<< HEAD
-source = "git+https://github.com/pingcap/kvproto.git?branch=release-7.5#97f4477a96a0afdf8d19926d39494546bd939efb"
-=======
-source = "git+https://github.com/pingcap/kvproto.git#258e68e813aa1af3a9817ce87630e2ec638851cd"
->>>>>>> effe615237 (raftstore: remove stale ranges by DeleteByKeys rather than ingesting. (#18040))
+source = "git+https://github.com/pingcap/kvproto.git?branch=release-7.5#5030ed622c154001aa3e188dd8e56de8d4965732"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
