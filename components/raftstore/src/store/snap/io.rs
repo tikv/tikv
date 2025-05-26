@@ -12,8 +12,8 @@ use encryption::{
     from_engine_encryption_method, DataKeyManager, DecrypterReader, EncrypterWriter, Iv,
 };
 use engine_traits::{
-    CfName, EncryptionKeyManager, Error as EngineError, IterOptions, Iterable, Iterator, KvEngine, Mutable, RefIterable,
-    SstCompressionType, SstReader, SstWriter, SstWriterBuilder, WriteBatch,
+    CfName, EncryptionKeyManager, Error as EngineError, IterOptions, Iterable, Iterator, KvEngine,
+    Mutable, RefIterable, SstCompressionType, SstReader, SstWriter, SstWriterBuilder, WriteBatch,
 };
 use fail::fail_point;
 use kvproto::encryptionpb::EncryptionMethod;
