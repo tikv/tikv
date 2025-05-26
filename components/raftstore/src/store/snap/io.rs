@@ -329,7 +329,11 @@ where
     E: KvEngine,
     F: for<'r> FnMut(&'r [(Vec<u8>, Vec<u8>)]),
 {
-    let sst_reader = E::SstReader::open(path, key_mgr)?;
+    let sst_reader = if let Some(mgr) = key_mgr {
+        E::SstReader::open_encrypted(&path, mgr)?
+    } else {
+        E::SstReader::open(&path)?
+    };
     let mut iter = sst_reader.iter(IterOptions::default())?;
     iter.seek_to_first()?;
 
