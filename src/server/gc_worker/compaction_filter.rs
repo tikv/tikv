@@ -913,7 +913,7 @@ pub mod test_utils {
         pub(super) callbacks_on_drop: Vec<Arc<dyn Fn(&WriteCompactionFilter) + Send + Sync>>,
     }
 
-    impl<'a> TestGcRunner<'a> {
+    impl TestGcRunner<'_> {
         pub fn new(safe_point: u64) -> Self {
             let (gc_scheduler, gc_receiver) = dummy_scheduler();
 
@@ -930,7 +930,7 @@ pub mod test_utils {
         }
     }
 
-    impl<'a> TestGcRunner<'a> {
+    impl TestGcRunner<'_> {
         pub fn safe_point(&mut self, sp: u64) -> &mut Self {
             self.safe_point = sp;
             self

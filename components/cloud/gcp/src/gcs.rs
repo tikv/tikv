@@ -412,7 +412,7 @@ struct GcsPrefixIter<'cli> {
     finished: bool,
 }
 
-impl<'cli> GcsPrefixIter<'cli> {
+impl GcsPrefixIter<'_> {
     async fn one_page(&mut self) -> io::Result<Option<Vec<BlobObject>>> {
         if self.finished {
             return Ok(None);

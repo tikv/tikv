@@ -26,7 +26,7 @@ pub struct RegionSnapshotExt<'a, S: Snapshot> {
     snapshot: &'a RegionSnapshot<S>,
 }
 
-impl<'a, S: Snapshot> SnapshotExt for RegionSnapshotExt<'a, S> {
+impl<S: Snapshot> SnapshotExt for RegionSnapshotExt<'_, S> {
     #[inline]
     fn get_data_version(&self) -> Option<u64> {
         self.snapshot.get_data_version().ok()

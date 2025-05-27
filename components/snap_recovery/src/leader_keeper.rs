@@ -152,7 +152,7 @@ mod test {
         leaders: RefCell<HashSet<u64>>,
     }
 
-    impl<'a, EK, Router> LeaderKeeper<'a, EK, Router> {
+    impl<EK, Router> LeaderKeeper<'_, EK, Router> {
         fn mut_router(&mut self) -> &mut Router {
             &mut self.router
         }

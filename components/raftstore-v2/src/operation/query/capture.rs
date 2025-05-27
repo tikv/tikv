@@ -27,9 +27,7 @@ use crate::{
     router::{ApplyTask, QueryResChannel, QueryResult, message::CaptureChange},
 };
 
-impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
-    PeerFsmDelegate<'a, EK, ER, T>
-{
+impl<EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport> PeerFsmDelegate<'_, EK, ER, T> {
     pub fn on_leader_callback(&mut self, ch: QueryResChannel) {
         let peer = self.fsm.peer();
         let mut msg = new_read_index_request(

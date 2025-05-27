@@ -88,7 +88,7 @@ impl AsMySqlBool for Bytes {
     }
 }
 
-impl<'a> AsMySqlBool for BytesRef<'a> {
+impl AsMySqlBool for BytesRef<'_> {
     #[inline]
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         Ok(!self.is_empty() && ConvertTo::<f64>::convert(self, context)? != 0f64)
@@ -113,31 +113,31 @@ impl AsMySqlBool for VectorFloat32 {
     }
 }
 
-impl<'a> AsMySqlBool for JsonRef<'a> {
+impl AsMySqlBool for JsonRef<'_> {
     fn as_mysql_bool(&self, _context: &mut EvalContext) -> Result<bool> {
         Ok(!self.is_zero())
     }
 }
 
-impl<'a> AsMySqlBool for VectorFloat32Ref<'a> {
+impl AsMySqlBool for VectorFloat32Ref<'_> {
     fn as_mysql_bool(&self, _context: &mut EvalContext) -> Result<bool> {
         Ok(!self.is_empty())
     }
 }
 
-impl<'a> AsMySqlBool for EnumRef<'a> {
+impl AsMySqlBool for EnumRef<'_> {
     fn as_mysql_bool(&self, _context: &mut EvalContext) -> Result<bool> {
         Ok(!self.is_empty())
     }
 }
 
-impl<'a> AsMySqlBool for SetRef<'a> {
+impl AsMySqlBool for SetRef<'_> {
     fn as_mysql_bool(&self, _context: &mut EvalContext) -> Result<bool> {
         Ok(!self.is_empty())
     }
 }
 
-impl<'a> AsMySqlBool for Option<BytesRef<'a>> {
+impl AsMySqlBool for Option<BytesRef<'_>> {
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match self {
             None => Ok(false),
@@ -146,7 +146,7 @@ impl<'a> AsMySqlBool for Option<BytesRef<'a>> {
     }
 }
 
-impl<'a> AsMySqlBool for Option<JsonRef<'a>> {
+impl AsMySqlBool for Option<JsonRef<'_>> {
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match self {
             None => Ok(false),
@@ -155,7 +155,7 @@ impl<'a> AsMySqlBool for Option<JsonRef<'a>> {
     }
 }
 
-impl<'a> AsMySqlBool for Option<VectorFloat32Ref<'a>> {
+impl AsMySqlBool for Option<VectorFloat32Ref<'_>> {
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match self {
             None => Ok(false),
@@ -164,7 +164,7 @@ impl<'a> AsMySqlBool for Option<VectorFloat32Ref<'a>> {
     }
 }
 
-impl<'a> AsMySqlBool for Option<EnumRef<'a>> {
+impl AsMySqlBool for Option<EnumRef<'_>> {
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match self {
             None => Ok(false),
@@ -173,7 +173,7 @@ impl<'a> AsMySqlBool for Option<EnumRef<'a>> {
     }
 }
 
-impl<'a> AsMySqlBool for Option<SetRef<'a>> {
+impl AsMySqlBool for Option<SetRef<'_>> {
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match self {
             None => Ok(false),
@@ -502,31 +502,31 @@ impl<'a> EvaluableRef<'a> for BytesRef<'a> {
     }
 }
 
-impl<'a> UnsafeRefInto<BytesRef<'static>> for BytesRef<'a> {
+impl UnsafeRefInto<BytesRef<'static>> for BytesRef<'_> {
     unsafe fn unsafe_into(self) -> BytesRef<'static> {
         std::mem::transmute(self)
     }
 }
 
-impl<'a> UnsafeRefInto<JsonRef<'static>> for JsonRef<'a> {
+impl UnsafeRefInto<JsonRef<'static>> for JsonRef<'_> {
     unsafe fn unsafe_into(self) -> JsonRef<'static> {
         std::mem::transmute(self)
     }
 }
 
-impl<'a> UnsafeRefInto<EnumRef<'static>> for EnumRef<'a> {
+impl UnsafeRefInto<EnumRef<'static>> for EnumRef<'_> {
     unsafe fn unsafe_into(self) -> EnumRef<'static> {
         std::mem::transmute(self)
     }
 }
 
-impl<'a> UnsafeRefInto<SetRef<'static>> for SetRef<'a> {
+impl UnsafeRefInto<SetRef<'static>> for SetRef<'_> {
     unsafe fn unsafe_into(self) -> SetRef<'static> {
         std::mem::transmute(self)
     }
 }
 
-impl<'a> UnsafeRefInto<VectorFloat32Ref<'static>> for VectorFloat32Ref<'a> {
+impl UnsafeRefInto<VectorFloat32Ref<'static>> for VectorFloat32Ref<'_> {
     unsafe fn unsafe_into(self) -> VectorFloat32Ref<'static> {
         std::mem::transmute(self)
     }

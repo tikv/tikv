@@ -657,7 +657,7 @@ pub enum TxnLockRef<'a> {
     Persisted(&'a Lock),
 }
 
-impl<'a> TxnLockRef<'a> {
+impl TxnLockRef<'_> {
     pub fn get_start_ts(&self) -> TimeStamp {
         match self {
             TxnLockRef::InMemory(pessimistic_lock) => pessimistic_lock.start_ts,
