@@ -1414,7 +1414,15 @@ impl StreamTaskHandler {
     #[instrument(skip_all)]
     pub async fn flush_backup_metadata(&self, metadata_info: MetadataInfo) -> Result<()> {
         if !metadata_info.file_groups.is_empty() {
-            let meta_path = metadata_info.path_to_meta();
+            let mut min_begin_ts = u64::MAX;
+            for file_group in metadata_info.file_groups.as_slice() {
+                assert!(!file_group.data_files_info.is_empty());
+                for d in file_group.data_files_info.as_slice() {
+                    assert_ne!(d.min_begin_ts_in_default_cf, 0);
+                    min_begin_ts = min_begin_ts.min(d.min_begin_ts_in_default_cf)
+                }
+            }
+            let meta_path = metadata_info.path_to_meta(min_begin_ts);
             let meta_buff = metadata_info.marshal_to()?;
             let buflen = meta_buff.len();
 
@@ -1785,10 +1793,12 @@ impl MetadataInfo {
             .map_err(|err| Error::Other(box_err!("failed to marshal proto: {}", err)))
     }
 
-    fn path_to_meta(&self) -> String {
+    fn path_to_meta(&self, min_begin_ts: u64) -> String {
         format!(
-            "v1/backupmeta/{}-{}.meta",
-            self.min_resolved_ts.unwrap_or_default(),
+            "v1/backupmeta/{}-{}-{}-{}.meta",
+            self.min_ts.unwrap_or_default(),
+            self.max_ts.unwrap_or_default(),
+            min_begin_ts,
             uuid::Uuid::new_v4()
         )
     }
@@ -2262,10 +2272,31 @@ mod tests {
 
         let mut meta_count = 0;
         let mut log_count = 0;
+
         for entry in walkdir::WalkDir::new(storage_path) {
             let entry = entry.unwrap();
             let filename = entry.file_name();
             if entry.path().extension() == Some(OsStr::new("meta")) {
+                let file_name = entry.file_name().to_string_lossy();
+
+                let parts: Vec<&str> = filename.to_str().unwrap().split('-').collect();
+
+                assert!(
+                    parts.len() >= 4,
+                    "Invalid meta file name format: expected at least 4 parts, got {}, file: {}",
+                    parts.len(),
+                    file_name
+                );
+
+                for (i, label) in ["minTs", "maxTs", "minDefaultTs"].iter().enumerate() {
+                    let val = parts[i].parse::<u64>();
+                    assert!(
+                        val.is_ok(),
+                        "Failed to parse {} as u64 in file name: {}",
+                        label,
+                        file_name
+                    );
+                }
                 meta_count += 1;
             } else if entry.path().extension() == Some(OsStr::new("log")) {
                 log_count += 1;
