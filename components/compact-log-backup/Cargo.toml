@@ -62,7 +62,7 @@ uuid = { version = "0.8", features = ["v4", "serde"] }
 zstd = "0.11"
 
 [dev-dependencies]
-pprof = { version = "0.14", default-features = false, features = [
+pprof = { version = "0.15", default-features = false, features = [
   "flamegraph",
   "protobuf-codec",
 ] }
