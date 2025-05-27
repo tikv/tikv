@@ -28,7 +28,7 @@ pub struct BatchTableScanExecutor<S: Storage, F: KvFormat>(
     ScanExecutor<S, TableScanExecutorImpl, F>,
 );
 
-type HandleIndicesVec = SmallVec<[usize; 2]>;
+pub type HandleIndicesVec = SmallVec<[usize; 2]>;
 
 // We assign a dummy type `Box<dyn Storage<Statistics = ()>>` so that we can
 // omit the type when calling `check_supported`.
@@ -147,34 +147,34 @@ impl<S: Storage, F: KvFormat> BatchExecutor for BatchTableScanExecutor<S, F> {
     }
 }
 
-struct TableScanExecutorImpl {
+pub struct TableScanExecutorImpl {
     /// Note: Although called `EvalContext`, it is some kind of execution
     /// context instead.
     // TODO: Rename EvalContext to ExecContext.
-    context: EvalContext,
+    pub context: EvalContext,
 
     /// The schema of the output. All of the output come from specific columns
     /// in the underlying storage.
-    schema: Vec<FieldType>,
+    pub schema: Vec<FieldType>,
 
     /// The default value of corresponding columns in the schema. When column
     /// data is missing, the default value will be used to fill the output.
-    columns_default_value: Vec<Vec<u8>>,
+    pub columns_default_value: Vec<Vec<u8>>,
 
     /// The output position in the schema giving the column id.
-    column_id_index: HashMap<i64, usize>,
+    pub column_id_index: HashMap<i64, usize>,
 
     /// Vec of indices in output row to put the handle. The indices must be
     /// sorted in the vec.
-    handle_indices: HandleIndicesVec,
+    pub handle_indices: HandleIndicesVec,
 
     /// Vec of Primary key column's IDs.
-    primary_column_ids: Vec<i64>,
+    pub primary_column_ids: Vec<i64>,
 
     /// A vector of flags indicating whether corresponding column is filled in
     /// `next_batch`. It is a struct level field in order to prevent repeated
     /// memory allocations since its length is fixed for each `next_batch` call.
-    is_column_filled: Vec<bool>,
+    pub is_column_filled: Vec<bool>,
 }
 
 impl TableScanExecutorImpl {

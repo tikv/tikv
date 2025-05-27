@@ -22,6 +22,7 @@ make_auto_flush_static_metric! {
         stream_aggr,
         top_n,
         limit,
+        versioned_lookup,
     }
 
     pub struct LocalCoprExecutorCount: LocalIntCounter {

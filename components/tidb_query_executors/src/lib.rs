@@ -38,6 +38,7 @@ mod slow_hash_aggr_executor;
 mod stream_aggr_executor;
 mod table_scan_executor;
 mod top_n_executor;
+mod versioned_lookup_executor;
 mod util;
 
 pub use self::{
@@ -49,4 +50,5 @@ pub use self::{
     slow_hash_aggr_executor::BatchSlowHashAggregationExecutor,
     stream_aggr_executor::BatchStreamAggregationExecutor,
     table_scan_executor::BatchTableScanExecutor, top_n_executor::BatchTopNExecutor,
+    versioned_lookup_executor::BatchVersionedLookupExecutor,
 };

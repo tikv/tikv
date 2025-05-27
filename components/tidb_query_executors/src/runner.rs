@@ -6,9 +6,9 @@ use api_version::KvFormat;
 use fail::fail_point;
 use itertools::Itertools;
 use kvproto::coprocessor::KeyRange;
-use protobuf::Message;
+use protobuf::{Message, descriptor};
 use tidb_query_common::{
-    Result,
+    Result, error,
     execute_stats::ExecSummary,
     metrics::*,
     storage::{IntervalRange, Storage},
@@ -89,6 +89,11 @@ impl BatchExecutorsRunner<()> {
     pub fn check_supported(exec_descriptors: &[tipb::Executor]) -> Result<()> {
         for ed in exec_descriptors {
             match ed.get_tp() {
+                ExecType::TypeVersionedLookup => {
+                    let descriptor = ed.get_versioned_lookup();
+                    BatchVersionedLookupExecutor::check_supported(descriptor)
+                        .map_err(|e| other_err!("BatchVersionedLookupExecutor: {}", e))?;
+                }
                 ExecType::TypeTableScan => {
                     let descriptor = ed.get_tbl_scan();
                     BatchTableScanExecutor::check_supported(descriptor)
@@ -195,6 +200,28 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
 
     let mut executor: Box<dyn BatchExecutor<StorageStats = S::Statistics>> = match first_ed.get_tp()
     {
+        ExecType::TypeVersionedLookup => {
+            EXECUTOR_COUNT_METRICS.versioned_lookup.inc();
+
+            let mut descriptor = first_ed.take_versioned_lookup();
+            let versions = descriptor.take_versions().into();
+            let columns_info = descriptor.take_columns().into();
+            let primary_column_ids = descriptor.take_primary_column_ids();
+            let primary_prefix_column_ids = descriptor.take_primary_prefix_column_ids();
+
+            Box::new(
+                BatchVersionedLookupExecutor::<_, F>::new(
+                    storage,
+                    config.clone(),
+                    columns_info,
+                    ranges,
+                    primary_column_ids,
+                    primary_prefix_column_ids,
+                    versions,
+                )?
+                .collect_summary(summary_slot_index),
+            )
+        }
         ExecType::TypeTableScan => {
             EXECUTOR_COUNT_METRICS.batch_table_scan.inc();
 
