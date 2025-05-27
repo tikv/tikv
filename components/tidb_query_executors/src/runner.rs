@@ -207,7 +207,6 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
             let versions = descriptor.take_versions().into();
             let columns_info = descriptor.take_columns().into();
             let primary_column_ids = descriptor.take_primary_column_ids();
-            let primary_prefix_column_ids = descriptor.take_primary_prefix_column_ids();
 
             Box::new(
                 BatchVersionedLookupExecutor::<_, F>::new(
@@ -216,7 +215,6 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
                     columns_info,
                     ranges,
                     primary_column_ids,
-                    primary_prefix_column_ids,
                     versions,
                 )?
                 .collect_summary(summary_slot_index),

@@ -59,7 +59,6 @@ impl<S: Storage, F: KvFormat> BatchVersionedLookupExecutor<S, F> {
         columns_info: Vec<ColumnInfo>,
         key_ranges: Vec<KeyRange>,
         primary_column_ids: Vec<i64>,
-        _primary_prefix_column_ids: Vec<i64>,
         versions: Vec<u64>,
     ) -> Result<Self> {
         tidb_query_datatype::codec::table::check_table_ranges::<F>(&key_ranges)?;
@@ -119,6 +118,7 @@ impl<S: Storage, F: KvFormat> BatchVersionedLookupExecutor<S, F> {
             handle_indices,
             primary_column_ids,
             is_column_filled,
+            allow_missing_columns: false,
         };
         Ok(Self {
             storage,
@@ -153,13 +153,11 @@ impl<S: Storage, F: KvFormat> BatchVersionedLookupExecutor<S, F> {
                 let kv = F::make_kv_pair(row).map_err(|e| EvaluateError::Other(e.into()))?;
                 return Ok(Some(kv));
             } else {
-                // the data is gc-ed, so read the next row
-                // todo append a warning here
-                // self.table_scan_helper.context.warnings.append_warning(
-                //    &mut tidb_query_common::error::EvaluateError::Other(
-                //        "the data is gc-ed".into(),
-                //    ),
-                //);
+                // the target data is gc-ed, so read the next row
+                // this should rarely happens
+                self.table_scan_helper.context.warnings.append_warning(
+                    tidb_query_datatype::codec::Error::Other("some data is gc-ed".into()),
+                );
                 continue;
             }
         }
@@ -175,13 +173,12 @@ impl<S: Storage, F: KvFormat> BatchVersionedLookupExecutor<S, F> {
     ) -> Result<bool> {
         assert!(scan_rows > 0);
 
-        for _i in 0..scan_rows {
+        for _ in 0..scan_rows {
             let some_row = self.next()?;
             if let Some(row) = some_row {
-                // Retrieved one row from point range or non-point range.
+                // Retrieved one row.
 
                 let (key, value) = row.kv();
-                // todo not allow using default value when target column is not in the row
                 if let Err(e) = self.table_scan_helper.process_kv_pair(key, value, columns) {
                     // When there are errors in `process_kv_pair`, columns' length may not be
                     // identical. For example, the filling process may be partially done so that
@@ -197,7 +194,6 @@ impl<S: Storage, F: KvFormat> BatchVersionedLookupExecutor<S, F> {
                 return Ok(true);
             }
         }
-
         // Not drained
         Ok(false)
     }
@@ -250,28 +246,23 @@ impl<S: Storage, F: KvFormat> BatchExecutor for BatchVersionedLookupExecutor<S, 
     }
 
     #[inline]
-    fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {
-        // self.scanner
-        //    .collect_scanned_rows_per_range(&mut dest.scanned_rows_per_range);
-    }
+    fn collect_exec_stats(&mut self, _dest: &mut ExecuteStats) {}
 
     #[inline]
     fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
-        // self.scanner.collect_storage_stats(dest);
+        self.storage.collect_statistics(dest);
     }
 
     #[inline]
     fn take_scanned_range(&mut self) -> IntervalRange {
-        // TODO: check if there is a better way to reuse this method impl.
-        // self.scanner.take_scanned_range()
-        // todo double check it
+        // TODO support scanned range
         let range = IntervalRange::default();
         range
     }
 
     #[inline]
     fn can_be_cached(&self) -> bool {
+        // always return false because VersionedLookup is even not snapshot read
         return false;
-        // self.scanner.can_be_cached()
     }
 }

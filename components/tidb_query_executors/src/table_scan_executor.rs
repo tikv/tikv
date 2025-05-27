@@ -98,6 +98,7 @@ impl<S: Storage, F: KvFormat> BatchTableScanExecutor<S, F> {
             handle_indices,
             primary_column_ids,
             is_column_filled,
+            allow_missing_columns: true
         };
         let wrapper = ScanExecutor::new(ScanExecutorOptions {
             imp,
@@ -175,6 +176,9 @@ pub struct TableScanExecutorImpl {
     /// `next_batch`. It is a struct level field in order to prevent repeated
     /// memory allocations since its length is fixed for each `next_batch` call.
     pub is_column_filled: Vec<bool>,
+
+    // A flag indicating whether or not missing columns are allowed.
+    pub allow_missing_columns: bool,
 }
 
 impl TableScanExecutorImpl {
@@ -408,6 +412,12 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         // make all columns in same length.
         for i in 0..columns_len {
             if !self.is_column_filled[i] {
+                if !self.allow_missing_columns {
+                    return Err(other_err!(
+                        "Data is corrupted, missing data for column (offset = {})",
+                        i
+                    ));
+                }
                 // Missing fields must not be a primary key, so it must be
                 // `LazyBatchColumn::raw`.
 
