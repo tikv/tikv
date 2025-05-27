@@ -766,7 +766,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let txn_extra_op = match self.store_meta.lock().unwrap().reader(region_id) {
             Some(reader) => reader.txn_extra_op.clone(),
             None => {
-                error!("cdc register for a not found region"; "region_id" => region_id);
+                warn!("cdc register for a not found region"; "region_id" => region_id);
                 let mut err_event = EventError::default();
                 err_event.mut_region_not_found().region_id = region_id;
                 let _ = downstream.sink_error_event(region_id, err_event);
