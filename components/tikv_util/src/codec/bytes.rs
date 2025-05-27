@@ -213,6 +213,9 @@ pub fn decode_bytes(data: &mut BytesSlice<'_>, desc: bool) -> Result<Vec<u8>> {
         }
 
         if desc {
+            // TODO: remove this after updating to a new toolchain,
+            // See: https://github.com/rust-lang/rust-clippy/issues/14685
+            #[allow(clippy::manual_slice_fill)]
             for k in &mut key {
                 *k = !*k;
             }

@@ -9,7 +9,7 @@ use super::{
 };
 use crate::codec::mysql::json::path_expr::{ArrayIndex, ArraySelection, KeySelection};
 
-impl<'a> JsonRef<'a> {
+impl JsonRef<'_> {
     /// `extract` receives several path expressions as arguments, matches them
     /// in j, and returns the target JSON matched any path expressions, which
     /// may be autowrapped as an array. If there is no any expression matched,
@@ -42,13 +42,13 @@ impl<'a> JsonRef<'a> {
 #[derive(Eq)]
 struct RefEqualJsonWrapper<'a>(JsonRef<'a>);
 
-impl<'a> PartialEq for RefEqualJsonWrapper<'a> {
+impl PartialEq for RefEqualJsonWrapper<'_> {
     fn eq(&self, other: &Self) -> bool {
         self.0.ref_eq(&other.0)
     }
 }
 
-impl<'a> std::hash::Hash for RefEqualJsonWrapper<'a> {
+impl std::hash::Hash for RefEqualJsonWrapper<'_> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.0.value.as_ptr().hash(state)
     }

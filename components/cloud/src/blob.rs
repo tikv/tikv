@@ -21,7 +21,7 @@ pub struct PutResource<'a>(pub Box<dyn AsyncRead + Send + Unpin + 'a>);
 
 pub type BlobStream<'a> = Box<dyn AsyncRead + Unpin + Send + 'a>;
 
-impl<'a> AsyncRead for PutResource<'a> {
+impl AsyncRead for PutResource<'_> {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,

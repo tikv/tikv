@@ -956,7 +956,7 @@ pub trait AddSubDateConvertToTime {
     fn to_time(&self, ctx: &mut EvalContext, metadata: &AddSubDateMeta) -> CodecResult<Time>;
 }
 
-impl<'a> AddSubDateConvertToTime for BytesRef<'a> {
+impl AddSubDateConvertToTime for BytesRef<'_> {
     #[inline]
     fn to_time(&self, ctx: &mut EvalContext, metadata: &AddSubDateMeta) -> CodecResult<Time> {
         let input = std::str::from_utf8(self).map_err(Error::Encoding)?;

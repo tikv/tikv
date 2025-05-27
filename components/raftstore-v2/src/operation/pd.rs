@@ -19,7 +19,7 @@ use crate::{
     worker::pd,
 };
 
-impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
+impl<EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'_, EK, ER, T> {
     #[inline]
     pub fn on_pd_store_heartbeat(&mut self) {
         self.fsm.store.store_heartbeat_pd(self.store_ctx, None);
@@ -85,7 +85,7 @@ impl Store {
     }
 }
 
-impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
+impl<EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'_, EK, ER, T> {
     #[inline]
     pub fn on_pd_heartbeat(&mut self) {
         self.fsm.peer_mut().update_peer_statistics();

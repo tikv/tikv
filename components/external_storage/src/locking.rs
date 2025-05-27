@@ -230,7 +230,7 @@ pub mod requirements {
     }
 }
 
-impl<'a> ExclusiveWriteCtx<'a> {
+impl ExclusiveWriteCtx<'_> {
     pub fn txn_id(&self) -> uuid::Uuid {
         self.txn_id
     }

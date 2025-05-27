@@ -490,7 +490,7 @@ impl ConvertTo<f64> for Json {
     }
 }
 
-impl<'a> ConvertTo<f64> for JsonRef<'a> {
+impl ConvertTo<f64> for JsonRef<'_> {
     ///  Keep compatible with TiDB's `ConvertJSONToFloat` function.
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<f64> {

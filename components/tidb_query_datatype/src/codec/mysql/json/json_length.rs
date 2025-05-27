@@ -2,7 +2,7 @@
 
 use super::{super::Result, JsonRef, JsonType, path_expr::PathExpression};
 
-impl<'a> JsonRef<'a> {
+impl JsonRef<'_> {
     fn len(&self) -> i64 {
         match self.get_type() {
             JsonType::Array | JsonType::Object => self.get_elem_count() as i64,

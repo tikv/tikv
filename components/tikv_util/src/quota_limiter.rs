@@ -144,7 +144,7 @@ pub struct CpuObserveGuard<'a> {
     sample: &'a mut Sample,
 }
 
-impl<'a> Drop for CpuObserveGuard<'a> {
+impl Drop for CpuObserveGuard<'_> {
     fn drop(&mut self) {
         if let Some(timer) = self.timer {
             self.sample.add_cpu_time(timer.elapsed());

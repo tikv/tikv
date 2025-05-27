@@ -208,7 +208,7 @@ pub enum ScalarValueRef<'a> {
     VectorFloat32(Option<VectorFloat32Ref<'a>>),
 }
 
-impl<'a> ScalarValueRef<'a> {
+impl ScalarValueRef<'_> {
     #[inline]
     #[allow(clippy::clone_on_copy)]
     pub fn to_owned(self) -> ScalarValue {
@@ -500,14 +500,14 @@ impl<'a> ScalarValueRef<'a> {
     }
 }
 
-impl<'a> Ord for ScalarValueRef<'a> {
+impl Ord for ScalarValueRef<'_> {
     fn cmp(&self, other: &Self) -> Ordering {
         self.partial_cmp(other)
             .expect("Cannot compare two ScalarValueRef in different type")
     }
 }
 
-impl<'a> PartialOrd for ScalarValueRef<'a> {
+impl PartialOrd for ScalarValueRef<'_> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match_template_evaltype! {
             TT, match (self, other) {
@@ -520,13 +520,13 @@ impl<'a> PartialOrd for ScalarValueRef<'a> {
     }
 }
 
-impl<'a> PartialEq<ScalarValue> for ScalarValueRef<'a> {
+impl PartialEq<ScalarValue> for ScalarValueRef<'_> {
     fn eq(&self, other: &ScalarValue) -> bool {
         self == &other.as_scalar_value_ref()
     }
 }
 
-impl<'a> PartialEq<ScalarValueRef<'a>> for ScalarValue {
+impl PartialEq<ScalarValueRef<'_>> for ScalarValue {
     fn eq(&self, other: &ScalarValueRef<'_>) -> bool {
         other == self
     }

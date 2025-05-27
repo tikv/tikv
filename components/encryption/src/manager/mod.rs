@@ -1118,7 +1118,7 @@ impl<'a> DataKeyImporter<'a> {
     }
 }
 
-impl<'a> Drop for DataKeyImporter<'a> {
+impl Drop for DataKeyImporter<'_> {
     fn drop(&mut self) {
         if !self.committed {
             if let Err(e) = self.rollback() {
