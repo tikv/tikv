@@ -5,26 +5,26 @@ use std::{convert::TryFrom, sync::Arc};
 use api_version::KvFormat;
 use fail::fail_point;
 use itertools::Itertools;
-use kvproto::coprocessor::KeyRange;
+use kvproto::{coprocessor::KeyRange, metapb};
 use protobuf::Message;
 use tidb_query_common::{
-    Result,
     execute_stats::ExecSummary,
     metrics::*,
     storage::{IntervalRange, Storage},
+    Result,
 };
 use tidb_query_datatype::{
-    EvalType, FieldTypeAccessor,
-    expr::{EvalConfig, EvalContext, EvalWarnings},
+    expr::{EvalConfig, EvalContext, EvalWarnings}, EvalType,
+    FieldTypeAccessor,
 };
 use tikv_util::{
     deadline::Deadline,
-    metrics::{NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC, ThrottleType},
+    metrics::{ThrottleType, NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC},
     quota_limiter::QuotaLimiter,
 };
 use tipb::{
     self, Chunk, DagRequest, EncodeType, ExecType, ExecutorExecutionSummary, FieldType,
-    SelectResponse, StreamResponse,
+    PartialOutput, SelectResponse, StreamResponse,
 };
 
 use super::{
@@ -41,8 +41,226 @@ const BATCH_INITIAL_SIZE: usize = 32;
 // benchmarks.
 pub use tidb_query_expr::types::BATCH_MAX_SIZE;
 
+use crate::{
+    index_lookup_executor::{build_index_lookup_probe_ranges, BatchIndexLookupExecutor},
+    interface::BatchExecuteResult,
+    runner::SrcExecutorRanges::Simple,
+};
+
 // TODO: Maybe there can be some better strategy. Needs benchmarks and tunes.
 const BATCH_GROW_FACTOR: usize = 2;
+
+struct ExecutorsWithOutput<SS> {
+    out_most_executor: Box<dyn BatchExecutor<StorageStats = SS>>,
+    output_offsets: Vec<u32>,
+    encode_type: EncodeType,
+}
+
+impl<SS> ExecutorsWithOutput<SS> {
+    fn new<S: Storage<Statistics = SS> + 'static, F: KvFormat>(
+        executor_descriptors: Vec<tipb::Executor>,
+        ranges: SrcExecutorRanges<S>,
+        config: Arc<EvalConfig>,
+        is_scanned_range_aware: bool,
+        output_offsets: Vec<u32>,
+        encode_type: EncodeType,
+    ) -> Result<Self> {
+        let out_most_executor =
+            build_executors::<_, F>(executor_descriptors, ranges, config, is_scanned_range_aware)?;
+
+        // Check output offsets
+        let schema_len = out_most_executor.schema().len();
+        for offset in &output_offsets {
+            if (*offset as usize) >= schema_len {
+                return Err(other_err!(
+                    "Invalid output offset (schema has {} columns, access index {})",
+                    schema_len,
+                    offset
+                ));
+            }
+        }
+
+        // Only check output schema field types
+        let new_schema = output_offsets
+            .iter()
+            .map(|&i| &out_most_executor.schema()[i as usize]);
+        let encode_type = if !is_arrow_encodable(new_schema) {
+            EncodeType::TypeDefault
+        } else {
+            encode_type
+        };
+
+        Ok(Self {
+            out_most_executor,
+            output_offsets,
+            encode_type,
+        })
+    }
+
+    fn encode_result_to_trunk(
+        &self,
+        ctx: &mut EvalContext,
+        chunk: &mut Chunk,
+        result: &BatchExecuteResult,
+        encode_type: Option<EncodeType>,
+    ) -> Result<()> {
+        if result.logical_rows.is_empty() {
+            return Ok(());
+        }
+        assert_eq!(
+            result.physical_columns.columns_len(),
+            self.out_most_executor.schema().len()
+        );
+        let data = chunk.mut_rows_data();
+        let encode_type = encode_type.unwrap_or(self.encode_type);
+        // Although `schema()` can be deeply nested, it is ok since we process data in
+        // batch.
+        if encode_type == EncodeType::TypeDefault {
+            data.reserve(
+                result
+                    .physical_columns
+                    .maximum_encoded_size(&result.logical_rows, &self.output_offsets),
+            );
+            result.physical_columns.encode(
+                &result.logical_rows,
+                &self.output_offsets,
+                self.out_most_executor.schema(),
+                data,
+                ctx,
+            )?;
+        } else {
+            data.reserve(
+                result
+                    .physical_columns
+                    .maximum_encoded_size_chunk(&result.logical_rows, &self.output_offsets),
+            );
+            result.physical_columns.encode_chunk(
+                &result.logical_rows,
+                &self.output_offsets,
+                self.out_most_executor.schema(),
+                data,
+                ctx,
+            )?;
+        }
+        Ok(())
+    }
+}
+
+struct ExecutorDescriptors<SS> {
+    build_executors_with_output: Option<
+        Box<
+            dyn FnOnce(
+                    &mut EvalContext,
+                    &mut Vec<BatchExecuteResult>,
+                    &[FieldType],
+                ) -> Result<ExecutorsWithOutput<SS>>
+                + Send,
+        >,
+    >,
+}
+
+impl<SS> ExecutorDescriptors<SS> {
+    fn new<S: Storage<Statistics = SS> + 'static, F: KvFormat>(
+        executor_descriptors: Vec<tipb::Executor>,
+        output_offsets: Vec<u32>,
+        encode_type: EncodeType,
+        locate_key_fn: fn(key: &[u8]) -> Option<(Arc<metapb::Region>, S)>,
+    ) -> Result<Self> {
+        if executor_descriptors.len() == 0 {
+            return Err(other_err!("No executors"));
+        }
+
+        let tp = executor_descriptors[0].get_tp();
+        let build = match tp {
+            ExecType::TypeIndexLookup => {
+                move |ctx: &mut EvalContext,
+                      results: &mut Vec<BatchExecuteResult>,
+                      schema: &[FieldType]| {
+                    let ranges = build_index_lookup_probe_ranges(
+                        ctx,
+                        executor_descriptors[0].get_index_lookup(),
+                        results,
+                        schema,
+                        locate_key_fn,
+                    )?;
+
+                    ExecutorsWithOutput::new::<_, F>(
+                        executor_descriptors,
+                        SrcExecutorRanges::Probes(ranges),
+                        ctx.cfg.clone(),
+                        false,
+                        output_offsets.clone(),
+                        encode_type,
+                    )
+                }
+            }
+            _ => {
+                return Err(other_err!(
+                    "unsupported first type: {:?} to generate probe side ranges",
+                    tp
+                ));
+            }
+        };
+
+        Ok(Self {
+            build_executors_with_output: Some(Box::new(build)),
+        })
+    }
+
+    fn build_instant(
+        &mut self,
+        ctx: &mut EvalContext,
+        build_side_results: &mut Vec<BatchExecuteResult>,
+        result_schema: &[FieldType],
+    ) -> Result<ExecutorsWithOutput<SS>> {
+        match self.build_executors_with_output.take() {
+            Some(build) => (build)(ctx, build_side_results, &result_schema),
+            _ => Err(other_err!("build has been invoked")),
+        }
+    }
+}
+
+enum ExecutionGroup<SS> {
+    Instant(ExecutorsWithOutput<SS>),
+    Descriptors(ExecutorDescriptors<SS>),
+}
+
+impl<SS> ExecutionGroup<SS> {
+    fn mut_instant(&mut self) -> Result<&mut ExecutorsWithOutput<SS>> {
+        match self {
+            ExecutionGroup::Instant(ref mut instant) => Ok(instant),
+            ExecutionGroup::Descriptors(_) => Err(other_err!("instant has not built yet")),
+        }
+    }
+
+    fn instant(&self) -> Result<&ExecutorsWithOutput<SS>> {
+        match self {
+            ExecutionGroup::Instant(ref instant) => Ok(instant),
+            ExecutionGroup::Descriptors(_) => Err(other_err!("instant has not built yet")),
+        }
+    }
+}
+
+impl<SS> ExecutionGroup<SS> {
+    fn build_instant(
+        &mut self,
+        ctx: &mut EvalContext,
+        build_side_results: &mut Vec<BatchExecuteResult>,
+        result_schema: &[FieldType],
+    ) -> Result<&mut ExecutorsWithOutput<SS>> {
+        match self {
+            ExecutionGroup::Instant(_) => Err(other_err!("instant has already been built")),
+            ExecutionGroup::Descriptors(descriptors) => {
+                *self = Self::Instant(descriptors.build_instant(
+                    ctx,
+                    build_side_results,
+                    result_schema,
+                )?);
+                self.mut_instant()
+            }
+        }
+    }
+}
 
 pub struct BatchExecutorsRunner<SS> {
     /// The deadline of this handler. For each check point (e.g. each iteration)
@@ -51,12 +269,7 @@ pub struct BatchExecutorsRunner<SS> {
     // TODO: Deprecate it using a better deadline mechanism.
     deadline: Deadline,
 
-    out_most_executor: Box<dyn BatchExecutor<StorageStats = SS>>,
-
-    /// The offset of the columns need to be outputted. For example, TiDB may
-    /// only needs a subset of the columns in the result so that unrelated
-    /// columns don't need to be encoded and returned back.
-    output_offsets: Vec<u32>,
+    execution_groups: Vec<ExecutionGroup<SS>>,
 
     config: Arc<EvalConfig>,
 
@@ -67,12 +280,6 @@ pub struct BatchExecutorsRunner<SS> {
 
     /// Maximum rows to return in batch stream mode.
     stream_row_limit: usize,
-
-    /// The encoding method for the response.
-    /// Possible encoding methods are:
-    /// 1. default: result is encoded row by row using datum format.
-    /// 2. chunk: result is encoded column by column using chunk format.
-    encode_type: EncodeType,
 
     /// If it's a paging request, paging_size indicates to the required size for
     /// current page.
@@ -98,6 +305,11 @@ impl BatchExecutorsRunner<()> {
                     let descriptor = ed.get_idx_scan();
                     BatchIndexScanExecutor::check_supported(descriptor)
                         .map_err(|e| other_err!("BatchIndexScanExecutor: {}", e))?;
+                }
+                ExecType::TypeIndexLookup => {
+                    let descriptor = ed.get_index_lookup();
+                    BatchIndexLookupExecutor::check_supported(descriptor)
+                        .map_err(|e| other_err!("BatchLookupExecutor: {}", e))?;
                 }
                 ExecType::TypeSelection => {
                     let descriptor = ed.get_selection();
@@ -175,11 +387,31 @@ fn is_arrow_encodable<'a>(mut schema: impl Iterator<Item = &'a FieldType>) -> bo
     schema.all(|schema| EvalType::try_from(schema.as_accessor().tp()).is_ok())
 }
 
+pub enum SrcExecutorRanges<S: Storage> {
+    Simple((S, Vec<KeyRange>)),
+    Probes(Vec<(S, Vec<KeyRange>)>),
+}
+
+impl<S: Storage> SrcExecutorRanges<S> {
+    fn into_simple_ranges(self) -> Result<(S, Vec<KeyRange>)> {
+        match self {
+            SrcExecutorRanges::Simple(ranges) => Ok(ranges),
+            SrcExecutorRanges::Probes(_) => Err(other_err!("simple ranges expected")),
+        }
+    }
+
+    fn into_probe_side_ranges(self) -> Result<Vec<(S, Vec<KeyRange>)>> {
+        match self {
+            SrcExecutorRanges::Simple(_) => Err(other_err!("probes ranges expected")),
+            SrcExecutorRanges::Probes(ranges) => Ok(ranges),
+        }
+    }
+}
+
 #[allow(clippy::explicit_counter_loop)]
 pub fn build_executors<S: Storage + 'static, F: KvFormat>(
     executor_descriptors: Vec<tipb::Executor>,
-    storage: S,
-    ranges: Vec<KeyRange>,
+    src_scan_ranges: SrcExecutorRanges<S>,
     config: Arc<EvalConfig>,
     is_scanned_range_aware: bool,
 ) -> Result<Box<dyn BatchExecutor<StorageStats = S::Statistics>>> {
@@ -202,7 +434,12 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
             let columns_info = descriptor.take_columns().into();
             let primary_column_ids = descriptor.take_primary_column_ids();
             let primary_prefix_column_ids = descriptor.take_primary_prefix_column_ids();
-
+            let (storage, ranges) = src_scan_ranges.into_simple_ranges().map_err(|_| {
+                other_err!(
+                    "only simple ranges are allowed for src executor: {:?}",
+                    first_ed.get_tp()
+                )
+            })?;
             Box::new(
                 BatchTableScanExecutor::<_, F>::new(
                     storage,
@@ -223,6 +460,12 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
             let mut descriptor = first_ed.take_idx_scan();
             let columns_info = descriptor.take_columns().into();
             let primary_column_ids_len = descriptor.take_primary_column_ids().len();
+            let (storage, ranges) = src_scan_ranges.into_simple_ranges().map_err(|_| {
+                other_err!(
+                    "only simple ranges are allowed for src executor: {:?}",
+                    first_ed.get_tp()
+                )
+            })?;
             Box::new(
                 BatchIndexScanExecutor::<_, F>::new(
                     storage,
@@ -236,6 +479,23 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
                 )?
                 .collect_summary(summary_slot_index),
             )
+        }
+        ExecType::TypeIndexLookup => {
+            EXECUTOR_COUNT_METRICS.batch_index_lookup.inc();
+            let mut descriptor = first_ed.take_index_lookup();
+            let probe_side_ranges = src_scan_ranges.into_probe_side_ranges().map_err(|_| {
+                other_err!(
+                    "only probe ranges are allowed for src executor: {:?}",
+                    first_ed.get_tp()
+                )
+            })?;
+            Box::new(BatchIndexLookupExecutor::<_, F>::new(
+                config.clone(),
+                descriptor.take_columns().into(),
+                descriptor.take_primary_column_ids(),
+                descriptor.take_primary_prefix_column_ids(),
+                probe_side_ranges,
+            )?)
         }
         _ => {
             return Err(other_err!(
@@ -421,7 +681,7 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
 
 impl<SS: 'static> BatchExecutorsRunner<SS> {
     pub fn from_request<S: Storage<Statistics = SS> + 'static, F: KvFormat>(
-        mut req: DagRequest,
+        req: DagRequest,
         ranges: Vec<KeyRange>,
         storage: S,
         deadline: Deadline,
@@ -435,54 +695,110 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let mut config = EvalConfig::from_request(&req)?;
         config.paging_size = paging_size;
         let config = Arc::new(config);
-
-        let out_most_executor = build_executors::<_, F>(
-            req.take_executors().into(),
+        let exec_stats = ExecuteStats::new(executors_len);
+        let execution_groups = Self::split_execution_groups::<_, F>(
+            req,
             storage,
             ranges,
             config.clone(),
             is_streaming || paging_size.is_some(), /* For streaming and paging request,
                                                     * executors will continue scan from range
                                                     * end where last scan is finished */
+            |_| None,
         )?;
-
-        // Check output offsets
-        let output_offsets = req.take_output_offsets();
-        let schema_len = out_most_executor.schema().len();
-        for offset in &output_offsets {
-            if (*offset as usize) >= schema_len {
-                return Err(other_err!(
-                    "Invalid output offset (schema has {} columns, access index {})",
-                    schema_len,
-                    offset
-                ));
-            }
-        }
-
-        // Only check output schema field types
-        let new_schema = output_offsets
-            .iter()
-            .map(|&i| &out_most_executor.schema()[i as usize]);
-        let encode_type = if !is_arrow_encodable(new_schema) {
-            EncodeType::TypeDefault
-        } else {
-            req.get_encode_type()
-        };
-
-        let exec_stats = ExecuteStats::new(executors_len);
 
         Ok(Self {
             deadline,
-            out_most_executor,
-            output_offsets,
+            execution_groups,
             config,
             collect_exec_summary,
             exec_stats,
             stream_row_limit,
-            encode_type,
             paging_size,
             quota_limiter,
         })
+    }
+
+    fn split_execution_groups<S: Storage<Statistics = SS> + 'static, F: KvFormat>(
+        mut req: DagRequest,
+        storage: S,
+        first_scan_ranges: Vec<KeyRange>,
+        config: Arc<EvalConfig>,
+        is_scanned_range_aware: bool,
+        locate_key_fn: fn(key: &[u8]) -> Option<(Arc<metapb::Region>, S)>,
+    ) -> Result<Vec<ExecutionGroup<SS>>> {
+        let executors = req.take_executors().to_vec();
+        let mut barriers = req.take_parital_output_barriers();
+        if barriers.len() == 0 {
+            return Ok(vec![ExecutionGroup::Instant(ExecutorsWithOutput::new::<
+                _,
+                F,
+            >(
+                executors,
+                Simple((storage, first_scan_ranges)),
+                config,
+                is_scanned_range_aware,
+                req.take_output_offsets().into(),
+                req.get_encode_type(),
+            )?)]);
+        }
+
+        let mut groups = Vec::with_capacity(barriers.len() + 1);
+        let first_barrier = barriers.first_mut().unwrap();
+        let last_group_end = first_barrier.get_position() as usize;
+        if last_group_end <= 0 {
+            return Err(other_err!(
+                "invalid barrier position: {} at index: 0",
+                last_group_end
+            ));
+        }
+
+        groups.push(ExecutionGroup::Instant(ExecutorsWithOutput::new::<_, F>(
+            executors[..last_group_end].to_vec(),
+            Simple((storage, first_scan_ranges)),
+            config.clone(),
+            is_scanned_range_aware,
+            first_barrier.take_output_offsets(),
+            first_barrier.get_encode_type(),
+        )?));
+
+        let barriers_len = barriers.len();
+        for i in 1..=barriers_len {
+            let (group_end, output_offsets, encode_type) = if i == barriers_len {
+                (
+                    executors.len(),
+                    req.take_output_offsets(),
+                    req.get_encode_type(),
+                )
+            } else {
+                let barrier = &mut barriers[i];
+                (
+                    barrier.get_position() as usize,
+                    barrier.take_output_offsets(),
+                    barrier.get_encode_type(),
+                )
+            };
+
+            if group_end <= last_group_end || group_end > executors.len() {
+                return Err(other_err!(
+                    "invalid barrier position: {} at index: {}",
+                    group_end,
+                    i + 1
+                ));
+            }
+
+            let executors = &executors[last_group_end..group_end];
+            groups.push(ExecutionGroup::Descriptors(
+                ExecutorDescriptors::new::<S, F>(
+                    executors[last_group_end..group_end].to_vec(),
+                    output_offsets,
+                    encode_type,
+                    locate_key_fn,
+                )?,
+            ));
+        }
+
+        Ok(groups)
     }
 
     fn batch_initial_size() -> usize {
@@ -498,97 +814,95 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
     /// ranges. e.g.: [(k1 -> k2), (k4 -> k5)] may got response (k1, k2, k4)
     /// with IntervalRange like (k1, k4).
     pub async fn handle_request(&mut self) -> Result<(SelectResponse, Option<IntervalRange>)> {
-        let mut chunks = vec![];
-        let mut batch_size = Self::batch_initial_size();
         let mut warnings = self.config.new_eval_warnings();
         let mut ctx = EvalContext::new(self.config.clone());
-        let mut record_all = 0;
 
-        loop {
-            let mut chunk = Chunk::default();
-            let mut sample = self.quota_limiter.new_sample(true);
-            let (drained, record_len) = {
-                let (cpu_time, res) = sample
-                    .observe_cpu_async(self.internal_handle_request(
-                        false,
-                        batch_size,
-                        &mut chunk,
-                        &mut warnings,
-                        &mut ctx,
-                    ))
-                    .await;
-                sample.add_cpu_time(cpu_time);
-                res?
+        let groups_len = self.execution_groups.len();
+        let mut sel_resp = SelectResponse::default();
+        let mut interval_range_resp = None;
+        for i in 0..groups_len {
+            let (mut write_chunks, mut write_results) = if i < groups_len - 1 {
+                (None, Some(vec![]))
+            } else {
+                (Some(vec![]), None)
             };
-            if chunk.has_rows_data() {
-                sample.add_read_bytes(chunk.get_rows_data().len());
+            let paging = self.paging_size.is_some() && i == 0;
+            let internal_range = self
+                .handle_one_executor_group(
+                    i,
+                    &mut warnings,
+                    &mut ctx,
+                    paging,
+                    &mut write_chunks,
+                    &mut write_results,
+                )
+                .await?;
+
+            if paging {
+                interval_range_resp = internal_range;
             }
 
-            let quota_delay = self.quota_limiter.consume_sample(sample, true).await;
-            if !quota_delay.is_zero() {
-                NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
-                    .get(ThrottleType::dag)
-                    .inc_by(quota_delay.as_micros() as u64);
-            }
-
-            if record_len > 0 {
-                chunks.push(chunk);
-                record_all += record_len;
-            }
-
-            if drained.stop() || self.paging_size.is_some_and(|p| record_all >= p as usize) {
-                self.out_most_executor
-                    .collect_exec_stats(&mut self.exec_stats);
-                let range = if drained == BatchExecIsDrain::Drain {
-                    None
-                } else {
-                    // It's not allowed to stop paging when BatchExecIsDrain::PagingDrain.
-                    self.paging_size
-                        .map(|_| self.out_most_executor.take_scanned_range())
-                };
-
-                let mut sel_resp = SelectResponse::default();
+            let (group, next_groups) = self.execution_groups[i..].split_first_mut().unwrap();
+            if let Some(chunks) = write_chunks {
                 sel_resp.set_chunks(chunks.into());
-                sel_resp.set_encode_type(self.encode_type);
-
-                // TODO: output_counts should not be i64. Let's fix it in Coprocessor DAG V2.
-                sel_resp.set_output_counts(
-                    self.exec_stats
-                        .scanned_rows_per_range
-                        .iter()
-                        .map(|v| *v as i64)
-                        .collect(),
-                );
-
-                if self.collect_exec_summary {
-                    let summaries = self
-                        .exec_stats
-                        .summary_per_executor
-                        .iter()
-                        .map(|summary| {
-                            let mut ret = ExecutorExecutionSummary::default();
-                            ret.set_num_iterations(summary.num_iterations as u64);
-                            ret.set_num_produced_rows(summary.num_produced_rows as u64);
-                            ret.set_time_processed_ns(summary.time_processed_ns as u64);
-                            ret
-                        })
-                        .collect::<Vec<_>>();
-                    sel_resp.set_execution_summaries(summaries.into());
+                sel_resp.set_encode_type(group.instant()?.encode_type);
+            } else if let Some(results) = write_results.as_mut() {
+                let group = group.mut_instant()?;
+                let next_group = next_groups.iter_mut().next().unwrap();
+                next_group.build_instant(&mut ctx, results, &group.out_most_executor.schema())?;
+                let mut chunks = Vec::with_capacity(results.len());
+                for result in results {
+                    if !result.logical_rows.is_empty() {
+                        let mut chunk = Chunk::default();
+                        group.encode_result_to_trunk(&mut ctx, &mut chunk, &result, None)?;
+                        chunks.push(chunk);
+                    }
                 }
 
-                sel_resp.set_warnings(warnings.warnings.into());
-                sel_resp.set_warning_count(warnings.warning_cnt as i64);
-                return Ok((sel_resp, range));
+                let mut partial_output = PartialOutput::default();
+                partial_output.set_chunks(chunks.into());
+                partial_output.set_encode_type(group.encode_type);
+                sel_resp.mut_partial_outputs().push(partial_output);
             }
-
-            // Grow batch size
-            grow_batch_size(&mut batch_size);
         }
+
+        // TODO: output_counts should not be i64. Let's fix it in Coprocessor DAG V2.
+        sel_resp.set_output_counts(
+            self.exec_stats
+                .scanned_rows_per_range
+                .iter()
+                .map(|v| *v as i64)
+                .collect(),
+        );
+
+        if self.collect_exec_summary {
+            let summaries = self
+                .exec_stats
+                .summary_per_executor
+                .iter()
+                .map(|summary| {
+                    let mut ret = ExecutorExecutionSummary::default();
+                    ret.set_num_iterations(summary.num_iterations as u64);
+                    ret.set_num_produced_rows(summary.num_produced_rows as u64);
+                    ret.set_time_processed_ns(summary.time_processed_ns as u64);
+                    ret
+                })
+                .collect::<Vec<_>>();
+            sel_resp.set_execution_summaries(summaries.into());
+        }
+
+        sel_resp.set_warnings(warnings.warnings.into());
+        sel_resp.set_warning_count(warnings.warning_cnt as i64);
+        Ok((sel_resp, interval_range_resp))
     }
 
     pub async fn handle_streaming_request(
         &mut self,
     ) -> Result<(Option<(StreamResponse, IntervalRange)>, bool)> {
+        if self.execution_groups.len() != 1 {
+            return Err(other_err!("not supported"));
+        }
+
         let mut warnings = self.config.new_eval_warnings();
 
         let (mut record_len, mut is_drained) = (0, false);
@@ -600,11 +914,12 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         while record_len < self.stream_row_limit && !is_drained {
             let mut current_chunk = Chunk::default();
             // TODO: Streaming coprocessor on TiKV is just not enabled in TiDB now.
-            let (drained, len) = self
+            let (drained, result) = self
                 .internal_handle_request(
-                    true,
+                    0,
+                    Some(EncodeType::TypeDefault),
                     batch_size.min(self.stream_row_limit - record_len),
-                    &mut current_chunk,
+                    Some(&mut current_chunk),
                     &mut warnings,
                     &mut ctx,
                 )
@@ -612,12 +927,15 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             chunk
                 .mut_rows_data()
                 .extend_from_slice(current_chunk.get_rows_data());
-            record_len += len;
+            record_len += result.logical_rows.len();
             is_drained = drained.stop();
         }
 
         if !is_drained || record_len > 0 {
-            let range = self.out_most_executor.take_scanned_range();
+            let range = self.execution_groups[0]
+                .mut_instant()?
+                .out_most_executor
+                .take_scanned_range();
             return self
                 .make_stream_response(chunk, warnings)
                 .map(|r| (Some((r, range)), is_drained));
@@ -626,11 +944,22 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
     }
 
     pub fn collect_storage_stats(&mut self, dest: &mut SS) {
-        self.out_most_executor.collect_storage_stats(dest);
+        for group in &mut self.execution_groups {
+            if let ExecutionGroup::Instant(group) = group {
+                group.out_most_executor.collect_storage_stats(dest);
+            }
+        }
     }
 
     pub fn can_be_cached(&self) -> bool {
-        self.out_most_executor.can_be_cached()
+        self.execution_groups.len() == 1
+            && self.execution_groups.first().map_or(false, |group| {
+                if let ExecutionGroup::Instant(group) = group {
+                    group.out_most_executor.can_be_cached()
+                } else {
+                    false
+                }
+            })
     }
 
     pub fn collect_scan_summary(&mut self, dest: &mut ExecSummary) {
@@ -640,64 +969,96 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         }
     }
 
-    async fn internal_handle_request(
+    async fn handle_one_executor_group(
         &mut self,
-        is_streaming: bool,
-        batch_size: usize,
-        chunk: &mut Chunk,
+        group_idx: usize,
         warnings: &mut EvalWarnings,
         ctx: &mut EvalContext,
-    ) -> Result<(BatchExecIsDrain, usize)> {
-        let mut record_len = 0;
-
-        self.deadline.check()?;
-
-        let mut result = self.out_most_executor.next_batch(batch_size).await;
-
-        let is_drained = result.is_drained?;
-
-        if !result.logical_rows.is_empty() {
-            assert_eq!(
-                result.physical_columns.columns_len(),
-                self.out_most_executor.schema().len()
-            );
-            {
-                let data = chunk.mut_rows_data();
-                // Although `schema()` can be deeply nested, it is ok since we process data in
-                // batch.
-                if is_streaming || self.encode_type == EncodeType::TypeDefault {
-                    data.reserve(
-                        result
-                            .physical_columns
-                            .maximum_encoded_size(&result.logical_rows, &self.output_offsets),
-                    );
-                    result.physical_columns.encode(
-                        &result.logical_rows,
-                        &self.output_offsets,
-                        self.out_most_executor.schema(),
-                        data,
+        paging: bool,
+        write_chunks: &mut Option<Vec<Chunk>>,
+        append_results: &mut Option<Vec<BatchExecuteResult>>,
+    ) -> Result<Option<IntervalRange>> {
+        let mut record_all = 0;
+        let mut batch_size = Self::batch_initial_size();
+        loop {
+            let mut chunk = Chunk::default();
+            let mut sample = self.quota_limiter.new_sample(true);
+            let (drained, result) = {
+                let (cpu_time, res) = sample
+                    .observe_cpu_async(self.internal_handle_request(
+                        group_idx,
+                        None,
+                        batch_size,
+                        write_chunks.is_some().then_some(&mut chunk),
+                        warnings,
                         ctx,
-                    )?;
-                } else {
-                    data.reserve(
-                        result
-                            .physical_columns
-                            .maximum_encoded_size_chunk(&result.logical_rows, &self.output_offsets),
-                    );
-                    result.physical_columns.encode_chunk(
-                        &result.logical_rows,
-                        &self.output_offsets,
-                        self.out_most_executor.schema(),
-                        data,
-                        ctx,
-                    )?;
-                }
+                    ))
+                    .await;
+                sample.add_cpu_time(cpu_time);
+                res?
+            };
+
+            record_all += result.logical_rows.len();
+            if let Some(chunks) = write_chunks {
+                sample.add_read_bytes(chunk.get_rows_data().len());
+                chunks.push(chunk);
             }
-            record_len += result.logical_rows.len();
-        }
 
-        warnings.merge(&mut result.warnings);
-        Ok((is_drained, record_len))
+            if let Some(append_results) = append_results {
+                append_results.push(result);
+            }
+
+            let quota_delay = self.quota_limiter.consume_sample(sample, true).await;
+            if !quota_delay.is_zero() {
+                NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
+                    .get(ThrottleType::dag)
+                    .inc_by(quota_delay.as_micros() as u64);
+            }
+
+            if drained.stop()
+                || (paging && self.paging_size.is_some_and(|p| record_all >= p as usize))
+            {
+                let group = self.execution_groups[group_idx].mut_instant()?;
+                group
+                    .out_most_executor
+                    .collect_exec_stats(&mut self.exec_stats);
+                let range = if drained == BatchExecIsDrain::Drain {
+                    None
+                } else {
+                    // It's not allowed to stop paging when BatchExecIsDrain::PagingDrain.
+                    self.paging_size
+                        .map(|_| group.out_most_executor.take_scanned_range())
+                };
+                return Ok(range);
+            }
+
+            // Grow batch size
+            grow_batch_size(&mut batch_size);
+        }
+    }
+
+    async fn internal_handle_request(
+        &mut self,
+        group: usize,
+        force_encode_type: Option<EncodeType>,
+        batch_size: usize,
+        write_chunk: Option<&mut Chunk>,
+        warnings: &mut EvalWarnings,
+        ctx: &mut EvalContext,
+    ) -> Result<(BatchExecIsDrain, BatchExecuteResult)> {
+        self.deadline.check()?;
+        let group = self.execution_groups[group].mut_instant()?;
+        let mut result = group.out_most_executor.next_batch(batch_size).await;
+        match result.is_drained {
+            Ok(is_drained) => {
+                if let Some(chunk) = write_chunk {
+                    group.encode_result_to_trunk(ctx, chunk, &result, force_encode_type)?;
+                }
+                warnings.merge(&mut result.warnings);
+                Ok((is_drained, result))
+            }
+            Err(err) => Err(err),
+        }
     }
 
     fn make_stream_response(
@@ -705,8 +1066,12 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         chunk: Chunk,
         warnings: EvalWarnings,
     ) -> Result<StreamResponse> {
-        self.out_most_executor
-            .collect_exec_stats(&mut self.exec_stats);
+        for group in self.execution_groups.iter_mut() {
+            group
+                .mut_instant()?
+                .out_most_executor
+                .collect_exec_stats(&mut self.exec_stats);
+        }
 
         let mut s_resp = StreamResponse::default();
         s_resp.set_data(box_try!(chunk.write_to_bytes()));

@@ -13,11 +13,10 @@
 #![feature(specialization)]
 #![feature(stmt_expr_attributes)]
 
-#[macro_use(box_try, warn)]
-extern crate tikv_util;
-
 #[macro_use(other_err)]
 extern crate tidb_query_common;
+#[macro_use(box_try, warn)]
+extern crate tikv_util;
 
 #[cfg(test)]
 pub use tidb_query_aggr::*;
@@ -26,6 +25,7 @@ pub use tidb_query_expr::function::*;
 #[cfg(test)]
 pub use tidb_query_expr::*;
 mod fast_hash_aggr_executor;
+mod index_lookup_executor;
 mod index_scan_executor;
 pub mod interface;
 mod limit_executor;
