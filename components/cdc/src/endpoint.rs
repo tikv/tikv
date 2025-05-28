@@ -1256,7 +1256,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                     _ => return,
                 }
                 if let Err(e) = sink.unbounded_send(incremental_scan_barrier, true) {
-                    error!("cdc failed to schedule barrier for delta before delta scan";
+                    warn!("cdc failed to schedule barrier for delta before delta scan";
                         "region_id" => region_id,
                         "observe_id" => ?observe_id,
                         "downstream_id" => ?downstream_id,
