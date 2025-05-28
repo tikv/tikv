@@ -523,7 +523,7 @@ impl<E: KvEngine> Initializer<E> {
             .send_all(events, self.scan_truncated.clone())
             .await
         {
-            error!("cdc send scan event failed"; "req_id" => ?self.request_id);
+            warn!("cdc send scan event failed"; "err" => ?e, "req_id" => ?self.request_id);
             return Err(Error::Sink(e));
         }
 
