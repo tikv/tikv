@@ -1078,15 +1078,13 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         };
         let mut handle_result = HandleResult::KeepProcessing;
         #[cfg(feature = "linearizability-track")]
-        {
-            set_tls_peer_state(PeerStateTracker::new(
-                peer.region_id(),
-                peer.peer_id(),
-                peer.get_peer().term(),
-                peer.get_peer().get_store().commit_index(),
-                peer.get_peer().get_store().applied_index(),
-            ));
-        }
+        set_tls_peer_state(PeerStateTracker::new(
+            peer.region_id(),
+            peer.peer_id(),
+            peer.get_peer().term(),
+            peer.get_peer().get_store().commit_index(),
+            peer.get_peer().get_store().applied_index(),
+        ));
 
         fail_point!(
             "pause_on_peer_collect_message",

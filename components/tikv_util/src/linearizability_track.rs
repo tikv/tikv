@@ -11,7 +11,7 @@ mod linearizability_track {
             if let Some(debug) = tracker.linearizability_track.as_ref() {
                 match debug.scheduler_snapshot_states {
                     Some(ref states) => {
-                        info!("Linearizability Tracker Write";
+                        info!("Linearizability Track Write";
                             "apply_state" => ?debug.apply_state,
                             "ready_state" => ?debug.ready_state,
                             "propose_state" => ?debug.propose_state,
@@ -25,7 +25,7 @@ mod linearizability_track {
                         );
                     }
                     None => {
-                        info!("Linearizability Tracker Read";
+                        info!("Linearizability Track Read";
                             "snapshot_seq_no" => ?debug.snapshot_seq_no,
                             "ready_state" => ?debug.ready_state,
                             "propose_state" => ?debug.propose_state,
@@ -42,7 +42,7 @@ mod linearizability_track {
 
     pub fn log_read_index(uuid: Uuid, start_ts: u64) {
         let peer_state = get_tls_peer_state();
-        info!("Linearizability Tracker leader step read index";
+        info!("Linearizability Track leader step read index";
             "peer_state" => ?peer_state,
             "uuid" => ?uuid,
             "start_ts" => start_ts,
@@ -56,7 +56,7 @@ mod linearizability_track {
         after_seq_no: u64,
     ) {
         let peer_state = get_tls_peer_state();
-        info!("Linearizability Tracker apply entries";
+        info!("Linearizability Track apply entries";
             "after_seq_no" => after_seq_no,
             "before_seq_no" => before_seq_no,
             "to" => max_index,

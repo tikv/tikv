@@ -781,13 +781,10 @@ where
             }
             Ok(CmdRes::Snap(s)) => {
                 #[cfg(feature = "linearizability-track")]
-                {
+                GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
                     use engine_traits::SnapshotMiscExt;
-                    let seq_no = s.get_snapshot().sequence_number();
-                    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-                        tracker.track_snapshot_seq_no(seq_no);
-                    });
-                }
+                    tracker.track_snapshot_seq_no(s.get_snapshot().sequence_number());
+                });
                 Ok(s)
             }
             Err(e) => {

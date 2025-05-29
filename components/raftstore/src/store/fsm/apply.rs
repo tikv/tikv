@@ -4522,19 +4522,17 @@ where
                     #[cfg(feature = "linearizability-track")]
                     let (mut min_index, mut max_index) = (u64::MAX, 0);
                     #[cfg(feature = "linearizability-track")]
-                    {
-                        apply.entries.first().map(|cached_entries| {
-                            cached_entries.iter_entries(|entry| {
-                                let index = entry.get_index();
-                                if index < min_index {
-                                    min_index = index;
-                                }
-                                if index > max_index {
-                                    max_index = index;
-                                }
-                            });
+                    apply.entries.first().map(|cached_entries| {
+                        cached_entries.iter_entries(|entry| {
+                            let index = entry.get_index();
+                            if index < min_index {
+                                min_index = index;
+                            }
+                            if index > max_index {
+                                max_index = index;
+                            }
                         });
-                    }
+                    });
                     #[cfg(feature = "linearizability-track")]
                     let before_seq_no = if min_index <= max_index {
                         Some(apply_ctx.engine.get_latest_sequence_number())
@@ -4771,15 +4769,13 @@ where
 
     fn handle_normal(&mut self, normal: &mut impl DerefMut<Target = ApplyFsm<EK>>) -> HandleResult {
         #[cfg(feature = "linearizability-track")]
-        {
-            set_tls_peer_state(PeerStateTracker::new(
-                normal.delegate.region_id(),
-                normal.delegate.id(),
-                normal.delegate.term,
-                normal.delegate.apply_state.commit_index,
-                normal.delegate.apply_state.applied_index,
-            ));
-        }
+        set_tls_peer_state(PeerStateTracker::new(
+            normal.delegate.region_id(),
+            normal.delegate.id(),
+            normal.delegate.term,
+            normal.delegate.apply_state.commit_index,
+            normal.delegate.apply_state.applied_index,
+        ));
 
         let mut handle_result = HandleResult::KeepProcessing;
         normal.delegate.handle_start = Some(Instant::now_coarse());
