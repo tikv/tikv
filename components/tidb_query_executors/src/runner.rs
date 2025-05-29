@@ -216,6 +216,7 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
                     ranges,
                     primary_column_ids,
                     versions,
+                    is_scanned_range_aware,
                 )?
                 .collect_summary(summary_slot_index),
             )

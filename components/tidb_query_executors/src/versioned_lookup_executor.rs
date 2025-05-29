@@ -10,7 +10,7 @@ use tidb_query_common::{
     Result,
     error::EvaluateError,
     storage::{
-        IntervalRange, Range, Storage,
+        IntervalRange, PointRange, Range, Storage,
         ranges_iter::{IterStatus, RangesIterator},
     },
 };
@@ -28,12 +28,22 @@ use crate::{
     },
 };
 
+const KEY_BUFFER_CAPACITY: usize = 64;
 pub struct BatchVersionedLookupExecutor<S: Storage, F: KvFormat> {
     storage: S,
     ranges_iter: RangesIterator,
     versions: Vec<u64>,
     version_index: usize,
     table_scan_helper: TableScanExecutorImpl,
+
+    // The following fields are used for calculating scanned range.
+    // for versioned scan, all its range is point range, we maintain
+    // the working_begin_key and working_end_key to calculate the scanned range
+    // for working_begin_key, it will be set to the first PointRange's key, and
+    // be updated after each take_scanned_range call
+    is_scanned_range_aware: bool,
+    working_begin_key: Vec<u8>,
+    working_end_key: Vec<u8>,
 
     /// A flag indicating whether this executor is ended. When table is drained
     /// or there was an error scanning the table, this flag will be set to
@@ -60,6 +70,7 @@ impl<S: Storage, F: KvFormat> BatchVersionedLookupExecutor<S, F> {
         key_ranges: Vec<KeyRange>,
         primary_column_ids: Vec<i64>,
         versions: Vec<u64>,
+        is_scanned_range_aware: bool,
     ) -> Result<Self> {
         tidb_query_datatype::codec::table::check_table_ranges::<F>(&key_ranges)?;
         let ranges: Vec<Range> = key_ranges
@@ -79,6 +90,18 @@ impl<S: Storage, F: KvFormat> BatchVersionedLookupExecutor<S, F> {
                     "BatchVersionedLookupExecutor only support point range".into(),
                 )
                 .into());
+            }
+        }
+        let mut working_begin_key: Vec<u8> = Vec::with_capacity(KEY_BUFFER_CAPACITY);
+        // If there are ranges, set the working_begin_key to the first range's key.
+        // This is used to calculate the scanned range later.
+        if ranges.len() > 0 {
+            match &ranges[0] {
+                Range::Point(point) => {
+                    // If the first range is a point range, set the working_begin_key to its key.
+                    working_begin_key.extend_from_slice(&point.0);
+                }
+                _ => unreachable!("BatchVersionedLookupExecutor should only support point ranges"),
             }
         }
 
@@ -126,16 +149,37 @@ impl<S: Storage, F: KvFormat> BatchVersionedLookupExecutor<S, F> {
             versions,
             version_index: 0,
             table_scan_helper: ts,
+            is_scanned_range_aware,
+            working_begin_key,
+            working_end_key: Vec::with_capacity(KEY_BUFFER_CAPACITY),
             is_ended: false,
             _phantom: PhantomData, // Initialize PhantomData
         })
     }
 
-    fn next(&mut self) -> Result<Option<F::KvPair>> {
+    fn update_working_end_key_from_point_range(&mut self, point: &PointRange) {
+        self.working_end_key.clear();
+        self.working_end_key.extend_from_slice(&point.0);
+        self.working_end_key.push(0); // Ensure end key is exclusive
+    }
+
+    fn update_working_end_key_from_row(&mut self, row: &F::KvPair) {
+        self.working_end_key.clear();
+        self.working_end_key.extend(row.key());
+        self.working_end_key.push(0); // Ensure end key is exclusive
+    }
+
+    fn next(&mut self, update_scanned_range: bool) -> Result<Option<F::KvPair>> {
         loop {
             let range = self.ranges_iter.next();
             let some_row = match range {
                 IterStatus::NewRange(Range::Point(r)) => {
+                    if self.is_scanned_range_aware && self.ranges_iter.is_drained() {
+                        // if ranges_iter is drained, we should update the working end key,
+                        // otherwise if update_scanned_range is not true,
+                        // the working_end_key will not be updated
+                        self.update_working_end_key_from_point_range(&r);
+                    }
                     self.ranges_iter.notify_drained();
                     self.version_index += 1;
                     self.storage.get_with_version(
@@ -151,6 +195,13 @@ impl<S: Storage, F: KvFormat> BatchVersionedLookupExecutor<S, F> {
             };
             if let Some(row) = some_row {
                 let kv = F::make_kv_pair(row).map_err(|e| EvaluateError::Other(e.into()))?;
+                if self.is_scanned_range_aware
+                    && !self.ranges_iter.is_drained()
+                    && update_scanned_range
+                {
+                    // update end key
+                    self.update_working_end_key_from_row(&kv);
+                }
                 return Ok(Some(kv));
             } else {
                 // the target data is gc-ed, so read the next row
@@ -173,8 +224,8 @@ impl<S: Storage, F: KvFormat> BatchVersionedLookupExecutor<S, F> {
     ) -> Result<bool> {
         assert!(scan_rows > 0);
 
-        for _ in 0..scan_rows {
-            let some_row = self.next()?;
+        for i in 0..scan_rows {
+            let some_row = self.next(i == scan_rows - 1)?;
             if let Some(row) = some_row {
                 // Retrieved one row.
 
@@ -255,14 +306,22 @@ impl<S: Storage, F: KvFormat> BatchExecutor for BatchVersionedLookupExecutor<S, 
 
     #[inline]
     fn take_scanned_range(&mut self) -> IntervalRange {
-        // TODO support scanned range
-        let range = IntervalRange::default();
+        assert!(self.is_scanned_range_aware);
+
+        let mut range = IntervalRange::default();
+        std::mem::swap(&mut range.lower_inclusive, &mut self.working_begin_key);
+        std::mem::swap(&mut range.upper_exclusive, &mut self.working_end_key);
+
+        self.working_begin_key
+            .extend_from_slice(&range.upper_exclusive);
+
         range
     }
 
     #[inline]
     fn can_be_cached(&self) -> bool {
-        // always return false because VersionedLookup is even not snapshot read
+        // always return false because the cached key in TiDB does not consider the
+        // versions in VersionedLookup
         return false;
     }
 }
