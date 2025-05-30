@@ -2299,15 +2299,15 @@ mod tests {
                     file_name
                 );
 
-                for (i, label) in ["minTs", "maxTs", "minDefaultTs"].iter().enumerate() {
-                    let val = parts[i].parse::<u64>();
+                for (i, label) in ["flushTs", "minDefaultTs", "minTs", "maxTs"].iter().enumerate() {
+                    let val = u64::from_str_radix(parts[i], 16); // 如果 parts 是 hex 格式，记得用 16 进制
                     assert!(
                         val.is_ok(),
-                        "Failed to parse {} as u64 in file name: {}",
-                        label,
-                        file_name
+                        "Failed to parse '{}' as u64 (hex) for {} in file name: {}",
+                        parts[i], label, file_name
                     );
                 }
+
                 meta_count += 1;
             } else if entry.path().extension() == Some(OsStr::new("log")) {
                 log_count += 1;
