@@ -1,9 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::atomic::*;
+use std::sync::{atomic::*, Arc, Mutex};
 
 use engine_traits::{KvEngine, RaftEngine};
 use futures::{channel::mpsc, FutureExt, SinkExt, StreamExt, TryFutureExt};
+use futures_util::stream::AbortHandle;
 use grpcio::{self, *};
 use kvproto::brpb::*;
 use raftstore::store::{
@@ -18,7 +19,12 @@ use super::Task;
 #[derive(Clone)]
 pub struct Service<EK: KvEngine, ER: RaftEngine> {
     scheduler: Scheduler<Task>,
+<<<<<<< HEAD
     router: Option<RaftRouter<EK, ER>>,
+=======
+    snap_br_env: disk_snap::Env<H>,
+    abort_last_req: Arc<Mutex<Option<AbortHandle>>>,
+>>>>>>> 5cf15aacef (snap_backup: abort last connection of preparing while there are many (#16388))
 }
 
 impl<EK, ER> Service<EK, ER>
@@ -31,6 +37,7 @@ where
     pub fn new(scheduler: Scheduler<Task>) -> Self {
         Service {
             scheduler,
+<<<<<<< HEAD
             router: None,
         }
     }
@@ -40,6 +47,10 @@ where
         Service {
             scheduler,
             router: Some(router),
+=======
+            snap_br_env: env,
+            abort_last_req: Arc::default(),
+>>>>>>> 5cf15aacef (snap_backup: abort last connection of preparing while there are many (#16388))
         }
     }
 }
@@ -137,6 +148,47 @@ where
 
         ctx.spawn(send_task);
     }
+<<<<<<< HEAD
+=======
+
+    /// The new method for preparing a disk snapshot backup.
+    /// Generally there will be some steps for the client to do:
+    /// 1. Establish a `prepare_snapshot_backup` connection.
+    /// 2. Send a initial `UpdateLease`. And we should update the lease
+    /// periodically.
+    /// 3. Send `WaitApply` to each leader peer in this store.
+    /// 4. Once `WaitApply` for all regions have done, we can take disk
+    /// snapshot.
+    /// 5. Once all snapshots have been taken, send `Finalize` to stop.
+    fn prepare_snapshot_backup(
+        &mut self,
+        ctx: grpcio::RpcContext<'_>,
+        stream: grpcio::RequestStream<PrepareSnapshotBackupRequest>,
+        sink: grpcio::DuplexSink<PrepareSnapshotBackupResponse>,
+    ) {
+        let (l, new_cancel) = StreamHandleLoop::new(self.snap_br_env.clone());
+        let peer = ctx.peer();
+        // Note: should we disconnect here once there are more than one stream...?
+        // Generally once two streams enter here, one may exit
+        info!("A new prepare snapshot backup stream created!";
+            "peer" => %peer,
+            "stream_count" => %self.snap_br_env.active_stream(),
+        );
+        let abort_last_req = self.abort_last_req.clone();
+        self.snap_br_env.get_async_runtime().spawn(async move {
+            {
+                let mut lock = abort_last_req.lock().unwrap();
+                if let Some(cancel) = &*lock {
+                    cancel.abort();
+                }
+                *lock = Some(new_cancel);
+            }
+            let res = l.run(stream, sink.into()).await;
+            info!("stream closed; probably everything is done or a problem cannot be retried happens"; 
+                "result" => ?res, "peer" => %peer);
+        });
+    }
+>>>>>>> 5cf15aacef (snap_backup: abort last connection of preparing while there are many (#16388))
 }
 
 #[cfg(test)]
