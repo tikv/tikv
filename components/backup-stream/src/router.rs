@@ -159,6 +159,7 @@ pub struct FlushContext<'a> {
     pub store_id: u64,
     pub resolved_regions: &'a ResolvedRegions,
     pub resolved_ts: TimeStamp,
+    pub flush_ts: TimeStamp,
 }
 
 impl ApplyEvents {
@@ -1412,7 +1413,11 @@ impl StreamTaskHandler {
     }
 
     #[instrument(skip_all)]
-    pub async fn flush_backup_metadata(&self, metadata_info: MetadataInfo) -> Result<()> {
+    pub async fn flush_backup_metadata(
+        &self,
+        metadata_info: MetadataInfo,
+        flush_ts: TimeStamp,
+    ) -> Result<()> {
         if !metadata_info.file_groups.is_empty() {
             let mut min_begin_ts = u64::MAX;
             for file_group in metadata_info.file_groups.as_slice() {
@@ -1422,7 +1427,7 @@ impl StreamTaskHandler {
                     min_begin_ts = min_begin_ts.min(d.min_begin_ts_in_default_cf)
                 }
             }
-            let meta_path = metadata_info.path_to_meta(min_begin_ts);
+            let meta_path = metadata_info.path_to_meta(min_begin_ts, flush_ts.into_inner());
             let meta_buff = metadata_info.marshal_to()?;
             let buflen = meta_buff.len();
 
@@ -1489,7 +1494,8 @@ impl StreamTaskHandler {
             // flush meta file to storage.
             self.fill_region_info(cx, &mut backup_metadata);
             // flush backup metadata to external storage.
-            self.flush_backup_metadata(backup_metadata).await?;
+            self.flush_backup_metadata(backup_metadata, cx.flush_ts)
+                .await?;
             crate::metrics::FLUSH_DURATION
                 .with_label_values(&["save_files"])
                 .observe(sw.lap().as_secs_f64());
@@ -1746,6 +1752,7 @@ pub struct MetadataInfo {
     // the field files is deprecated in v6.3.0
     // pub files: Vec<DataFileInfo>,
     pub file_groups: Vec<DataFileGroup>,
+    // deprecated
     pub min_resolved_ts: Option<u64>,
     pub min_ts: Option<u64>,
     pub max_ts: Option<u64>,
@@ -1793,13 +1800,13 @@ impl MetadataInfo {
             .map_err(|err| Error::Other(box_err!("failed to marshal proto: {}", err)))
     }
 
-    fn path_to_meta(&self, min_begin_ts: u64) -> String {
+    fn path_to_meta(&self, min_begin_ts: u64, flush_ts: u64) -> String {
         format!(
-            "v1/backupmeta/{}-{}-{}-{}.meta",
+            "v1/backupmeta/{:X}-{:X}-{:X}-{:X}.meta",
+            flush_ts,
+            min_begin_ts,
             self.min_ts.unwrap_or_default(),
             self.max_ts.unwrap_or_default(),
-            min_begin_ts,
-            uuid::Uuid::new_v4()
         )
     }
 }
@@ -1969,6 +1976,7 @@ mod tests {
     };
     use online_config::{ConfigManager, OnlineConfig};
     use rand::Rng;
+    use serde_json::to_string;
     use tempfile::TempDir;
     use tikv_util::{
         codec::{
@@ -2259,7 +2267,10 @@ mod tests {
             }
         }
 
-        task_handler.flush_backup_metadata(meta).await.unwrap();
+        task_handler
+            .flush_backup_metadata(meta, TimeStamp::new(1))
+            .await
+            .unwrap();
         task_handler.clear_flushing_files().await;
 
         drop(router);
@@ -2360,6 +2371,7 @@ mod tests {
             store_id: 1,
             resolved_regions: &EMPTY_RESOLVE,
             resolved_ts: TimeStamp::new(1),
+            flush_ts: TimeStamp::new(1),
         };
         task_handler.do_flush(cx).await.unwrap();
         assert_eq!(task_handler.flush_failure_count(), 0);
@@ -2478,6 +2490,7 @@ mod tests {
             store_id: 42,
             resolved_regions: &EMPTY_RESOLVE,
             resolved_ts: TimeStamp::max(),
+            flush_ts: TimeStamp::max(),
         };
         let (task, _path) = task_handler("error_prone".to_owned()).await?;
         must_register_table(router.as_ref(), task, 1).await;
@@ -2534,6 +2547,7 @@ mod tests {
             store_id: 1,
             resolved_regions: &EMPTY_RESOLVE,
             resolved_ts: ts,
+            flush_ts: ts,
         };
         let rts = router.do_flush(cx).await.unwrap();
         assert_eq!(ts.into_inner(), rts);
@@ -2618,6 +2632,7 @@ mod tests {
             store_id: 42,
             resolved_regions: &EMPTY_RESOLVE,
             resolved_ts: TimeStamp::zero(),
+            flush_ts: TimeStamp::new(1),
         };
         for i in 0..=FLUSH_FAILURE_BECOME_FATAL_THRESHOLD {
             check_on_events_result(&router.on_events(build_kv_event((i * 10) as _, 10)).await);
@@ -3009,6 +3024,7 @@ mod tests {
             store_id: 42,
             resolved_regions: &EMPTY_RESOLVE,
             resolved_ts: TimeStamp::max(),
+            flush_ts: TimeStamp::new(1),
         };
         // set flush status to true, because we disabled the auto flush.
         t.set_flushing_status(true);
@@ -3120,6 +3136,7 @@ mod tests {
             store_id: 1,
             resolved_regions: &EMPTY_RESOLVE,
             resolved_ts: TimeStamp::new(1),
+            flush_ts: TimeStamp::new(1),
         };
         task_handler.do_flush(cx).await?;
         let duration = start.saturating_elapsed();
@@ -3191,7 +3208,22 @@ mod tests {
         for entry in walkdir::WalkDir::new(path) {
             let entry = entry.unwrap();
             if entry.path().extension() == Some(OsStr::new("meta")) {
-                meta_files.push(entry.path().to_path_buf());
+                if let Some(filename) = entry.path().file_stem().and_then(OsStr::to_str) {
+                    // v1/backupmeta/{a}-{b}-{c}-{d}.meta
+                    let parts: Vec<&str> = filename.split('-').collect();
+                    if parts.len() == 4 {
+                        for p in parts {
+                            assert!(
+                                u64::from_str_radix(p, 16).is_ok(),
+                                "Part '{}' is not a valid hex u64",
+                                p
+                            );
+                        }
+                        meta_files.push(entry.path().to_path_buf());
+                    } else {
+                        panic!("backup meta file format changed")
+                    }
+                }
             }
         }
         meta_files
