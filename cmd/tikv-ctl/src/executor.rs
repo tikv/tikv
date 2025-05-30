@@ -680,6 +680,18 @@ pub trait DebugExecutor {
 
     fn reset_to_version(&self, version: u64);
 
+<<<<<<< HEAD
+=======
+    fn flashback_to_version(
+        &self,
+        _version: u64,
+        _region_id: u64,
+        _key_range: KeyRange,
+        _start_ts: u64,
+        _commit_ts: u64,
+    ) -> Result<(), (KeyRange, grpcio::Error)>;
+
+>>>>>>> 3f7c63646e (ctl: backoff load key range in finish flashback when meet `notLeader` or `regionNotFound` (#16058))
     fn get_region_read_progress(&self, region_id: u64, log: bool, min_start_ts: u64);
 }
 
@@ -896,6 +908,36 @@ impl DebugExecutor for DebugClient {
             .unwrap_or_else(|e| perror_and_exit("DebugClient::get_cluster_info", e));
     }
 
+<<<<<<< HEAD
+=======
+    fn flashback_to_version(
+        &self,
+        version: u64,
+        region_id: u64,
+        key_range: KeyRange,
+        start_ts: u64,
+        commit_ts: u64,
+    ) -> Result<(), (KeyRange, grpcio::Error)> {
+        let mut req = FlashbackToVersionRequest::default();
+        req.set_version(version);
+        req.set_region_id(region_id);
+        req.set_start_key(key_range.get_start_key().to_owned());
+        req.set_end_key(key_range.get_end_key().to_owned());
+        req.set_start_ts(start_ts);
+        req.set_commit_ts(commit_ts);
+        match self.flashback_to_version(&req) {
+            Ok(_) => Ok(()),
+            Err(err) => {
+                println!(
+                    "flashback key_range {:?} with start_ts {:?}, commit_ts {:?} need to retry, err is {:?}",
+                    key_range, start_ts, commit_ts, err
+                );
+                Err((key_range, err))
+            }
+        }
+    }
+
+>>>>>>> 3f7c63646e (ctl: backoff load key range in finish flashback when meet `notLeader` or `regionNotFound` (#16058))
     fn get_region_read_progress(&self, region_id: u64, log: bool, min_start_ts: u64) {
         let mut req = GetRegionReadProgressRequest::default();
         req.set_region_id(region_id);
@@ -1207,6 +1249,20 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerImpl<ER> {
         Debugger::reset_to_version(self, version);
     }
 
+<<<<<<< HEAD
+=======
+    fn flashback_to_version(
+        &self,
+        _version: u64,
+        _region_id: u64,
+        _key_range: KeyRange,
+        _start_ts: u64,
+        _commit_ts: u64,
+    ) -> Result<(), (KeyRange, grpcio::Error)> {
+        unimplemented!("only available for remote mode");
+    }
+
+>>>>>>> 3f7c63646e (ctl: backoff load key range in finish flashback when meet `notLeader` or `regionNotFound` (#16058))
     fn get_region_read_progress(&self, _region_id: u64, _log: bool, _min_start_ts: u64) {
         println!("only available for remote mode");
         tikv_util::logger::exit_process_gracefully(-1);
@@ -1353,6 +1409,20 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerImplV2<ER> {
         unimplemented!()
     }
 
+<<<<<<< HEAD
+=======
+    fn flashback_to_version(
+        &self,
+        _region_id: u64,
+        _version: u64,
+        _key_range: KeyRange,
+        _start_ts: u64,
+        _commit_ts: u64,
+    ) -> Result<(), (KeyRange, grpcio::Error)> {
+        unimplemented!("only available for remote mode");
+    }
+
+>>>>>>> 3f7c63646e (ctl: backoff load key range in finish flashback when meet `notLeader` or `regionNotFound` (#16058))
     fn get_region_read_progress(&self, _region_id: u64, _log: bool, _min_start_ts: u64) {
         println!("only available for remote mode");
         tikv_util::logger::exit_process_gracefully(-1);

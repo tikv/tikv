@@ -682,9 +682,244 @@ fn compact_whole_cluster(
         handles.push(h);
     }
 
+<<<<<<< HEAD
     for h in handles {
         h.join().unwrap();
     }
+=======
+    handles.into_iter().for_each(|h| h.join().unwrap());
+}
+
+const FLASHBACK_TIMEOUT: u64 = 1800; // 1800s
+const WAIT_APPLY_FLASHBACK_STATE: u64 = 100; // 100ms
+
+fn flashback_whole_cluster(
+    pd_client: &RpcClient,
+    cfg: &TikvConfig,
+    mgr: Arc<SecurityManager>,
+    region_ids: Vec<u64>,
+    version: u64,
+    start_key: Vec<u8>,
+    end_key: Vec<u8>,
+) {
+    println!(
+        "flashback whole cluster with version {} from {:?} to {:?}",
+        version, start_key, end_key
+    );
+    let pd_client = pd_client.clone();
+    let cfg = cfg.clone();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .thread_name("flashback")
+        .enable_time()
+        .build()
+        .unwrap();
+
+    block_on(runtime.spawn(async move {
+        // Pre-create the debug executors for all stores.
+        let stores = match pd_client.get_all_stores(false) {
+            Ok(stores) => stores,
+            Err(e) => {
+                println!("failed to load all stores: {:?}", e);
+                return;
+            }
+        };
+        let debuggers = Mutex::new(stores
+            .into_iter()
+            .map(|s| {
+                let addr = pd_client.get_store(s.get_id()).unwrap().address;
+                let cfg_inner = cfg.clone();
+                let mgr = Arc::clone(&mgr);
+                let debug_executor = new_debug_executor(&cfg_inner, None, Some(&addr), mgr);
+                (s.get_id(), debug_executor)
+            } )
+            .collect::<HashMap<_, _>>());
+        // Prepare flashback.
+        let start_ts = pd_client.get_tso().await.unwrap();
+        let key_range_to_prepare = RwLock::new(load_key_range(&pd_client, start_key, end_key));
+        // Need to retry if all regions are not finish.
+        let mut key_range_to_finish = key_range_to_prepare.read().unwrap().clone();
+        loop {
+            // Traverse all regions and prepare flashback.
+            let mut futures = Vec::default();
+            let read_result = key_range_to_prepare.read().unwrap().clone();
+            read_result.into_iter().
+            filter(|(_, (region_id, _))| {
+                region_ids.is_empty() || region_ids.contains(region_id)
+            })
+            .for_each(|((start_key, end_key), (region_id, store_id))| {
+                let debuggers = &debuggers;
+                let key_range_to_prepare = &key_range_to_prepare;
+                let key_range = build_key_range(&start_key, &end_key, false);
+                let f = async move {
+                    let debuggers = debuggers.lock().unwrap();
+                    match debuggers.get(&store_id).unwrap().flashback_to_version(
+                        version,
+                        region_id,
+                        key_range,
+                        start_ts.into_inner(),
+                        0,
+                    ) {
+                        Ok(_) => {
+                            key_range_to_prepare
+                                .write()
+                                .unwrap()
+                                .remove(&(start_key, end_key));
+                            Ok(())
+                        }
+                        Err(err) => {
+                            println!(
+                                "prepare flashback region {} with start_ts {:?} to version {} failed, error: {:?}",
+                                region_id, start_ts, version, err
+                            );
+                            Err(err)
+                        },
+                    }
+                };
+                futures.push(f);
+            });
+
+            // Wait for finishing prepare flashback.
+            match tokio::time::timeout(
+                Duration::from_secs(FLASHBACK_TIMEOUT),
+                try_join_all(futures),
+            )
+            .await
+            {
+                Ok(res) => {
+                    if let Err((key_range, _)) = res {
+                        // Retry specific key range to prepare flashback.
+                        let stale_key_range = (key_range.start_key.clone(), key_range.end_key.clone());
+                        let mut key_range_to_prepare = key_range_to_prepare.write().unwrap();
+                        // Remove stale key range.
+                        key_range_to_prepare.remove(&stale_key_range);
+                        key_range_to_finish.remove(&stale_key_range);
+                        load_key_range(&pd_client, stale_key_range.0.clone(), stale_key_range.1.clone())
+                            .into_iter().for_each(|(key_range, region_info)| {
+                                // Need to update `key_range_to_prepare` to replace stale key range.
+                                key_range_to_prepare.insert(key_range.clone(), region_info);
+                                // Need to update `key_range_to_finish` as well.
+                                key_range_to_finish.insert(key_range, region_info);
+                            });
+                        thread::sleep(Duration::from_micros(WAIT_APPLY_FLASHBACK_STATE));
+                        continue;
+                    }
+                    break;
+                }
+                Err(e) => {
+                    println!(
+                        "prepare flashback with start_ts {:?} timeout. err: {:?}",
+                        start_ts, e
+                    );
+                    return;
+                }
+            }
+        }
+
+        // Flashback for all regions.
+        let commit_ts = pd_client.get_tso().await.unwrap();
+        let key_range_to_finish = RwLock::new(key_range_to_finish);
+        loop {
+            let mut futures = Vec::default();
+            let read_result = key_range_to_finish.read().unwrap().clone();
+            read_result.into_iter()
+            .filter(|(_, (region_id, _))| {
+                region_ids.is_empty() || region_ids.contains(region_id)
+            })
+            .for_each(|((start_key, end_key), (region_id, store_id))| {
+                let debuggers = &debuggers;
+                let key_range_to_finish = &key_range_to_finish;
+                let key_range = build_key_range(&start_key, &end_key, false);
+                let f = async move {
+                    let debuggers = debuggers.lock().unwrap();
+                    match debuggers.get(&store_id).unwrap().flashback_to_version(
+                        version,
+                        region_id,
+                        key_range,
+                        start_ts.into_inner(),
+                        commit_ts.into_inner(),
+                    ) {
+                        Ok(_) => {
+                            key_range_to_finish
+                                .write()
+                                .unwrap()
+                                .remove(&(start_key, end_key));
+                            Ok(())
+                        }
+                        Err(err) => {
+                            println!(
+                                "finish flashback region {} with start_ts {:?} to version {} failed, error: {:?}",
+                                region_id, start_ts, version, err
+                            );
+                            Err(err)
+                        },
+                    }
+                };
+                futures.push(f);
+            });
+
+            // Wait for finishing flashback to version.
+            match tokio::time::timeout(
+                Duration::from_secs(FLASHBACK_TIMEOUT),
+                try_join_all(futures),
+            )
+            .await
+            {
+                Ok(res) => match res {
+                    Ok(_) => break,
+                    Err((key_range, err)) => {
+                        // Retry `NotLeader` or `RegionNotFound`.
+                        if err.to_string().contains("not leader") || err.to_string().contains("not found") {
+                            // When finished `PrepareFlashback`, the region may change leader in the `flashback in progress`
+                            // Neet to retry specific key range to finish flashback.
+                            let stale_key_range = (key_range.start_key.clone(), key_range.end_key.clone());
+                            let mut key_range_to_finish = key_range_to_finish.write().unwrap();
+                            // Remove stale key range.
+                            key_range_to_finish.remove(&stale_key_range);
+                            load_key_range(&pd_client, stale_key_range.0.clone(), stale_key_range.1.clone())
+                                .into_iter().for_each(|(key_range, region_info)| {
+                                // Need to update `key_range_to_finish` to replace stale key range.
+                                key_range_to_finish.insert(key_range, region_info);
+                            });
+                        }
+                        thread::sleep(Duration::from_micros(WAIT_APPLY_FLASHBACK_STATE));
+                        continue;
+                    }
+                },
+                Err(e) => {
+                    println!(
+                        "finish flashback with start_ts {:?}, commit_ts: {:?} timeout. err: {:?}",
+                        e, start_ts, commit_ts
+                    );
+                    return;
+                }
+            }
+        }
+    }))
+    .unwrap();
+
+    println!("flashback all stores success!");
+}
+
+// Load (region_id, leader's store id) in the cluster with key ranges.
+fn load_key_range(
+    pd_client: &RpcClient,
+    start_key: Vec<u8>,
+    end_key: Vec<u8>,
+) -> HashMap<(Vec<u8>, Vec<u8>), (u64, u64)> {
+    // Get all regions in the cluster.
+    let res = pd_client.batch_load_regions(start_key, end_key);
+    res.into_iter()
+        .flatten()
+        .map(|r| {
+            let cur_region = r.get_region();
+            let start_key = cur_region.get_start_key().to_owned();
+            let end_key = cur_region.get_end_key().to_owned();
+            let region_id = cur_region.get_id();
+            let leader_store_id = r.get_leader().get_store_id();
+            ((start_key, end_key), (region_id, leader_store_id))
+        })
+        .collect::<HashMap<_, _>>()
+>>>>>>> 3f7c63646e (ctl: backoff load key range in finish flashback when meet `notLeader` or `regionNotFound` (#16058))
 }
 
 fn read_fail_file(path: &str) -> Vec<(String, String)> {
