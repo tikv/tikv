@@ -223,8 +223,7 @@ where
             Callback::Write { trackers, .. } => trackers
                 .first()
                 .copied()
-                .map(|t| t.as_tracker_token())
-                .flatten(),
+                .and_then(|t| t.as_tracker_token()),
             _ => None,
         }
     }
