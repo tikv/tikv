@@ -382,7 +382,7 @@ impl BackupRange {
         let snapshot = match engine.snapshot(snap_ctx) {
             Ok(s) => s,
             Err(e) => {
-                error!(?e; "backup snapshot failed");
+                warn!("backup snapshot failed"; "err" => ?e, "ctx" => ?ctx);
                 return Err(e.into());
             }
         };
@@ -418,7 +418,7 @@ impl BackupRange {
             RescheduleChecker::new(tokio::task::yield_now, TASK_YIELD_DURATION);
         loop {
             if let Err(e) = scanner.scan_entries(&mut batch) {
-                error!(?e; "backup scan entries failed");
+                warn!("backup scan entries failed"; "err" => ?e, "ctx" => ?ctx);
                 return Err(e.into());
             };
             if batch.is_empty() {
@@ -459,7 +459,7 @@ impl BackupRange {
 
             // Build sst files.
             if let Err(e) = writer.write(entries, true) {
-                error_unknown!(?e; "backup build sst failed");
+                warn!("backup build sst failed"; "err" => ?e, "ctx" => ?ctx);
                 return Err(e);
             }
             if resource_limiter.is_some() {
@@ -584,7 +584,7 @@ impl BackupRange {
         ) {
             Ok(w) => w,
             Err(e) => {
-                error_unknown!(?e; "backup writer failed");
+                warn!("backup writer failed"; "err" => ?e, "region" => ?self.region);
                 return Err(e);
             }
         };
@@ -601,7 +601,7 @@ impl BackupRange {
         let engine_snapshot = match engine.snapshot(snap_ctx) {
             Ok(s) => s,
             Err(e) => {
-                error!(?e; "backup raw kv snapshot failed");
+                warn!("backup raw kv snapshot failed"; "err" => ?e, "ctx" => ?ctx);
                 return Err(e.into());
             }
         };
@@ -863,7 +863,6 @@ impl<R: RegionInfoProvider> Progress<R> {
             }),
         );
         if let Err(e) = res {
-            // TODO: handle error.
             error!(?e; "backup seek region failed");
         }
 
@@ -1063,7 +1062,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                     };
                     match stat {
                         Err(err) => {
-                            error_unknown!(%err; "error during backup"; "region" => ?brange.region,);
+                            warn!("error during backup"; "region" => ?brange.region, "err" => %err);
                             let mut resp = BackupResponse::new();
                             resp.set_error(err.into());
                             if let Err(err) =  resp_tx.unbounded_send(resp) {
