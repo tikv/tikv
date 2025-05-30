@@ -60,7 +60,7 @@ impl CasualRouter<RocksEngine> for MockRaftStoreRouter {
     fn send(&self, region_id: u64, msg: CasualMessage<RocksEngine>) -> RaftStoreResult<()> {
         let mut senders = self.senders.lock().unwrap();
         if let Some(tx) = senders.get_mut(&region_id) {
-            tx.try_send(PeerMsg::CasualMessage(msg))
+            tx.try_send(PeerMsg::CasualMessage(Box::new(msg)))
                 .map_err(|e| handle_send_error(region_id, e))
         } else {
             Err(RaftStoreError::RegionNotFound(region_id))
@@ -76,7 +76,8 @@ impl SignificantRouter<RocksEngine> for MockRaftStoreRouter {
     ) -> RaftStoreResult<()> {
         let mut senders = self.senders.lock().unwrap();
         if let Some(tx) = senders.get_mut(&region_id) {
-            tx.force_send(PeerMsg::SignificantMsg(msg)).unwrap();
+            tx.force_send(PeerMsg::SignificantMsg(Box::new(msg)))
+                .unwrap();
             Ok(())
         } else {
             error!("failed to send significant msg"; "msg" => ?msg);

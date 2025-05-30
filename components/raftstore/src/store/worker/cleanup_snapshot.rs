@@ -70,12 +70,12 @@ where
                 "region_id" => region_id,
             );
 
-            let gc_snap = PeerMsg::CasualMessage(CasualMessage::GcSnap { snaps });
+            let gc_snap = PeerMsg::CasualMessage(Box::new(CasualMessage::GcSnap { snaps }));
             match (*self.router).send(region_id, gc_snap) {
                 Ok(()) => Ok(()),
                 Err(TrySendError::Disconnected(_)) if self.router.is_shutdown() => Ok(()),
                 Err(TrySendError::Disconnected(PeerMsg::CasualMessage(
-                    CasualMessage::GcSnap { snaps },
+                    box CasualMessage::GcSnap { snaps },
                 ))) => {
                     // The snapshot exists because MsgAppend has been rejected. So the
                     // peer must have been exist. But now it's disconnected, so the peer
