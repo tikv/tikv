@@ -3,12 +3,15 @@ use std::{convert::TryInto, fmt::Display, io, sync::Arc};
 
 use async_trait::async_trait;
 use cloud::{
-    blob::{none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty},
+    blob::{
+        none_to_empty, read_to_end, BlobConfig, BlobStorage, BucketConf, PutResource,
+        StringNonEmpty,
+    },
     metrics,
 };
 use futures_util::{
     future::TryFutureExt,
-    io::{self as async_io, AsyncRead, Cursor},
+    io::Cursor,
     stream::{StreamExt, TryStreamExt},
 };
 use http::HeaderValue;
@@ -440,14 +443,6 @@ fn parse_predefined_acl(acl: &str) -> Result<Option<PredefinedAcl>, &str> {
     }))
 }
 
-/// Like AsyncReadExt::read_to_end, but only try to initialize the buffer once.
-/// Check https://github.com/rust-lang/futures-rs/issues/2658 for the reason we cannot
-/// directly use it.
-async fn read_to_end<R: AsyncRead>(r: R, v: &mut Vec<u8>) -> std::io::Result<u64> {
-    let mut c = Cursor::new(v);
-    async_io::copy(r, &mut c).await
-}
-
 const STORAGE_NAME: &str = "gcs";
 
 #[async_trait]
@@ -524,10 +519,6 @@ impl BlobStorage for GcsStorage {
 
 #[cfg(test)]
 mod tests {
-    extern crate test;
-    use std::task::Poll;
-
-    use futures_util::AsyncReadExt;
     use matches::assert_matches;
 
     use super::*;
@@ -616,122 +607,5 @@ mod tests {
             &Config::default(bucket).url().unwrap().to_string(),
             "http://endpoint.com/bucket/backup%2002/prefix/"
         );
-    }
-
-    #[test]
-    fn test_config_round_trip() {
-        let mut input = InputConfig::default();
-        input.set_bucket("bucket".to_owned());
-        input.set_prefix("backup 02/prefix/".to_owned());
-        let c1 = Config::from_input(input.clone()).unwrap();
-        let c2 = Config::from_cloud_dynamic(&cloud_dynamic_from_input(input)).unwrap();
-        assert_eq!(c1.bucket.bucket, c2.bucket.bucket);
-        assert_eq!(c1.bucket.prefix, c2.bucket.prefix);
-    }
-
-    enum ThrottleReadState {
-        Spawning,
-        Emitting,
-    }
-    /// ThrottleRead throttles a `Read` -- make it emits 2 chars for each
-    /// `read` call. This is copy & paste from the implmentation from s3.rs.
-    #[pin_project::pin_project]
-    struct ThrottleRead<R> {
-        #[pin]
-        inner: R,
-        state: ThrottleReadState,
-    }
-    impl<R: AsyncRead> AsyncRead for ThrottleRead<R> {
-        fn poll_read(
-            self: std::pin::Pin<&mut Self>,
-            cx: &mut std::task::Context<'_>,
-            buf: &mut [u8],
-        ) -> Poll<io::Result<usize>> {
-            let this = self.project();
-            match this.state {
-                ThrottleReadState::Spawning => {
-                    *this.state = ThrottleReadState::Emitting;
-                    cx.waker().wake_by_ref();
-                    Poll::Pending
-                }
-                ThrottleReadState::Emitting => {
-                    *this.state = ThrottleReadState::Spawning;
-                    this.inner.poll_read(cx, &mut buf[..2])
-                }
-            }
-        }
-    }
-    impl<R> ThrottleRead<R> {
-        fn new(r: R) -> Self {
-            Self {
-                inner: r,
-                state: ThrottleReadState::Spawning,
-            }
-        }
-    }
-
-    const BENCH_READ_SIZE: usize = 128 * 1024;
-
-    // 255,120,895 ns/iter (+/- 73,332,249) (futures-util 0.3.15)
-    #[bench]
-    fn bench_read_to_end(b: &mut test::Bencher) {
-        let mut v = [0; BENCH_READ_SIZE];
-        let mut dst = Vec::with_capacity(BENCH_READ_SIZE);
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap();
-
-        b.iter(|| {
-            let mut r = ThrottleRead::new(Cursor::new(&mut v));
-            dst.clear();
-
-            rt.block_on(r.read_to_end(&mut dst)).unwrap();
-            assert_eq!(dst.len(), BENCH_READ_SIZE)
-        })
-    }
-
-    // 5,850,042 ns/iter (+/- 3,787,438)
-    #[bench]
-    fn bench_manual_read_to_end(b: &mut test::Bencher) {
-        let mut v = [0; BENCH_READ_SIZE];
-        let mut dst = Vec::with_capacity(BENCH_READ_SIZE);
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap();
-        b.iter(|| {
-            let r = ThrottleRead::new(Cursor::new(&mut v));
-            dst.clear();
-
-            rt.block_on(read_to_end(r, &mut dst)).unwrap();
-            assert_eq!(dst.len(), BENCH_READ_SIZE)
-        })
-    }
-
-    fn cloud_dynamic_from_input(mut gcs: InputConfig) -> CloudDynamic {
-        let mut bucket = InputBucket::default();
-        if !gcs.endpoint.is_empty() {
-            bucket.endpoint = gcs.take_endpoint();
-        }
-        if !gcs.prefix.is_empty() {
-            bucket.prefix = gcs.take_prefix();
-        }
-        if !gcs.storage_class.is_empty() {
-            bucket.storage_class = gcs.take_storage_class();
-        }
-        if !gcs.bucket.is_empty() {
-            bucket.bucket = gcs.take_bucket();
-        }
-        let mut attrs = std::collections::HashMap::new();
-        if !gcs.predefined_acl.is_empty() {
-            attrs.insert("predefined_acl".to_owned(), gcs.take_predefined_acl());
-        }
-        if !gcs.credentials_blob.is_empty() {
-            attrs.insert("credentials_blob".to_owned(), gcs.take_credentials_blob());
-        }
-        let mut cd = CloudDynamic::default();
-        cd.set_provider_name("gcp".to_owned());
-        cd.set_attrs(attrs);
-        cd.set_bucket(bucket);
-        cd
     }
 }
