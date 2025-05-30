@@ -1806,12 +1806,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             ReadRunner::new(self.router.clone(), engines.raft.clone()),
         );
 
-        let compact_runner = CompactRunner::new(
-            engines.kv.clone(),
-            bgworker_remote,
-            cfg.clone().tracker(String::from("compact-runner")),
-            cfg.value().skip_manual_compaction_in_clean_up_worker,
-        );
+        let compact_runner = CompactRunner::new(engines.kv.clone(), bgworker_remote);
         let cleanup_sst_runner = CleanupSstRunner::new(Arc::clone(&importer));
         let gc_snapshot_runner = GcSnapshotRunner::new(
             meta.get_id(),
@@ -1820,7 +1815,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         );
         let cleanup_runner =
             CleanupRunner::new(compact_runner, cleanup_sst_runner, gc_snapshot_runner);
-        let cleanup_scheduler = workers
+        let cleanup_scheduler: Scheduler<CleanupTask> = workers
             .cleanup_worker
             .start("cleanup-worker", cleanup_runner);
         let consistency_check_runner =
