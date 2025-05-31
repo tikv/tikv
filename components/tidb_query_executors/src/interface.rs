@@ -5,7 +5,10 @@
 
 //! Batch executor common structures.
 
+use std::{future::Future, pin::Pin, sync::Arc};
+
 use async_trait::async_trait;
+use kvproto::{coprocessor::KeyRange, metapb};
 pub use tidb_query_common::execute_stats::{
     ExecSummaryCollector, ExecuteStats, WithSummaryCollector,
 };
@@ -215,4 +218,52 @@ impl BatchExecIsDrain {
     pub fn stop(&self) -> bool {
         !self.is_remain()
     }
+}
+
+pub type AsyncRegionFn<S> =
+    Box<dyn Fn(&[KeyRange]) -> Pin<Box<dyn Future<Output = Option<S>> + Send>> + Send + Sync>;
+
+pub struct AsyncRegion<S> {
+    region: Arc<metapb::Region>,
+    async_store_fn: AsyncRegionFn<S>,
+}
+
+impl<S> AsyncRegion<S> {
+    pub fn new(region: Arc<metapb::Region>, async_store_fn: AsyncRegionFn<S>) -> Self {
+        Self {
+            region,
+            async_store_fn,
+        }
+    }
+
+    pub fn get_region(&self) -> &metapb::Region {
+        &self.region
+    }
+
+    pub async fn get_region_store(&self, key: &[KeyRange]) -> Option<S> {
+        (self.async_store_fn)(key).await
+    }
+}
+
+impl<S: 'static> AsyncRegion<S> {
+    pub fn into_map_store<S2: Send + 'static>(
+        self,
+        f: impl Fn(S) -> S2 + Send + Sync + Clone + 'static,
+    ) -> AsyncRegion<S2> {
+        let async_store_fn: AsyncRegionFn<S2> = Box::new(move |key: &[KeyRange]| {
+            let fut = (self.async_store_fn)(key);
+            let ff = f.clone();
+            Box::pin(async { fut.await.map(ff) })
+        });
+        AsyncRegion {
+            region: self.region,
+            async_store_fn,
+        }
+    }
+}
+
+pub type FnLocateRegionKey<S> = Box<dyn Fn(&[u8]) -> Option<AsyncRegion<S>> + Send + Sync>;
+
+pub fn new_empty_locate_key_fn<S>() -> FnLocateRegionKey<S> {
+    Box::new(|_| None)
 }

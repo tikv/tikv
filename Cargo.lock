@@ -7713,6 +7713,7 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 [[package]]
 name = "tipb"
 version = "0.0.1"
+source = "git+https://github.com/lcwangchao/tipb?branch=indexlookuppushdown#907dab02b99af5e323b010d814aea3642984a578"
 dependencies = [
  "futures 0.3.15",
  "grpcio",

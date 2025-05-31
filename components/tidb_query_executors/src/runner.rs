@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{convert::TryFrom, sync::Arc};
+use std::{convert::TryFrom, future::Future, marker::PhantomData, mem, pin::Pin, sync::Arc};
 
 use api_version::KvFormat;
 use fail::fail_point;
@@ -43,7 +43,7 @@ pub use tidb_query_expr::types::BATCH_MAX_SIZE;
 
 use crate::{
     index_lookup_executor::{build_index_lookup_probe_ranges, BatchIndexLookupExecutor},
-    interface::BatchExecuteResult,
+    interface::{AsyncRegion, BatchExecuteResult, FnLocateRegionKey},
     runner::SrcExecutorRanges::Simple,
 };
 
@@ -57,7 +57,7 @@ struct ExecutorsWithOutput<SS> {
 }
 
 impl<SS> ExecutorsWithOutput<SS> {
-    fn new<S: Storage<Statistics = SS> + 'static, F: KvFormat>(
+    fn build<S: Storage<Statistics = SS> + 'static, F: KvFormat>(
         executor_descriptors: Vec<tipb::Executor>,
         ranges: SrcExecutorRanges<S>,
         config: Arc<EvalConfig>,
@@ -146,83 +146,69 @@ impl<SS> ExecutorsWithOutput<SS> {
     }
 }
 
-struct ExecutorDescriptors<SS> {
-    build_executors_with_output: Option<
-        Box<
-            dyn FnOnce(
-                    &mut EvalContext,
-                    &mut Vec<BatchExecuteResult>,
-                    &[FieldType],
-                ) -> Result<ExecutorsWithOutput<SS>>
-                + Send,
-        >,
-    >,
+struct ExecutorDescriptors {
+    executor_descriptors: Vec<tipb::Executor>,
+    output_offsets: Vec<u32>,
+    encode_type: EncodeType,
 }
 
-impl<SS> ExecutorDescriptors<SS> {
-    fn new<S: Storage<Statistics = SS> + 'static, F: KvFormat>(
+impl ExecutorDescriptors {
+    fn new(
         executor_descriptors: Vec<tipb::Executor>,
         output_offsets: Vec<u32>,
         encode_type: EncodeType,
-        locate_key_fn: fn(key: &[u8]) -> Option<(Arc<metapb::Region>, S)>,
-    ) -> Result<Self> {
-        if executor_descriptors.len() == 0 {
-            return Err(other_err!("No executors"));
+    ) -> Self {
+        Self {
+            executor_descriptors,
+            output_offsets,
+            encode_type,
         }
-
-        let tp = executor_descriptors[0].get_tp();
-        let build = match tp {
-            ExecType::TypeIndexLookup => {
-                move |ctx: &mut EvalContext,
-                      results: &mut Vec<BatchExecuteResult>,
-                      schema: &[FieldType]| {
-                    let ranges = build_index_lookup_probe_ranges(
-                        ctx,
-                        executor_descriptors[0].get_index_lookup(),
-                        results,
-                        schema,
-                        locate_key_fn,
-                    )?;
-
-                    ExecutorsWithOutput::new::<_, F>(
-                        executor_descriptors,
-                        SrcExecutorRanges::Probes(ranges),
-                        ctx.cfg.clone(),
-                        false,
-                        output_offsets.clone(),
-                        encode_type,
-                    )
-                }
-            }
-            _ => {
-                return Err(other_err!(
-                    "unsupported first type: {:?} to generate probe side ranges",
-                    tp
-                ));
-            }
-        };
-
-        Ok(Self {
-            build_executors_with_output: Some(Box::new(build)),
-        })
     }
 
-    fn build_instant(
-        &mut self,
+    async fn build_instant<S: Storage<Statistics = SS> + 'static, SS: 'static, F: KvFormat>(
+        self,
         ctx: &mut EvalContext,
         build_side_results: &mut Vec<BatchExecuteResult>,
         result_schema: &[FieldType],
+        locate_key: &FnLocateRegionKey<S>,
     ) -> Result<ExecutorsWithOutput<SS>> {
-        match self.build_executors_with_output.take() {
-            Some(build) => (build)(ctx, build_side_results, &result_schema),
-            _ => Err(other_err!("build has been invoked")),
+        if self.executor_descriptors.len() == 0 {
+            return Err(other_err!("No executors"));
+        }
+
+        let descriptor = &self.executor_descriptors[0];
+        let tp = descriptor.get_tp();
+        match tp {
+            ExecType::TypeIndexLookup => {
+                let ranges = build_index_lookup_probe_ranges(
+                    ctx,
+                    descriptor.get_index_lookup(),
+                    build_side_results,
+                    result_schema,
+                    locate_key,
+                )
+                .await?;
+
+                ExecutorsWithOutput::build::<_, F>(
+                    self.executor_descriptors,
+                    SrcExecutorRanges::Probes(ranges),
+                    ctx.cfg.clone(),
+                    false,
+                    self.output_offsets,
+                    self.encode_type,
+                )
+            }
+            _ => Err(other_err!(
+                "unsupported first type: {:?} to generate probe side ranges",
+                tp
+            )),
         }
     }
 }
 
 enum ExecutionGroup<SS> {
     Instant(ExecutorsWithOutput<SS>),
-    Descriptors(ExecutorDescriptors<SS>),
+    Descriptors(ExecutorDescriptors),
 }
 
 impl<SS> ExecutionGroup<SS> {
@@ -241,33 +227,47 @@ impl<SS> ExecutionGroup<SS> {
     }
 }
 
-impl<SS> ExecutionGroup<SS> {
-    fn build_instant(
+impl<SS: 'static> ExecutionGroup<SS> {
+    async fn build_instant<S: Storage<Statistics = SS> + 'static, F: KvFormat>(
         &mut self,
         ctx: &mut EvalContext,
         build_side_results: &mut Vec<BatchExecuteResult>,
         result_schema: &[FieldType],
+        locate_key: &FnLocateRegionKey<S>,
     ) -> Result<&mut ExecutorsWithOutput<SS>> {
         match self {
             ExecutionGroup::Instant(_) => Err(other_err!("instant has already been built")),
-            ExecutionGroup::Descriptors(descriptors) => {
-                *self = Self::Instant(descriptors.build_instant(
-                    ctx,
-                    build_side_results,
-                    result_schema,
-                )?);
+            ExecutionGroup::Descriptors(desc) => {
+                let mut descriptors = ExecutorDescriptors {
+                    executor_descriptors: vec![],
+                    output_offsets: vec![],
+                    encode_type: EncodeType::TypeDefault,
+                };
+                mem::swap(desc, &mut descriptors);
+                *self = Self::Instant(
+                    descriptors
+                        .build_instant::<_, _, F>(
+                            ctx,
+                            build_side_results,
+                            result_schema,
+                            locate_key,
+                        )
+                        .await?,
+                );
                 self.mut_instant()
             }
         }
     }
 }
 
-pub struct BatchExecutorsRunner<SS> {
+pub struct BatchExecutorsRunner<S, SS, F> {
     /// The deadline of this handler. For each check point (e.g. each iteration)
     /// we need to check whether or not the deadline is exceeded and break
     /// the process if so.
     // TODO: Deprecate it using a better deadline mechanism.
     deadline: Deadline,
+
+    locate_key: FnLocateRegionKey<S>,
 
     execution_groups: Vec<ExecutionGroup<SS>>,
 
@@ -286,11 +286,13 @@ pub struct BatchExecutorsRunner<SS> {
     paging_size: Option<u64>,
 
     quota_limiter: Arc<QuotaLimiter>,
+
+    _phantom: PhantomData<F>,
 }
 
 // We assign a dummy type `()` so that we can omit the type when calling
 // `check_supported`.
-impl BatchExecutorsRunner<()> {
+impl BatchExecutorsRunner<(), (), ()> {
     /// Given a list of executor descriptors and checks whether all executor
     /// descriptors can be used to build batch executors.
     pub fn check_supported(exec_descriptors: &[tipb::Executor]) -> Result<()> {
@@ -679,8 +681,10 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
     Ok(executor)
 }
 
-impl<SS: 'static> BatchExecutorsRunner<SS> {
-    pub fn from_request<S: Storage<Statistics = SS> + 'static, F: KvFormat>(
+impl<S: Storage<Statistics = SS> + 'static, SS: 'static, F: KvFormat>
+    BatchExecutorsRunner<S, SS, F>
+{
+    pub fn from_request(
         req: DagRequest,
         ranges: Vec<KeyRange>,
         storage: S,
@@ -689,6 +693,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         is_streaming: bool,
         paging_size: Option<u64>,
         quota_limiter: Arc<QuotaLimiter>,
+        locate_key: FnLocateRegionKey<S>,
     ) -> Result<Self> {
         let executors_len = req.get_executors().len();
         let collect_exec_summary = req.get_collect_execution_summaries();
@@ -696,7 +701,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         config.paging_size = paging_size;
         let config = Arc::new(config);
         let exec_stats = ExecuteStats::new(executors_len);
-        let execution_groups = Self::split_execution_groups::<_, F>(
+        let execution_groups = Self::split_execution_groups(
             req,
             storage,
             ranges,
@@ -704,11 +709,11 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             is_streaming || paging_size.is_some(), /* For streaming and paging request,
                                                     * executors will continue scan from range
                                                     * end where last scan is finished */
-            |_| None,
         )?;
 
         Ok(Self {
             deadline,
+            locate_key,
             execution_groups,
             config,
             collect_exec_summary,
@@ -716,21 +721,21 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             stream_row_limit,
             paging_size,
             quota_limiter,
+            _phantom: PhantomData,
         })
     }
 
-    fn split_execution_groups<S: Storage<Statistics = SS> + 'static, F: KvFormat>(
+    fn split_execution_groups(
         mut req: DagRequest,
         storage: S,
         first_scan_ranges: Vec<KeyRange>,
         config: Arc<EvalConfig>,
         is_scanned_range_aware: bool,
-        locate_key_fn: fn(key: &[u8]) -> Option<(Arc<metapb::Region>, S)>,
     ) -> Result<Vec<ExecutionGroup<SS>>> {
         let executors = req.take_executors().to_vec();
         let mut barriers = req.take_parital_output_barriers();
         if barriers.len() == 0 {
-            return Ok(vec![ExecutionGroup::Instant(ExecutorsWithOutput::new::<
+            return Ok(vec![ExecutionGroup::Instant(ExecutorsWithOutput::build::<
                 _,
                 F,
             >(
@@ -753,7 +758,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             ));
         }
 
-        groups.push(ExecutionGroup::Instant(ExecutorsWithOutput::new::<_, F>(
+        groups.push(ExecutionGroup::Instant(ExecutorsWithOutput::build::<_, F>(
             executors[..last_group_end].to_vec(),
             Simple((storage, first_scan_ranges)),
             config.clone(),
@@ -787,15 +792,11 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 ));
             }
 
-            let executors = &executors[last_group_end..group_end];
-            groups.push(ExecutionGroup::Descriptors(
-                ExecutorDescriptors::new::<S, F>(
-                    executors[last_group_end..group_end].to_vec(),
-                    output_offsets,
-                    encode_type,
-                    locate_key_fn,
-                )?,
-            ));
+            groups.push(ExecutionGroup::Descriptors(ExecutorDescriptors::new(
+                executors[last_group_end..group_end].to_vec(),
+                output_offsets,
+                encode_type,
+            )));
         }
 
         Ok(groups)
@@ -849,7 +850,14 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             } else if let Some(results) = write_results.as_mut() {
                 let group = group.mut_instant()?;
                 let next_group = next_groups.iter_mut().next().unwrap();
-                next_group.build_instant(&mut ctx, results, &group.out_most_executor.schema())?;
+                next_group
+                    .build_instant::<_, F>(
+                        &mut ctx,
+                        results,
+                        &group.out_most_executor.schema(),
+                        &self.locate_key,
+                    )
+                    .await?;
                 let mut chunks = Vec::with_capacity(results.len());
                 for result in results {
                     if !result.logical_rows.is_empty() {
@@ -998,14 +1006,16 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 res?
             };
 
-            record_all += result.logical_rows.len();
-            if let Some(chunks) = write_chunks {
-                sample.add_read_bytes(chunk.get_rows_data().len());
-                chunks.push(chunk);
-            }
+            if !result.logical_rows.is_empty() {
+                record_all += result.logical_rows.len();
+                if let Some(chunks) = write_chunks {
+                    sample.add_read_bytes(chunk.get_rows_data().len());
+                    chunks.push(chunk);
+                }
 
-            if let Some(append_results) = append_results {
-                append_results.push(result);
+                if let Some(append_results) = append_results {
+                    append_results.push(result);
+                }
             }
 
             let quota_delay = self.quota_limiter.consume_sample(sample, true).await;

@@ -228,7 +228,7 @@ sysinfo = { git = "https://github.com/tikv/sysinfo", branch = "0.26-fix-cpu" }
 # rocksdb = { git = "https://github.com/your_github_id/rust-rocksdb", branch = "your_branch" }
 
  [patch.'https://github.com/pingcap/tipb']
- tipb = { path = "../tipb" }
+ tipb = { git = "https://github.com/lcwangchao/tipb", branch = "indexlookuppushdown" }
 
 [workspace]
 # See https://github.com/rust-lang/rfcs/blob/master/text/2957-cargo-features2.md
