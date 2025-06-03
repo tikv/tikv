@@ -833,7 +833,7 @@ where
         router.unregister_task(task)
     }
 
-    fn prepare_min_ts(&self) -> future![TimeStamp] {
+    fn prepare_min_ts(&self) -> future![(TimeStamp, TimeStamp)] {
         let pd_cli = self.pd_client.clone();
         let cm = self.concurrency_manager.clone();
         async move {
@@ -844,11 +844,16 @@ where
                 .unwrap_or_default();
             cm.update_max_ts(pd_tso, "backup-stream").unwrap();
             let min_ts = cm.global_min_lock_ts().unwrap_or(TimeStamp::max());
-            Ord::min(pd_tso, min_ts)
+            (Ord::min(pd_tso, min_ts), pd_tso)
         }
     }
 
-    fn do_flush(&self, task: String, resolved: ResolvedRegions) -> future![Result<()>] {
+    fn do_flush(
+        &self,
+        task: String,
+        resolved: ResolvedRegions,
+        flush_ts: TimeStamp,
+    ) -> future![Result<()>] {
         let router = self.range_router.clone();
         let store_id = self.store_id;
         let mut flush_ob = self.flush_observer();
@@ -865,6 +870,7 @@ where
                 store_id,
                 resolved_regions: &resolved,
                 resolved_ts: new_rts,
+                flush_ts,
             };
             if let Some(rts) = router.do_flush(cx).await {
                 info!("flushing and refreshing checkpoint ts.";
@@ -899,7 +905,7 @@ where
             info!("Triggering force flush."; "selector" => ?task);
             let handlers = self.range_router.select_task_handler(task);
             for hnd in handlers {
-                let mts = self.prepare_min_ts().await;
+                let (mts, fts) = self.prepare_min_ts().await;
                 let sched = self.scheduler.clone();
                 let sender = sender.clone();
                 self.subscribe_flush_done(&hnd.task.info.name, sender);
@@ -909,7 +915,7 @@ where
                             callback: Box::new(move |res| {
                                 try_send!(
                                     sched,
-                                    Task::ExecFlush(hnd.task.info.name.to_owned(), res)
+                                    Task::ExecFlush(hnd.task.info.name.to_owned(), res, fts)
                                 );
                             }),
                             min_ts: mts,
@@ -926,12 +932,12 @@ where
 
     pub fn on_flush(&self, task: String) {
         self.pool.block_on(async move {
-            let mts = self.prepare_min_ts().await;
+            let (mts, flush_ts) = self.prepare_min_ts().await;
             let sched = self.scheduler.clone();
-            info!("min_ts prepared for flushing"; "min_ts" => %mts);
+            info!("min_ts prepared for flushing"; "min_ts" => %mts, "flush_ts" => %flush_ts);
             self.region_op(ObserveOp::ResolveRegions {
                 callback: Box::new(move |res| {
-                    try_send!(sched, Task::ExecFlush(task, res));
+                    try_send!(sched, Task::ExecFlush(task, res, flush_ts));
                 }),
                 min_ts: mts,
             })
@@ -939,9 +945,9 @@ where
         })
     }
 
-    fn on_exec_flush(&mut self, task: String, resolved: ResolvedRegions) {
+    fn on_exec_flush(&mut self, task: String, resolved: ResolvedRegions, flush_ts: TimeStamp) {
         self.checkpoint_mgr.freeze();
-        let fut = self.do_flush(task.clone(), resolved);
+        let fut = self.do_flush(task.clone(), resolved, flush_ts);
         let sched = self.scheduler.clone();
         self.pool.spawn(root!("flush"; async move {
             let res = fut.await;
@@ -1095,7 +1101,7 @@ where
                 }
             }
             Task::MarkFailover(t) => self.failover_time = Some(t),
-            Task::ExecFlush(task, min_ts) => self.on_exec_flush(task, min_ts),
+            Task::ExecFlush(task, min_ts, flush_ts) => self.on_exec_flush(task, min_ts, flush_ts),
             Task::RegionCheckpointsOp(s) => self.handle_region_checkpoints_op(s),
             Task::UpdateGlobalCheckpoint(task) => self.on_update_global_checkpoint(task),
             Task::Flushed(result) => self.on_flushed(result),
@@ -1177,7 +1183,7 @@ where
                     metrics::MISC_EVENTS.skip_resolve_no_subscription.inc();
                     return;
                 }
-                let min_ts = self.pool.block_on(self.prepare_min_ts());
+                let (min_ts, _) = self.pool.block_on(self.prepare_min_ts());
                 let start_time = Instant::now();
                 // We need to reschedule the `Resolve` task to queue, because the subscription
                 // is asynchronous -- there may be transactions committed before
@@ -1349,7 +1355,7 @@ pub enum Task {
     Flushed(FlushResult),
     /// Execute the flush with the calculated resolved result.
     /// This is an internal command only issued by the `Flush` task.
-    ExecFlush(String, ResolvedRegions),
+    ExecFlush(String, ResolvedRegions, TimeStamp),
     /// The command for getting region checkpoints.
     RegionCheckpointsOp(RegionCheckpointOperation),
     /// update global-checkpoint-ts to storage.
@@ -1463,10 +1469,11 @@ impl fmt::Debug for Task {
                 .debug_tuple("MarkFailover")
                 .field(&format_args!("{:?} ago", t.saturating_elapsed()))
                 .finish(),
-            Self::ExecFlush(arg0, arg1) => f
+            Self::ExecFlush(arg0, arg1, arg2) => f
                 .debug_tuple("ExecFlush")
                 .field(arg0)
                 .field(&arg1.global_checkpoint())
+                .field(&arg2)
                 .finish(),
             Self::RegionCheckpointsOp(s) => f.debug_tuple("GetRegionCheckpoints").field(s).finish(),
             Self::UpdateGlobalCheckpoint(task) => {
