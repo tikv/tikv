@@ -2285,17 +2285,15 @@ mod tests {
 
         for entry in walkdir::WalkDir::new(storage_path) {
             let entry = entry.unwrap();
-            let filename = entry.file_name();
             if entry.path().extension() == Some(OsStr::new("meta")) {
-                let file_name = entry.file_name().to_string_lossy();
-
+                let filename = entry.path().file_stem().unwrap().to_os_string();
                 let parts: Vec<&str> = filename.to_str().unwrap().split('-').collect();
 
                 assert!(
                     parts.len() >= 4,
-                    "Invalid meta file name format: expected at least 4 parts, got {}, file: {}",
+                    "Invalid meta file name format: expected at least 4 parts, got {}, file: {:?}",
                     parts.len(),
-                    file_name
+                    entry.file_name(),
                 );
 
                 for (i, label) in ["flushTs", "minDefaultTs", "minTs", "maxTs"]
@@ -2305,10 +2303,10 @@ mod tests {
                     let val = u64::from_str_radix(parts[i], 16);
                     assert!(
                         val.is_ok(),
-                        "Failed to parse '{}' as u64 (hex) for {} in file name: {}",
+                        "Failed to parse '{}' as u64 (hex) for {} in file name: {:?}",
                         parts[i],
                         label,
-                        file_name
+                        entry.file_name(),
                     );
                 }
 
@@ -2319,7 +2317,7 @@ mod tests {
                 assert!(
                     f.len() > 10,
                     "the log file {:?} is too small (size = {}B)",
-                    filename,
+                    entry.file_name(),
                     f.len()
                 );
             }
