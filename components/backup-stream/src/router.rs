@@ -1976,7 +1976,6 @@ mod tests {
     };
     use online_config::{ConfigManager, OnlineConfig};
     use rand::Rng;
-    use serde_json::to_string;
     use tempfile::TempDir;
     use tikv_util::{
         codec::{
@@ -2303,7 +2302,7 @@ mod tests {
                     .iter()
                     .enumerate()
                 {
-                    let val = u64::from_str_radix(parts[i], 16); 
+                    let val = u64::from_str_radix(parts[i], 16);
                     assert!(
                         val.is_ok(),
                         "Failed to parse '{}' as u64 (hex) for {} in file name: {}",
