@@ -3750,7 +3750,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#08fddd37b0f5526219ac9730c51d4689cf3b6d33"
+source = "git+https://github.com/windtalker/kvproto?branch=add_versioned_lookup#a0f62de4d35f317fbba3f3892a98809066f9d7bb"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -7782,7 +7782,7 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/windtalker/tipb?branch=add_versioned_lookup#c6255a204a564ac5b66e40a69ff45af9e7e44629"
+source = "git+https://github.com/windtalker/tipb?branch=add_versioned_lookup#6137fc1a2edb0b3426d975f447a93977c3fc320e"
 dependencies = [
  "futures 0.3.15",
  "grpcio",

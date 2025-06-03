@@ -22,6 +22,7 @@ use crate::{
 pub struct DagHandlerBuilder<S: Store + 'static, F: KvFormat> {
     req: DagRequest,
     ranges: Vec<KeyRange>,
+    versions: Option<Vec<u64>>,
     store: S,
     data_version: Option<u64>,
     deadline: Deadline,
@@ -37,6 +38,7 @@ impl<S: Store + 'static, F: KvFormat> DagHandlerBuilder<S, F> {
     pub fn new(
         req: DagRequest,
         ranges: Vec<KeyRange>,
+        versions: Option<Vec<u64>>,
         store: S,
         deadline: Deadline,
         batch_row_limit: usize,
@@ -48,6 +50,7 @@ impl<S: Store + 'static, F: KvFormat> DagHandlerBuilder<S, F> {
         DagHandlerBuilder {
             req,
             ranges,
+            versions,
             store,
             data_version: None,
             deadline,
@@ -71,6 +74,7 @@ impl<S: Store + 'static, F: KvFormat> DagHandlerBuilder<S, F> {
         Ok(BatchDagHandler::new::<_, F>(
             self.req,
             self.ranges,
+            self.versions,
             self.store,
             self.data_version,
             self.deadline,
@@ -93,6 +97,7 @@ impl BatchDagHandler {
     pub fn new<S: Store + 'static, F: KvFormat>(
         req: DagRequest,
         ranges: Vec<KeyRange>,
+        versions: Option<Vec<u64>>,
         store: S,
         data_version: Option<u64>,
         deadline: Deadline,
@@ -106,6 +111,7 @@ impl BatchDagHandler {
             runner: tidb_query_executors::runner::BatchExecutorsRunner::from_request::<_, F>(
                 req,
                 ranges,
+                versions,
                 TikvStorage::new(store, is_cache_enabled),
                 deadline,
                 streaming_batch_limit,

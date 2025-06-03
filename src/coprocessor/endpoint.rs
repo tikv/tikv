@@ -199,6 +199,12 @@ impl<E: Engine> Endpoint<E> {
             "unsupported tp (failpoint)"
         )));
 
+        let range_versions = if !req.get_range_versions().is_empty() {
+            Some(req.take_range_versions())
+        } else {
+            None
+        };
+
         let (context, data, ranges, mut start_ts) = (
             req.take_context(),
             req.take_data(),
@@ -277,6 +283,7 @@ impl<E: Engine> Endpoint<E> {
                     dag::DagHandlerBuilder::<_, F>::new(
                         dag,
                         req_ctx.ranges.clone(),
+                        range_versions,
                         store,
                         req_ctx.deadline,
                         batch_row_limit,

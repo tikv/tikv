@@ -185,6 +185,7 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
     executor_descriptors: Vec<tipb::Executor>,
     storage: S,
     ranges: Vec<KeyRange>,
+    versions: Option<Vec<u64>>,
     config: Arc<EvalConfig>,
     is_scanned_range_aware: bool,
 ) -> Result<Box<dyn BatchExecutor<StorageStats = S::Statistics>>> {
@@ -204,9 +205,10 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
             EXECUTOR_COUNT_METRICS.versioned_lookup.inc();
 
             let mut descriptor = first_ed.take_versioned_lookup();
-            let versions = descriptor.take_versions().into();
             let columns_info = descriptor.take_columns().into();
             let primary_column_ids = descriptor.take_primary_column_ids();
+            let versions_vec =
+                versions.ok_or_else(|| other_err!("VersionedLookup requires versions"))?;
 
             Box::new(
                 BatchVersionedLookupExecutor::<_, F>::new(
@@ -215,7 +217,7 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
                     columns_info,
                     ranges,
                     primary_column_ids,
-                    versions,
+                    versions_vec,
                     is_scanned_range_aware,
                 )?
                 .collect_summary(summary_slot_index),
@@ -449,6 +451,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
     pub fn from_request<S: Storage<Statistics = SS> + 'static, F: KvFormat>(
         mut req: DagRequest,
         ranges: Vec<KeyRange>,
+        versions: Option<Vec<u64>>,
         storage: S,
         deadline: Deadline,
         stream_row_limit: usize,
@@ -466,6 +469,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             req.take_executors().into(),
             storage,
             ranges,
+            versions,
             config.clone(),
             is_streaming || paging_size.is_some(), /* For streaming and paging request,
                                                     * executors will continue scan from range

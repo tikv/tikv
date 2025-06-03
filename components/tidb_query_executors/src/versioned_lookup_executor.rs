@@ -77,18 +77,12 @@ impl<S: Storage, F: KvFormat> BatchVersionedLookupExecutor<S, F> {
             .into_iter()
             .map(|r| Range::from_pb_range(r, true))
             .collect();
-        if ranges.len() > versions.len() {
+        if ranges.len() != versions.len() {
             return Err(tidb_query_common::error::EvaluateError::Other(
                 "key range and versions not match for BatchVersionedLookupExecutor".into(),
             )
             .into());
         }
-        let final_versions = if ranges.len() == versions.len() {
-            versions
-        } else {
-            // in this case, we should use the last `len(ranges)` versions
-            versions[versions.len() - ranges.len()..].to_vec()
-        };
 
         for range in &ranges {
             if !matches!(range, Range::Point(_)) {
@@ -153,7 +147,7 @@ impl<S: Storage, F: KvFormat> BatchVersionedLookupExecutor<S, F> {
         Ok(Self {
             storage,
             ranges_iter: RangesIterator::new(ranges),
-            versions: final_versions,
+            versions,
             version_index: 0,
             table_scan_helper: ts,
             is_scanned_range_aware,
