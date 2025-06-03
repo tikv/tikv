@@ -1802,7 +1802,7 @@ impl MetadataInfo {
 
     fn path_to_meta(&self, min_begin_ts: u64, flush_ts: u64) -> String {
         format!(
-            "v1/backupmeta/{:X}-{:X}-{:X}-{:X}.meta",
+            "v1/backupmeta/{:016X}-{:016X}-{:016X}-{:016X}.meta",
             flush_ts,
             min_begin_ts,
             self.min_ts.unwrap_or_default(),
