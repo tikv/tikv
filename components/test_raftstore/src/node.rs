@@ -2,7 +2,7 @@
 
 use std::{
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, RwLock, atomic::AtomicU64},
+    sync::{Arc, Mutex, RwLock},
 };
 
 use collections::{HashMap, HashSet};
@@ -369,7 +369,6 @@ impl Simulator for NodeCluster {
             None,
             DiskCheckRunner::dummy(),
             GrpcServiceManager::dummy(),
-            Arc::new(AtomicU64::new(0)),
         )?;
         assert!(
             engines
