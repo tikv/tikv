@@ -2299,12 +2299,17 @@ mod tests {
                     file_name
                 );
 
-                for (i, label) in ["flushTs", "minDefaultTs", "minTs", "maxTs"].iter().enumerate() {
-                    let val = u64::from_str_radix(parts[i], 16); // 如果 parts 是 hex 格式，记得用 16 进制
+                for (i, label) in ["flushTs", "minDefaultTs", "minTs", "maxTs"]
+                    .iter()
+                    .enumerate()
+                {
+                    let val = u64::from_str_radix(parts[i], 16); 
                     assert!(
                         val.is_ok(),
                         "Failed to parse '{}' as u64 (hex) for {} in file name: {}",
-                        parts[i], label, file_name
+                        parts[i],
+                        label,
+                        file_name
                     );
                 }
 
