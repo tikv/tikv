@@ -20,7 +20,6 @@ use yatp::Remote;
 use super::metrics::{
     COMPACT_RANGE_CF, FULL_COMPACT, FULL_COMPACT_INCREMENTAL, FULL_COMPACT_PAUSE,
 };
-use crate::store::Config;
 
 type Key = Vec<u8>;
 

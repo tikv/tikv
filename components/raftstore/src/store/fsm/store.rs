@@ -10,10 +10,7 @@ use std::{
     },
     mem,
     ops::{Deref, DerefMut},
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, Mutex, atomic::Ordering},
     time::{Duration, Instant, SystemTime},
 };
 

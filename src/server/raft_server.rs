@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{Arc, Mutex, atomic::AtomicU64},
+    sync::{Arc, Mutex},
     thread,
     time::Duration,
 };
