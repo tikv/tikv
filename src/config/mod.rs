@@ -4122,6 +4122,45 @@ impl TikvConfig {
         Ok(())
     }
 
+    /// Adjusts the current configuration to maintain compatibility with the
+    /// last persisted configuration. This function performs two main tasks:
+    ///
+    /// 1. Checks for configuration inconsistencies between the current and last
+    ///    configuration, particularly for region size settings that have been
+    ///    moved from raftstore to coprocessor.
+    ///
+    /// 2. Inherits critical configuration values from the last configuration
+    ///    when appropriate, specifically:
+    ///    - For region size settings (max_size, split_size, max_keys,
+    ///      split_keys), inheritance only occurs if the current value is not
+    ///      manually specified
+    ///
+    /// # Parameters
+    ///
+    /// * `last_config` - An optional reference to the last persisted
+    ///   configuration. If `None`, default values will be used instead of
+    ///   inheritance.
+    ///
+    /// # Behavior
+    ///
+    /// * Region Size Settings:
+    ///   - If `raftstore.region-max-size` differs from the last config, it's
+    ///     considered deprecated and will be moved to
+    ///     `coprocessor.region-max-size` if not already set
+    ///   - If `raftstore.region-split-size` differs from the last config, it's
+    ///     considered deprecated and will be moved to
+    ///     `coprocessor.region-split-size` if not already set
+    /// # Examples
+    ///
+    /// ```rust
+    /// // Start with default configuration
+    /// let mut cfg = TikvConfig::default();
+    /// cfg.compatible_adjust(None); // Uses default values
+    ///
+    /// // Adjust with last configuration
+    /// let last_cfg = get_last_config();
+    /// cfg.compatible_adjust(Some(&last_cfg)); // Inherits values from last_cfg if needed
+    /// ```
     #[allow(deprecated)]
     pub fn compatible_adjust(&mut self, last_config: Option<&TikvConfig>) {
         let (default_raft_store, default_coprocessor) = last_config
@@ -4442,12 +4481,21 @@ pub fn validate_and_persist_config(config: &mut TikvConfig, persist: bool) -> Re
     // changes, user must guarantee relevant works have been done.
     let mut last_cfg = get_last_config(&config.storage.data_dir);
     if let Some(last_cfg) = &mut last_cfg {
+        // Validate and normalize the last persisted configuration to ensure it's in a
+        // consistent state before using it as a reference for inheritance. This helps
+        // prevent propagating invalid or deprecated settings to the current
+        // configuration.
         last_cfg.compatible_adjust(None);
         if let Err(e) = last_cfg.validate() {
             warn!("last_tikv.toml is invalid but ignored: {:?}", e);
         }
+        // Inherit critical configuration values from the validated last configuration
+        // if they are not explicitly set in the current configuration. This ensures
+        // smooth upgrades while preserving user-specified settings.
         config.compatible_adjust(Some(last_cfg));
     } else {
+        // For newly deployed nodes or when no previous configuration exists,
+        // initialize with default values. No inheritance is needed in this case.
         config.compatible_adjust(None);
     }
 
