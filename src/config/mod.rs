@@ -4123,9 +4123,11 @@ impl TikvConfig {
     }
 
     #[allow(deprecated)]
-    pub fn compatible_adjust(&mut self) {
-        let default_raft_store = RaftstoreConfig::default();
-        let default_coprocessor = CopConfig::default();
+    pub fn compatible_adjust(&mut self, last_config: Option<&TikvConfig>) {
+        let (default_raft_store, default_coprocessor) = last_config
+            .map_or((RaftstoreConfig::default(), CopConfig::default()), |cfg| {
+                (cfg.raft_store.clone(), cfg.coprocessor.clone())
+            });
         if self.raft_store.region_max_size != default_raft_store.region_max_size {
             warn!(
                 "deprecated configuration, \
@@ -4153,6 +4155,21 @@ impl TikvConfig {
                 self.coprocessor.region_split_size = Some(self.raft_store.region_split_size);
             }
             self.raft_store.region_split_size = default_raft_store.region_split_size;
+        }
+        // If any one of the configurations, corresponsive for the size of region, not
+        // manully changed or set, TiKV should inherit the relative settings
+        // from the previous config file.
+        if self.coprocessor.region_max_size.is_none() {
+            self.coprocessor.region_max_size = default_coprocessor.region_max_size;
+        }
+        if self.coprocessor.region_max_keys.is_none() {
+            self.coprocessor.region_max_keys = default_coprocessor.region_max_keys;
+        }
+        if self.coprocessor.region_split_size.is_none() {
+            self.coprocessor.region_split_size = default_coprocessor.region_split_size;
+        }
+        if self.coprocessor.region_split_keys.is_none() {
+            self.coprocessor.region_split_keys = default_coprocessor.region_split_keys;
         }
         if self.server.end_point_concurrency.is_some() {
             warn!(
@@ -4425,13 +4442,15 @@ pub fn validate_and_persist_config(config: &mut TikvConfig, persist: bool) -> Re
     // changes, user must guarantee relevant works have been done.
     let mut last_cfg = get_last_config(&config.storage.data_dir);
     if let Some(last_cfg) = &mut last_cfg {
-        last_cfg.compatible_adjust();
+        last_cfg.compatible_adjust(None);
         if let Err(e) = last_cfg.validate() {
             warn!("last_tikv.toml is invalid but ignored: {:?}", e);
         }
+        config.compatible_adjust(Some(last_cfg));
+    } else {
+        config.compatible_adjust(None);
     }
 
-    config.compatible_adjust();
     if let Err(e) = config.validate() {
         return Err(format!("invalid configuration: {}", e));
     }
@@ -5334,6 +5353,7 @@ mod tests {
 
         tikv_cfg.rocksdb.wal_dir = s1.clone();
         tikv_cfg.raftdb.wal_dir = s2.clone();
+        tikv_cfg.coprocessor.region_split_size = Some(ReadableSize::mb(16));
         tikv_cfg.write_to_file(file).unwrap();
         let cfg_from_file = TikvConfig::from_file(file, None).unwrap_or_else(|e| {
             panic!(
@@ -5358,6 +5378,10 @@ mod tests {
         });
         assert_eq!(cfg_from_file.rocksdb.wal_dir, s2);
         assert_eq!(cfg_from_file.raftdb.wal_dir, s1);
+        assert_eq!(
+            cfg_from_file.coprocessor.region_split_size.unwrap(),
+            tikv_cfg.coprocessor.region_split_size.unwrap()
+        );
     }
 
     #[test]
@@ -6493,11 +6517,11 @@ mod tests {
         // the same effect as calling `compatible_adjust` and `validate` one time
         let mut c = TikvConfig::default();
         let mut cfg = c.clone();
-        c.compatible_adjust();
+        c.compatible_adjust(None);
         c.validate().unwrap();
 
         for _ in 0..10 {
-            cfg.compatible_adjust();
+            cfg.compatible_adjust(None);
             cfg.validate().unwrap();
             assert_eq_debug(&c, &cfg);
         }
@@ -6510,7 +6534,7 @@ mod tests {
         [readpool.coprocessor]
         "#;
         let mut cfg: TikvConfig = toml::from_str(content).unwrap();
-        cfg.compatible_adjust();
+        cfg.compatible_adjust(None);
         assert_eq!(cfg.readpool.storage.use_unified_pool, Some(true));
         assert_eq!(cfg.readpool.coprocessor.use_unified_pool, Some(true));
 
@@ -6521,7 +6545,7 @@ mod tests {
         normal-concurrency = 1
         "#;
         let mut cfg: TikvConfig = toml::from_str(content).unwrap();
-        cfg.compatible_adjust();
+        cfg.compatible_adjust(None);
         assert_eq!(cfg.readpool.storage.use_unified_pool, Some(false));
         assert_eq!(cfg.readpool.coprocessor.use_unified_pool, Some(false));
     }
@@ -7222,6 +7246,114 @@ mod tests {
         assert!(!default_cfg.coprocessor.enable_region_bucket());
         default_cfg.coprocessor.validate(true).unwrap();
         assert!(default_cfg.coprocessor.enable_region_bucket());
+    }
+
+    #[test]
+    fn test_inherit_region_size_config() {
+        let default_cfg = TikvConfig::default();
+
+        // Case 1: start with empty settings
+        let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
+        cfg.compatible_adjust(None);
+        assert_eq!(
+            default_cfg.coprocessor.region_max_size,
+            cfg.coprocessor.region_max_size
+        );
+        assert_eq!(
+            default_cfg.coprocessor.region_split_size,
+            cfg.coprocessor.region_split_size
+        );
+
+        // Case 2: persist and load the last tikv configurations, then make the current
+        // config compatible to it.
+        cfg.coprocessor.region_split_size = Some(ReadableSize::mb(16));
+        validate_and_persist_config(&mut cfg, true).unwrap();
+        let cfg_from_file = TikvConfig::from_file(
+            &Path::new(&cfg.storage.data_dir).join(LAST_CONFIG_FILE),
+            None,
+        )
+        .unwrap();
+        assert!(
+            cfg_from_file.coprocessor.region_max_size.is_some()
+                && cfg_from_file.coprocessor.region_max_keys.is_some()
+        );
+        assert_eq!(
+            cfg_from_file.coprocessor.region_split_size,
+            cfg.coprocessor.region_split_size
+        );
+        let mut case2_cfg = TikvConfig::default();
+        case2_cfg.compatible_adjust(Some(&cfg_from_file));
+        assert_eq!(
+            cfg_from_file.coprocessor.region_max_size,
+            case2_cfg.coprocessor.region_max_size
+        );
+        assert_eq!(
+            cfg_from_file.coprocessor.region_split_size,
+            case2_cfg.coprocessor.region_split_size
+        );
+        assert_eq!(
+            cfg_from_file.coprocessor.region_max_keys,
+            case2_cfg.coprocessor.region_max_keys
+        );
+        assert_eq!(
+            cfg_from_file.coprocessor.region_split_keys,
+            case2_cfg.coprocessor.region_split_keys
+        );
+
+        // Case 3: manually specify region-split-size, then make it compatible to the
+        // last config. The current configuration should inherit the remained configs.
+        let content = r#"
+        [coprocessor]
+        region-split-size = "32MiB"
+        "#;
+        let mut case3_cfg: TikvConfig = toml::from_str(content).unwrap();
+        case3_cfg.compatible_adjust(None);
+        assert_eq!(
+            case3_cfg.coprocessor.region_split_size,
+            Some(ReadableSize::mb(32))
+        );
+        case3_cfg.compatible_adjust(Some(&cfg_from_file));
+        assert_eq!(
+            case3_cfg.coprocessor.region_split_size,
+            Some(ReadableSize::mb(32))
+        );
+        assert_eq!(
+            cfg_from_file.coprocessor.region_max_size,
+            case3_cfg.coprocessor.region_max_size
+        );
+        assert_eq!(
+            cfg_from_file.coprocessor.region_max_keys,
+            case3_cfg.coprocessor.region_max_keys
+        );
+        assert_eq!(
+            cfg_from_file.coprocessor.region_split_keys,
+            case3_cfg.coprocessor.region_split_keys
+        );
+        // Invalid configuration as `regions-split-size` > inherited.`region-max-size`
+        case3_cfg.coprocessor.validate(false).unwrap_err();
+
+        // Case 4: all settings are manually changed in the current config file,
+        // then make it compatible to the last config. The current
+        // configuration should not be changed.
+        let content = r#"
+        [coprocessor]
+        region-split-size = "24MiB"
+        region-max-size = "32MiB"
+        region-split-keys = 24000
+        region-max-keys = 32000
+        "#;
+        let mut case4_cfg: TikvConfig = toml::from_str(content).unwrap();
+        case4_cfg.compatible_adjust(Some(&cfg_from_file));
+        assert_eq!(
+            case4_cfg.coprocessor.region_split_size,
+            Some(ReadableSize::mb(24))
+        );
+        assert_eq!(
+            case4_cfg.coprocessor.region_max_size,
+            Some(ReadableSize::mb(32))
+        );
+        assert_eq!(case4_cfg.coprocessor.region_split_keys, Some(24000));
+        assert_eq!(case4_cfg.coprocessor.region_max_keys, Some(32000));
     }
 
     #[test]
