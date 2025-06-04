@@ -817,7 +817,7 @@ impl PdConnector {
                             network_fail_num += 1;
                         }
                     }
-                    error!("failed to connect to PD member"; "endpoints" => ep, "error" => ?e);
+                    warn!("failed to connect to PD member"; "endpoints" => ep, "error" => ?e);
                 }
                 _ => unreachable!(),
             }
