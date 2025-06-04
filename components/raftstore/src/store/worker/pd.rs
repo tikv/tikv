@@ -109,13 +109,13 @@ where
 {
     fn report_read_stats(&self, read_stats: ReadStats) {
         if let Err(e) = self.schedule(Task::ReadStats { read_stats }) {
-            error!("Failed to send read flow statistics"; "err" => ?e);
+            warn!("Failed to send read flow statistics"; "err" => ?e);
         }
     }
 
     fn report_write_stats(&self, write_stats: WriteStats) {
         if let Err(e) = self.schedule(Task::WriteStats { write_stats }) {
-            error!("Failed to send write flow statistics"; "err" => ?e);
+            warn!("Failed to send write flow statistics"; "err" => ?e);
         }
     }
 }
@@ -1440,7 +1440,7 @@ where
                     }
                 }
                 Err(e) => {
-                    error!("store heartbeat failed"; "err" => ?e);
+                    warn!("store heartbeat failed"; "err" => ?e);
                 }
             }
         };
@@ -1846,13 +1846,13 @@ where
                     if leader.get_store_id() != 0 {
                         let msg = Box::new(CasualMessage::QueryRegionLeaderResp { region, leader });
                         if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg)) {
-                            error!("send region info message failed"; "region_id" => region_id, "err" => ?e);
+                            warn!("send region info message failed"; "region_id" => region_id, "err" => ?e);
                         }
                     }
                 }
                 Ok(None) => {}
                 Err(e) => {
-                    error!("get region failed"; "err" => ?e);
+                    warn!("get region failed"; "err" => ?e);
                 }
             }
         };
@@ -2483,7 +2483,7 @@ fn send_admin_request<EK, ER>(
 
     let cmd = RaftCommand::new_ext(req, callback, extra_opts);
     if let Err(e) = router.send_raft_command(cmd) {
-        error!(
+        warn!(
             "send request failed";
             "region_id" => region_id, "cmd_type" => ?cmd_type, "err" => ?e,
         );
