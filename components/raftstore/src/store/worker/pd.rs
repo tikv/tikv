@@ -495,6 +495,52 @@ fn default_collect_tick_interval() -> Duration {
     DEFAULT_COLLECT_TICK_INTERVAL
 }
 
+/// Determines the minimal interval for latency inspection ticks based on raft
+/// and kvdb inspection intervals.
+///
+/// This function handles different scenarios for latency inspection:
+/// 1. Both intervals are zero: Inspection is disabled, returns a large interval
+///    (1 hour)
+/// 2. Only raft interval is zero: Uses kvdb interval (raft inspection disabled)
+/// 3. Only kvdb interval is zero: Uses raft interval (kvdb inspection disabled)
+/// 4. Both intervals non-zero: Uses the smaller of the two intervals
+///
+/// # Arguments
+///
+/// * `inspect_latency_interval` - Interval for raft latency inspection
+/// * `inspect_kvdb_latency_interval` - Interval for kvdb latency inspection
+///
+/// # Returns
+///
+/// The minimal interval that should be used for latency inspection ticks
+fn get_minimal_inspect_tick_interval(
+    inspect_latency_interval: Duration,
+    inspect_kvdb_latency_interval: Duration,
+) -> Duration {
+    match (
+        inspect_latency_interval.is_zero(),
+        inspect_kvdb_latency_interval.is_zero(),
+    ) {
+        (true, true) => {
+            // Both inspections are disabled - return a large interval to avoid misleading
+            // tick checks
+            Duration::from_secs(3600)
+        }
+        (true, false) => {
+            // raft inspection disabled - use kvdb interval
+            inspect_kvdb_latency_interval
+        }
+        (false, true) => {
+            // kvdb inspection disabled - use raft interval
+            inspect_latency_interval
+        }
+        (false, false) => {
+            // Both inspections enabled - use the smaller interval
+            std::cmp::min(inspect_latency_interval, inspect_kvdb_latency_interval)
+        }
+    }
+}
+
 #[inline]
 fn convert_record_pairs(m: HashMap<String, u64>) -> RecordPairVec {
     m.into_iter()
@@ -602,8 +648,8 @@ where
     collect_store_infos_interval: Duration,
     load_base_split_check_interval: Duration,
     collect_tick_interval: Duration,
-    inspect_latency_interval: Duration,
-    inspect_kvdb_latency_interval: Duration,
+    inspect_latency_interval: Duration,      // for raft mount path
+    inspect_kvdb_latency_interval: Duration, // for kvdb mount path
 }
 
 impl<T> StatsMonitor<T>
@@ -627,10 +673,13 @@ where
                 DEFAULT_LOAD_BASE_SPLIT_CHECK_INTERVAL,
                 interval,
             ),
-            // Use `inspect_latency_interval` as the minimal limitation for collecting tick.
+            // Use the smallest inspect latency as the minimal limitation for collecting tick.
             collect_tick_interval: cmp::min(
-                inspect_latency_interval,
-                cmp::min(default_collect_tick_interval(), interval),
+                get_minimal_inspect_tick_interval(
+                    inspect_latency_interval,
+                    inspect_kvdb_latency_interval,
+                ),
+                interval.min(default_collect_tick_interval()),
             ),
             inspect_latency_interval,
             inspect_kvdb_latency_interval,
@@ -646,7 +695,10 @@ where
     ) -> Result<(), io::Error> {
         if self.collect_tick_interval
             < cmp::min(
-                self.inspect_latency_interval,
+                get_minimal_inspect_tick_interval(
+                    self.inspect_latency_interval,
+                    self.inspect_kvdb_latency_interval,
+                ),
                 default_collect_tick_interval(),
             )
         {
