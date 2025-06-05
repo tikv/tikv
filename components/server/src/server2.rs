@@ -1547,7 +1547,7 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         .sst_recovery_sender(self.init_sst_recovery_sender())
         .flow_listener(flow_listener);
 
-        let mut node = NodeV2::new(
+        let mut node: NodeV2<RpcClient, RocksEngine, CER> = NodeV2::new(
             &self.core.config.server,
             self.pd_client.clone(),
             None,

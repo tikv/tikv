@@ -29,6 +29,7 @@ pub struct RaftstoreReporterConfig {
     /// some internal calculations.
     pub inspect_interval: Duration,
     pub inspect_kvdb_interval: Duration,
+    pub inspect_pd_interval: Duration,
 
     pub unsensitive_cause: f64,
     pub unsensitive_result: f64,
@@ -68,6 +69,10 @@ impl UnifiedSlowScore {
         unified_slow_score
             .factors
             .push(SlowScore::new(cfg.inspect_kvdb_interval));
+        // The third factor is for PD Network I/O.
+        unified_slow_score
+            .factors
+            .push(SlowScore::new(cfg.inspect_pd_interval));
         unified_slow_score
     }
 
@@ -92,11 +97,23 @@ impl UnifiedSlowScore {
         &mut self.factors[factor as usize]
     }
 
-    // Returns the maximum score of all factors.
-    pub fn get_score(&self) -> f64 {
+    // Returns the maximum score of disk factors.
+    pub fn get_disk_score(&self) -> f64 {
         self.factors
             .iter()
-            .map(|factor| factor.get())
+            .enumerate()
+            .filter(|(idx, _)| *idx < InspectFactor::PdNetwork as usize)
+            .map(|(_, factor)| factor.get())
+            .fold(1.0, f64::max)
+    }
+
+    // Returns the maximum score of network factors.
+    pub fn get_network_score(&self) -> f64 {
+        self.factors
+            .iter()
+            .enumerate()
+            .filter(|(idx, _)| *idx >= InspectFactor::PdNetwork as usize)
+            .map(|(_, factor)| factor.get())
             .fold(1.0, f64::max)
     }
 
@@ -124,8 +141,12 @@ impl RaftstoreReporter {
         }
     }
 
-    pub fn get_slow_score(&self) -> f64 {
-        self.slow_score.get_score()
+    pub fn get_disk_slow_score(&self) -> f64 {
+        self.slow_score.get_disk_score()
+    }
+
+    pub fn get_network_slow_score(&self) -> f64 {
+        self.slow_score.get_network_score()
     }
 
     pub fn get_slow_trend(&self) -> &SlowTrendStatistics {
@@ -144,9 +165,18 @@ impl RaftstoreReporter {
             .record(id, factor, &duration, store_not_busy);
         self.slow_trend.record(duration);
 
-        // Publish slow score to health controller
-        self.health_controller_inner
-            .update_raftstore_slow_score(self.slow_score.get_score());
+        match factor {
+            InspectFactor::RaftDisk | InspectFactor::KvDisk => {
+            // Publish slow score to health controller
+            self.health_controller_inner
+                .update_raftstore_slow_score(self.slow_score.get_disk_score());
+            }
+            InspectFactor::PdNetwork => {
+            self.health_controller_inner
+                .update_network_slow_score(self.slow_score.get_network_score());
+            }
+        }
+        
     }
 
     fn is_healthy(&self) -> bool {
@@ -202,8 +232,17 @@ impl RaftstoreReporter {
 
         // Publish the slow score to health controller
         if slow_score_tick_result.updated_score.is_some() {
-            self.health_controller_inner
-                .update_raftstore_slow_score(self.slow_score.get_score());
+            match factor {
+                InspectFactor::RaftDisk | InspectFactor::KvDisk => {
+                // Publish slow score to health controller
+                self.health_controller_inner
+                    .update_raftstore_slow_score(self.slow_score.get_disk_score());
+                }
+                InspectFactor::PdNetwork => {
+                self.health_controller_inner
+                    .update_network_slow_score(self.slow_score.get_network_score());
+                }
+            }
         }
 
         slow_score_tick_result
