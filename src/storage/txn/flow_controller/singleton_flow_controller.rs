@@ -599,13 +599,8 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
                     return;
                 }
                 self.wait_for_destroy_range_finish = true;
-<<<<<<< HEAD
-                let soft = (self.soft_pending_compaction_bytes_limit as f64).log2();
-                for (cf, cf_checker) in &mut self.cf_checkers {
-=======
                 let soft = (current_cfg.soft_pending_compaction_bytes_limit.0 as f64).log2();
-                for cf_checker in self.cf_checkers.values_mut() {
->>>>>>> 444270cf97 (storage: support online config for flow-control module (#17396))
+                for (cf, cf_checker) in &mut self.cf_checkers {
                     if let Some(long_term_pending_bytes) =
                         cf_checker.long_term_pending_bytes.as_ref()
                     {
