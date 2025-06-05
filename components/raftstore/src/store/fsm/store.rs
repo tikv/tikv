@@ -806,7 +806,7 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             StoreTick::PdStoreHeartbeat => self.on_pd_store_heartbeat_tick(),
             StoreTick::SnapGc => self.on_snap_mgr_gc(),
             StoreTick::CompactLockCf => self.on_compact_lock_cf(),
-            StoreTick::CompactCheck => self.on_compact_check_tick(),
+            StoreTick::CompactCheck => self.on_check_and_compact_tick(),
             StoreTick::PeriodicFullCompact => self.on_full_compact_tick(),
             StoreTick::LoadMetricsWindow => self.on_load_metrics_window_tick(),
             StoreTick::ConsistencyCheck => self.on_consistency_check_tick(),
@@ -2724,6 +2724,35 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
     }
 
     fn on_compact_check_tick(&mut self) {
+        self.register_compact_check_tick();
+        if self.ctx.cleanup_scheduler.is_busy() {
+            debug!(
+                "compact worker is busy, skip compact check";
+                "store_id" => self.fsm.store.id,
+            );
+            return;
+        }
+
+        let meta = self.ctx.store_meta.lock().unwrap();
+        if meta.region_ranges.is_empty() {
+            debug!(
+                "there is no range need to check";
+                "store_id" => self.fsm.store.id
+            );
+            return;
+        }
+        let mut all_ranges = Vec::with_capacity(meta.region_ranges.len() + 2);
+        all_ranges.push(keys::DATA_MIN_KEY.to_vec());
+        all_ranges.extend(
+            meta.region_ranges
+                .keys()
+                .map(|k| k.to_owned())
+                .collect::<Vec<_>>(),
+        );
+        all_ranges.push(keys::DATA_MAX_KEY.to_vec());
+    }
+
+    fn on_check_and_compact_tick(&mut self) {
         self.register_compact_check_tick();
         if self.ctx.cleanup_scheduler.is_busy() {
             debug!(

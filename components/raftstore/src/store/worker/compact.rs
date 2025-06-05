@@ -1,17 +1,20 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::VecDeque,
+    cmp::Reverse,
+    collections::{BinaryHeap, VecDeque},
     error::Error as StdError,
     fmt::{self, Display, Formatter},
     sync::atomic::{AtomicBool, Ordering},
     time::Duration,
 };
 
+use derive_more::derive;
 use engine_traits::{CF_WRITE, KvEngine, ManualCompactionOptions, RangeStats};
 use fail::fail_point;
 use futures_util::compat::Future01CompatExt;
 use thiserror::Error;
+use tidb_query_datatype::codec::batch;
 use tikv_util::{
     box_try, debug, error, info, time::Instant, timer::GLOBAL_TIMER_HANDLE, warn, worker::Runnable,
 };
@@ -47,7 +50,38 @@ pub enum Task {
         // The minimum RocksDB tombstones/duplicate versions a range that need compacting has
         compact_threshold: CompactThreshold,
     },
+
+    CompactTopN {
+        // Column families need to compact
+        cf_names: Vec<String>,
+        // Ranges need to check
+        ranges: Vec<Key>,
+        // The minimum RocksDB tombstones/duplicate versions a range that need compacting has
+        compact_threshold: CompactThreshold,
+        // Only compact the top N ranges that need compaction.
+        top_n: usize,
+        compaction_filter_enabled: bool,
+        // RAII guard to indicate the task is still running. Store FSM will hold a weak ptr to this
+        // guard, and will be aware of the task being dropped.
+        // If the task is dropped, it means the check is finished or failed.
+        // If the task is still running, it will block future checks.
+        // Drop this guard *after* compaction is scheduled, to prevent periodic checks by Store FSM
+        // races with the compaction tasks.
+        finished: Arc<()>,
+    },
 }
+
+#[derive(Clone, Debug)]
+struct CompactionUnit {
+    cf_name: String,
+    start_key: Key,
+    end_key: Key,
+    score: f64,
+}
+
+// Entry in the min-heap for top N compaction.
+#[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord)]
+struct MinHeapEntry(Reverse<f64>, CompactionUnit);
 
 type CompactPredicateFn = Box<dyn Fn() -> bool + Send + Sync>;
 
@@ -200,6 +234,35 @@ impl Display for Task {
                     "redundant_rows_percent_threshold",
                     &compact_threshold.redundant_rows_percent_threshold,
                 )
+                .finish(),
+            Task::CompactTopN {
+                ref cf_names,
+                ref ranges,
+                ref compact_threshold,
+                top_n,
+                compaction_filter_enabled,
+                ref finished,
+            } => f
+                .debug_struct("CompactTopN")
+                .field("cf_names", cf_names)
+                .field(
+                    "tombstones_num_threshold",
+                    &compact_threshold.tombstones_num_threshold,
+                )
+                .field(
+                    "tombstones_percent_threshold",
+                    &compact_threshold.tombstones_percent_threshold,
+                )
+                .field(
+                    "redundant_rows_threshold",
+                    &compact_threshold.redundant_rows_threshold,
+                )
+                .field(
+                    "redundant_rows_percent_threshold",
+                    &compact_threshold.redundant_rows_percent_threshold,
+                )
+                .field("top_n", &top_n)
+                .field("compaction_filter_enabled", &compaction_filter_enabled)
                 .finish(),
         }
     }
@@ -403,6 +466,17 @@ where
                 }
                 Err(e) => warn!("check ranges need reclaim failed"; "err" => %e),
             },
+            Task::CompactTopN {
+                cf_names,
+                ranges,
+                compact_threshold,
+                top_n,
+                compaction_filter_enabled,
+                finished,
+            } => {
+                // Schedule the compaction.
+                self.schedule_compact_top_n(cf_names, ranges, compact_threshold, top_n);
+            }
         }
     }
 }
@@ -472,6 +546,60 @@ fn collect_ranges_need_compact(
     }
 
     Ok(ranges_need_compact)
+}
+
+fn get_top_n_ranges_to_compact(
+    engine: &impl KvEngine,
+    ranges: Vec<Key>,
+    compact_threshold: CompactThreshold,
+    top_n: usize,
+    compaction_filter_enabled: bool,
+) -> Result<BinaryHeap<MinHeapEntry>> {
+    let mut heap = BinaryHeap::new();
+    for range in ranges.iter().windows(2) {
+        // Get total entries and total versions in this range and checks if it needs to
+        // be compacted.
+        if let Some(range_stats) = engine.get_range_stats(CF_WRITE, &range[0], &range[1])? {
+            if !need_compact(&range_stats, &compact_threshold) {
+                continue;
+            }
+        } else {
+            // Empty range, skip it.
+            continue;
+        }
+
+        // Calculate the score for the range.
+        let estimate_num_del = range_stats.num_entries - range_stats.num_versions;
+        let redundant_keys = range_stats.redundant_keys();
+        let score = if compaction_filter_enabled {
+            redundant_keys as f64 / range_stats.num_entries as f64
+        } else {
+            estimate_num_del as f64 / range_stats.num_entries as f64
+        };
+        if heap.len() >= top_n && score < heap.peek().map_or(1.0, |e| e.0.0) {
+            // If the score is less than the top of the heap, skip it.
+            continue;
+        }
+
+        // Create a new compaction unit.
+        let compaction_unit = CompactionUnit {
+            cf_name: CF_WRITE.to_string(),
+            start_key: range[0].clone(),
+            end_key: range[1].clone(),
+            score,
+        };
+
+        // Push the compaction unit into the min-heap.
+        let entry = MinHeapEntry(Reverse(score), compaction_unit);
+        heap.push(entry);
+        if heap.len() > top_n {
+            // If the heap size exceeds the top N, pop the smallest element.
+            heap.pop();
+        }
+    }
+
+    // Return the top N ranges.
+    sorted_ranges.into_iter().take(top_n).collect()
 }
 
 #[cfg(test)]
