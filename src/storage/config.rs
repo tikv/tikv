@@ -254,13 +254,9 @@ impl Config {
 #[serde(rename_all = "kebab-case")]
 pub struct FlowControlConfig {
     pub enable: bool,
-    #[online_config(skip)]
     pub soft_pending_compaction_bytes_limit: ReadableSize,
-    #[online_config(skip)]
     pub hard_pending_compaction_bytes_limit: ReadableSize,
-    #[online_config(skip)]
     pub memtables_threshold: u64,
-    #[online_config(skip)]
     pub l0_files_threshold: u64,
 }
 
