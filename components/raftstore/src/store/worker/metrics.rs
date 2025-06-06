@@ -212,6 +212,21 @@ lazy_static! {
         "Bucketed histogram of full compaction pauses for the storage."
     )
     .unwrap();
+    pub static ref CHECK_AND_COMPACT_CHECKING_DURATION: Histogram = register_histogram!(
+        "tikv_storage_check_and_compact_checking_duration_seconds",
+        "Bucketed histogram of checking duration in storage check and compact worker",
+        exponential_buckets(0.001, 2.0, 20).unwrap()
+    )
+    .unwrap();
+    pub static ref CHECK_AND_COMPACT_PENDING_COMPACTIONS: IntGauge = register_int_gauge!(
+        "tikv_storage_check_and_compact_pending_compactions",
+        "Total number of pending compactions in storage check and compact worker"
+    ).unwrap();
+    pub static ref CHECK_AND_COMPACT_NUM_MVCC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_storage_check_and_compact_num_mvcc",
+        "Total number of MVCC entries in write cf",
+        &["discardable"]
+    ).unwrap();
     pub static ref PROCESS_STAT_CPU_USAGE: Gauge = register_gauge!(
         "tikv_storage_process_stat_cpu_usage",
         "CPU usage measured over a 30 second window",
