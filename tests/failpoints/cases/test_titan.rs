@@ -111,7 +111,7 @@ fn test_titan() {
         db.get_property_int_cf(defaultcf, "rocksdb.num-files-at-level5")
             .unwrap()
     );
-    // lv5: file1 [k1: deleted]
+    // lv5: file1 [k1: deletion]
     // lv6: file0 [k1: ref_to_blob_file, k3: v]
     // blob db: file0 [k1: v]
 
@@ -155,6 +155,8 @@ fn test_titan() {
             .async_add_peer(region1.get_id(), peer.clone())
             .unwrap(),
     )));
+
+    cluster.must_transfer_leader(region1.get_id(), peer.clone());
     // TiKV does not crash, even the add peer will clean up the data again,
     // thus able to see the obesolete blob reference, the blob reference will
     // not be evaluated.
