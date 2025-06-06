@@ -120,6 +120,10 @@ ifneq ($(NO_ASYNC_BACKTRACE),1)
 ENABLE_FEATURES += trace-async-tasks
 endif
 
+ifeq ($(LINEARIZABILITY_TRACK),1)
+ENABLE_FEATURES += linearizability-track
+endif
+
 export DOCKER_FILE ?= Dockerfile
 export DOCKER_IMAGE_NAME ?= pingcap/tikv
 export DOCKER_IMAGE_TAG ?= latest
