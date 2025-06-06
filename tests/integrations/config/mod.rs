@@ -955,7 +955,7 @@ fn test_block_cache_backward_compatible() {
     let content = read_file_in_project_dir("integrations/config/test-cache-compatible.toml");
     let mut cfg: TikvConfig = toml::from_str(&content).unwrap();
     assert!(cfg.storage.block_cache.capacity.is_none());
-    cfg.compatible_adjust();
+    cfg.compatible_adjust(None);
     assert!(cfg.storage.block_cache.capacity.is_some());
     assert_eq!(
         cfg.storage.block_cache.capacity.unwrap().0,
