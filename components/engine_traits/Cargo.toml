@@ -31,4 +31,5 @@ txn_types = { workspace = true }
 
 [dev-dependencies]
 serde_derive = "1.0"
+rand = "0.8.5"
 toml = "0.5"
