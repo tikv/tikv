@@ -939,7 +939,7 @@ pub fn must_new_and_configure_cluster(
     must_new_and_configure_cluster_mul(1, configure)
 }
 
-fn must_new_and_configure_cluster_mul(
+pub fn must_new_and_configure_cluster_mul(
     count: usize,
     mut configure: impl FnMut(&mut Cluster<RocksEngine, ServerCluster<RocksEngine>>),
 ) -> (
