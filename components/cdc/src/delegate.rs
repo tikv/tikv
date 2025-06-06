@@ -371,7 +371,6 @@ impl Delegate {
             }
             LockTracker::Prepared { locks, .. } => match locks.entry(key) {
                 BTreeMapEntry::Occupied(mut x) => {
-                    assert_eq!(x.get().ts, start_ts.ts);
                     assert!(x.get().generation <= start_ts.generation);
                     x.get_mut().generation = start_ts.generation;
                 }
