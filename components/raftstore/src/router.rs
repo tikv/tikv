@@ -15,13 +15,13 @@ use slog_global::warn;
 use tikv_util::time::ThreadReadId;
 
 use crate::{
-    DiscardReason, Error as RaftStoreError, Result as RaftStoreResult,
     store::{
-        Callback, CasualMessage, LocalReader, PeerMsg, RaftCmdExtraOpts, RaftCommand,
-        SignificantMsg, StoreMsg, StoreRouter,
-        fsm::{ChangeObserver, RaftRouter},
-        transport::{CasualRouter, ProposalRouter, SignificantRouter},
-    },
+        fsm::{ChangeObserver, RaftRouter}, transport::{CasualRouter, ProposalRouter, SignificantRouter}, Callback, CasualMessage, LocalReader, PeerMsg,
+        RaftCmdExtraOpts, RaftCommand, SignificantMsg,
+        StoreMsg,
+        StoreRouter,
+    }, DiscardReason, Error as RaftStoreError,
+    Result as RaftStoreResult,
 };
 /// Routes messages to the raftstore.
 pub trait RaftStoreRouter<EK>:
@@ -141,6 +141,10 @@ where
     ) -> RaftStoreResult<()>;
 
     fn release_snapshot_cache(&mut self);
+
+    fn locate_key(&self, _key: &[u8]) -> Option<(Arc<metapb::Region>, u64, u64)> {
+        None
+    }
 }
 
 #[derive(Clone)]
@@ -275,6 +279,10 @@ impl<EK: KvEngine, ER: RaftEngine> LocalReadRouter<EK> for ServerRaftStoreRouter
 
     fn release_snapshot_cache(&mut self) {
         self.local_reader.release_snapshot_cache();
+    }
+
+    fn locate_key(&self, key: &[u8]) -> Option<(Arc<metapb::Region>, u64, u64)> {
+        self.local_reader.locate_key(key)
     }
 }
 

@@ -13,8 +13,8 @@ use std::{
     pin::Pin,
     result,
     sync::{
-        Arc, RwLock,
-        atomic::{AtomicU8, Ordering},
+        atomic::{AtomicU8, Ordering}, Arc,
+        RwLock,
     },
     task::Poll,
     time::Duration,
@@ -23,41 +23,42 @@ use std::{
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot};
-use futures::{Future, Stream, StreamExt, TryFutureExt, future::BoxFuture, task::AtomicWaker};
+use futures::{future::BoxFuture, task::AtomicWaker, Future, Stream, StreamExt, TryFutureExt};
 use hybrid_engine::HybridEngineSnapshot;
 use in_memory_engine::RegionCacheMemoryEngine;
 use kvproto::{
     errorpb,
     kvrpcpb::{Context, IsolationLevel},
+    metapb,
     raft_cmdpb::{
         AdminCmdType, CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request,
         Response,
     },
 };
 use raft::{
-    StateRole,
     eraftpb::{self, MessageType},
+    StateRole,
 };
 pub use raft_extension::RaftRouterWrap;
 use raftstore::{
     coprocessor::{
-        Coprocessor, CoprocessorHost, ReadIndexObserver, dispatcher::BoxReadIndexObserver,
+        dispatcher::BoxReadIndexObserver, Coprocessor, CoprocessorHost, ReadIndexObserver,
     },
     errors::Error as RaftServerError,
     router::{LocalReadRouter, RaftStoreRouter, ReadContext},
     store::{
-        self, Callback as StoreCallback, RaftCmdExtraOpts, ReadIndexContext, ReadResponse,
-        RegionSnapshot, StoreMsg, WriteResponse, util::encode_start_ts_into_flag_data,
+        self, util::encode_start_ts_into_flag_data, Callback as StoreCallback, RaftCmdExtraOpts, ReadIndexContext,
+        ReadResponse, RegionSnapshot, StoreMsg, WriteResponse,
     },
 };
 use thiserror::Error;
-use tikv_kv::{OnAppliedCb, WriteEvent, write_modifies};
+use tikv_kv::{write_modifies, OnAppliedCb, WriteEvent};
 use tikv_util::{
     callback::must_call,
     future::{paired_future_callback, paired_must_called_future_callback},
     time::Instant,
 };
-use tracker::{GLOBAL_TRACKERS, get_tls_tracker_token};
+use tracker::{get_tls_tracker_token, GLOBAL_TRACKERS};
 use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 
 use super::metrics::*;
@@ -667,6 +668,10 @@ where
                 // Warn and ignore it.
                 warn!("unsafe destroy range: failed sending ClearRegionSizeInRange"; "err" => ?e);
             });
+    }
+
+    fn locate_key(&self, _key: &[u8]) -> Option<(Arc<metapb::Region>, u64, u64)> {
+        self.router.locate_key(_key)
     }
 }
 

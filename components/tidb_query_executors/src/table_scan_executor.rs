@@ -8,18 +8,19 @@ use collections::HashMap;
 use kvproto::coprocessor::KeyRange;
 use smallvec::SmallVec;
 use tidb_query_common::{
-    Result,
     storage::{IntervalRange, Storage},
+    Result,
 };
 use tidb_query_datatype::{
-    EvalType, FieldTypeAccessor,
     codec::{
         batch::{LazyBatchColumn, LazyBatchColumnVec},
         row, table,
-    },
-    expr::{EvalConfig, EvalContext},
+    }, expr::{EvalConfig, EvalContext},
+    EvalType,
+    FieldTypeAccessor,
 };
 use tipb::{ColumnInfo, FieldType, TableScan};
+use txn_types::Key;
 
 use super::util::scan_executor::*;
 use crate::interface::*;
@@ -52,6 +53,18 @@ impl<S: Storage, F: KvFormat> BatchTableScanExecutor<S, F> {
         is_scanned_range_aware: bool,
         primary_prefix_column_ids: Vec<i64>,
     ) -> Result<Self> {
+        if config.div_precision_increment == 1 {
+            let first = &key_ranges[0];
+            let start = Key::from_raw(first.get_start());
+            let end = Key::from_raw(first.get_end());
+            warn!(
+                "key_ranges: {}, from: {:?}, to: {:?}",
+                key_ranges.len(),
+                start,
+                end
+            );
+        }
+
         let is_column_filled = vec![false; columns_info.len()];
         let mut is_key_only = true;
         let mut handle_indices = HandleIndicesVec::new();
@@ -449,9 +462,9 @@ mod tests {
         execute_stats::*, storage::test_fixture::FixtureStorage, util::convert_to_prefix_next,
     };
     use tidb_query_datatype::{
-        Collation, EvalType, FieldTypeAccessor, FieldTypeTp,
-        codec::{Datum, batch::LazyBatchColumnVec, data_type::*, datum, table},
-        expr::EvalConfig,
+        codec::{batch::LazyBatchColumnVec, data_type::*, datum, table, Datum}, expr::EvalConfig, Collation, EvalType,
+        FieldTypeAccessor,
+        FieldTypeTp,
     };
     use tipb::{ColumnInfo, FieldType};
 

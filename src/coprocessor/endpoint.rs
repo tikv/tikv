@@ -1,14 +1,11 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    borrow::Cow, future::Future, iter::FromIterator, marker::PhantomData, mem, sync::Arc,
+    borrow::Cow, future::Future, iter::FromIterator, marker::PhantomData, mem, pin::Pin, sync::Arc,
     time::Duration,
 };
 
-use ::tracker::{
-    GLOBAL_TRACKERS, RequestInfo, RequestType, set_tls_tracker_token, track, with_tls_tracker,
-};
-use api_version::{KvFormat, dispatch_api_version};
+use api_version::{dispatch_api_version, KvFormat};
 use async_stream::try_stream;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::PerfLevel;
@@ -17,12 +14,13 @@ use futures::{
     future::Either,
     prelude::*,
 };
-use kvproto::{coprocessor as coppb, errorpb, kvrpcpb, kvrpcpb::CommandPri};
+use kvproto::{coprocessor as coppb, errorpb, kvrpcpb, kvrpcpb::CommandPri, metapb};
 use online_config::ConfigManager;
 use protobuf::{CodedInputStream, Message};
 use resource_control::{ResourceGroupManager, ResourceLimiter, TaskMetadata};
 use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
 use tidb_query_common::execute_stats::ExecSummary;
+use tidb_query_executors::interface::{AsyncRegion, AsyncRegionFn, FnLocateRegionKey};
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_kv::SnapshotExt;
 use tikv_util::{
@@ -31,8 +29,13 @@ use tikv_util::{
     quota_limiter::QuotaLimiter,
     time::Instant,
 };
-use tipb::{AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, DagRequest, ExecType};
+use tipb::{
+    AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, DagRequest, ExecType, KeyRange,
+};
 use tokio::sync::Semaphore;
+use ::tracker::{
+    set_tls_tracker_token, track, with_tls_tracker, RequestInfo, RequestType, GLOBAL_TRACKERS,
+};
 use txn_types::Lock;
 
 use super::config_manager::CopConfigManager;
@@ -44,10 +47,10 @@ use crate::{
     read_pool::ReadPoolHandle,
     server::Config,
     storage::{
-        self, Engine, Snapshot, SnapshotStore,
-        kv::{self, SnapContext, with_tls_engine},
-        mvcc::Error as MvccError,
-        need_check_locks, need_check_locks_in_replica_read,
+        self, kv::{self, with_tls_engine, SnapContext}, mvcc::Error as MvccError, need_check_locks,
+        need_check_locks_in_replica_read,
+        Engine,
+        Snapshot, SnapshotStore,
     },
     tikv_util::time::InstantExt,
 };
@@ -261,6 +264,7 @@ impl<E: Engine> Endpoint<E> {
                 let quota_limiter = self.quota_limiter.clone();
                 builder = Box::new(move |snap, req_ctx| {
                     let data_version = snap.ext().get_data_version();
+                    let check_has_newer_ts_data = req.get_is_cache_enabled();
                     let store = SnapshotStore::new(
                         snap,
                         start_ts.into(),
@@ -268,12 +272,13 @@ impl<E: Engine> Endpoint<E> {
                         !req_ctx.context.get_not_fill_cache(),
                         req_ctx.bypass_locks.clone(),
                         req_ctx.access_locks.clone(),
-                        req.get_is_cache_enabled(),
+                        check_has_newer_ts_data,
                     );
                     let paging_size = match req.get_paging_size() {
                         0 => None,
                         i => Some(i),
                     };
+
                     dag::DagHandlerBuilder::<_, F>::new(
                         dag,
                         req_ctx.ranges.clone(),
@@ -286,6 +291,7 @@ impl<E: Engine> Endpoint<E> {
                         quota_limiter,
                     )
                     .data_version(data_version)
+                    .locate_key_fn(new_locate_key_fn::<E>(req_ctx, check_has_newer_ts_data))
                     .build()
                 });
             }
@@ -399,25 +405,14 @@ impl<E: Engine> Endpoint<E> {
     fn async_in_memory_snapshot(
         engine: &mut E,
         ctx: &ReqContext,
-    ) -> impl std::future::Future<Output = Result<E::IMSnap>> {
-        let mut snap_ctx = SnapContext {
-            pb_ctx: &ctx.context,
-            start_ts: Some(ctx.txn_start_ts),
-            allowed_in_flashback: ctx.allowed_in_flashback,
-            ..Default::default()
-        };
-        // need to pass start_ts and ranges to check memory locks for replica read
-        if need_check_locks_in_replica_read(&ctx.context) {
-            for r in &ctx.ranges {
-                let start_key = txn_types::Key::from_raw(r.get_start());
-                let end_key = txn_types::Key::from_raw(r.get_end());
-                let mut key_range = kvrpcpb::KeyRange::default();
-                key_range.set_start_key(start_key.into_encoded());
-                key_range.set_end_key(end_key.into_encoded());
-                snap_ctx.key_ranges.push(key_range);
-            }
-        }
-        kv::in_memory_snapshot(engine, snap_ctx).map_err(Error::from)
+    ) -> impl Future<Output = Result<E::IMSnap>> {
+        async_in_memory_snapshot_with_ranges(
+            engine,
+            &ctx.context,
+            ctx.txn_start_ts,
+            ctx.allowed_in_flashback,
+            &ctx.ranges,
+        )
     }
 
     /// The real implementation of handling a unary request.
@@ -996,7 +991,7 @@ mod tests {
         config::CoprReadPoolConfig,
         coprocessor::readpool_impl::build_read_pool_for_test,
         read_pool::ReadPool,
-        storage::{TestEngineBuilder, kv::RocksEngine},
+        storage::{kv::RocksEngine, TestEngineBuilder},
     };
 
     /// A unary `RequestHandler` that always produces a fixture.
@@ -2186,4 +2181,106 @@ mod tests {
             );
         }
     }
+}
+
+#[inline]
+fn async_in_memory_snapshot_with_ranges<E: Engine>(
+    engine: &mut E,
+    ctx: &kvrpcpb::Context,
+    start_ts: TimeStamp,
+    allowed_in_flashback: bool,
+    ranges: &[coppb::KeyRange],
+) -> impl Future<Output = Result<E::IMSnap>> {
+    let mut snap_ctx = SnapContext {
+        pb_ctx: ctx,
+        start_ts: Some(start_ts),
+        allowed_in_flashback,
+        ..Default::default()
+    };
+    // need to pass start_ts and ranges to check memory locks for replica read
+    if need_check_locks_in_replica_read(ctx) {
+        for r in ranges {
+            let start_key = txn_types::Key::from_raw(r.get_start());
+            let end_key = txn_types::Key::from_raw(r.get_end());
+            let mut key_range = kvrpcpb::KeyRange::default();
+            key_range.set_start_key(start_key.into_encoded());
+            key_range.set_end_key(end_key.into_encoded());
+            snap_ctx.key_ranges.push(key_range);
+        }
+    }
+    kv::in_memory_snapshot(engine, snap_ctx).map_err(Error::from)
+}
+
+fn new_locate_key_fn<E: Engine>(
+    req_context: &ReqContext,
+    check_has_newer_ts_data: bool,
+) -> FnLocateRegionKey<SnapshotStore<E::IMSnap>> {
+    let context = req_context.context.clone();
+    let start_ts = req_context.txn_start_ts;
+    let allowed_in_flashback = req_context.allowed_in_flashback;
+    Box::new(move |key| -> _ {
+        let region = unsafe { with_tls_engine(|engine: &mut E| engine.locate_key(key)) };
+        region.map(|(region, peer_id, term)| {
+            new_fn_async_region::<E>(
+                region.clone(),
+                peer_id,
+                term,
+                context.clone(),
+                start_ts,
+                allowed_in_flashback,
+                check_has_newer_ts_data,
+            )
+        })
+    })
+}
+
+fn new_fn_async_region<E: Engine>(
+    region: Arc<metapb::Region>,
+    peer_id: u64,
+    term: u64,
+    mut context: kvrpcpb::Context,
+    start_ts: TimeStamp,
+    allowed_in_flashback: bool,
+    check_has_newer_ts_data: bool,
+) -> AsyncRegion<SnapshotStore<E::IMSnap>> {
+    context.set_region_id(region.get_id());
+    context.set_region_epoch(region.get_region_epoch().clone());
+    context.set_term(term);
+    for peer in region.peers.iter() {
+        if peer.get_id() == peer_id {
+            context.set_peer(peer.clone());
+            break;
+        }
+    }
+
+    AsyncRegion::new(
+        region,
+        Box::new(move |ranges| -> _ {
+            let fut = unsafe {
+                with_tls_engine(|engine: &mut E| {
+                    async_in_memory_snapshot_with_ranges(
+                        engine,
+                        &context,
+                        start_ts,
+                        allowed_in_flashback,
+                        ranges,
+                    )
+                })
+            };
+            Box::pin(async move {
+                match fut.await {
+                    Ok(snap) => Some(SnapshotStore::new(
+                        snap,
+                        start_ts,
+                        context.isolation_level,
+                        !context.not_fill_cache,
+                        TsSet::Empty,
+                        TsSet::Empty,
+                        check_has_newer_ts_data,
+                    )),
+                    Err(_) => None,
+                }
+            })
+        }),
+    )
 }
