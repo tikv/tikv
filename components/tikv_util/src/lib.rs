@@ -55,7 +55,14 @@ pub mod memory;
 pub mod metrics;
 pub mod mpsc;
 pub mod quota_limiter;
+<<<<<<< HEAD
 pub mod slow_score;
+=======
+pub mod range_latch;
+pub mod resizable_threadpool;
+pub mod resource_control;
+pub mod smoother;
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
 pub mod store;
 pub mod stream;
 pub mod sys;
