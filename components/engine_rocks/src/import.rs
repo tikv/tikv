@@ -1,18 +1,48 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{ImportExt, IngestExternalFileOptions, Result};
+use engine_traits::{ImportExt, IngestExternalFileOptions, Range, Result};
+use fail::fail_point;
 use rocksdb::IngestExternalFileOptions as RawIngestExternalFileOptions;
+use tikv_util::range_latch::RangeLatchGuard;
 
-use crate::{engine::RocksEngine, r2e, util};
+use crate::{
+    engine::RocksEngine, perf_context_metrics::INGEST_EXTERNAL_FILE_ALLOW_WRITE_COUNTER, r2e, util,
+};
 
 impl ImportExt for RocksEngine {
     type IngestExternalFileOptions = RocksIngestExternalFileOptions;
 
-    fn ingest_external_file_cf(&self, cf: &str, files: &[&str]) -> Result<()> {
-        let cf = util::get_cf_handle(self.as_inner(), cf)?;
+    fn ingest_external_file_cf(
+        &self,
+        cf_name: &str,
+        files: &[&str],
+        range: Option<Range<'_>>,
+    ) -> Result<()> {
+        // Acquire latch to prevent concurrency with compaction-filter operations
+        // when using RocksDB IngestExternalFileOptions.allow_write = true.
+        let _region_inject_latch_guard = range.as_ref().map(|r| {
+            self.ingest_latch
+                .acquire(r.start_key.to_vec(), r.end_key.to_vec())
+        });
+        fail_point!("after_apply_snapshot_ingest_latch_acquired");
+
+        let cf = util::get_cf_handle(self.as_inner(), cf_name)?;
         let mut opts = RocksIngestExternalFileOptions::new();
         opts.move_files(true);
-        opts.set_write_global_seqno(false);
+        let allow_write = range.is_some();
+        opts.allow_write(allow_write);
+        if allow_write {
+            INGEST_EXTERNAL_FILE_ALLOW_WRITE_COUNTER
+                .with_label_values(&["
+            allow_write"])
+                .inc();
+        } else {
+            INGEST_EXTERNAL_FILE_ALLOW_WRITE_COUNTER
+                .with_label_values(&["
+            not_allow_write"])
+                .inc();
+        }
+
         // Note: no need reset the global seqno to 0 for compatibility as #16992
         // This is calling a specially optimized version of
         // ingest_external_file_cf. In cases where the memtable needs to be
@@ -24,6 +54,11 @@ impl ImportExt for RocksEngine {
             .ingest_external_file_optimized(cf, &opts.0, files)
             .map_err(r2e)?;
         Ok(())
+    }
+
+    fn acquire_ingest_latch(&self, range: Range<'_>) -> RangeLatchGuard<'_> {
+        self.ingest_latch
+            .acquire(range.start_key.to_vec(), range.end_key.to_vec())
     }
 }
 
@@ -38,12 +73,8 @@ impl IngestExternalFileOptions for RocksIngestExternalFileOptions {
         self.0.move_files(f);
     }
 
-    fn get_write_global_seqno(&self) -> bool {
-        self.0.get_write_global_seqno()
-    }
-
-    fn set_write_global_seqno(&mut self, f: bool) {
-        self.0.set_write_global_seqno(f);
+    fn allow_write(&mut self, f: bool) {
+        self.0.set_allow_write(f);
     }
 }
 
@@ -118,7 +149,11 @@ mod tests {
             sst2.put(v.as_bytes(), v.as_bytes()).unwrap();
         }
         sst2.finish().unwrap();
-        db.ingest_external_file_cf(CF_DEFAULT, &[p1.to_str().unwrap(), p2.to_str().unwrap()])
-            .unwrap();
+        db.ingest_external_file_cf(
+            CF_DEFAULT,
+            &[p1.to_str().unwrap(), p2.to_str().unwrap()],
+            None,
+        )
+        .unwrap();
     }
 }

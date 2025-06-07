@@ -1174,7 +1174,13 @@ impl Snapshot {
                     )?;
                 } else {
                     // Apply the snapshot by ingest.
-                    snap_io::apply_sst_cf_files_by_ingest(clone_files.as_slice(), &options.db, cf)?;
+                    snap_io::apply_sst_cf_files_by_ingest(
+                        clone_files.as_slice(),
+                        &options.db,
+                        cf,
+                        enc_start_key(&region),
+                        enc_end_key(&region),
+                    )?;
                     coprocessor_host.post_apply_sst_from_snapshot(&region, cf, path);
                 }
             }
@@ -2003,6 +2009,7 @@ impl SnapManagerCore {
     }
 
     pub fn can_apply_cf_without_ingest(&self, cf_size: u64, cf_kvs: u64) -> bool {
+        fail_point!("apply_cf_without_ingest_false", |_| { false });
         if self.min_ingest_cf_size == 0 {
             return false;
         }
