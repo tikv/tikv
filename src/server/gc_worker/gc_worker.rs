@@ -2886,7 +2886,6 @@ mod tests {
         let prefixed_engine = PrefixedEngine(engine.clone());
         let (tx, _rx) = mpsc::channel();
         let cfg = GcConfig::default();
-        let coprocessor_host = CoprocessorHost::default();
         let mut runner = GcRunnerCore::new(
             store_id,
             prefixed_engine.clone(),
@@ -2895,7 +2894,6 @@ mod tests {
                 .0
                 .tracker("gc-worker".to_owned()),
             cfg,
-            coprocessor_host,
         );
 
         let kv_engine = engine.kv_engine().unwrap();
@@ -2945,7 +2943,6 @@ mod tests {
         let prefixed_engine = PrefixedEngine(engine.clone());
         let (tx, _rx) = mpsc::channel();
         let cfg = GcConfig::default();
-        let coprocessor_host = CoprocessorHost::default();
         let mut runner = GcRunnerCore::new(
             store_id,
             prefixed_engine.clone(),
@@ -2954,7 +2951,6 @@ mod tests {
                 .0
                 .tracker("gc-worker".to_owned()),
             cfg,
-            coprocessor_host,
         );
 
         let engine_clone = engine.clone();

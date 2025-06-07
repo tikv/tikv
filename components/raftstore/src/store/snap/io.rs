@@ -12,7 +12,7 @@ use encryption::{
     from_engine_encryption_method, DataKeyManager, DecrypterReader, EncrypterWriter, Iv,
 };
 use engine_traits::{
-    CfName, Error as EngineError, ExternalSstFileInfo, IterOptions, Iterable, Iterator, KvEngine,
+    CfName, EncryptionKeyManager, Error as EngineError, IterOptions, Iterable, Iterator, KvEngine,
     Mutable, Range, RefIterable, SstCompressionType, SstReader, SstWriter, SstWriterBuilder,
     WriteBatch,
 };

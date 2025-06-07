@@ -3,14 +3,10 @@
 use engine_traits::{ImportExt, IngestExternalFileOptions, Range, Result};
 use fail::fail_point;
 use rocksdb::IngestExternalFileOptions as RawIngestExternalFileOptions;
-use tikv_util::{range_latch::RangeLatchGuard, time::Instant};
+use tikv_util::range_latch::RangeLatchGuard;
 
 use crate::{
-    engine::RocksEngine,
-    perf_context_metrics::{
-        INGEST_EXTERNAL_FILE_ALLOW_WRITE_COUNTER, INGEST_EXTERNAL_FILE_TIME_HISTOGRAM,
-    },
-    r2e, util,
+    engine::RocksEngine, perf_context_metrics::INGEST_EXTERNAL_FILE_ALLOW_WRITE_COUNTER, r2e, util,
 };
 
 impl ImportExt for RocksEngine {
