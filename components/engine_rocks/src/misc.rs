@@ -111,7 +111,12 @@ impl RocksEngine {
             } else {
                 None
             };
-            self.ingest_external_file_cf(cf, &[sst_path.as_str()], range_to_lock)?;
+            self.ingest_external_file_cf(
+                cf,
+                &[sst_path.as_str()],
+                range_to_lock,
+                allow_write_during_ingestion,
+            )?;
         } else {
             let mut wb = self.write_batch();
             for key in data.iter() {
