@@ -210,12 +210,11 @@ mod tests {
         prepare_sst_for_ingestion(&sst_path, &sst_clone, key_manager).unwrap();
         check_hard_link(&sst_path, 2);
         check_hard_link(&sst_clone, 2);
-        let force_allow_write = false;
         db.ingest_external_file_cf(
             CF_DEFAULT,
             &[sst_clone.to_str().unwrap()],
             None,
-            force_allow_write,
+            false, // force_allow_write
         )
         .unwrap();
         check_db_with_kvs(&db, CF_DEFAULT, &kvs);
@@ -233,12 +232,11 @@ mod tests {
         prepare_sst_for_ingestion(&sst_path, &sst_clone, key_manager).unwrap();
         check_hard_link(&sst_path, 2);
         check_hard_link(&sst_clone, 1);
-        let force_allow_write = false;
         db.ingest_external_file_cf(
             CF_DEFAULT,
             &[sst_clone.to_str().unwrap()],
             None,
-            force_allow_write,
+            false, // force_allow_write
         )
         .unwrap();
         check_db_with_kvs(&db, CF_DEFAULT, &kvs);
@@ -317,12 +315,11 @@ mod tests {
         check_hard_link(&sst_path, 1);
         check_hard_link(&sst_clone, 1);
 
-        let force_allow_write = false;
         db.ingest_external_file_cf(
             CF_DEFAULT,
             &[sst_clone.to_str().unwrap()],
             None,
-            force_allow_write,
+            false, // force_allow_write
         )
         .unwrap();
         check_db_with_kvs(&db, CF_DEFAULT, &kvs);

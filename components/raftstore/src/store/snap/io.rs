@@ -385,7 +385,6 @@ where
     //      concurrently, but we use ingest latch to avoid such situations.
     //
     // Refer to https://github.com/tikv/tikv/issues/18081.
-    let force_allow_write = true;
     box_try!(db.ingest_external_file_cf(
         cf,
         files,
@@ -393,7 +392,7 @@ where
             start_key: start_key.as_slice(),
             end_key: end_key.as_slice()
         }),
-        force_allow_write,
+        true, // force_allow_write
     ));
     Ok(())
 }

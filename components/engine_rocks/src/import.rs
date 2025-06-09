@@ -168,12 +168,11 @@ mod tests {
             sst2.put(v.as_bytes(), v.as_bytes()).unwrap();
         }
         sst2.finish().unwrap();
-        let force_allow_write = false;
         db.ingest_external_file_cf(
             CF_DEFAULT,
             &[p1.to_str().unwrap(), p2.to_str().unwrap()],
             None,
-            force_allow_write,
+            false, // force_allow_write
         )
         .unwrap();
     }
