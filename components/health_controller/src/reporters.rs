@@ -29,7 +29,7 @@ pub struct RaftstoreReporterConfig {
     /// some internal calculations.
     pub inspect_interval: Duration,
     pub inspect_kvdb_interval: Duration,
-    pub inspect_pd_interval: Duration,
+    pub inspect_network_interval: Duration,
 
     pub unsensitive_cause: f64,
     pub unsensitive_result: f64,
@@ -64,15 +64,18 @@ impl UnifiedSlowScore {
         // The first factor is for Raft Disk I/O.
         unified_slow_score
             .factors
-            .push(SlowScore::new(cfg.inspect_interval));
+            .push(SlowScore::new(cfg.inspect_interval, cfg.inspect_interval, 
+                SlowScore::DISK_TIMEOUT_RATIO_THRESHOLD, SlowScore::DISK_ROUND_TICKS));
         // The second factor is for KvDB Disk I/O.
         unified_slow_score
             .factors
-            .push(SlowScore::new(cfg.inspect_kvdb_interval));
+            .push(SlowScore::new(cfg.inspect_kvdb_interval, cfg.inspect_kvdb_interval,
+                SlowScore::DISK_TIMEOUT_RATIO_THRESHOLD, SlowScore::DISK_ROUND_TICKS));
         // The third factor is for PD Network I/O.
         unified_slow_score
             .factors
-            .push(SlowScore::new(cfg.inspect_pd_interval));
+            .push(SlowScore::new(SlowScore::NETWORK_TIMEOUT_THRESHOLD, cfg.inspect_network_interval,
+                SlowScore::NETWORK_TIMEOUT_RATIO_THRESHOLD, SlowScore::NETWORK_ROUND_TICKS));
         unified_slow_score
     }
 
@@ -102,7 +105,7 @@ impl UnifiedSlowScore {
         self.factors
             .iter()
             .enumerate()
-            .filter(|(idx, _)| *idx < InspectFactor::PdNetwork as usize)
+            .filter(|(idx, _)| *idx < InspectFactor::Network as usize)
             .map(|(_, factor)| factor.get())
             .fold(1.0, f64::max)
     }
@@ -112,7 +115,7 @@ impl UnifiedSlowScore {
         self.factors
             .iter()
             .enumerate()
-            .filter(|(idx, _)| *idx >= InspectFactor::PdNetwork as usize)
+            .filter(|(idx, _)| *idx >= InspectFactor::Network as usize)
             .map(|(_, factor)| factor.get())
             .fold(1.0, f64::max)
     }
@@ -171,7 +174,7 @@ impl RaftstoreReporter {
             self.health_controller_inner
                 .update_raftstore_slow_score(self.slow_score.get_disk_score());
             }
-            InspectFactor::PdNetwork => {
+            InspectFactor::Network => {
             self.health_controller_inner
                 .update_network_slow_score(self.slow_score.get_network_score());
             }
@@ -215,11 +218,11 @@ impl RaftstoreReporter {
         if !healthy && all_ticks_finished {
             self.set_is_healthy(true);
         }
-        if !all_ticks_finished {
-            // If the last tick is not finished, it means that the current store might
+        if !all_ticks_finished && !factor_tick_finished {
+            // If the tick is not finished, it means that the current store might
             // be busy on handling requests or delayed on I/O operations. And only when
             // the current store is not busy, it should record the last_tick as a timeout.
-            if !store_maybe_busy && !factor_tick_finished {
+            if factor == InspectFactor::Network || !store_maybe_busy {
                 self.slow_score.get_mut(factor).record_timeout();
             }
         }
@@ -238,7 +241,7 @@ impl RaftstoreReporter {
                 self.health_controller_inner
                     .update_raftstore_slow_score(self.slow_score.get_disk_score());
                 }
-                InspectFactor::PdNetwork => {
+                InspectFactor::Network => {
                 self.health_controller_inner
                     .update_network_slow_score(self.slow_score.get_network_score());
                 }

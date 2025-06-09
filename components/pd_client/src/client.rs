@@ -19,6 +19,7 @@ use futures::{
     stream::{ErrInto, StreamExt},
 };
 use grpcio::{EnvBuilder, Environment, WriteFlags};
+use grpcio_health::{HealthCheckRequest,HealthCheckResponse};
 use kvproto::{
     meta_storagepb::{
         self as mpb, DeleteRequest, GetRequest, PutRequest, WatchRequest, WatchResponse,
@@ -40,6 +41,7 @@ use super::{
     BucketStat, Config, Error, FeatureGate, PdClient, PdFuture, REQUEST_TIMEOUT, RegionInfo,
     RegionStat, Result, UnixSecs,
     meta_storage::{Delete, Get, MetaStorageClient, Put, Watch},
+    health::HealthClient,
     metrics::*,
     util::{Client, PdConnector, call_option_inner, check_resp_header, sync_request},
 };
@@ -1248,4 +1250,34 @@ impl MetaStorageClient for RpcClient {
     type WatchStream = TryFlattenStream<
         PdFuture<ErrInto<grpcio::ClientSStreamReceiver<WatchResponse>, crate::Error>>,
     >;
+}
+
+impl HealthClient for RpcClient {
+    fn check(&self, service: String) -> PdFuture<HealthCheckResponse> {
+        let timer = Instant::now();
+
+        let mut req = HealthCheckRequest::default();
+        req.set_service(service);
+
+        let executor = move |client: &Client, req: HealthCheckRequest| {
+            let handler = {
+                let inner = client.inner.rl();
+                inner
+                    .health
+                    .check(&req)
+                    .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "health_check", e))
+            };
+            Box::pin(async move {
+                let resp = handler.await?;
+                PD_REQUEST_HISTOGRAM_VEC
+                    .health_check
+                    .observe(timer.saturating_elapsed_secs());
+                Ok(resp.err_into())
+            }) as PdFuture<_>
+        };
+
+        self.pd_client
+            .request(req, executor, LEADER_CHANGE_RETRY)
+            .execute()
+    }
 }

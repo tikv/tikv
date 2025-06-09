@@ -912,6 +912,10 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                                 );
                             }
                         }
+                        InspectFactor::Network => {
+                            // Reset the health_stats and wait it to be refreshed in the next tick.
+                            
+                        }
                     }
                 }
                 StoreMsg::UnsafeRecoveryReport(report) => self.store_heartbeat_pd(Some(report)),
