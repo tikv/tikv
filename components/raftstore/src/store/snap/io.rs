@@ -308,7 +308,36 @@ where
             cf, files
         );
     }
+<<<<<<< HEAD
     box_try!(db.ingest_external_file_cf(cf, files));
+=======
+    // We set start_key and end_key to enable RocksDB
+    // IngestExternalFileOptions.allow_write = true, minimizing the impact on
+    // foreground performance.
+    //
+    // We can safely enable `allow_write` because no concurrent writes overlap with
+    // the data to be ingested, due to:
+    //   1. The region's snapshot is unapplied, ensuring there are no foreground
+    //      write operations.
+    //   2. If a peer is migrated out and then migrated back, and we are in the
+    //      apply snapshot phase, the delete_all_in_range in DestroyTask cannot
+    //      concurrently delete the overlapping key range. This is because the
+    //      single-threaded, queue-based region worker ensures that DestroyTask is
+    //      always completed before ApplyTask is executed.
+    //   3. The compaction filter may write to the default column family
+    //      concurrently, but we use ingest latch to avoid such situations.
+    //
+    // Refer to https://github.com/tikv/tikv/issues/18081.
+    box_try!(db.ingest_external_file_cf(
+        cf,
+        files,
+        Some(Range {
+            start_key: start_key.as_slice(),
+            end_key: end_key.as_slice()
+        }),
+        true, // force_allow_write
+    ));
+>>>>>>> c7429059b2 (sst_importer: allow write during ingesting sst (#18514))
     Ok(())
 }
 

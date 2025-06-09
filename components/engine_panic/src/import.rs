@@ -9,7 +9,21 @@ use crate::engine::PanicEngine;
 impl ImportExt for PanicEngine {
     type IngestExternalFileOptions = PanicIngestExternalFileOptions;
 
+<<<<<<< HEAD
     fn ingest_external_file_cf(&self, cf: &str, files: &[&str]) -> Result<()> {
+=======
+    fn ingest_external_file_cf(
+        &self,
+        cf: &str,
+        files: &[&str],
+        range: Option<Range<'_>>,
+        force_allow_write: bool,
+    ) -> Result<()> {
+        panic!()
+    }
+
+    fn acquire_ingest_latch(&self, range: Range<'_>) -> RangeLatchGuard<'_> {
+>>>>>>> c7429059b2 (sst_importer: allow write during ingesting sst (#18514))
         panic!()
     }
 }
