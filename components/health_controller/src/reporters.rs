@@ -170,13 +170,13 @@ impl RaftstoreReporter {
 
         match factor {
             InspectFactor::RaftDisk | InspectFactor::KvDisk => {
-            // Publish slow score to health controller
-            self.health_controller_inner
-                .update_raftstore_slow_score(self.slow_score.get_disk_score());
+                // Publish slow score to health controller
+                self.health_controller_inner
+                    .update_raftstore_slow_score(self.slow_score.get_disk_score());
             }
             InspectFactor::Network => {
-            self.health_controller_inner
-                .update_network_slow_score(self.slow_score.get_network_score());
+                self.health_controller_inner
+                    .update_network_slow_score(self.slow_score.get_network_score());
             }
         }
         
@@ -237,13 +237,13 @@ impl RaftstoreReporter {
         if slow_score_tick_result.updated_score.is_some() {
             match factor {
                 InspectFactor::RaftDisk | InspectFactor::KvDisk => {
-                // Publish slow score to health controller
-                self.health_controller_inner
-                    .update_raftstore_slow_score(self.slow_score.get_disk_score());
+                    // Publish slow score to health controller
+                    self.health_controller_inner
+                        .update_raftstore_slow_score(self.slow_score.get_disk_score());
                 }
                 InspectFactor::Network => {
-                self.health_controller_inner
-                    .update_network_slow_score(self.slow_score.get_network_score());
+                    self.health_controller_inner
+                        .update_network_slow_score(self.slow_score.get_network_score());
                 }
             }
         }
