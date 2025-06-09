@@ -2080,18 +2080,7 @@ where
                 InspectFactor::Network => LatencyInspector::new(
                     id,
                     Box::new(move |id, duration| {
-                        STORE_INSPECT_DURATION_HISTOGRAM
-                            .with_label_values(&["pd_network"])
-                            .observe(tikv_util::time::duration_to_sec(
-                                duration.pd_network_duration.unwrap_or_default(),
-                            ));
-                        if let Err(e) = scheduler.schedule(Task::UpdateSlowScore {
-                            id,
-                            factor,
-                            duration,
-                        }) {
-                            warn!("schedule pd task failed"; "err" => ?e);
-                        }
+                        // TODO: Add network latency metrics.
                     }),
                 ),
             }

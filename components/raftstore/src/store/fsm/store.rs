@@ -913,8 +913,11 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                             }
                         }
                         InspectFactor::Network => {
-                            // Reset the health_stats and wait it to be refreshed in the next tick.
-                            
+                            // TODO: support network latency inspect.
+                            warn!(
+                                "Network latency inspect is not supported";
+                                "store_id" => self.fsm.store.id
+                            );                           
                         }
                     }
                 }
