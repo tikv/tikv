@@ -98,7 +98,7 @@ where
 #[test]
 fn test_update_server_config() {
     let (mut config, _dir) = TikvConfig::with_tmp().unwrap();
-    config.validate().unwrap();
+    config.validate(None).unwrap();
     let (cfg_controller, snap_worker, snap_mgr) = start_server(config.clone(), &_dir);
     let mut svr_cfg = config.server.clone();
     // dispatch updated config

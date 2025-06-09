@@ -64,7 +64,7 @@ where
 #[test]
 fn test_gc_worker_config_update() {
     let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
-    cfg.validate().unwrap();
+    cfg.validate(None).unwrap();
     let (gc_worker, cfg_controller) = setup_cfg_controller(cfg);
     let scheduler = gc_worker.scheduler();
 
@@ -98,7 +98,7 @@ fn test_gc_worker_config_update() {
 #[allow(clippy::float_cmp)]
 fn test_change_io_limit_by_config_manager() {
     let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
-    cfg.validate().unwrap();
+    cfg.validate(None).unwrap();
     let (gc_worker, cfg_controller) = setup_cfg_controller(cfg);
     let scheduler = gc_worker.scheduler();
 
@@ -136,7 +136,7 @@ fn test_change_io_limit_by_config_manager() {
 fn test_change_io_limit_by_debugger() {
     // Debugger use GcWorkerConfigManager to change io limit
     let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
-    cfg.validate().unwrap();
+    cfg.validate(None).unwrap();
     let (gc_worker, _) = setup_cfg_controller(cfg);
     let scheduler = gc_worker.scheduler();
     let config_manager = gc_worker.get_config_manager();
