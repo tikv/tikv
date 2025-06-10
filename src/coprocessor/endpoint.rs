@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    borrow::Cow, future::Future, iter::FromIterator, marker::PhantomData, mem, pin::Pin, sync::Arc,
+    borrow::Cow, future::Future, iter::FromIterator, marker::PhantomData, mem, sync::Arc,
     time::Duration,
 };
 
@@ -20,7 +20,7 @@ use protobuf::{CodedInputStream, Message};
 use resource_control::{ResourceGroupManager, ResourceLimiter, TaskMetadata};
 use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
 use tidb_query_common::execute_stats::ExecSummary;
-use tidb_query_executors::interface::{AsyncRegion, AsyncRegionFn, FnLocateRegionKey};
+use tidb_query_executors::interface::{AsyncRegion, FnLocateRegionKey};
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_kv::SnapshotExt;
 use tikv_util::{
@@ -29,9 +29,7 @@ use tikv_util::{
     quota_limiter::QuotaLimiter,
     time::Instant,
 };
-use tipb::{
-    AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, DagRequest, ExecType, KeyRange,
-};
+use tipb::{AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, DagRequest, ExecType};
 use tokio::sync::Semaphore;
 use ::tracker::{
     set_tls_tracker_token, track, with_tls_tracker, RequestInfo, RequestType, GLOBAL_TRACKERS,

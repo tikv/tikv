@@ -8,10 +8,7 @@ use api_version::KvFormat;
 use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
-use tidb_query_common::{
-    execute_stats::ExecSummary,
-    storage::{IntervalRange, Storage},
-};
+use tidb_query_common::{execute_stats::ExecSummary, storage::IntervalRange};
 use tidb_query_executors::interface::{new_empty_locate_key_fn, AsyncRegion, FnLocateRegionKey};
 use tikv_alloc::trace::MemoryTraceGuard;
 use tipb::{DagRequest, SelectResponse, StreamResponse};

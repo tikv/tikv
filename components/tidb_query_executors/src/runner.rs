@@ -1,11 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{convert::TryFrom, future::Future, marker::PhantomData, mem, pin::Pin, sync::Arc};
+use std::{convert::TryFrom, marker::PhantomData, mem, sync::Arc};
 
 use api_version::KvFormat;
 use fail::fail_point;
 use itertools::Itertools;
-use kvproto::{coprocessor::KeyRange, metapb};
+use kvproto::coprocessor::KeyRange;
 use protobuf::Message;
 use tidb_query_common::{
     execute_stats::ExecSummary,
@@ -43,7 +43,7 @@ pub use tidb_query_expr::types::BATCH_MAX_SIZE;
 
 use crate::{
     index_lookup_executor::{build_index_lookup_probe_ranges, BatchIndexLookupExecutor},
-    interface::{AsyncRegion, BatchExecuteResult, FnLocateRegionKey},
+    interface::{BatchExecuteResult, FnLocateRegionKey},
     runner::SrcExecutorRanges::Simple,
 };
 

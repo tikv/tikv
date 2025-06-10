@@ -2,7 +2,7 @@ use std::{collections::HashSet, sync::Arc};
 
 use api_version::{ApiV1, KvFormat};
 use async_trait::async_trait;
-use kvproto::{brpb::Schema, coprocessor::KeyRange, metapb};
+use kvproto::coprocessor::KeyRange;
 use tidb_query_common::{
     execute_stats::ExecuteStats,
     storage::{IntervalRange, Storage},
@@ -100,18 +100,14 @@ impl<S: Storage, F: KvFormat> BatchExecutor for BatchIndexLookupExecutor<S, F> {
         let child = &mut self.probe_children[self.cur_probe_index];
         let mut result = child.next_batch(scan_rows).await;
         match result.is_drained {
-            Ok(is_drain) => {
-                if is_drain.stop() {
-                    self.cur_probe_index += 1;
-                }
-
-                if self.cur_probe_index >= self.probe_children.len() {
+            Ok(is_drain) if is_drain.stop() => {
+                self.cur_probe_index += 1;
+                if self.cur_probe_index < self.probe_children.len() {
                     result.is_drained = Ok(BatchExecIsDrain::Remain);
                 }
-
                 result
             }
-            Err(_) => result,
+            _ => result,
         }
     }
 
@@ -149,19 +145,20 @@ pub async fn build_index_lookup_probe_ranges<S: Storage>(
         sort_result_int_handles(ctx, build_side_results, result_schema, handle_offsets)?;
 
     let mut probe_side_ranges = vec![];
-    let mut left_handles = HashSet::new();
-    let mut temp_left_handles = HashSet::new();
-    let mut current_region: Option<(AsyncRegion<S>, Vec<KeyRange>)> = None;
+    let mut left_handles = HashSet::<(usize, usize)>::new();
+    let mut current_region: Option<(AsyncRegion<S>, Vec<KeyRange>, (usize, usize))> = None;
     let mut last_id = 0i64;
     let handles_len = int_handles.len();
-    for (i, (id, pos)) in int_handles.into_iter().enumerate() {
-        let raw_key = encode_row_key(descriptor.get_table_id(), id);
-        let key = Key::from_raw(&raw_key);
-        let mut current_end = false;
-        match current_region {
-            Some((ref region, ref mut ranges)) => {
-                current_end = !check_key_in_region(key.as_encoded(), region.get_region());
-                if !current_end {
+    for i in 0..=handles_len {
+        let mut region_end = None;
+        if i < handles_len {
+            let (id, _) = int_handles[i];
+            let raw_key = encode_row_key(descriptor.get_table_id(), id);
+            let key = Key::from_raw(&raw_key);
+            match current_region {
+                Some((ref region, ref mut ranges, ref mut slice))
+                    if check_key_in_region(key.as_encoded(), region.get_region()) =>
+                {
                     if last_id == id - 1 {
                         let last_range = ranges.last_mut().unwrap();
                         last_range.set_end(raw_key);
@@ -173,40 +170,46 @@ pub async fn build_index_lookup_probe_ranges<S: Storage>(
                         convert_to_prefix_next(r.mut_end());
                         ranges.push(r);
                     }
-                    temp_left_handles.insert(pos);
+                    slice.1 += i;
                     last_id = id;
                 }
-            }
-            None => {
-                if let Some(region) = locate_key(key.as_encoded()).take() {
-                    let mut r = KeyRange::new();
-                    r.set_start(raw_key);
-                    r.set_end(r.get_start().to_vec());
-                    convert_to_prefix_next(r.mut_end());
-                    current_region = Some((region, vec![r]));
-                    last_id = id;
-                } else {
-                    left_handles.insert(pos);
+                _ => {
+                    region_end = current_region.take();
+                    if let Some(region) = locate_key(key.as_encoded()).take() {
+                        let mut r = KeyRange::new();
+                        r.set_start(raw_key);
+                        r.set_end(r.get_start().to_vec());
+                        convert_to_prefix_next(r.mut_end());
+                        current_region = Some((region, vec![r], (i, i)));
+                        last_id = id;
+                    }
                 }
             }
+        } else {
+            region_end = current_region.take();
         }
 
-        if current_end || i == handles_len - 1 {
-            let (region, ranges) = current_region.take().unwrap();
+        if let Some((region, ranges, slice)) = region_end {
             let store = region.get_region_store(&ranges).await;
             if store.is_some() {
                 probe_side_ranges.push((store.unwrap(), ranges));
             } else {
-                left_handles.extend(temp_left_handles.iter());
-                temp_left_handles.clear();
+                for (_, pos) in &int_handles[slice.0..=slice.1] {
+                    left_handles.insert((pos.0, pos.1));
+                }
             }
         }
     }
 
+    let no_left_handles = left_handles.is_empty();
     for (i, result) in build_side_results.iter_mut().enumerate() {
-        result
-            .logical_rows
-            .retain(|row| left_handles.contains(&(i, *row)))
+        if no_left_handles {
+            result.logical_rows = vec![];
+        } else {
+            result
+                .logical_rows
+                .retain(|row| left_handles.contains(&(i, *row)))
+        }
     }
 
     Ok(probe_side_ranges)
