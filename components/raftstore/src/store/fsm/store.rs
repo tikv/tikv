@@ -10,6 +10,7 @@ use std::{
     },
     mem,
     ops::{Deref, DerefMut},
+    rc::Weak,
     sync::{Arc, Mutex, atomic::Ordering},
     time::{Duration, Instant, SystemTime},
 };
@@ -756,6 +757,7 @@ where
 {
     store: Store,
     receiver: Receiver<StoreMsg<EK>>,
+    check_and_compact_running_indicator: Option<Weak<()>>,
 }
 
 impl<EK> StoreFsm<EK>
@@ -775,6 +777,7 @@ where
                 mvcc_stats: None,
             },
             receiver: rx,
+            check_and_compact_running_indicator: None,
         });
         (tx, fsm)
     }
@@ -2795,6 +2798,15 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
 
     fn on_compact_check_tick(&mut self) {
         self.register_compact_check_tick();
+        if let Some(token) = &self.fsm.check_compact_check_running_indicator {
+            if token.upgrade().is_some() {
+                debug!(
+                    "compact check is running, skip compact check";
+                    "store_id" => self.fsm.store.id,
+                );
+                return;
+            }
+        }
         if self.ctx.cleanup_scheduler.is_busy() {
             debug!(
                 "compact worker is busy, skip compact check";
@@ -2820,6 +2832,34 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
                 .collect::<Vec<_>>(),
         );
         all_ranges.push(keys::DATA_MAX_KEY.to_vec());
+        let cf_names = vec![CF_WRITE.to_owned(), CF_DEFAULT.to_owned()];
+        let finished = Arc::new(());
+        let self.fsm.check_compact_check_running_indicator =
+            Some(Arc::downgrade(&finished));
+        if let Err(e) =
+            self.ctx
+                .cleanup_scheduler
+                .schedule(CleanupTask::Compact(CompactTask::CompactTopN {
+                    cf_names,
+                    ranges: all_ranges,
+                    compact_threshold: CompactThreshold::new(
+                        self.ctx.cfg.region_compact_min_tombstones,
+                        self.ctx.cfg.region_compact_tombstones_percent,
+                        self.ctx.cfg.region_compact_min_redundant_rows,
+                        self.ctx.cfg.region_compact_redundant_rows_percent(),
+                    ),
+                    top_n: self.ctx.cfg.check_then_compact_top_n,
+                    compaction_filter_enabled: self.ctx.cfg.compaction_filter_enabled,
+                    bottommost_level_force: self.ctx.cfg.check_then_compact_bottommost,
+                    finished,
+                }))
+        {
+            error!(
+                "schedule space check task failed";
+                "store_id" => self.fsm.store.id,
+                "err" => ?e,
+            );
+        }
     }
 
     fn on_check_and_compact_tick(&mut self) {
