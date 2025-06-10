@@ -30,6 +30,7 @@ impl ImportExt for RocksEngine {
         let cf = util::get_cf_handle(self.as_inner(), cf_name)?;
         let mut opts = RocksIngestExternalFileOptions::new();
         opts.move_files(true);
+        opts.0.set_write_global_seqno(false);
         let allow_write = range.is_some() || force_allow_write;
         opts.allow_write(allow_write);
         if allow_write {
