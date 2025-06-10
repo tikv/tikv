@@ -770,9 +770,9 @@ checksum = "12ae9db68ad7fac5fe51304d20f016c911539251075a214f8e663babefa35187"
 
 [[package]]
 name = "bytemuck"
-version = "1.9.1"
+version = "1.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cdead85bdec19c194affaeeb670c0e41fe23de31459efd1c174d049269cf02cc"
+checksum = "9134a6ef01ce4b366b50689c94f82c14bc72bc5d0386829828a2e2752ef7958c"
 
 [[package]]
 name = "byteorder"
@@ -1700,6 +1700,7 @@ dependencies = [
  "log_wrappers",
  "protobuf",
  "raft",
+ "rand 0.8.5",
  "serde",
  "serde_derive",
  "slog",
@@ -2936,7 +2937,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?branch=release-7.5#c4a09794a10c8564d8b4645f45b4092b8ff0b29c"
+source = "git+https://github.com/pingcap/kvproto.git?branch=release-7.5#5030ed622c154001aa3e188dd8e56de8d4965732"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -3001,7 +3002,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.5#45576ddd5e6d0c6f33cf8110f87121eb167bede8"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.5#63a07c7ded4e646300788b364d090828de76fe48"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -3020,7 +3021,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.5#45576ddd5e6d0c6f33cf8110f87121eb167bede8"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.5#63a07c7ded4e646300788b364d090828de76fe48"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4878,9 +4879,9 @@ checksum = "18eb52b6664d331053136fcac7e4883bdc6f5fc04a6aab3b0f75eafb80ab88b3"
 
 [[package]]
 name = "rgb"
-version = "0.8.32"
+version = "0.8.50"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e74fdc210d8f24a7dbfedc13b04ba5764f5232754ccebfdf5fff1bad791ccbc6"
+checksum = "57397d16646700483b67d2dd6511d79318f9d057fdbd21a4066aeac8b41d310a"
 dependencies = [
  "bytemuck",
 ]
@@ -4929,7 +4930,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.5#45576ddd5e6d0c6f33cf8110f87121eb167bede8"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.5#63a07c7ded4e646300788b364d090828de76fe48"
 dependencies = [
  "libc 0.2.146",
  "librocksdb_sys",

@@ -55,6 +55,7 @@ pub mod memory;
 pub mod metrics;
 pub mod mpsc;
 pub mod quota_limiter;
+pub mod range_latch;
 pub mod slow_score;
 pub mod store;
 pub mod stream;

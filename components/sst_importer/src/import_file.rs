@@ -409,7 +409,10 @@ impl ImportDir {
 
         for (cf, cf_paths) in paths {
             let files: Vec<&str> = cf_paths.iter().map(|p| p.clone.to_str().unwrap()).collect();
-            engine.ingest_external_file_cf(cf, &files)?;
+            // TiDB guarantees that region will not receive writes during ingestion.
+            // Set `force_allow_write` to true to minimize the impact on foreground
+            // performance. Refer to https://github.com/tikv/tikv/issues/18081.
+            engine.ingest_external_file_cf(cf, &files, None, true /* force_allow_write */)?;
         }
         INPORTER_INGEST_COUNT.observe(metas.len() as _);
         IMPORTER_INGEST_BYTES.observe(ingest_bytes as _);
@@ -603,7 +606,7 @@ mod test {
 
     #[cfg(feature = "test-engines-rocksdb")]
     fn test_path_with_range_and_km(km: Option<DataKeyManager>) {
-        use engine_rocks::{RocksEngine, RocksSstWriterBuilder};
+        use engine_rocks::RocksSstWriterBuilder;
         use engine_test::ctor::{CfOptions, DbOptions};
         use engine_traits::{SstWriter, SstWriterBuilder};
         use tempfile::TempDir;
