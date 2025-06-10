@@ -23,8 +23,8 @@ use std::{
 };
 
 use batch_system::{
-    BasicMailbox, BatchRouter, BatchSystem, Config as BatchSystemConfig, Fsm, HandleResult,
-    HandlerBuilder, PollHandler, Priority,
+    BasicMailbox, BatchRouter, BatchSystem, Config as BatchSystemConfig, Fsm, FsmType,
+    HandleResult, HandlerBuilder, PollHandler, Priority,
 };
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
@@ -450,6 +450,7 @@ where
     /// The pending inspector should be cleaned at the end of a write.
     pending_latency_inspect: Vec<LatencyInspector>,
     apply_wait: LocalHistogram,
+    apply_msg_len: LocalHistogram,
     apply_time: LocalHistogram,
 
     key_buffer: Vec<u8>,
@@ -518,6 +519,7 @@ where
             pending_ssts: vec![],
             pending_latency_inspect: vec![],
             apply_wait: APPLY_TASK_WAIT_TIME_HISTOGRAM.local(),
+            apply_msg_len: APPLY_MSG_LEN.local(),
             apply_time: APPLY_TIME_HISTOGRAM.local(),
             key_buffer: Vec::with_capacity(1024),
             disable_wal: false,
@@ -4372,6 +4374,7 @@ where
 
     #[allow(clippy::vec_box)]
     fn handle_tasks(&mut self, apply_ctx: &mut ApplyContext<EK>, msgs: &mut Vec<Box<Msg<EK>>>) {
+        apply_ctx.apply_msg_len.observe(msgs.len() as f64);
         let mut drainer = msgs.drain(..);
         let mut batch_apply = None;
         loop {
@@ -4470,6 +4473,8 @@ where
 {
     type Message = Box<Msg<EK>>;
 
+    const FSM_TYPE: FsmType = FsmType::apply;
+
     #[inline]
     fn is_stopped(&self) -> bool {
         self.delegate.stopped
@@ -4564,6 +4569,8 @@ impl ControlFsm {
 
 impl Fsm for ControlFsm {
     type Message = ControlMsg;
+
+    const FSM_TYPE: FsmType = FsmType::apply;
 
     #[inline]
     fn is_stopped(&self) -> bool {
