@@ -57,8 +57,9 @@ struct ExecutorsWithOutput<SS> {
 }
 
 impl<SS> ExecutorsWithOutput<SS> {
+    #[inline]
     fn build<S: Storage<Statistics = SS> + 'static, F: KvFormat>(
-        executor_descriptors: Vec<tipb::Executor>,
+        executor_descriptors: &mut [tipb::Executor],
         ranges: SrcExecutorRanges<S>,
         config: Arc<EvalConfig>,
         is_scanned_range_aware: bool,
@@ -166,7 +167,7 @@ impl ExecutorDescriptors {
     }
 
     async fn build_instant<S: Storage<Statistics = SS> + 'static, SS: 'static, F: KvFormat>(
-        self,
+        mut self,
         ctx: &mut EvalContext,
         build_side_results: &mut Vec<BatchExecuteResult>,
         result_schema: &[FieldType],
@@ -190,7 +191,7 @@ impl ExecutorDescriptors {
                 .await?;
 
                 ExecutorsWithOutput::build::<_, F>(
-                    self.executor_descriptors,
+                    &mut self.executor_descriptors,
                     SrcExecutorRanges::Probes(ranges),
                     ctx.cfg.clone(),
                     false,
@@ -412,13 +413,13 @@ impl<S: Storage> SrcExecutorRanges<S> {
 
 #[allow(clippy::explicit_counter_loop)]
 pub fn build_executors<S: Storage + 'static, F: KvFormat>(
-    executor_descriptors: Vec<tipb::Executor>,
+    executor_descriptors: &mut [tipb::Executor],
     src_scan_ranges: SrcExecutorRanges<S>,
     config: Arc<EvalConfig>,
     is_scanned_range_aware: bool,
 ) -> Result<Box<dyn BatchExecutor<StorageStats = S::Statistics>>> {
     let mut executor_descriptors = executor_descriptors.into_iter();
-    let mut first_ed = executor_descriptors
+    let first_ed = executor_descriptors
         .next()
         .ok_or_else(|| other_err!("No executors"))?;
 
@@ -507,7 +508,7 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
         }
     };
 
-    for mut ed in executor_descriptors {
+    for ed in executor_descriptors {
         summary_slot_index += 1;
 
         executor = match ed.get_tp() {
@@ -732,14 +733,14 @@ impl<S: Storage<Statistics = SS> + 'static, SS: 'static, F: KvFormat>
         config: Arc<EvalConfig>,
         is_scanned_range_aware: bool,
     ) -> Result<Vec<ExecutionGroup<SS>>> {
-        let executors = req.take_executors().to_vec();
+        let mut executors = req.take_executors().into_vec();
         let mut barriers = req.take_parital_output_barriers();
         if barriers.len() == 0 {
             return Ok(vec![ExecutionGroup::Instant(ExecutorsWithOutput::build::<
                 _,
                 F,
             >(
-                executors,
+                &mut executors,
                 Simple((storage, first_scan_ranges)),
                 config,
                 is_scanned_range_aware,
@@ -749,55 +750,42 @@ impl<S: Storage<Statistics = SS> + 'static, SS: 'static, F: KvFormat>
         }
 
         let mut groups = Vec::with_capacity(barriers.len() + 1);
-        let first_barrier = barriers.first_mut().unwrap();
-        let last_group_end = first_barrier.get_position() as usize;
-        if last_group_end <= 0 {
-            return Err(other_err!(
-                "invalid barrier position: {} at index: 0",
-                last_group_end
-            ));
-        }
-
-        groups.push(ExecutionGroup::Instant(ExecutorsWithOutput::build::<_, F>(
-            executors[..last_group_end].to_vec(),
-            Simple((storage, first_scan_ranges)),
-            config.clone(),
-            is_scanned_range_aware,
-            first_barrier.take_output_offsets(),
-            first_barrier.get_encode_type(),
-        )?));
-
-        let barriers_len = barriers.len();
-        for i in 1..=barriers_len {
-            let (group_end, output_offsets, encode_type) = if i == barriers_len {
-                (
-                    executors.len(),
-                    req.take_output_offsets(),
-                    req.get_encode_type(),
-                )
-            } else {
-                let barrier = &mut barriers[i];
-                (
-                    barrier.get_position() as usize,
-                    barrier.take_output_offsets(),
-                    barrier.get_encode_type(),
-                )
-            };
-
-            if group_end <= last_group_end || group_end > executors.len() {
-                return Err(other_err!(
-                    "invalid barrier position: {} at index: {}",
-                    group_end,
-                    i + 1
-                ));
+        let mut first_range = Some(Simple((storage, first_scan_ranges)));
+        let mut offset = 0usize;
+        let executors_len = executors.len();
+        for barrier in barriers.iter_mut() {
+            let pos = barrier.get_position() as usize;
+            if pos <= offset || pos >= executors_len {
+                return Err(other_err!("invalid barrier position: {} ", pos));
             }
 
-            groups.push(ExecutionGroup::Descriptors(ExecutorDescriptors::new(
-                executors[last_group_end..group_end].to_vec(),
-                output_offsets,
-                encode_type,
-            )));
+            let left_executors = executors.split_off(pos - offset);
+            if offset == 0 {
+                groups.push(ExecutionGroup::Instant(ExecutorsWithOutput::build::<_, F>(
+                    &mut executors,
+                    first_range.take().unwrap(),
+                    config.clone(),
+                    is_scanned_range_aware,
+                    barrier.take_output_offsets(),
+                    barrier.get_encode_type(),
+                )?));
+            } else {
+                groups.push(ExecutionGroup::Descriptors(ExecutorDescriptors::new(
+                    executors,
+                    barrier.take_output_offsets(),
+                    barrier.get_encode_type(),
+                )));
+            }
+
+            offset = pos;
+            executors = left_executors;
         }
+
+        groups.push(ExecutionGroup::Descriptors(ExecutorDescriptors::new(
+            executors,
+            req.take_output_offsets(),
+            req.get_encode_type(),
+        )));
 
         Ok(groups)
     }
