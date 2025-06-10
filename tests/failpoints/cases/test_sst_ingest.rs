@@ -293,7 +293,7 @@ fn blocks_ingest_test(region_to_migrate: &[u8], ingest_type: &str) {
     }
     // Start the apply-snapshot thread, which might be blocked by the GC thread,
     // depending on whether the ranges overlap.
-    let apply_snap_handle = start_region_migrate(region_id, pd_client, peer.clone());
+    let apply_snap_handle = start_region_migrate(region_id, pd_client, peer);
     // Wait for snapshot to acquire the latch.
     sleep_ms(500);
     if region_to_migrate != b"c" {
@@ -396,8 +396,8 @@ fn test_apply_snapshot_must_wait_destroy_peer() {
     })
     .unwrap();
 
-    let pd_client_clone2 = pd_client.clone();
-    let peer_clone2 = peer.clone();
+    let pd_client_clone2 = pd_client;
+    let peer_clone2 = peer;
     let apply_handle = thread::spawn(move || {
         pd_client_clone2.must_add_peer(region_id, peer_clone2);
     });
@@ -448,8 +448,8 @@ fn test_destroy_peer_must_wait_ongoing_foreground_writes() {
 
     // Start the destroy-peer process, which will pause at
     // before_clean_stale_ranges.
-    let pd_client_clone1 = pd_client.clone();
-    let peer_clone1 = peer.clone();
+    let pd_client_clone1 = pd_client;
+    let peer_clone1 = peer;
     let destroy_handle = thread::spawn(move || {
         pd_client_clone1.must_remove_peer(region_id, peer_clone1);
     });

@@ -95,7 +95,7 @@ impl RangeLatch {
                 let mutex = Arc::new(Mutex::new(()));
                 let previous_value = range_latches.insert(
                     start_key.clone(),
-                    (mutex.clone(), (start_key.clone(), end_key.clone())),
+                    (mutex.clone(), (start_key.clone(), end_key)),
                 );
                 debug_assert!(previous_value.is_none());
 

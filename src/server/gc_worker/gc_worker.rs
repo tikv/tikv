@@ -2888,7 +2888,7 @@ mod tests {
         let cfg = GcConfig::default();
         let mut runner = GcRunnerCore::new(
             store_id,
-            prefixed_engine.clone(),
+            prefixed_engine,
             tx,
             GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())), None)
                 .0
@@ -2945,7 +2945,7 @@ mod tests {
         let cfg = GcConfig::default();
         let mut runner = GcRunnerCore::new(
             store_id,
-            prefixed_engine.clone(),
+            prefixed_engine,
             tx,
             GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())), None)
                 .0

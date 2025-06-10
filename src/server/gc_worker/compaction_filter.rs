@@ -1304,7 +1304,7 @@ pub mod tests {
         let engine = builder.build_with_cfg(&cfg).unwrap();
         let raw_engine = engine.get_rocksdb();
 
-        let mut delete_batch = DeleteBatch::new(&Some(raw_engine.clone()));
+        let mut delete_batch = DeleteBatch::new(&Some(raw_engine));
 
         let key1 = b"key1";
         let key2 = b"key2";
