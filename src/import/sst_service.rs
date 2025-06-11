@@ -378,6 +378,11 @@ where
         if header.has_error() {
             return Err(header.take_error());
         }
+        fail::fail_point!("failed_to_async_snapshot", |_| {
+            let mut e = errorpb::Error::default();
+            e.set_message("faild to get snapshot".to_string());
+            Err(e)
+        });
         Ok(SnapshotResult {
             snapshot: res.snapshot.unwrap(),
             term: header.get_current_term(),
@@ -1108,12 +1113,16 @@ where
                             IMPORT_RPC_DURATION
                                 .with_label_values(&[label, "ok"])
                                 .observe(timer.saturating_elapsed_secs());
+                            let _ = sink.close().await;
                         }
                         Err(e) => {
                             warn!(
                                 "connection send message fail";
                                 "err" => %e
                             );
+                            let status =
+                                RpcStatus::with_message(RpcStatusCode::UNKNOWN, format!("{:?}", e));
+                            let _ = sink.fail(status).await;
                         }
                     }
                     let _ = sink.close().await;
@@ -1132,7 +1141,10 @@ where
                         "connection send message fail";
                         "err" => %e
                     );
-                    break;
+                    let status =
+                        RpcStatus::with_message(RpcStatusCode::UNKNOWN, format!("{:?}", e));
+                    let _ = sink.fail(status).await;
+                    return;
                 }
             }
             let _ = sink.close().await;
