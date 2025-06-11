@@ -5,27 +5,26 @@ use std::{
     collections::{BinaryHeap, VecDeque},
     error::Error as StdError,
     fmt::{self, Display, Formatter},
-    simd::num,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
-use derive_more::derive;
 use engine_traits::{CF_WRITE, KvEngine, ManualCompactionOptions, RangeStats};
 use fail::fail_point;
 use futures_util::compat::Future01CompatExt;
 use thiserror::Error;
-use tidb_query_datatype::codec::batch;
 use tikv_util::{
     box_try, debug, error, info, time::Instant, timer::GLOBAL_TIMER_HANDLE, warn, worker::Runnable,
 };
 use yatp::Remote;
 
 use super::metrics::{
-    COMPACT_RANGE_CF, FULL_COMPACT, FULL_COMPACT_INCREMENTAL, FULL_COMPACT_PAUSE,
-};
-use crate::store::worker_metrics::{
     CHECK_AND_COMPACT_CHECKING_DURATION, CHECK_AND_COMPACT_NUM_MVCC,
+    CHECK_AND_COMPACT_PENDING_COMPACTIONS, COMPACT_RANGE_CF, FULL_COMPACT,
+    FULL_COMPACT_INCREMENTAL, FULL_COMPACT_PAUSE,
 };
 
 type Key = Vec<u8>;
@@ -89,9 +88,25 @@ struct CompactionUnit {
     score: f64,
 }
 
-// Entry in the min-heap for top N compaction.
-#[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord)]
-struct MinHeapEntry(Reverse<f64>, CompactionUnit);
+impl PartialEq for CompactionUnit {
+    fn eq(&self, other: &Self) -> bool {
+        self.score == other.score
+    }
+}
+
+impl Eq for CompactionUnit {}
+
+impl PartialOrd for CompactionUnit {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.score.partial_cmp(&other.score).unwrap())
+    }
+}
+
+impl Ord for CompactionUnit {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.partial_cmp(other).unwrap()
+    }
+}
 
 type CompactPredicateFn = Box<dyn Fn() -> bool + Send + Sync>;
 
@@ -255,11 +270,12 @@ impl Display for Task {
                 .finish(),
             Task::CompactTopN {
                 ref cf_names,
-                ref ranges,
+                ranges: _,
                 ref compact_threshold,
                 top_n,
+                bottommost_level_force,
                 compaction_filter_enabled,
-                ref finished,
+                finished: _,
             } => f
                 .debug_struct("CompactTopN")
                 .field("cf_names", cf_names)
@@ -506,7 +522,7 @@ where
                 top_n,
                 compaction_filter_enabled,
                 bottommost_level_force,
-                finished,
+                finished: _,
             } => {
                 match get_top_n_ranges_to_compact(
                     &self.engine,
@@ -517,7 +533,7 @@ where
                 ) {
                     Ok(top_n_ranges) => {
                         let mut remaining_tasks = top_n_ranges.len();
-                        CHECK_AND_COMPACT_PENDING_COMPACTIONS.set(remaining_tasks as u64);
+                        CHECK_AND_COMPACT_PENDING_COMPACTIONS.set(remaining_tasks as i64);
                         for compaction_unit in top_n_ranges {
                             let start = compaction_unit.start_key;
                             let end = compaction_unit.end_key;
@@ -539,7 +555,7 @@ where
                                 }
                             }
                             remaining_tasks -= 1;
-                            CHECK_AND_COMPACT_PENDING_COMPACTIONS.set(remaining_tasks as u64);
+                            CHECK_AND_COMPACT_PENDING_COMPACTIONS.set(remaining_tasks as i64);
                         }
                     }
                     Err(e) => {
@@ -620,7 +636,7 @@ fn collect_ranges_need_compact(
 
 fn get_compact_score(
     range_stats: &RangeStats,
-    compact_threshold: &CompactThreshold,
+    _compact_threshold: &CompactThreshold,
     compaction_filter_enabled: bool,
 ) -> f64 {
     if range_stats.num_entries < range_stats.num_versions {
@@ -641,15 +657,18 @@ fn get_top_n_ranges_to_compact(
     compact_threshold: CompactThreshold,
     top_n: usize,
     compaction_filter_enabled: bool,
-) -> Result<Vec<CompactionUnit>> {
+) -> Result<Vec<CompactionUnit>, Error> {
     let check_duration = CHECK_AND_COMPACT_CHECKING_DURATION.start_coarse_timer();
     let mut heap = BinaryHeap::new();
     let mut num_total_entries = 0;
     let mut num_discardable_entries = 0;
-    for range in ranges.iter().windows(2) {
-        let mut score = 0.0;
+    for range in ranges.windows(2) {
+        let mut score;
 
-        if let Some(range_stats) = engine.get_range_stats(CF_WRITE, &range[0], &range[1])? {
+        if let Some(range_stats) = engine
+            .get_range_stats(CF_WRITE, &range[0], &range[1])
+            .map_err(|e| Error::Other(Box::new(e)))?
+        {
             score = get_compact_score(&range_stats, &compact_threshold, compaction_filter_enabled);
             num_total_entries += range_stats.num_entries;
             num_discardable_entries += range_stats.num_entries - range_stats.num_versions;
@@ -661,7 +680,12 @@ fn get_top_n_ranges_to_compact(
             continue;
         }
 
-        if score < heap.top().0.0 {
+        if score <= 0.0
+            || score
+                < heap
+                    .peek()
+                    .map_or(0.0, |e: &Reverse<CompactionUnit>| e.0.score)
+        {
             continue;
         }
 
@@ -674,8 +698,7 @@ fn get_top_n_ranges_to_compact(
         };
 
         // Push the compaction unit into the min-heap.
-        let entry = MinHeapEntry(Reverse(score), compaction_unit);
-        heap.push(entry);
+        heap.push(Reverse(compaction_unit));
         if heap.len() > top_n {
             // If the heap size exceeds the top N, pop the smallest element.
             heap.pop();
@@ -684,14 +707,18 @@ fn get_top_n_ranges_to_compact(
     check_duration.observe_duration();
     CHECK_AND_COMPACT_NUM_MVCC
         .with_label_values(&["total"])
-        .observe(num_total_entries as f64);
+        .set(num_total_entries as i64);
     CHECK_AND_COMPACT_NUM_MVCC
         .with_label_values(&["discardable"])
-        .observe(num_discardable_entries as f64);
-    heap.into_sorted_vec()
+        .set(num_discardable_entries as i64);
+    let mut sorted_vec: Vec<_> = heap
+        .into_sorted_vec()
         .into_iter()
-        .map(|entry| entry.1)
-        .collect()
+        .map(|Reverse(compaction_unit)| compaction_unit)
+        .collect();
+    sorted_vec.reverse();
+
+    Ok(sorted_vec)
 }
 
 #[cfg(test)]

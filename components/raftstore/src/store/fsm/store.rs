@@ -10,8 +10,7 @@ use std::{
     },
     mem,
     ops::{Deref, DerefMut},
-    rc::Weak,
-    sync::{Arc, Mutex, atomic::Ordering},
+    sync::{Arc, Mutex, Weak, atomic::Ordering},
     time::{Duration, Instant, SystemTime},
 };
 
@@ -2798,7 +2797,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
 
     fn on_compact_check_tick(&mut self) {
         self.register_compact_check_tick();
-        if let Some(token) = &self.fsm.check_compact_check_running_indicator {
+        if let Some(token) = &self.fsm.check_and_compact_running_indicator {
             if token.upgrade().is_some() {
                 debug!(
                     "compact check is running, skip compact check";
@@ -2834,8 +2833,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         all_ranges.push(keys::DATA_MAX_KEY.to_vec());
         let cf_names = vec![CF_WRITE.to_owned(), CF_DEFAULT.to_owned()];
         let finished = Arc::new(());
-        let self.fsm.check_compact_check_running_indicator =
-            Some(Arc::downgrade(&finished));
+        self.fsm.check_and_compact_running_indicator = Some(Arc::downgrade(&finished));
         if let Err(e) =
             self.ctx
                 .cleanup_scheduler
@@ -2848,7 +2846,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
                         self.ctx.cfg.region_compact_min_redundant_rows,
                         self.ctx.cfg.region_compact_redundant_rows_percent(),
                     ),
-                    top_n: self.ctx.cfg.check_then_compact_top_n,
+                    top_n: self.ctx.cfg.check_then_compact_top_n as usize,
                     compaction_filter_enabled: self.ctx.cfg.compaction_filter_enabled,
                     bottommost_level_force: self.ctx.cfg.check_then_compact_bottommost,
                     finished,
