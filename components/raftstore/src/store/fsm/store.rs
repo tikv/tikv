@@ -917,7 +917,7 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                             warn!(
                                 "Network latency inspect is not supported";
                                 "store_id" => self.fsm.store.id
-                            );                           
+                            );
                         }
                     }
                 }

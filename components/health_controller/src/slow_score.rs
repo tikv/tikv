@@ -1,7 +1,9 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cmp, collections::HashSet, time::{Duration, Instant}
+    cmp,
+    collections::HashSet,
+    time::{Duration, Instant},
 };
 
 use ordered_float::OrderedFloat;
@@ -12,15 +14,19 @@ const UPDATE_INTERVALS: Duration = Duration::from_secs(10);
 /// If the score has reached 100 and there is no timeout inspecting requests
 /// during this interval, the score will go back to 1 after 5min.
 const RECOVERY_INTERVALS: Duration = Duration::from_secs(60 * 5);
-
+/// After every DISK_ROUND_TICKS, the disk's slow score will be updated.
 pub const DISK_ROUND_TICKS: u64 = 30;
-
+/// After every NETWORK_ROUND_TICKS, the network's slow score will be updated.
 pub const NETWORK_ROUND_TICKS: u64 = 10;
-
+/// DISK_TIMEOUT_RATIO_THRESHOLD is the maximal tolerated timeout ratio
+/// for disk inspecting requests. If the timeout ratio is larger than this
+/// threshold, the disk's slow score will be multiplied by 2.
 pub const DISK_TIMEOUT_RATIO_THRESHOLD: f64 = 0.1;
-
+/// NETWORK_TIMEOUT_RATIO_THRESHOLD is the maximal tolerated timeout ratio
+/// for network inspecting requests. If the timeout ratio is larger than this
+/// threshold, the network's slow score will be multiplied by 2.
 pub const NETWORK_TIMEOUT_RATIO_THRESHOLD: f64 = 0.5;
-
+/// The timeout threshold for network inspecting requests.
 pub const NETWORK_TIMEOUT_THRESHOLD: Duration = Duration::from_secs(1);
 // Slow score is a value that represents the speed of a store and ranges in [1,
 // 100]. It is maintained in the AIMD way.
@@ -46,15 +52,19 @@ pub struct SlowScore {
     round_ticks: u64,
     // Identify every ticks.
     last_tick_id: u64,
-    // If the tick_id is less than `last_tick_id`-`min_timeout_ticks`, we view 
+    // If the tick_id is less than `last_tick_id`-`min_timeout_ticks`, we view
     // this tick as timeout.
     min_timeout_ticks: u64,
     uncompleted_ticks: HashSet<u64>,
 }
 
 impl SlowScore {
-    pub fn new(timeout_threshold :Duration, inspect_interval: Duration, ratio_thresh: f64,
-     round_ticks: u64) -> SlowScore {
+    pub fn new(
+        timeout_threshold: Duration,
+        inspect_interval: Duration,
+        ratio_thresh: f64,
+        round_ticks: u64,
+    ) -> SlowScore {
         SlowScore {
             value: OrderedFloat(1.0),
 
@@ -112,8 +122,10 @@ impl SlowScore {
 
     pub fn record_timeout(&mut self) {
         self.last_record_time = Instant::now();
-        let threshold = self.last_tick_id.saturating_sub(self.min_timeout_ticks+1);
-        let timeout_requests = self.uncompleted_ticks.iter()
+        let threshold = self.last_tick_id.saturating_sub(self.min_timeout_ticks + 1);
+        let timeout_requests = self
+            .uncompleted_ticks
+            .iter()
             .filter(|&&id| id <= threshold)
             .count();
         self.total_requests += timeout_requests;
@@ -159,9 +171,9 @@ impl SlowScore {
     }
 
     pub fn last_tick_finished(&self) -> bool {
-        let threshold = self.last_tick_id.saturating_sub(self.min_timeout_ticks+1);
+        let threshold = self.last_tick_id.saturating_sub(self.min_timeout_ticks + 1);
         let exist_uncompleted_tick = self.uncompleted_ticks.iter().any(|&id| id <= threshold);
-        
+
         !exist_uncompleted_tick
     }
 

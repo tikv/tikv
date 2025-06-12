@@ -62,20 +62,26 @@ impl UnifiedSlowScore {
     pub fn new(cfg: &RaftstoreReporterConfig) -> Self {
         let mut unified_slow_score = UnifiedSlowScore::default();
         // The first factor is for Raft Disk I/O.
-        unified_slow_score
-            .factors
-            .push(SlowScore::new(cfg.inspect_interval, cfg.inspect_interval, 
-                DISK_TIMEOUT_RATIO_THRESHOLD, DISK_ROUND_TICKS));
+        unified_slow_score.factors.push(SlowScore::new(
+            cfg.inspect_interval,
+            cfg.inspect_interval,
+            DISK_TIMEOUT_RATIO_THRESHOLD,
+            DISK_ROUND_TICKS,
+        ));
         // The second factor is for KvDB Disk I/O.
-        unified_slow_score
-            .factors
-            .push(SlowScore::new(cfg.inspect_kvdb_interval, cfg.inspect_kvdb_interval,
-                DISK_TIMEOUT_RATIO_THRESHOLD, DISK_ROUND_TICKS));
+        unified_slow_score.factors.push(SlowScore::new(
+            cfg.inspect_kvdb_interval,
+            cfg.inspect_kvdb_interval,
+            DISK_TIMEOUT_RATIO_THRESHOLD,
+            DISK_ROUND_TICKS,
+        ));
         // The third factor is for PD Network I/O.
-        unified_slow_score
-            .factors
-            .push(SlowScore::new(NETWORK_TIMEOUT_THRESHOLD, cfg.inspect_network_interval,
-                NETWORK_TIMEOUT_RATIO_THRESHOLD, NETWORK_ROUND_TICKS));
+        unified_slow_score.factors.push(SlowScore::new(
+            NETWORK_TIMEOUT_THRESHOLD,
+            cfg.inspect_network_interval,
+            NETWORK_TIMEOUT_RATIO_THRESHOLD,
+            NETWORK_ROUND_TICKS,
+        ));
         unified_slow_score
     }
 
@@ -186,7 +192,6 @@ impl RaftstoreReporter {
                     .update_network_slow_score(self.slow_score.get_network_score());
             }
         }
-        
     }
 
     fn is_healthy(&self) -> bool {

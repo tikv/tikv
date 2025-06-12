@@ -473,9 +473,10 @@ impl StoreStatsReporter for PdReporter {
                     STORE_INSPECT_DURATION_HISTOGRAM
                         .with_label_values(&["all"])
                         .observe(tikv_util::time::duration_to_sec(dur));
-                    if let Err(e) =
-                        scheduler.schedule(Task::UpdateSlownessStats { tick_id, duration: duration.raftstore_duration })
-                    {
+                    if let Err(e) = scheduler.schedule(Task::UpdateSlownessStats {
+                        tick_id,
+                        duration: duration.raftstore_duration,
+                    }) {
                         warn!(logger, "schedule pd UpdateSlownessStats task failed"; "err" => ?e);
                     }
                 }),
