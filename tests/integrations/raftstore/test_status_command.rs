@@ -50,7 +50,7 @@ fn test_latency_inspect() {
             let inspector = LatencyInspector::new(
                 1,
                 Box::new(move |_, duration| {
-                    let dur = duration.sum();
+                    let dur = duration.raftstore_duration.sum();
                     cloned_tx.send(dur).unwrap();
                 }),
             );
@@ -69,7 +69,7 @@ fn test_latency_inspect() {
         let inspector = LatencyInspector::new(
             1,
             Box::new(move |_, duration| {
-                let dur = duration.sum();
+                let dur = duration.raftstore_duration.sum();
                 tx.send(dur).unwrap();
             }),
         );
@@ -95,7 +95,7 @@ fn test_sync_latency_inspect() {
         let inspector = LatencyInspector::new(
             1,
             Box::new(move |_, duration| {
-                let dur = duration.sum();
+                let dur = duration.raftstore_duration.sum();
                 cloned_tx.send(dur).unwrap();
             }),
         );

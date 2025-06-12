@@ -453,28 +453,28 @@ impl StoreStatsReporter for PdReporter {
             let inspector = LatencyInspector::new(
                 tick_id,
                 Box::new(move |tick_id, duration| {
-                    let dur = duration.sum();
+                    let dur = duration.raftstore_duration.sum();
 
                     STORE_INSPECT_DURATION_HISTOGRAM
                         .with_label_values(&["store_process"])
                         .observe(tikv_util::time::duration_to_sec(
-                            duration.store_process_duration.unwrap(),
+                            duration.raftstore_duration.store_process_duration.unwrap(),
                         ));
                     STORE_INSPECT_DURATION_HISTOGRAM
                         .with_label_values(&["store_wait"])
                         .observe(tikv_util::time::duration_to_sec(
-                            duration.store_wait_duration.unwrap(),
+                            duration.raftstore_duration.store_wait_duration.unwrap(),
                         ));
                     STORE_INSPECT_DURATION_HISTOGRAM
                         .with_label_values(&["store_commit"])
                         .observe(tikv_util::time::duration_to_sec(
-                            duration.store_commit_duration.unwrap(),
+                            duration.raftstore_duration.store_commit_duration.unwrap(),
                         ));
                     STORE_INSPECT_DURATION_HISTOGRAM
                         .with_label_values(&["all"])
                         .observe(tikv_util::time::duration_to_sec(dur));
                     if let Err(e) =
-                        scheduler.schedule(Task::UpdateSlownessStats { tick_id, duration })
+                        scheduler.schedule(Task::UpdateSlownessStats { tick_id, duration: duration.raftstore_duration })
                     {
                         warn!(logger, "schedule pd UpdateSlownessStats task failed"; "err" => ?e);
                     }

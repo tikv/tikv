@@ -21,9 +21,7 @@ use engine_traits::{KvEngine, RaftEngine};
 use fail::fail_point;
 use futures::{compat::Future01CompatExt, future::Inspect, FutureExt};
 use health_controller::{
-    HealthController,
-    reporters::{RaftstoreReporter, RaftstoreReporterConfig},
-    types::{InspectFactor, LatencyInspector, RaftstoreDuration},
+    reporters::{RaftstoreReporter, RaftstoreReporterConfig}, types::{InspectFactor, LatencyInspector, UnifiedDuration}, HealthController
 };
 use kvproto::{
     kvrpcpb::DiskFullOpt,
@@ -198,7 +196,7 @@ where
     UpdateSlowScore {
         id: u64,
         factor: InspectFactor,
-        duration: RaftstoreDuration,
+        duration: UnifiedDuration,
     },
     RegionCpuRecords(Arc<RawRecords>),
     ReportMinResolvedTs {
@@ -2034,17 +2032,17 @@ where
                             STORE_INSPECT_DURATION_HISTOGRAM
                                 .with_label_values(&["store_wait"])
                                 .observe(tikv_util::time::duration_to_sec(
-                                    duration.store_wait_duration.unwrap_or_default(),
+                                    duration.raftstore_duration.store_wait_duration.unwrap_or_default(),
                                 ));
                             STORE_INSPECT_DURATION_HISTOGRAM
                                 .with_label_values(&["store_commit"])
                                 .observe(tikv_util::time::duration_to_sec(
-                                    duration.store_commit_duration.unwrap_or_default(),
+                                    duration.raftstore_duration.store_commit_duration.unwrap_or_default(),
                                 ));
 
                             STORE_INSPECT_DURATION_HISTOGRAM
                                 .with_label_values(&["all"])
-                                .observe(tikv_util::time::duration_to_sec(duration.sum()));
+                                .observe(tikv_util::time::duration_to_sec(duration.raftstore_duration.sum()));
                             if let Err(e) = scheduler.schedule(Task::UpdateSlowScore {
                                 id,
                                 factor,
@@ -2061,12 +2059,12 @@ where
                         STORE_INSPECT_DURATION_HISTOGRAM
                             .with_label_values(&["apply_wait"])
                             .observe(tikv_util::time::duration_to_sec(
-                                duration.apply_wait_duration.unwrap_or_default(),
+                                duration.raftstore_duration.apply_wait_duration.unwrap_or_default(),
                             ));
                         STORE_INSPECT_DURATION_HISTOGRAM
                             .with_label_values(&["apply_process"])
                             .observe(tikv_util::time::duration_to_sec(
-                                duration.apply_process_duration.unwrap_or_default(),
+                                duration.raftstore_duration.apply_process_duration.unwrap_or_default(),
                             ));
                         if let Err(e) = scheduler.schedule(Task::UpdateSlowScore {
                             id,
@@ -2080,7 +2078,18 @@ where
                 InspectFactor::Network => LatencyInspector::new(
                     id,
                     Box::new(move |id, duration| {
-                        // TODO: Add network latency metrics.
+                        STORE_INSPECT_DURATION_HISTOGRAM
+                            .with_label_values(&["network"])
+                            .observe(tikv_util::time::duration_to_sec(
+                                duration.network_duration.unwrap_or_default(),
+                            ));
+                        if let Err(e) = scheduler.schedule(Task::UpdateSlowScore {
+                            id,
+                            factor,
+                            duration,
+                        }) {
+                            warn!("schedule pd task failed"; "err" => ?e);
+                        }
                     }),
                 ),
             }
@@ -2348,7 +2357,7 @@ where
                 factor,
                 duration,
             } => {
-                self.health_reporter.record_raftstore_duration(
+                self.health_reporter.record_duration(
                     id,
                     factor,
                     duration,

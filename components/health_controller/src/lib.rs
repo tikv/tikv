@@ -47,7 +47,7 @@ use std::{
 use grpcio_health::HealthService;
 use kvproto::pdpb::SlowTrend as SlowTrendPb;
 use parking_lot::{Mutex, RwLock};
-pub use types::{LatencyInspector, RaftstoreDuration};
+pub use types::{LatencyInspector, RaftstoreDuration, UnifiedDuration};
 
 struct ServingStatus {
     is_serving: bool,

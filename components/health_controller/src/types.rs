@@ -2,6 +2,12 @@
 
 use std::fmt::Debug;
 
+#[derive(Default, Debug)]
+pub struct UnifiedDuration {
+    pub raftstore_duration: RaftstoreDuration,
+    pub network_duration: Option<std::time::Duration>,
+}
+
 /// Represent the duration of all stages of raftstore recorded by one
 /// inspecting.
 #[derive(Default, Debug)]
@@ -71,8 +77,8 @@ impl InspectFactor {
 /// Used to inspect the latency of all stages of raftstore.
 pub struct LatencyInspector {
     id: u64,
-    duration: RaftstoreDuration,
-    cb: Box<dyn FnOnce(u64, RaftstoreDuration) + Send>,
+    duration: UnifiedDuration,
+    cb: Box<dyn FnOnce(u64, UnifiedDuration) + Send>,
 }
 
 impl Debug for LatencyInspector {
@@ -86,36 +92,40 @@ impl Debug for LatencyInspector {
 }
 
 impl LatencyInspector {
-    pub fn new(id: u64, cb: Box<dyn FnOnce(u64, RaftstoreDuration) + Send>) -> Self {
+    pub fn new(id: u64, cb: Box<dyn FnOnce(u64, UnifiedDuration) + Send>) -> Self {
         Self {
             id,
             cb,
-            duration: RaftstoreDuration::default(),
+            duration: UnifiedDuration::default(),
         }
     }
 
     pub fn record_store_wait(&mut self, duration: std::time::Duration) {
-        self.duration.store_wait_duration = Some(duration);
+        self.duration.raftstore_duration.store_wait_duration = Some(duration);
     }
 
     pub fn record_store_process(&mut self, duration: std::time::Duration) {
-        self.duration.store_process_duration = Some(duration);
+        self.duration.raftstore_duration.store_process_duration = Some(duration);
     }
 
     pub fn record_store_write(&mut self, duration: std::time::Duration) {
-        self.duration.store_write_duration = Some(duration);
+        self.duration.raftstore_duration.store_write_duration = Some(duration);
     }
 
     pub fn record_store_commit(&mut self, duration: std::time::Duration) {
-        self.duration.store_commit_duration = Some(duration);
+        self.duration.raftstore_duration.store_commit_duration = Some(duration);
     }
 
     pub fn record_apply_wait(&mut self, duration: std::time::Duration) {
-        self.duration.apply_wait_duration = Some(duration);
+        self.duration.raftstore_duration.apply_wait_duration = Some(duration);
     }
 
     pub fn record_apply_process(&mut self, duration: std::time::Duration) {
-        self.duration.apply_process_duration = Some(duration);
+        self.duration.raftstore_duration.apply_process_duration = Some(duration);
+    }
+
+    pub fn record_network(&mut self, duration: std::time::Duration) {
+        self.duration.network_duration = Some(duration);
     }
 
     /// Call the callback.

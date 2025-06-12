@@ -10,8 +10,8 @@ use pdpb::SlowTrend as SlowTrendPb;
 use prometheus::IntGauge;
 
 use crate::{
-    HealthController, HealthControllerInner, RaftstoreDuration,
-    slow_score::{SlowScore, SlowScoreTickResult},
+    HealthController, HealthControllerInner, RaftstoreDuration, UnifiedDuration,
+    slow_score::*,
     trend::{RequestPerSecRecorder, Trend},
     types::InspectFactor,
 };
@@ -65,17 +65,17 @@ impl UnifiedSlowScore {
         unified_slow_score
             .factors
             .push(SlowScore::new(cfg.inspect_interval, cfg.inspect_interval, 
-                SlowScore::DISK_TIMEOUT_RATIO_THRESHOLD, SlowScore::DISK_ROUND_TICKS));
+                DISK_TIMEOUT_RATIO_THRESHOLD, DISK_ROUND_TICKS));
         // The second factor is for KvDB Disk I/O.
         unified_slow_score
             .factors
             .push(SlowScore::new(cfg.inspect_kvdb_interval, cfg.inspect_kvdb_interval,
-                SlowScore::DISK_TIMEOUT_RATIO_THRESHOLD, SlowScore::DISK_ROUND_TICKS));
+                DISK_TIMEOUT_RATIO_THRESHOLD, DISK_ROUND_TICKS));
         // The third factor is for PD Network I/O.
         unified_slow_score
             .factors
-            .push(SlowScore::new(SlowScore::NETWORK_TIMEOUT_THRESHOLD, cfg.inspect_network_interval,
-                SlowScore::NETWORK_TIMEOUT_RATIO_THRESHOLD, SlowScore::NETWORK_ROUND_TICKS));
+            .push(SlowScore::new(NETWORK_TIMEOUT_THRESHOLD, cfg.inspect_network_interval,
+                NETWORK_TIMEOUT_RATIO_THRESHOLD, NETWORK_ROUND_TICKS));
         unified_slow_score
     }
 
@@ -84,10 +84,17 @@ impl UnifiedSlowScore {
         &mut self,
         id: u64,
         factor: InspectFactor,
-        duration: &RaftstoreDuration,
+        duration: &UnifiedDuration,
         not_busy: bool,
     ) {
-        self.factors[factor as usize].record(id, duration.delays_on_disk_io(false), not_busy);
+        let dur = if factor == InspectFactor::Network {
+            // For network factor, we only care about the raftstore duration.
+            duration.network_duration.unwrap_or_default()
+        } else {
+            // For disk factors, we care about the whole duration.
+            duration.raftstore_duration.delays_on_disk_io(false)
+        };
+        self.factors[factor as usize].record(id, dur, not_busy);
     }
 
     #[inline]
@@ -156,17 +163,17 @@ impl RaftstoreReporter {
         &self.slow_trend
     }
 
-    pub fn record_raftstore_duration(
+    pub fn record_duration(
         &mut self,
         id: u64,
         factor: InspectFactor,
-        duration: RaftstoreDuration,
+        duration: UnifiedDuration,
         store_not_busy: bool,
     ) {
         // Fine-tuned, `SlowScore` only takes the I/O jitters on the disk into account.
         self.slow_score
             .record(id, factor, &duration, store_not_busy);
-        self.slow_trend.record(duration);
+        self.slow_trend.record(duration.raftstore_duration);
 
         match factor {
             InspectFactor::RaftDisk | InspectFactor::KvDisk => {
