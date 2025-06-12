@@ -1402,9 +1402,12 @@ where
                     if let Some(awaken_regions) = resp.awaken_regions.take() {
                         info!("forcely awaken hibernated regions in this store");
                         let abnormal_stores = awaken_regions.get_abnormal_stores().to_vec();
+                        // The chunk_size of 1024 is an empirical batch size that balances
+                        // between generating too many `StoreMsg::AwakenRegions` messages and
+                        // keeping each batch small enough to avoid stalling Raftstore for
+                        // extended periods.
                         let chunk_size = 1024;
-                        let mut region_ids = Vec::new();
-                        region_ids.reserve(chunk_size);
+                        let mut region_ids = Vec::with_capacity(chunk_size);
 
                         for (id, _) in region_peers.read().unwrap().iter() {
                             region_ids.push(*id);
