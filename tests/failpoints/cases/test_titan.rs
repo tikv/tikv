@@ -158,6 +158,9 @@ fn test_titan() {
     )));
 
     cluster.must_transfer_leader(region1.get_id(), peer.clone());
+    assert_eq!(cluster.must_get(b"k1").unwrap(), b"v".repeat(20000));
+    cluster.must_put(b"k11", &b"v".repeat(30000));
+    assert_eq!(cluster.must_get(b"k11").unwrap(), b"v".repeat(30000));
     // TiKV does not crash, even the add peer will clean up the data again,
     // thus able to see the obesolete blob reference, the blob reference will
     // not be evaluated.
