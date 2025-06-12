@@ -761,7 +761,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         IMPORT_RPC_COUNT.with_label_values(&[label]).inc();
         let timer = Instant::now_coarse();
 
-        let res = {
+        let res = tokio::task::spawn_blocking(||{
             fn mf(cf: &str, name: &str, v: f64) {
                 CONFIG_ROCKSDB_GAUGE.with_label_values(&[cf, name]).set(v);
             }
@@ -798,13 +798,13 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                     }
                 }
             }
-        };
-        match res {
-            Ok(_) => info!("switch mode"; "mode" => ?req.get_mode()),
-            Err(ref e) => error!(%*e; "switch mode failed"; "mode" => ?req.get_mode(),),
-        }
+        });
 
         let task = async move {
+            match res.await {
+                Ok(_) => info!("switch mode"; "mode" => ?req.get_mode()),
+                Err(ref e) => error!(%*e; "switch mode failed"; "mode" => ?req.get_mode(),),
+            }
             defer! { IMPORT_RPC_COUNT.with_label_values(&[label]).dec() }
             crate::send_rpc_response!(Ok(SwitchModeResponse::default()), sink, label, timer);
         };
