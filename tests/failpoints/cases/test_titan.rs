@@ -111,9 +111,8 @@ fn test_titan() {
         db.get_property_int_cf(defaultcf, "rocksdb.num-files-at-level5")
             .unwrap()
     );
-    // lv5: file1 [k1: deletion]
+    // lv5: file1 [k1: v]
     // lv6: file0 [k1: ref_to_blob_file, k3: v]
-    // blob db: file0 [k1: v]
 
     cluster.cfg.rocksdb.titan.enabled = Some(false);
     cluster.stop_node(3);
@@ -135,6 +134,8 @@ fn test_titan() {
             .unwrap(),
     )));
     cluster.must_remove_region(3, region1.get_id());
+    // lv5: empty, file 1 got deleted, since it is fully covered by region1
+    // lv6: file0 [k1: ref_to_blob_file, k3: v]
     let db = cluster.engines[&3].kv.as_inner();
     let defaultcf = db.cf_handle(CF_DEFAULT).unwrap();
     assert_eq!(
