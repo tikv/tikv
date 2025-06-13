@@ -108,7 +108,7 @@ use crate::{
         worker::{
             AutoSplitController, CleanupRunner, CleanupSstRunner, CleanupSstTask, CleanupTask,
             CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
-            DiskCheckRunner, DiskCheckTask, GcSnapshotRunner, GcSnapshotTask, PdRunner,
+            InpectorRunner, InspectorTask, GcSnapshotRunner, GcSnapshotTask, PdRunner,
             RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RefreshConfigRunner, RefreshConfigTask,
             RegionRunner, RegionTask, SNAP_GENERATOR_MAX_POOL_SIZE, SnapGenRunner, SnapGenTask,
             SplitCheckTask,
@@ -558,7 +558,7 @@ where
     pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
     pub raftlog_fetch_scheduler: Scheduler<ReadTask<EK>>,
     pub region_scheduler: Scheduler<RegionTask>,
-    pub disk_check_scheduler: Scheduler<DiskCheckTask>,
+    pub disk_check_scheduler: Scheduler<InspectorTask>,
     pub apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
     pub importer: Arc<SstImporter<EK>>,
@@ -903,7 +903,7 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                             if let Err(e) = self
                                 .ctx
                                 .disk_check_scheduler
-                                .schedule(DiskCheckTask::InspectLatency { inspector })
+                                .schedule(InspectorTask::InspectLatency { inspector })
                             {
                                 warn!(
                                     "Failed to schedule disk check task";
@@ -1276,7 +1276,7 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
     raftlog_fetch_scheduler: Scheduler<ReadTask<EK>>,
     pub snap_gen_scheduler: Scheduler<SnapGenTask<EK::Snapshot>>,
-    disk_check_scheduler: Scheduler<DiskCheckTask>,
+    disk_check_scheduler: Scheduler<InspectorTask>,
     pub region_scheduler: Scheduler<RegionTask>,
     apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
@@ -1690,7 +1690,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         collector_reg_handle: CollectorRegHandle,
         health_controller: HealthController,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
-        mut disk_check_runner: DiskCheckRunner,
+        mut disk_check_runner: InpectorRunner,
         grpc_service_mgr: GrpcServiceManager,
         safe_point: Arc<AtomicU64>,
     ) -> Result<()> {

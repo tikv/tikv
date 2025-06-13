@@ -6,7 +6,7 @@ mod cleanup_snapshot;
 mod cleanup_sst;
 mod compact;
 mod consistency_check;
-mod disk_check;
+mod inspector;
 pub mod metrics;
 mod pd;
 mod raftlog_gc;
@@ -28,7 +28,7 @@ pub use self::{
         need_compact,
     },
     consistency_check::{Runner as ConsistencyCheckRunner, Task as ConsistencyCheckTask},
-    disk_check::{Runner as DiskCheckRunner, Task as DiskCheckTask},
+    inspector::{Runner as InpectorRunner, Task as InspectorTask},
     pd::{
         FlowStatistics, FlowStatsReporter, HeartbeatTask, NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
         Runner as PdRunner, StatsMonitor as PdStatsMonitor, StoreStatsReporter, Task as PdTask,

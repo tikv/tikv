@@ -18,7 +18,7 @@ use pd_client::{Error as PdError, INVALID_ID, PdClient};
 use raftstore::{
     coprocessor::dispatcher::CoprocessorHost,
     store::{
-        self, AutoSplitController, Config as StoreConfig, DiskCheckRunner, GlobalReplicationState,
+        self, AutoSplitController, Config as StoreConfig, InpectorRunner, GlobalReplicationState,
         PdTask, RefreshConfigTask, SnapManager, SplitCheckTask, Transport,
         fsm::{ApplyRouter, RaftBatchSystem, RaftRouter, store::StoreMeta},
         initial_region,
@@ -172,7 +172,7 @@ where
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
-        disk_check_runner: DiskCheckRunner,
+        disk_check_runner: InpectorRunner,
         grpc_service_mgr: GrpcServiceManager,
         safe_point: Arc<AtomicU64>,
     ) -> Result<()>
@@ -462,7 +462,7 @@ where
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
-        disk_check_runner: DiskCheckRunner,
+        disk_check_runner: InpectorRunner,
         grpc_service_mgr: GrpcServiceManager,
         safe_point: Arc<AtomicU64>,
     ) -> Result<()>
