@@ -5,6 +5,7 @@ use std::{
     collections::{BinaryHeap, VecDeque},
     error::Error as StdError,
     fmt::{self, Display, Formatter},
+    simd::num,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -636,7 +637,7 @@ fn collect_ranges_need_compact(
 
 fn get_compact_score(
     range_stats: &RangeStats,
-    _compact_threshold: &CompactThreshold,
+    compact_threshold: &CompactThreshold,
     compaction_filter_enabled: bool,
 ) -> f64 {
     if range_stats.num_entries < range_stats.num_versions {
@@ -647,8 +648,16 @@ fn get_compact_score(
     if compaction_filter_enabled {
         num_discardable += range_stats.redundant_keys();
     }
+    let discardable_ratio = num_discardable as f64 / range_stats.num_entries as f64;
+    if compaction_filter_enabled {
+        if discardable_ratio < compact_threshold.redundant_rows_percent_threshold as f64 / 100.0 {
+            return 0.0;
+        }
+    } else if discardable_ratio < compact_threshold.tombstones_percent_threshold as f64 / 100.0 {
+        return 0.0;
+    }
 
-    num_discardable as f64 / range_stats.num_entries as f64
+    discardable_ratio
 }
 
 fn get_top_n_ranges_to_compact(

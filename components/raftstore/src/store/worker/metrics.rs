@@ -225,7 +225,7 @@ lazy_static! {
     pub static ref CHECK_AND_COMPACT_NUM_MVCC: IntGaugeVec = register_int_gauge_vec!(
         "tikv_storage_check_and_compact_num_mvcc",
         "Total number of MVCC entries in write cf",
-        &["discardable"]
+        &["type"]
     ).unwrap();
     pub static ref PROCESS_STAT_CPU_USAGE: Gauge = register_gauge!(
         "tikv_storage_process_stat_cpu_usage",
