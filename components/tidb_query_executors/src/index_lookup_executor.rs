@@ -2,6 +2,7 @@ use std::{collections::HashSet, sync::Arc};
 
 use api_version::{ApiV1, KvFormat};
 use async_trait::async_trait;
+use itertools::Itertools;
 use kvproto::coprocessor::KeyRange;
 use tidb_query_common::{
     execute_stats::ExecuteStats,
@@ -10,7 +11,13 @@ use tidb_query_common::{
     Result,
 };
 use tidb_query_datatype::{
-    codec::{batch::LazyBatchColumnVec, data_type::LogicalRows, table::encode_row_key},
+    codec::{
+        batch::LazyBatchColumnVec,
+        data_type::LogicalRows,
+        datum,
+        table::{encode_common_handle, encode_row_key},
+        Datum,
+    },
     expr::{EvalConfig, EvalContext, EvalWarnings},
     FieldTypeTp,
 };
@@ -132,34 +139,112 @@ impl<S: Storage, F: KvFormat> BatchExecutor for BatchIndexLookupExecutor<S, F> {
     }
 }
 
-pub async fn build_index_lookup_probe_ranges<S: Storage>(
+trait Handle: Eq + Ord + Sized {
+    fn new(
+        ctx: &mut EvalContext,
+        rows: &LazyBatchColumnVec,
+        field_types: &[FieldType],
+        handle_offsets: &[u32],
+        row_index: usize,
+    ) -> Result<Self>;
+    fn encode_raw_key(&self, table_id: i64) -> Vec<u8>;
+    fn is_next(&self, other: &Self) -> bool;
+}
+
+#[derive(PartialEq, PartialOrd, Eq, Ord, Clone, Copy, Debug)]
+struct IntHandle(i64);
+
+impl Handle for IntHandle {
+    #[inline]
+    fn new(
+        _: &mut EvalContext,
+        rows: &LazyBatchColumnVec,
+        _: &[FieldType],
+        handle_offsets: &[u32],
+        row_index: usize,
+    ) -> Result<Self> {
+        let int_val = *rows[handle_offsets[0] as usize]
+            .decoded()
+            .get_scalar_ref(row_index)
+            .as_int()
+            .unwrap();
+        Ok(IntHandle(int_val.into()))
+    }
+
+    #[inline]
+    fn encode_raw_key(&self, table_id: i64) -> Vec<u8> {
+        encode_row_key(table_id, self.0)
+    }
+
+    #[inline]
+    fn is_next(&self, other: &Self) -> bool {
+        other.0 + 1 == self.0
+    }
+}
+
+#[derive(PartialEq, PartialOrd, Eq, Ord, Debug)]
+struct CommonHandle(Vec<u8>);
+
+impl Handle for CommonHandle {
+    #[inline]
+    fn new(
+        ctx: &mut EvalContext,
+        rows: &LazyBatchColumnVec,
+        field_types: &[FieldType],
+        handle_offsets: &[u32],
+        row_index: usize,
+    ) -> Result<Self> {
+        let mut row = Vec::with_capacity(handle_offsets.len());
+        for offset in handle_offsets {
+            let offset = *offset as usize;
+            row.push(Datum::from_scalar(
+                rows[offset].decoded().get_scalar_ref(row_index),
+                &field_types[offset],
+                true,
+            )?);
+        }
+        Ok(CommonHandle(datum::encode_key(ctx, &row)?))
+    }
+
+    #[inline]
+    fn encode_raw_key(&self, table_id: i64) -> Vec<u8> {
+        encode_common_handle(table_id, &self.0)
+    }
+
+    #[inline]
+    fn is_next(&self, _: &Self) -> bool {
+        false
+    }
+}
+
+async fn build_index_lookup_probe_ranges_for_handles<S: Storage, T: Handle>(
     ctx: &mut EvalContext,
-    descriptor: &IndexLookup,
+    table_id: i64,
+    handle_offsets: &[u32],
     build_side_results: &mut Vec<BatchExecuteResult>,
     result_schema: &[FieldType],
     locate_key: &FnLocateRegionKey<S>,
 ) -> Result<Vec<(S, Vec<KeyRange>)>> {
-    let handle_offsets = descriptor.get_build_side_primary_key_offsets();
-    check_int_handle_schema(result_schema, handle_offsets)?;
-    let int_handles =
-        sort_result_int_handles(ctx, build_side_results, result_schema, handle_offsets)?;
+    let sorted_handles =
+        sort_result_handles::<T>(ctx, build_side_results, result_schema, handle_offsets)?;
 
     let mut probe_side_ranges = vec![];
     let mut left_handles = HashSet::<(usize, usize)>::new();
     let mut current_region: Option<(AsyncRegion<S>, Vec<KeyRange>, (usize, usize))> = None;
-    let mut last_id = 0i64;
-    let handles_len = int_handles.len();
+    let handles_len = sorted_handles.handles.len();
     for i in 0..=handles_len {
-        let mut region_end = None;
+        let mut region_has_end = None;
         if i < handles_len {
-            let (id, _) = int_handles[i];
-            let raw_key = encode_row_key(descriptor.get_table_id(), id);
+            let handle_idx = sorted_handles.orders[i];
+            let handle = &sorted_handles.handles[handle_idx];
+            let raw_key = handle.encode_raw_key(table_id);
             let key = Key::from_raw(&raw_key);
             match current_region {
                 Some((ref region, ref mut ranges, ref mut slice))
                     if check_key_in_region(key.as_encoded(), region.get_region()) =>
                 {
-                    if last_id == id - 1 {
+                    let lat_handle = &sorted_handles.handles[sorted_handles.orders[i - 1]];
+                    if lat_handle.is_next(handle) {
                         let last_range = ranges.last_mut().unwrap();
                         last_range.set_end(raw_key);
                         convert_to_prefix_next(last_range.mut_end());
@@ -170,32 +255,32 @@ pub async fn build_index_lookup_probe_ranges<S: Storage>(
                         convert_to_prefix_next(r.mut_end());
                         ranges.push(r);
                     }
-                    slice.1 += i;
-                    last_id = id;
+                    slice.1 = i;
                 }
                 _ => {
-                    region_end = current_region.take();
+                    region_has_end = current_region.take();
                     if let Some(region) = locate_key(key.as_encoded()).take() {
                         let mut r = KeyRange::new();
                         r.set_start(raw_key);
                         r.set_end(r.get_start().to_vec());
                         convert_to_prefix_next(r.mut_end());
                         current_region = Some((region, vec![r], (i, i)));
-                        last_id = id;
+                    } else {
+                        left_handles.insert(sorted_handles.get_position_in_results(i)?);
                     }
                 }
             }
         } else {
-            region_end = current_region.take();
+            region_has_end = current_region.take();
         }
 
-        if let Some((region, ranges, slice)) = region_end {
+        if let Some((region, ranges, slice)) = region_has_end {
             let store = region.get_region_store(&ranges).await;
             if store.is_some() {
                 probe_side_ranges.push((store.unwrap(), ranges));
             } else {
-                for (_, pos) in &int_handles[slice.0..=slice.1] {
-                    left_handles.insert((pos.0, pos.1));
+                for pos in &sorted_handles.orders[slice.0..=slice.1] {
+                    left_handles.insert(sorted_handles.get_position_in_results(*pos)?);
                 }
             }
         }
@@ -215,50 +300,116 @@ pub async fn build_index_lookup_probe_ranges<S: Storage>(
     Ok(probe_side_ranges)
 }
 
-fn sort_result_int_handles(
+pub async fn build_index_lookup_probe_ranges<S: Storage>(
     ctx: &mut EvalContext,
-    results: &mut Vec<BatchExecuteResult>,
+    descriptor: &IndexLookup,
+    build_side_results: &mut Vec<BatchExecuteResult>,
     result_schema: &[FieldType],
-    handle_offsets: &[u32],
-) -> Result<Vec<(i64, (usize, usize))>> {
-    let (offset, ft) = check_int_handle_schema(result_schema, handle_offsets)?;
-    let mut handles = vec![];
-    for (i, result) in results.iter_mut().enumerate() {
-        result.physical_columns[offset].ensure_decoded(
-            ctx,
-            ft,
-            LogicalRows::from_slice(&result.logical_rows),
-        )?;
-
-        handles.extend(
-            result.physical_columns[offset]
-                .decoded()
-                .to_int_vec()
-                .iter()
-                .enumerate()
-                .filter(|(_, &h)| h.is_some())
-                .map(|(j, h)| (h.unwrap(), (i, j))),
-        );
+    locate_key: &FnLocateRegionKey<S>,
+) -> Result<Vec<(S, Vec<KeyRange>)>> {
+    let handle_offsets = descriptor.get_build_side_primary_key_offsets();
+    if handle_offsets.is_empty() {
+        return Err(other_err!("no handle offsets provided"));
     }
 
-    handles.sort();
-    Ok(handles)
+    if result_schema.is_empty() {
+        return Err(other_err!("no result schema provided"));
+    }
+
+    if handle_offsets.len() == 1 {
+        let offset = handle_offsets[0] as usize;
+        let tp_code = result_schema[offset].get_tp();
+        let tp = FieldTypeTp::from_i32(tp_code);
+        match tp {
+            Some(
+                FieldTypeTp::Long | FieldTypeTp::LongLong | FieldTypeTp::Tiny | FieldTypeTp::Short,
+            ) => {
+                return build_index_lookup_probe_ranges_for_handles::<S, IntHandle>(
+                    ctx,
+                    descriptor.get_table_id(),
+                    handle_offsets,
+                    build_side_results,
+                    result_schema,
+                    locate_key,
+                )
+                .await;
+            }
+            None => {
+                return Err(other_err!("unsupported type code: {}", tp_code));
+            }
+            _ => {}
+        }
+    }
+
+    build_index_lookup_probe_ranges_for_handles::<S, CommonHandle>(
+        ctx,
+        descriptor.get_table_id(),
+        handle_offsets,
+        build_side_results,
+        result_schema,
+        locate_key,
+    )
+    .await
 }
 
-fn check_int_handle_schema<'a>(
-    schema: &'a [FieldType],
-    handle_offsets: &'a [u32],
-) -> Result<(usize, &'a FieldType)> {
-    if handle_offsets.len() > 1 {
-        return Err(other_err!("common handle not supported yet"));
+struct SortedHandles<'a, T: Handle> {
+    handles: Vec<T>,
+    orders: Vec<usize>,
+    results: &'a Vec<BatchExecuteResult>,
+}
+
+impl<'a, T: Handle> SortedHandles<'a, T> {
+    #[inline]
+    fn get_position_in_results(&self, pos_in_orders: usize) -> Result<(usize, usize)> {
+        let mut pos = self.orders[pos_in_orders];
+        for (i, result) in self.results.iter().enumerate() {
+            let row_len = result.logical_rows.len();
+            if pos < row_len {
+                return Ok((i, pos));
+            }
+            pos -= row_len
+        }
+        Err(other_err!("pos: {} out of bounds", pos))
+    }
+}
+
+fn sort_result_handles<'a, T: Handle>(
+    ctx: &mut EvalContext,
+    results: &'a mut Vec<BatchExecuteResult>,
+    result_schema: &[FieldType],
+    handle_offsets: &[u32],
+) -> Result<SortedHandles<'a, T>> {
+    let mut handles = vec![];
+    for result in results.iter_mut() {
+        handles.reserve(handles.len() + result.logical_rows.len());
+        for offset in handle_offsets {
+            let offset = *offset as usize;
+            let ft = &result_schema[offset];
+            result.physical_columns[offset].ensure_decoded(
+                ctx,
+                ft,
+                LogicalRows::from_slice(&result.logical_rows),
+            )?;
+        }
+
+        for pos in result.logical_rows.iter() {
+            handles.push(T::new(
+                ctx,
+                &result.physical_columns,
+                result_schema,
+                handle_offsets,
+                *pos,
+            )?);
+        }
     }
 
-    let offset = handle_offsets[0] as usize;
-    let ft = &schema[offset];
-    match FieldTypeTp::from_i32(ft.get_tp()) {
-        Some(
-            FieldTypeTp::Long | FieldTypeTp::LongLong | FieldTypeTp::Tiny | FieldTypeTp::Short,
-        ) => Ok((offset, ft)),
-        _ => Err(other_err!("common handle not supported yet")),
-    }
+    let orders = (0..handles.len())
+        .sorted_by(|a, b| handles[*a].cmp(&handles[*b]))
+        .collect::<Vec<_>>();
+
+    Ok(SortedHandles {
+        handles,
+        orders,
+        results,
+    })
 }

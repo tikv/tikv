@@ -53,18 +53,6 @@ impl<S: Storage, F: KvFormat> BatchTableScanExecutor<S, F> {
         is_scanned_range_aware: bool,
         primary_prefix_column_ids: Vec<i64>,
     ) -> Result<Self> {
-        if config.div_precision_increment == 1 {
-            let first = &key_ranges[0];
-            let start = Key::from_raw(first.get_start());
-            let end = Key::from_raw(first.get_end());
-            warn!(
-                "key_ranges: {}, from: {:?}, to: {:?}",
-                key_ranges.len(),
-                start,
-                end
-            );
-        }
-
         let is_column_filled = vec![false; columns_info.len()];
         let mut is_key_only = true;
         let mut handle_indices = HandleIndicesVec::new();
@@ -1382,13 +1370,13 @@ mod tests {
         }
 
         let handle = datum::encode_key(&mut EvalContext::default(), &handle).unwrap();
-        let key = table::encode_common_handle_for_test(TABLE_ID, &handle);
+        let key = table::encode_common_handle(TABLE_ID, &handle);
         let value = table::encode_row(&mut EvalContext::default(), row, &column_ids).unwrap();
 
         // Constructs a range that includes the constructed key.
         let mut key_range = KeyRange::default();
-        let begin = table::encode_common_handle_for_test(TABLE_ID - 1, &handle);
-        let end = table::encode_common_handle_for_test(TABLE_ID + 1, &handle);
+        let begin = table::encode_common_handle(TABLE_ID - 1, &handle);
+        let end = table::encode_common_handle(TABLE_ID + 1, &handle);
         key_range.set_start(begin);
         key_range.set_end(end);
 
@@ -1563,13 +1551,13 @@ mod tests {
 
         let handle = datum::encode_key(&mut EvalContext::default(), &handle).unwrap();
 
-        let key = table::encode_common_handle_for_test(TABLE_ID, &handle);
+        let key = table::encode_common_handle(TABLE_ID, &handle);
         let value = table::encode_row(&mut EvalContext::default(), row, &column_ids).unwrap();
 
         // Constructs a range that includes the constructed key.
         let mut key_range = KeyRange::default();
-        let begin = table::encode_common_handle_for_test(TABLE_ID - 1, &handle);
-        let end = table::encode_common_handle_for_test(TABLE_ID + 1, &handle);
+        let begin = table::encode_common_handle(TABLE_ID - 1, &handle);
+        let end = table::encode_common_handle(TABLE_ID + 1, &handle);
         key_range.set_start(begin);
         key_range.set_end(end);
 
