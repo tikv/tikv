@@ -672,7 +672,7 @@ fn get_top_n_ranges_to_compact(
     let mut num_total_entries = 0;
     let mut num_discardable_entries = 0;
     for range in ranges.windows(2) {
-        let mut score;
+        let score;
 
         if let Some(range_stats) = engine
             .get_range_stats(CF_WRITE, &range[0], &range[1])
