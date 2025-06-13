@@ -4114,27 +4114,15 @@ def GC() -> RowPanel:
     layout.row(
         [
             graph_panel(
-                title="Check And Compact pending compactions",
-                description="The pending compactions for check and compact",
-                targets=[
-                    target(
-                        expr=expr_sum(
-                            "tikv_storage_check_and_compact_pending_compactions",
-                        ),
-                        additional_groupby=True,
-                    ),
-                ],
-            ),
-            graph_panel(
-                title="Check And Compact check duration " + OPTIONAL_QUANTILE_INPUT,
-                description="The duration of check and compact operations",
+                title="Check then Compact check duration " + OPTIONAL_QUANTILE_INPUT,
+                description="The duration of check phase",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
                 targets=[
                     target(
                         expr=expr_histogram_quantile(
                             0.99,
-                            "tikv_storage_check_and_compact_checking_duration_seconds",
-                            by_labels=["instance"],
+                            "tikv_storage_check_then_compact_duration_seconds",
+                            by_labels=["instance", "type"],
                             is_optional_quantile=True,
                         ),
                         legend_format="{{instance}}-check-duration "
@@ -4142,10 +4130,6 @@ def GC() -> RowPanel:
                     ),
                 ],
             ),
-        ]
-    )
-    layout.half_row(
-        [
             graph_panel(
                 title="MVCC stats",
                 description="MVCC stats",
