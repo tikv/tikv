@@ -2822,14 +2822,29 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
             );
             return;
         }
-        let mut all_ranges = Vec::with_capacity(meta.region_ranges.len() + 2);
-        all_ranges.push(keys::DATA_MIN_KEY.to_vec());
-        all_ranges.extend(
-            meta.region_ranges
-                .keys()
-                .map(|k| k.to_owned())
-                .collect::<Vec<_>>(),
+        let num_coarses = std::cmp::min(
+            self.ctx.cfg.check_then_compact_num_coarses as usize,
+            meta.region_ranges.len(),
         );
+
+        let mut all_ranges = Vec::with_capacity(num_coarses + 2);
+        let base = meta.region_ranges.len() / num_coarses;
+        let extra = meta.region_ranges.len() % num_coarses;
+        all_ranges.push(keys::DATA_MIN_KEY.to_vec());
+        let mut expected_size = base + if extra > 0 { 1 } else { 0 };
+        let mut count = 0;
+        let mut part = 0;
+        for (i, (key, _)) in meta.region_ranges.iter().enumerate() {
+            count += 1;
+            if count == expected_size {
+                all_ranges.push(key.to_vec());
+                count = 0;
+                part += 1;
+                if part >= extra {
+                    expected_size = base;
+                }
+            }
+        }
         all_ranges.push(keys::DATA_MAX_KEY.to_vec());
         let cf_names = vec![CF_WRITE.to_owned(), CF_DEFAULT.to_owned()];
         let finished = Arc::new(());

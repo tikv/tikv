@@ -144,6 +144,8 @@ pub struct Config {
     /// Should between 1 and 100.
     pub region_compact_redundant_rows_percent: Option<u64>,
     #[doc(hidden)]
+    pub check_then_compact_num_coarses: u64,
+    #[doc(hidden)]
     pub check_then_compact_top_n: u64,
     #[doc(hidden)]
     pub check_then_compact_bottommost: bool,
@@ -503,7 +505,8 @@ impl Default for Config {
             region_compact_tombstones_percent: 30,
             region_compact_min_redundant_rows: 50000,
             region_compact_redundant_rows_percent: Some(20),
-            check_then_compact_top_n: 10,
+            check_then_compact_num_coarses: 1000,
+            check_then_compact_top_n: 1,
             check_then_compact_bottommost: true,
             compaction_filter_enabled: true,
             pd_heartbeat_tick_interval: ReadableDuration::minutes(1),
