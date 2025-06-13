@@ -6,7 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use ordered_float::OrderedFloat;
+use ordered_float::{Float, OrderedFloat};
 
 /// Interval for updating the slow score.
 const UPDATE_INTERVALS: Duration = Duration::from_secs(10);
@@ -65,6 +65,11 @@ impl SlowScore {
         ratio_thresh: f64,
         round_ticks: u64,
     ) -> SlowScore {
+        let min_timeout_ticks = if inspect_interval.is_zero() {
+            1  
+        } else {
+            timeout_threshold.div_duration_f64(inspect_interval).ceil() as u64
+        };
         SlowScore {
             value: OrderedFloat(1.0),
 
@@ -78,7 +83,7 @@ impl SlowScore {
             last_update_time: Instant::now(),
             round_ticks,
             last_tick_id: 0,
-            min_timeout_ticks: timeout_threshold.div_duration_f64(inspect_interval) as u64,
+            min_timeout_ticks,
             uncompleted_ticks: HashSet::new(),
         }
     }

@@ -4,7 +4,9 @@ use std::fmt::Debug;
 
 #[derive(Default, Debug)]
 pub struct UnifiedDuration {
+    /// The duration of all stages of raftstore.
     pub raftstore_duration: RaftstoreDuration,
+    /// The duration of inspection to PD.
     pub network_duration: Option<std::time::Duration>,
 }
 
@@ -124,7 +126,7 @@ impl LatencyInspector {
         self.duration.raftstore_duration.apply_process_duration = Some(duration);
     }
 
-    pub fn record_network(&mut self, duration: std::time::Duration) {
+    pub fn record_network_io_duration(&mut self, duration: std::time::Duration) {
         self.duration.network_duration = Some(duration);
     }
 

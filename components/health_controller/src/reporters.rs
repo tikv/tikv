@@ -63,15 +63,15 @@ impl UnifiedSlowScore {
         let mut unified_slow_score = UnifiedSlowScore::default();
         // The first factor is for Raft Disk I/O.
         unified_slow_score.factors.push(SlowScore::new(
-            cfg.inspect_interval,
-            cfg.inspect_interval,
+            cfg.inspect_interval, /* timeout */
+            cfg.inspect_interval, /* inspect interval */
             DISK_TIMEOUT_RATIO_THRESHOLD,
             DISK_ROUND_TICKS,
         ));
         // The second factor is for KvDB Disk I/O.
         unified_slow_score.factors.push(SlowScore::new(
-            cfg.inspect_kvdb_interval,
-            cfg.inspect_kvdb_interval,
+            cfg.inspect_kvdb_interval, /* timeout */
+            cfg.inspect_kvdb_interval, /* inspect interval */
             DISK_TIMEOUT_RATIO_THRESHOLD,
             DISK_ROUND_TICKS,
         ));
@@ -94,10 +94,9 @@ impl UnifiedSlowScore {
         not_busy: bool,
     ) {
         let dur = if factor == InspectFactor::Network {
-            // For network factor, we only care about the raftstore duration.
             duration.network_duration.unwrap_or_default()
         } else {
-            // For disk factors, we care about the whole duration.
+            // For disk factors, we care about the raftstore duration.
             duration.raftstore_duration.delays_on_disk_io(false)
         };
         self.factors[factor as usize].record(id, dur, not_busy);
@@ -118,6 +117,9 @@ impl UnifiedSlowScore {
         self.factors
             .iter()
             .enumerate()
+            // the factor InspectFactor::Network is the final element when 
+            // initializing the factors list, where other factors related to 
+            // disk-io are placed ahead of it.
             .filter(|(idx, _)| *idx < InspectFactor::Network as usize)
             .map(|(_, factor)| factor.get())
             .fold(1.0, f64::max)
@@ -128,6 +130,9 @@ impl UnifiedSlowScore {
         self.factors
             .iter()
             .enumerate()
+            // the factor InspectFactor::Network is the final element when 
+            // initializing the factors list, where other factors related to 
+            // disk-io are placed ahead of it.
             .filter(|(idx, _)| *idx >= InspectFactor::Network as usize)
             .map(|(_, factor)| factor.get())
             .fold(1.0, f64::max)
