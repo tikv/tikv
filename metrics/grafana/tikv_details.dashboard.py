@@ -4110,6 +4110,58 @@ def GC() -> RowPanel:
             ),
         ]
     )
+    layout.row(
+        [
+            graph_panel(
+                title="Check And Compact pending compactions",
+                description="The pending compactions for check and compact",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_storage_check_and_compact_pending_compactions",
+                        ),
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Check And Compact check duration " + OPTIONAL_QUANTILE_INPUT,
+                description="The duration of check and compact operations",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_storage_check_and_compact_checking_duration_seconds",
+                            by_labels=["instance"],
+                            is_optional_quantile=True,
+                        ),
+                        legend_format="{{instance}}-check-duration "
+                        + OPTIONAL_QUANTILE_INPUT,
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.half_row(
+        [
+            graph_panel(
+                title="Check And Compact MVCC",
+                description="The MVCC keys handled in check and compact",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_storage_check_and_compact_num_mvcc",
+                            by_labels=["type"],
+                        ),
+                        additional_groupby=True,
+                        legend_format="{{type}}-mvcc-keys",
+                    ),
+                ],
+            ),
+        ]
+    )
+
     return layout.row_panel
 
 
