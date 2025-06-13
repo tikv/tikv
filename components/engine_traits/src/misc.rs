@@ -125,7 +125,7 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt + WriteBatchExt {
     /// memtables of the cf.
     fn get_approximate_memtable_stats_cf(&self, cf: &str, range: &Range<'_>) -> Result<(u64, u64)>;
 
-    fn ingest_maybe_slowdown_writes(&self, cf: &str) -> Result<bool>;
+    fn ingest_maybe_slowdown_writes(&self, cf: &str, sst_cnt: u64) -> Result<bool>;
 
     fn get_sst_key_ranges(&self, cf: &str, level: usize) -> Result<Vec<(Vec<u8>, Vec<u8>)>>;
 
