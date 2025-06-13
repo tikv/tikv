@@ -56,6 +56,8 @@ use resource_control::{ResourceConsumeType, ResourceController, ResourceMetered}
 use smallvec::{SmallVec, smallvec};
 use sst_importer::SstImporter;
 use tikv_alloc::trace::TraceEvent;
+#[cfg(feature = "linearizability-track")]
+use tikv_util::linearizability_track::log_apply_entries;
 use tikv_util::{
     Either, MustConsumeVec, box_err, box_try,
     config::{Tracker, VersionTrack},
@@ -70,6 +72,8 @@ use tikv_util::{
 };
 use time::Timespec;
 use tracker::{GLOBAL_TRACKERS, TrackerToken, TrackerTokenArray};
+#[cfg(feature = "linearizability-track")]
+use tracker::{PeerStateTracker, clear_tls_peer_state, set_tls_peer_state};
 use uuid::Builder as UuidBuilder;
 
 use self::memtrace::*;
@@ -4510,8 +4514,31 @@ where
                     {
                         GLOBAL_TRACKERS.with_tracker(tracker, |t| {
                             t.metrics.apply_wait_nanos = apply_wait.as_nanos() as u64;
+                            #[cfg(feature = "linearizability-track")]
+                            t.track_apply_applied();
                         });
                     }
+
+                    #[cfg(feature = "linearizability-track")]
+                    let (mut min_index, mut max_index) = (u64::MAX, 0);
+                    #[cfg(feature = "linearizability-track")]
+                    apply.entries.first().map(|cached_entries| {
+                        cached_entries.iter_entries(|entry| {
+                            let index = entry.get_index();
+                            if index < min_index {
+                                min_index = index;
+                            }
+                            if index > max_index {
+                                max_index = index;
+                            }
+                        });
+                    });
+                    #[cfg(feature = "linearizability-track")]
+                    let before_seq_no = if min_index <= max_index {
+                        Some(apply_ctx.engine.get_latest_sequence_number())
+                    } else {
+                        None
+                    };
 
                     if let Some(batch) = batch_apply.as_mut() {
                         if batch.try_batch(&mut apply) {
@@ -4527,6 +4554,13 @@ where
                             }
                         }
                     }
+
+                    #[cfg(feature = "linearizability-track")]
+                    if let Some(before_seq_no) = before_seq_no {
+                        let after_seq_no = apply_ctx.engine.get_latest_sequence_number();
+                        log_apply_entries(min_index, max_index, before_seq_no, after_seq_no);
+                    }
+
                     if !self.delegate.wait_data {
                         batch_apply = Some(apply);
                     }
@@ -4734,6 +4768,15 @@ where
     }
 
     fn handle_normal(&mut self, normal: &mut impl DerefMut<Target = ApplyFsm<EK>>) -> HandleResult {
+        #[cfg(feature = "linearizability-track")]
+        set_tls_peer_state(PeerStateTracker::new(
+            normal.delegate.region_id(),
+            normal.delegate.id(),
+            normal.delegate.term,
+            normal.delegate.apply_state.commit_index,
+            normal.delegate.apply_state.applied_index,
+        ));
+
         let mut handle_result = HandleResult::KeepProcessing;
         normal.delegate.handle_start = Some(Instant::now_coarse());
         if normal.delegate.yield_state.is_some() {
@@ -4790,6 +4833,8 @@ where
             // Let it continue to run next time.
             handle_result = HandleResult::KeepProcessing;
         }
+        #[cfg(feature = "linearizability-track")]
+        clear_tls_peer_state();
         handle_result
     }
 
