@@ -5,7 +5,6 @@ use std::{
     collections::{BinaryHeap, VecDeque},
     error::Error as StdError,
     fmt::{self, Display, Formatter},
-    simd::num,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
