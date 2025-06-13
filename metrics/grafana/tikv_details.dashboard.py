@@ -4114,14 +4114,14 @@ def GC() -> RowPanel:
     layout.half_row(
         [
             graph_panel(
-                title="Check And Compact check duration " + OPTIONAL_QUANTILE_INPUT,
+                title="Check and Compact duration " + OPTIONAL_QUANTILE_INPUT,
                 description="The duration of check and compact operations",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
                 targets=[
                     target(
                         expr=expr_histogram_quantile(
                             0.99,
-                            "tikv_storage_check_and_compact_checking_duration_seconds",
+                            "tikv_storage_check_then_compact_duration_seconds",
                             by_labels=["instance", "type"],
                             is_optional_quantile=True,
                         ),

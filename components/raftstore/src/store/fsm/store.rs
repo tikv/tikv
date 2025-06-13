@@ -2729,7 +2729,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         self.register_compact_check_tick();
         if let Some(token) = &self.fsm.check_and_compact_running_indicator {
             if token.upgrade().is_some() {
-                debug!(
+                info!(
                     "compact check is running, skip compact check";
                     "store_id" => self.fsm.store.id,
                 );
@@ -2747,56 +2747,45 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         let meta = self.ctx.store_meta.lock().unwrap();
         if meta.region_ranges.is_empty() {
             debug!(
-                "there is no range need to check";
-                "store_id" => self.fsm.store.id
+            "there is no range need to check";
+            "store_id" => self.fsm.store.id
             );
             return;
         }
-        let num_coarses = std::cmp::min(
-            self.ctx.cfg.check_then_compact_num_coarses as usize,
-            meta.region_ranges.len(),
-        );
-
-        let mut all_ranges = Vec::with_capacity(num_coarses + 2);
-        let base = meta.region_ranges.len() / num_coarses;
-        let extra = meta.region_ranges.len() % num_coarses;
+        // Divide region ranges by group_size, add DATA_MIN_KEY as first and
+        // DATA_MAX_KEY as last.
+        let group_size = std::cmp::max(1, self.ctx.cfg.check_then_compact_group_size as usize);
+        let estimated_groups = (meta.region_ranges.len() + group_size - 1) / group_size;
+        let mut all_ranges = Vec::with_capacity(estimated_groups + 1);
         all_ranges.push(keys::DATA_MIN_KEY.to_vec());
-        let mut expected_size = base + if extra > 0 { 1 } else { 0 };
-        let mut count = 0;
-        let mut part = 0;
-        for key in meta.region_ranges.keys() {
-            count += 1;
-            if count == expected_size {
-                all_ranges.push(key.to_vec());
-                count = 0;
-                part += 1;
-                if part >= extra {
-                    expected_size = base;
-                }
+
+        for (i, key) in meta.region_ranges.keys().enumerate() {
+            if (i + 1) % group_size == 0 {
+                all_ranges.push(key.clone());
             }
         }
-        all_ranges.push(keys::DATA_MAX_KEY.to_vec());
+        // If the last group has fewer members than group_size, just use DATA_MAX_KEY.
+        if meta.region_ranges.len() % group_size != 0 {
+            all_ranges.push(keys::DATA_MAX_KEY.to_vec());
+        }
         let cf_names = vec![CF_WRITE.to_owned(), CF_DEFAULT.to_owned()];
         let finished = Arc::new(());
         self.fsm.check_and_compact_running_indicator = Some(Arc::downgrade(&finished));
-        if let Err(e) =
-            self.ctx
-                .cleanup_scheduler
-                .schedule(CleanupTask::Compact(CompactTask::CompactTopN {
-                    cf_names,
-                    ranges: all_ranges,
-                    compact_threshold: CompactThreshold::new(
-                        self.ctx.cfg.region_compact_min_tombstones,
-                        self.ctx.cfg.region_compact_tombstones_percent,
-                        self.ctx.cfg.region_compact_min_redundant_rows,
-                        self.ctx.cfg.region_compact_redundant_rows_percent(),
-                    ),
-                    top_n: self.ctx.cfg.check_then_compact_top_n as usize,
-                    compaction_filter_enabled: self.ctx.cfg.compaction_filter_enabled,
-                    bottommost_level_force: self.ctx.cfg.check_then_compact_bottommost,
-                    finished,
-                }))
-        {
+        if let Err(e) = self.ctx.cleanup_scheduler.schedule(CleanupTask::Compact(
+            CompactTask::CheckThenCompactV2 {
+                cf_names,
+                ranges: all_ranges,
+                compact_threshold: CompactThreshold::new(
+                    self.ctx.cfg.region_compact_min_tombstones,
+                    self.ctx.cfg.region_compact_tombstones_percent,
+                    self.ctx.cfg.region_compact_min_redundant_rows,
+                    self.ctx.cfg.region_compact_redundant_rows_percent(),
+                ),
+                compaction_filter_enabled: self.ctx.cfg.compaction_filter_enabled,
+                bottommost_level_force: self.ctx.cfg.check_then_compact_force_bottommost_level,
+                finished,
+            },
+        )) {
             error!(
                 "schedule space check task failed";
                 "store_id" => self.fsm.store.id,
@@ -2805,6 +2794,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         }
     }
 
+    #[allow(dead_code)]
     fn on_check_and_compact_tick(&mut self) {
         self.register_compact_check_tick();
         if self.ctx.cleanup_scheduler.is_busy() {

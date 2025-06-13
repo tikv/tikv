@@ -143,14 +143,6 @@ pub struct Config {
     /// Minimum percentage of redundant rows to trigger manual compaction.
     /// Should between 1 and 100.
     pub region_compact_redundant_rows_percent: Option<u64>,
-    #[doc(hidden)]
-    pub check_then_compact_num_coarses: u64,
-    #[doc(hidden)]
-    pub check_then_compact_top_n: u64,
-    #[doc(hidden)]
-    pub check_then_compact_bottommost: bool,
-    #[doc(hidden)]
-    pub compaction_filter_enabled: bool,
     pub pd_heartbeat_tick_interval: ReadableDuration,
     pub pd_store_heartbeat_tick_interval: ReadableDuration,
     pub pd_report_min_resolved_ts_interval: ReadableDuration,
@@ -452,6 +444,24 @@ pub struct Config {
     #[doc(hidden)]
     #[online_config(hidden)]
     pub min_pending_apply_region_count: u64,
+
+    /// Controls whether RocksDB performs compaction at the bottommost level
+    /// during manual compaction operations.
+    ///
+    /// This option maps to `CompactRangeOptions::bottommost_level_compaction`
+    /// in RocksDB.
+    ///
+    /// Bottommost level compaction is expensive but necessary for space
+    /// reclamation and ensuring data is fully compacted. The default
+    /// behavior (`kIfHaveCompactionFilter`) only performs this operation when a
+    /// compaction filter is present, balancing performance and
+    /// functionality.
+    #[doc(hidden)]
+    #[online_config(hidden)]
+    pub check_then_compact_force_bottommost_level: bool,
+    #[doc(hidden)]
+    #[online_config(hidden)]
+    pub compaction_filter_enabled: bool,
 }
 
 impl Default for Config {
@@ -486,14 +496,10 @@ impl Default for Config {
             region_split_check_diff: None,
             region_compact_check_interval: ReadableDuration::minutes(5),
             region_compact_check_step: None,
-            region_compact_min_tombstones: 10000,
+            region_compact_min_tombstones: 3000,
             region_compact_tombstones_percent: 30,
-            region_compact_min_redundant_rows: 50000,
+            region_compact_min_redundant_rows: 5000,
             region_compact_redundant_rows_percent: Some(20),
-            check_then_compact_num_coarses: 1000,
-            check_then_compact_top_n: 1,
-            check_then_compact_bottommost: true,
-            compaction_filter_enabled: true,
             pd_heartbeat_tick_interval: ReadableDuration::minutes(1),
             pd_store_heartbeat_tick_interval: ReadableDuration::secs(10),
             pd_report_min_resolved_ts_interval: ReadableDuration::secs(1),
@@ -598,6 +604,12 @@ impl Default for Config {
             enable_v2_compatible_learner: false,
             unsafe_disable_check_quorum: false,
             min_pending_apply_region_count: 10,
+<<<<<<< HEAD
+=======
+            check_then_compact_force_bottommost_level: true,
+            check_then_compact_group_size: 10,
+            compaction_filter_enabled: true,
+>>>>>>> 1c749ce3b (Fix clippy)
         }
     }
 }

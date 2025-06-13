@@ -1,11 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cmp::Reverse,
-    collections::{BinaryHeap, VecDeque},
+    collections::VecDeque,
     error::Error as StdError,
     fmt::{self, Display, Formatter},
-    simd::num,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -23,9 +21,8 @@ use tikv_util::{
 use yatp::Remote;
 
 use super::metrics::{
-    CHECK_AND_COMPACT_CHECKING_DURATION, CHECK_AND_COMPACT_NUM_MVCC,
-    CHECK_AND_COMPACT_PENDING_COMPACTIONS, COMPACT_RANGE_CF, FULL_COMPACT,
-    FULL_COMPACT_INCREMENTAL, FULL_COMPACT_PAUSE,
+    CHECK_THEN_COMPACT_DURATION, COMPACT_RANGE_CF, FULL_COMPACT, FULL_COMPACT_INCREMENTAL,
+    FULL_COMPACT_PAUSE,
 };
 
 type Key = Vec<u8>;
@@ -55,15 +52,13 @@ pub enum Task {
         compact_threshold: CompactThreshold,
     },
 
-    CompactTopN {
+    CheckThenCompactV2 {
         // Column families need to compact
         cf_names: Vec<String>,
         // Ranges need to check
         ranges: Vec<Key>,
         // The minimum RocksDB tombstones/duplicate versions a range that need compacting has
         compact_threshold: CompactThreshold,
-        // Only compact the top N ranges that need compaction.
-        top_n: usize,
         compaction_filter_enabled: bool,
         bottommost_level_force: bool,
         // RAII guard to indicate the task is still running. Store FSM will hold a weak ptr to this
@@ -74,34 +69,6 @@ pub enum Task {
         // races with the compaction tasks.
         finished: Arc<()>,
     },
-}
-
-#[derive(Clone, Debug)]
-struct CompactionUnit {
-    cf_name: String,
-    start_key: Key,
-    end_key: Key,
-    score: f64,
-}
-
-impl PartialEq for CompactionUnit {
-    fn eq(&self, other: &Self) -> bool {
-        self.score == other.score
-    }
-}
-
-impl Eq for CompactionUnit {}
-
-impl PartialOrd for CompactionUnit {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.score.partial_cmp(&other.score).unwrap())
-    }
-}
-
-impl Ord for CompactionUnit {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.partial_cmp(other).unwrap()
-    }
 }
 
 type CompactPredicateFn = Box<dyn Fn() -> bool + Send + Sync>;
@@ -256,17 +223,15 @@ impl Display for Task {
                     &compact_threshold.redundant_rows_percent_threshold,
                 )
                 .finish(),
-            Task::CompactTopN {
+            Task::CheckThenCompactV2 {
                 ref cf_names,
-                ranges: _,
                 ref compact_threshold,
-                top_n,
-                bottommost_level_force,
-                compaction_filter_enabled,
-                finished: _,
+                ref compaction_filter_enabled,
+                ref bottommost_level_force,
+                ..
             } => f
-                .debug_struct("CompactTopN")
-                .field("cf_names", cf_names)
+                .debug_struct("CheckThenCompactV2")
+                .field("cf_names", &cf_names)
                 .field(
                     "tombstones_num_threshold",
                     &compact_threshold.tombstones_num_threshold,
@@ -283,7 +248,6 @@ impl Display for Task {
                     "redundant_rows_percent_threshold",
                     &compact_threshold.redundant_rows_percent_threshold,
                 )
-                .field("top_n", &top_n)
                 .field("compaction_filter_enabled", &compaction_filter_enabled)
                 .field("bottommost_level_force", &bottommost_level_force)
                 .finish(),
@@ -489,48 +453,51 @@ where
                 }
                 Err(e) => warn!("check ranges need reclaim failed"; "err" => %e),
             },
-            Task::CompactTopN {
+            Task::CheckThenCompactV2 {
                 cf_names,
                 ranges,
                 compact_threshold,
-                top_n,
                 compaction_filter_enabled,
                 bottommost_level_force,
                 finished: _,
             } => {
-                match get_top_n_ranges_to_compact(
+                match select_compaction_candidate(
                     &self.engine,
                     ranges,
                     compact_threshold,
-                    top_n,
                     compaction_filter_enabled,
                 ) {
-                    Ok(top_n_ranges) => {
-                        let mut remaining_tasks = top_n_ranges.len();
-                        CHECK_AND_COMPACT_PENDING_COMPACTIONS.set(remaining_tasks as i64);
-                        for compaction_unit in top_n_ranges {
-                            let start = compaction_unit.start_key;
-                            let end = compaction_unit.end_key;
-
-                            for cf in &cf_names {
-                                if let Err(e) = self.compact_range_cf(
-                                    cf,
-                                    Some(&start),
-                                    Some(&end),
-                                    bottommost_level_force,
-                                ) {
-                                    error!(
-                                        "compact range failed";
-                                        "range_start" => log_wrappers::Value::key(&start),
-                                        "range_end" => log_wrappers::Value::key(&end),
-                                        "cf" => cf,
-                                        "err" => %e,
-                                    );
-                                }
+                    Ok(Some((start, end, range_stats))) => {
+                        info!("check_then_compact found a range to compact";
+                            "num_entries" => range_stats.num_entries,
+                            "num_versions" => range_stats.num_versions,
+                            "num_rows" => range_stats.num_rows,
+                            "num_deletes" => range_stats.num_deletes,
+                        );
+                        let start_time = Instant::now_coarse();
+                        for cf in &cf_names {
+                            if let Err(e) = self.compact_range_cf(
+                                cf,
+                                Some(&start),
+                                Some(&end),
+                                bottommost_level_force,
+                            ) {
+                                error!(
+                                    "compact range failed";
+                                    "range_start" => log_wrappers::Value::key(&start),
+                                    "range_end" => log_wrappers::Value::key(&end),
+                                    "cf" => cf,
+                                    "err" => %e,
+                                );
                             }
-                            remaining_tasks -= 1;
-                            CHECK_AND_COMPACT_PENDING_COMPACTIONS.set(remaining_tasks as i64);
                         }
+                        CHECK_THEN_COMPACT_DURATION
+                            .with_label_values(&["compaction"])
+                            .observe(start_time.saturating_elapsed_secs());
+                    }
+                    Ok(None) => {
+                        // No ranges need compacting.
+                        info!("no ranges need compacting");
                     }
                     Err(e) => {
                         error!("get top n ranges to compact failed"; "err" => %e);
@@ -618,6 +585,9 @@ fn get_compact_score(
     }
 
     let mut num_discardable = range_stats.num_entries - range_stats.num_versions;
+    if num_discardable < compact_threshold.tombstones_num_threshold && !compaction_filter_enabled {
+        return 0.0;
+    }
     if compaction_filter_enabled {
         num_discardable += range_stats.redundant_keys();
     }
@@ -630,77 +600,44 @@ fn get_compact_score(
         return 0.0;
     }
 
-    discardable_ratio
+    // To prioritize compaction candidates using both:
+    // 1.	Redundant key count (R)
+    // 2.	Redundancy ratio (S = R / total_keys)
+    // priority = R^a * S^b
+    // where a and b are constants that can be tuned.
+    // Here we use a = 1 and b = 1
+    discardable_ratio * num_discardable as f64
 }
 
-fn get_top_n_ranges_to_compact(
+fn select_compaction_candidate(
     engine: &impl KvEngine,
     ranges: Vec<Key>,
     compact_threshold: CompactThreshold,
-    top_n: usize,
     compaction_filter_enabled: bool,
-) -> Result<Vec<CompactionUnit>, Error> {
-    let check_duration = CHECK_AND_COMPACT_CHECKING_DURATION.start_coarse_timer();
-    let mut heap = BinaryHeap::new();
-    let mut num_total_entries = 0;
-    let mut num_discardable_entries = 0;
+) -> Result<Option<(Key, Key, RangeStats)>, Error> {
+    let check_duration = Instant::now_coarse();
+    let mut candidates = None;
+    let mut highest_score = 0.0;
     for range in ranges.windows(2) {
-        let score;
-
         if let Some(range_stats) = engine
             .get_range_stats(CF_WRITE, &range[0], &range[1])
             .map_err(|e| Error::Other(Box::new(e)))?
         {
-            score = get_compact_score(&range_stats, &compact_threshold, compaction_filter_enabled);
-            num_total_entries += range_stats.num_entries;
-            num_discardable_entries += range_stats.num_entries - range_stats.num_versions;
-            if compaction_filter_enabled {
-                num_discardable_entries += range_stats.redundant_keys();
+            let score =
+                get_compact_score(&range_stats, &compact_threshold, compaction_filter_enabled);
+            if score > highest_score {
+                highest_score = score;
+                candidates = Some((range[0].clone(), range[1].clone(), range_stats));
             }
         } else {
             // Empty range, skip it.
             continue;
         }
-
-        if score <= 0.0
-            || score
-                < heap
-                    .peek()
-                    .map_or(0.0, |e: &Reverse<CompactionUnit>| e.0.score)
-        {
-            continue;
-        }
-
-        // Create a new compaction unit.
-        let compaction_unit = CompactionUnit {
-            cf_name: CF_WRITE.to_string(),
-            start_key: range[0].clone(),
-            end_key: range[1].clone(),
-            score,
-        };
-
-        // Push the compaction unit into the min-heap.
-        heap.push(Reverse(compaction_unit));
-        if heap.len() > top_n {
-            // If the heap size exceeds the top N, pop the smallest element.
-            heap.pop();
-        }
     }
-    check_duration.observe_duration();
-    CHECK_AND_COMPACT_NUM_MVCC
-        .with_label_values(&["total"])
-        .set(num_total_entries as i64);
-    CHECK_AND_COMPACT_NUM_MVCC
-        .with_label_values(&["discardable"])
-        .set(num_discardable_entries as i64);
-    let mut sorted_vec: Vec<_> = heap
-        .into_sorted_vec()
-        .into_iter()
-        .map(|Reverse(compaction_unit)| compaction_unit)
-        .collect();
-    sorted_vec.reverse();
-
-    Ok(sorted_vec)
+    CHECK_THEN_COMPACT_DURATION
+        .with_label_values(&["check"])
+        .observe(check_duration.saturating_elapsed_secs());
+    Ok(candidates)
 }
 
 #[cfg(test)]
