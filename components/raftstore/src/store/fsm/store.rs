@@ -2764,7 +2764,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         let mut expected_size = base + if extra > 0 { 1 } else { 0 };
         let mut count = 0;
         let mut part = 0;
-        for (i, (key, _)) in meta.region_ranges.iter().enumerate() {
+        for key in meta.region_ranges.keys() {
             count += 1;
             if count == expected_size {
                 all_ranges.push(key.to_vec());
