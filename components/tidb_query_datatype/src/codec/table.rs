@@ -10,11 +10,11 @@ use tikv_util::codec::BytesSlice;
 use tipb::ColumnInfo;
 
 use super::{
-    Datum, Error, Result, datum,
-    datum::DatumDecoder,
-    mysql::{Duration, Time},
+    datum, datum::DatumDecoder, mysql::{Duration, Time}, Datum,
+    Error,
+    Result,
 };
-use crate::{FieldTypeTp, expr::EvalContext, prelude::*};
+use crate::{expr::EvalContext, prelude::*, FieldTypeTp};
 
 // handle or index id
 pub const ID_LEN: usize = 8;
@@ -182,7 +182,7 @@ pub fn encode_row_key(table_id: i64, handle: i64) -> Vec<u8> {
     key
 }
 
-pub fn encode_common_handle_for_test(table_id: i64, handle: &[u8]) -> Vec<u8> {
+pub fn encode_common_handle(table_id: i64, handle: &[u8]) -> Vec<u8> {
     let mut key = Vec::with_capacity(PREFIX_LEN + handle.len());
     key.append_table_record_prefix(table_id).unwrap();
     key.extend(handle);
