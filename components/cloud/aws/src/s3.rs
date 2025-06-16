@@ -209,7 +209,17 @@ impl S3Storage {
                 (*access_key_pair.secret_access_key).to_owned(),
             );
             // a 10ms wait time to create credential, like IAM Role in aws
-            std::thread::sleep(std::time::Duration::from_millis(10));
+            #[cfg(feature = "failpoints")]
+            {
+                let delay_duration = (|| {
+                    fail_point!("s3_cred_sleep_injected", |t| {
+                        let t = t.unwrap().parse::<u64>().unwrap();
+                        std::time::Duration::from_millis(t)
+                    });
+                    std::time::Duration::from_millis(5)
+                })();
+                std::thread::sleep(delay_duration);
+            }
             Self::new_creds_dispatcher(config, dispatcher, cred_provider)
         } else {
             let cred_provider = util::CredentialsProvider::new()?;
