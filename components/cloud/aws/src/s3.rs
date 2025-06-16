@@ -211,13 +211,23 @@ impl S3Storage {
             // a 10ms wait time to create credential, like IAM Role in aws
             #[cfg(feature = "failpoints")]
             {
+                use rand::thread_rng;
+                use rand_distr::{Distribution, LogNormal};
+
                 let delay_duration = (|| {
                     fail_point!("s3_cred_sleep_injected", |t| {
                         let t = t.unwrap().parse::<u64>().unwrap();
                         std::time::Duration::from_millis(t)
                     });
-                    std::time::Duration::from_millis(5)
+
+                    // Log-normal delay: median ≈ 10ms, std_dev ≈ 5ms
+                    let mu = (10.0_f64).ln(); // ln(median)
+                    let sigma = 0.4; // adjust to get reasonable spread; higher = more variance
+                    let dist = LogNormal::new(mu, sigma).unwrap();
+                    let delay_ms = dist.sample(&mut thread_rng()).min(40.0); // Cap max delay to 100ms for safety
+                    std::time::Duration::from_millis(delay_ms as u64)
                 })();
+
                 std::thread::sleep(delay_duration);
             }
             Self::new_creds_dispatcher(config, dispatcher, cred_provider)
