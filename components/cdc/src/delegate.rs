@@ -31,7 +31,12 @@ use raftstore::{
     store::util::compare_region_epoch,
 };
 use tikv::storage::{Statistics, txn::TxnEntry};
-use tikv_util::{debug, error, info, memory::{HeapSize, MemoryQuota}, time::Instant, warn};
+use tikv_util::{
+    debug, error, info,
+    memory::{HeapSize, MemoryQuota},
+    time::Instant,
+    warn,
+};
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, WriteType};
 
 use crate::{
