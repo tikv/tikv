@@ -12,7 +12,9 @@ mod all {
         time::{Duration, Instant},
     };
 
-    use backup_stream::{GetCheckpointResult, RegionCheckpointOperation, RegionSet, Task};
+    use backup_stream::{
+        router::TaskSelector, GetCheckpointResult, RegionCheckpointOperation, RegionSet, Task,
+    };
     use futures::{Stream, StreamExt};
     use kvproto::metapb::RegionEpoch;
     use pd_client::PdClient;
