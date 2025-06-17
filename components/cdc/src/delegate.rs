@@ -31,12 +31,7 @@ use raftstore::{
     store::util::compare_region_epoch,
 };
 use tikv::storage::{Statistics, txn::TxnEntry};
-use tikv_util::{
-    debug, info,
-    memory::{HeapSize, MemoryQuota},
-    time::Instant,
-    warn,
-};
+use tikv_util::{debug, error, info, memory::{HeapSize, MemoryQuota}, time::Instant, warn};
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, WriteType};
 
 use crate::{
@@ -369,8 +364,15 @@ impl Delegate {
                 CDC_PENDING_BYTES_GAUGE.add(bytes as _);
                 locks.push(PendingLock::Track { key, start_ts });
             }
-            LockTracker::Prepared { locks, .. } => match locks.entry(key) {
+            LockTracker::Prepared { locks, .. } => match locks.entry(key.clone()) {
                 BTreeMapEntry::Occupied(mut x) => {
+                    if x.get().ts != start_ts.ts {
+                        error!("duplicate lock with different start_ts";
+                            "region_id" => self.region_id,
+                            "key" => ?key,
+                            "old_start_ts" => ?x.get().ts,
+                            "new_start_ts" => ?start_ts.ts);
+                    }
                     assert!(x.get().generation <= start_ts.generation);
                     x.get_mut().generation = start_ts.generation;
                 }
