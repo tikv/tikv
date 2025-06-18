@@ -29,6 +29,14 @@ pub fn set_prof_sample(_rate: u64) -> ProfResult<()> {
     Err(ProfError::MemProfilingNotEnabled)
 }
 
+pub fn get_arena_count() -> u32 {
+    0
+}
+
+pub fn set_thread_exclusive_arena(_enable: bool) {
+    // Do nothing
+}
+
 pub fn is_profiling_active() -> bool {
     false
 }
@@ -42,3 +50,9 @@ pub unsafe fn add_thread_memory_accessor() {}
 pub fn remove_thread_memory_accessor() {}
 
 pub fn iterate_thread_allocation_stats(_f: impl FnMut(&str, u64, u64)) {}
+
+pub fn iterate_arena_allocation_stats(_f: impl FnMut(&str, u64, u64, u64)) {}
+
+pub fn thread_allocate_exclusive_arena() -> ProfResult<()> {
+    Ok(())
+}
