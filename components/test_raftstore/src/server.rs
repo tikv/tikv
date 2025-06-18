@@ -658,7 +658,7 @@ impl ServerCluster {
         let pessimistic_txn_cfg = cfg.tikv.pessimistic_txn;
 
         let split_check_runner = SplitCheckRunner::new(
-            None,
+            Some(store_meta.clone()),
             engines.kv.clone(),
             router.clone(),
             coprocessor_host.clone(),

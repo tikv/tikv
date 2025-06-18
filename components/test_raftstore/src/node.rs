@@ -327,7 +327,7 @@ impl Simulator for NodeCluster {
         let cfg_controller = ConfigController::new(cfg.tikv.clone());
 
         let split_check_runner = SplitCheckRunner::new(
-            None,
+            Some(store_meta.clone()),
             engines.kv.clone(),
             router.clone(),
             coprocessor_host.clone(),

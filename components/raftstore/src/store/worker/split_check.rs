@@ -908,20 +908,6 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
     }
 
     fn on_compaction_finished(&self, event: EK::CompactedEvent, region_split_check_diff: u64) {
-        // Mock test case: When store_meta is None (indicating this is a test
-        // environment), we simulate updating compaction declined bytes for
-        // testing purposes. This allows us to test the compaction event
-        // handling without requiring a full store setup with actual region
-        // metadata.
-        #[cfg(test)]
-        {
-            // Assert that we're in a test environment where store_meta is None
-            assert!(self.store_meta.is_none());
-            // Mock the router call to update compaction declined bytes for region ID 1
-            // This simulates the real behavior without needing actual region data
-            self.router
-                .update_compaction_declined_bytes(1, region_split_check_diff);
-        }
         if self.store_meta.is_none() || event.is_size_declining_trivial(region_split_check_diff) {
             return;
         }
@@ -946,12 +932,10 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             .with_label_values(&[&output_level_str])
             .observe(region_declined_bytes.len() as f64);
 
-        let _ = region_declined_bytes
-            .drain(..)
-            .map(|(region_id, declined_bytes)| {
-                self.router
-                    .update_compaction_declined_bytes(region_id, declined_bytes)
-            });
+        for (region_id, declined_bytes) in region_declined_bytes.drain(..) {
+            self.router
+                .update_compaction_declined_bytes(region_id, declined_bytes);
+        }
     }
 
     fn change_cfg(&mut self, change: ConfigChange) {

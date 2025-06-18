@@ -532,35 +532,6 @@ pub mod tests {
             ],
         );
 
-        // Mock compaction finished
-        {
-            use engine_rocks::{RangeOffsets, RangeProperties, RocksCompactedEvent};
-
-            let prop = RangeProperties {
-                offsets: vec![(
-                    b"0001".to_vec(),
-                    RangeOffsets {
-                        size: 4 * 1024,
-                        keys: 1,
-                    },
-                )],
-            };
-            let event = RocksCompactedEvent {
-                cf: "default".to_owned(),
-                output_level: 3,
-                total_input_bytes: 4 * 1024,
-                total_output_bytes: 0,
-                start_key: prop.smallest_key().unwrap(),
-                end_key: prop.largest_key().unwrap(),
-                input_props: vec![prop],
-                output_props: vec![],
-            };
-            runnable.run(SplitCheckTask::CompactedEvent {
-                event,
-                region_split_check_diff: 1024,
-            });
-        }
-
         drop(rx);
         // It should be safe even the result can't be sent back.
         runnable.run(SplitCheckTask::split_check(
