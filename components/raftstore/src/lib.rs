@@ -21,6 +21,8 @@ pub mod router;
 pub mod store;
 #[cfg(feature = "engine_rocks")]
 pub use self::compacted_event_sender::RaftRouterCompactedEventSender;
+#[cfg(feature = "engine_rocks")]
+pub use self::compacted_event_sender::RaftRouterStatsChangeEventSender;
 pub use self::{
     coprocessor::{RegionInfo, RegionInfoAccessor, SeekRegionCallback},
     errors::{DiscardReason, Error, Result},

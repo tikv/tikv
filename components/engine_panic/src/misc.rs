@@ -123,6 +123,10 @@ impl MiscExt for PanicEngine {
         panic!()
     }
 
+    fn get_whole_range_stats(&self, cf: &str) -> Result<RangeStats> {
+        panic!()
+    }
+
     fn is_stalled_or_stopped(&self) -> bool {
         panic!()
     }

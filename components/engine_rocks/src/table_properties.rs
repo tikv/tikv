@@ -74,4 +74,14 @@ impl RocksEngine {
         let range = Range::new(start_key, end_key);
         self.get_properties_of_tables_in_range(cfname, &[range])
     }
+
+    pub fn get_properties_of_all_tables_cf(
+        &self,
+        cf: &str,
+    ) -> Result<rocksdb::TablePropertiesCollection> {
+        let cf = util::get_cf_handle(self.as_inner(), cf)?;
+        self.as_inner()
+            .get_properties_of_all_tables_cf(cf)
+            .map_err(r2e)
+    }
 }

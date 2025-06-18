@@ -39,6 +39,10 @@ pub enum Task {
         bottommost_level_force: bool, // Whether force the bottommost level to compact
     },
 
+    CollectWholeRangeMVCCStats {
+        callback: Box<dyn FnOnce(RangeStats) + Send>,
+    },
+
     CheckAndCompact {
         // Column families need to compact
         cf_names: Vec<String>,
@@ -46,6 +50,7 @@ pub enum Task {
         ranges: Vec<Key>,
         // The minimum RocksDB tombstones/duplicate versions a range that need compacting has
         compact_threshold: CompactThreshold,
+        force_bottommost_level: bool,
     },
 }
 
@@ -170,10 +175,14 @@ impl Display for Task {
                 )
                 .field("bottommost_level_force", bottommost_level_force)
                 .finish(),
+            Task::CollectWholeRangeMVCCStats { .. } => {
+                f.debug_struct("CollectWholeRangeMVCCStats").finish()
+            }
             Task::CheckAndCompact {
                 ref cf_names,
                 ref ranges,
                 ref compact_threshold,
+                ref force_bottommost_level,
             } => f
                 .debug_struct("CheckAndCompact")
                 .field("cf_names", cf_names)
@@ -200,6 +209,10 @@ impl Display for Task {
                     "redundant_rows_percent_threshold",
                     &compact_threshold.redundant_rows_percent_threshold,
                 )
+                .field(
+                    "check_then_compact_force_bottommost_level",
+                    &force_bottommost_level,
+                )
                 .finish(),
         }
     }
@@ -211,16 +224,16 @@ pub enum Error {
     Other(#[from] Box<dyn StdError + Sync + Send>),
 }
 
-pub struct Runner<E> {
-    engine: E,
+pub struct Runner<EK: KvEngine> {
+    engine: EK,
     remote: Remote<yatp::task::future::TaskCell>,
 }
 
-impl<E> Runner<E>
+impl<EK> Runner<EK>
 where
-    E: KvEngine,
+    EK: KvEngine,
 {
-    pub fn new(engine: E, remote: Remote<yatp::task::future::TaskCell>) -> Runner<E> {
+    pub fn new(engine: EK, remote: Remote<yatp::task::future::TaskCell>) -> Runner<EK> {
         Runner { engine, remote }
     }
 
@@ -231,7 +244,7 @@ where
     ///
     /// TODO: Support stopping a full compaction.
     async fn full_compact(
-        engine: E,
+        engine: EK,
         ranges: Vec<(Key, Key)>,
         compact_controller: FullCompactController,
     ) -> Result<(), Error> {
@@ -331,9 +344,9 @@ where
     }
 }
 
-impl<E> Runnable for Runner<E>
+impl<EK> Runnable for Runner<EK>
 where
-    E: KvEngine,
+    EK: KvEngine,
 {
     type Task = Task;
 
@@ -378,17 +391,31 @@ where
                     error!("execute compact range failed"; "cf" => cf, "err" => %e);
                 }
             }
+            Task::CollectWholeRangeMVCCStats { callback } => {
+                match self.engine.get_whole_range_stats(CF_WRITE) {
+                    Ok(mvcc_stats) => {
+                        callback(mvcc_stats);
+                    }
+                    Err(e) => {
+                        error!("collect whole range MVCC stats failed"; "err" => %e);
+                    }
+                }
+            }
             Task::CheckAndCompact {
                 cf_names,
                 ranges,
                 compact_threshold,
+                force_bottommost_level,
             } => match collect_ranges_need_compact(&self.engine, ranges, compact_threshold) {
                 Ok(mut ranges) => {
                     for (start, end) in ranges.drain(..) {
                         for cf in &cf_names {
-                            if let Err(e) =
-                                self.compact_range_cf(cf, Some(&start), Some(&end), false)
-                            {
+                            if let Err(e) = self.compact_range_cf(
+                                cf,
+                                Some(&start),
+                                Some(&end),
+                                force_bottommost_level,
+                            ) {
                                 error!(
                                     "compact range failed";
                                     "range_start" => log_wrappers::Value::key(&start),
