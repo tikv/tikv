@@ -1006,8 +1006,7 @@ mod tests {
         let result = StoreMsg::<RocksEngine>::VARIANTS
             .iter()
             .zip(distribution)
-            .filter(|(_, c)| *c > 0)
-            .next()
+            .find(|(_, c)| *c > 0)
             .unwrap();
         assert_eq!(result.1, unreachable_msg.discriminant());
         assert_eq!(*result.0, "StoreUnreachable");
