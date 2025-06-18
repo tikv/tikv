@@ -6,14 +6,13 @@ use std::sync::Arc;
 use std::{borrow::Cow, fmt};
 
 use collections::HashSet;
-use engine_traits::{CompactedEvent, KvEngine, Snapshot};
+use engine_traits::{CompactedEvent, KvEngine, RangeStats, Snapshot, StatsChangeEvent};
 use futures::channel::mpsc::UnboundedSender;
 use health_controller::types::{InspectFactor, LatencyInspector};
 use kvproto::{
     brpb::CheckAdminResponse,
     kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp},
-    metapb,
-    metapb::{Region, RegionEpoch},
+    metapb::{self, Region, RegionEpoch},
     pdpb::{self, CheckPolicy},
     raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
     raft_serverpb::RaftMessage,
@@ -981,6 +980,12 @@ where
         region_ids: Vec<u64>,
     },
 
+    DoneCollectWholeRangeMVCCStats {
+        mvcc_stats: RangeStats,
+    },
+
+    StatsChangeEvent(EK::StatsChangeEvent),
+
     /// Message only used for test.
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&crate::store::Config) + Send>),
@@ -1016,6 +1021,10 @@ where
             }
             StoreMsg::GcSnapshotFinish => write!(fmt, "GcSnapshotFinish"),
             StoreMsg::AwakenRegions { .. } => write!(fmt, "AwakenRegions"),
+            StoreMsg::DoneCollectWholeRangeMVCCStats { .. } => {
+                write!(fmt, "CollectWholeRangeMVCCStats")
+            }
+            StoreMsg::StatsChangeEvent(event) => write!(fmt, "StatsChangeEvent {:?}", event.cf()),
             #[cfg(any(test, feature = "testexport"))]
             StoreMsg::Validate(_) => write!(fmt, "Validate config"),
         }
@@ -1037,8 +1046,10 @@ impl<EK: KvEngine> StoreMsg<EK> {
             StoreMsg::UnsafeRecoveryCreatePeer { .. } => 9,
             StoreMsg::GcSnapshotFinish => 10,
             StoreMsg::AwakenRegions { .. } => 11,
+            StoreMsg::DoneCollectWholeRangeMVCCStats { .. } => 12,
+            StoreMsg::StatsChangeEvent(_) => 13,
             #[cfg(any(test, feature = "testexport"))]
-            StoreMsg::Validate(_) => 12, // Please keep this always be the last one.
+            StoreMsg::Validate(_) => 14, // Please keep this always be the last one.
         }
     }
 }

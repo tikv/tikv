@@ -4,7 +4,7 @@ use std::cmp;
 
 use txn_types::TimeStamp;
 
-use crate::TtlProperties;
+use crate::{RangeStats, TtlProperties};
 
 #[derive(Clone, Debug)]
 pub struct MvccProperties {
@@ -51,6 +51,8 @@ impl Default for MvccProperties {
 }
 
 pub trait MvccPropertiesExt {
+    type StatsChangeEvent: StatsChangeEvent;
+
     fn get_mvcc_properties_cf(
         &self,
         cf: &str,
@@ -58,4 +60,10 @@ pub trait MvccPropertiesExt {
         start_key: &[u8],
         end_key: &[u8],
     ) -> Option<MvccProperties>;
+}
+
+pub trait StatsChangeEvent: Send {
+    fn cf(&self) -> &str;
+    fn get_input_range_stats(&self) -> Option<&RangeStats>;
+    fn get_output_range_stats(&self) -> Option<&RangeStats>;
 }

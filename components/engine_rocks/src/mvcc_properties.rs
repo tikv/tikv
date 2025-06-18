@@ -3,7 +3,10 @@
 use engine_traits::{MvccProperties, MvccPropertiesExt, Result};
 use txn_types::TimeStamp;
 
-use crate::{RocksEngine, RocksTtlProperties, UserProperties, decode_properties::DecodeProperties};
+use crate::{
+    RocksEngine, RocksStatsChangeEvent, RocksTtlProperties, UserProperties,
+    decode_properties::DecodeProperties,
+};
 
 pub const PROP_NUM_ERRORS: &str = "tikv.num_errors";
 pub const PROP_MIN_TS: &str = "tikv.min_ts";
@@ -50,6 +53,7 @@ impl RocksMvccProperties {
 }
 
 impl MvccPropertiesExt for RocksEngine {
+    type StatsChangeEvent = RocksStatsChangeEvent;
     fn get_mvcc_properties_cf(
         &self,
         cf: &str,

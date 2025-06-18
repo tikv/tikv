@@ -24,7 +24,8 @@ use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::{
     CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DeleteStrategy, Engines, KvEngine, Mutable,
-    PerfContextKind, RaftEngine, RaftLogBatch, Range, WriteBatch, WriteOptions,
+    PerfContextKind, RaftEngine, RaftLogBatch, Range, RangeStats, StatsChangeEvent, WriteBatch,
+    WriteOptions,
 };
 use fail::fail_point;
 use file_system::{IoType, WithIoType};
@@ -741,6 +742,7 @@ struct Store {
     start_time: Option<Timespec>,
     consistency_check_time: HashMap<u64, Instant>,
     store_reachability: HashMap<u64, StoreReachability>,
+    mvcc_stats: Option<RangeStats>,
 }
 
 struct StoreReachability {
@@ -770,6 +772,7 @@ where
                 start_time: None,
                 consistency_check_time: HashMap::default(),
                 store_reachability: HashMap::default(),
+                mvcc_stats: None,
             },
             receiver: rx,
         });
@@ -921,6 +924,22 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 } => {
                     self.on_wake_up_regions(abnormal_stores, region_ids);
                 }
+                StoreMsg::DoneCollectWholeRangeMVCCStats { mvcc_stats } => {
+                    self.fsm.store.mvcc_stats = Some(mvcc_stats);
+                    self.update_mvcc_stats_metrics();
+                }
+                StoreMsg::StatsChangeEvent(event) => {
+                    assert!(event.cf() == CF_WRITE);
+                    if let Some(mvcc_stats) = self.fsm.store.mvcc_stats.as_mut() {
+                        if let Some(input) = event.get_input_range_stats() {
+                            mvcc_stats.sub(input);
+                        }
+                        if let Some(output) = event.get_output_range_stats() {
+                            mvcc_stats.add(output);
+                        }
+                    }
+                    self.update_mvcc_stats_metrics();
+                }
             }
         }
         slow_log!(
@@ -956,6 +975,23 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
         self.register_compact_lock_cf_tick();
         self.register_snap_mgr_gc_tick();
         self.register_consistency_check_tick();
+    }
+
+    fn update_mvcc_stats_metrics(&self) {
+        if let Some(mvcc_stats) = &self.fsm.store.mvcc_stats {
+            STORE_MVCC_STATS_GAUGE_VEC
+                .with_label_values(&["total_rocksdb_entries"])
+                .set(mvcc_stats.num_entries as i64);
+            STORE_MVCC_STATS_GAUGE_VEC
+                .with_label_values(&["total_tikv_entries"])
+                .set(mvcc_stats.num_versions as i64);
+            STORE_MVCC_STATS_GAUGE_VEC
+                .with_label_values(&["total_tikv_rows"])
+                .set(mvcc_stats.num_rows as i64);
+            STORE_MVCC_STATS_GAUGE_VEC
+                .with_label_values(&["total_tikv_deleted_rows"])
+                .set(mvcc_stats.num_deletes as i64);
+        }
     }
 }
 
@@ -1812,6 +1848,20 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let cleanup_scheduler: Scheduler<CleanupTask> = workers
             .cleanup_worker
             .start("cleanup-worker", cleanup_runner);
+        let router_for_cb = self.router.clone();
+        if let Err(e) = cleanup_scheduler.schedule(CleanupTask::Compact(
+            CompactTask::CollectWholeRangeMVCCStats {
+                callback: Box::new(move |mvcc_stats| {
+                    if let Err(e) = router_for_cb
+                        .send_control(StoreMsg::DoneCollectWholeRangeMVCCStats { mvcc_stats })
+                    {
+                        error!("failed to send compact range stats"; "err" => ?e);
+                    }
+                }),
+            },
+        )) {
+            error!("failed to schedule collect whole range MVCC stats"; "err" => ?e);
+        }
         let consistency_check_runner =
             ConsistencyCheckRunner::<EK, _>::new(self.router.clone(), coprocessor_host.clone());
         let consistency_check_scheduler = workers
@@ -2803,6 +2853,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
                     self.ctx.cfg.region_compact_min_redundant_rows,
                     self.ctx.cfg.region_compact_redundant_rows_percent(),
                 ),
+                force_bottommost_level: self.ctx.cfg.check_then_compact_force_bottommost_level,
             },
         )) {
             error!(

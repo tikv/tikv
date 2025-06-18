@@ -6,7 +6,7 @@ use encryption_export::DataKeyManager;
 use engine_rocks::{
     CompactedEventSender, CompactionListener, FlowListener, RocksCfOptions, RocksCompactionJobInfo,
     RocksDbOptions, RocksEngine, RocksEventListener, RocksPersistenceListener, RocksStatistics,
-    TabletLogger,
+    RocksStatsChangeEventSender, TabletLogger,
     raw::{Cache, Env},
     util::RangeCompactionFilterFactory,
 };
@@ -34,6 +34,7 @@ struct FactoryInner {
     cf_resources: CfResources,
     state_storage: Option<Arc<dyn StateStorage>>,
     lite: bool,
+    stats_change_event_sender: Option<Arc<dyn RocksStatsChangeEventSender + Send + Sync>>,
 }
 
 pub struct KvEngineFactoryBuilder {
@@ -60,6 +61,7 @@ impl KvEngineFactoryBuilder {
                 cf_resources: config.rocksdb.build_cf_resources(cache),
                 state_storage: None,
                 lite: false,
+                stats_change_event_sender: None,
             },
             compact_event_sender: None,
         }
@@ -85,6 +87,14 @@ impl KvEngineFactoryBuilder {
         sender: Arc<dyn CompactedEventSender + Send + Sync>,
     ) -> Self {
         self.compact_event_sender = Some(sender);
+        self
+    }
+
+    pub fn stats_change_event_sender(
+        mut self,
+        sender: Arc<dyn RocksStatsChangeEventSender + Send + Sync>,
+    ) -> Self {
+        self.inner.stats_change_event_sender = Some(sender);
         self
     }
 
@@ -154,6 +164,7 @@ impl KvEngineFactory {
             db_opts.add_event_listener(RocksEventListener::new(
                 "kv",
                 self.inner.sst_recovery_sender.clone(),
+                self.inner.stats_change_event_sender.clone(),
             ));
             if let Some(filter) = self.create_raftstore_compaction_listener() {
                 db_opts.add_event_listener(filter);

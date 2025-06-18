@@ -4111,6 +4111,25 @@ def GC() -> RowPanel:
             ),
         ]
     )
+    layout.half_row(
+        [
+            graph_panel(
+                title="MVCC stats",
+                description="MVCC stats",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_mvcc_stats",
+                            by_labels=["type"],
+                        ),
+                        additional_groupby=True,
+                        legend_format="{{type}}",
+                    ),
+                ],
+            ),
+        ]
+    )
     return layout.row_panel
 
 

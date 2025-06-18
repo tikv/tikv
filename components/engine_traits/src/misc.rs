@@ -61,11 +61,23 @@ pub trait StatisticsReporter<T: ?Sized> {
     fn flush(&mut self);
 }
 
+/// RocksDB example:
+/// lv0: f5: [{k1_t6, delete: ()}]
+/// lv1: f4: [{k1_t10, put: v13}, {k2_t11, put: tombstone}, {k3_t12, put: v32}]
+/// ...
+/// lv5: f3: [{k2_t8, put: v21}], f2: [{k3_t9, put: v31}]
+/// lv6: f1: [{k1_t6, put: v11}, {k1_t7, put: v12}]
+/// The range stats for the range [k1, k3] will be:
+/// num_entries: 8
+/// num_versions: 7 (all entries except k1_t6 RocksDB delete entry)
+/// num_rows: 6 (f4: 3 + f3: 1 + f2: 1 + f1: 1, k1_t6 is masked by k1_t7)
+/// num_deletes: 1 (k2 in f4)
+
 #[derive(Default)]
 pub struct RangeStats {
-    // The number of entries in write cf.
+    // The total number of entries in the range.
     pub num_entries: u64,
-    // The number of MVCC versions of all rows (num_entries - tombstones).
+    // The number of MVCC versions of all rows (num_entries - engine tombstones).
     pub num_versions: u64,
     // The number of rows.
     pub num_rows: u64,
@@ -81,6 +93,20 @@ impl RangeStats {
         self.num_entries
             .saturating_sub(self.num_rows)
             .saturating_add(self.num_deletes)
+    }
+
+    pub fn add(&mut self, other: &RangeStats) {
+        self.num_entries = self.num_entries.saturating_add(other.num_entries);
+        self.num_versions = self.num_versions.saturating_add(other.num_versions);
+        self.num_rows = self.num_rows.saturating_add(other.num_rows);
+        self.num_deletes = self.num_deletes.saturating_add(other.num_deletes);
+    }
+
+    pub fn sub(&mut self, other: &RangeStats) {
+        self.num_entries = self.num_entries.saturating_sub(other.num_entries);
+        self.num_versions = self.num_versions.saturating_sub(other.num_versions);
+        self.num_rows = self.num_rows.saturating_sub(other.num_rows);
+        self.num_deletes = self.num_deletes.saturating_sub(other.num_deletes);
     }
 }
 
@@ -169,6 +195,8 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt + WriteBatchExt {
     fn get_num_keys(&self) -> Result<u64>;
 
     fn get_range_stats(&self, cf: &str, start: &[u8], end: &[u8]) -> Result<Option<RangeStats>>;
+
+    fn get_whole_range_stats(&self, cf: &str) -> Result<RangeStats>;
 
     fn is_stalled_or_stopped(&self) -> bool;
 
