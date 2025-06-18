@@ -23,9 +23,9 @@ use collections::{HashMap, HashMapEntry, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::{
-    CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DeleteStrategy, Engines, KvEngine, Mutable,
-    PerfContextKind, RaftEngine, RaftLogBatch, Range, RangeStats, StatsChangeEvent, WriteBatch,
-    WriteOptions,
+    CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, CompactedEvent, DeleteStrategy, Engines, KvEngine,
+    Mutable, PerfContextKind, RaftEngine, RaftLogBatch, Range, RangeStats, StatsChangeEvent,
+    WriteBatch, WriteOptions,
 };
 use fail::fail_point;
 use file_system::{IoType, WithIoType};
@@ -930,6 +930,22 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 }
                 StoreMsg::StatsChangeEvent(event) => {
                     assert!(event.cf() == CF_WRITE, "cf: {}", event.cf());
+                    if let Some(mvcc_stats) = self.fsm.store.mvcc_stats.as_mut() {
+                        if let Some(input) = event.get_input_range_stats() {
+                            mvcc_stats.sub(input);
+                        }
+                        if let Some(output) = event.get_output_range_stats() {
+                            mvcc_stats.add(output);
+                        }
+                    }
+                    self.update_mvcc_stats_metrics();
+                }
+                StoreMsg::DoneCollectWholeRangeMVCCStats { mvcc_stats } => {
+                    self.fsm.store.mvcc_stats = Some(mvcc_stats);
+                    self.update_mvcc_stats_metrics();
+                }
+                StoreMsg::StatsChangeEvent(event) => {
+                    assert!(event.cf() == CF_WRITE);
                     if let Some(mvcc_stats) = self.fsm.store.mvcc_stats.as_mut() {
                         if let Some(input) = event.get_input_range_stats() {
                             mvcc_stats.sub(input);
@@ -1852,8 +1868,13 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         if let Err(e) = cleanup_scheduler.schedule(CleanupTask::Compact(
             CompactTask::CollectWholeRangeMVCCStats {
                 callback: Box::new(move |mvcc_stats| {
+<<<<<<< HEAD
                     if let Err(e) =
                         router_for_cb.send_control(StoreMsg::InitWholeRangeMVCCStats { mvcc_stats })
+=======
+                    if let Err(e) = router_for_cb
+                        .send_control(StoreMsg::DoneCollectWholeRangeMVCCStats { mvcc_stats })
+>>>>>>> 6590c5113 (Keep track of MVCC properties in store)
                     {
                         error!("failed to send compact range stats"; "err" => ?e);
                     }

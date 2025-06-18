@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use core::panic;
 use std::collections::BTreeMap;
 
 use engine_traits::{CompactExt, CompactedEvent, ManualCompactionOptions, Result};

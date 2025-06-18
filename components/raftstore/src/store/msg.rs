@@ -1023,10 +1023,6 @@ where
             StoreMsg::AwakenRegions { .. } => write!(fmt, "AwakenRegions"),
             StoreMsg::InitWholeRangeMVCCStats { .. } => {
                 write!(fmt, "InitWholeRangeMVCCStats")
-            }
-            StoreMsg::StatsChangeEvent(event) => write!(fmt, "StatsChangeEvent {:?}", event.cf()),
-            #[cfg(any(test, feature = "testexport"))]
-            StoreMsg::Validate(_) => write!(fmt, "Validate config"),
         }
     }
 }
