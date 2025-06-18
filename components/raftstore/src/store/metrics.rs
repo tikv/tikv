@@ -1034,4 +1034,9 @@ lazy_static! {
             "Is raft process busy or not",
             &["type"]
         ).unwrap();
+    pub static ref STORE_MVCC_STATS_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_raftstore_mvcc_stats",
+        "MVCC stats",
+        &["type"]
+    ).unwrap();
 }

@@ -8,7 +8,9 @@ use std::{
 };
 
 use api_version::{ApiV2, KeyMode, KvFormat};
-use engine_traits::{MvccProperties, Range, RangeStats, raw_ttl::ttl_current_ts};
+use engine_traits::{
+    MvccProperties, Range, RangeStats, Result as EngResult, raw_ttl::ttl_current_ts,
+};
 use rocksdb::{
     DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex,
     UserCollectedProperties,
@@ -568,6 +570,26 @@ pub fn get_range_stats(
         num_rows: props.num_rows,
         num_deletes: props.num_deletes,
     })
+}
+
+pub fn get_all_table_stats(engine: &crate::RocksEngine, cf: &str) -> EngResult<RangeStats> {
+    let collection = engine.get_properties_of_all_tables_cf(cf)?;
+    let mut range_stats = RangeStats::default();
+    if collection.is_empty() {
+        return Ok(range_stats);
+    }
+    let mut props = MvccProperties::new();
+    let mut num_entries = 0;
+    for (_, v) in collection.iter() {
+        let mvcc = RocksMvccProperties::decode(v.user_collected_properties())?;
+        num_entries += v.num_entries();
+        props.add(&mvcc);
+    }
+    range_stats.num_entries = num_entries;
+    range_stats.num_versions = props.num_versions;
+    range_stats.num_rows = props.num_rows;
+    range_stats.num_deletes = props.num_deletes;
+    Ok(range_stats)
 }
 
 #[cfg(test)]
