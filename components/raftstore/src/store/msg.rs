@@ -943,6 +943,9 @@ where
         store_id: u64,
     },
 
+    // Compaction finished event
+    CompactedEvent(EK::CompactedEvent),
+
     // Clear region size and keys for all regions in the range, so we can force them to
     // re-calculate their size later.
     ClearRegionSizeInRange {
@@ -950,8 +953,6 @@ where
         end_key: Vec<u8>,
     },
 
-    // Compaction finished event
-    CompactedEvent(EK::CompactedEvent),
     Tick(StoreTick),
     Start {
         store: metapb::Store,
