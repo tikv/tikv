@@ -606,7 +606,7 @@ where
             min_resolved_ts,
         };
         if let Err(e) = self.0.schedule(task) {
-            error!(
+            warn!(
                 "failed to send min resolved ts to pd worker";
                 "err" => ?e,
             );
@@ -616,7 +616,7 @@ where
     fn auto_split(&self, split_infos: Vec<SplitInfo>) {
         let task = Task::AutoSplit { split_infos };
         if let Err(e) = self.0.schedule(task) {
-            error!(
+            warn!(
                 "failed to send split infos to pd worker";
                 "err" => ?e,
             );
@@ -628,7 +628,7 @@ where
                 "tick" => timer_tick);
         let task = Task::InspectLatency { factor };
         if let Err(e) = self.0.schedule(task) {
-            error!(
+            warn!(
                 "failed to send inspect raftstore latency task to pd worker";
                 "err" => ?e,
             );
