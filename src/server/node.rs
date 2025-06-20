@@ -167,8 +167,13 @@ where
         pd_worker: LazyWorker<PdTask<EK, ER>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<EK>,
+<<<<<<< HEAD:src/server/node.rs
         importer: Arc<SstImporter>,
         split_check_scheduler: Scheduler<SplitCheckTask>,
+=======
+        importer: Arc<SstImporter<EK>>,
+        split_check_scheduler: Scheduler<SplitCheckTask<EK>>,
+>>>>>>> 95a06da9a9 (raftstore: move the handling of `CompactedEvent` to split-check worker. (#18565)):src/server/raft_server.rs
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
@@ -457,8 +462,13 @@ where
         pd_worker: LazyWorker<PdTask<EK, ER>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<EK>,
+<<<<<<< HEAD:src/server/node.rs
         importer: Arc<SstImporter>,
         split_check_scheduler: Scheduler<SplitCheckTask>,
+=======
+        importer: Arc<SstImporter<EK>>,
+        split_check_scheduler: Scheduler<SplitCheckTask<EK>>,
+>>>>>>> 95a06da9a9 (raftstore: move the handling of `CompactedEvent` to split-check worker. (#18565)):src/server/raft_server.rs
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
