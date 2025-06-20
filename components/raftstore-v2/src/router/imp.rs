@@ -110,6 +110,10 @@ impl<EK: KvEngine, ER: RaftEngine> raftstore::coprocessor::StoreHandle for Store
     ) {
         // TODO
     }
+
+    fn update_compaction_declined_bytes(&self, _region_id: u64, _bytes: u64) {
+        // TODO
+    }
 }
 
 /// A router that routes messages to the raftstore

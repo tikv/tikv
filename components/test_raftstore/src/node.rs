@@ -326,8 +326,12 @@ impl Simulator for NodeCluster {
         );
         let cfg_controller = ConfigController::new(cfg.tikv.clone());
 
-        let split_check_runner =
-            SplitCheckRunner::new(engines.kv.clone(), router.clone(), coprocessor_host.clone());
+        let split_check_runner = SplitCheckRunner::new(
+            Some(store_meta.clone()),
+            engines.kv.clone(),
+            router.clone(),
+            coprocessor_host.clone(),
+        );
         let split_scheduler = bg_worker.start("test-split-check", split_check_runner);
         cfg_controller.register(
             Module::Coprocessor,
