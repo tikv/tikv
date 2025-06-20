@@ -36,8 +36,8 @@ use std::{
 
 use collections::HashMap;
 use engine_traits::{
-    CF_DEFAULT, CF_LOCK, CfName, IterOptions, KvEngine as LocalEngine, MetricsExt, Mutable,
-    MvccProperties, ReadOptions, TabletRegistry, WriteBatch,
+    CfName, IterOptions, KvEngine as LocalEngine, MetricsExt, Mutable, MvccProperties, ReadOptions,
+    TabletRegistry, WriteBatch, CF_DEFAULT, CF_LOCK,
 };
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use futures::{future::BoxFuture, prelude::*};
@@ -46,7 +46,7 @@ use kvproto::{
     errorpb::Error as ErrorHeader,
     import_sstpb::SstMeta,
     kvrpcpb::{Context, DiskFullOpt, ExtraOp as TxnExtraOp, KeyRange},
-    raft_cmdpb,
+    metapb, raft_cmdpb,
 };
 use pd_client::BucketMeta;
 use raftstore::store::{PessimisticLockPair, TxnExt};
@@ -64,8 +64,8 @@ pub use self::{
     raft_extension::{FakeExtension, RaftExtension},
     rocksdb_engine::{RocksEngine, RocksSnapshot},
     stats::{
-        CfStatistics, FlowStatistics, FlowStatsReporter, LoadDataHint, RAW_VALUE_TOMBSTONE,
-        StageLatencyStats, Statistics, StatisticsSummary,
+        CfStatistics, FlowStatistics, FlowStatsReporter, LoadDataHint, StageLatencyStats,
+        Statistics, StatisticsSummary, RAW_VALUE_TOMBSTONE,
     },
 };
 
@@ -464,6 +464,10 @@ pub trait Engine: Send + Clone + 'static {
     /// the engine there is probably a notable difference in range, so
     /// engine may update its statistics.
     fn hint_change_in_range(&self, _start_key: Vec<u8>, _end_key: Vec<u8>) {}
+
+    fn locate_key(&self, _key: &[u8]) -> Option<(Arc<metapb::Region>, u64, u64)> {
+        None
+    }
 }
 
 /// A Snapshot is a consistent view of the underlying engine at a given point in
