@@ -1,27 +1,31 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::VecDeque,
+    cmp::Reverse,
+    collections::{BinaryHeap, VecDeque},
     error::Error as StdError,
     fmt::{self, Display, Formatter},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
-use engine_traits::{CF_LOCK, CF_WRITE, KvEngine, ManualCompactionOptions, RangeStats};
+use engine_traits::{CF_WRITE, KvEngine, ManualCompactionOptions, RangeStats};
 use fail::fail_point;
 use futures_util::compat::Future01CompatExt;
 use thiserror::Error;
 use tikv_util::{
-    box_try, config::Tracker, debug, error, info, time::Instant, timer::GLOBAL_TIMER_HANDLE, warn,
-    worker::Runnable,
+    box_try, debug, error, info, time::Instant, timer::GLOBAL_TIMER_HANDLE, warn, worker::Runnable,
 };
 use yatp::Remote;
 
 use super::metrics::{
-    COMPACT_RANGE_CF, FULL_COMPACT, FULL_COMPACT_INCREMENTAL, FULL_COMPACT_PAUSE,
+    CHECK_AND_COMPACT_CHECKING_DURATION, CHECK_AND_COMPACT_NUM_MVCC,
+    CHECK_AND_COMPACT_PENDING_COMPACTIONS, COMPACT_RANGE_CF, FULL_COMPACT,
+    FULL_COMPACT_INCREMENTAL, FULL_COMPACT_PAUSE,
 };
-use crate::store::Config;
 
 type Key = Vec<u8>;
 
@@ -49,6 +53,54 @@ pub enum Task {
         // The minimum RocksDB tombstones/duplicate versions a range that need compacting has
         compact_threshold: CompactThreshold,
     },
+
+    CompactTopN {
+        // Column families need to compact
+        cf_names: Vec<String>,
+        // Ranges need to check
+        ranges: Vec<Key>,
+        // The minimum RocksDB tombstones/duplicate versions a range that need compacting has
+        compact_threshold: CompactThreshold,
+        // Only compact the top N ranges that need compaction.
+        top_n: usize,
+        compaction_filter_enabled: bool,
+        bottommost_level_force: bool,
+        // RAII guard to indicate the task is still running. Store FSM will hold a weak ptr to this
+        // guard, and will be aware of the task being dropped.
+        // If the task is dropped, it means the check is finished or failed.
+        // If the task is still running, it will block future checks.
+        // Drop this guard *after* compaction is scheduled, to prevent periodic checks by Store FSM
+        // races with the compaction tasks.
+        finished: Arc<()>,
+    },
+}
+
+#[derive(Clone, Debug)]
+struct CompactionUnit {
+    cf_name: String,
+    start_key: Key,
+    end_key: Key,
+    score: f64,
+}
+
+impl PartialEq for CompactionUnit {
+    fn eq(&self, other: &Self) -> bool {
+        self.score == other.score
+    }
+}
+
+impl Eq for CompactionUnit {}
+
+impl PartialOrd for CompactionUnit {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.score.partial_cmp(&other.score).unwrap())
+    }
+}
+
+impl Ord for CompactionUnit {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.partial_cmp(other).unwrap()
+    }
 }
 
 type CompactPredicateFn = Box<dyn Fn() -> bool + Send + Sync>;
@@ -203,6 +255,37 @@ impl Display for Task {
                     &compact_threshold.redundant_rows_percent_threshold,
                 )
                 .finish(),
+            Task::CompactTopN {
+                ref cf_names,
+                ranges: _,
+                ref compact_threshold,
+                top_n,
+                bottommost_level_force,
+                compaction_filter_enabled,
+                finished: _,
+            } => f
+                .debug_struct("CompactTopN")
+                .field("cf_names", cf_names)
+                .field(
+                    "tombstones_num_threshold",
+                    &compact_threshold.tombstones_num_threshold,
+                )
+                .field(
+                    "tombstones_percent_threshold",
+                    &compact_threshold.tombstones_percent_threshold,
+                )
+                .field(
+                    "redundant_rows_threshold",
+                    &compact_threshold.redundant_rows_threshold,
+                )
+                .field(
+                    "redundant_rows_percent_threshold",
+                    &compact_threshold.redundant_rows_percent_threshold,
+                )
+                .field("top_n", &top_n)
+                .field("compaction_filter_enabled", &compaction_filter_enabled)
+                .field("bottommost_level_force", &bottommost_level_force)
+                .finish(),
         }
     }
 }
@@ -216,27 +299,14 @@ pub enum Error {
 pub struct Runner<E> {
     engine: E,
     remote: Remote<yatp::task::future::TaskCell>,
-    cfg_tracker: Tracker<Config>,
-    // Whether to skip the manual compaction of write and default comlumn family.
-    skip_compact: bool,
 }
 
 impl<E> Runner<E>
 where
     E: KvEngine,
 {
-    pub fn new(
-        engine: E,
-        remote: Remote<yatp::task::future::TaskCell>,
-        cfg_tracker: Tracker<Config>,
-        skip_compact: bool,
-    ) -> Runner<E> {
-        Runner {
-            engine,
-            remote,
-            cfg_tracker,
-            skip_compact,
-        }
+    pub fn new(engine: E, remote: Remote<yatp::task::future::TaskCell>) -> Runner<E> {
+        Runner { engine, remote }
     }
 
     /// Periodic full compaction.
@@ -384,21 +454,6 @@ where
                 bottommost_level_force,
             } => {
                 let cf = &cf_name;
-                if cf != CF_LOCK {
-                    // check whether the config changed for ignoring manual compaction
-                    if let Some(incoming) = self.cfg_tracker.any_new() {
-                        self.skip_compact = incoming.skip_manual_compaction_in_clean_up_worker;
-                    }
-                    if self.skip_compact {
-                        info!(
-                            "skip compact range";
-                            "range_start" => start_key.as_ref().map(|k| log_wrappers::Value::key(k)),
-                            "range_end" => end_key.as_ref().map(|k|log_wrappers::Value::key(k)),
-                            "cf" => cf_name,
-                        );
-                        return;
-                    }
-                }
                 if let Err(e) = self.compact_range_cf(
                     cf,
                     start_key.as_deref(),
@@ -433,6 +488,54 @@ where
                 }
                 Err(e) => warn!("check ranges need reclaim failed"; "err" => %e),
             },
+            Task::CompactTopN {
+                cf_names,
+                ranges,
+                compact_threshold,
+                top_n,
+                compaction_filter_enabled,
+                bottommost_level_force,
+                finished: _,
+            } => {
+                match get_top_n_ranges_to_compact(
+                    &self.engine,
+                    ranges,
+                    compact_threshold,
+                    top_n,
+                    compaction_filter_enabled,
+                ) {
+                    Ok(top_n_ranges) => {
+                        let mut remaining_tasks = top_n_ranges.len();
+                        CHECK_AND_COMPACT_PENDING_COMPACTIONS.set(remaining_tasks as i64);
+                        for compaction_unit in top_n_ranges {
+                            let start = compaction_unit.start_key;
+                            let end = compaction_unit.end_key;
+
+                            for cf in &cf_names {
+                                if let Err(e) = self.compact_range_cf(
+                                    cf,
+                                    Some(&start),
+                                    Some(&end),
+                                    bottommost_level_force,
+                                ) {
+                                    error!(
+                                        "compact range failed";
+                                        "range_start" => log_wrappers::Value::key(&start),
+                                        "range_end" => log_wrappers::Value::key(&end),
+                                        "cf" => cf,
+                                        "err" => %e,
+                                    );
+                                }
+                            }
+                            remaining_tasks -= 1;
+                            CHECK_AND_COMPACT_PENDING_COMPACTIONS.set(remaining_tasks as i64);
+                        }
+                    }
+                    Err(e) => {
+                        error!("get top n ranges to compact failed"; "err" => %e);
+                    }
+                }
+            }
         }
     }
 }
@@ -504,6 +607,101 @@ fn collect_ranges_need_compact(
     Ok(ranges_need_compact)
 }
 
+fn get_compact_score(
+    range_stats: &RangeStats,
+    compact_threshold: &CompactThreshold,
+    compaction_filter_enabled: bool,
+) -> f64 {
+    if range_stats.num_entries < range_stats.num_versions {
+        return 0.0;
+    }
+
+    let mut num_discardable = range_stats.num_entries - range_stats.num_versions;
+    if compaction_filter_enabled {
+        num_discardable += range_stats.redundant_keys();
+    }
+    let discardable_ratio = num_discardable as f64 / range_stats.num_entries as f64;
+    if compaction_filter_enabled {
+        if discardable_ratio < compact_threshold.redundant_rows_percent_threshold as f64 / 100.0 {
+            return 0.0;
+        }
+    } else if discardable_ratio < compact_threshold.tombstones_percent_threshold as f64 / 100.0 {
+        return 0.0;
+    }
+
+    discardable_ratio
+}
+
+fn get_top_n_ranges_to_compact(
+    engine: &impl KvEngine,
+    ranges: Vec<Key>,
+    compact_threshold: CompactThreshold,
+    top_n: usize,
+    compaction_filter_enabled: bool,
+) -> Result<Vec<CompactionUnit>, Error> {
+    let check_duration = CHECK_AND_COMPACT_CHECKING_DURATION.start_coarse_timer();
+    let mut heap = BinaryHeap::new();
+    let mut num_total_entries = 0;
+    let mut num_discardable_entries = 0;
+    for range in ranges.windows(2) {
+        let score;
+
+        if let Some(range_stats) = engine
+            .get_range_stats(CF_WRITE, &range[0], &range[1])
+            .map_err(|e| Error::Other(Box::new(e)))?
+        {
+            score = get_compact_score(&range_stats, &compact_threshold, compaction_filter_enabled);
+            num_total_entries += range_stats.num_entries;
+            num_discardable_entries += range_stats.num_entries - range_stats.num_versions;
+            if compaction_filter_enabled {
+                num_discardable_entries += range_stats.redundant_keys();
+            }
+        } else {
+            // Empty range, skip it.
+            continue;
+        }
+
+        if score <= 0.0
+            || score
+                < heap
+                    .peek()
+                    .map_or(0.0, |e: &Reverse<CompactionUnit>| e.0.score)
+        {
+            continue;
+        }
+
+        // Create a new compaction unit.
+        let compaction_unit = CompactionUnit {
+            cf_name: CF_WRITE.to_string(),
+            start_key: range[0].clone(),
+            end_key: range[1].clone(),
+            score,
+        };
+
+        // Push the compaction unit into the min-heap.
+        heap.push(Reverse(compaction_unit));
+        if heap.len() > top_n {
+            // If the heap size exceeds the top N, pop the smallest element.
+            heap.pop();
+        }
+    }
+    check_duration.observe_duration();
+    CHECK_AND_COMPACT_NUM_MVCC
+        .with_label_values(&["total"])
+        .set(num_total_entries as i64);
+    CHECK_AND_COMPACT_NUM_MVCC
+        .with_label_values(&["discardable"])
+        .set(num_discardable_entries as i64);
+    let mut sorted_vec: Vec<_> = heap
+        .into_sorted_vec()
+        .into_iter()
+        .map(|Reverse(compaction_unit)| compaction_unit)
+        .collect();
+    sorted_vec.reverse();
+
+    Ok(sorted_vec)
+}
+
 #[cfg(test)]
 mod tests {
     use std::{thread::sleep, time::Duration};
@@ -528,10 +726,7 @@ mod tests {
         E: KvEngine,
     {
         let pool = YatpPoolBuilder::new(DefaultTicker::default()).build_future_pool();
-        (
-            pool.clone(),
-            Runner::new(engine, pool.remote().clone(), Tracker::default(), false),
-        )
+        (pool.clone(), Runner::new(engine, pool.remote().clone()))
     }
 
     #[test]

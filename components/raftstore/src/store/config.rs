@@ -143,6 +143,14 @@ pub struct Config {
     /// Minimum percentage of redundant rows to trigger manual compaction.
     /// Should between 1 and 100.
     pub region_compact_redundant_rows_percent: Option<u64>,
+    #[doc(hidden)]
+    pub check_then_compact_num_coarses: u64,
+    #[doc(hidden)]
+    pub check_then_compact_top_n: u64,
+    #[doc(hidden)]
+    pub check_then_compact_bottommost: bool,
+    #[doc(hidden)]
+    pub compaction_filter_enabled: bool,
     pub pd_heartbeat_tick_interval: ReadableDuration,
     pub pd_store_heartbeat_tick_interval: ReadableDuration,
     pub pd_report_min_resolved_ts_interval: ReadableDuration,
@@ -444,11 +452,6 @@ pub struct Config {
     #[doc(hidden)]
     #[online_config(hidden)]
     pub min_pending_apply_region_count: u64,
-
-    /// Whether to skip manual compaction in the clean up worker for `write` and
-    /// `default` column family
-    #[doc(hidden)]
-    pub skip_manual_compaction_in_clean_up_worker: bool,
 }
 
 impl Default for Config {
@@ -487,6 +490,10 @@ impl Default for Config {
             region_compact_tombstones_percent: 30,
             region_compact_min_redundant_rows: 50000,
             region_compact_redundant_rows_percent: Some(20),
+            check_then_compact_num_coarses: 1000,
+            check_then_compact_top_n: 1,
+            check_then_compact_bottommost: true,
+            compaction_filter_enabled: true,
             pd_heartbeat_tick_interval: ReadableDuration::minutes(1),
             pd_store_heartbeat_tick_interval: ReadableDuration::secs(10),
             pd_report_min_resolved_ts_interval: ReadableDuration::secs(1),
@@ -591,7 +598,6 @@ impl Default for Config {
             enable_v2_compatible_learner: false,
             unsafe_disable_check_quorum: false,
             min_pending_apply_region_count: 10,
-            skip_manual_compaction_in_clean_up_worker: false,
         }
     }
 }
