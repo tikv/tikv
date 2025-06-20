@@ -1,6 +1,10 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+<<<<<<< HEAD
 use engine_traits::{perf_level_serde, PerfLevel};
+=======
+use engine_traits::{KvEngine, PerfLevel, perf_level_serde};
+>>>>>>> 95a06da9a9 (raftstore: move the handling of `CompactedEvent` to split-check worker. (#18565))
 use online_config::{ConfigChange, ConfigManager, OnlineConfig};
 use serde::{Deserialize, Serialize};
 use tikv_util::{box_err, config::ReadableSize, worker::Scheduler};
@@ -216,9 +220,9 @@ impl Config {
     }
 }
 
-pub struct SplitCheckConfigManager(pub Scheduler<SplitCheckTask>);
+pub struct SplitCheckConfigManager<EK: KvEngine>(pub Scheduler<SplitCheckTask<EK>>);
 
-impl ConfigManager for SplitCheckConfigManager {
+impl<EK: KvEngine> ConfigManager for SplitCheckConfigManager<EK> {
     fn dispatch(
         &mut self,
         change: ConfigChange,
@@ -228,8 +232,8 @@ impl ConfigManager for SplitCheckConfigManager {
     }
 }
 
-impl std::ops::Deref for SplitCheckConfigManager {
-    type Target = Scheduler<SplitCheckTask>;
+impl<EK: KvEngine> std::ops::Deref for SplitCheckConfigManager<EK> {
+    type Target = Scheduler<SplitCheckTask<EK>>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
