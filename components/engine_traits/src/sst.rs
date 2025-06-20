@@ -7,11 +7,21 @@ use kvproto::import_sstpb::SstMeta;
 
 use crate::{RefIterable, errors::Result};
 
+#[repr(u8)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum ImportType {
+    // Indicate this file can be imported with ingest.
+    Ingest = 0,
+    // Indicate this file can be imported with directly writing, rather than ingest.
+    BulkLoad,
+}
+
 #[derive(Clone, Debug)]
 pub struct SstMetaInfo {
     pub total_bytes: u64,
     pub total_kvs: u64,
     pub meta: SstMeta,
+    pub import_type: ImportType,
 }
 
 pub trait SstExt: Sized {

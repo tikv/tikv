@@ -406,7 +406,7 @@ impl DestroyPeerObserver for LoadEvictionObserver {
 mod tests {
     use std::sync::Mutex;
 
-    use engine_traits::{RegionEvent, SstMetaInfo};
+    use engine_traits::{ImportType, RegionEvent, SstMetaInfo};
     use kvproto::{
         import_sstpb::SstMeta,
         metapb::{Peer, Region},
@@ -520,6 +520,7 @@ mod tests {
             total_bytes: 0,
             total_kvs: 0,
             meta,
+            import_type: ImportType::Ingest,
         };
         let mut pending_handle_ssts = Some(vec![meta]);
         let mut delete_ssts = Vec::new();

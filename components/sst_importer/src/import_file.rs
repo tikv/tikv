@@ -12,11 +12,13 @@ use std::{
 
 use api_version::api_v2::TIDB_RANGES_COMPLEMENT;
 use encryption::{DataKeyManager, EncrypterWriter};
-use engine_traits::{Iterator, KvEngine, RefIterable, SstMetaInfo, SstReader, iter_option};
+use engine_traits::{
+    ImportType, Iterator, KvEngine, RefIterable, SstMetaInfo, SstReader, iter_option,
+};
 use file_system::{File, OpenOptions, sync_dir};
 use keys::data_key;
 use kvproto::{import_sstpb::*, kvrpcpb::ApiVersion};
-use tikv_util::time::Instant;
+use tikv_util::{config::ReadableSize, time::Instant};
 use uuid::{Builder as UuidBuilder, Uuid};
 
 use crate::{Error, Result, metrics::*};
@@ -325,7 +327,19 @@ impl<E: KvEngine> ImportDir<E> {
         &self,
         meta: &SstMeta,
         key_manager: Option<Arc<DataKeyManager>>,
+        ingest_size_limit: u64,
     ) -> Result<SstMetaInfo> {
+        let can_import_without_ingest = |size_limit: u64, size: u64, kvs: u64| -> bool {
+            let kvs_limit = std::cmp::max(
+                10000,
+                (ReadableSize(size_limit).as_mb_f64() * 10000.0) as u64,
+            );
+            // If the size and the count of keys of cf are relatively small, it's
+            // recommended to directly write it into kvdb rather than ingest,
+            // for mitigating performance issue when ingesting too many ssts.
+            size <= size_limit && kvs <= kvs_limit
+        };
+
         let path = self.join_for_read(meta)?;
         let path_str = path.save.to_str().unwrap();
         let sst_reader = E::SstReader::open(path_str, key_manager)?;
@@ -335,6 +349,11 @@ impl<E: KvEngine> ImportDir<E> {
             total_kvs: count,
             total_bytes: size,
             meta: meta.to_owned(),
+            import_type: if can_import_without_ingest(ingest_size_limit, size, count) {
+                ImportType::BulkLoad
+            } else {
+                ImportType::Ingest
+            },
         };
         Ok(meta_info)
     }
@@ -418,6 +437,16 @@ impl<E: KvEngine> ImportDir<E> {
             // performance. Refer to https://github.com/tikv/tikv/issues/18081.
             engine.ingest_external_file_cf(cf, &files, None, true /* force_allow_write */)?;
         }
+
+        // let reader = RocksSstReader::open(path, None).unwrap();
+        // let mut sst_reader = reader.iter(IterOptions::default()).unwrap();
+        // let mut valid = sst_reader.seek_to_first().unwrap();
+        // let mut ret = vec![];
+        // while valid {
+        // ret.push(sst_reader.key().to_owned());
+        // valid = sst_reader.next().unwrap();
+        // }
+        //
         INPORTER_INGEST_COUNT.observe(metas.len() as _);
         IMPORTER_INGEST_BYTES.observe(ingest_bytes as _);
         IMPORTER_INGEST_DURATION

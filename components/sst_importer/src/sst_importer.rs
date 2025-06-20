@@ -7,7 +7,10 @@ use std::{
     io::{self, BufReader, ErrorKind, Read},
     ops::Bound,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, SystemTime},
 };
 
@@ -160,6 +163,9 @@ pub struct SstImporter<E: KvEngine> {
     file_locks: Arc<DashMap<String, (CacheKvFile, Instant)>>,
     memory_quota: Arc<MemoryQuota>,
     multi_master_keys_backend: MultiMasterKeyBackend,
+    // Configurations for the minimal threshold of ingestion, if the size of the relative
+    // sst is under the limit, this sst will be import with bulk load.
+    ingest_sst_size_limit: Arc<AtomicU64>,
 }
 
 impl<E: KvEngine> SstImporter<E> {
@@ -213,6 +219,7 @@ impl<E: KvEngine> SstImporter<E> {
             _download_rt: download_rt,
             memory_quota: Arc::new(MemoryQuota::new(memory_limit as _)),
             multi_master_keys_backend: MultiMasterKeyBackend::new(),
+            ingest_sst_size_limit: Arc::new(AtomicU64::new(cfg.ingest_size_limit.0)),
         })
     }
 
@@ -339,7 +346,11 @@ impl<E: KvEngine> SstImporter<E> {
     }
 
     pub fn validate(&self, meta: &SstMeta) -> Result<SstMetaInfo> {
-        self.dir.validate(meta, self.key_manager.clone())
+        self.dir.validate(
+            meta,
+            self.key_manager.clone(),
+            self.ingest_sst_size_limit.load(Ordering::Relaxed),
+        )
     }
 
     /// check if api version of sst files are compatible
@@ -558,7 +569,12 @@ impl<E: KvEngine> SstImporter<E> {
         Ok(())
     }
 
-    pub fn update_config_memory_use_ratio(&self, cfg_mgr: &ImportConfigManager) {
+    pub fn update_config(&self, cfg_mgr: &ImportConfigManager) {
+        self.update_config_memory_use_ratio(cfg_mgr);
+        self.update_config_ingest_size_limit(cfg_mgr);
+    }
+
+    fn update_config_memory_use_ratio(&self, cfg_mgr: &ImportConfigManager) {
         let mem_ratio = cfg_mgr.rl().memory_use_ratio;
         let memory_limit = Self::calcualte_usage_mem(mem_ratio) as usize;
 
@@ -569,6 +585,11 @@ impl<E: KvEngine> SstImporter<E> {
                 "size" => memory_limit,
             )
         }
+    }
+
+    fn update_config_ingest_size_limit(&self, cfg_mgr: &ImportConfigManager) {
+        self.ingest_sst_size_limit
+            .store(cfg_mgr.rl().ingest_size_limit.0, Ordering::Relaxed);
     }
 
     pub fn shrink_by_tick(&self) -> usize {
@@ -1740,8 +1761,8 @@ mod tests {
     use encryption::{EncrypterWriter, Iv};
     use engine_rocks::get_env;
     use engine_traits::{
-        CF_DEFAULT, DATA_CFS, Error as TraitError, ExternalSstFileInfo, Iterable, Iterator,
-        RefIterable, SstCompressionType::Zstd, SstReader, SstWriter, collect,
+        CF_DEFAULT, DATA_CFS, Error as TraitError, ExternalSstFileInfo, ImportType, Iterable,
+        Iterator, RefIterable, SstCompressionType::Zstd, SstReader, SstWriter, collect,
     };
     use external_storage::read_external_storage_info_buff;
     use file_system::Sha256Reader;
@@ -1836,6 +1857,7 @@ mod tests {
                 total_bytes: 0,
                 total_kvs: 0,
                 meta: meta.to_owned(),
+                import_type: ImportType::Ingest,
             };
             let api_version = info.meta.api_version;
             dir.ingest(&[info], &db, key_manager.clone(), api_version)
@@ -2440,7 +2462,7 @@ mod tests {
         // create config manager and update config.
         let mut cfg_mgr = ImportConfigManager::new(cfg, Arc::downgrade(&threads_clone));
         cfg_mgr.dispatch(change).unwrap();
-        importer.update_config_memory_use_ratio(&cfg_mgr);
+        importer.update_config(&cfg_mgr);
 
         let mem_quota_new = importer.memory_quota.capacity();
         assert!(mem_quota_old > mem_quota_new);
