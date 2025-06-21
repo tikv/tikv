@@ -351,6 +351,7 @@ format: pre-format
 	@cargo fmt
 	@cargo sort -w -c &>/dev/null || cargo sort -w >/dev/null
 
+doc: ENABLE_FEATURES += testexport
 doc:
 	@cargo doc --workspace --document-private-items \
 		--exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
