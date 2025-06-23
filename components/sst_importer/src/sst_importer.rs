@@ -1778,8 +1778,8 @@ mod tests {
     use test_sst_importer::*;
     use test_util::new_test_key_manager;
     use tikv_util::{
-        codec::stream_event::EventEncoder, resizable_threadpool::ResizableRuntime,
-        stream::block_on_external_io,
+        codec::stream_event::EventEncoder, config::ReadableSize,
+        resizable_threadpool::ResizableRuntime, stream::block_on_external_io,
     };
     use tokio::io::{AsyncWrite, AsyncWriteExt};
     use tokio_util::compat::{FuturesAsyncWriteCompatExt, TokioAsyncWriteCompatExt};
@@ -2432,47 +2432,95 @@ mod tests {
     }
 
     #[test]
-    fn test_update_config_memory_use_ratio() {
-        // create SstImporter with default.
-        let cfg = Config {
-            memory_use_ratio: 0.3,
-            ..Default::default()
-        };
-        let import_dir = tempfile::tempdir().unwrap();
-        let importer =
-            SstImporter::<TestEngine>::new(&cfg, import_dir, None, ApiVersion::V1, false).unwrap();
-        let mem_quota_old = importer.memory_quota.capacity();
+    fn test_update_config() {
+        // Cases for the validation of updating memory_use_ratio
+        {
+            // create SstImporter with default.
+            let cfg = Config {
+                memory_use_ratio: 0.3,
+                ..Default::default()
+            };
+            let import_dir = tempfile::tempdir().unwrap();
+            let importer =
+                SstImporter::<TestEngine>::new(&cfg, import_dir, None, ApiVersion::V1, false)
+                    .unwrap();
+            let mem_quota_old = importer.memory_quota.capacity();
 
-        // create new config and get the diff config.
-        let cfg_new = Config {
-            memory_use_ratio: 0.1,
-            ..Default::default()
-        };
-        let change = cfg.diff(&cfg_new);
+            // create new config and get the diff config.
+            let cfg_new = Config {
+                memory_use_ratio: 0.1,
+                ..Default::default()
+            };
+            let change = cfg.diff(&cfg_new);
 
-        let threads = ResizableRuntime::new(
-            cfg.num_threads,
-            "test",
-            Box::new(create_tokio_runtime),
-            Box::new(|_| {}),
-        );
+            let threads = ResizableRuntime::new(
+                cfg.num_threads,
+                "test",
+                Box::new(create_tokio_runtime),
+                Box::new(|_| {}),
+            );
 
-        let threads_clone = Arc::new(Mutex::new(threads));
+            let threads_clone = Arc::new(Mutex::new(threads));
 
-        // create config manager and update config.
-        let mut cfg_mgr = ImportConfigManager::new(cfg, Arc::downgrade(&threads_clone));
-        cfg_mgr.dispatch(change).unwrap();
-        importer.update_config(&cfg_mgr);
+            // create config manager and update config.
+            let mut cfg_mgr = ImportConfigManager::new(cfg, Arc::downgrade(&threads_clone));
+            cfg_mgr.dispatch(change).unwrap();
+            importer.update_config(&cfg_mgr);
 
-        let mem_quota_new = importer.memory_quota.capacity();
-        assert!(mem_quota_old > mem_quota_new);
-        assert_eq!(
-            mem_quota_old / 3,
-            mem_quota_new,
-            "mem_quota_old / 3 = {} mem_quota_new = {}",
-            mem_quota_old / 3,
-            mem_quota_new
-        );
+            let mem_quota_new = importer.memory_quota.capacity();
+            assert!(mem_quota_old > mem_quota_new);
+            assert_eq!(
+                mem_quota_old / 3,
+                mem_quota_new,
+                "mem_quota_old / 3 = {} mem_quota_new = {}",
+                mem_quota_old / 3,
+                mem_quota_new
+            );
+        }
+        // Cases for the validation of updating ingest_size_limit
+        {
+            // create SstImporter with default.
+            let cfg = Config {
+                ingest_size_limit: ReadableSize::mb(1),
+                ..Default::default()
+            };
+            let import_dir = tempfile::tempdir().unwrap();
+            let importer =
+                SstImporter::<TestEngine>::new(&cfg, import_dir, None, ApiVersion::V1, false)
+                    .unwrap();
+            let ingest_size_old = importer.ingest_sst_size_limit.load(Ordering::Relaxed);
+
+            // create new config and get the diff config.
+            let cfg_new = Config {
+                ingest_size_limit: ReadableSize::kb(1),
+                ..Default::default()
+            };
+            let change = cfg.diff(&cfg_new);
+
+            let threads = ResizableRuntime::new(
+                cfg.num_threads,
+                "test",
+                Box::new(create_tokio_runtime),
+                Box::new(|_| {}),
+            );
+
+            let threads_clone = Arc::new(Mutex::new(threads));
+
+            // create config manager and update config.
+            let mut cfg_mgr = ImportConfigManager::new(cfg, Arc::downgrade(&threads_clone));
+            cfg_mgr.dispatch(change).unwrap();
+            importer.update_config(&cfg_mgr);
+
+            let ingest_size_new = importer.ingest_sst_size_limit.load(Ordering::Relaxed);
+            assert!(ingest_size_old > ingest_size_new);
+            assert_eq!(
+                ingest_size_old / 1024,
+                ingest_size_new,
+                "ingest_size_old / 1024 = {} ingest_size_new = {}",
+                ingest_size_old / 1024,
+                ingest_size_new
+            );
+        }
     }
 
     #[test]

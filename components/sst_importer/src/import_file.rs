@@ -350,7 +350,7 @@ impl<E: KvEngine> ImportDir<E> {
             total_bytes: size,
             meta: meta.to_owned(),
             import_type: if can_import_without_ingest(ingest_size_limit, size, count) {
-                ImportType::BulkLoad
+                ImportType::WriteBatch
             } else {
                 ImportType::Ingest
             },
@@ -420,35 +420,56 @@ impl<E: KvEngine> ImportDir<E> {
             panic!("cannot ingest because of incompatible api version");
         }
 
-        let mut paths = HashMap::new();
-        let mut ingest_bytes = 0;
+        // Maps for recording the paths of ssts.
+        // It consists of two collections, the first one is collection of ssts waited
+        // for ingestion, the second one is the collection waited to be directly
+        // write into kvengine.
+        let mut paths_for_ingest = HashMap::new();
+        let mut paths_for_directly_write = HashMap::new();
+        let mut ingest_bytes = (0, 0);
         for info in metas {
             let path = self.join_for_read(&info.meta)?;
             let cf = info.meta.get_cf_name();
             super::prepare_sst_for_ingestion(&path.save, &path.clone, key_manager.as_deref())?;
-            ingest_bytes += info.total_bytes;
-            paths.entry(cf).or_insert_with(Vec::new).push(path);
+            match info.import_type {
+                ImportType::Ingest => {
+                    ingest_bytes.0 += info.total_bytes;
+                    paths_for_ingest
+                        .entry(cf)
+                        .or_insert_with(Vec::new)
+                        .push(path)
+                }
+                ImportType::WriteBatch => {
+                    ingest_bytes.1 += info.total_bytes;
+                    paths_for_directly_write
+                        .entry(cf)
+                        .or_insert_with(Vec::new)
+                        .push(path)
+                }
+            }
         }
 
-        for (cf, cf_paths) in paths {
+        let ingest_count = (paths_for_ingest.len(), paths_for_directly_write.len());
+        for (cf, cf_paths) in paths_for_ingest {
             let files: Vec<&str> = cf_paths.iter().map(|p| p.clone.to_str().unwrap()).collect();
             // TiDB guarantees that region will not receive writes during ingestion.
             // Set `force_allow_write` to true to minimize the impact on foreground
             // performance. Refer to https://github.com/tikv/tikv/issues/18081.
             engine.ingest_external_file_cf(cf, &files, None, true /* force_allow_write */)?;
         }
+        for (cf, cf_paths) in paths_for_directly_write {
+            let files: Vec<&str> = cf_paths.iter().map(|p| p.clone.to_str().unwrap()).collect();
+            engine.directly_write_external_file_cf(cf, &files, key_manager.clone())?;
+        }
 
-        // let reader = RocksSstReader::open(path, None).unwrap();
-        // let mut sst_reader = reader.iter(IterOptions::default()).unwrap();
-        // let mut valid = sst_reader.seek_to_first().unwrap();
-        // let mut ret = vec![];
-        // while valid {
-        // ret.push(sst_reader.key().to_owned());
-        // valid = sst_reader.next().unwrap();
-        // }
-        //
-        INPORTER_INGEST_COUNT.observe(metas.len() as _);
-        IMPORTER_INGEST_BYTES.observe(ingest_bytes as _);
+        IMPORTER_INGEST_COUNT.ingest.observe(ingest_count.0 as _);
+        IMPORTER_INGEST_BYTES.ingest.observe(ingest_bytes.0 as _);
+        IMPORTER_INGEST_COUNT
+            .directly_write
+            .observe(ingest_count.1 as _);
+        IMPORTER_INGEST_BYTES
+            .directly_write
+            .observe(ingest_bytes.1 as _);
         IMPORTER_INGEST_DURATION
             .with_label_values(&["ingest"])
             .observe(start.saturating_elapsed().as_secs_f64());

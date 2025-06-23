@@ -13,7 +13,7 @@ pub enum ImportType {
     // Indicate this file can be imported with ingest.
     Ingest = 0,
     // Indicate this file can be imported with directly writing, rather than ingest.
-    BulkLoad,
+    WriteBatch,
 }
 
 #[derive(Clone, Debug)]

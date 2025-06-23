@@ -2,6 +2,22 @@
 
 use lazy_static::lazy_static;
 use prometheus::*;
+use prometheus_static_metric::*;
+
+make_static_metric! {
+    pub label_enum ImportType {
+        ingest,
+        directly_write,
+    }
+
+    pub struct ImportIngestBytes: Histogram {
+        "type" => ImportType,
+    }
+
+    pub struct ImportIngestCount: Histogram {
+        "type" => ImportType,
+    }
+}
 
 lazy_static! {
     pub static ref IMPORT_RPC_DURATION: HistogramVec = register_histogram_vec!(
@@ -78,15 +94,19 @@ lazy_static! {
         exponential_buckets(0.01, 2.0, 20).unwrap()
     )
     .unwrap();
-    pub static ref IMPORTER_INGEST_BYTES: Histogram = register_histogram!(
+    pub static ref IMPORTER_INGEST_BYTES: ImportIngestBytes = register_static_histogram_vec!(
+        ImportIngestBytes,
         "tikv_import_ingest_bytes",
         "Bucketed histogram of importer ingest bytes",
+        &["type"],
         exponential_buckets(1024.0, 2.0, 20).unwrap()
     )
     .unwrap();
-    pub static ref INPORTER_INGEST_COUNT: Histogram = register_histogram!(
+    pub static ref IMPORTER_INGEST_COUNT: ImportIngestCount = register_static_histogram_vec!(
+        ImportIngestCount,
         "tikv_import_ingest_count",
         "Bucketed histogram of importer ingest count",
+        &["type"],
         exponential_buckets(1.0, 2.0, 20).unwrap()
     ).unwrap();
     pub static ref IMPORTER_ERROR_VEC: IntCounterVec = register_int_counter_vec!(

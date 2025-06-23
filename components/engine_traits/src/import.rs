@@ -1,5 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
+use std::sync::Arc;
 
+use encryption::DataKeyManager;
 use tikv_util::range_latch::RangeLatchGuard;
 
 use crate::{Range, errors::Result};
@@ -18,6 +20,13 @@ pub trait ImportExt {
         files: &[&str],
         range: Option<Range<'_>>,
         force_allow_write: bool,
+    ) -> Result<()>;
+
+    fn directly_write_external_file_cf(
+        &self,
+        cf: &str,
+        files: &[&str],
+        key_manager: Option<Arc<DataKeyManager>>,
     ) -> Result<()>;
 
     fn acquire_ingest_latch(&self, range: Range<'_>) -> RangeLatchGuard<'_>;
