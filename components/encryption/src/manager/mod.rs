@@ -13,6 +13,7 @@ use std::{
 };
 
 use crossbeam::channel::{self, select, tick};
+use error_code::encryption;
 use fail::fail_point;
 use file_system::File;
 use kvproto::encryptionpb::{DataKey, EncryptionMethod, FileDictionary, FileInfo, KeyDictionary};
@@ -21,13 +22,13 @@ use tikv_util::{box_err, debug, error, info, sys::thread::StdThreadBuildWrapper,
 
 use crate::{
     config::EncryptionConfig,
-    crypter::{self, Iv},
+    crypter::{self, EncryptionKeyManager, FileEncryptionInfo, Iv},
     encrypted_file::EncryptedFile,
     file_dict_file::FileDictionaryFile,
     io::{DecrypterReader, EncrypterWriter},
     master_key::Backend,
     metrics::*,
-    EncryptionKeyManager, EncryptionMethod as EtEncryptionMethod, FileEncryptionInfo,
+    EncryptionMethod as EtEncryptionMethod,
     Error, Result,
 };
 
@@ -842,7 +843,7 @@ impl DataKeyManager {
     }
 
     /// Return which method this manager is using.
-    pub fn encryption_method(&self) -> engine_traits::EncryptionMethod {
+    pub fn encryption_method(&self) -> EtEncryptionMethod {
         crypter::to_engine_encryption_method(self.method)
     }
 
@@ -1118,13 +1119,13 @@ impl<'a> Drop for DataKeyImporter<'a> {
 
 #[cfg(test)]
 mod tests {
-    use engine_traits::EncryptionMethod as EtEncryptionMethod;
     use file_system::{remove_file, File};
     use matches::assert_matches;
     use tempfile::TempDir;
     use test_util::create_test_key_file;
 
     use super::*;
+    use crate::EncryptionMethod as EtEncryptionMethod;
     use crate::master_key::{
         tests::{decrypt_called, encrypt_called, MockBackend},
         FileBackend, PlaintextBackend,

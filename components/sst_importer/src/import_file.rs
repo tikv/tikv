@@ -325,6 +325,7 @@ impl ImportDir {
         &self,
         meta: &SstMeta,
         key_manager: Option<Arc<DataKeyManager>>,
+        ingest_size_limit: u64,
     ) -> Result<SstMetaInfo> {
         let can_import_without_ingest = |size_limit: u64, size: u64, kvs: u64| -> bool {
             let kvs_limit = std::cmp::max(
@@ -342,6 +343,7 @@ impl ImportDir {
         let sst_reader = RocksSstReader::open_with_env(path_str, Some(env))?;
         // TODO: check the length and crc32 of ingested file.
         let mut meta_info = sst_reader.sst_meta_info(meta.to_owned());
+        let (size, count) = (meta_info.total_bytes, meta_info.total_kvs);
         meta_info.import_type = if can_import_without_ingest(ingest_size_limit, size, count) {
             ImportType::WriteBatch
         } else {

@@ -75,9 +75,14 @@ impl ImportExt for RocksEngine {
         let capacity = 1024;
         let mut write_batch = self.write_batch();
         for file in files {
-            let reader = RocksSstReader::open(file, key_manager.clone()).unwrap();
-            let mut sst_reader = reader.iter(IterOptions::default()).unwrap();
-            let mut valid = sst_reader.seek_to_first().unwrap();
+			let manager = key_manager.clone();
+            let reader = if let Some(mgr) = manager {
+                RocksSstReader::open_encrypted(file, mgr)?
+            } else {
+                RocksSstReader::open(file)?
+            };
+            let mut sst_reader = reader.iter(IterOptions::default())?;
+            let mut valid = sst_reader.seek_to_first()?;
             while valid {
                 write_batch.put_cf(cf, sst_reader.key(), sst_reader.value())?;
                 if write_batch.count() >= capacity {

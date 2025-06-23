@@ -1599,6 +1599,7 @@ dependencies = [
 name = "engine_panic"
 version = "0.0.1"
 dependencies = [
+ "encryption",
  "engine_traits",
  "kvproto",
  "raft",

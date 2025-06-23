@@ -18,7 +18,7 @@ pub use self::{
     config::*,
     crypter::{
         from_engine_encryption_method, to_engine_encryption_method, verify_encryption_config,
-        AesGcmCrypter, Iv,
+        AesGcmCrypter, EncryptionKeyManager, FileEncryptionInfo, Iv,
     },
     encrypted_file::EncryptedFile,
     errors::{cloud_convert_error, Error, Result, RetryCodedError},
@@ -26,7 +26,7 @@ pub use self::{
     io::{
         create_aes_ctr_crypter, DecrypterReader, DecrypterWriter, EncrypterReader, EncrypterWriter,
     },
-    manager::{DataKeyImporter, DataKeyManager, DataKeyManagerArgs, FileEncryptionInfo, EncryptionKeyManager},
+    manager::{DataKeyImporter, DataKeyManager, DataKeyManagerArgs},
     master_key::{Backend, FileBackend, KmsBackend, PlaintextBackend},
 };
 

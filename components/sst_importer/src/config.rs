@@ -10,7 +10,6 @@ use online_config::{self, OnlineConfig};
 use tikv_util::{
     HandyRwLock,
     config::{ReadableDuration, ReadableSize},
-    resizable_threadpool::ResizableRuntime,
 };
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]

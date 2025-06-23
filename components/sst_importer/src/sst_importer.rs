@@ -1519,7 +1519,7 @@ mod tests {
     use tempfile::Builder;
     use test_sst_importer::*;
     use test_util::new_test_key_manager;
-    use tikv_util::{codec::stream_event::EventEncoder, stream::block_on_external_io};
+    use tikv_util::{codec::stream_event::EventEncoder, config::ReadableSize, stream::block_on_external_io};
     use txn_types::{Value, WriteType};
     use uuid::Uuid;
 
@@ -2067,9 +2067,7 @@ mod tests {
                 ..Default::default()
             };
             let import_dir = tempfile::tempdir().unwrap();
-            let importer =
-                SstImporter::<TestEngine>::new(&cfg, import_dir, None, ApiVersion::V1, false)
-                    .unwrap();
+            let importer = SstImporter::new(&cfg, import_dir, None, ApiVersion::V1, false).unwrap();
             let ingest_size_old = importer.ingest_sst_size_limit.load(Ordering::Relaxed);
 
             // create new config and get the diff config.
@@ -2079,17 +2077,8 @@ mod tests {
             };
             let change = cfg.diff(&cfg_new);
 
-            let threads = ResizableRuntime::new(
-                cfg.num_threads,
-                "test",
-                Box::new(create_tokio_runtime),
-                Box::new(|_| {}),
-            );
-
-            let threads_clone = Arc::new(Mutex::new(threads));
-
             // create config manager and update config.
-            let mut cfg_mgr = ImportConfigManager::new(cfg, Arc::downgrade(&threads_clone));
+            let mut cfg_mgr = ImportConfigManager::new(cfg);
             cfg_mgr.dispatch(change).unwrap();
             importer.update_config(&cfg_mgr);
 
