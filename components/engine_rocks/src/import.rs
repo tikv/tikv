@@ -103,6 +103,10 @@ impl ImportExt for RocksEngine {
                 valid = sst_reader.next()?;
             }
         }
+        if write_batch.count() > 0 {
+            write_batch.write()?;
+            write_batch.clear();
+        }
         Ok(())
     }
 
