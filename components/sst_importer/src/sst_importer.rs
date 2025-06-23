@@ -167,6 +167,9 @@ pub struct SstImporter {
     file_locks: Arc<DashMap<String, (CacheKvFile, Instant)>>,
     mem_use: Arc<AtomicU64>,
     mem_limit: Arc<AtomicU64>,
+    // Configurations for the minimal threshold of ingestion, if the size of the relative
+    // sst is under the limit, this sst will be import with bulk load.
+    ingest_sst_size_limit: Arc<AtomicU64>,
 }
 
 impl SstImporter {
@@ -220,6 +223,7 @@ impl SstImporter {
             _download_rt: download_rt,
             mem_use: Arc::new(AtomicU64::new(0)),
             mem_limit: Arc::new(AtomicU64::new(memory_limit)),
+            ingest_sst_size_limit: Arc::new(AtomicU64::new(cfg.ingest_size_limit.0)),
         })
     }
 
@@ -346,7 +350,11 @@ impl SstImporter {
     }
 
     pub fn validate(&self, meta: &SstMeta) -> Result<SstMetaInfo> {
-        self.dir.validate(meta, self.key_manager.clone())
+        self.dir.validate(
+            meta,
+            self.key_manager.clone(),
+            self.ingest_sst_size_limit.load(Ordering::Relaxed),
+        )
     }
 
     /// check if api version of sst files are compatible
@@ -562,7 +570,12 @@ impl SstImporter {
         Ok(())
     }
 
-    pub fn update_config_memory_use_ratio(&self, cfg_mgr: &ImportConfigManager) {
+    pub fn update_config(&self, cfg_mgr: &ImportConfigManager) {
+        self.update_config_memory_use_ratio(cfg_mgr);
+        self.update_config_ingest_size_limit(cfg_mgr);
+    }
+
+    fn update_config_memory_use_ratio(&self, cfg_mgr: &ImportConfigManager) {
         let mem_ratio = cfg_mgr.rl().memory_use_ratio;
         let memory_limit = Self::calcualte_usage_mem(mem_ratio);
 
@@ -573,6 +586,11 @@ impl SstImporter {
                 "size" => memory_limit,
             )
         }
+    }
+
+    fn update_config_ingest_size_limit(&self, cfg_mgr: &ImportConfigManager) {
+        self.ingest_sst_size_limit
+            .store(cfg_mgr.rl().ingest_size_limit.0, Ordering::Relaxed);
     }
 
     pub fn shrink_by_tick(&self) -> usize {
@@ -1490,8 +1508,8 @@ mod tests {
     };
 
     use engine_traits::{
-        collect, EncryptionMethod, Error as TraitError, ExternalSstFileInfo, Iterable, Iterator,
-        RefIterable, SstReader, SstWriter, CF_DEFAULT, DATA_CFS,
+        collect, EncryptionMethod, Error as TraitError, ExternalSstFileInfo, ImportType, Iterable,
+        Iterator, RefIterable, SstReader, SstWriter, CF_DEFAULT, DATA_CFS,
     };
     use external_storage_export::read_external_storage_info_buff;
     use file_system::File;
@@ -1507,7 +1525,7 @@ mod tests {
     use super::*;
     use crate::{import_file::ImportPath, *};
 
-    fn do_test_import_dir(key_manager: Option<Arc<DataKeyManager>>) {
+    fn do_test_import_dir(key_manager: Option<Arc<DataKeyManager>>, import_type: ImportType) {
         let temp_dir = Builder::new().prefix("test_import_dir").tempdir().unwrap();
         let dir = ImportDir::new(temp_dir.path()).unwrap();
 
@@ -1566,6 +1584,7 @@ mod tests {
                 total_bytes: 0,
                 total_kvs: 0,
                 meta: meta.to_owned(),
+                import_type,
             };
             let api_version = info.meta.api_version;
             dir.ingest(&[info], &db, key_manager.clone(), api_version)
@@ -1589,10 +1608,12 @@ mod tests {
 
     #[test]
     fn test_import_dir() {
-        do_test_import_dir(None);
+        for t in [ImportType::Ingest, ImportType::WriteBatch] {
+            do_test_import_dir(None, t);
 
-        let (_tmp_dir, key_manager) = new_key_manager_for_test();
-        do_test_import_dir(Some(key_manager));
+            let (_tmp_dir, key_manager) = new_key_manager_for_test();
+            do_test_import_dir(Some(key_manager), t);
+        }
     }
 
     fn do_test_import_file(data_key_manager: Option<Arc<DataKeyManager>>) {
@@ -2003,37 +2024,84 @@ mod tests {
     }
 
     #[test]
-    fn test_update_config_memory_use_ratio() {
-        // create SstImpoter with default.
-        let cfg = Config {
-            memory_use_ratio: 0.3,
-            ..Default::default()
-        };
-        let import_dir = tempfile::tempdir().unwrap();
-        let importer = SstImporter::new(&cfg, import_dir, None, ApiVersion::V1, false).unwrap();
-        let mem_limit_old = importer.mem_limit.load(Ordering::SeqCst);
+    fn test_update() {
+        // Cases for the validation of updating memory_use_ratio
+        {
+            // create SstImpoter with default.
+            let cfg = Config {
+                memory_use_ratio: 0.3,
+                ..Default::default()
+            };
+            let import_dir = tempfile::tempdir().unwrap();
+            let importer = SstImporter::new(&cfg, import_dir, None, ApiVersion::V1, false).unwrap();
+            let mem_limit_old = importer.mem_limit.load(Ordering::SeqCst);
 
-        // create new config and get the diff config.
-        let cfg_new = Config {
-            memory_use_ratio: 0.1,
-            ..Default::default()
-        };
-        let change = cfg.diff(&cfg_new);
+            // create new config and get the diff config.
+            let cfg_new = Config {
+                memory_use_ratio: 0.1,
+                ..Default::default()
+            };
+            let change = cfg.diff(&cfg_new);
 
-        // create config manager and update config.
-        let mut cfg_mgr = ImportConfigManager::new(cfg);
-        cfg_mgr.dispatch(change).unwrap();
-        importer.update_config_memory_use_ratio(&cfg_mgr);
+            // create config manager and update config.
+            let mut cfg_mgr = ImportConfigManager::new(cfg);
+            cfg_mgr.dispatch(change).unwrap();
+            importer.update_config(&cfg_mgr);
 
-        let mem_limit_new = importer.mem_limit.load(Ordering::SeqCst);
-        assert!(mem_limit_old > mem_limit_new);
-        assert_eq!(
-            mem_limit_old / 3,
-            mem_limit_new,
-            "mem_limit_old / 3 = {} mem_limit_new = {}",
-            mem_limit_old / 3,
-            mem_limit_new
-        );
+            let mem_limit_new = importer.mem_limit.load(Ordering::SeqCst);
+            assert!(mem_limit_old > mem_limit_new);
+            assert_eq!(
+                mem_limit_old / 3,
+                mem_limit_new,
+                "mem_limit_old / 3 = {} mem_limit_new = {}",
+                mem_limit_old / 3,
+                mem_limit_new
+            );
+        }
+        // Cases for the validation of updating ingest_size_limit
+        {
+            // create SstImporter with default.
+            let cfg = Config {
+                ingest_size_limit: ReadableSize::mb(1),
+                ..Default::default()
+            };
+            let import_dir = tempfile::tempdir().unwrap();
+            let importer =
+                SstImporter::<TestEngine>::new(&cfg, import_dir, None, ApiVersion::V1, false)
+                    .unwrap();
+            let ingest_size_old = importer.ingest_sst_size_limit.load(Ordering::Relaxed);
+
+            // create new config and get the diff config.
+            let cfg_new = Config {
+                ingest_size_limit: ReadableSize::kb(1),
+                ..Default::default()
+            };
+            let change = cfg.diff(&cfg_new);
+
+            let threads = ResizableRuntime::new(
+                cfg.num_threads,
+                "test",
+                Box::new(create_tokio_runtime),
+                Box::new(|_| {}),
+            );
+
+            let threads_clone = Arc::new(Mutex::new(threads));
+
+            // create config manager and update config.
+            let mut cfg_mgr = ImportConfigManager::new(cfg, Arc::downgrade(&threads_clone));
+            cfg_mgr.dispatch(change).unwrap();
+            importer.update_config(&cfg_mgr);
+
+            let ingest_size_new = importer.ingest_sst_size_limit.load(Ordering::Relaxed);
+            assert!(ingest_size_old > ingest_size_new);
+            assert_eq!(
+                ingest_size_old / 1024,
+                ingest_size_new,
+                "ingest_size_old / 1024 = {} ingest_size_new = {}",
+                ingest_size_old / 1024,
+                ingest_size_new
+            );
+        }
     }
 
     #[test]

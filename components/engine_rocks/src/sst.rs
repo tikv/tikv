@@ -3,8 +3,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use engine_traits::{
-    EncryptionKeyManager, Error, ExternalSstFileInfo, IterOptions, Iterator, RefIterable, Result,
-    SstCompressionType, SstExt, SstMetaInfo, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT,
+    EncryptionKeyManager, Error, ExternalSstFileInfo, ImportType, IterOptions, Iterator, RefIterable, Result, SstCompressionType, SstExt, SstMetaInfo, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT
 };
 use fail::fail_point;
 use kvproto::import_sstpb::SstMeta;
@@ -35,6 +34,7 @@ impl RocksSstReader {
             total_kvs: 0,
             total_bytes: 0,
             meta: sst,
+            import_type: ImportType::Ingest
         };
         self.inner.read_table_properties(|p| {
             meta.total_kvs = p.num_entries();

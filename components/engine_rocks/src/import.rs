@@ -1,12 +1,20 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
+use std::sync::Arc;
 
-use engine_traits::{ImportExt, IngestExternalFileOptions, Range, Result};
+use encryption::DataKeyManager;
+use engine_traits::{
+    ImportExt, IngestExternalFileOptions, IterOptions, Iterator, Mutable, Range, RefIterable,
+    Result, SstReader, WriteBatch, WriteBatchExt,
+};
 use fail::fail_point;
 use rocksdb::IngestExternalFileOptions as RawIngestExternalFileOptions;
 use tikv_util::range_latch::RangeLatchGuard;
 
 use crate::{
-    engine::RocksEngine, perf_context_metrics::INGEST_EXTERNAL_FILE_ALLOW_WRITE_COUNTER, r2e, util,
+    engine::RocksEngine, perf_context_metrics::INGEST_EXTERNAL_FILE_ALLOW_WRITE_COUNTER,
+    r2e,
+    sst::RocksSstReader,
+    util,
 };
 
 impl ImportExt for RocksEngine {
@@ -55,6 +63,34 @@ impl ImportExt for RocksEngine {
             .as_inner()
             .ingest_external_file_optimized(cf, &opts.0, files)
             .map_err(r2e)?;
+        Ok(())
+    }
+
+    fn directly_write_external_file_cf(
+        &self,
+        cf: &str,
+        files: &[&str],
+        key_manager: Option<Arc<DataKeyManager>>,
+    ) -> Result<()> {
+        let capacity = 1024;
+        let mut write_batch = self.write_batch();
+        for file in files {
+            let reader = RocksSstReader::open(file, key_manager.clone()).unwrap();
+            let mut sst_reader = reader.iter(IterOptions::default()).unwrap();
+            let mut valid = sst_reader.seek_to_first().unwrap();
+            while valid {
+                write_batch.put_cf(cf, sst_reader.key(), sst_reader.value())?;
+                if write_batch.count() >= capacity {
+                    write_batch.write()?;
+                    write_batch.clear();
+                }
+                valid = sst_reader.next()?;
+            }
+        }
+        if write_batch.count() > 0 {
+            write_batch.write()?;
+            write_batch.clear();
+        }
         Ok(())
     }
 
