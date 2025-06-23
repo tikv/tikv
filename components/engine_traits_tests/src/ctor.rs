@@ -4,12 +4,13 @@
 
 use std::fs;
 
+use encryption::EncryptionKeyManager;
 use encryption_export::data_key_manager_from_config;
 use engine_test::{
     ctor::{CfOptions, DbOptions, KvEngineConstructorExt},
     kv::KvTestEngine,
 };
-use engine_traits::{EncryptionKeyManager, KvEngine, Peekable, SyncMutable, ALL_CFS, CF_DEFAULT};
+use engine_traits::{KvEngine, Peekable, SyncMutable, ALL_CFS, CF_DEFAULT};
 
 use super::tempdir;
 

@@ -163,6 +163,7 @@ fn test_switch_mode_v2() {
     cfg.server.grpc_concurrency = 1;
     cfg.rocksdb.writecf.disable_auto_compactions = true;
     cfg.raft_store.right_derive_when_split = true;
+    cfg.import.ingest_size_limit = ReadableSize::default(); // Make all files imported with ImportType::Ingest
     // cfg.rocksdb.writecf.level0_slowdown_writes_trigger = Some(2);
     let (mut cluster, mut ctx, _tikv, import) = open_cluster_and_tikv_import_client_v2(Some(cfg));
 

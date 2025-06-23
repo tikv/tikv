@@ -1,14 +1,62 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
+use std::fmt::{self, Debug, Formatter};
+use std::io::Result as IoResult;
 
 use byteorder::{BigEndian, ByteOrder};
 use cloud::kms::PlainKey;
-use engine_traits::EncryptionMethod as EtEncryptionMethod;
 use kvproto::encryptionpb::EncryptionMethod;
 use openssl::symm::{self, Cipher as OCipher};
 use rand::{rngs::OsRng, RngCore};
 use tikv_util::box_err;
 
-use crate::{Error, Result};
+use crate::{Error, Result, EncryptionMethod as EtEncryptionMethod};
+
+pub trait EncryptionKeyManager: Sync + Send {
+    fn get_file(&self, fname: &str) -> IoResult<FileEncryptionInfo>;
+    fn new_file(&self, fname: &str) -> IoResult<FileEncryptionInfo>;
+    /// Can be used with both file and directory.
+    ///
+    /// `physical_fname` is a hint when `fname` was renamed physically.
+    /// Depending on the implementation, providing false negative or false
+    /// positive value may result in leaking encryption keys.
+    fn delete_file(&self, fname: &str, physical_fname: Option<&str>) -> IoResult<()>;
+    fn link_file(&self, src_fname: &str, dst_fname: &str) -> IoResult<()>;
+}
+
+#[derive(Clone, PartialEq)]
+pub struct FileEncryptionInfo {
+    pub method: EtEncryptionMethod,
+    pub key: Vec<u8>,
+    pub iv: Vec<u8>,
+}
+
+impl Default for FileEncryptionInfo {
+    fn default() -> Self {
+        FileEncryptionInfo {
+            method: EtEncryptionMethod::Unknown,
+            key: vec![],
+            iv: vec![],
+        }
+    }
+}
+
+impl Debug for FileEncryptionInfo {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "FileEncryptionInfo [method={:?}, key=...<{} bytes>, iv=...<{} bytes>]",
+            self.method,
+            self.key.len(),
+            self.iv.len()
+        )
+    }
+}
+
+impl FileEncryptionInfo {
+    pub fn is_empty(&self) -> bool {
+        self.key.is_empty() && self.iv.is_empty()
+    }
+}
 
 pub fn to_engine_encryption_method(method: EncryptionMethod) -> EtEncryptionMethod {
     match method {

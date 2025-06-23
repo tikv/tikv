@@ -9,6 +9,7 @@ publish = false
 testexport = []
 
 [dependencies]
+encryption = { workspace = true }
 engine_traits = { workspace = true }
 kvproto = { workspace = true }
 raft = { workspace = true }

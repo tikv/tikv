@@ -8,9 +8,9 @@ use std::{
 };
 
 use codec::number::NumberCodec;
-use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter};
+use encryption::{DataKeyManager, DecrypterReader, EncryptionKeyManager, EncryptionMethod, EncrypterWriter};
 use engine_traits::{
-    CacheStats, EncryptionKeyManager, EncryptionMethod, PerfContextExt, PerfContextKind, PerfLevel,
+    CacheStats, PerfContextExt, PerfContextKind, PerfLevel,
     RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait, Result,
     CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };

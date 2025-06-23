@@ -15,8 +15,8 @@ use std::{
 };
 
 use collections::{HashMap, HashMapEntry as Entry};
-use encryption::{create_aes_ctr_crypter, from_engine_encryption_method, DataKeyManager, Iv};
-use engine_traits::{CfName, EncryptionKeyManager, KvEngine, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use encryption::{create_aes_ctr_crypter, from_engine_encryption_method, DataKeyManager, EncryptionKeyManager, Iv};
+use engine_traits::{CfName, KvEngine, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use fail::fail_point;
 use file_system::{

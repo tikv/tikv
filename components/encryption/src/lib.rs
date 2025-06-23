@@ -18,7 +18,7 @@ pub use self::{
     config::*,
     crypter::{
         from_engine_encryption_method, to_engine_encryption_method, verify_encryption_config,
-        AesGcmCrypter, Iv,
+        AesGcmCrypter, EncryptionKeyManager, FileEncryptionInfo, Iv,
     },
     encrypted_file::EncryptedFile,
     errors::{cloud_convert_error, Error, Result, RetryCodedError},
@@ -31,6 +31,17 @@ pub use self::{
 };
 
 const TRASH_PREFIX: &str = "TRASH-";
+
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum EncryptionMethod {
+    Unknown = 0,
+    Plaintext = 1,
+    Aes128Ctr = 2,
+    Aes192Ctr = 3,
+    Aes256Ctr = 4,
+    Sm4Ctr = 5,
+}
 
 /// Remove a directory.
 ///
