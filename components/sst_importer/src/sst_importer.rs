@@ -1798,7 +1798,7 @@ mod tests {
             .build()
     }
 
-    fn do_test_import_dir(key_manager: Option<Arc<DataKeyManager>>) {
+    fn do_test_import_dir(key_manager: Option<Arc<DataKeyManager>>, import_type: ImportType) {
         let temp_dir = Builder::new().prefix("test_import_dir").tempdir().unwrap();
         let dir = ImportDir::new(temp_dir.path()).unwrap();
 
@@ -1857,7 +1857,7 @@ mod tests {
                 total_bytes: 0,
                 total_kvs: 0,
                 meta: meta.to_owned(),
-                import_type: ImportType::Ingest,
+                import_type,
             };
             let api_version = info.meta.api_version;
             dir.ingest(&[info], &db, key_manager.clone(), api_version)
@@ -1881,10 +1881,12 @@ mod tests {
 
     #[test]
     fn test_import_dir() {
-        do_test_import_dir(None);
+        for t in [ImportType::Ingest, ImportType::WriteBatch] {
+            do_test_import_dir(None, t);
 
-        let (_tmp_dir, key_manager) = new_key_manager_for_test();
-        do_test_import_dir(Some(key_manager));
+            let (_tmp_dir, key_manager) = new_key_manager_for_test();
+            do_test_import_dir(Some(key_manager), t);
+        }
     }
 
     fn do_test_import_file(data_key_manager: Option<Arc<DataKeyManager>>) {

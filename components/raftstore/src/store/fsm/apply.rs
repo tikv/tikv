@@ -2054,7 +2054,6 @@ where
 
         match ctx.importer.validate(sst) {
             Ok(meta_info) => {
-                // self.cfg
                 ctx.pending_ssts.push(meta_info.clone());
                 self.has_pending_ssts = true;
                 ssts.push(meta_info)
