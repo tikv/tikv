@@ -9,10 +9,10 @@ use std::{
 };
 
 use encryption::{
-    from_engine_encryption_method, DataKeyManager, DecrypterReader, EncrypterWriter, Iv,
+    from_engine_encryption_method, DataKeyManager, DecrypterReader, EncryptionKeyManager, EncrypterWriter, Iv,
 };
 use engine_traits::{
-    CfName, EncryptionKeyManager, Error as EngineError, IterOptions, Iterable, Iterator, KvEngine,
+    CfName, Error as EngineError, IterOptions, Iterable, Iterator, KvEngine,
     Mutable, Range, RefIterable, SstCompressionType, SstReader, SstWriter, SstWriterBuilder,
     WriteBatch,
 };

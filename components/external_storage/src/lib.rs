@@ -17,8 +17,7 @@ use std::{
 
 use async_compression::futures::bufread::ZstdDecoder;
 use async_trait::async_trait;
-use encryption::{from_engine_encryption_method, DecrypterReader, Iv};
-use engine_traits::FileEncryptionInfo;
+use encryption::{from_engine_encryption_method, DecrypterReader, FileEncryptionInfo, Iv};
 use file_system::File;
 use futures::io::BufReader;
 use futures_io::AsyncRead;

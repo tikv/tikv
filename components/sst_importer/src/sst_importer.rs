@@ -16,11 +16,11 @@ use std::{
 
 use collections::HashSet;
 use dashmap::{mapref::entry::Entry, DashMap};
-use encryption::{to_engine_encryption_method, DataKeyManager};
+use encryption::{to_engine_encryption_method, DataKeyManager, EncryptionKeyManager, FileEncryptionInfo};
 use engine_rocks::{get_env, RocksSstReader};
 use engine_traits::{
-    name_to_cf, util::check_key_in_range, CfName, EncryptionKeyManager, FileEncryptionInfo,
-    IterOptions, Iterator, KvEngine, RefIterable, SstCompressionType, SstExt, SstMetaInfo,
+    name_to_cf, util::check_key_in_range, CfName, IterOptions, Iterator, KvEngine,
+    RefIterable, SstCompressionType, SstExt, SstMetaInfo,
     SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
 };
 use external_storage_export::{
@@ -1507,8 +1507,9 @@ mod tests {
         usize,
     };
 
+    use encryption::EncryptionMethod;
     use engine_traits::{
-        collect, EncryptionMethod, Error as TraitError, ExternalSstFileInfo, ImportType, Iterable,
+        collect, Error as TraitError, ExternalSstFileInfo, ImportType, Iterable,
         Iterator, RefIterable, SstReader, SstWriter, CF_DEFAULT, DATA_CFS,
     };
     use external_storage_export::read_external_storage_info_buff;

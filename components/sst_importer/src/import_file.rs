@@ -10,10 +10,10 @@ use std::{
 };
 
 use api_version::api_v2::TIDB_RANGES_COMPLEMENT;
-use encryption::{DataKeyManager, EncrypterWriter};
+use encryption::{DataKeyManager, EncryptionKeyManager, EncrypterWriter};
 use engine_rocks::{get_env, RocksSstReader};
 use engine_traits::{
-    iter_option, EncryptionKeyManager, ImportType, Iterator,
+    iter_option, ImportType, Iterator,
     KvEngine, RefIterable, SstMetaInfo, SstReader,
 };
 use file_system::{get_io_rate_limiter, sync_dir, File, OpenOptions};

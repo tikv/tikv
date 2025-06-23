@@ -29,10 +29,9 @@ use std::{
     },
 };
 
-use encryption_export::DataKeyManager;
+use encryption_export::{DataKeyManager, EncryptionKeyManager};
 use engine_traits::{
-    EncryptionKeyManager, KvEngine, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry,
-    ALL_CFS,
+    KvEngine, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry, ALL_CFS,
 };
 use fail::fail_point;
 use kvproto::{

@@ -2,8 +2,7 @@
 
 use std::{io::Result, sync::Arc};
 
-use encryption::{self, DataKeyManager};
-use engine_traits::{EncryptionKeyManager, EncryptionMethod, FileEncryptionInfo};
+use encryption::{self, DataKeyManager, EncryptionKeyManager, EncryptionMethod, FileEncryptionInfo};
 use rocksdb::{
     DBEncryptionMethod, EncryptionKeyManager as DBEncryptionKeyManager,
     FileEncryptionInfo as DBFileEncryptionInfo,

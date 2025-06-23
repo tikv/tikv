@@ -2,8 +2,9 @@
 
 use std::{path::PathBuf, sync::Arc};
 
+use encryption::EncryptionKeyManager;
 use engine_traits::{
-    EncryptionKeyManager, Error, ExternalSstFileInfo, ImportType, IterOptions, Iterator, RefIterable, Result, SstCompressionType, SstExt, SstMetaInfo, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT
+    Error, ExternalSstFileInfo, ImportType, IterOptions, Iterator, RefIterable, Result, SstCompressionType, SstExt, SstMetaInfo, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT
 };
 use fail::fail_point;
 use kvproto::import_sstpb::SstMeta;

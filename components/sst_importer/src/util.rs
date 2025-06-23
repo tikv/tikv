@@ -2,8 +2,7 @@
 
 use std::path::Path;
 
-use encryption::DataKeyManager;
-use engine_traits::EncryptionKeyManager;
+use encryption::{DataKeyManager, EncryptionKeyManager};
 use external_storage_export::ExternalStorage;
 use file_system::File;
 
@@ -121,13 +120,13 @@ pub fn url_for<E: ExternalStorage>(storage: &E) -> String {
 mod tests {
     use std::{path::Path, sync::Arc};
 
-    use encryption::DataKeyManager;
+    use encryption::{DataKeyManager, EncryptionKeyManager};
     use engine_rocks::{
         util::new_engine_opt, RocksCfOptions, RocksDbOptions, RocksEngine, RocksSstWriterBuilder,
         RocksTitanDbOptions,
     };
     use engine_traits::{
-        CfName, CfOptions, DbOptions, EncryptionKeyManager, ImportExt, Peekable, SstWriter,
+        CfName, CfOptions, DbOptions, ImportExt, Peekable, SstWriter,
         SstWriterBuilder, TitanCfOptions, CF_DEFAULT,
     };
     use tempfile::Builder;

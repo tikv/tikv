@@ -22,10 +22,10 @@ use std::{
 use collections::HashMap;
 use encryption_export::{
     create_backend, data_key_manager_from_config, from_engine_encryption_method, DataKeyManager,
-    DecrypterReader, Iv,
+    EncryptionKeyManager, DecrypterReader, Iv,
 };
 use engine_rocks::get_env;
-use engine_traits::{EncryptionKeyManager, Peekable};
+use engine_traits::Peekable;
 use file_system::calc_crc32;
 use futures::{executor::block_on, future::try_join_all};
 use gag::BufferRedirect;

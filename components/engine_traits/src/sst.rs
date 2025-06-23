@@ -2,9 +2,10 @@
 
 use std::{path::PathBuf, sync::Arc};
 
+use encryption::EncryptionKeyManager;
 use kvproto::import_sstpb::SstMeta;
 
-use crate::{errors::Result, EncryptionKeyManager, RefIterable};
+use crate::{errors::Result, RefIterable};
 
 #[repr(u8)]
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]

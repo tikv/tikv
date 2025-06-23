@@ -34,8 +34,8 @@ use std::{
 
 use collections::HashMap;
 use crc64fast::Digest;
-use encryption_export::{DataKeyImporter, DataKeyManager};
-use engine_traits::{Checkpointer, EncryptionKeyManager, KvEngine, TabletRegistry};
+use encryption_export::{DataKeyImporter, DataKeyManagerm, EncryptionKeyManager};
+use engine_traits::{Checkpointer, KvEngine, TabletRegistry};
 use file_system::{IoType, OpenOptions, WithIoType};
 use futures::{
     future::FutureExt,

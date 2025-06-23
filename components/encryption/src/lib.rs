@@ -26,11 +26,22 @@ pub use self::{
     io::{
         create_aes_ctr_crypter, DecrypterReader, DecrypterWriter, EncrypterReader, EncrypterWriter,
     },
-    manager::{DataKeyImporter, DataKeyManager, DataKeyManagerArgs},
+    manager::{DataKeyImporter, DataKeyManager, DataKeyManagerArgs, FileEncryptionInfo, EncryptionKeyManager},
     master_key::{Backend, FileBackend, KmsBackend, PlaintextBackend},
 };
 
 const TRASH_PREFIX: &str = "TRASH-";
+
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum EncryptionMethod {
+    Unknown = 0,
+    Plaintext = 1,
+    Aes128Ctr = 2,
+    Aes192Ctr = 3,
+    Aes256Ctr = 4,
+    Sm4Ctr = 5,
+}
 
 /// Remove a directory.
 ///

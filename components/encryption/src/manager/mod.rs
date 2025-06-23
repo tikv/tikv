@@ -13,9 +13,6 @@ use std::{
 };
 
 use crossbeam::channel::{self, select, tick};
-use engine_traits::{
-    EncryptionKeyManager, EncryptionMethod as EtEncryptionMethod, FileEncryptionInfo,
-};
 use fail::fail_point;
 use file_system::File;
 use kvproto::encryptionpb::{DataKey, EncryptionMethod, FileDictionary, FileInfo, KeyDictionary};
@@ -30,6 +27,7 @@ use crate::{
     io::{DecrypterReader, EncrypterWriter},
     master_key::Backend,
     metrics::*,
+    EncryptionKeyManager, EncryptionMethod as EtEncryptionMethod, FileEncryptionInfo,
     Error, Result,
 };
 
