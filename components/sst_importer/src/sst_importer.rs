@@ -3319,7 +3319,11 @@ mod tests {
 
             // performs the download.
             let importer_dir = tempfile::tempdir().unwrap();
-            let cfg = Config::default();
+            let cfg = Config {
+                ingest_size_limit: ReadableSize(0), /* all files will be imported by
+                                                     * ImportType::Ingest */
+                ..Default::default()
+            };
             let importer =
                 SstImporter::<TestEngine>::new(&cfg, &importer_dir, None, ApiVersion::V1, false)
                     .unwrap();
