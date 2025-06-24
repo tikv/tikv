@@ -1778,7 +1778,6 @@ where
                 peer_stat
                     .query_stats
                     .add_query_stats(&region_info.query_stats.0);
-                peer_stat.cop_detail.add(&region_info.cop_detail);
             }
             self.store_stat
                 .engine_total_query_num

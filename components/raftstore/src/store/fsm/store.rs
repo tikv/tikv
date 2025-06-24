@@ -2898,7 +2898,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             {
                 // Send MsgRegionWakeUp to Peer for awakening hibernated regions.
                 let mut message = RaftMessage::default();
-                message.set_region_id(region_id);
+                message.set_region_id(*region_id);
                 message.set_from_peer(peer.clone());
                 message.set_to_peer(peer);
                 message.set_region_epoch(region.get_region_epoch().clone());
