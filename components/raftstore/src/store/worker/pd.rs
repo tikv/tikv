@@ -1488,7 +1488,7 @@ where
                         // Send remaining regions if any
                         if !region_ids.is_empty() {
                             let _ = router.send_store_msg(StoreMsg::AwakenRegions {
-                                abnormal_stores: abnormal_stores.clone(),
+                                abnormal_stores,
                                 region_ids,
                             });
                         }

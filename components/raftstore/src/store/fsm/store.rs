@@ -2874,7 +2874,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         info!("try to wake up all hibernated regions in this store";
             "to_all" => abnormal_stores.is_empty());
         let meta = self.ctx.store_meta.lock().unwrap();
-        for region_id in meta.regions.keys() {
+
+        for region_id in region_ids {
             let region = {
                 match meta.regions.get(&region_id) {
                     None => {
@@ -2898,7 +2899,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             {
                 // Send MsgRegionWakeUp to Peer for awakening hibernated regions.
                 let mut message = RaftMessage::default();
-                message.set_region_id(*region_id);
+                message.set_region_id(region_id);
                 message.set_from_peer(peer.clone());
                 message.set_to_peer(peer);
                 message.set_region_epoch(region.get_region_epoch().clone());
