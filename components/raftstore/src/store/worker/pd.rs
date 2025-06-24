@@ -6,13 +6,9 @@ use std::{
     fmt::{self, Display, Formatter},
     io, mem,
     sync::{
-<<<<<<< HEAD
-=======
-        Arc, Mutex, RwLock,
->>>>>>> 844eddc4a4 (raftstore: break up awaken regions into small batch. (#18544))
         atomic::Ordering,
         mpsc::{self, Receiver, Sender, SyncSender},
-        Arc, Mutex,
+        Arc, Mutex, RwLock,
     },
     thread::{Builder, JoinHandle},
     time::{Duration, Instant},
@@ -1279,11 +1275,7 @@ where
 
         let scheduler = self.scheduler.clone();
         let router = self.router.clone();
-<<<<<<< HEAD
-=======
         let region_peers = self.region_peers.clone();
-        let mut snap_mgr = self.snap_mgr.clone();
->>>>>>> 844eddc4a4 (raftstore: break up awaken regions into small batch. (#18544))
         let resp = self
             .pd_client
             .store_heartbeat(stats, store_report, dr_autosync_status);
@@ -1639,16 +1631,6 @@ where
 
     fn handle_read_stats(&mut self, mut read_stats: ReadStats) {
         for (region_id, region_info) in read_stats.region_infos.iter_mut() {
-<<<<<<< HEAD
-            let peer_stat = self.region_peers.entry(*region_id).or_default();
-            peer_stat.read_bytes += region_info.flow.read_bytes as u64;
-            peer_stat.read_keys += region_info.flow.read_keys as u64;
-            self.store_stat.engine_total_bytes_read += region_info.flow.read_bytes as u64;
-            self.store_stat.engine_total_keys_read += region_info.flow.read_keys as u64;
-            peer_stat
-                .query_stats
-                .add_query_stats(&region_info.query_stats.0);
-=======
             {
                 let mut region_peers = self.region_peers.write().unwrap();
                 let peer_stat = region_peers.entry(*region_id).or_default();
@@ -1659,9 +1641,7 @@ where
                 peer_stat
                     .query_stats
                     .add_query_stats(&region_info.query_stats.0);
-                peer_stat.cop_detail.add(&region_info.cop_detail);
             }
->>>>>>> 844eddc4a4 (raftstore: break up awaken regions into small batch. (#18544))
             self.store_stat
                 .engine_total_query_num
                 .add_query_stats(&region_info.query_stats.0);
