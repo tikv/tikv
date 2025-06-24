@@ -27,13 +27,8 @@ use collections::{HashMap, HashMapEntry, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::{
-<<<<<<< HEAD
-    CompactedEvent, DeleteStrategy, Engines, KvEngine, Mutable, PerfContextKind, RaftEngine,
-    RaftLogBatch, Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
-=======
-    CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DeleteStrategy, Engines, KvEngine, Mutable,
-    PerfContextKind, RaftEngine, RaftLogBatch, Range, WriteBatch, WriteOptions,
->>>>>>> 95a06da9a9 (raftstore: move the handling of `CompactedEvent` to split-check worker. (#18565))
+    DeleteStrategy, Engines, KvEngine, Mutable, PerfContextKind, RaftEngine, RaftLogBatch, Range,
+    WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use fail::fail_point;
 use file_system::{IoType, WithIoType};
@@ -2511,36 +2506,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
     }
 
     fn on_compaction_finished(&mut self, event: EK::CompactedEvent) {
-<<<<<<< HEAD
-        if event.is_size_declining_trivial(self.ctx.cfg.region_split_check_diff().0) {
-            return;
-        }
-
-        let output_level_str = event.output_level_label();
-        COMPACTION_DECLINED_BYTES
-            .with_label_values(&[&output_level_str])
-            .observe(event.total_bytes_declined() as f64);
-
-        // self.cfg.region_split_check_diff.0 / 16 is an experienced value.
-        let mut region_declined_bytes = {
-            let meta = self.ctx.store_meta.lock().unwrap();
-            event.calc_ranges_declined_bytes(
-                &meta.region_ranges,
-                self.ctx.cfg.region_split_check_diff().0 / 16,
-            )
-        };
-
-        COMPACTION_RELATED_REGION_COUNT
-            .with_label_values(&[&output_level_str])
-            .observe(region_declined_bytes.len() as f64);
-
-        for (region_id, declined_bytes) in region_declined_bytes.drain(..) {
-            let _ = self.ctx.router.send(
-                region_id,
-                PeerMsg::CasualMessage(CasualMessage::CompactionDeclinedBytes {
-                    bytes: declined_bytes,
-                }),
-=======
         if let Err(e) = self
             .ctx
             .split_check_scheduler
@@ -2552,7 +2517,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             error!(
                 "failed to schedule split check for compaction finished event";
                 "err" => %e,
->>>>>>> 95a06da9a9 (raftstore: move the handling of `CompactedEvent` to split-check worker. (#18565))
             );
         }
     }
@@ -3054,20 +3018,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         let store_id = self.ctx.store_id();
         let meta = self.ctx.store_meta.lock().unwrap();
 
-<<<<<<< HEAD
         for (region_id, region) in &meta.regions {
-=======
-        for region_id in region_ids {
-            let region = {
-                match meta.regions.get(&region_id) {
-                    None => {
-                        // The region has been merged or removed from this store; skip processing.
-                        continue;
-                    }
-                    Some(r) => r,
-                }
-            };
->>>>>>> 95a06da9a9 (raftstore: move the handling of `CompactedEvent` to split-check worker. (#18565))
             // Check whether the current region is not found on abnormal stores. If so,
             // this region is not the target to be awaken.
             if !region_on_stores(region, &abnormal_stores) {
