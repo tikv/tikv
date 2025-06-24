@@ -27,13 +27,8 @@ use collections::{HashMap, HashMapEntry, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::{
-<<<<<<< HEAD
-    CompactedEvent, DeleteStrategy, Engines, KvEngine, Mutable, PerfContextKind, RaftEngine,
-    RaftLogBatch, Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
-=======
-    CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DeleteStrategy, Engines, KvEngine, Mutable,
-    PerfContextKind, RaftEngine, RaftLogBatch, Range, WriteBatch, WriteOptions,
->>>>>>> 95a06da9a9 (raftstore: move the handling of `CompactedEvent` to split-check worker. (#18565))
+    DeleteStrategy, Engines, KvEngine, Mutable, PerfContextKind, RaftEngine, RaftLogBatch, Range,
+    WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use fail::fail_point;
 use file_system::{IoType, WithIoType};
@@ -3054,20 +3049,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         let store_id = self.ctx.store_id();
         let meta = self.ctx.store_meta.lock().unwrap();
 
-<<<<<<< HEAD
         for (region_id, region) in &meta.regions {
-=======
-        for region_id in region_ids {
-            let region = {
-                match meta.regions.get(&region_id) {
-                    None => {
-                        // The region has been merged or removed from this store; skip processing.
-                        continue;
-                    }
-                    Some(r) => r,
-                }
-            };
->>>>>>> 95a06da9a9 (raftstore: move the handling of `CompactedEvent` to split-check worker. (#18565))
             // Check whether the current region is not found on abnormal stores. If so,
             // this region is not the target to be awaken.
             if !region_on_stores(region, &abnormal_stores) {
