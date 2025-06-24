@@ -27,13 +27,8 @@ use collections::{HashMap, HashMapEntry, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::{
-<<<<<<< HEAD
-    CompactedEvent, DeleteStrategy, Engines, KvEngine, Mutable, PerfContextKind, RaftEngine,
+    DeleteStrategy, Engines, KvEngine, Mutable, PerfContextKind, RaftEngine,
     RaftLogBatch, Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
-=======
-    CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DeleteStrategy, Engines, KvEngine, Mutable,
-    PerfContextKind, RaftEngine, RaftLogBatch, Range, WriteBatch, WriteOptions,
->>>>>>> 95a06da9a9 (raftstore: move the handling of `CompactedEvent` to split-check worker. (#18565))
 };
 use fail::fail_point;
 use file_system::{IoType, WithIoType};
@@ -1641,13 +1636,8 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         pd_worker: LazyWorker<PdTask<EK, ER>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<EK>,
-<<<<<<< HEAD
         importer: Arc<SstImporter>,
-        split_check_scheduler: Scheduler<SplitCheckTask>,
-=======
-        importer: Arc<SstImporter<EK>>,
         split_check_scheduler: Scheduler<SplitCheckTask<EK>>,
->>>>>>> 95a06da9a9 (raftstore: move the handling of `CompactedEvent` to split-check worker. (#18565))
         background_worker: Worker,
         auto_split_controller: AutoSplitController,
         global_replication_state: Arc<Mutex<GlobalReplicationState>>,
@@ -2864,22 +2854,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         info!("try to wake up all hibernated regions in this store";
             "to_all" => abnormal_stores.is_empty());
         let meta = self.ctx.store_meta.lock().unwrap();
-<<<<<<< HEAD
         for region_id in meta.regions.keys() {
             let region = &meta.regions[region_id];
-=======
-
-        for region_id in region_ids {
-            let region = {
-                match meta.regions.get(&region_id) {
-                    None => {
-                        // The region has been merged or removed from this store; skip processing.
-                        continue;
-                    }
-                    Some(r) => r,
-                }
-            };
->>>>>>> 95a06da9a9 (raftstore: move the handling of `CompactedEvent` to split-check worker. (#18565))
             // Check whether the current region is not found on abnormal stores. If so,
             // this region is not the target to be awaken.
             if !region_on_stores(region, &abnormal_stores) {

@@ -9,12 +9,8 @@ use std::{
 };
 
 use engine_traits::{
-<<<<<<< HEAD
-    CfName, IterOptions, Iterable, Iterator, KvEngine, TabletRegistry, CF_WRITE, LARGE_CFS,
-=======
     CF_WRITE, CfName, CompactedEvent, IterOptions, Iterable, Iterator, KvEngine, LARGE_CFS,
     TabletRegistry,
->>>>>>> 95a06da9a9 (raftstore: move the handling of `CompactedEvent` to split-check worker. (#18565))
 };
 use file_system::{IoType, WithIoType};
 use itertools::Itertools;
@@ -36,14 +32,11 @@ use crate::{
         split_observer::{is_valid_split_key, strip_timestamp_if_exists},
         Config, CoprocessorHost, SplitCheckerHost,
     },
-<<<<<<< HEAD
     Result,
-=======
     store::{
         fsm::StoreMeta,
         metrics::{COMPACTION_DECLINED_BYTES, COMPACTION_RELATED_REGION_COUNT},
     },
->>>>>>> 95a06da9a9 (raftstore: move the handling of `CompactedEvent` to split-check worker. (#18565))
 };
 
 #[derive(PartialEq, Eq)]
