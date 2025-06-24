@@ -4118,7 +4118,7 @@ def GC() -> RowPanel:
                 yaxes=yaxes(left_format=UNITS.SHORT),
                 targets=[
                     target(
-                        expr=expr_sum_rate(
+                        expr=expr_sum(
                             "tikv_raftstore_mvcc_stats",
                             by_labels=["type"],
                         ),
