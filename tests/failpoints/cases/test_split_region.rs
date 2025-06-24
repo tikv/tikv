@@ -3,7 +3,7 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
-        mpsc::{self, channel, sync_channel},
+        mpsc::{self, channel},
     },
     thread,
     time::Duration,
@@ -40,7 +40,7 @@ use tikv_util::{
     mpsc::{Sender, unbounded},
     time::Instant,
 };
-use txn_types::{Key, LastChange, PessimisticLock, TimeStamp};
+use txn_types::{Key, LastChange, PessimisticLock};
 
 #[test]
 fn test_meta_inconsistency() {
