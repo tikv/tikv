@@ -27,8 +27,8 @@ use collections::{HashMap, HashMapEntry, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::{
-    DeleteStrategy, Engines, KvEngine, Mutable, PerfContextKind, RaftEngine,
-    RaftLogBatch, Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    DeleteStrategy, Engines, KvEngine, Mutable, PerfContextKind, RaftEngine, RaftLogBatch, Range,
+    WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use fail::fail_point;
 use file_system::{IoType, WithIoType};

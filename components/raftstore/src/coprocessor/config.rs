@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{KvEngine, PerfLevel, perf_level_serde};
+use engine_traits::{perf_level_serde, KvEngine, PerfLevel};
 use online_config::{ConfigChange, ConfigManager, OnlineConfig};
 use serde::{Deserialize, Serialize};
 use tikv_util::{box_err, config::ReadableSize, worker::Scheduler};

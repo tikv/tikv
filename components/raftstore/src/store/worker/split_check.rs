@@ -9,8 +9,8 @@ use std::{
 };
 
 use engine_traits::{
-    CF_WRITE, CfName, CompactedEvent, IterOptions, Iterable, Iterator, KvEngine, LARGE_CFS,
-    TabletRegistry,
+    CfName, CompactedEvent, IterOptions, Iterable, Iterator, KvEngine, TabletRegistry, CF_WRITE,
+    LARGE_CFS,
 };
 use file_system::{IoType, WithIoType};
 use itertools::Itertools;
@@ -32,11 +32,11 @@ use crate::{
         split_observer::{is_valid_split_key, strip_timestamp_if_exists},
         Config, CoprocessorHost, SplitCheckerHost,
     },
-    Result,
     store::{
         fsm::StoreMeta,
         metrics::{COMPACTION_DECLINED_BYTES, COMPACTION_RELATED_REGION_COUNT},
     },
+    Result,
 };
 
 #[derive(PartialEq, Eq)]
