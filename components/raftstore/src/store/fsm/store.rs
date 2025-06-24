@@ -3039,7 +3039,15 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         let meta = self.ctx.store_meta.lock().unwrap();
 
         for region_id in region_ids {
-            let region = &meta.regions[&region_id];
+            let region = {
+                match meta.regions.get(&region_id) {
+                    None => {
+                        // The region has been merged or removed from this store; skip processing.
+                        continue;
+                    }
+                    Some(r) => r,
+                }
+            };
             // Check whether the current region is not found on abnormal stores. If so,
             // this region is not the target to be awaken.
             if !region_on_stores(region, &abnormal_stores) {
