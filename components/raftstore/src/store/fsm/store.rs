@@ -2874,14 +2874,16 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         info!("try to wake up all hibernated regions in this store";
             "to_all" => abnormal_stores.is_empty());
         let meta = self.ctx.store_meta.lock().unwrap();
-<<<<<<< HEAD
         for region_id in meta.regions.keys() {
-            let region = &meta.regions[region_id];
-=======
-
-        for region_id in region_ids {
-            let region = &meta.regions[&region_id];
->>>>>>> 844eddc4a4 (raftstore: break up awaken regions into small batch. (#18544))
+            let region = {
+                match meta.regions.get(&region_id) {
+                    None => {
+                        // The region has been merged or removed from this store; skip processing.
+                        continue;
+                    }
+                    Some(r) => r,
+                }
+            };
             // Check whether the current region is not found on abnormal stores. If so,
             // this region is not the target to be awaken.
             if !region_on_stores(region, &abnormal_stores) {
