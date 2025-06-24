@@ -6,13 +6,9 @@ use std::{
     fmt::{self, Display, Formatter},
     io, mem,
     sync::{
-<<<<<<< HEAD
-=======
-        Arc, Mutex, RwLock,
->>>>>>> 844eddc4a4 (raftstore: break up awaken regions into small batch. (#18544))
         atomic::Ordering,
         mpsc::{self, Receiver, Sender, SyncSender},
-        Arc, Mutex,
+        Arc, Mutex, RwLock,
     },
     thread::{Builder, JoinHandle},
     time::{Duration, Instant},
@@ -1281,11 +1277,7 @@ where
 
         let scheduler = self.scheduler.clone();
         let router = self.router.clone();
-<<<<<<< HEAD
-=======
         let region_peers = self.region_peers.clone();
-        let mut snap_mgr = self.snap_mgr.clone();
->>>>>>> 844eddc4a4 (raftstore: break up awaken regions into small batch. (#18544))
         let resp = self
             .pd_client
             .store_heartbeat(stats, store_report, dr_autosync_status);
