@@ -6,10 +6,9 @@ use std::{
     fmt::{self, Display, Formatter},
     io, mem,
     sync::{
-        Arc, Mutex, RwLock,
         atomic::Ordering,
         mpsc::{self, Receiver, Sender, SyncSender},
-        Arc, Mutex,
+        Arc, Mutex, RwLock,
     },
     thread::{Builder, JoinHandle},
     time::{Duration, Instant},
