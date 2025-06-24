@@ -335,7 +335,7 @@ mod tests {
 
         // Try to ignore the ApproximateRegionSize
         let coprocessor = CoprocessorHost::new(stx, cfg);
-        let mut runnable = SplitCheckRunner::new(engine.clone(), tx, coprocessor);
+        let mut runnable = SplitCheckRunner::new(None, engine.clone(), tx, coprocessor);
 
         type Case = (Option<Vec<u8>>, Option<Vec<u8>>, Option<i64>);
         let mut check_cases = |cases: Vec<Case>| {
