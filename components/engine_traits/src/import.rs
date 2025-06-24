@@ -22,7 +22,29 @@ pub trait ImportExt {
         force_allow_write: bool,
     ) -> Result<()>;
 
-    fn directly_write_external_file_cf(
+    /// Imports the contents of external SST files into the given column family
+    /// by reading each key-value pair and writing them via write batches.
+    ///
+    /// This method is typically used as a mitigation when native RocksDB
+    /// ingestion is not appropriate, such as when file format or encryption
+    /// prevents direct ingestion or the source SST files are too trivial to
+    /// be ingested. It iterates over all key-value pairs in the provided SST
+    /// files and writes them into the target column family using batched
+    /// writes.
+    ///
+    /// # Arguments
+    /// * `cf` - The name of the column family to write into.
+    /// * `files` - Paths to the external SST files to import.
+    /// * `key_manager` - Optional key manager for decrypting encrypted SST
+    ///   files.
+    ///
+    /// # Returns
+    /// * `Result<()>` - Returns Ok if all files are imported successfully, or
+    ///   an error otherwise.
+    ///
+    /// # Caveats
+    /// - Write batches are flushed every 1024 entries for memory efficiency.
+    fn import_external_file_cf_without_ingest(
         &self,
         cf: &str,
         files: &[&str],

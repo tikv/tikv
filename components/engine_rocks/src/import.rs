@@ -82,7 +82,7 @@ impl ImportExt for RocksEngine {
         Ok(())
     }
 
-    fn directly_write_external_file_cf(
+    fn import_external_file_cf_without_ingest(
         &self,
         cf: &str,
         files: &[&str],

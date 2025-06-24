@@ -459,7 +459,7 @@ impl<E: KvEngine> ImportDir<E> {
         }
         for (cf, cf_paths) in paths_for_directly_write {
             let files: Vec<&str> = cf_paths.iter().map(|p| p.clone.to_str().unwrap()).collect();
-            engine.directly_write_external_file_cf(cf, &files, key_manager.clone())?;
+            engine.import_external_file_cf_without_ingest(cf, &files, key_manager.clone())?;
         }
 
         IMPORTER_INGEST_COUNT.ingest.observe(ingest_count.0 as _);
