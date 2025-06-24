@@ -999,23 +999,9 @@ impl<EK: KvEngine> StoreMsg<EK> {
         }
     }
 }
-<<<<<<< HEAD
-=======
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn test_msg_size() {
-        use std::mem;
-
-        use engine_rocks::RocksEngine;
-
-        use super::*;
-
-        // make sure the msg is small enough
-        assert_eq!(mem::size_of::<PeerMsg<RocksEngine>>(), 32);
-    }
-
     #[test]
     fn test_validate_slowlog_of_store_msg() {
         use engine_rocks::RocksEngine;
@@ -1047,4 +1033,3 @@ mod tests {
         assert!(filter.next().is_none());
     }
 }
->>>>>>> aa4c2786ec (raftstore: fix incorrect and misleading index logging in StoreMsg of slowlog. (#18562))
