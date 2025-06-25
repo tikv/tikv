@@ -296,24 +296,6 @@ impl MiscExt for RocksEngine {
         Ok(false)
     }
 
-    fn get_sst_key_ranges(&self, cf: &str, level: usize) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
-        let handle = util::get_cf_handle(self.as_inner(), cf)?;
-        let ret = self
-            .as_inner()
-            .get_column_family_meta_data(handle)
-            .get_level(level)
-            .get_files()
-            .iter()
-            .map(|sst_meta| {
-                (
-                    sst_meta.get_smallestkey().to_vec(),
-                    sst_meta.get_largestkey().to_vec(),
-                )
-            })
-            .collect();
-        Ok(ret)
-    }
-
     fn get_engine_used_size(&self) -> Result<u64> {
         let mut used_size: u64 = 0;
         for cf in self.cf_names() {
@@ -465,8 +447,12 @@ impl MiscExt for RocksEngine {
 #[cfg(test)]
 mod tests {
     use engine_traits::{
+<<<<<<< HEAD
         CompactExt, DeleteStrategy, Iterable, Iterator, ManualCompactionOptions, Mutable,
         SyncMutable, WriteBatchExt, ALL_CFS,
+=======
+        ALL_CFS, DeleteStrategy, Iterable, Iterator, Mutable, SyncMutable, WriteBatchExt,
+>>>>>>> b53e5f79ef (*: remove the logging for "sst ingest is too slow" to avoid latency jitters. (#18590))
     };
     use tempfile::Builder;
 
@@ -726,6 +712,7 @@ mod tests {
     }
 
     #[test]
+<<<<<<< HEAD
     fn test_get_sst_key_ranges() {
         let path = Builder::new()
             .prefix("test_get_sst_key_ranges")
@@ -798,6 +785,8 @@ mod tests {
     }
 
     #[test]
+=======
+>>>>>>> b53e5f79ef (*: remove the logging for "sst ingest is too slow" to avoid latency jitters. (#18590))
     fn test_flush_oldest() {
         let path = Builder::new()
             .prefix("test_flush_oldest")
