@@ -47,7 +47,7 @@ use std::{
 use grpcio_health::HealthService;
 use kvproto::pdpb::SlowTrend as SlowTrendPb;
 use parking_lot::{Mutex, RwLock};
-pub use types::{LatencyInspector, RaftstoreDuration};
+pub use types::{LatencyInspector, RaftstoreDuration, UnifiedDuration};
 
 struct ServingStatus {
     is_serving: bool,
@@ -67,6 +67,7 @@ impl ServingStatus {
 struct HealthControllerInner {
     // Internally stores a `f64` type.
     raftstore_slow_score: AtomicU64,
+    network_slow_score: AtomicU64,
     raftstore_slow_trend: RollingRetriever<SlowTrendPb>,
 
     /// gRPC's builtin `HealthService`.
@@ -101,6 +102,7 @@ impl HealthControllerInner {
         health_service.set_serving_status("", grpcio_health::ServingStatus::NotServing);
         Self {
             raftstore_slow_score: AtomicU64::new(f64::to_bits(1.0)),
+            network_slow_score: AtomicU64::new(f64::to_bits(1.0)),
             raftstore_slow_trend: RollingRetriever::new(),
 
             health_service,
@@ -188,6 +190,15 @@ impl HealthControllerInner {
         f64::from_bits(self.raftstore_slow_score.load(Ordering::Acquire))
     }
 
+    fn update_network_slow_score(&self, value: f64) {
+        self.network_slow_score
+            .store(value.to_bits(), Ordering::Release);
+    }
+
+    fn get_network_slow_score(&self) -> f64 {
+        f64::from_bits(self.network_slow_score.load(Ordering::Acquire))
+    }
+
     fn update_raftstore_slow_trend(&self, slow_trend_pb: SlowTrendPb) {
         self.raftstore_slow_trend.put(slow_trend_pb);
     }
@@ -215,6 +226,10 @@ impl HealthController {
 
     pub fn get_raftstore_slow_score(&self) -> f64 {
         self.inner.get_raftstore_slow_score()
+    }
+
+    pub fn get_network_slow_score(&self) -> f64 {
+        self.inner.get_network_slow_score()
     }
 
     pub fn get_raftstore_slow_trend(&self) -> SlowTrendPb {

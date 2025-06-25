@@ -219,7 +219,7 @@ mod tests {
             let inspector = LatencyInspector::new(
                 1,
                 Box::new(move |_, duration| {
-                    let dur = duration.sum();
+                    let dur = duration.raftstore_duration.sum();
                     tx_1.send(dur).unwrap();
                 }),
             );
@@ -235,7 +235,7 @@ mod tests {
                 let inspector = LatencyInspector::new(
                     i as u64,
                     Box::new(move |_, duration| {
-                        let dur = duration.sum();
+                        let dur = duration.raftstore_duration.sum();
                         tx_2.send(dur).unwrap();
                     }),
                 );
