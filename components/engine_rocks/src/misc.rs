@@ -447,12 +447,7 @@ impl MiscExt for RocksEngine {
 #[cfg(test)]
 mod tests {
     use engine_traits::{
-<<<<<<< HEAD
-        CompactExt, DeleteStrategy, Iterable, Iterator, ManualCompactionOptions, Mutable,
-        SyncMutable, WriteBatchExt, ALL_CFS,
-=======
-        ALL_CFS, DeleteStrategy, Iterable, Iterator, Mutable, SyncMutable, WriteBatchExt,
->>>>>>> b53e5f79ef (*: remove the logging for "sst ingest is too slow" to avoid latency jitters. (#18590))
+        DeleteStrategy, Iterable, Iterator, Mutable, SyncMutable, WriteBatchExt, ALL_CFS,
     };
     use tempfile::Builder;
 
@@ -712,81 +707,6 @@ mod tests {
     }
 
     #[test]
-<<<<<<< HEAD
-    fn test_get_sst_key_ranges() {
-        let path = Builder::new()
-            .prefix("test_get_sst_key_ranges")
-            .tempdir()
-            .unwrap();
-        let path_str = path.path().to_str().unwrap();
-
-        let mut opts = RocksDbOptions::default();
-        opts.create_if_missing(true);
-        opts.enable_multi_batch_write(true);
-
-        let mut cf_opts = RocksCfOptions::default();
-        // Prefix extractor(trim the timestamp at tail) for write cf.
-        cf_opts
-            .set_prefix_extractor(
-                "FixedSuffixSliceTransform",
-                crate::util::FixedSuffixSliceTransform::new(8),
-            )
-            .unwrap_or_else(|err| panic!("{:?}", err));
-        // Create prefix bloom filter for memtable.
-        cf_opts.set_memtable_prefix_bloom_size_ratio(0.1_f64);
-        let cf = "default";
-        let db = new_engine_opt(path_str, opts, vec![(cf, cf_opts)]).unwrap();
-        let mut wb = db.write_batch();
-        let kvs: Vec<(&[u8], &[u8])> = vec![
-            (b"k1", b"v1"),
-            (b"k2", b"v2"),
-            (b"k6", b"v3"),
-            (b"k7", b"v4"),
-        ];
-
-        for &(k, v) in kvs.as_slice() {
-            wb.put_cf(cf, k, v).unwrap();
-        }
-        wb.write().unwrap();
-
-        db.flush_cf(cf, true).unwrap();
-        let sst_range = db.get_sst_key_ranges(cf, 0).unwrap();
-        let expected = vec![(b"k1".to_vec(), b"k7".to_vec())];
-        assert_eq!(sst_range, expected);
-
-        let mut wb = db.write_batch();
-        let kvs: Vec<(&[u8], &[u8])> = vec![(b"k3", b"v1"), (b"k4", b"v2"), (b"k8", b"v3")];
-
-        for &(k, v) in kvs.as_slice() {
-            wb.put_cf(cf, k, v).unwrap();
-        }
-        wb.write().unwrap();
-
-        db.flush_cf(cf, true).unwrap();
-        let sst_range = db.get_sst_key_ranges(cf, 0).unwrap();
-        let expected = vec![
-            (b"k3".to_vec(), b"k8".to_vec()),
-            (b"k1".to_vec(), b"k7".to_vec()),
-        ];
-        assert_eq!(sst_range, expected);
-
-        db.compact_range_cf(
-            cf,
-            None,
-            None,
-            ManualCompactionOptions::new(false, 1, false),
-        )
-        .unwrap();
-        let sst_range = db.get_sst_key_ranges(cf, 0).unwrap();
-        assert_eq!(sst_range.len(), 0);
-        let sst_range = db.get_sst_key_ranges(cf, 1).unwrap();
-        let expected = vec![(b"k1".to_vec(), b"k8".to_vec())];
-        assert_eq!(sst_range, expected);
-    }
-
-    #[test]
-=======
->>>>>>> b53e5f79ef (*: remove the logging for "sst ingest is too slow" to avoid latency jitters. (#18590))
     fn test_flush_oldest() {
         let path = Builder::new()
             .prefix("test_flush_oldest")
