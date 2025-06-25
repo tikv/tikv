@@ -497,8 +497,7 @@ impl MiscExt for RocksEngine {
 #[cfg(test)]
 mod tests {
     use engine_traits::{
-        ALL_CFS, CompactExt, DeleteStrategy, Iterable, Iterator, ManualCompactionOptions, Mutable,
-        SyncMutable, WriteBatchExt,
+        ALL_CFS, DeleteStrategy, Iterable, Iterator, Mutable, SyncMutable, WriteBatchExt,
     };
     use tempfile::Builder;
 
