@@ -459,12 +459,7 @@ impl MiscExt for RocksEngine {
 #[cfg(test)]
 mod tests {
     use engine_traits::{
-<<<<<<< HEAD
-        CompactExt, DeleteStrategy, Iterable, Iterator, ManualCompactionOptions, Mutable,
-        SyncMutable, WriteBatchExt, ALL_CFS,
-=======
-        ALL_CFS, DeleteStrategy, Iterable, Iterator, Mutable, SyncMutable, WriteBatchExt,
->>>>>>> b53e5f79ef (*: remove the logging for "sst ingest is too slow" to avoid latency jitters. (#18590))
+        DeleteStrategy, Iterable, Iterator, Mutable, SyncMutable, WriteBatchExt, ALL_CFS,
     };
     use tempfile::Builder;
 
