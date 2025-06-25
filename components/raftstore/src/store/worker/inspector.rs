@@ -9,7 +9,6 @@ use std::{
 
 use std::sync::Arc;
 use crossbeam::channel::{Receiver, Sender, bounded};
-use error_code::ErrorCodeExt;
 use health_controller::types::LatencyInspector;
 use tikv_util::{
     time::Instant,
@@ -162,7 +161,7 @@ impl Runner {
                 Task::NetworkLatency { mut inspector } => {
                     // For network latency, we don't have a specific implementation here.
                     if let Some(latency) = self.inspect_network() {
-                        // TODO: record network latency
+                        inspector.record_network_io_duration(latency);
                         inspector.finish();
                     } else {
                         warn!("failed to inspect network io latency");

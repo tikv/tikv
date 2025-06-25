@@ -2,6 +2,8 @@
 
 use std::fmt::Debug;
 
+use tikv_util::info;
+
 #[derive(Default, Debug)]
 pub struct UnifiedDuration {
     /// The duration of all stages of raftstore.
@@ -127,6 +129,11 @@ impl LatencyInspector {
     }
 
     pub fn record_network_io_duration(&mut self, duration: std::time::Duration) {
+        info!(
+            "record network io duration";
+            "id" => self.id,
+            "duration" => ?duration
+        );
         self.duration.network_duration = Some(duration);
     }
 

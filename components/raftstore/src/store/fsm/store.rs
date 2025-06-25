@@ -913,11 +913,17 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                             }
                         }
                         InspectFactor::Network => {
-                            // TODO: support network latency inspect.
-                            warn!(
-                                "Network latency inspect is not supported";
-                                "store_id" => self.fsm.store.id
-                            );
+                            if let Err(e) = self
+                                .ctx
+                                .inspector_scheduler
+                                .schedule(InspectorTask::NetworkLatency { inspector })
+                            {
+                                warn!(
+                                    "Failed to schedule network check task";
+                                    "error" => ?e,
+                                    "store_id" => self.fsm.store.id
+                                );
+                            }
                         }
                     }
                 }
