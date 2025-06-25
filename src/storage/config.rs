@@ -14,7 +14,10 @@ use tikv_util::{
     sys::SysQuota,
 };
 
-use crate::config::{DEFAULT_ROCKSDB_SUB_DIR, DEFAULT_TABLET_SUB_DIR, MIN_BLOCK_CACHE_SHARD_SIZE};
+use crate::{
+    config::{DEFAULT_ROCKSDB_SUB_DIR, DEFAULT_TABLET_SUB_DIR, MIN_BLOCK_CACHE_SHARD_SIZE},
+    server::CONFIG_FLOW_CONTROL_GAUGE,
+};
 
 pub const DEFAULT_DATA_DIR: &str = "./";
 const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
@@ -276,6 +279,26 @@ impl Default for FlowControlConfig {
             memtables_threshold: 5,
             l0_files_threshold: 20,
         }
+    }
+}
+
+impl FlowControlConfig {
+    pub fn write_into_metrics(&self) {
+        CONFIG_FLOW_CONTROL_GAUGE
+            .with_label_values(&["enabled"])
+            .set(self.enable.into());
+        CONFIG_FLOW_CONTROL_GAUGE
+            .with_label_values(&["soft_pending_compaction_bytes_limit"])
+            .set(self.soft_pending_compaction_bytes_limit.0 as f64);
+        CONFIG_FLOW_CONTROL_GAUGE
+            .with_label_values(&["hard_pending_compaction_bytes_limit"])
+            .set(self.hard_pending_compaction_bytes_limit.0 as f64);
+        CONFIG_FLOW_CONTROL_GAUGE
+            .with_label_values(&["memtables_threshold"])
+            .set(self.memtables_threshold as f64);
+        CONFIG_FLOW_CONTROL_GAUGE
+            .with_label_values(&["l0_files_threshold"])
+            .set(self.l0_files_threshold as f64);
     }
 }
 

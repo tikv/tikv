@@ -454,10 +454,22 @@ lazy_static! {
             &["reason"]
         )
         .unwrap();
-    pub static ref CONFIG_ROCKSDB_GAUGE: GaugeVec = register_gauge_vec!(
-        "tikv_config_rocksdb",
-        "Config information of rocksdb",
+    pub static ref CONFIG_ROCKSDB_DB_GAUGE: GaugeVec = register_gauge_vec!(
+        "tikv_config_rocksdb_db",
+        "DB Config information of rocksdb",
+        &["db", "name"]
+    )
+    .unwrap();
+    pub static ref CONFIG_ROCKSDB_CF_GAUGE: GaugeVec = register_gauge_vec!(
+        "tikv_config_rocksdb_cf",
+        "CF Config information of rocksdb",
         &["cf", "name"]
+    )
+    .unwrap();
+    pub static ref CONFIG_FLOW_CONTROL_GAUGE: GaugeVec = register_gauge_vec!(
+        "tikv_config_flow_control",
+        "Config information of flow control",
+        &["name"]
     )
     .unwrap();
     pub static ref REQUEST_BATCH_SIZE_HISTOGRAM_VEC: RequestBatchSizeHistogramVec =

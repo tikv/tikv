@@ -58,7 +58,7 @@ use super::{
 use crate::{
     import::duplicate_detect::DuplicateDetector,
     send_rpc_response,
-    server::CONFIG_ROCKSDB_GAUGE,
+    server::CONFIG_ROCKSDB_CF_GAUGE,
     storage::{self, errors::extract_region_error_from_error},
     tikv_util::sys::thread::ThreadBuildWrapper,
 };
@@ -767,7 +767,9 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             let req_mode = req.get_mode();
             let handle = tokio::task::spawn_blocking(move || {
                 fn mf(cf: &str, name: &str, v: f64) {
-                    CONFIG_ROCKSDB_GAUGE.with_label_values(&[cf, name]).set(v);
+                    CONFIG_ROCKSDB_CF_GAUGE
+                        .with_label_values(&[cf, name])
+                        .set(v);
                 }
 
                 match tablets {
