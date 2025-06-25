@@ -136,17 +136,11 @@ fn check_write_stall<E: KvEngine>(
     } else if importer.get_mode() == SwitchMode::Normal
         && tablet.ingest_maybe_slowdown_writes(CF_WRITE).expect("cf")
     {
-        match tablet.get_sst_key_ranges(CF_WRITE, 0) {
-            Ok(l0_sst_ranges) => {
-                warn!(
-                    "sst ingest is too slow";
-                    "sst_ranges" => ?l0_sst_ranges,
-                );
-            }
-            Err(e) => {
-                error!("get sst key ranges failed"; "err" => ?e);
-            }
-        }
+        // See https://github.com/tikv/tikv/issues/18549:
+        // Previously, logging SST key ranges by calling `ingest_sst_key_ranges` caused
+        // latency spikes. The logging here has been refined to avoid such
+        // performance issues.
+        warn!("SST ingest is experiencing slowdowns");
         return reject_error(None);
     }
 
