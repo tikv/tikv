@@ -7,7 +7,6 @@ use kvproto::coprocessor::KeyRange;
 use tidb_query_common::{
     execute_stats::ExecuteStats,
     storage::{IntervalRange, Storage},
-    util::convert_to_prefix_next,
     Result,
 };
 use tidb_query_datatype::{
@@ -15,7 +14,9 @@ use tidb_query_datatype::{
         batch::LazyBatchColumnVec,
         data_type::LogicalRows,
         datum,
-        table::{encode_common_handle, encode_row_key},
+        table::{
+            encode_common_handle_to_buf, encode_row_key_to_buf, PREFIX_LEN, RECORD_ROW_KEY_LEN,
+        },
         Datum,
     },
     expr::{EvalConfig, EvalContext, EvalWarnings},
@@ -173,7 +174,9 @@ impl Handle for IntHandle {
 
     #[inline]
     fn encode_raw_key(&self, table_id: i64) -> Vec<u8> {
-        encode_row_key(table_id, self.0)
+        let mut key = Vec::with_capacity(RECORD_ROW_KEY_LEN + 1);
+        encode_row_key_to_buf(table_id, self.0, &mut key);
+        key
     }
 
     #[inline]
@@ -208,7 +211,9 @@ impl Handle for CommonHandle {
 
     #[inline]
     fn encode_raw_key(&self, table_id: i64) -> Vec<u8> {
-        encode_common_handle(table_id, &self.0)
+        let mut key = Vec::with_capacity(PREFIX_LEN + self.0.len() + 1);
+        encode_common_handle_to_buf(table_id, &self.0, &mut key);
+        key
     }
 
     #[inline]
@@ -228,7 +233,7 @@ async fn build_index_lookup_probe_ranges_for_handles<S: Storage, T: Handle>(
     let sorted_handles =
         sort_result_handles::<T>(ctx, build_side_results, result_schema, handle_offsets)?;
 
-    let mut probe_side_ranges = vec![];
+    let mut probe_side_ranges = Vec::with_capacity(sorted_handles.handles.len());
     let mut left_handles = HashSet::<(usize, usize)>::new();
     let mut current_region: Option<(AsyncRegion<S>, Vec<KeyRange>, (usize, usize))> = None;
     let handles_len = sorted_handles.handles.len();
@@ -237,7 +242,8 @@ async fn build_index_lookup_probe_ranges_for_handles<S: Storage, T: Handle>(
         if i < handles_len {
             let handle_idx = sorted_handles.orders[i];
             let handle = &sorted_handles.handles[handle_idx];
-            let raw_key = handle.encode_raw_key(table_id);
+            let mut raw_key = handle.encode_raw_key(table_id);
+            let raw_key_len = raw_key.len();
             let key = Key::from_raw(&raw_key);
             match current_region {
                 Some((ref region, ref mut ranges, ref mut slice))
@@ -246,13 +252,15 @@ async fn build_index_lookup_probe_ranges_for_handles<S: Storage, T: Handle>(
                     let lat_handle = &sorted_handles.handles[sorted_handles.orders[i - 1]];
                     if lat_handle.is_next(handle) {
                         let last_range = ranges.last_mut().unwrap();
+                        raw_key.push(0);
                         last_range.set_end(raw_key);
-                        convert_to_prefix_next(last_range.mut_end());
                     } else {
                         let mut r = KeyRange::new();
                         r.set_start(raw_key);
-                        r.set_end(r.get_start().to_vec());
-                        convert_to_prefix_next(r.mut_end());
+                        let mut raw_end = Vec::with_capacity(raw_key_len + 1);
+                        raw_end.extend_from_slice(r.get_start());
+                        raw_end.push(0);
+                        r.set_end(raw_end);
                         ranges.push(r);
                     }
                     slice.1 = i;
@@ -262,8 +270,10 @@ async fn build_index_lookup_probe_ranges_for_handles<S: Storage, T: Handle>(
                     if let Some(region) = locate_key(key.as_encoded()).take() {
                         let mut r = KeyRange::new();
                         r.set_start(raw_key);
-                        r.set_end(r.get_start().to_vec());
-                        convert_to_prefix_next(r.mut_end());
+                        let mut raw_end = Vec::with_capacity(raw_key_len + 1);
+                        raw_end.extend_from_slice(r.get_start());
+                        raw_end.push(0);
+                        r.set_end(raw_end);
                         current_region = Some((region, vec![r], (i, i)));
                     } else {
                         left_handles.insert(sorted_handles.get_position_in_results(i)?);

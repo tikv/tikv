@@ -20,7 +20,6 @@ use tidb_query_datatype::{
     FieldTypeAccessor,
 };
 use tipb::{ColumnInfo, FieldType, TableScan};
-use txn_types::Key;
 
 use super::util::scan_executor::*;
 use crate::interface::*;
