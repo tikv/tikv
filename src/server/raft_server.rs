@@ -172,7 +172,7 @@ where
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
-        disk_check_runner: InpectorRunner,
+        inspector_runner: InpectorRunner,
         grpc_service_mgr: GrpcServiceManager,
         safe_point: Arc<AtomicU64>,
     ) -> Result<()>
@@ -212,7 +212,7 @@ where
             concurrency_manager,
             collector_reg_handle,
             causal_ts_provider,
-            disk_check_runner,
+            inspector_runner,
             grpc_service_mgr,
             safe_point,
         )?;
@@ -462,7 +462,7 @@ where
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
-        disk_check_runner: InpectorRunner,
+        inspector_runner: InpectorRunner,
         grpc_service_mgr: GrpcServiceManager,
         safe_point: Arc<AtomicU64>,
     ) -> Result<()>
@@ -498,7 +498,7 @@ where
             collector_reg_handle,
             self.health_controller.clone(),
             causal_ts_provider,
-            disk_check_runner,
+            inspector_runner,
             grpc_service_mgr,
             safe_point,
         )?;

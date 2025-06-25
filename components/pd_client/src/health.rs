@@ -3,7 +3,7 @@
 use grpcio_health::proto::HealthCheckResponse;
 use super::Result;
 
-pub trait HealthClient {
+pub trait HealthClient: Send + Sync {
     fn check(
         &self,
     ) -> Result<HealthCheckResponse>;

@@ -5331,6 +5331,8 @@ dependencies = [
  "futures 0.3.15",
  "futures-util",
  "getset",
+ "grpcio",
+ "grpcio-health",
  "health_controller",
  "into_other",
  "itertools",

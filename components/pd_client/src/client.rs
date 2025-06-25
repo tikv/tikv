@@ -1256,12 +1256,11 @@ impl HealthClient for RpcClient {
     fn check(&self) -> Result<HealthCheckResponse> {
         let req = HealthCheckRequest::default();
 
-        let resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client, option| {
-            let health_client = GrpcHealthClient::new(
-                client.client.channel().clone(),
-            );
-            health_client.check_opt(&req, option)
-        })?;
+        let health_client = GrpcHealthClient::new(
+            self.pd_client.inner.rl().client_stub.client.channel().clone(),
+        );
+        let resp = health_client.check_opt(&req, call_option_inner(&self.pd_client.inner.rl()))?;
+
         Ok(resp)
     }
 }
