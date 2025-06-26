@@ -1426,7 +1426,7 @@ pub struct DbConfig {
     pub lockcf: LockCfConfig,
     #[online_config(submodule)]
     pub raftcf: RaftCfConfig,
-    #[online_config(submodule)]
+    #[online_config(skip)]
     pub titan: TitanDbConfig,
 }
 
@@ -1867,10 +1867,7 @@ impl DbConfig {
             .with_label_values(&["rocksdb", "write_buffer_limit"])
             .set(self.write_buffer_limit.unwrap_or_default().0 as f64);
         CONFIG_ROCKSDB_DB_GAUGE
-            .with_label_values(&[
-                "rocksdb",
-                "allow_concurrtrack_and_verify_wals_in_manifestent_memtable_write",
-            ])
+            .with_label_values(&["rocksdb", "track_and_verify_wals_in_manifest"])
             .set(self.track_and_verify_wals_in_manifest.into());
         CONFIG_ROCKSDB_DB_GAUGE
             .with_label_values(&["rocksdb", "paranoid_checks"])
