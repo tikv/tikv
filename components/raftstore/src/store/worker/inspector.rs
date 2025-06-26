@@ -66,6 +66,8 @@ impl Runner {
     const DISK_IO_LATENCY_INSPECT_FILENAME: &'static str = ".disk_latency_inspector.tmp";
     /// The content to write to the file to measure the latency.
     const DISK_IO_LATENCY_INSPECT_FLUSH_STR: &'static [u8] = b"inspect disk io latency";
+    /// If duration is greater than 1s, it will be considered as a timeout.
+    const NETWORK_TIMEOUT: Duration = Duration::from_secs(2);
 
     #[inline]
     fn build(target: PathBuf, health_client: Arc<dyn HealthClient + Send + Sync>) -> Self {
@@ -137,9 +139,9 @@ impl Runner {
             Err(e) => {
                 if is_network_error(&e) {
                     warn!("network error when checking pd health"; "err" => ?e);
-                } else {
-                    warn!("unexpected error when checking pd health"; "err" => ?e);
+                    return Some(Self::NETWORK_TIMEOUT);
                 }
+                warn!("unexpected error when checking pd health"; "err" => ?e);
                 return None;
             }
         };
