@@ -520,7 +520,7 @@ where
                                 );
                                 for cf in &cf_names {
                                     let start_time = CHECK_THEN_COMPACT_DURATION
-                                        .with_label_values(&["check_then_compact", cf])
+                                        .with_label_values(&["compact", cf])
                                         .start_coarse_timer();
                                     if let Err(e) = self.compact_range_cf(
                                         cf,
@@ -626,29 +626,30 @@ fn get_compact_score(
         return 0.0;
     }
 
-    let mut num_discardable = range_stats.num_entries - range_stats.num_versions;
-    if num_discardable < compact_threshold.tombstones_num_threshold && !compaction_filter_enabled {
-        return 0.0;
-    }
-    if compaction_filter_enabled {
-        num_discardable += range_stats.redundant_keys();
-    }
-    let discardable_ratio = num_discardable as f64 / range_stats.num_entries as f64;
-    if compaction_filter_enabled {
-        if discardable_ratio < compact_threshold.redundant_rows_percent_threshold as f64 / 100.0 {
+    let num_tombstones = range_stats.num_entries - range_stats.num_versions;
+
+    if !compaction_filter_enabled {
+        // Only consider deletes (tombstones)
+        if num_tombstones < compact_threshold.tombstones_num_threshold
+            && num_tombstones * 100
+                < compact_threshold.tombstones_percent_threshold * range_stats.num_entries
+        {
             return 0.0;
         }
-    } else if discardable_ratio < compact_threshold.tombstones_percent_threshold as f64 / 100.0 {
+        let ratio = num_tombstones as f64 / range_stats.num_entries as f64;
+        return num_tombstones as f64 * ratio;
+    }
+    // When compaction filter is enabled, ignore tombstone threshold,
+    // just add deletes to redundant keys for scoring.
+    let num_discardable = num_tombstones + range_stats.redundant_keys();
+    let ratio = num_discardable as f64 / range_stats.num_entries as f64;
+    if num_discardable < compact_threshold.redundant_rows_threshold
+        && num_discardable * 100
+            < compact_threshold.redundant_rows_percent_threshold * range_stats.num_entries
+    {
         return 0.0;
     }
-
-    // To prioritize compaction candidates using both:
-    // 1.	Redundant key count (R)
-    // 2.	Redundancy ratio (S = R / total_keys)
-    // priority = R^a * S^b
-    // where a and b are constants that can be tuned.
-    // Here we use a = 1 and b = 1
-    discardable_ratio * num_discardable as f64
+    return num_discardable as f64 * ratio;
 }
 
 #[derive(Debug, Clone)]

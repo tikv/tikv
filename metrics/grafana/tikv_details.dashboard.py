@@ -4122,7 +4122,7 @@ def GC() -> RowPanel:
                         expr=expr_histogram_quantile(
                             0.99,
                             "tikv_storage_check_then_compact_duration_seconds",
-                            by_labels=["instance", "type"],
+                            by_labels=["instance", "type", "cf"],
                             is_optional_quantile=True,
                         ),
                         legend_format="{{instance}}-{{type}}-{{cf}}-duration "
