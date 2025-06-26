@@ -2754,25 +2754,30 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         }
         // Divide region ranges by group_size, add DATA_MIN_KEY as first and
         // DATA_MAX_KEY as last.
-        let group_size = std::cmp::max(1, self.ctx.cfg.check_then_compact_group_size as usize);
-        let estimated_groups = (meta.region_ranges.len() + group_size - 1) / group_size;
-        let mut all_ranges = Vec::with_capacity(estimated_groups + 1);
-        all_ranges.push(keys::DATA_MIN_KEY.to_vec());
+        // let group_size = std::cmp::max(1, self.ctx.cfg.check_then_compact_group_size
+        // as usize); let estimated_groups = (meta.region_ranges.len() +
+        // group_size - 1) / group_size; let mut all_ranges =
+        // Vec::with_capacity(estimated_groups + 1); all_ranges.
+        // push(keys::DATA_MIN_KEY.to_vec());
 
-        for (i, key) in meta.region_ranges.keys().enumerate() {
-            if (i + 1) % group_size == 0 {
-                all_ranges.push(key.clone());
-            }
-        }
-        // If the last group has fewer members than group_size, just use DATA_MAX_KEY.
-        if meta.region_ranges.len() % group_size != 0 {
-            all_ranges.push(keys::DATA_MAX_KEY.to_vec());
-        }
+        // for (i, key) in meta.region_ranges.keys().enumerate() {
+        //     if (i + 1) % group_size == 0 {
+        //         all_ranges.push(key.clone());
+        //     }
+        // }
+        // // If the last group has fewer members than group_size, just use
+        // DATA_MAX_KEY. if meta.region_ranges.len() % group_size != 0 {
+        //     all_ranges.push(keys::DATA_MAX_KEY.to_vec());
+        // }
+        let mut all_ranges = Vec::with_capacity(meta.region_ranges.len() + 2);
+        all_ranges.push(keys::DATA_MIN_KEY.to_vec());
+        all_ranges.extend(meta.region_ranges.keys().cloned());
+        all_ranges.push(keys::DATA_MAX_KEY.to_vec());
         let cf_names = vec![CF_WRITE.to_owned(), CF_DEFAULT.to_owned()];
         let finished = Arc::new(());
         self.fsm.check_and_compact_running_indicator = Some(Arc::downgrade(&finished));
         if let Err(e) = self.ctx.cleanup_scheduler.schedule(CleanupTask::Compact(
-            CompactTask::CheckThenCompactV2 {
+            CompactTask::CheckThenCompactTopN {
                 cf_names,
                 ranges: all_ranges,
                 compact_threshold: CompactThreshold::new(
@@ -2783,6 +2788,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
                 ),
                 compaction_filter_enabled: self.ctx.cfg.compaction_filter_enabled,
                 bottommost_level_force: self.ctx.cfg.check_then_compact_force_bottommost_level,
+                top_n: self.ctx.cfg.check_then_compact_top_n as usize,
                 finished,
             },
         )) {
