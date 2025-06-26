@@ -464,6 +464,9 @@ pub struct Config {
     pub check_then_compact_group_size: u64,
     #[doc(hidden)]
     #[online_config(hidden)]
+    pub check_then_compact_top_n: u64,
+    #[doc(hidden)]
+    #[online_config(hidden)]
     pub compaction_filter_enabled: bool,
 }
 
@@ -609,6 +612,7 @@ impl Default for Config {
             min_pending_apply_region_count: 10,
             check_then_compact_force_bottommost_level: true,
             check_then_compact_group_size: 10,
+            check_then_compact_top_n: 10,
             compaction_filter_enabled: true,
         }
     }

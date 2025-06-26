@@ -4125,7 +4125,7 @@ def GC() -> RowPanel:
                             by_labels=["instance", "type"],
                             is_optional_quantile=True,
                         ),
-                        legend_format="{{instance}}-check-duration "
+                        legend_format="{{instance}}-{{type}}-{{cf}}-duration "
                         + OPTIONAL_QUANTILE_INPUT,
                     ),
                 ],

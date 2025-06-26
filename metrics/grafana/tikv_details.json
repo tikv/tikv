@@ -58976,7 +58976,7 @@
               "instant": false,
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "{{instance}}-check-duration $optional_quantile",
+              "legendFormat": "{{instance}}-{{type}}-{{cf}}-duration $optional_quantile",
               "metric": "",
               "query": "histogram_quantile($optional_quantile,(\n    sum(rate(\n    tikv_storage_check_then_compact_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance, type, le) \n    \n    \n))  ",
               "refId": "",
