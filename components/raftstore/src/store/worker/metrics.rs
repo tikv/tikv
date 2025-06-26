@@ -215,7 +215,7 @@ lazy_static! {
     pub static ref CHECK_THEN_COMPACT_DURATION: HistogramVec = register_histogram_vec!(
         "tikv_storage_check_then_compact_duration_seconds",
         "Bucketed histogram of duration in storage check and compact worker",
-        &["type"],
+        &["type", "cf"],
         exponential_buckets(0.001, 2.0, 20).unwrap()
     )
     .unwrap();

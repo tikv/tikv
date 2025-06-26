@@ -73,7 +73,7 @@ pub trait StatisticsReporter<T: ?Sized> {
 /// num_rows: 6 (f4: 3 + f3: 1 + f2: 1 + f1: 1, k1_t6 is masked by k1_t7)
 /// num_deletes: 1 (k2 in f4)
 
-#[derive(Default)]
+#[derive(Default, Debug, Clone)]
 pub struct RangeStats {
     // The total number of entries in the range.
     pub num_entries: u64,
