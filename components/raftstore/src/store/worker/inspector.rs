@@ -5,6 +5,7 @@ use std::{
     io::Write,
     path::PathBuf,
     time::Duration,
+    cmp,
 };
 
 use std::sync::Arc;
@@ -68,6 +69,8 @@ impl Runner {
     const DISK_IO_LATENCY_INSPECT_FLUSH_STR: &'static [u8] = b"inspect disk io latency";
     /// If duration is greater than 1s, it will be considered as a timeout.
     const NETWORK_TIMEOUT: Duration = Duration::from_secs(2);
+    /// If duration is less than 1s, it will be considered as a normal network.
+    const NETWORK_NOT_TIMEOUT: Duration = Duration::from_millis(500);
 
     #[inline]
     fn build(target: PathBuf, health_client: Arc<dyn HealthClient + Send + Sync>) -> Self {
@@ -133,7 +136,8 @@ impl Runner {
             Ok(resp) => {
                 if resp.status != Serving {
                     warn!("pd server is not serving."; "status" => ?resp.status);
-                    return None;
+                    // Non-network problem, we do not consider it as a timeout
+                    return Some(cmp::max(start.saturating_elapsed(), Self::NETWORK_NOT_TIMEOUT));
                 }
             },
             Err(e) => {
@@ -142,7 +146,8 @@ impl Runner {
                     return Some(Self::NETWORK_TIMEOUT);
                 }
                 warn!("unexpected error when checking pd health"; "err" => ?e);
-                return None;
+                // Non-network problem, we do not consider it as a timeout
+                return Some(cmp::max(start.saturating_elapsed(), Self::NETWORK_NOT_TIMEOUT));
             }
         };
         Some(start.saturating_elapsed())
