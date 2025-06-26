@@ -3219,7 +3219,7 @@ dependencies = [
  "httpdate",
  "itoa 1.0.1",
  "pin-project-lite",
- "socket2 0.4.7",
+ "socket2",
  "tokio",
  "tower-service",
  "tracing",
@@ -5132,7 +5132,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.4.2"
-source = "git+https://github.com/tikv/raft-engine.git#de1ec937529e3a88e093db0cf0d403522565fe64"
+source = "git+https://github.com/tikv/raft-engine.git?branch=tikv-8.5#e5e2b4ea7c61581121013b382568d7336706fed2"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -5166,7 +5166,7 @@ dependencies = [
 [[package]]
 name = "raft-engine-ctl"
 version = "0.4.2"
-source = "git+https://github.com/tikv/raft-engine.git#cd1533d79cfea02d005b458bd70fd9675846c9c6"
+source = "git+https://github.com/tikv/raft-engine.git?branch=tikv-8.5#e5e2b4ea7c61581121013b382568d7336706fed2"
 dependencies = [
  "clap 3.1.6",
  "env_logger 0.10.0",
@@ -6376,16 +6376,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9518813a25ab2704a6df4968f609aa6949705409b6a854dcc87018d12961cbc8"
 dependencies = [
  "cmake",
-]
-
-[[package]]
-name = "socket2"
-version = "0.4.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02e2d2db9033d13a1567121ddd7a095ee144db4e1ca1b1bda3419bc0da294ebd"
-dependencies = [
- "libc 0.2.151",
- "winapi 0.3.9",
 ]
 
 [[package]]
@@ -7701,7 +7691,7 @@ dependencies = [
  "parking_lot 0.12.1",
  "pin-project-lite",
  "signal-hook-registry",
- "socket2 0.5.7",
+ "socket2",
  "tokio-macros",
  "windows-sys 0.48.0",
 ]
