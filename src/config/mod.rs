@@ -1270,20 +1270,15 @@ impl RaftCfConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct TitanDbConfig {
-    #[online_config(skip)]
     pub enabled: Option<bool>,
-    #[online_config(skip)]
     pub dirname: String,
-    #[online_config(skip)]
     pub disable_gc: bool,
-    #[online_config(skip)]
     pub max_background_gc: i32,
     // The value of this field will be truncated to seconds.
-    #[online_config(skip)]
     pub purge_obsolete_files_period: ReadableDuration,
 }
 
