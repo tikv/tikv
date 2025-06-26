@@ -82,7 +82,7 @@ use crate::{
     coprocessor_v2::Config as CoprocessorV2Config,
     import::Config as ImportConfig,
     server::{
-        CONFIG_ROCKSDB_GAUGE, Config as ServerConfig,
+        CONFIG_ROCKSDB_CF_GAUGE, CONFIG_ROCKSDB_DB_GAUGE, Config as ServerConfig,
         gc_worker::{GcConfig, RawCompactionFilterFactory, WriteCompactionFilterFactory},
         lock_manager::Config as PessimisticTxnConfig,
         ttl::TtlCompactionFilterFactory,
@@ -459,7 +459,7 @@ macro_rules! cf_config {
     };
 }
 
-macro_rules! write_into_metrics {
+macro_rules! write_into_cf_metrics {
     ($cf:expr, $tag:expr, $metrics:expr) => {{
         $metrics
             .with_label_values(&[$tag, "block_size"])
@@ -477,7 +477,6 @@ macro_rules! write_into_metrics {
         $metrics
             .with_label_values(&[$tag, "pin_l0_filter_and_index_blocks"])
             .set(($cf.pin_l0_filter_and_index_blocks as i32).into());
-
         $metrics
             .with_label_values(&[$tag, "use_bloom_filter"])
             .set(($cf.use_bloom_filter as i32).into());
@@ -501,13 +500,20 @@ macro_rules! write_into_metrics {
                 .with_label_values(&[$tag, "ribbon_filter_above_level"])
                 .set((level as i32).into());
         }
-
         $metrics
             .with_label_values(&[$tag, "read_amp_bytes_per_bit"])
             .set($cf.read_amp_bytes_per_bit.into());
+        for (i, level_compression) in $cf.compression_per_level.iter().enumerate() {
+            $metrics
+                .with_label_values(&[$tag, &format!("compression_level_{}", i)])
+                .set(*level_compression as u64 as f64);
+        }
         $metrics
             .with_label_values(&[$tag, "write_buffer_size"])
-            .set($cf.write_buffer_size.unwrap().0 as f64);
+            .set($cf.write_buffer_size.unwrap_or_default().0 as f64);
+        $metrics
+            .with_label_values(&[$tag, "write_buffer_limit"])
+            .set($cf.write_buffer_limit.unwrap_or_default().0 as f64);
         $metrics
             .with_label_values(&[$tag, "max_write_buffer_number"])
             .set($cf.max_write_buffer_number.into());
@@ -537,6 +543,9 @@ macro_rules! write_into_metrics {
             .with_label_values(&[$tag, "max_compaction_bytes"])
             .set($cf.max_compaction_bytes.0 as f64);
         $metrics
+            .with_label_values(&[$tag, "compaction_pri"])
+            .set($cf.compaction_pri as u64 as f64);
+        $metrics
             .with_label_values(&[$tag, "dynamic_level_bytes"])
             .set(($cf.dynamic_level_bytes as i32).into());
         $metrics
@@ -545,7 +554,9 @@ macro_rules! write_into_metrics {
         $metrics
             .with_label_values(&[$tag, "max_bytes_for_level_multiplier"])
             .set($cf.max_bytes_for_level_multiplier.into());
-
+        $metrics
+            .with_label_values(&[$tag, "compaction_style"])
+            .set($cf.compaction_style as u64 as f64);
         $metrics
             .with_label_values(&[$tag, "disable_auto_compactions"])
             .set(($cf.disable_auto_compactions as i32).into());
@@ -570,16 +581,71 @@ macro_rules! write_into_metrics {
             .with_label_values(&[$tag, "force_consistency_checks"])
             .set(($cf.force_consistency_checks as i32).into());
         $metrics
+            .with_label_values(&[$tag, "prop_size_index_distance"])
+            .set($cf.prop_size_index_distance as f64);
+        $metrics
+            .with_label_values(&[$tag, "prop_keys_index_distance"])
+            .set($cf.prop_keys_index_distance as f64);
+        $metrics
             .with_label_values(&[$tag, "enable_doubly_skiplist"])
             .set(($cf.enable_doubly_skiplist as i32).into());
         $metrics
+            .with_label_values(&[$tag, "enable_compaction_guard"])
+            .set($cf.enable_compaction_guard.unwrap_or_default().into());
+        $metrics
+            .with_label_values(&[$tag, "compaction_guard_min_output_file_size"])
+            .set($cf.compaction_guard_min_output_file_size.0 as f64);
+        $metrics
+            .with_label_values(&[$tag, "compaction_guard_max_output_file_size"])
+            .set($cf.compaction_guard_max_output_file_size.0 as f64);
+        $metrics
+            .with_label_values(&[$tag, "bottommost_level_compression"])
+            .set($cf.bottommost_level_compression as u64 as f64);
+        $metrics
+            .with_label_values(&[$tag, "bottommost_zstd_compression_dict_size"])
+            .set($cf.bottommost_zstd_compression_dict_size.into());
+        $metrics
+            .with_label_values(&[$tag, "bottommost_zstd_compression_sample_size"])
+            .set($cf.bottommost_zstd_compression_sample_size.into());
+        $metrics
+            .with_label_values(&[$tag, "prepopulate_block_cache"])
+            .set($cf.prepopulate_block_cache as u64 as f64);
+        $metrics
             .with_label_values(&[$tag, "format_version"])
             .set($cf.format_version.unwrap_or(2) as f64);
+        $metrics
+            .with_label_values(&[$tag, "checksum"])
+            .set($cf.checksum as u64 as f64);
+        $metrics
+            .with_label_values(&[$tag, "max_compactions"])
+            .set($cf.max_compactions.unwrap_or_default().into());
+        $metrics
+            .with_label_values(&[$tag, "ttl"])
+            .set($cf.ttl.unwrap_or_default().as_secs_f64());
+        $metrics
+            .with_label_values(&[$tag, "periodic_compaction_seconds"])
+            .set(
+                $cf.periodic_compaction_seconds
+                    .unwrap_or_default()
+                    .as_secs_f64(),
+            );
 
         // Titan specific metrics.
         $metrics
             .with_label_values(&[$tag, "titan_min_blob_size"])
             .set($cf.titan.min_blob_size.unwrap_or_default().0 as f64);
+        $metrics
+            .with_label_values(&[$tag, "titan_blob_file_compression"])
+            .set($cf.titan.blob_file_compression as u64 as f64);
+        $metrics
+            .with_label_values(&[$tag, "titan_zstd_dict_size"])
+            .set($cf.titan.zstd_dict_size.0 as f64);
+        $metrics
+            .with_label_values(&[$tag, "titan_shared_blob_cache"])
+            .set($cf.titan.shared_blob_cache.into());
+        $metrics
+            .with_label_values(&[$tag, "titan_blob_cache_size"])
+            .set($cf.titan.blob_cache_size.0 as f64);
         $metrics
             .with_label_values(&[$tag, "titan_min_gc_batch_size"])
             .set($cf.titan.min_gc_batch_size.0 as f64);
@@ -592,6 +658,18 @@ macro_rules! write_into_metrics {
         $metrics
             .with_label_values(&[$tag, "titan_merge_small_file_threshold"])
             .set($cf.titan.merge_small_file_threshold.0 as f64);
+        $metrics
+            .with_label_values(&[$tag, "titan_blob_run_mode"])
+            .set($cf.titan.blob_run_mode as u64 as f64);
+        $metrics
+            .with_label_values(&[$tag, "titan_level_merge"])
+            .set($cf.titan.level_merge.into());
+        $metrics
+            .with_label_values(&[$tag, "titan_range_merge"])
+            .set($cf.titan.range_merge.into());
+        $metrics
+            .with_label_values(&[$tag, "titan_max_sorted_runs"])
+            .set($cf.titan.max_sorted_runs.into());
     }};
 }
 
@@ -1229,6 +1307,24 @@ impl TitanDbConfig {
     fn validate(&self) -> Result<(), Box<dyn Error>> {
         Ok(())
     }
+
+    fn write_into_metrics(&self) {
+        CONFIG_ROCKSDB_DB_GAUGE
+            .with_label_values(&["titan", "enabled"])
+            .set((self.enabled.unwrap_or_default() as i32).into());
+
+        CONFIG_ROCKSDB_DB_GAUGE
+            .with_label_values(&["titan", "disable_gc"])
+            .set((self.disable_gc as i32).into());
+
+        CONFIG_ROCKSDB_DB_GAUGE
+            .with_label_values(&["titan", "max_background_gc"])
+            .set(self.max_background_gc.into());
+
+        CONFIG_ROCKSDB_DB_GAUGE
+            .with_label_values(&["titan", "purge_obsolete_files_period_secs"])
+            .set(self.purge_obsolete_files_period.0.as_secs_f64());
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
@@ -1690,11 +1786,100 @@ impl DbConfig {
         Ok(())
     }
 
+    fn write_into_db_metrics(&self) {
+        CONFIG_ROCKSDB_DB_GAUGE
+            .with_label_values(&["rocksdb", "wal_recovery_mode"])
+            .set(self.wal_recovery_mode as u64 as f64);
+        CONFIG_ROCKSDB_DB_GAUGE
+            .with_label_values(&["rocksdb", "wal_ttl_seconds"])
+            .set(self.wal_ttl_seconds as f64);
+        CONFIG_ROCKSDB_DB_GAUGE
+            .with_label_values(&["rocksdb", "wal_size_limit"])
+            .set(self.wal_size_limit.0 as f64);
+        CONFIG_ROCKSDB_DB_GAUGE
+            .with_label_values(&["rocksdb", "max_total_wal_size"])
+            .set(self.max_total_wal_size.unwrap_or_default().0 as f64);
+        CONFIG_ROCKSDB_DB_GAUGE
+            .with_label_values(&["rocksdb", "max_background_jobs"])
+            .set(self.max_background_jobs.into());
+        CONFIG_ROCKSDB_DB_GAUGE
+            .with_label_values(&["rocksdb", "max_background_flushes"])
+            .set(self.max_background_flushes.into());
+        CONFIG_ROCKSDB_DB_GAUGE
+            .with_label_values(&["rocksdb", "max_manifest_file_size"])
+            .set(self.max_manifest_file_size.0 as f64);
+        CONFIG_ROCKSDB_DB_GAUGE
+            .with_label_values(&["rocksdb", "create_if_missing"])
+            .set(self.create_if_missing.into());
+        CONFIG_ROCKSDB_DB_GAUGE
+            .with_label_values(&["rocksdb", "max_open_files"])
+            .set(self.max_open_files.into());
+        CONFIG_ROCKSDB_DB_GAUGE
+            .with_label_values(&["rocksdb", "stats_dump_period"])
+            .set(self.stats_dump_period.unwrap_or_default().as_secs_f64());
+        CONFIG_ROCKSDB_DB_GAUGE
+            .with_label_values(&["rocksdb", "compaction_readahead_size"])
+            .set(self.compaction_readahead_size.0 as f64);
+        CONFIG_ROCKSDB_DB_GAUGE
+            .with_label_values(&["rocksdb", "rate_bytes_per_sec"])
+            .set(self.rate_bytes_per_sec.0 as f64);
+        CONFIG_ROCKSDB_DB_GAUGE
+            .with_label_values(&["rocksdb", "rate_limiter_refill_period"])
+            .set(self.rate_limiter_refill_period.as_secs_f64());
+        CONFIG_ROCKSDB_DB_GAUGE
+            .with_label_values(&["rocksdb", "rate_limiter_mode"])
+            .set(self.rate_limiter_mode as u64 as f64);
+        CONFIG_ROCKSDB_DB_GAUGE
+            .with_label_values(&["rocksdb", "rate_limiter_auto_tuned"])
+            .set(self.rate_limiter_auto_tuned.into());
+        CONFIG_ROCKSDB_DB_GAUGE
+            .with_label_values(&["rocksdb", "bytes_per_sync"])
+            .set(self.bytes_per_sync.0 as f64);
+        CONFIG_ROCKSDB_DB_GAUGE
+            .with_label_values(&["rocksdb", "wal_bytes_per_sync"])
+            .set(self.wal_bytes_per_sync.0 as f64);
+        CONFIG_ROCKSDB_DB_GAUGE
+            .with_label_values(&["rocksdb", "max_sub_compactions"])
+            .set(self.max_sub_compactions.into());
+        CONFIG_ROCKSDB_DB_GAUGE
+            .with_label_values(&["rocksdb", "writable_file_max_buffer_size"])
+            .set(self.writable_file_max_buffer_size.0 as f64);
+        CONFIG_ROCKSDB_DB_GAUGE
+            .with_label_values(&["rocksdb", "use_direct_io_for_flush_and_compaction"])
+            .set(self.use_direct_io_for_flush_and_compaction.into());
+        CONFIG_ROCKSDB_DB_GAUGE
+            .with_label_values(&["rocksdb", "enable_pipelined_write"])
+            .set(self.enable_pipelined_write.into());
+        CONFIG_ROCKSDB_DB_GAUGE
+            .with_label_values(&["rocksdb", "enable_multi_batch_write"])
+            .set(self.enable_multi_batch_write.unwrap_or_default().into());
+        CONFIG_ROCKSDB_DB_GAUGE
+            .with_label_values(&["rocksdb", "enable_unordered_write"])
+            .set(self.enable_unordered_write.into());
+        CONFIG_ROCKSDB_DB_GAUGE
+            .with_label_values(&["rocksdb", "allow_concurrent_memtable_write"])
+            .set(
+                self.allow_concurrent_memtable_write
+                    .unwrap_or_default()
+                    .into(),
+            );
+        CONFIG_ROCKSDB_DB_GAUGE
+            .with_label_values(&["rocksdb", "write_buffer_limit"])
+            .set(self.write_buffer_limit.unwrap_or_default().0 as f64);
+        CONFIG_ROCKSDB_DB_GAUGE
+            .with_label_values(&["rocksdb", "track_and_verify_wals_in_manifest"])
+            .set(self.track_and_verify_wals_in_manifest.into());
+        CONFIG_ROCKSDB_DB_GAUGE
+            .with_label_values(&["rocksdb", "paranoid_checks"])
+            .set(self.paranoid_checks.unwrap_or_default().into());
+    }
     fn write_into_metrics(&self) {
-        write_into_metrics!(self.defaultcf, CF_DEFAULT, CONFIG_ROCKSDB_GAUGE);
-        write_into_metrics!(self.lockcf, CF_LOCK, CONFIG_ROCKSDB_GAUGE);
-        write_into_metrics!(self.writecf, CF_WRITE, CONFIG_ROCKSDB_GAUGE);
-        write_into_metrics!(self.raftcf, CF_RAFT, CONFIG_ROCKSDB_GAUGE);
+        self.write_into_db_metrics();
+        write_into_cf_metrics!(self.defaultcf, CF_DEFAULT, CONFIG_ROCKSDB_CF_GAUGE);
+        write_into_cf_metrics!(self.lockcf, CF_LOCK, CONFIG_ROCKSDB_CF_GAUGE);
+        write_into_cf_metrics!(self.writecf, CF_WRITE, CONFIG_ROCKSDB_CF_GAUGE);
+        write_into_cf_metrics!(self.raftcf, CF_RAFT, CONFIG_ROCKSDB_CF_GAUGE);
+        self.titan.write_into_metrics();
     }
 }
 
@@ -2072,7 +2257,7 @@ impl<D: ConfigurableDb> DbConfigManger<D> {
                 v => v.parse::<f64>(),
             };
             if let Ok(v) = cfg_value {
-                CONFIG_ROCKSDB_GAUGE
+                CONFIG_ROCKSDB_CF_GAUGE
                     .with_label_values(&[cf, cfg_name])
                     .set(v);
             }
@@ -4427,6 +4612,7 @@ impl TikvConfig {
     pub fn write_into_metrics(&self) {
         self.raft_store.write_into_metrics();
         self.rocksdb.write_into_metrics();
+        self.storage.flow_control.write_into_metrics();
     }
 
     pub fn with_tmp() -> Result<(TikvConfig, tempfile::TempDir), IoError> {
@@ -5564,6 +5750,94 @@ mod tests {
             let string = format!("v = \"{}\"\n", case);
             toml::from_str::<LevelHolder>(&string).unwrap_err();
         }
+    }
+
+    #[test]
+    fn test_write_metrics() {
+        use raftstore::store::config::CONFIG_RAFTSTORE_GAUGE;
+        let mut cfg = TikvConfig::default();
+        cfg.rocksdb.max_background_jobs = 5;
+        cfg.rocksdb.wal_recovery_mode = DBRecoveryMode::SkipAnyCorruptedRecords;
+        cfg.rocksdb.defaultcf.block_size = ReadableSize::kb(64);
+        cfg.raft_store.inspect_interval = ReadableDuration::secs(15);
+        cfg.raft_store.reactive_memory_lock_tick_interval = ReadableDuration::secs(3);
+        cfg.raft_store.reactive_memory_lock_timeout_tick = 10;
+        cfg.raft_store.report_region_buckets_tick_interval = ReadableDuration::secs(20);
+        cfg.raft_store.max_entry_cache_warmup_duration = ReadableDuration::secs(60);
+        cfg.raft_store.unreachable_backoff = ReadableDuration::secs(5);
+        cfg.validate().unwrap();
+
+        CONFIG_ROCKSDB_DB_GAUGE.reset();
+        CONFIG_ROCKSDB_CF_GAUGE.reset();
+        CONFIG_RAFTSTORE_GAUGE.reset();
+
+        cfg.write_into_metrics();
+
+        let wal_mode_value = CONFIG_ROCKSDB_DB_GAUGE
+            .with_label_values(&["rocksdb", "wal_recovery_mode"])
+            .get();
+        assert_eq!(
+            wal_mode_value as u64,
+            DBRecoveryMode::SkipAnyCorruptedRecords as u64
+        );
+
+        let block_size_value = CONFIG_ROCKSDB_CF_GAUGE
+            .with_label_values(&["default", "block_size"])
+            .get();
+        assert_eq!(block_size_value as u64, ReadableSize::kb(64).0);
+
+        let max_bytes_for_level_base = CONFIG_ROCKSDB_CF_GAUGE
+            .with_label_values(&["default", "max_bytes_for_level_base"])
+            .get();
+        assert_eq!(
+            max_bytes_for_level_base as u64,
+            cfg.rocksdb.defaultcf.max_bytes_for_level_base.0
+        );
+
+        let compression_level_0 = CONFIG_ROCKSDB_CF_GAUGE
+            .with_label_values(&["default", "compression_level_0"])
+            .get();
+        assert_eq!(
+            compression_level_0 as u64,
+            cfg.rocksdb.defaultcf.compression_per_level[0] as u64
+        );
+        let disable_auto_compactions = CONFIG_ROCKSDB_CF_GAUGE
+            .with_label_values(&["default", "disable_auto_compactions"])
+            .get();
+        assert_eq!(
+            disable_auto_compactions as u64,
+            cfg.rocksdb.defaultcf.disable_auto_compactions as u64
+        );
+
+        let inspect_interval = CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["inspect_interval"])
+            .get();
+        assert_eq!(inspect_interval, 15.0);
+
+        let reactive_tick = CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["reactive_memory_lock_tick_interval"])
+            .get();
+        assert_eq!(reactive_tick, 3.0);
+
+        let reactive_timeout = CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["reactive_memory_lock_timeout_tick"])
+            .get();
+        assert_eq!(reactive_timeout, 10.0);
+
+        let region_buckets = CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["report_region_buckets_tick_interval"])
+            .get();
+        assert_eq!(region_buckets, 20.0);
+
+        let warmup_duration = CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["max_entry_cache_warmup_duration"])
+            .get();
+        assert_eq!(warmup_duration, 60.0);
+
+        let unreachable_backoff = CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["unreachable_backoff"])
+            .get();
+        assert_eq!(unreachable_backoff, 5.0);
     }
 
     #[test]

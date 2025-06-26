@@ -1082,6 +1082,9 @@ impl Config {
             .with_label_values(&["raft_log_gc_size_limit"])
             .set(self.raft_log_gc_size_limit.unwrap_or_default().0 as f64);
         CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["max_apply_unpersisted_log_limit"])
+            .set(self.max_apply_unpersisted_log_limit as f64);
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_log_reserve_max_ticks"])
             .set(self.raft_log_reserve_max_ticks as f64);
         CONFIG_RAFTSTORE_GAUGE
@@ -1137,11 +1140,18 @@ impl Config {
             .with_label_values(&["snap_gc_timeout"])
             .set(self.snap_gc_timeout.as_secs_f64());
         CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["snap_wait_split_duration"])
+            .set(self.snap_wait_split_duration.as_secs_f64());
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["lock_cf_compact_interval"])
             .set(self.lock_cf_compact_interval.as_secs_f64());
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["lock_cf_compact_bytes_threshold"])
             .set(self.lock_cf_compact_bytes_threshold.0 as f64);
+
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["periodic_full_compact_start_max_cpu"])
+            .set(self.periodic_full_compact_start_max_cpu);
 
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["notify_capacity"])
@@ -1172,6 +1182,9 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["snap_apply_batch_size"])
             .set(self.snap_apply_batch_size.0 as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["snap_apply_copy_symlink"])
+            .set(self.snap_apply_copy_symlink.into());
 
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["consistency_check_interval_seconds"])
@@ -1183,8 +1196,17 @@ impl Config {
             .with_label_values(&["raft_store_max_leader_lease"])
             .set(self.raft_store_max_leader_lease.as_secs_f64());
         CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["check_leader_lease_interval"])
+            .set(self.check_leader_lease_interval.as_secs_f64());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["renew_leader_lease_advance_duration"])
+            .set(self.renew_leader_lease_advance_duration.as_secs_f64());
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["right_derive_when_split"])
             .set((self.right_derive_when_split as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["allow_remove_leader"])
+            .set(self.allow_remove_leader().into());
 
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["merge_max_log_gap"])
@@ -1196,15 +1218,16 @@ impl Config {
             .with_label_values(&["use_delete_range"])
             .set((self.use_delete_range as i32).into());
         CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["snap_generator_pool_size"])
+            .set(self.snap_generator_pool_size as f64);
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["cleanup_import_sst_interval"])
             .set(self.cleanup_import_sst_interval.as_secs_f64());
 
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["local_read_batch_size"])
             .set(self.local_read_batch_size as f64);
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["apply_yield_write_size"])
-            .set(self.apply_yield_write_size.0 as f64);
+
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["apply_max_batch_size"])
             .set(self.apply_batch_system.max_batch_size() as f64);
@@ -1212,11 +1235,25 @@ impl Config {
             .with_label_values(&["apply_pool_size"])
             .set(self.apply_batch_system.pool_size as f64);
         CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["apply_reschedule_duration"])
+            .set(self.apply_batch_system.reschedule_duration.as_secs_f64());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["apply_priority_pool_size"])
+            .set(self.apply_batch_system.low_priority_pool_size as f64);
+
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["store_max_batch_size"])
             .set(self.store_batch_system.max_batch_size() as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["store_pool_size"])
             .set(self.store_batch_system.pool_size as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["store_reschedule_duration"])
+            .set(self.store_batch_system.reschedule_duration.as_secs_f64());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["store_priority_pool_size"])
+            .set(self.store_batch_system.low_priority_pool_size as f64);
+
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["store_io_pool_size"])
             .set(self.store_io_pool_size as f64);
@@ -1227,11 +1264,17 @@ impl Config {
             .with_label_values(&["future_poll_size"])
             .set(self.future_poll_size as f64);
         CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["snap_generator_pool_size"])
-            .set(self.snap_generator_pool_size as f64);
-        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["hibernate_regions"])
             .set((self.hibernate_regions as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["apply_yield_duration"])
+            .set(self.apply_yield_duration.as_secs_f64());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["apply_yield_write_size"])
+            .set(self.apply_yield_write_size.0 as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["perf_level"])
+            .set(self.perf_level as u64 as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["cmd_batch"])
             .set((self.cmd_batch as i32).into());
@@ -1256,6 +1299,25 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["io_reschedule_hotpot_duration"])
             .set(self.io_reschedule_hotpot_duration.as_secs_f64());
+
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["inspect_interval"])
+            .set(self.inspect_interval.as_secs_f64());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["reactive_memory_lock_tick_interval"])
+            .set(self.reactive_memory_lock_tick_interval.as_secs_f64());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["reactive_memory_lock_timeout_tick"])
+            .set(self.reactive_memory_lock_timeout_tick as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["report_region_buckets_tick_interval"])
+            .set(self.report_region_buckets_tick_interval.as_secs_f64());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["max_entry_cache_warmup_duration"])
+            .set(self.max_entry_cache_warmup_duration.as_secs_f64());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["unreachable_backoff"])
+            .set(self.unreachable_backoff.as_secs_f64());
     }
 
     fn write_change_into_metrics(change: ConfigChange) {

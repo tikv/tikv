@@ -17,7 +17,7 @@ use tikv_util::{
 
 use crate::{
     config::ConfigurableDb,
-    server::{CONFIG_ROCKSDB_GAUGE, ttl::TtlCheckerTask},
+    server::{CONFIG_ROCKSDB_CF_GAUGE, ttl::TtlCheckerTask},
     storage::{TxnScheduler, lock_manager::LockManager, txn::flow_controller::FlowController},
 };
 
@@ -61,7 +61,7 @@ impl<EK: Engine, K: ConfigurableDb, L: LockManager> ConfigManager
                     self.configurable_db
                         .set_shared_block_cache_capacity(s.0 as usize)?;
                     // Write config to metric
-                    CONFIG_ROCKSDB_GAUGE
+                    CONFIG_ROCKSDB_CF_GAUGE
                         .with_label_values(&[CF_DEFAULT, "block_cache_size"])
                         .set(s.0 as f64);
                 }
