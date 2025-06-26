@@ -571,7 +571,7 @@ impl Default for Config {
             clean_stale_peer_delay: ReadableDuration::minutes(0),
             inspect_interval: ReadableDuration::millis(100),
             inspect_kvdb_interval: ReadableDuration::millis(100),
-            inspect_network_interval: ReadableDuration::secs(1),
+            inspect_network_interval: ReadableDuration::millis(100),
             // The default value of `inspect_cpu_util_thd` is 0.4, which means
             // when the cpu utilization is greater than 40%, the store might be
             // regarded as a slow node if there exists delayed inspected messages.

@@ -21,12 +21,11 @@ use grpcio_health::ServingStatus::Serving;
 use grpcio::{Error, RpcStatusCode};
 
 fn is_network_error(err: &pd_client::Error) -> bool {
+    warn!("[test] checking network error"; "err" => ?err);
     match err {
-        pd_client::Error::Grpc(Error::RpcFailure(status)) => matches!(
-            status.code(),
-            RpcStatusCode::UNAVAILABLE
-                | RpcStatusCode::DEADLINE_EXCEEDED
-        ),
+        pd_client::Error::Grpc(Error::RpcFailure(status)) => 
+            status.code() == RpcStatusCode::DEADLINE_EXCEEDED,
+            // leader restart will return unavailable, message: "failed to connect to all addresses"
         _ => false,
     }
 }
