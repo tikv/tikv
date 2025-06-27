@@ -549,7 +549,13 @@ where
                 error!("failed to delete files in range"; "err" => %e);
             })
             .unwrap();
+<<<<<<< HEAD
         if let Err(e) = self.delete_all_in_range(&ranges) {
+=======
+        fail_point!("after_delete_files_in_range", |_| {});
+        // Remove all overlapped ranges directly without ingesting.
+        if let Err(e) = self.delete_all_in_range(&ranges, true, false) {
+>>>>>>> e11725c4ce (Titan: Fix turning off compatibility issue (#18495))
             error!("failed to cleanup stale range"; "err" => %e);
             return;
         }
