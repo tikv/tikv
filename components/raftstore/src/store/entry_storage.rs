@@ -428,16 +428,23 @@ impl Default for TermCache {
 }
 
 impl TermCache {
-    fn append(&mut self, term: u64, index: u64) {
-        // The term should not decrease.
-        if let Some((last_term, last_index)) = self.cache.back() {
-            if *last_term == term {
-                assert!(*last_index < index);
-                // Update the latest index of the latest term.
-                self.cache.back_mut().unwrap().1 = index;
+    fn append(&mut self, index: u64, term: u64) {
+        // Update the previous entry if it's in the same term.
+        if let Some(first_term) = self.cache.front().map(|(first_term, _)| *first_term) {
+            if first_term > term {
+                return;
+            }
+            let pos = (term - first_term) as usize;
+            if pos < self.cache.len() {
+                let (t, idx) = self.cache[pos];
+                assert_eq!(t, term);
+                if idx < index {
+                    self.cache[pos].1 = index;
+                }
                 return;
             }
         }
+        // New term.
         self.cache.push_back((term, index));
         if self.cache.len() > self.capacity {
             self.cache.pop_front();
@@ -445,7 +452,7 @@ impl TermCache {
     }
 
     /// Push entries to the left of the cache.
-    fn prepend(&mut self, entries: &Vec<Entry>) {
+    fn prepend(&mut self, entries: &[Entry]) {
         for e in entries.iter().rev() {
             let (term, index) = (e.get_term(), e.get_index());
             if let Some((first_term, first_idx)) = self.cache.front() {
@@ -1209,7 +1216,7 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
         };
 
         self.cache.append(self.region_id, self.peer_id, &entries);
-        self.term_cache.append(last_term, last_index);
+        self.term_cache.append(last_index, last_term);
 
         // Delete any previously appended log entries which never committed.
         task.set_append(Some(prev_last_index + 1), entries);
@@ -1535,15 +1542,17 @@ pub mod tests {
         assert_eq!(cache.entry(123), None);
         // Append entries
         cache.append(1, 1);
-        cache.append(1, 2);
-        cache.append(2, 3);
-        cache.append(2, 4);
-        cache.append(2, 5);
+        cache.append(2, 1);
+        cache.append(3, 2);
+        cache.append(4, 2);
+        cache.append(5, 2);
+        cache.append(4, 2); // skip as rewrite with old idx
+        cache.append(3, 2); // skip as rewrite with old idx
         for i in 1..=10 {
-            cache.append(3, i + 5);
+            cache.append(i + 5, 3);
         }
         for i in 1..=5 {
-            cache.append(3 + i, i + 15);
+            cache.append(i + 15, 3 + i);
         }
         assert_eq!(cache.entry(0), Some(1));
         assert_eq!(cache.entry(20), Some(8));
@@ -1565,9 +1574,9 @@ pub mod tests {
         drop(cache);
 
         let mut cache = TermCache::default();
-        cache.append(6, 20);
+        cache.append(20, 6);
         for i in 1..=5 {
-            cache.append(i + 6, 20 + i * 5);
+            cache.append(20 + i * 5, i + 6);
         }
         let ents = vec![
             new_entry(2, 2),
