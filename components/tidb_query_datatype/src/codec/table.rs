@@ -10,11 +10,11 @@ use tikv_util::codec::BytesSlice;
 use tipb::ColumnInfo;
 
 use super::{
-    Datum, Error, Result, datum,
-    datum::DatumDecoder,
-    mysql::{Duration, Time},
+    datum, datum::DatumDecoder, mysql::{Duration, Time}, Datum,
+    Error,
+    Result,
 };
-use crate::{FieldTypeTp, expr::EvalContext, prelude::*};
+use crate::{expr::EvalContext, prelude::*, FieldTypeTp};
 
 // handle or index id
 pub const ID_LEN: usize = 8;
@@ -176,17 +176,27 @@ pub fn encode_row(ctx: &mut EvalContext, row: Vec<Datum>, col_ids: &[i64]) -> Re
 /// `encode_row_key` encodes the table id and record handle into a byte array.
 pub fn encode_row_key(table_id: i64, handle: i64) -> Vec<u8> {
     let mut key = Vec::with_capacity(RECORD_ROW_KEY_LEN);
-    // can't panic
-    key.append_table_record_prefix(table_id).unwrap();
-    key.write_i64(handle).unwrap();
+    encode_row_key_to_buf(table_id, handle, &mut key);
     key
 }
 
-pub fn encode_common_handle_for_test(table_id: i64, handle: &[u8]) -> Vec<u8> {
+/// `encode_row_key_to_buf` encodes the table id and record handle into a byte
+/// array.
+pub fn encode_row_key_to_buf(table_id: i64, handle: i64, buf: &mut Vec<u8>) {
+    // can't panic
+    buf.append_table_record_prefix(table_id).unwrap();
+    buf.write_i64(handle).unwrap();
+}
+
+pub fn encode_common_handle(table_id: i64, handle: &[u8]) -> Vec<u8> {
     let mut key = Vec::with_capacity(PREFIX_LEN + handle.len());
-    key.append_table_record_prefix(table_id).unwrap();
-    key.extend(handle);
+    encode_common_handle_to_buf(table_id, handle, &mut key);
     key
+}
+
+pub fn encode_common_handle_to_buf(table_id: i64, handle: &[u8], buf: &mut Vec<u8>) {
+    buf.append_table_record_prefix(table_id).unwrap();
+    buf.extend(handle);
 }
 
 /// `encode_column_key` encodes the table id, row handle and column id into a
