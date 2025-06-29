@@ -37,7 +37,7 @@ fn get_entry_size(value: &[u8], entry_type: DBEntryType) -> std::result::Result<
     match entry_type {
         DBEntryType::Put => Ok(value.len() as u64),
         DBEntryType::BlobIndex => match TitanBlobIndex::decode(value) {
-            Ok(index) => Ok(index.blob_size + value.len() as u64),
+            Ok(index) => Ok(index.blob_raw_size + value.len() as u64),
             Err(_) => Err(()),
         },
         _ => Err(()),

@@ -56,7 +56,8 @@ tracker = { workspace = true }
 txn_types = { workspace = true }
 
 [dependencies.rocksdb]
-git = "https://github.com/tikv/rust-rocksdb.git"
+git = "https://github.com/hbisheng/rust-rocksdb.git"
+branch = "titan-properties"
 package = "rocksdb"
 features = ["encryption"]
 
