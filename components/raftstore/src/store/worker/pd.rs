@@ -1440,6 +1440,7 @@ where
                     }
                     // NodeState for this store.
                     {
+                        #[allow(clippy::redundant_closure_call)]
                         let state = (|| {
                             #[cfg(feature = "failpoints")]
                             fail_point!("manually_set_store_offline", |_| {

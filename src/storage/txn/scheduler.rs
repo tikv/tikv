@@ -1698,6 +1698,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         while let Some(ev) = res.next().await {
             match ev {
                 WriteEvent::Committed => {
+                    #[allow(clippy::redundant_closure_call)]
                     let early_return = (|| {
                         fail_point!("before_async_apply_prewrite_finish", |_| false);
                         true
@@ -1717,6 +1718,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                     }
                 }
                 WriteEvent::Proposed => {
+                    #[allow(clippy::redundant_closure_call)]
                     let early_return = (|| {
                         fail_point!("before_pipelined_write_finish", |_| false);
                         true

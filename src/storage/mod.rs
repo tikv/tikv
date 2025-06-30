@@ -3080,7 +3080,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         self.sched_raw_command(metadata, priority, CMD, async move {
             let key = F::encode_raw_key_owned(key, None);
             let cmd = RawCompareAndSwap::new(cf, key, previous_value, value, ttl, api_version, ctx);
-            Self::sched_raw_atomic_command(sched, cmd, Box::new(|res| callback(res)));
+            Self::sched_raw_atomic_command(sched, cmd, Box::new(callback));
         })
     }
 
@@ -3109,7 +3109,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         self.sched_raw_command(metadata, priority, CMD, async move {
             let modifies = Self::raw_batch_put_requests_to_modifies(cf, pairs, ttls, None);
             let cmd = RawAtomicStore::new(cf, modifies, ctx);
-            Self::sched_raw_atomic_command(sched, cmd, Box::new(|res| callback(res)));
+            Self::sched_raw_atomic_command(sched, cmd, Box::new(callback));
         })
     }
 
@@ -3134,7 +3134,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 .map(|k| Self::raw_delete_request_to_modify(cf, k, None))
                 .collect();
             let cmd = RawAtomicStore::new(cf, modifies, ctx);
-            Self::sched_raw_atomic_command(sched, cmd, Box::new(|res| callback(res)));
+            Self::sched_raw_atomic_command(sched, cmd, Box::new(callback));
         })
     }
 
@@ -3263,7 +3263,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             self.read_pool
                 .spawn_handle(future, priority, task_id, metadata, resource_limiter)
                 .map_err(|_| Error::from(ErrorInner::SchedTooBusy))
-                .and_then(|res| future::ready(res)),
+                .and_then(future::ready),
         )
     }
 

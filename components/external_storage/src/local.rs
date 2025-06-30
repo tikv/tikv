@@ -37,6 +37,7 @@ impl LocalStorage {
     /// Create a new local storage in the given path.
     pub fn new(base: &Path) -> io::Result<LocalStorage> {
         info!("create local storage"; "base" => base.display());
+        #[allow(clippy::redundant_closure_call)]
         (|| {
             fail::fail_point!("create_local_storage_yield", |v| {
                 info!("inject create storage sleep time: {:?}ms", v);

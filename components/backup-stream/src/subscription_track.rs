@@ -397,7 +397,7 @@ impl SubscriptionTracer {
     ) -> Option<impl RefMut<Key = u64, Value = ActiveSubscription> + '_> {
         self.0
             .get_mut(&region_id)
-            .and_then(|x| ActiveSubscriptionRef::try_from_dash(x))
+            .and_then(ActiveSubscriptionRef::try_from_dash)
     }
 }
 

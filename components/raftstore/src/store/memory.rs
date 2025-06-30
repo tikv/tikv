@@ -57,6 +57,7 @@ lazy_static! {
         MEMTRACE_ROOT.sub_trace(Id::Name("raft_entries"));
 }
 
+#[allow(clippy::redundant_closure_call)]
 pub fn get_memory_usage_entry_cache() -> u64 {
     (|| {
         fail_point!("mock_memory_usage_entry_cache", |t| {

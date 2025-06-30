@@ -282,15 +282,16 @@ impl ResourceManagerService {
             }
 
             let dur = if cfg!(feature = "failpoints") {
+                #[allow(clippy::redundant_closure_call)]
                 (|| {
                     fail::fail_point!("set_report_duration", |v| {
                         let dur = v
                             .expect("should provide delay time (in ms)")
                             .parse::<u64>()
                             .expect("should be number (in ms)");
-                        std::time::Duration::from_millis(dur)
+                        Duration::from_millis(dur)
                     });
-                    std::time::Duration::from_millis(100)
+                    Duration::from_millis(100)
                 })()
             } else {
                 BACKGROUND_RU_REPORT_DURATION

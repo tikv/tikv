@@ -358,6 +358,7 @@ impl BgWorkManager {
         // blocking task.
         // TODO: Spawn non-blocking tasks and make full use of the ticker.
         let interval = Duration::from_millis(100);
+        #[allow(clippy::redundant_closure_call)]
         let check_load_pending_interval = (|| {
             fail_point!("ime_background_check_load_pending_interval", |t| {
                 let t = t.unwrap().parse::<u64>().unwrap();
@@ -1018,8 +1019,9 @@ impl BackgroundRunner {
                 }
             };
 
+            #[allow(clippy::redundant_closure_call)]
             let safe_point = (|| {
-                fail::fail_point!("ime_safe_point_in_loading", |t| {
+                fail_point!("ime_safe_point_in_loading", |t| {
                     t.unwrap().parse::<u64>().unwrap()
                 });
 

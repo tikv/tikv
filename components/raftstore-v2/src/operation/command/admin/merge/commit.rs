@@ -367,6 +367,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         req: RaftCmdRequest,
     ) -> Result<u64> {
+        #[allow(clippy::redundant_closure_call)]
         (|| fail::fail_point!("propose_commit_merge_1", store_ctx.store_id == 1, |_| {}))();
         let mut proposal_ctx = ProposalContext::empty();
         proposal_ctx.insert(ProposalContext::COMMIT_MERGE);
@@ -398,6 +399,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 
         let mut start_time = Instant::now_coarse();
         let mut wait_duration = None;
+        #[allow(clippy::redundant_closure_call)]
         let force_send = (|| {
             fail::fail_point!("force_send_catch_up_logs", |_| true);
             false

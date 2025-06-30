@@ -126,7 +126,7 @@ fn extract_region_error(error: &PluginError) -> Option<kvproto::errorpb::Error> 
     match error {
         PluginError::Other(_, other_err) => other_err
             .downcast_ref::<storage::Result<()>>()
-            .and_then(|e| storage::errors::extract_region_error::<()>(e)),
+            .and_then(storage::errors::extract_region_error::<()>),
         _ => None,
     }
 }

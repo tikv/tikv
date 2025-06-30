@@ -578,7 +578,7 @@ impl Interval {
         input: &str,
     ) -> Result<Duration> {
         let val = Self::parse_from_str_internal(ctx, unit, input, true)?
-            .ok_or_else(|| Error::datetime_function_overflow())?;
+            .ok_or_else(Error::datetime_function_overflow)?;
         use IntervalUnit::*;
         match unit {
             Microsecond | Second | Minute | Hour | Day | Week | Month | Quarter | Year => {

@@ -202,6 +202,7 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
         cmd.set_requests(vec![req].into());
+        #[allow(clippy::redundant_closure_call)]
         let res: tikv_kv::Result<()> = (|| {
             fail_point!("raftkv_async_snapshot_err", |_| {
                 Err(box_err!("injected error for async_snapshot"))
@@ -296,6 +297,7 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
         let region_id = ctx.region_id;
         ASYNC_REQUESTS_COUNTER_VEC.write.all.inc();
 
+        #[allow(clippy::redundant_closure_call)]
         let inject_region_not_found = (|| {
             // If rid is some, only the specified region reports error.
             // If rid is None, all regions report error.

@@ -2875,6 +2875,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         // almost idle (no more pending regions on applying logs), it can be
         // regarded as the candidate for balancing leaders.
         if during_starting_stage {
+            #[allow(clippy::redundant_closure_call)]
             let completed_target_count = (|| {
                 fail_point!("on_mock_store_completed_target_count", |_| 0);
                 std::cmp::max(

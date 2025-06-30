@@ -298,6 +298,7 @@ impl Store {
         let region_id = msg.region.id;
         let raft_msg = empty_split_message(self.store_id(), &msg.region);
 
+        #[allow(clippy::redundant_closure_call)]
         (|| {
             fail::fail_point!(
                 "on_store_2_split_init_race_with_initial_message",

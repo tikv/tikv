@@ -588,7 +588,7 @@ where
                 opt.map(|(pd_ts, instant)| {
                     pd_ts.physical() + instant.saturating_elapsed().as_millis() as u64
                 })
-                .unwrap_or_else(|| TimeStamp::physical_now())
+                .unwrap_or_else(TimeStamp::physical_now)
             })
             .unwrap_or_else(|_| TimeStamp::physical_now())
     }

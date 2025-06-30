@@ -237,12 +237,15 @@ where
     F: Future<Output = Result<T, E>>,
     E: RetryError,
 {
-    ext.max_retry_times = (|| {
-        fail::fail_point!("retry_count", |t| t
-            .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(ext.max_retry_times));
-        ext.max_retry_times
-    })();
+    ext.max_retry_times = {
+        #[allow(clippy::redundant_closure_call)]
+        (|| {
+            fail::fail_point!("retry_count", |t| t
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(ext.max_retry_times));
+            ext.max_retry_times
+        })()
+    };
 
     retry_expr!(action(), ext).await
 }

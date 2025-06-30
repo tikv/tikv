@@ -2228,20 +2228,20 @@ impl Time {
         let sec_dur = chrono::Duration::seconds(secs);
         let duration = sec_dur
             .checked_add(&chrono::Duration::nanoseconds(nanos))
-            .ok_or_else(|| Error::datetime_function_overflow())?;
+            .ok_or_else(Error::datetime_function_overflow)?;
         let time_type = self.get_time_type();
         let fsp = self.fsp() as i8;
         let mut new_time = if time_type == TimeType::Timestamp {
             let datetime = self
                 .try_into_chrono_datetime(ctx)?
                 .checked_add_signed(duration)
-                .ok_or_else(|| Error::datetime_function_overflow())?;
+                .ok_or_else(Error::datetime_function_overflow)?;
             Time::try_from_chrono_datetime(ctx, datetime, TimeType::Timestamp, fsp)?
         } else {
             let naive = self
                 .try_into_chrono_naive_datetime()?
                 .checked_add_signed(duration)
-                .ok_or_else(|| Error::datetime_function_overflow())?;
+                .ok_or_else(Error::datetime_function_overflow)?;
             Time::try_from_chrono_datetime(ctx, naive, time_type, fsp)?
         };
 

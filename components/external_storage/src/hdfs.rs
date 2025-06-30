@@ -37,7 +37,7 @@ pub struct HdfsStorage {
 
 impl HdfsStorage {
     pub fn new(remote: &str, config: HdfsConfig) -> io::Result<HdfsStorage> {
-        let mut remote = Url::parse(remote).map_err(|e| io::Error::other(e))?;
+        let mut remote = Url::parse(remote).map_err(io::Error::other)?;
         if !remote.path().ends_with('/') {
             let mut new_path = remote.path().to_owned();
             new_path.push('/');

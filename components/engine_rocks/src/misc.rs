@@ -75,6 +75,7 @@ impl RocksEngine {
                 } else {
                     data.push(it.key().to_vec());
                 }
+                #[allow(clippy::redundant_closure_call)]
                 let max_delete_count_by_key = (|| {
                     fail_point!("manually_set_max_delete_count_by_key", |_| { 0 });
                     MAX_DELETE_COUNT_BY_KEY
