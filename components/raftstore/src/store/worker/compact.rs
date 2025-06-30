@@ -614,7 +614,8 @@ fn get_compact_score(
     }
     // When compaction filter is enabled, ignore tombstone threshold,
     // just add deletes to redundant keys for scoring.
-    let num_discardable = num_tombstones + range_stats.redundant_keys();
+    let num_discardable =
+        num_tombstones + range_stats.num_entries.saturating_sub(range_stats.num_rows);
     let ratio = num_discardable as f64 / range_stats.num_entries as f64;
     if num_discardable < compact_threshold.redundant_rows_threshold
         && num_discardable * 100
@@ -662,6 +663,39 @@ fn select_compaction_candidates(
 ) -> Result<Vec<CompactionCandidate>, Error> {
     use std::{cmp::Reverse, collections::BinaryHeap};
     let check_duration = Instant::now_coarse();
+
+    if top_n == 0 {
+        // When top_n is 0, return all candidates with score > 0
+        let mut candidates = Vec::new();
+        for range in ranges.windows(2) {
+            if let Some(range_stats) = engine
+                .get_range_stats(CF_WRITE, &range[0], &range[1])
+                .map_err(|e| Error::Other(Box::new(e)))?
+            {
+                let score =
+                    get_compact_score(&range_stats, &compact_threshold, compaction_filter_enabled);
+                if score > 0.0 {
+                    let candidate = CompactionCandidate {
+                        score,
+                        start_key: range[0].clone(),
+                        end_key: range[1].clone(),
+                        range_stats,
+                    };
+                    candidates.push(candidate);
+                }
+            }
+        }
+        CHECK_THEN_COMPACT_DURATION
+            .with_label_values(&["check", "write"])
+            .observe(check_duration.saturating_elapsed_secs());
+        candidates.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        return Ok(candidates);
+    }
+
     let mut heap = BinaryHeap::new();
     for range in ranges.windows(2) {
         if let Some(range_stats) = engine
