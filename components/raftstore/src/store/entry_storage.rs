@@ -1077,12 +1077,13 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
         if self.truncated_term() == self.last_term || idx == self.last_index() {
             return Ok(self.last_term);
         }
-        if let Some(term) = self.term_cache.entry(idx) {
-            return Ok(term);
-        }
         if let Some(e) = self.cache.entry(idx) {
             Ok(e.get_term())
         } else {
+            // Try to fetch it from caching terms.
+            if let Some(term) = self.term_cache.entry(idx) {
+                return Ok(term);
+            }
             let _timer = self.io_read_raft_term.start_timer();
             Ok(self
                 .raft_engine
@@ -1213,8 +1214,8 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
             (e.get_index(), e.get_term())
         };
 
-        self.cache.append(self.region_id, self.peer_id, &entries);
         self.term_cache.append(last_index, last_term);
+        self.cache.append(self.region_id, self.peer_id, &entries);
 
         // Delete any previously appended log entries which never committed.
         task.set_append(Some(prev_last_index + 1), entries);
