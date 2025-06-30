@@ -412,7 +412,7 @@ impl Drop for EntryCache {
 /// keep memory overhead minimal while caching the most relevant term
 /// information.
 struct TermCache {
-    cache: VecDeque<(u64, u64)>, // (term, latest_index)
+    cache: VecDeque<(u64, u64)>, // (term, start_index)
     capacity: usize,
 }
 
