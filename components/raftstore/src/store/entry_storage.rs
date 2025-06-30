@@ -399,6 +399,105 @@ impl Drop for EntryCache {
     }
 }
 
+/// A cache that maintains term information for recently updated Raft log
+/// entries.
+///
+/// This cache optimizes term lookups by storing term-to-index mappings for
+/// recent entries. Each cache entry contains:
+/// - term: The term number of a sequence of entries
+/// - start_index: The start raft log index that shares this term
+///
+/// The cache maintains entries in descending order by index, allowing quick
+/// lookups of terms for any given log index. The small fixed capacity helps
+/// keep memory overhead minimal while caching the most relevant term
+/// information.
+struct TermCache {
+    cache: VecDeque<(u64, u64)>, // (term, start_index)
+    capacity: usize,
+}
+
+impl Default for TermCache {
+    fn default() -> Self {
+        TermCache {
+            cache: Default::default(),
+            capacity: 8, /* 8 is enough for the recent updated terms.
+                          * Small capacity will make the extra memory
+                          * cost negligible. */
+        }
+    }
+}
+
+impl TermCache {
+    fn append(&mut self, index: u64, term: u64) {
+        // Update the previous entry if it's in the same term.
+        if let Some(first_term) = self.cache.front().map(|(first_term, _)| *first_term) {
+            if first_term > term {
+                // Still has enough space for caching this older term.
+                if self.cache.len() < self.capacity {
+                    self.cache.push_front((term, index));
+                }
+                return;
+            }
+            let pos = (term - first_term) as usize;
+            if pos < self.cache.len() {
+                let (t, idx) = self.cache[pos];
+                assert_eq!(t, term);
+                // Only updates if the inserted index is smaller than
+                // the current start_index of this target term.
+                if idx > index {
+                    self.cache[pos].1 = index;
+                }
+                return;
+            }
+        }
+        // New term.
+        self.cache.push_back((term, index));
+        if self.cache.len() > self.capacity {
+            self.cache.pop_front();
+        }
+    }
+
+    /// Push entries to the left of the cache.
+    fn prepend(&mut self, entries: &[Entry]) {
+        for e in entries.iter().rev() {
+            self.append(e.get_index(), e.get_term());
+            if self.cache.len() == self.capacity {
+                // NOTE: no need to check the previous term as the cached
+                // terms are fresh and the term is not allowed to decrease.
+                break;
+            }
+        }
+    }
+
+    /// Return the term of the given index.
+    ///
+    /// If the term is not found in the cache, return None.
+    fn entry(&self, idx: u64) -> Option<u64> {
+        if self.cache.is_empty() {
+            return None;
+        }
+        let (_, start_idx) = self.cache.front().unwrap();
+        if idx < *start_idx {
+            return None;
+        }
+        let (end_term, end_idx) = self.cache.back().unwrap();
+        if idx >= *end_idx {
+            return Some(*end_term);
+        }
+        // Traverse the cache in reverse order.
+        // The cost is low since the cache is small and the term is likely to be
+        // found in the recent terms.
+        let mut candidate = None;
+        for (term, start_index) in self.cache.iter().rev() {
+            candidate = Some(*term);
+            if idx >= *start_index {
+                break;
+            }
+        }
+        candidate
+    }
+}
+
 #[derive(Debug)]
 pub enum RaftlogFetchState {
     // The Instant records the start time of the fetching.
@@ -648,6 +747,7 @@ pub struct EntryStorage<EK: KvEngine, ER> {
     region_id: u64,
     peer_id: u64,
     raft_engine: ER,
+    term_cache: TermCache,
     cache: EntryCache,
     raft_state: RaftLocalState,
     apply_state: RaftApplyState,
@@ -685,6 +785,7 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
             region_id: region.id,
             peer_id,
             raft_engine,
+            term_cache: TermCache::default(),
             cache: EntryCache::default(),
             raft_state,
             apply_state,
@@ -979,6 +1080,10 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
         if let Some(e) = self.cache.entry(idx) {
             Ok(e.get_term())
         } else {
+            // Try to fetch it from caching terms.
+            if let Some(term) = self.term_cache.entry(idx) {
+                return Ok(term);
+            }
             let _timer = self.io_read_raft_term.start_timer();
             Ok(self
                 .raft_engine
@@ -1109,6 +1214,7 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
             (e.get_index(), e.get_term())
         };
 
+        self.term_cache.append(last_index, last_term);
         self.cache.append(self.region_id, self.peer_id, &entries);
 
         // Delete any previously appended log entries which never committed.
@@ -1199,6 +1305,7 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
                             return;
                         }
                         entries.truncate((range.1 - range.0) as usize);
+                        self.term_cache.prepend(&entries);
                         self.cache.prepend(entries);
                         WARM_UP_ENTRY_CACHE_COUNTER.finished.inc();
                         fail_point!("on_entry_cache_warmed_up");
@@ -1425,6 +1532,66 @@ pub mod tests {
         }
         let res = panic_hook::recover_safe(|| cache.entry(7));
         res.unwrap_err();
+    }
+
+    #[test]
+    fn test_storage_term_cache() {
+        let mut cache = TermCache::default();
+        assert_eq!(cache.entry(0), None);
+        assert_eq!(cache.entry(123), None);
+        // Append entries
+        cache.append(1, 1);
+        cache.append(2, 1);
+        cache.append(3, 2);
+        cache.append(4, 2);
+        cache.append(5, 2);
+        cache.append(4, 2); // skip as rewrite with old idx
+        cache.append(3, 2); // skip as rewrite with old idx
+        for i in 1..=10 {
+            cache.append(i + 5, 3);
+        }
+        for i in 1..=5 {
+            cache.append(i + 15, 3 + i);
+        }
+        assert_eq!(cache.entry(0), None);
+        assert_eq!(cache.entry(20), Some(8));
+        assert_eq!(cache.entry(21), Some(8));
+        // index [1..2] => term 1
+        assert_eq!(cache.entry(1), Some(1));
+        assert_eq!(cache.entry(2), Some(1));
+        // index [3..5] => term 2
+        assert_eq!(cache.entry(3), Some(2));
+        assert_eq!(cache.entry(4), Some(2));
+        assert_eq!(cache.entry(5), Some(2));
+        // index [6..15] => term 3
+        assert_eq!(cache.entry(6), Some(3));
+        assert_eq!(cache.entry(15), Some(3));
+        // index [16..20] => term 4..8
+        for i in 16..=20 {
+            assert_eq!(cache.entry(i), Some(i - 12));
+        }
+        drop(cache);
+
+        let mut cache = TermCache::default();
+        cache.append(20, 6);
+        for i in 1..=5 {
+            cache.append(20 + i * 5, i + 6);
+        }
+        let ents = vec![
+            new_entry(2, 2),
+            new_entry(3, 3),
+            new_entry(4, 4),
+            new_entry(5, 5),
+            new_entry(6, 6),
+        ];
+        cache.prepend(&ents);
+        assert_eq!(cache.entry(46), Some(11));
+        assert_eq!(cache.entry(3), None);
+        assert_eq!(cache.entry(4), Some(4));
+        assert_eq!(cache.entry(5), Some(5));
+        assert_eq!(cache.entry(15), Some(6));
+        assert_eq!(cache.entry(39), Some(9));
+        assert_eq!(cache.entry(44), Some(10));
     }
 
     #[test]
