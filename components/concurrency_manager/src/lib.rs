@@ -14,6 +14,7 @@ use fail::fail_point;
 
 mod key_handle;
 mod lock_table;
+mod metrics;
 
 use std::{
     error::Error,
@@ -38,6 +39,7 @@ use txn_types::{Key, Lock, TimeStamp};
 pub use self::{
     key_handle::{KeyHandle, KeyHandleGuard},
     lock_table::LockTable,
+    metrics::*,
 };
 
 lazy_static! {
@@ -178,6 +180,19 @@ impl ConcurrencyManager {
                 max_ts_drift_allowance.as_millis() as u64
             )),
         }
+    }
+
+    /// Start background monitoring task for lock table size
+    pub fn start_lock_table_monitoring(&self) {
+        let lock_table = self.lock_table.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(60)); // Update every minute
+            loop {
+                interval.tick().await;
+                let size = lock_table.len();
+                metrics::LOCK_TABLE_SIZE.set(size as i64);
+            }
+        });
     }
 
     pub fn max_ts(&self) -> TimeStamp {

@@ -6,7 +6,13 @@ use parking_lot::Mutex;
 use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 use txn_types::{Key, Lock};
 
-use super::lock_table::LockTable;
+use super::{
+    lock_table::LockTable,
+    metrics::{
+        get_key_type, KEYHANDLE_CREATED_TOTAL, KEYHANDLE_CURRENT, KEYHANDLE_DESTROYED_TOTAL,
+        KEYHANDLE_GUARD_ACQUIRED_TOTAL, KEYHANDLE_GUARD_RELEASED_TOTAL,
+    },
+};
 
 /// An entry in the in-memory table providing functions related to a specific
 /// key.
@@ -19,6 +25,11 @@ pub struct KeyHandle {
 
 impl KeyHandle {
     pub fn new(key: Key) -> Self {
+        // Increment creation counter and current gauge based on key type
+        let key_type = get_key_type(key.as_encoded());
+        KEYHANDLE_CREATED_TOTAL.with_label_values(&[key_type]).inc();
+        KEYHANDLE_CURRENT.with_label_values(&[key_type]).inc();
+
         KeyHandle {
             key,
             table: UnsafeCell::new(None),
@@ -28,6 +39,12 @@ impl KeyHandle {
     }
 
     pub async fn lock(self: Arc<Self>) -> KeyHandleGuard {
+        // Increment guard acquisition counter based on key type
+        let key_type = get_key_type(self.key.as_encoded());
+        KEYHANDLE_GUARD_ACQUIRED_TOTAL
+            .with_label_values(&[key_type])
+            .inc();
+
         // Safety: `_mutex_guard` is declared before `handle_ref` in `KeyHandleGuard`.
         // So the mutex guard will be released earlier than the `Arc<KeyHandle>`.
         // Then we can make sure the mutex guard doesn't point to released memory.
@@ -53,6 +70,13 @@ impl KeyHandle {
 
 impl Drop for KeyHandle {
     fn drop(&mut self) {
+        // Increment destruction counter and decrement current gauge based on key type
+        let key_type = get_key_type(self.key.as_encoded());
+        KEYHANDLE_DESTROYED_TOTAL
+            .with_label_values(&[key_type])
+            .inc();
+        KEYHANDLE_CURRENT.with_label_values(&[key_type]).dec();
+
         // SAFETY: `&mut self` ensures it's the only thread that can access `table`.
         unsafe {
             if let Some(table) = &*self.table.get() {
@@ -90,6 +114,12 @@ impl KeyHandleGuard {
 
 impl Drop for KeyHandleGuard {
     fn drop(&mut self) {
+        // Increment guard release counter based on key type
+        let key_type = get_key_type(self.handle.key.as_encoded());
+        KEYHANDLE_GUARD_RELEASED_TOTAL
+            .with_label_values(&[key_type])
+            .inc();
+
         // We only keep the lock in memory until the write to the underlying
         // store finishes.
         // The guard can be released after finishes writing.

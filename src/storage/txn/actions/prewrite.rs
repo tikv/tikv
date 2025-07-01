@@ -758,7 +758,19 @@ fn async_commit_timestamps(
 ) -> Result<TimeStamp> {
     // This operation should not block because the latch makes sure only one thread
     // is operating on this key.
+
+    // Checkpoint: before acquiring KeyHandleGuard in async_commit_timestamps (part
+    // of prewrite)
+    use concurrency_manager::{
+        CHECKPOINT_PREWRITE_ASYNC_AFTER_LOCK_KEY, CHECKPOINT_PREWRITE_ASYNC_BEFORE_LOCK_KEY,
+    };
+    CHECKPOINT_PREWRITE_ASYNC_BEFORE_LOCK_KEY.inc();
+
     let key_guard = ::futures_executor::block_on(txn.concurrency_manager.lock_key(key));
+
+    // Checkpoint: after acquiring KeyHandleGuard in async_commit_timestamps (part
+    // of prewrite)
+    CHECKPOINT_PREWRITE_ASYNC_AFTER_LOCK_KEY.inc();
 
     let final_min_commit_ts = key_guard.with_lock(|l| {
         let max_ts = txn.concurrency_manager.max_ts();

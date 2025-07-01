@@ -8,6 +8,11 @@
 
 use std::mem;
 
+use concurrency_manager::{
+    CHECKPOINT_PREWRITE_AFTER_MUTATIONS, CHECKPOINT_PREWRITE_BEFORE_MUTATIONS,
+    CHECKPOINT_PREWRITE_BEFORE_TAKE_GUARDS, CHECKPOINT_PREWRITE_GUARDS_TAKEN,
+    CHECKPOINT_PREWRITE_START,
+};
 use engine_traits::CF_WRITE;
 use kvproto::kvrpcpb::{
     AssertionLevel, ExtraOp, PrewriteRequestForUpdateTsConstraint,
@@ -532,8 +537,15 @@ impl<K: PrewriteKind> Prewriter<K> {
         // prewrite.
 
         let rows = self.mutations.len();
+
+        // Checkpoint: before processing mutations (guards will be acquired here)
+        CHECKPOINT_PREWRITE_BEFORE_MUTATIONS.inc();
+
         let res = self.prewrite(&mut txn, &mut reader, context.extra_op);
         let (locks, final_min_commit_ts) = res?;
+
+        // Checkpoint: after processing mutations, guards are in txn.guards
+        CHECKPOINT_PREWRITE_AFTER_MUTATIONS.inc();
 
         Ok(self.write_result(
             locks,
@@ -644,6 +656,7 @@ impl<K: PrewriteKind> Prewriter<K> {
             }
 
             let need_min_commit_ts = secondaries.is_some() || self.try_one_pc;
+
             let prewrite_result = prewrite(
                 txn,
                 reader,
@@ -763,7 +776,14 @@ impl<K: PrewriteKind> Prewriter<K> {
             // Here the lock guards are taken and will be released after the write finishes.
             // If an error (KeyIsLocked or WriteConflict) occurs before, these lock guards
             // are dropped along with `txn` automatically.
+
+            // Checkpoint: before taking guards from txn (critical for leak detection)
+            CHECKPOINT_PREWRITE_BEFORE_TAKE_GUARDS.inc();
+
             let lock_guards = txn.take_guards();
+
+            // Checkpoint: after taking guards, they're now in WriteResult
+            CHECKPOINT_PREWRITE_GUARDS_TAKEN.inc();
             let new_acquired_locks = txn.take_new_locks();
             let mut to_be_write = WriteData::new(txn.into_modifies(), extra);
             to_be_write.set_disk_full_opt(self.ctx.get_disk_full_opt());

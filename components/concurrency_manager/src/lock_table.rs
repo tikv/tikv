@@ -8,7 +8,10 @@ use std::{
 use crossbeam_skiplist::SkipMap;
 use txn_types::{Key, Lock};
 
-use super::key_handle::{KeyHandle, KeyHandleGuard};
+use super::{
+    key_handle::{KeyHandle, KeyHandleGuard},
+    metrics::{LOCK_TABLE_INSERTS_TOTAL, LOCK_TABLE_REMOVALS_TOTAL, LOCK_TABLE_REUSE_TOTAL},
+};
 
 #[derive(Clone)]
 pub struct LockTable(pub Arc<SkipMap<Key, Weak<KeyHandle>>>);
@@ -36,6 +39,9 @@ impl LockTable {
                 // `guard` refers to the KeyHandle in the lock table. Now, we can bind the
                 // handle to the table.
 
+                // Increment insert counter since we successfully inserted a new entry
+                LOCK_TABLE_INSERTS_TOTAL.inc();
+
                 // SAFETY: The `table` field in `KeyHandle` is only accessed through the
                 // `set_table` or the `drop` method. It's impossible to have a concurrent `drop`
                 // here and `set_table` is only called here. So there is no concurrent access to
@@ -45,7 +51,11 @@ impl LockTable {
                 }
                 return guard;
             } else if let Some(handle) = entry.value().upgrade() {
+                // Increment reuse counter since we're reusing an existing KeyHandle
+                LOCK_TABLE_REUSE_TOTAL.inc();
                 return handle.lock().await;
+            } else {
+                LOCK_TABLE_UPGRADE_FAIL.inc();
             }
         }
     }
@@ -125,7 +135,16 @@ impl LockTable {
 
     /// Removes the key and its key handle from the map.
     pub fn remove(&self, key: &Key) {
-        self.0.remove(key);
+        if self.0.remove(key).is_some() {
+            // Increment removal counter only if an entry was actually removed
+            LOCK_TABLE_REMOVALS_TOTAL.inc();
+        }
+    }
+
+    /// Returns the number of entries in the lock table.
+    /// Note: This includes weak references that may no longer be valid.
+    pub fn len(&self) -> usize {
+        self.0.len()
     }
 }
 
