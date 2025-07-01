@@ -549,6 +549,8 @@ where
                 error!("failed to delete files in range"; "err" => %e);
             })
             .unwrap();
+        fail_point!("after_delete_files_in_range", |_| {});
+        // Remove all overlapped ranges directly without ingesting.
         if let Err(e) = self.delete_all_in_range(&ranges) {
             error!("failed to cleanup stale range"; "err" => %e);
             return;
