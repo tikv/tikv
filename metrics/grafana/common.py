@@ -20,6 +20,7 @@ from grafanalib.core import (
     SeriesOverride,
     Stat,
     StatValueMappings,
+    Table,
     Target,
     Template,
     TimeSeries,
@@ -1180,3 +1181,63 @@ def heatmap_panel_graph_panel_histogram_quantile_pairs(
             hide_avg=hide_avg,
         ),
     ]
+
+
+def table_panel(
+    title: str,
+    targets: list[Target],
+    description=None,
+    data_source=DATASOURCE,
+    overrides=None,
+    columns=None,
+    sort_by=None,
+    filterable=False,
+    show_header=True,
+    time_from=None,
+    transformations=None,
+) -> Panel:
+    """
+    Create a table panel for displaying configuration data in tabular format.
+
+    Args:
+        title: Panel title
+        targets: List of targets to query data
+        description: Panel description
+        data_source: Data source to use
+        overrides: Field overrides for customizing display
+        columns: Column configuration
+        sort_by: Default sorting configuration
+        filterable: Whether to allow column filtering
+        show_header: Whether to show table header
+        time_from: Time from parameter for the panel
+        transformations: Grafana transformations for the panel
+
+    Returns:
+        Table panel instance
+    """
+    for target in targets:
+        target.format = "table"
+
+    table_args = {
+        "title": title,
+        "dataSource": data_source,
+        "targets": targets,
+        "overrides": overrides or [],
+    }
+
+    if description is not None:
+        table_args["description"] = description
+    if columns is not None:
+        table_args["columns"] = columns
+    if sort_by is not None:
+        table_args["sortBy"] = sort_by
+    if filterable is not None:
+        table_args["filterable"] = filterable
+    if show_header is not None:
+        table_args["showHeader"] = show_header
+    if time_from is not None:
+        table_args["timeFrom"] = time_from
+    if transformations is not None:
+        table_args["transformations"] = transformations
+
+    return Table(**table_args)
