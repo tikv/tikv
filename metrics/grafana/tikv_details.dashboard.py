@@ -9445,10 +9445,23 @@ def BackupImport() -> RowPanel:
                 metric="tikv_import_ingest_duration_bucket",
                 label_selectors=['type=~"ingest"'],
             ),
-            heatmap_panel(
-                title="Import Ingest SST Bytes",
-                yaxis=yaxis(format=UNITS.SECONDS),
-                metric="tikv_import_ingest_byte_bucket",
+            graph_panel(
+                title="Import Ingest SST Bytes Rate",
+                yaxes=yaxes(left_format=UNITS.BYTES_SEC_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_import_ingest_bytes_sum",
+                        ),
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_import_ingest_bytes_sum",
+                            by_labels=[],
+                        ),
+                        legend_format="total",
+                    ),
+                ],
             ),
             graph_panel(
                 title="Import Download SST Throughput",
@@ -9465,6 +9478,25 @@ def BackupImport() -> RowPanel:
                             by_labels=[],
                         ),
                         legend_format="total",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Import Download Failure Rate",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_import_download_failure_count",
+                            by_labels=["type", "instance"],
+                        ),
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_import_download_failure_count",
+                            by_labels=["type"],
+                        ),
+                        legend_format="{{type}} total",
                     ),
                 ],
             ),
