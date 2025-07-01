@@ -1275,6 +1275,13 @@ impl RegionReadProgress {
                 if let Some(ts) = core.update_safe_ts(apply_index, ts) {
                     if !core.pause {
                         self.safe_ts.store(ts, AtomicOrdering::Release);
+                    } else {
+                        info!(
+                            "[DEBUG_PATCH] region read progress is paused, discard safe ts update";
+                            "region_id" => core.region_id,
+                            "apply_index" => apply_index,
+                            "safe_ts" => ts
+                        );
                     }
                 }
             }

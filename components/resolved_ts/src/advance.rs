@@ -363,6 +363,11 @@ impl LeadershipResolver {
         let store_count = store_req_map.len();
         let mut check_leader_rpcs = Vec::with_capacity(store_req_map.len());
         for (store_id, req) in store_req_map {
+            info!("[DEBUG_PATCH] before send check leader request";
+                "regions" => req.regions.len(),
+                "min_ts" => min_ts,
+                "store_id" => store_id,
+            );
             if req.regions.is_empty() {
                 continue;
             }
@@ -434,6 +439,7 @@ impl LeadershipResolver {
             check_leader_rpcs = remains;
             match res {
                 Ok((to_store, resp)) => {
+                    info!("[DEBUG_PATCH] check leader success"; "to_store" => to_store);
                     for region_id in resp.regions {
                         resp_map
                             .entry(region_id)

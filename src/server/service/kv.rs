@@ -938,8 +938,19 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         sink: UnarySink<CheckLeaderResponse>,
     ) {
         let addr = ctx.peer();
+        let clone_addr = addr.clone();
         let ts = request.get_ts();
-        let leaders = request.take_regions().into();
+        let leaders: Vec<_> = request.take_regions().into();
+        let num_leaders = leaders.len();
+        let min_safe_ts = leaders
+            .iter()
+            .map(|leader| leader.get_read_state().get_safe_ts())
+            .fold(
+                u64::MAX,
+                |min, safe_ts| {
+                    if safe_ts > 0 { min.min(safe_ts) } else { min }
+                },
+            );
         let (cb, resp) = paired_future_callback();
         let check_leader_scheduler = self.check_leader_scheduler.clone();
         let task = async move {
@@ -960,11 +971,20 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             }
             ServerResult::Ok(())
         }
-        .map_err(move |e| {
-            // CheckLeader only needs quorum responses, remote may drops
-            // requests early.
-            info!("call CheckLeader failed"; "err" => ?e, "address" => addr);
-        })
+        .map_ok_or_else(
+            move |e| {
+                // CheckLeader only needs quorum responses, remote may drops
+                // requests early.
+                info!("call CheckLeader failed"; "err" => ?e, "address" => addr);
+            },
+            move |_| {
+                info!("[DEBUG_PATCH] call CheckLeader success";
+                "ts" => ts,
+                "min_safe_ts" => ?min_safe_ts,
+                "leaders" => num_leaders,
+                "address" => clone_addr);
+            },
+        )
         .map(|_| ());
 
         ctx.spawn(task);
