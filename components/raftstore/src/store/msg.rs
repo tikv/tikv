@@ -977,10 +977,15 @@ where
         abnormal_stores: Vec<u64>,
     },
 
+    // This message is used to collect MVCC stats for the whole range at server startup.
+    // It's more accurate than adding up the MVCC stats of all regions. Since some files
+    // may be shared by multiple regions.
     DoneCollectWholeRangeMVCCStats {
         mvcc_stats: RangeStats,
     },
 
+    // This is a event triggered every time when a compaction or flush is done. MVCC stats
+    // will be updated accordingly.
     StatsChangeEvent(EK::StatsChangeEvent),
 
     /// Message only used for test.
