@@ -469,6 +469,11 @@ impl TermCache {
         }
     }
 
+    /// Compact all terms whose start_index are less than `idx`.
+    fn compact_to(&mut self, idx: u64) {
+        self.cache.retain(|(_, start_idx)| *start_idx >= idx);
+    }
+
     /// Return the term of the given index.
     ///
     /// If the term is not found in the cache, return None.
@@ -1337,6 +1342,7 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
             // should be temporarily skipped. Otherwise, the warmup task may fail.
             return;
         }
+        self.term_cache.compact_to(idx);
         self.cache.compact_to(idx);
     }
 
@@ -1592,6 +1598,19 @@ pub mod tests {
         assert_eq!(cache.entry(15), Some(6));
         assert_eq!(cache.entry(39), Some(9));
         assert_eq!(cache.entry(44), Some(10));
+        // compact to 40
+        cache.compact_to(40);
+        assert_eq!(cache.cache.len(), 2);
+        assert_eq!(cache.entry(39), None);
+        assert_eq!(cache.entry(40), Some(10));
+        // compact to 45
+        cache.compact_to(45);
+        assert_eq!(cache.cache.len(), 1);
+        cache.append(48, 12);
+        assert_eq!(cache.cache.len(), 2);
+        assert_eq!(cache.entry(45), Some(11));
+        cache.compact_to(46);
+        assert_eq!(cache.entry(45), None);
     }
 
     #[test]
