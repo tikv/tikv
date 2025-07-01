@@ -407,10 +407,10 @@ impl Drop for EntryCache {
 /// - term: The term number of a sequence of entries
 /// - start_index: The start raft log index that shares this term
 ///
-/// The cache maintains entries in descending order by index, allowing quick
-/// lookups of terms for any given log index. The small fixed capacity helps
-/// keep memory overhead minimal while caching the most relevant term
-/// information.
+/// The cache maintains entries in monotonically increasing order by term,
+/// allowing quick lookups of terms for any given log index. The small fixed
+/// capacity helps keep memory overhead minimal while caching the most relevant
+/// term information.
 struct TermCache {
     cache: VecDeque<(u64, u64)>, // (term, start_index)
     capacity: usize,
