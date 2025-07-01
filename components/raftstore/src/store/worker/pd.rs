@@ -992,7 +992,7 @@ where
             error!("failed to start stats collector, error = {:?}", e);
         }
 
-        let health_reporter_config = RaftstoreReporterConfig {
+        let health_reporter_config: RaftstoreReporterConfig = RaftstoreReporterConfig {
             inspect_interval: cfg.inspect_interval.0,
             inspect_kvdb_interval: cfg.inspect_kvdb_interval.0,
             inspect_network_interval: cfg.inspect_network_interval.0,

@@ -8,6 +8,7 @@ use std::{
 use kvproto::pdpb;
 use pdpb::SlowTrend as SlowTrendPb;
 use prometheus::IntGauge;
+use tikv_util::info;
 
 use crate::{
     HealthController, HealthControllerInner, RaftstoreDuration, UnifiedDuration,
@@ -99,6 +100,14 @@ impl UnifiedSlowScore {
             // For disk factors, we care about the raftstore duration.
             duration.raftstore_duration.delays_on_disk_io(false)
         };
+        info!(
+            "recording slow score: factor {}, id: {}, duration: {}, not_busy: {}, input_duration: {:?}",
+            factor.as_str(),
+            id,
+            tikv_util::time::duration_to_us(dur),
+            not_busy,
+            duration
+        );
         self.factors[factor as usize].record(id, dur, not_busy);
     }
 
@@ -240,6 +249,10 @@ impl RaftstoreReporter {
             // be busy on handling requests or delayed on I/O operations. And only when
             // the current store is not busy, it should record the last_tick as a timeout.
             if factor == InspectFactor::Network || !store_maybe_busy {
+                info!(
+                    "raftstore reporter tick: factor {:?} not finished, store_maybe_busy: {}",
+                    factor, store_maybe_busy
+                );
                 self.slow_score.get_mut(factor).record_timeout();
             }
         }
