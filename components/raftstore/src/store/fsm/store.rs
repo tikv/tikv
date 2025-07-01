@@ -2752,23 +2752,6 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
             );
             return;
         }
-        // Divide region ranges by group_size, add DATA_MIN_KEY as first and
-        // DATA_MAX_KEY as last.
-        // let group_size = std::cmp::max(1, self.ctx.cfg.check_then_compact_group_size
-        // as usize); let estimated_groups = (meta.region_ranges.len() +
-        // group_size - 1) / group_size; let mut all_ranges =
-        // Vec::with_capacity(estimated_groups + 1); all_ranges.
-        // push(keys::DATA_MIN_KEY.to_vec());
-
-        // for (i, key) in meta.region_ranges.keys().enumerate() {
-        //     if (i + 1) % group_size == 0 {
-        //         all_ranges.push(key.clone());
-        //     }
-        // }
-        // // If the last group has fewer members than group_size, just use
-        // DATA_MAX_KEY. if meta.region_ranges.len() % group_size != 0 {
-        //     all_ranges.push(keys::DATA_MAX_KEY.to_vec());
-        // }
         let mut all_ranges = Vec::with_capacity(meta.region_ranges.len() + 2);
         all_ranges.push(keys::DATA_MIN_KEY.to_vec());
         all_ranges.extend(meta.region_ranges.keys().cloned());
