@@ -31,6 +31,7 @@ pub(super) const TICK_DURATION: Duration = Duration::from_millis(1000);
 pub(super) const RATIO_SCALE_FACTOR: u32 = 10_000_000;
 const K_INC_SLOWDOWN_RATIO: f64 = 0.8;
 const K_DEC_SLOWDOWN_RATIO: f64 = 1.0 / K_INC_SLOWDOWN_RATIO;
+const MIN_THROTTLE_SPEED: f64 = 16.0 * 1024.0; // 16KB
 const MAX_THROTTLE_SPEED: f64 = 200.0 * 1024.0 * 1024.0; // 200MB
 
 const EMA_FACTOR: f64 = 0.6; // EMA stands for Exponential Moving Average
@@ -113,7 +114,6 @@ impl EngineFlowController {
         let limiter = Arc::new(
             <Limiter>::builder(f64::INFINITY)
                 .refill(Duration::from_millis(1))
-                .min_wait(config.min_wait.0)
                 .build(),
         );
         let discard_ratio = Arc::new(AtomicU32::new(0));
@@ -859,9 +859,8 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
     }
 
     fn update_speed_limit(&mut self, mut throttle: f64) {
-        let min_throttle_speed = self.config_tracker.value().min_throttle_speed.0 as f64;
-        if throttle < min_throttle_speed {
-            throttle = min_throttle_speed;
+        if throttle < MIN_THROTTLE_SPEED {
+            throttle = MIN_THROTTLE_SPEED;
         }
         if throttle > MAX_THROTTLE_SPEED {
             self.throttle_cf = None;

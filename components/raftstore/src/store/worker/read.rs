@@ -476,7 +476,7 @@ impl ReadDelegate {
         ReadDelegate {
             region: Arc::new(region),
             peer_id,
-            term, //
+            term,
             applied_term,
             leader_lease: None,
             last_valid_ts: Timespec::new(0, 0),

@@ -356,9 +356,6 @@
 ## reject all write requests with `ServerIsBusy` error.
 # hard-pending-compaction-bytes-limit = "1024GB"
 
-# min-wait = "1ms" # The minimum wait duration for the flow controller to throttle writes.
-# min-throttle-speed = "16KB" # The minimum throttle speed (bytes/sec) for the flow controller.
-
 [storage.io-rate-limit]
 ## Maximum I/O bytes that this server can write to or read from disk (determined by mode)
 ## in one second. Internally it prefers throttling background operations over foreground
