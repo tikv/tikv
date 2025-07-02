@@ -114,6 +114,7 @@ impl EngineFlowController {
         let limiter = Arc::new(
             <Limiter>::builder(f64::INFINITY)
                 .refill(Duration::from_millis(1))
+                .min_wait(Duration::from_millis(0))
                 .build(),
         );
         let discard_ratio = Arc::new(AtomicU32::new(0));
