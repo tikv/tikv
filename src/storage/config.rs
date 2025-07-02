@@ -262,10 +262,6 @@ pub struct FlowControlConfig {
     pub memtables_threshold: u64,
     #[online_config(skip)]
     pub l0_files_threshold: u64,
-    /// The minimum wait duration for the flow controller to throttle writes.
-    pub min_wait: ReadableDuration,
-    /// The minimum throttle speed (bytes/sec) for the flow controller.
-    pub min_throttle_speed: ReadableSize,
 }
 
 impl Default for FlowControlConfig {
@@ -276,8 +272,6 @@ impl Default for FlowControlConfig {
             hard_pending_compaction_bytes_limit: ReadableSize::gb(1024),
             memtables_threshold: 5,
             l0_files_threshold: 20,
-            min_wait: ReadableDuration::millis(100),
-            min_throttle_speed: ReadableSize::kb(16),
         }
     }
 }
