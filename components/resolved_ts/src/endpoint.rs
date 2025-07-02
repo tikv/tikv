@@ -279,6 +279,7 @@ pub struct Endpoint<T, E: KvEngine> {
     scanner_pool: ScannerPool<T, E>,
     scheduler: Scheduler<Task>,
     advance_worker: AdvanceTsWorker,
+    running_event: Option<String>,
     _phantom: PhantomData<(T, E)>,
 }
 
@@ -327,6 +328,7 @@ where
             advance_worker,
             scanner_pool,
             regions: HashMap::default(),
+            running_event: None,
             _phantom: PhantomData::default(),
         };
         ep.handle_advance_resolved_ts(leader_resolver);
@@ -744,6 +746,12 @@ where
 
     fn run(&mut self, task: Task) {
         debug!("run resolved-ts task"; "task" => ?task);
+        self.running_event = Some(if let Task::ResolvedTsAdvanced { ts, .. } = task {
+            // don't log the regions, as it may be too long
+            format!("advance-resolved-ts: {}", ts)
+        } else {
+            format!("{:?}", task)
+        });
         match task {
             Task::RegionDestroyed(region) => self.region_destroyed(region),
             Task::RegionUpdated(region) => self.region_updated(region),
@@ -889,6 +897,7 @@ where
                     .map(TimeStamp::into_inner);
                 lock_num = Some(ob.resolver.locks_by_key.len());
             }
+            self.region_read_progress.oldest_safe_ts_region = Some(oldest_safe_ts_region);
             info!(
                 "the max gap of safe-ts is large";
                 "gap" => safe_ts_gap,
@@ -897,6 +906,7 @@ where
                 "advance-ts-interval" => ?self.cfg.advance_ts_interval,
                 "lock num" => lock_num,
                 "min start ts" => min_start_ts,
+                "timeout_task" => ?self.running_event,
             );
         }
         RTS_MIN_SAFE_TS_GAP.set(safe_ts_gap as i64);

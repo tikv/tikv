@@ -1032,12 +1032,14 @@ impl Display for MsgType<'_> {
 
 #[derive(Clone)]
 pub struct RegionReadProgressRegistry {
+    pub oldest_safe_ts_region: Option<u64>,
     registry: Arc<Mutex<HashMap<u64, Arc<RegionReadProgress>>>>,
 }
 
 impl RegionReadProgressRegistry {
     pub fn new() -> RegionReadProgressRegistry {
         RegionReadProgressRegistry {
+            oldest_safe_ts_region: None,
             registry: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -1111,8 +1113,9 @@ impl RegionReadProgressRegistry {
         let registry = self.registry.lock().unwrap();
         for leader_info in &leaders {
             let region_id = leader_info.get_region_id();
+            let is_oldest_safe_ts_region = self.oldest_safe_ts_region == Some(region_id);
             if let Some(rp) = registry.get(&region_id) {
-                if rp.consume_leader_info(leader_info, coprocessor) {
+                if rp.consume_leader_info(leader_info, coprocessor, is_oldest_safe_ts_region) {
                     regions.push(region_id);
                 }
             }
@@ -1264,6 +1267,7 @@ impl RegionReadProgress {
         &self,
         leader_info: &LeaderInfo,
         coprocessor: &CoprocessorHost<E>,
+        is_oldest_safe_ts_region: bool,
     ) -> bool {
         let mut core = self.core.lock().unwrap();
         if leader_info.has_read_state() {
@@ -1283,6 +1287,18 @@ impl RegionReadProgress {
                             "safe_ts" => ts
                         );
                     }
+                } else if is_oldest_safe_ts_region {
+                    info!(
+                        "[DEBUG_PATCH] oldest safe-ts region update safe ts failed";
+                        "last_merge_index" => core.last_merge_index,
+                        "pending_items" => core.pending_items.len(),
+                        "self apply_index" => core.applied_index,
+                        "sefl read state" => ?core.read_state,
+                        "self safe_ts" => self.safe_ts.load(AtomicOrdering::Acquire),
+                        "leader apply_index" => apply_index,
+                        "leader safe_ts" => ts,
+                        "region_id" => core.region_id,
+                    );
                 }
             }
             let self_phy_ts = TimeStamp::new(self.safe_ts()).physical();
