@@ -226,6 +226,7 @@ waterfall-metrics = true
 io-reschedule-concurrent-max-count = 1234
 io-reschedule-hotpot-duration = "4321s"
 inspect-interval = "444ms"
+inspect-kvdb-interval = "333ms"
 inspect-cpu-util-thd = 0.666
 check-leader-lease-interval = "123ms"
 renew-leader-lease-advance-duration = "456ms"
