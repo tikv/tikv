@@ -1402,6 +1402,7 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
 
     pub fn clear(&mut self) {
         self.cache = EntryCache::default();
+        self.term_cache = TermCache::default();
     }
 
     pub fn read_scheduler(&self) -> Scheduler<ReadTask<EK>> {
