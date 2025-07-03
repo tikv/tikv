@@ -4348,9 +4348,16 @@ impl TikvConfig {
     /// ```
     #[allow(deprecated)]
     pub fn compatible_adjust(&mut self, last_config: Option<&TikvConfig>) {
-        let (default_raft_store, default_coprocessor) = last_config
-            .map_or((RaftstoreConfig::default(), CopConfig::default()), |cfg| {
-                (cfg.raft_store.clone(), cfg.coprocessor.clone())
+        let (default_raft_store, default_coprocessor) =
+            last_config.map_or((RaftstoreConfig::default(), CopConfig::default()), |cfg| {
+                (
+                    RaftstoreConfig {
+                        region_max_size: cfg.raft_store.region_max_size,
+                        region_split_size: cfg.raft_store.region_split_size,
+                        ..cfg.raft_store.clone()
+                    },
+                    cfg.coprocessor.clone(),
+                )
             });
         if self.raft_store.region_max_size != default_raft_store.region_max_size {
             warn!(
@@ -7620,6 +7627,10 @@ mod tests {
         assert_eq!(
             cfg_from_file.coprocessor.region_split_keys,
             case2_cfg.coprocessor.region_split_keys
+        );
+        assert_eq!(
+            default_cfg.raft_store.raft_entry_max_size,
+            case2_cfg.raft_store.raft_entry_max_size
         );
 
         // Case 3: manually specify region-split-size, then make it compatible to the
