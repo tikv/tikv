@@ -1001,6 +1001,7 @@ where
         let importer = Arc::new(importer);
 
         let split_check_runner = SplitCheckRunner::new(
+            Some(engines.store_meta.clone()),
             engines.engines.kv.clone(),
             self.router.clone(),
             self.coprocessor_host.clone().unwrap(),

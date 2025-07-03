@@ -401,6 +401,14 @@ impl<EK: KvEngine, ER: RaftEngine> crate::coprocessor::StoreHandle for RaftRoute
             },
         );
     }
+
+    fn update_compaction_declined_bytes(&self, region_id: u64, bytes: u64) {
+        let _ = CasualRouter::send(
+            self,
+            region_id,
+            CasualMessage::CompactionDeclinedBytes { bytes },
+        );
+    }
 }
 
 /// A handle for cdc and pitr to schedule some command back to raftstore.
