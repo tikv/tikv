@@ -92,4 +92,11 @@ lazy_static! {
             exponential_buckets(0.005, 2.0, 20).unwrap()
         )
         .unwrap();
+    pub static ref INGEST_EXTERNAL_FILE_ALLOW_WRITE_COUNTER: IntCounterVec =
+        register_int_counter_vec!(
+            "tikv_storage_ingest_external_file_allow_write_counter",
+            "Total number of RocksDB ingest SST operations for both allow_write enabled and disabled",
+            &["type"]
+        )
+        .unwrap();
 }

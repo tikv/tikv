@@ -2098,6 +2098,7 @@ dependencies = [
  "engine_traits",
  "kvproto",
  "raft",
+ "tikv_util",
  "tracker",
  "txn_types",
 ]
@@ -2185,6 +2186,7 @@ dependencies = [
  "log_wrappers",
  "protobuf",
  "raft",
+ "rand 0.8.5",
  "serde",
  "slog",
  "slog-global",
@@ -3757,7 +3759,11 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git#1fa579389704096b88f511325a71151a25d58151"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#c55bb14ec41439c2c1849358a1c57bb6c0fbdbf7"
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -3776,7 +3782,11 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git#1fa579389704096b88f511325a71151a25d58151"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#c55bb14ec41439c2c1849358a1c57bb6c0fbdbf7"
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -5734,7 +5744,11 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git#1fa579389704096b88f511325a71151a25d58151"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#c55bb14ec41439c2c1849358a1c57bb6c0fbdbf7"
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
 dependencies = [
  "libc 0.2.151",
  "librocksdb_sys",
