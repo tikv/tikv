@@ -4163,7 +4163,7 @@ impl TikvConfig {
     /// ```
     #[allow(deprecated)]
     pub fn compatible_adjust(&mut self, last_config: Option<&TikvConfig>) {
-		let (default_raft_store, default_coprocessor) =
+        let (default_raft_store, default_coprocessor) =
             last_config.map_or((RaftstoreConfig::default(), CopConfig::default()), |cfg| {
                 (
                     RaftstoreConfig {
