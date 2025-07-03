@@ -169,6 +169,20 @@ pub struct RaftMetrics {
     pub write_block_wait: LocalHistogram,
     pub propose_log_size: LocalHistogram,
 
+    // Raftstore disk IO metrics
+    pub io_write_init_raft_state: LocalHistogram,
+    pub io_write_init_apply_state: LocalHistogram,
+    pub io_write_peer_destroy_kv: LocalHistogram,
+    pub io_write_peer_destroy_raft: LocalHistogram,
+    pub io_read_entry_storage_create: LocalHistogram,
+    pub io_read_store_check_msg: LocalHistogram,
+    pub io_read_peer_check_merge_target_stale: LocalHistogram,
+    pub io_read_peer_maybe_create: LocalHistogram,
+    pub io_read_peer_snapshot_read: LocalHistogram,
+    pub io_read_v2_compatible_learner: LocalHistogram,
+    pub io_read_raft_term: LocalHistogram,
+    pub io_read_raft_fetch_log: LocalHistogram,
+
     // waterfall metrics
     pub waterfall_metrics: bool,
     pub wf_batch_wait: LocalHistogram,
@@ -211,6 +225,42 @@ impl RaftMetrics {
             commit_log: PEER_COMMIT_LOG_HISTOGRAM.local(),
             write_block_wait: STORE_WRITE_MSG_BLOCK_WAIT_DURATION_HISTOGRAM.local(),
             propose_log_size: PEER_PROPOSE_LOG_SIZE_HISTOGRAM.local(),
+            io_write_peer_destroy_kv: STORE_IO_DURATION_HISTOGRAM
+                .with_label_values(&["write", "peer_destroy_kv_write"])
+                .local(),
+            io_write_peer_destroy_raft: STORE_IO_DURATION_HISTOGRAM
+                .with_label_values(&["write", "peer_destroy_raft_write"])
+                .local(),
+            io_write_init_raft_state: STORE_IO_DURATION_HISTOGRAM
+                .with_label_values(&["write", "init_raft_state"])
+                .local(),
+            io_write_init_apply_state: STORE_IO_DURATION_HISTOGRAM
+                .with_label_values(&["write", "init_apply_state"])
+                .local(),
+            io_read_entry_storage_create: STORE_IO_DURATION_HISTOGRAM
+                .with_label_values(&["read", "entry_storage_create"])
+                .local(),
+            io_read_store_check_msg: STORE_IO_DURATION_HISTOGRAM
+                .with_label_values(&["read", "store_check_msg"])
+                .local(),
+            io_read_peer_check_merge_target_stale: STORE_IO_DURATION_HISTOGRAM
+                .with_label_values(&["read", "peer_check_merge_target_stale"])
+                .local(),
+            io_read_peer_maybe_create: STORE_IO_DURATION_HISTOGRAM
+                .with_label_values(&["read", "peer_maybe_create"])
+                .local(),
+            io_read_peer_snapshot_read: STORE_IO_DURATION_HISTOGRAM
+                .with_label_values(&["read", "peer_snapshot_read"])
+                .local(),
+            io_read_v2_compatible_learner: STORE_IO_DURATION_HISTOGRAM
+                .with_label_values(&["read", "v2_compatible_learner"])
+                .local(),
+            io_read_raft_term: STORE_IO_DURATION_HISTOGRAM
+                .with_label_values(&["read", "raft_term"])
+                .local(),
+            io_read_raft_fetch_log: STORE_IO_DURATION_HISTOGRAM
+                .with_label_values(&["read", "raft_fetch_log"])
+                .local(),
             waterfall_metrics,
             wf_batch_wait: STORE_WF_BATCH_WAIT_DURATION_HISTOGRAM.local(),
             wf_send_to_queue: STORE_WF_SEND_TO_QUEUE_DURATION_HISTOGRAM.local(),
@@ -249,6 +299,19 @@ impl RaftMetrics {
         self.commit_log.flush();
         self.write_block_wait.flush();
         self.propose_log_size.flush();
+
+        self.io_write_init_raft_state.flush();
+        self.io_write_init_apply_state.flush();
+        self.io_write_peer_destroy_kv.flush();
+        self.io_write_peer_destroy_raft.flush();
+        self.io_read_entry_storage_create.flush();
+        self.io_read_store_check_msg.flush();
+        self.io_read_peer_check_merge_target_stale.flush();
+        self.io_read_peer_maybe_create.flush();
+        self.io_read_peer_snapshot_read.flush();
+        self.io_read_v2_compatible_learner.flush();
+        self.io_read_raft_term.flush();
+        self.io_read_raft_fetch_log.flush();
 
         if self.waterfall_metrics {
             self.wf_batch_wait.flush();
