@@ -78,7 +78,7 @@ impl Runner {
         // recent request; older requests become stale and irrelevant. To avoid
         // unnecessary accumulation of multiple requests, we set a small
         // `capacity` for the disk check worker.
-        let (notifier, receiver) = bounded(20);
+        let (notifier, receiver) = bounded(1000);
         Self {
             target,
             notifier,
