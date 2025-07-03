@@ -4163,10 +4163,9 @@ impl TikvConfig {
     /// ```
     #[allow(deprecated)]
     pub fn compatible_adjust(&mut self, last_config: Option<&TikvConfig>) {
-        let (default_raft_store, default_coprocessor) = last_config
-            .map_or((RaftstoreConfig::default(), CopConfig::default()), |cfg| {
-                (cfg.raft_store.clone(), cfg.coprocessor.clone())
-            });
+        let default_raft_store = RaftstoreConfig::default();
+        let default_coprocessor =
+            last_config.map_or(CopConfig::default(), |cfg| cfg.coprocessor.clone());
         if self.raft_store.region_max_size != default_raft_store.region_max_size {
             warn!(
                 "deprecated configuration, \
