@@ -464,7 +464,7 @@ impl<E: Engine> ImportSstService<E> {
         loop {
             sleep(Duration::from_secs(10)).await;
 
-            importer.update_config_memory_use_ratio(&cfg);
+            importer.update_config(&cfg);
             importer.shrink_by_tick();
         }
     }
