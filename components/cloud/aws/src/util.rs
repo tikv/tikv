@@ -177,7 +177,7 @@ impl ProvideCredentials for DefaultCredentialsProvider {
                     Box::pin(
                         self.default_provider
                             .provide_credentials()
-                            .map_err(|e| CredentialsErrorWrapper(e)),
+                            .map_err(CredentialsErrorWrapper),
                     )
                 },
                 "get_cred_on_premise",

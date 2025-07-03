@@ -164,6 +164,7 @@ where
                              key_mgr: Option<Arc<DataKeyManager>>|
      -> Result<u64, Error> {
         let info = sst_writer.finish()?;
+        #[allow(clippy::redundant_closure_call)]
         (|| {
             fail_point!("inject_sst_file_corruption", |_| {
                 static CALLED: std::sync::atomic::AtomicBool =

@@ -211,11 +211,9 @@ impl PersistenceListener {
     /// be held during this method, so we should avoid do heavy things in it.
     pub fn on_memtable_sealed(&self, cf: String, smallest_seqno: u64, largest_seqno: u64) {
         let t = Instant::now_coarse();
-        (|| {
-            fail_point!("on_memtable_sealed", |t| {
-                assert_eq!(t.unwrap().as_str(), cf);
-            })
-        })();
+        fail_point!("on_memtable_sealed", |t| {
+            assert_eq!(t.unwrap().as_str(), cf);
+        });
         // The correctness relies on the assumption that there will be only one
         // thread writing to the DB and increasing apply index.
         // Apply index will be set within DB lock, so it's correct even with manual

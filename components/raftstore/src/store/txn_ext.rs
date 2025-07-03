@@ -285,8 +285,8 @@ impl PeerPessimisticLocks {
         }
         let mut locks = Vec::new();
         let mut iter = self.map.range((
-            start.map_or(Bound::Unbounded, |k| Bound::Included(k)),
-            end.map_or(Bound::Unbounded, |k| Bound::Excluded(k)),
+            start.map_or(Bound::Unbounded, Bound::Included),
+            end.map_or(Bound::Unbounded, Bound::Excluded),
         ));
         while let Some((key, (lock, _))) = iter.next() {
             if filter(key, lock) {

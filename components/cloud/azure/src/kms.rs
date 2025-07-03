@@ -109,14 +109,14 @@ impl AzureKms {
                     certificate_path.clone(),
                     azure_cfg.client_certificate_password.clone(),
                 )
-                .map_err(|e| CloudError::Other(e))?,
+                .map_err(CloudError::Other)?,
                 ClientCertificateCredentialExt::build(
                     azure_cfg.tenant_id.clone(),
                     azure_cfg.client_id,
                     certificate_path,
                     azure_cfg.client_certificate_password,
                 )
-                .map_err(|e| CloudError::Other(e))?,
+                .map_err(CloudError::Other)?,
             );
             Self::new_with_credentials(config, keyvault_credential, hsm_credential)
         } else if let Some(client_secret) = azure_cfg.client_secret.clone() {

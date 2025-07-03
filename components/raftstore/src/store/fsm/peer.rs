@@ -4085,6 +4085,7 @@ where
                 .snapshot_recovery_maybe_finish_wait_apply(/* force= */ true);
         }
 
+        #[allow(clippy::redundant_closure_call)]
         (|| {
             fail_point!(
                 "before_destroy_peer_on_peer_1003",
@@ -7162,6 +7163,7 @@ where
 
     fn on_set_flashback_state(&mut self, region: metapb::Region) {
         // Update the region meta.
+        #[allow(clippy::redundant_closure_call)]
         self.update_region((|| {
             #[cfg(feature = "failpoints")]
             fail_point!("keep_peer_fsm_flashback_state_false", |_| {

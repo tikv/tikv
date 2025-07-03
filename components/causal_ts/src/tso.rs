@@ -385,7 +385,7 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
         let res = response
             .await
             .map_err(|_| box_err!("renew response channel is dropped"))
-            .and_then(|r| r.map_err(|err| Error::BatchRenew(err)));
+            .and_then(|r| r.map_err(Error::BatchRenew));
 
         TS_PROVIDER_TSO_BATCH_RENEW_DURATION_STATIC
             .get(res.borrow().into())

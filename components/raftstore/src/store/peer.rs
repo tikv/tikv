@@ -4580,6 +4580,7 @@ where
                 // that we can not manage to get a valid split key. So, we
                 // trigger a compaction to handle it.
                 if e.to_string().contains(NO_VALID_SPLIT_KEY) {
+                    #[allow(clippy::redundant_closure_call)]
                     let safe_ts = (|| {
                         fail::fail_point!("safe_point_inject", |t| {
                             t.unwrap().parse::<u64>().unwrap()

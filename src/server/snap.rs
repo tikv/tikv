@@ -61,6 +61,7 @@ const MIN_SNAP_SEND_SPEED: u64 = MIB;
 
 #[inline]
 fn get_snap_timeout(size: u64) -> Duration {
+    #[allow(clippy::redundant_closure_call)]
     let timeout = (|| {
         fail_point!("snap_send_duration_timeout", |t| -> Duration {
             let t = t.unwrap().parse::<u64>();

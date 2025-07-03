@@ -528,6 +528,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             }
         };
         apply_state.set_applied_index(applied_index);
+        #[allow(clippy::redundant_closure_call)]
         (|| {
             // Make node reply from start.
             fail_point!("RESET_APPLY_INDEX_WHEN_RESTART", |_| {
@@ -722,6 +723,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             "region flush before close begin";
         );
         let region_id = self.region_id();
+        #[allow(clippy::redundant_closure_call)]
         let flush_threshold: u64 = (|| {
             fail_point!("flush_before_close_threshold", |t| {
                 t.unwrap().parse::<u64>().unwrap()

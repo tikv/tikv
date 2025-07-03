@@ -707,7 +707,7 @@ impl<'a> MigrationStorageWrapper<'a> {
                     UnpinReader(Box::new(Cursor::new(&bytes))),
                     bytes.len() as u64
                 )
-                .map_err(|err| JustRetry(err))
+                .map_err(JustRetry)
         )
         .await
         .map_err(|err| err.0)?;

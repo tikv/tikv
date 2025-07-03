@@ -103,6 +103,7 @@ where
             }
         };
 
+        #[allow(clippy::redundant_closure_call)]
         let delay = (|| {
             fail::fail_point!("delay_update_max_ts", |_| true);
             false

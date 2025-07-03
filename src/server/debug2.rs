@@ -841,7 +841,7 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
     fn get_store_ident(&self) -> Result<StoreIdent> {
         self.raft_engine
             .get_store_ident()
-            .map_err(|e| Error::EngineTrait(e))
+            .map_err(Error::EngineTrait)
             .and_then(|ident| match ident {
                 Some(ident) => Ok(ident),
                 None => Err(Error::NotFound("No store ident key".to_owned())),

@@ -194,7 +194,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             peer_cache: vec![],
             peer_heartbeats: HashMap::default(),
             compact_log_context: CompactLogContext::new(applied_index, persisted_applied),
-            merge_context: merge_context.map(|c| Box::new(c)),
+            merge_context: merge_context.map(Box::new),
             last_sent_snapshot_index: 0,
             raw_write_encoder: None,
             proposals: ProposalQueue::new(region_id, raft_group.raft.id),

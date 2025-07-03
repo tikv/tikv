@@ -886,6 +886,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         apply_res.sst_applied_index = self.take_sst_applied_index();
         let written_bytes = apply_res.metrics.written_bytes;
 
+        #[allow(clippy::redundant_closure_call)]
         let skip_report = || -> bool {
             fail_point!("before_report_apply_res", |_| { true });
             false

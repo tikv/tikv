@@ -553,6 +553,7 @@ where
 
         match find_peer_by_id(&self.region, to) {
             Some(to_peer) => {
+                #[allow(clippy::redundant_closure_call)]
                 let max_snap_try_cnt = (|| {
                     fail_point!("ignore_snap_try_cnt", |_| usize::MAX);
                     MAX_SNAP_TRY_CNT
@@ -1088,9 +1089,7 @@ where
         // The `region` is updated after persisting in order to stay consistent with the
         // one in `StoreMeta::regions` (will be updated soon).
         // See comments in `apply_snapshot` for more details.
-        (|| {
-            fail_point!("before_set_region_on_peer_3", self.peer_id == 3, |_| {});
-        })();
+        fail_point!("before_set_region_on_peer_3", self.peer_id == 3, |_| {});
         self.set_region(res.region.clone());
     }
 }
