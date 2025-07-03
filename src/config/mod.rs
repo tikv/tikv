@@ -7357,6 +7357,10 @@ mod tests {
             cfg_from_file.coprocessor.region_split_keys,
             case2_cfg.coprocessor.region_split_keys
         );
+        assert_eq!(
+            default_cfg.raft_store.raft_entry_max_size,
+            case2_cfg.raft_store.raft_entry_max_size
+        );
 
         // Case 3: manually specify region-split-size, then make it compatible to the
         // last config. The current configuration should inherit the remained configs.
