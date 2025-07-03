@@ -1477,8 +1477,8 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
             // Checkpoint: in-memory pessimistic locks write, guards will be dropped
             // immediately
-            use concurrency_manager::CHECKPOINT_SCHEDULER_PIPELINED_WRITE;
-            CHECKPOINT_SCHEDULER_PIPELINED_WRITE.inc();
+            use concurrency_manager::CHECKPOINT_SCHEDULER_IN_MEMORY_PESSIMISTIC_LOCK;
+            CHECKPOINT_SCHEDULER_IN_MEMORY_PESSIMISTIC_LOCK.inc();
 
             scheduler.on_write_finished(
                 cid,

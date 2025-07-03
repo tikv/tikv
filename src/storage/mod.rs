@@ -3033,7 +3033,11 @@ pub async fn get_raw_key_guard(
         // other raw write requests. Ts in lock value to used by CDC which
         // get maximum resolved-ts from concurrency_manager.global_min_lock_ts
         let encode_key = ApiV2::encode_raw_key(&raw_key, Some(ts));
-        let key_guard = concurrency_manager.lock_key(&encode_key).await;
+        use concurrency_manager::Operation;
+        let operation = Operation::RawKeyGuard {
+            ts: ts.into_inner(),
+        };
+        let key_guard = concurrency_manager.lock_key(&encode_key, operation).await;
         let lock = Lock::new(LockType::Put, raw_key, ts, 0, None, 0.into(), 1, ts, false);
         key_guard.with_lock(|l| *l = Some(lock));
         Ok(Some(key_guard))
@@ -7601,7 +7605,8 @@ mod tests {
 
         let mem_lock = |k: &[u8], ts: u64, lock_type| {
             let key = Key::from_raw(k);
-            let guard = block_on(cm.lock_key(&key));
+            use concurrency_manager::Operation;
+            let guard = block_on(cm.lock_key(&key, Operation::Test));
             guard.with_lock(|lock| {
                 *lock = Some(txn_types::Lock::new(
                     lock_type,
@@ -9570,7 +9575,8 @@ mod tests {
             .unwrap();
         let cm = storage.get_concurrency_manager();
         let key = Key::from_raw(b"key");
-        let guard = block_on(cm.lock_key(&key));
+        use concurrency_manager::Operation;
+        let guard = block_on(cm.lock_key(&key, Operation::Test));
         guard.with_lock(|lock| {
             *lock = Some(txn_types::Lock::new(
                 LockType::Put,

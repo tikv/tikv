@@ -766,7 +766,12 @@ fn async_commit_timestamps(
     };
     CHECKPOINT_PREWRITE_ASYNC_BEFORE_LOCK_KEY.inc();
 
-    let key_guard = ::futures_executor::block_on(txn.concurrency_manager.lock_key(key));
+    use concurrency_manager::Operation;
+    let operation = Operation::Prewrite {
+        start_ts: start_ts.into_inner(),
+        for_update_ts: for_update_ts.into_inner(),
+    };
+    let key_guard = ::futures_executor::block_on(txn.concurrency_manager.lock_key(key, operation));
 
     // Checkpoint: after acquiring KeyHandleGuard in async_commit_timestamps (part
     // of prewrite)

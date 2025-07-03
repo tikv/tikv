@@ -377,7 +377,8 @@ fn test_read_index_retry_lock_checking() {
         false,
     )
     .use_async_commit(vec![]);
-    let guard = block_on(leader_cm.lock_key(&Key::from_raw(b"k1")));
+    let guard =
+        block_on(leader_cm.lock_key(&Key::from_raw(b"k1"), concurrency_manager::Operation::Test));
     guard.with_lock(|l| *l = Some(lock.clone()));
 
     // clear filters, so later read index responses can be received

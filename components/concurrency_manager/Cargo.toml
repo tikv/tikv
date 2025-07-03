@@ -5,8 +5,10 @@ publish = false
 version = "0.0.1"
 
 [dependencies]
+backtrace = "0.3"
 crossbeam = "0.8"
 crossbeam-skiplist = "0.1"
+dashmap = "6"
 fail = "0.5"
 kvproto = { workspace = true }
 lazy_static = "1.4.0"
@@ -17,6 +19,7 @@ prometheus = "0.13"
 serde = { version = "1.0.194", features = ["derive"] }
 slog = { workspace = true }
 slog-global = { workspace = true }
+test_util = { workspace = true }
 thiserror = "1.0"
 tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["macros", "sync", "time"] }

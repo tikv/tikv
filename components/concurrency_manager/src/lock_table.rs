@@ -1,20 +1,21 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    ops::Bound,
-    sync::{Arc, Weak},
-};
+use std::{ops::Bound, sync::Arc};
 
 use crossbeam_skiplist::SkipMap;
 use txn_types::{Key, Lock};
 
 use super::{
     key_handle::{KeyHandle, KeyHandleGuard},
-    metrics::{LOCK_TABLE_INSERTS_TOTAL, LOCK_TABLE_REMOVALS_TOTAL, LOCK_TABLE_REUSE_TOTAL},
+    metrics::{
+        LOCK_TABLE_INSERTS_TOTAL, LOCK_TABLE_REMOVALS_TOTAL, LOCK_TABLE_REUSE_TOTAL,
+        LOCK_TABLE_UPGRADE_FAIL,
+    },
+    tracked_arc::{TrackedArc, TrackedWeak},
 };
 
 #[derive(Clone)]
-pub struct LockTable(pub Arc<SkipMap<Key, Weak<KeyHandle>>>);
+pub struct LockTable(pub Arc<SkipMap<Key, TrackedWeak>>);
 
 impl Default for LockTable {
     fn default() -> Self {
@@ -23,13 +24,13 @@ impl Default for LockTable {
 }
 
 impl LockTable {
-    pub async fn lock_key(&self, key: &Key) -> KeyHandleGuard {
+    pub async fn lock_key(&self, key: &Key, operation: crate::Operation) -> KeyHandleGuard {
         loop {
             // Create a KeyHandle first, but do not bind it to the lock table first.
             // If we fail to insert the handle into the table, this handle should be dropped
             // without removing any entry from the table.
-            let handle = Arc::new(KeyHandle::new(key.clone()));
-            let weak = Arc::downgrade(&handle);
+            let handle = TrackedArc::new(KeyHandle::new(key.clone()), operation.clone());
+            let weak = handle.downgrade();
             let weak2 = weak.clone();
             let guard = handle.lock().await;
 
@@ -92,7 +93,7 @@ impl LockTable {
     }
 
     /// Gets the handle of the key.
-    pub fn get(&self, key: &Key) -> Option<Arc<KeyHandle>> {
+    pub fn get(&self, key: &Key) -> Option<TrackedArc> {
         self.0.get(key).and_then(|e| e.value().upgrade())
     }
 
@@ -102,7 +103,7 @@ impl LockTable {
         &'m self,
         start_key: Option<&Key>,
         end_key: Option<&Key>,
-        mut pred: impl FnMut(Arc<KeyHandle>) -> Option<T>,
+        mut pred: impl FnMut(TrackedArc) -> Option<T>,
     ) -> Option<T> {
         let lower_bound = start_key.map(Bound::Included).unwrap_or(Bound::Unbounded);
         let upper_bound = end_key.map(Bound::Excluded).unwrap_or(Bound::Unbounded);
@@ -117,7 +118,7 @@ impl LockTable {
     }
 
     /// Iterates all handles and call a specified function on each of them.
-    pub fn for_each(&self, mut f: impl FnMut(Arc<KeyHandle>)) {
+    pub fn for_each(&self, mut f: impl FnMut(TrackedArc)) {
         for entry in self.0.iter() {
             if let Some(handle) = entry.value().upgrade() {
                 f(handle);
@@ -125,7 +126,7 @@ impl LockTable {
         }
     }
 
-    pub fn for_each_kv(&self, mut f: impl FnMut(&Key, Arc<KeyHandle>)) {
+    pub fn for_each_kv(&self, mut f: impl FnMut(&Key, TrackedArc)) {
         for entry in self.0.iter() {
             if let Some(handle) = entry.value().upgrade() {
                 f(entry.key(), handle);
@@ -145,6 +146,10 @@ impl LockTable {
     /// Note: This includes weak references that may no longer be valid.
     pub fn len(&self) -> usize {
         self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 }
 
@@ -170,7 +175,9 @@ mod test {
             let lock_table = lock_table.clone();
             let counter = counter.clone();
             let handle = tokio::spawn(async move {
-                let _guard = lock_table.lock_key(&Key::from_raw(b"k")).await;
+                let _guard = lock_table
+                    .lock_key(&Key::from_raw(b"k"), crate::Operation::Test)
+                    .await;
                 // Modify an atomic counter with a mutex guard. The value of the counter
                 // should remain unchanged if the mutex works.
                 let counter_val = counter.fetch_add(1, Ordering::SeqCst) + 1;
@@ -212,7 +219,7 @@ mod test {
             10.into(),
             false,
         );
-        let guard = lock_table.lock_key(&key_k).await;
+        let guard = lock_table.lock_key(&key_k, crate::Operation::Test).await;
         guard.with_lock(|l| {
             *l = Some(lock.clone());
         });
@@ -242,7 +249,9 @@ mod test {
             20.into(),
             false,
         );
-        let guard = lock_table.lock_key(&Key::from_raw(b"k")).await;
+        let guard = lock_table
+            .lock_key(&Key::from_raw(b"k"), crate::Operation::Test)
+            .await;
         guard.with_lock(|l| {
             *l = Some(lock_k.clone());
         });
@@ -258,7 +267,9 @@ mod test {
             10.into(),
             false,
         );
-        let guard = lock_table.lock_key(&Key::from_raw(b"l")).await;
+        let guard = lock_table
+            .lock_key(&Key::from_raw(b"l"), crate::Operation::Test)
+            .await;
         guard.with_lock(|l| {
             *l = Some(lock_l.clone());
         });
@@ -297,7 +308,7 @@ mod test {
         let mut found_locks = Vec::new();
         let mut expect_locks = Vec::new();
 
-        let collect = |h: Arc<KeyHandle>, to: &mut Vec<_>| {
+        let collect = |h: TrackedArc, to: &mut Vec<_>| {
             let lock = h.with_lock(|l| l.clone());
             to.push((h.key.clone(), lock));
         };
@@ -316,7 +327,9 @@ mod test {
             20.into(),
             false,
         );
-        let guard_a = lock_table.lock_key(&Key::from_raw(b"a")).await;
+        let guard_a = lock_table
+            .lock_key(&Key::from_raw(b"a"), crate::Operation::Test)
+            .await;
         guard_a.with_lock(|l| {
             *l = Some(lock_a.clone());
         });
@@ -338,7 +351,9 @@ mod test {
             false,
         )
         .use_async_commit(vec![b"c".to_vec()]);
-        let guard_b = lock_table.lock_key(&Key::from_raw(b"b")).await;
+        let guard_b = lock_table
+            .lock_key(&Key::from_raw(b"b"), crate::Operation::Test)
+            .await;
         guard_b.with_lock(|l| {
             *l = Some(lock_b.clone());
         });
@@ -353,24 +368,30 @@ mod test {
         let lock_table: LockTable = LockTable::default();
         let key = Key::from_raw(b"key");
 
-        let guard = lock_table.lock_key(&key).await;
+        let guard = lock_table.lock_key(&key, crate::Operation::Test).await;
         let handle = lock_table.get(&key).unwrap();
         drop(guard);
         // The handle is still alive in the table.
-        assert!(Arc::ptr_eq(&handle, &lock_table.get(&key).unwrap()));
+        assert!(std::ptr::eq(&*handle, &*lock_table.get(&key).unwrap()));
 
-        let guard2 = lock_table.lock_key(&key).await;
+        let guard2 = lock_table.lock_key(&key, crate::Operation::Test).await;
 
         // After we drop the original handle, make sure the new guard refers
         // to the KeyHandle in the table.
         drop(handle);
-        assert!(Arc::ptr_eq(guard2.handle(), &lock_table.get(&key).unwrap()));
+        assert!(std::ptr::eq(
+            &**guard2.handle(),
+            &*lock_table.get(&key).unwrap()
+        ));
 
         // After dropping guard2, a new guard should be different to the old one.
-        let old_ptr = Arc::as_ptr(guard2.handle());
+        let old_ptr = std::ptr::addr_of!(**guard2.handle());
         drop(guard2);
-        let guard3 = lock_table.lock_key(&key).await;
-        assert_ne!(old_ptr, Arc::as_ptr(guard3.handle()));
-        assert!(Arc::ptr_eq(guard3.handle(), &lock_table.get(&key).unwrap()));
+        let guard3 = lock_table.lock_key(&key, crate::Operation::Test).await;
+        assert_ne!(old_ptr, std::ptr::addr_of!(**guard3.handle()));
+        assert!(std::ptr::eq(
+            &**guard3.handle(),
+            &*lock_table.get(&key).unwrap()
+        ));
     }
 }

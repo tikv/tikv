@@ -76,8 +76,8 @@ lazy_static! {
         KEYHANDLE_CHECKPOINT_TOTAL.with_label_values(&["scheduler", "guards_to_write"]);
     pub static ref CHECKPOINT_SCHEDULER_NO_WRITE_NEEDED: IntCounter =
         KEYHANDLE_CHECKPOINT_TOTAL.with_label_values(&["scheduler", "no_write_needed"]);
-    pub static ref CHECKPOINT_SCHEDULER_PIPELINED_WRITE: IntCounter =
-        KEYHANDLE_CHECKPOINT_TOTAL.with_label_values(&["scheduler", "pipelined_write"]);
+    pub static ref CHECKPOINT_SCHEDULER_IN_MEMORY_PESSIMISTIC_LOCK: IntCounter =
+        KEYHANDLE_CHECKPOINT_TOTAL.with_label_values(&["scheduler", "in_memory_pessimistic_lock"]);
     pub static ref CHECKPOINT_SCHEDULER_BEFORE_ASYNC_WRITE: IntCounter =
         KEYHANDLE_CHECKPOINT_TOTAL.with_label_values(&["scheduler", "before_async_write"]);
     pub static ref CHECKPOINT_SCHEDULER_ASYNC_WRITE_LOOP_START: IntCounter =
@@ -128,6 +128,18 @@ lazy_static! {
         "Total number of times an existing KeyHandle was not upgraded"
     )
     .unwrap();
+
+    /// Counter for tracking when registry reaches capacity limit
+    pub static ref TRACKED_ARC_CAPACITY_EXCEEDED: IntCounter = register_int_counter!(
+        "tikv_tracked_arc_capacity_exceeded_total",
+        "Total number of times TrackedArc registry capacity was exceeded"
+    ).unwrap();
+
+    /// Counter for tracking when record_access is called for unregistered KeyHandles
+    pub static ref TRACKED_ARC_RECORD_NOT_FOUND: IntCounter = register_int_counter!(
+        "tikv_tracked_arc_record_not_found_total",
+        "Total number of times record_access was called for unregistered KeyHandles"
+    ).unwrap();
 }
 
 /// Determine the key type for metrics labeling

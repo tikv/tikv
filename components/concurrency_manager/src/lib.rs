@@ -15,6 +15,7 @@ use fail::fail_point;
 mod key_handle;
 mod lock_table;
 mod metrics;
+mod tracked_arc;
 
 use std::{
     error::Error,
@@ -40,6 +41,7 @@ pub use self::{
     key_handle::{KeyHandle, KeyHandleGuard},
     lock_table::LockTable,
     metrics::*,
+    tracked_arc::{LeakDetector, Operation, TrackedArc, TrackedInfo, TrackedWeak},
 };
 
 lazy_static! {
@@ -385,8 +387,8 @@ impl ConcurrencyManager {
     ///
     /// The guard can be used to store Lock in the table. The stored lock
     /// is visible to `read_key_check` and `read_range_check`.
-    pub async fn lock_key(&self, key: &Key) -> KeyHandleGuard {
-        self.lock_table.lock_key(key).await
+    pub async fn lock_key(&self, key: &Key, operation: crate::Operation) -> KeyHandleGuard {
+        self.lock_table.lock_key(key, operation).await
     }
 
     /// Acquires mutexes of the keys and returns the RAII guards. The order of
@@ -394,14 +396,19 @@ impl ConcurrencyManager {
     ///
     /// The guards can be used to store Lock in the table. The stored lock
     /// is visible to `read_key_check` and `read_range_check`.
-    pub async fn lock_keys(&self, keys: impl Iterator<Item = &Key>) -> Vec<KeyHandleGuard> {
+    pub async fn lock_keys(
+        &self,
+        keys: impl Iterator<Item = &Key>,
+        operation: crate::Operation,
+    ) -> Vec<KeyHandleGuard> {
         let mut keys_with_index: Vec<_> = keys.enumerate().collect();
         // To prevent deadlock, we sort the keys and lock them one by one.
         keys_with_index.sort_by_key(|(_, key)| *key);
         let mut result: Vec<MaybeUninit<KeyHandleGuard>> = Vec::new();
         result.resize_with(keys_with_index.len(), MaybeUninit::uninit);
         for (index, key) in keys_with_index {
-            result[index] = MaybeUninit::new(self.lock_table.lock_key(key).await);
+            result[index] =
+                MaybeUninit::new(self.lock_table.lock_key(key, operation.clone()).await);
         }
         unsafe { tikv_util::memory::vec_transmute(result) }
     }
@@ -695,7 +702,9 @@ mod tests {
             .copied()
             .map(|k| Key::from_raw(k))
             .collect();
-        let guards = concurrency_manager.lock_keys(keys.iter()).await;
+        let guards = concurrency_manager
+            .lock_keys(keys.iter(), crate::Operation::Test)
+            .await;
         for (key, guard) in keys.iter().zip(&guards) {
             assert_eq!(key, guard.key());
         }
@@ -734,7 +743,9 @@ mod tests {
         let concurrency_manager = ConcurrencyManager::new(1.into());
 
         assert_eq!(concurrency_manager.global_min_lock_ts(), None);
-        let guard = concurrency_manager.lock_key(&Key::from_raw(b"a")).await;
+        let guard = concurrency_manager
+            .lock_key(&Key::from_raw(b"a"), crate::Operation::Test)
+            .await;
         assert_eq!(concurrency_manager.global_min_lock_ts(), None);
         guard.with_lock(|l| *l = Some(new_lock(10, b"a", LockType::Put)));
         assert_eq!(concurrency_manager.global_min_lock_ts(), Some(10.into()));
@@ -754,7 +765,9 @@ mod tests {
             .collect();
 
         for ts_seq in ts_seqs {
-            let guards = concurrency_manager.lock_keys(keys.iter()).await;
+            let guards = concurrency_manager
+                .lock_keys(keys.iter(), crate::Operation::Test)
+                .await;
             assert_eq!(concurrency_manager.global_min_lock_ts(), None);
             for (ts, guard) in ts_seq.into_iter().zip(guards.iter()) {
                 guard.with_lock(|l| *l = Some(new_lock(ts, b"pk", LockType::Put)));

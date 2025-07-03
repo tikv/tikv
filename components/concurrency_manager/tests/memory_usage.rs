@@ -56,7 +56,7 @@ fn test_memory_usage() {
                     continue;
                 }
 
-                let guard = block_on(cm.lock_key(&key));
+                let guard = block_on(cm.lock_key(&key, concurrency_manager::Operation::Test));
                 guard.with_lock(|l| {
                     *l = Some(lock);
                 });
