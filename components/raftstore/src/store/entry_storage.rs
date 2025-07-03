@@ -448,6 +448,11 @@ impl TermCache {
                     self.cache[pos].1 = index;
                 }
                 return;
+            } else if self.cache.back().unwrap().0 + 1 < term {
+                // Received a hopping term from other peers. It means that this
+                // node might be partitioned from the majority. We need to clear the
+                // cache to avoid returning stale terms.
+                self.cache.clear();
             }
         }
         // New term.
@@ -1219,8 +1224,10 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
             (e.get_index(), e.get_term())
         };
 
-        self.term_cache.append(last_index, last_term);
         self.cache.append(self.region_id, self.peer_id, &entries);
+        // Normally, the incoming entries belongs to one term.
+        self.term_cache
+            .append(entries.first().unwrap().get_index(), last_term);
 
         // Delete any previously appended log entries which never committed.
         task.set_append(Some(prev_last_index + 1), entries);
@@ -1542,75 +1549,103 @@ pub mod tests {
 
     #[test]
     fn test_storage_term_cache() {
-        let mut cache = TermCache::default();
-        assert_eq!(cache.entry(0), None);
-        assert_eq!(cache.entry(123), None);
-        // Append entries
-        cache.append(1, 1);
-        cache.append(2, 1);
-        cache.append(3, 2);
-        cache.append(4, 2);
-        cache.append(5, 2);
-        cache.append(4, 2); // skip as rewrite with old idx
-        cache.append(3, 2); // skip as rewrite with old idx
-        for i in 1..=10 {
-            cache.append(i + 5, 3);
+        // Normal
+        {
+            let mut cache = TermCache::default();
+            assert_eq!(cache.entry(0), None);
+            assert_eq!(cache.entry(123), None);
+            // Append entries
+            cache.append(1, 1);
+            cache.append(2, 1);
+            cache.append(3, 2);
+            cache.append(4, 2);
+            cache.append(5, 2);
+            cache.append(4, 2); // skip as rewrite with old idx
+            cache.append(3, 2); // skip as rewrite with old idx
+            for i in 1..=10 {
+                cache.append(i + 5, 3);
+            }
+            for i in 1..=5 {
+                cache.append(i + 15, 3 + i);
+            }
+            assert_eq!(cache.entry(0), None);
+            assert_eq!(cache.entry(20), Some(8));
+            assert_eq!(cache.entry(21), Some(8));
+            // index [1..2] => term 1
+            assert_eq!(cache.entry(1), Some(1));
+            assert_eq!(cache.entry(2), Some(1));
+            // index [3..5] => term 2
+            assert_eq!(cache.entry(3), Some(2));
+            assert_eq!(cache.entry(4), Some(2));
+            assert_eq!(cache.entry(5), Some(2));
+            // index [6..15] => term 3
+            assert_eq!(cache.entry(6), Some(3));
+            assert_eq!(cache.entry(15), Some(3));
+            // index [16..20] => term 4..8
+            for i in 16..=20 {
+                assert_eq!(cache.entry(i), Some(i - 12));
+            }
         }
-        for i in 1..=5 {
-            cache.append(i + 15, 3 + i);
+        // Prepend & Compact
+        {
+            let mut cache = TermCache::default();
+            cache.append(20, 6);
+            for i in 1..=5 {
+                cache.append(20 + i * 5, i + 6);
+            }
+            let ents = vec![
+                new_entry(2, 2),
+                new_entry(3, 3),
+                new_entry(4, 4),
+                new_entry(5, 5),
+                new_entry(6, 6),
+            ];
+            cache.prepend(&ents);
+            assert_eq!(cache.entry(46), Some(11));
+            assert_eq!(cache.entry(3), None);
+            assert_eq!(cache.entry(4), Some(4));
+            assert_eq!(cache.entry(5), Some(5));
+            assert_eq!(cache.entry(15), Some(6));
+            assert_eq!(cache.entry(39), Some(9));
+            assert_eq!(cache.entry(44), Some(10));
+            // compact to 40
+            cache.compact_to(40);
+            assert_eq!(cache.cache.len(), 2);
+            assert_eq!(cache.entry(39), None);
+            assert_eq!(cache.entry(40), Some(10));
+            // compact to 45
+            cache.compact_to(45);
+            assert_eq!(cache.cache.len(), 1);
+            cache.append(48, 12);
+            assert_eq!(cache.cache.len(), 2);
+            assert_eq!(cache.entry(45), Some(11));
+            cache.compact_to(46);
+            assert_eq!(cache.entry(45), None);
         }
-        assert_eq!(cache.entry(0), None);
-        assert_eq!(cache.entry(20), Some(8));
-        assert_eq!(cache.entry(21), Some(8));
-        // index [1..2] => term 1
-        assert_eq!(cache.entry(1), Some(1));
-        assert_eq!(cache.entry(2), Some(1));
-        // index [3..5] => term 2
-        assert_eq!(cache.entry(3), Some(2));
-        assert_eq!(cache.entry(4), Some(2));
-        assert_eq!(cache.entry(5), Some(2));
-        // index [6..15] => term 3
-        assert_eq!(cache.entry(6), Some(3));
-        assert_eq!(cache.entry(15), Some(3));
-        // index [16..20] => term 4..8
-        for i in 16..=20 {
-            assert_eq!(cache.entry(i), Some(i - 12));
-        }
-        drop(cache);
+        // Abnormal cases
+        {
+            let mut cache = TermCache::default();
+            cache.append(5, 5);
+            cache.append(6, 6);
+            cache.append(7, 6);
+            cache.append(8, 6);
+            assert_eq!(cache.cache.len(), 2);
+            assert_eq!(cache.entry(8), Some(6));
+            cache.append(6, 8);
+            assert_eq!(cache.cache.len(), 1);
+            assert_eq!(cache.entry(8), Some(8));
+            drop(cache);
 
-        let mut cache = TermCache::default();
-        cache.append(20, 6);
-        for i in 1..=5 {
-            cache.append(20 + i * 5, i + 6);
+            let mut cache = TermCache::default();
+            cache.append(6, 3);
+            cache.append(7, 5); // index hopping, clear the cache
+            assert_eq!(cache.cache.len(), 1);
+            assert_eq!(cache.entry(6), None);
+            assert_eq!(cache.entry(7), Some(5));
+            cache.append(5, 4);
+            cache.append(10, 6);
+            assert_eq!(cache.cache.len(), 3);
         }
-        let ents = vec![
-            new_entry(2, 2),
-            new_entry(3, 3),
-            new_entry(4, 4),
-            new_entry(5, 5),
-            new_entry(6, 6),
-        ];
-        cache.prepend(&ents);
-        assert_eq!(cache.entry(46), Some(11));
-        assert_eq!(cache.entry(3), None);
-        assert_eq!(cache.entry(4), Some(4));
-        assert_eq!(cache.entry(5), Some(5));
-        assert_eq!(cache.entry(15), Some(6));
-        assert_eq!(cache.entry(39), Some(9));
-        assert_eq!(cache.entry(44), Some(10));
-        // compact to 40
-        cache.compact_to(40);
-        assert_eq!(cache.cache.len(), 2);
-        assert_eq!(cache.entry(39), None);
-        assert_eq!(cache.entry(40), Some(10));
-        // compact to 45
-        cache.compact_to(45);
-        assert_eq!(cache.cache.len(), 1);
-        cache.append(48, 12);
-        assert_eq!(cache.cache.len(), 2);
-        assert_eq!(cache.entry(45), Some(11));
-        cache.compact_to(46);
-        assert_eq!(cache.entry(45), None);
     }
 
     #[test]
