@@ -15,7 +15,7 @@ pub type CollatorUtf8Mb4UnicodeCi = CollatorUca<data_0400::Unicode0400>;
 pub type CollatorUtf8Mb40900AiCi = CollatorUca<data_0900::Unicode0900>;
 
 pub trait UnicodeVersion: 'static + Send + Sync + Debug {
-    fn preprocess(s: &str) -> &str;
+    fn preprocess(s: &[u8]) -> &[u8];
 
     fn char_weight(ch: char) -> u128;
 }
@@ -38,15 +38,22 @@ impl<T: UnicodeVersion> Collator for CollatorUca<T> {
 
     #[inline]
     fn write_sort_key<W: BufferWriter>(writer: &mut W, bstr: &[u8]) -> Result<usize> {
-        let s = T::preprocess(str::from_utf8(bstr)?);
+        let mut bstr_rest = T::preprocess(bstr);
 
         let mut n = 0;
-        for ch in s.chars() {
-            let mut weight = Self::char_weight(ch);
-            while weight != 0 {
-                writer.write_u16_be((weight & 0xFFFF) as u16)?;
-                n += 1;
-                weight >>= 16
+
+        while !bstr_rest.is_empty() {
+            match next_utf8_char(bstr_rest) {
+                Some((ch_b, b_next)) => {
+                    let mut weight = Self::char_weight(ch_b);
+                    while weight != 0 {
+                        writer.write_u16_be((weight & 0xFFFF) as u16)?;
+                        n += 1;
+                        weight >>= 16
+                    }
+                    bstr_rest = b_next
+                }
+                _ => break,
             }
         }
         Ok(n * std::mem::size_of::<u16>())
@@ -54,34 +61,30 @@ impl<T: UnicodeVersion> Collator for CollatorUca<T> {
 
     #[inline]
     fn sort_compare(a: &[u8], b: &[u8], force_no_pad: bool) -> Result<Ordering> {
-        let mut sa = str::from_utf8(a)?;
-        let mut sb = str::from_utf8(b)?;
-        if !force_no_pad {
-            sa = T::preprocess(sa);
-            sb = T::preprocess(sb);
-        }
+        let mut sa = if force_no_pad { a } else { T::preprocess(a) };
+        let mut sb = if force_no_pad { b } else { T::preprocess(b) };
 
-        let mut ca = sa.chars();
-        let mut cb = sb.chars();
         let mut an = 0;
         let mut bn = 0;
 
-        loop {
-            if an == 0 {
-                for ach in &mut ca {
-                    an = Self::char_weight(ach);
-                    if an != 0 {
-                        break;
+        while !sa.is_empty() || !sb.is_empty() {
+            while an == 0 && !sa.is_empty() {
+                match next_utf8_char(sa) {
+                    Some((ch_a, a_next)) => {
+                        an = Self::char_weight(ch_a);
+                        sa = a_next;
                     }
+                    _ => return Ok(Ordering::Equal),
                 }
             }
 
-            if bn == 0 {
-                for bch in &mut cb {
-                    bn = Self::char_weight(bch);
-                    if bn != 0 {
-                        break;
+            while bn == 0 && !sb.is_empty() {
+                match next_utf8_char(sb) {
+                    Some((ch_b, b_next)) => {
+                        bn = Self::char_weight(ch_b);
+                        sb = b_next;
                     }
+                    _ => return Ok(Ordering::Equal),
                 }
             }
 
@@ -104,16 +107,23 @@ impl<T: UnicodeVersion> Collator for CollatorUca<T> {
                 }
             }
         }
+        Ok(sa.len().cmp(&sb.len()))
     }
 
     #[inline]
     fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8]) -> Result<()> {
-        let s = T::preprocess(str::from_utf8(bstr)?);
-        for ch in s.chars() {
-            let mut weight = Self::char_weight(ch);
-            while weight != 0 {
-                (weight & 0xFFFF).hash(state);
-                weight >>= 16;
+        let mut bstr_rest = T::preprocess(bstr);
+        while !bstr_rest.is_empty() {
+            match next_utf8_char(bstr_rest) {
+                Some((ch_b, b_next)) => {
+                    let mut weight = Self::char_weight(ch_b);
+                    while weight != 0 {
+                        (weight & 0xFFFF).hash(state);
+                        weight >>= 16;
+                    }
+                    bstr_rest = b_next
+                }
+                _ => break,
             }
         }
         Ok(())
