@@ -15,6 +15,7 @@ error_code = { workspace = true }
 fail = "0.5"
 futures = "0.3"
 grpcio = { workspace = true }
+grpcio-health = { workspace = true }
 kvproto = { workspace = true }
 lazy_static = "1.3"
 log_wrappers = { workspace = true }
