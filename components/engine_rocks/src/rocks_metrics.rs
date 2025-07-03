@@ -9,7 +9,9 @@ use rocksdb::{
     DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType, HistogramData,
 };
 
-use crate::{RocksStatistics, engine::RocksEngine, rocks_metrics_defs::*};
+use crate::{
+    RocksStatistics, TITAN_BLOB_SIZE_ESTIMATOR, engine::RocksEngine, rocks_metrics_defs::*,
+};
 
 make_auto_flush_static_metric! {
     pub label_enum TickerName {
@@ -1235,6 +1237,20 @@ pub fn flush_engine_statistics(statistics: &RocksStatistics, name: &str, is_tita
         }
     }
     if is_titan {
+        if let Some(v) = statistics.get_histogram(HistType::TitanValueSize) {
+            let keys_cnt = statistics.get_ticker_count(TickerType::TitanBlobFileNumKeysWritten);
+            let compressed_size =
+                statistics.get_ticker_count(TickerType::TitanBlobFileBytesWritten);
+            let estimated_raw_size = (v.average * keys_cnt as f64) as u64;
+            if estimated_raw_size > 0 && compressed_size > 0 {
+                TITAN_BLOB_SIZE_ESTIMATOR.update_stats(
+                    estimated_raw_size,
+                    compressed_size,
+                    v.max as u64,
+                );
+            }
+        }
+
         for t in TITAN_ENGINE_TICKER_TYPES {
             let v = statistics.get_and_reset_ticker_count(*t);
             flush_engine_ticker_metrics(*t, v, name);
@@ -1344,7 +1360,7 @@ lazy_static! {
         "tikv_engine_titandb_blob_file_discardable_ratio",
         "Size of obsolete blob file",
         &["db", "cf", "ratio"]
-    ).unwrap();
+    ).unwrap();    
 }
 
 // For ticker type
@@ -1710,6 +1726,10 @@ lazy_static! {
         "tikv_engine_blob_iter_touch_blob_file_count",
         "Histogram of titan iter touched blob file count",
         &["db", "type"]
+    ).unwrap();
+    pub static ref TITAN_COMPRESSION_EXPANSION_FACTOR_GAUGE: Gauge = register_gauge!(
+        "tikv_engine_blob_compression_expansion_factor",
+        "Estimated compression expansion factor (raw_size / compressed_size) of Titan"
     ).unwrap();
 }
 
