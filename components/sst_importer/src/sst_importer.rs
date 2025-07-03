@@ -3520,7 +3520,7 @@ mod tests {
         );
 
         // Verify download failed
-        assert!(result.is_err());
+        result.unwrap_err();
 
         // Verify temporary file was cleaned up
         assert!(
