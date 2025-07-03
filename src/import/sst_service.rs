@@ -185,7 +185,8 @@ pub struct ImportSstService<E: Engine> {
     #[allow(dead_code)]
     threads_ref: Arc<Mutex<ResizableRuntime>>,
     importer: Arc<SstImporter<E::Local>>,
-    limiter: Limiter,
+    download_limiter: Limiter,
+    apply_limiter: Limiter,
     ingest_latch: Arc<IngestLatch>,
     raft_entry_max_size: ReadableSize,
     region_info_accessor: Arc<RegionInfoAccessor>,
@@ -444,7 +445,8 @@ impl<E: Engine> ImportSstService<E> {
             threads_ref: threads_clone,
             engine,
             importer,
-            limiter: Limiter::new(f64::INFINITY),
+            download_limiter: Limiter::new(f64::INFINITY),
+            apply_limiter: Limiter::new(f64::INFINITY),
             ingest_latch: Arc::default(),
             raft_entry_max_size,
             region_info_accessor,
@@ -473,7 +475,8 @@ impl<E: Engine> ImportSstService<E> {
         mut req: ApplyRequest,
         importer: Arc<SstImporter<E::Local>>,
         writer: raft_writer::ThrottledTlsEngineWriter,
-        limiter: Limiter,
+        download_limiter: Limiter,
+        apply_limiter: Limiter,
         max_raft_size: usize,
     ) -> std::result::Result<Option<Range>, ImportPbError> {
         let mut range: Option<Range> = None;
@@ -501,7 +504,7 @@ impl<E: Engine> ImportSstService<E> {
                     meta,
                     ext_storage.clone(),
                     req.get_storage_backend(),
-                    &limiter,
+                    &download_limiter,
                     req.cipher_info.clone().take(),
                     req.master_keys.clone().to_vec(),
                 )
@@ -525,6 +528,18 @@ impl<E: Engine> ImportSstService<E> {
 
             let is_last_task = tasks.peek().is_none();
             for w in collector.drain_pending_writes(is_last_task) {
+                // Estimate write size for apply rate limiting
+                let estimated_bytes = w.data.iter().map(|m| {
+                    match m {
+                        Modify::Put(_, ref k, ref v) => k.len() + v.len(),
+                        Modify::Delete(_, ref k) => k.len(),
+                        _ => 1024, // Default estimate for other operations
+                    }
+                }).sum::<usize>() as u64;
+
+                // Apply rate limiting before processing the write
+                apply_limiter.consume(estimated_bytes as f64).await;
+
                 // Record the start of a task would greatly help us to inspect pending
                 // tasks.
                 APPLIER_EVENT.with_label_values(&["begin_req"]).inc();
@@ -910,7 +925,8 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         IMPORT_RPC_COUNT.with_label_values(&[label]).inc();
         let start = Instant::now();
         let importer = self.importer.clone();
-        let limiter = self.limiter.clone();
+        let download_limiter = self.download_limiter.clone();
+        let apply_limiter = self.apply_limiter.clone();
         let mem_limit = self.mem_limit;
         let max_raft_size = self.raft_entry_max_size.0 as usize;
         let applier = self.writer.clone();
@@ -932,7 +948,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 }
             }
 
-            match Self::do_apply(req, importer, applier, limiter, max_raft_size).await {
+            match Self::do_apply(req, importer, applier, download_limiter, apply_limiter, max_raft_size).await {
                 Ok(Some(r)) => resp.set_range(r),
                 Err(e) => resp.set_error(e),
                 _ => {}
@@ -955,7 +971,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         IMPORT_RPC_COUNT.with_label_values(&[label]).inc();
         let timer = Instant::now_coarse();
         let importer = Arc::clone(&self.importer);
-        let limiter = self.limiter.clone();
+        let download_limiter = self.download_limiter.clone();
         let mem_limit = self.mem_limit;
         let region_id = req.get_sst().get_region_id();
         let tablets = self.tablets.clone();
@@ -1185,11 +1201,15 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let timer = Instant::now_coarse();
 
         let speed_limit = req.get_speed_limit();
-        self.limiter.set_speed_limit(if speed_limit > 0 {
+        let limit_value = if speed_limit > 0 {
             speed_limit as f64
         } else {
             f64::INFINITY
-        });
+        };
+        
+        // Set both download and apply limiters to the same speed for consistent throughput
+        self.download_limiter.set_speed_limit(limit_value);
+        self.apply_limiter.set_speed_limit(limit_value);
 
         let ctx_task = async move {
             crate::send_rpc_response!(
