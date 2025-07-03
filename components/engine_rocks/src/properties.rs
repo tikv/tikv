@@ -2,7 +2,7 @@
 
 use std::{
     cmp,
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
     io::Read,
     ops::{Deref, DerefMut},
     sync::{
@@ -24,11 +24,11 @@ use tikv_util::{
         number::{self, NumberEncoder},
     },
     info,
+    smoother::Smoother,
 };
 use txn_types::{Key, Write, WriteType};
 
 use crate::{
-    TITAN_COMPRESSION_EXPANSION_FACTOR_GAUGE,
     decode_properties::{DecodeProperties, IndexHandle, IndexHandles},
     mvcc_properties::*,
 };
@@ -39,89 +39,35 @@ const PROP_RANGE_INDEX: &str = "tikv.range_index";
 pub const DEFAULT_PROP_SIZE_INDEX_DISTANCE: u64 = 4 * 1024 * 1024;
 pub const DEFAULT_PROP_KEYS_INDEX_DISTANCE: u64 = 40 * 1024;
 
-/// Caps the expansion factor to avoid unrealistic estimates due to
-/// miscalculation or noise.
-const TITAN_MAX_EXPANSION_FACTOR: f64 = 5000.0;
-/// Number of samples to keep for estimating Titan blob size. With a default
-/// metrics flush interval of 10s, this corresponds to 5 minutes.
-const TITAN_ESTIMATOR_WINDOW_SIZE: usize = 30;
+/// Caps the compaction factor to avoid unrealistic estimates.
+pub const TITAN_MAX_COMPACTION_FACTOR: f64 = 5000.0;
+const FIVE_MINS_IN_SECONDS: u64 = 5 * 60;
 
 lazy_static! {
-    // Tracks Titan blob compression ratio for raw size estimation.
-    pub static ref TITAN_BLOB_SIZE_ESTIMATOR: TitanBlobSizeEstimator =
-        TitanBlobSizeEstimator::new();
+    pub static ref TITAN_COMPRESSION_FACTOR_SMOOTHER: Mutex<Smoother<f64, 30, FIVE_MINS_IN_SECONDS, 0>> =
+        Mutex::new(Smoother::<f64, 30, FIVE_MINS_IN_SECONDS, 0>::default());
+    pub static ref TITAN_COMPRESSION_FACTOR: AtomicU64 = AtomicU64::new(0);
+    pub static ref TITAN_MAX_BLOB_SIZE_SEEN: AtomicU64 = AtomicU64::new(0);
 }
 
-fn get_entry_size(value: &[u8], entry_type: DBEntryType) -> std::result::Result<u64, ()> {
+fn get_entry_size(
+    value: &[u8],
+    entry_type: DBEntryType,
+    titan_compression_factor: f64,
+    titan_max_blob_size: u64,
+) -> std::result::Result<u64, ()> {
     match entry_type {
         DBEntryType::Put => Ok(value.len() as u64),
         DBEntryType::BlobIndex => match TitanBlobIndex::decode(value) {
             Ok(index) => {
-                let estimated_raw_size = TITAN_BLOB_SIZE_ESTIMATOR.estimate(index.blob_size);
-                Ok(estimated_raw_size + value.len() as u64)
+                // Estimate the raw blob size using the Titan compression factor.
+                let estimation = (index.blob_size as f64 * titan_compression_factor) as u64;
+                let blob_raw_size = estimation.min(titan_max_blob_size).max(index.blob_size);
+                Ok(blob_raw_size as u64 + value.len() as u64)
             }
             Err(_) => Err(()),
         },
         _ => Err(()),
-    }
-}
-
-/// Tracks recent Titan blob compression stats to estimate raw blob size from
-/// compressed size. Maintains a sliding window of recent (raw, compressed)
-/// pairs and the largest blob seen.
-pub struct TitanBlobSizeEstimator {
-    history: Mutex<VecDeque<(u64, u64)>>, // (raw, compressed)
-    expansion_factor: AtomicU64,          // total_raw / total_compressed
-    max_blob_value: AtomicU64,
-}
-
-impl TitanBlobSizeEstimator {
-    pub fn new() -> Self {
-        Self {
-            history: Mutex::new(VecDeque::with_capacity(TITAN_ESTIMATOR_WINDOW_SIZE)),
-            expansion_factor: AtomicU64::new(f64::to_bits(1.0)),
-            max_blob_value: AtomicU64::new(0),
-        }
-    }
-
-    /// Updates internal stats with a new (raw, compressed) datapoint.
-    /// Recomputes the expansion factor from the sliding window of data.
-    pub fn update_stats(&self, raw: u64, compressed: u64, max_blob_size_seen: u64) {
-        if raw == 0 || compressed == 0 {
-            return;
-        }
-
-        // Loosely update max blob value seen
-        if max_blob_size_seen > self.max_blob_value.load(Ordering::Relaxed) {
-            self.max_blob_value
-                .store(max_blob_size_seen, Ordering::Relaxed);
-        }
-
-        let mut history = self.history.lock().unwrap();
-        if history.len() >= TITAN_ESTIMATOR_WINDOW_SIZE {
-            history.pop_front();
-        }
-        history.push_back((raw, compressed));
-
-        // Recompute expansion factor from the window
-        let total_raw: u64 = history.iter().map(|(r, _)| r).sum();
-        let total_compressed: u64 = history.iter().map(|(_, c)| c).sum();
-        let expansion_factor =
-            (total_raw as f64 / total_compressed as f64).clamp(1.0, TITAN_MAX_EXPANSION_FACTOR);
-        self.expansion_factor
-            .store(expansion_factor.to_bits(), Ordering::Relaxed);
-        TITAN_COMPRESSION_EXPANSION_FACTOR_GAUGE.set(expansion_factor);
-    }
-
-    /// Estimates the raw size of a blob given its compressed size, clamped by
-    /// the largest blob size observed so far.
-    pub fn estimate(&self, compressed_size: u64) -> u64 {
-        let max_blob_size_seen = self.max_blob_value.load(Ordering::Relaxed);
-        if compressed_size > max_blob_size_seen {
-            return compressed_size;
-        }
-        let expansion_factor = f64::from_bits(self.expansion_factor.load(Ordering::Relaxed));
-        max_blob_size_seen.min((compressed_size as f64 * expansion_factor) as u64)
     }
 }
 
@@ -367,6 +313,9 @@ pub struct RangePropertiesCollector {
     cur_offsets: RangeOffsets,
     prop_size_index_distance: u64,
     prop_keys_index_distance: u64,
+    titan_compression_factor: f64,
+    titan_max_blob_size: u64,
+    should_reload_titan_stats: bool,
 }
 
 impl Default for RangePropertiesCollector {
@@ -378,6 +327,9 @@ impl Default for RangePropertiesCollector {
             cur_offsets: RangeOffsets::default(),
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+            titan_compression_factor: 1.0,
+            titan_max_blob_size: 0,
+            should_reload_titan_stats: true,
         }
     }
 }
@@ -407,8 +359,20 @@ impl RangePropertiesCollector {
 
 impl TablePropertiesCollector for RangePropertiesCollector {
     fn add(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
+        if self.should_reload_titan_stats {
+            self.titan_compression_factor =
+                f64::from_bits(TITAN_COMPRESSION_FACTOR.load(Ordering::Relaxed))
+                    .clamp(1.0, TITAN_MAX_COMPACTION_FACTOR);
+            self.titan_max_blob_size = TITAN_MAX_BLOB_SIZE_SEEN.load(Ordering::Relaxed);
+            self.should_reload_titan_stats = false;
+        }
         // size
-        let size = match get_entry_size(value, entry_type) {
+        let size = match get_entry_size(
+            value,
+            entry_type,
+            self.titan_compression_factor,
+            self.titan_max_blob_size,
+        ) {
             Ok(entry_size) => key.len() as u64 + entry_size,
             Err(_) => return,
         };
@@ -427,6 +391,7 @@ impl TablePropertiesCollector for RangePropertiesCollector {
     }
 
     fn finish(&mut self) -> HashMap<Vec<u8>, Vec<u8>> {
+        self.should_reload_titan_stats = true;
         if self.size_in_last_range() > 0 || self.keys_in_last_range() > 0 {
             let key = self.last_key.clone();
             self.insert_new_point(key);
@@ -959,57 +924,41 @@ mod tests {
         });
     }
 
+    fn encode_blob_index(blob_size: u64) -> Vec<u8> {
+        let mut index = TitanBlobIndex::default();
+        index.blob_size = blob_size;
+        index.encode()
+    }
+
     #[test]
-    fn test_titan_blob_size_estimator() {
-        let estimator = TitanBlobSizeEstimator::new();
-
-        // Zero inputs ignored
-        estimator.update_stats(0, 100, 800);
-        estimator.update_stats(1000, 0, 800);
-        {
-            let history = estimator.history.lock().unwrap();
-            assert_eq!(history.len(), 0);
-            assert_eq!(estimator.estimate(50), 50);
-        }
-
-        estimator.update_stats(1000, 100, 800);
+    fn test_get_entry_size() {
+        let blob_size = 10;
+        let val = encode_blob_index(blob_size);
         assert_eq!(
-            10.0,
-            f64::from_bits(estimator.expansion_factor.load(Ordering::Relaxed))
+            get_entry_size(&val, DBEntryType::BlobIndex, 1.0, 1000).unwrap(),
+            blob_size + val.len() as u64
         );
-
-        assert_eq!(estimator.estimate(50), 500);
-        // Estimation is larger than max blob size seen
-        assert_eq!(estimator.estimate(100), 800);
-        // Uncompressed size larger than max blob seen. 2000 * 10.0 > 800
-        assert_eq!(estimator.estimate(2000), 2000);
-
-        // Update stats with larger blob size seen.
-        estimator.update_stats(10000, 1000, 3000);
-        assert_eq!(estimator.estimate(2000), 3000);
-
-        // Update stats with a smaller max_blob_size_seen.
-        estimator.update_stats(10_000, 1000, 1000);
-        assert_eq!(estimator.estimate(2000), 3000);
-
-        // Test the cap on expansion factor.
-        estimator.update_stats(100_000_000, 1, 0);
         assert_eq!(
-            TITAN_MAX_EXPANSION_FACTOR,
-            f64::from_bits(estimator.expansion_factor.load(Ordering::Relaxed))
+            get_entry_size(&val, DBEntryType::BlobIndex, 100.0, 1000).unwrap(),
+            1000 + val.len() as u64
         );
-
-        // Test window trim.
-        for _ in 0..(TITAN_ESTIMATOR_WINDOW_SIZE + 10) {
-            estimator.update_stats(1000, 100, 500);
-        }
-        {
-            let history = estimator.history.lock().unwrap();
-            assert_eq!(history.len(), TITAN_ESTIMATOR_WINDOW_SIZE); // should trim to window
-        }
+        // Estimation clamped by max blob size seen.
         assert_eq!(
-            10.0,
-            f64::from_bits(estimator.expansion_factor.load(Ordering::Relaxed))
+            get_entry_size(&val, DBEntryType::BlobIndex, 100.0, 500).unwrap(),
+            500 + val.len() as u64
+        );
+        // No regress if stats are 0.
+        assert_eq!(
+            get_entry_size(&val, DBEntryType::BlobIndex, 0.0, 0).unwrap(),
+            blob_size + val.len() as u64
+        );
+        assert_eq!(
+            get_entry_size(&val, DBEntryType::BlobIndex, 0.0, 100).unwrap(),
+            blob_size + val.len() as u64
+        );
+        assert_eq!(
+            get_entry_size(&val, DBEntryType::BlobIndex, 100.0, 0).unwrap(),
+            blob_size + val.len() as u64
         );
     }
 }
