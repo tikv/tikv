@@ -913,6 +913,7 @@ where
 
     AwakenRegions {
         abnormal_stores: Vec<u64>,
+        region_ids: Vec<u64>,
     },
 
     /// Message only used for test.
