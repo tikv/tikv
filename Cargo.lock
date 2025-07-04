@@ -4939,7 +4939,11 @@ dependencies = [
 [[package]]
 name = "rusoto_core"
 version = "0.46.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#0d6df7b119c4e757daaa715f261c3150c7ae0a3b"
+=======
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#2b142c1792062a7a3a8317610d78dd141ab4223d"
+>>>>>>> 0a99919065 (dep: Update rusoto to support IMDSv2 (#17441))
 dependencies = [
  "async-trait",
  "base64 0.13.0",
@@ -4963,7 +4967,11 @@ dependencies = [
 [[package]]
 name = "rusoto_credential"
 version = "0.46.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#0d6df7b119c4e757daaa715f261c3150c7ae0a3b"
+=======
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#2b142c1792062a7a3a8317610d78dd141ab4223d"
+>>>>>>> 0a99919065 (dep: Update rusoto to support IMDSv2 (#17441))
 dependencies = [
  "async-trait",
  "chrono",
@@ -4980,7 +4988,11 @@ dependencies = [
 [[package]]
 name = "rusoto_kms"
 version = "0.46.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#0d6df7b119c4e757daaa715f261c3150c7ae0a3b"
+=======
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#2b142c1792062a7a3a8317610d78dd141ab4223d"
+>>>>>>> 0a99919065 (dep: Update rusoto to support IMDSv2 (#17441))
 dependencies = [
  "async-trait",
  "bytes",
@@ -4993,7 +5005,11 @@ dependencies = [
 [[package]]
 name = "rusoto_mock"
 version = "0.46.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#0d6df7b119c4e757daaa715f261c3150c7ae0a3b"
+=======
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#2b142c1792062a7a3a8317610d78dd141ab4223d"
+>>>>>>> 0a99919065 (dep: Update rusoto to support IMDSv2 (#17441))
 dependencies = [
  "async-trait",
  "chrono",
@@ -5007,7 +5023,11 @@ dependencies = [
 [[package]]
 name = "rusoto_s3"
 version = "0.46.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#0d6df7b119c4e757daaa715f261c3150c7ae0a3b"
+=======
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#2b142c1792062a7a3a8317610d78dd141ab4223d"
+>>>>>>> 0a99919065 (dep: Update rusoto to support IMDSv2 (#17441))
 dependencies = [
  "async-trait",
  "bytes",
@@ -5021,7 +5041,11 @@ dependencies = [
 [[package]]
 name = "rusoto_signature"
 version = "0.46.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#0d6df7b119c4e757daaa715f261c3150c7ae0a3b"
+=======
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#2b142c1792062a7a3a8317610d78dd141ab4223d"
+>>>>>>> 0a99919065 (dep: Update rusoto to support IMDSv2 (#17441))
 dependencies = [
  "base64 0.13.0",
  "bytes",
@@ -5046,7 +5070,11 @@ dependencies = [
 [[package]]
 name = "rusoto_sts"
 version = "0.46.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#0d6df7b119c4e757daaa715f261c3150c7ae0a3b"
+=======
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#2b142c1792062a7a3a8317610d78dd141ab4223d"
+>>>>>>> 0a99919065 (dep: Update rusoto to support IMDSv2 (#17441))
 dependencies = [
  "async-trait",
  "bytes",
