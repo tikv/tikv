@@ -13,7 +13,7 @@ use crossbeam::atomic::AtomicCell;
 use engine_rocks::{PROP_MAX_TS, ReadPerfContext, ReadPerfInstant};
 use engine_traits::{
     CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN, IterOptions, KvEngine, Range,
-    Snapshot as EngineSnapshot, TablePropertiesCollection, TablePropertiesExt,
+    Snapshot as EngineSnapshot, TableProperties, TablePropertiesCollection,
     UserCollectedProperties,
 };
 use fail::fail_point;
@@ -606,11 +606,15 @@ impl<E: KvEngine> Initializer<E> {
 
         let hint_min_ts = self.checkpoint_ts.into_inner();
         let (mut total_count, mut filtered_count, mut tables) = (0, 0, 0);
-        collection.iter_user_collected_properties(|prop| {
+        collection.iter_table_properties(|table_prop| {
+            let prop = table_prop.get_user_collected_properties();
             tables += 1;
             if let Some((_, keys)) = prop.approximate_size_and_keys(&start_key, &end_key) {
                 total_count += keys;
-                if Self::parse_u64_prop(prop, PROP_MAX_TS)
+
+                if prop
+                    .get(PROP_MAX_TS.as_bytes())
+                    .and_then(|mut x| number::decode_u64(&mut x).ok())
                     .is_some_and(|max_ts| max_ts < hint_min_ts)
                 {
                     filtered_count += keys;
@@ -628,14 +632,6 @@ impl<E: KvEngine> Initializer<E> {
             "filtered_versions" => filtered_count,
             "tables" => tables);
         use_ts_filter
-    }
-
-    fn parse_u64_prop(
-        prop: &<<E as TablePropertiesExt>::TablePropertiesCollection as TablePropertiesCollection>::UserCollectedProperties,
-        field: &str,
-    ) -> Option<u64> {
-        prop.get(field.as_bytes())
-            .and_then(|mut x| number::decode_u64(&mut x).ok())
     }
 }
 
