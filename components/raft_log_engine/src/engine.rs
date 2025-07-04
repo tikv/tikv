@@ -1,6 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    backtrace::Backtrace,
+    collections::HashMap,
     fs,
     io::{Read, Result as IoResult, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
@@ -21,6 +23,7 @@ use kvproto::{
         RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent, StoreRecoverState,
     },
 };
+use lazy_static::lazy_static;
 use raft::eraftpb::Entry;
 use raft_engine::{
     env::{DefaultFileSystem, FileSystem, Handle, Permission, WriteExt},
@@ -332,8 +335,7 @@ fn encode_flushed_key(cf: &str, tablet_index: u64) -> [u8; 10] {
     buf
 }
 
-#[derive(Clone)]
-pub struct RaftLogEngine(Arc<RawRaftEngine<ManagedFileSystem>>);
+pub struct RaftLogEngine(Arc<RawRaftEngine<ManagedFileSystem>>, usize);
 
 impl RaftLogEngine {
     pub fn new(
@@ -342,9 +344,26 @@ impl RaftLogEngine {
         rate_limiter: Option<Arc<IoRateLimiter>>,
     ) -> Result<Self> {
         let file_system = Arc::new(ManagedFileSystem::new(key_manager, rate_limiter));
-        Ok(RaftLogEngine(Arc::new(
-            RawRaftEngine::open_with_file_system(config, file_system).map_err(transfer_error)?,
-        )))
+        let id = RAFT_ENGINE_REF_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        RAFT_ENGINE_REF_COLLECTIONS.lock().unwrap().insert(
+            id,
+            RaftEngineTrace {
+                id,
+                thread: std::thread::current()
+                    .name()
+                    .unwrap_or("unknown")
+                    .to_owned(),
+                backtrace: Backtrace::capture(),
+            },
+        );
+
+        Ok(RaftLogEngine(
+            Arc::new(
+                RawRaftEngine::open_with_file_system(config, file_system)
+                    .map_err(transfer_error)?,
+            ),
+            id,
+        ))
     }
 
     /// If path is not an empty directory, we say db exists.
@@ -366,6 +385,58 @@ impl RaftLogEngine {
 
     pub fn last_index(&self, raft_id: u64) -> Option<u64> {
         self.0.last_index(raft_id)
+    }
+}
+
+struct RaftEngineTrace {
+    id: usize,
+    thread: String,
+    backtrace: Backtrace,
+}
+
+static RAFT_ENGINE_REF_COUNT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+lazy_static! {
+    static ref RAFT_ENGINE_REF_COLLECTIONS: std::sync::Mutex<HashMap<usize, RaftEngineTrace>> =
+        std::sync::Mutex::new(Default::default());
+}
+pub fn print_all_traces() {
+    println!("raft engine restart");
+    let collections = RAFT_ENGINE_REF_COLLECTIONS.lock().unwrap();
+    for trace in collections.values() {
+        println!(
+            "raft engine ref count: id {}, thread {}, backtrace {:?}",
+            trace.id, &trace.thread, trace.backtrace
+        );
+    }
+}
+
+impl Clone for RaftLogEngine {
+    fn clone(&self) -> Self {
+        let id = RAFT_ENGINE_REF_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let mut collections = RAFT_ENGINE_REF_COLLECTIONS.lock().unwrap();
+        collections.insert(
+            id,
+            RaftEngineTrace {
+                id,
+                thread: std::thread::current()
+                    .name()
+                    .unwrap_or("unknown")
+                    .to_owned(),
+                backtrace: Backtrace::capture(),
+            },
+        );
+        RaftLogEngine(self.0.clone(), id)
+    }
+}
+
+impl Drop for RaftLogEngine {
+    fn drop(&mut self) {
+        let id = self.1;
+        let mut collections = RAFT_ENGINE_REF_COLLECTIONS.lock().unwrap();
+        if let Some(trace) = collections.remove(&id) {
+            warn!("raft engine dropped"; "id" => trace.id, "thread" => trace.thread, "backtrace" => ?trace.backtrace);
+        }
     }
 }
 
