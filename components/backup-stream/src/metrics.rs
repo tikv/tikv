@@ -34,7 +34,7 @@ pub fn remove_task_status_metric(task: &str) -> Result<()> {
 // example update the tikv_details.dashboard.py.
 lazy_static! {
     pub static ref INTERNAL_ACTOR_MESSAGE_HANDLE_DURATION: HistogramVec = register_histogram_vec!(
-        "tikv_log_backup_interal_actor_acting_duration_sec",
+        "tikv_log_backup_internal_actor_acting_duration_sec",
         "The internal actor message handling duration.",
         &["message"],
         exponential_buckets(0.001, 2.0, 16).unwrap()
