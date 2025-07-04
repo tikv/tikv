@@ -408,13 +408,22 @@ fn test_delete_files_in_range_for_titan() {
         .iter()
         .map(|s| s.as_str())
         .collect::<Vec<&str>>();
+<<<<<<< HEAD
     apply_sst_cf_file(&tmp_file_paths, &engines1.kv, CF_DEFAULT).unwrap();
+=======
+    apply_sst_cf_files_by_ingest(&tmp_file_paths, &engines1.kv, CF_DEFAULT, vec![], vec![])
+        .unwrap();
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
     let tmp_file_paths = cf_file_write.tmp_file_paths();
     let tmp_file_paths = tmp_file_paths
         .iter()
         .map(|s| s.as_str())
         .collect::<Vec<&str>>();
+<<<<<<< HEAD
     apply_sst_cf_file(&tmp_file_paths, &engines1.kv, CF_WRITE).unwrap();
+=======
+    apply_sst_cf_files_by_ingest(&tmp_file_paths, &engines1.kv, CF_WRITE, vec![], vec![]).unwrap();
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
 
     // Do scan on other DB.
     let mut r = Region::default();

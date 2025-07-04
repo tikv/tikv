@@ -12,8 +12,14 @@ use encryption::{
     from_engine_encryption_method, DataKeyManager, DecrypterReader, EncrypterWriter, Iv,
 };
 use engine_traits::{
+<<<<<<< HEAD
     CfName, EncryptionKeyManager, Error as EngineError, Iterable, KvEngine, Mutable,
     SstCompressionType, SstReader, SstWriter, SstWriterBuilder, WriteBatch,
+=======
+    CfName, Error as EngineError, ExternalSstFileInfo, IterOptions, Iterable, Iterator, KvEngine,
+    Mutable, Range, RefIterable, SstCompressionType, SstReader, SstWriter, SstWriterBuilder,
+    WriteBatch,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
 };
 use fail::fail_point;
 use kvproto::encryptionpb::EncryptionMethod;
@@ -302,7 +308,17 @@ where
     }
 }
 
+<<<<<<< HEAD
 pub fn apply_sst_cf_file<E>(files: &[&str], db: &E, cf: &str) -> Result<(), Error>
+=======
+pub fn apply_sst_cf_files_by_ingest<E>(
+    files: &[&str],
+    db: &E,
+    cf: &str,
+    start_key: Vec<u8>,
+    end_key: Vec<u8>,
+) -> Result<(), Error>
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
 where
     E: KvEngine,
 {
@@ -312,7 +328,31 @@ where
             cf, files
         );
     }
-    box_try!(db.ingest_external_file_cf(cf, files));
+    // We set start_key and end_key to enable RocksDB
+    // IngestExternalFileOptions.allow_write = true, minimizing the impact on
+    // foreground performance.
+    //
+    // We can safely enable `allow_write` because no concurrent writes overlap with
+    // the data to be ingested, due to:
+    //   1. The region's snapshot is unapplied, ensuring there are no foreground
+    //      write operations.
+    //   2. If a peer is migrated out and then migrated back, and we are in the
+    //      apply snapshot phase, the delete_all_in_range in DestroyTask cannot
+    //      concurrently delete the overlapping key range. This is because the
+    //      single-threaded, queue-based region worker ensures that DestroyTask is
+    //      always completed before ApplyTask is executed.
+    //   3. The compaction filter may write to the default column family
+    //      concurrently, but we use ingest latch to avoid such situations.
+    //
+    // Refer to https://github.com/tikv/tikv/issues/18081.
+    box_try!(db.ingest_external_file_cf(
+        cf,
+        files,
+        Some(Range {
+            start_key: start_key.as_slice(),
+            end_key: end_key.as_slice()
+        })
+    ));
     Ok(())
 }
 
@@ -505,7 +545,12 @@ mod tests {
                         .iter()
                         .map(|s| s.as_str())
                         .collect::<Vec<&str>>();
+<<<<<<< HEAD
                     apply_sst_cf_file(&tmp_file_paths, &db1, CF_DEFAULT).unwrap();
+=======
+                    apply_sst_cf_files_by_ingest(&tmp_file_paths, &db1, CF_DEFAULT, vec![], vec![])
+                        .unwrap();
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
                     assert_eq_db(&db, &db1);
                 }
             }

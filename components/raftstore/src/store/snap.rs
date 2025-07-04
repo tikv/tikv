@@ -1156,8 +1156,33 @@ impl Snapshot {
                     .iter()
                     .map(|s| s.as_str())
                     .collect::<Vec<&str>>();
+<<<<<<< HEAD
                 snap_io::apply_sst_cf_file(clone_files.as_slice(), &options.db, cf)?;
                 coprocessor_host.post_apply_sst_from_snapshot(&region, cf, path);
+=======
+                if apply_without_ingest {
+                    // Apply the snapshot without ingest, to accelerate the applying process.
+                    snap_io::apply_sst_cf_files_without_ingest(
+                        clone_files.as_slice(),
+                        &options.db,
+                        cf,
+                        key_mgr.clone(),
+                        &abort_checker,
+                        batch_size,
+                        &mut cb,
+                    )?;
+                } else {
+                    // Apply the snapshot by ingest.
+                    snap_io::apply_sst_cf_files_by_ingest(
+                        clone_files.as_slice(),
+                        &options.db,
+                        cf,
+                        enc_start_key(&region),
+                        enc_end_key(&region),
+                    )?;
+                    coprocessor_host.post_apply_sst_from_snapshot(&region, cf, path);
+                }
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
             }
         }
         Ok(())
@@ -1964,6 +1989,114 @@ impl SnapManagerCore {
         }
         u64::MAX
     }
+<<<<<<< HEAD
+=======
+
+    pub fn can_apply_cf_without_ingest(&self, cf_size: u64, cf_kvs: u64) -> bool {
+        fail_point!("apply_cf_without_ingest_false", |_| { false });
+        if self.min_ingest_cf_size == 0 {
+            return false;
+        }
+        // If the size and the count of keys of cf are relatively small, it's
+        // recommended to directly write it into kvdb rather than ingest,
+        // for mitigating performance issue when ingesting snapshot.
+        cf_size <= self.min_ingest_cf_size && cf_kvs <= self.min_ingest_cf_kvs
+    }
+}
+
+/// `SnapRecvConcurrencyLimiter` enforces a limit on the number of simultaneous
+/// snapshot receives. It is consulted before a snapshot is generated. It
+/// employs a TTL mechanism to automatically evict operations that have been
+/// pending longer than the specified TTL. The TTL helps to handle scenarios
+/// where a snapshot fails to be sent for any reason. Note that a limit of 0
+/// means there's no limit.
+#[derive(Clone)]
+pub struct SnapRecvConcurrencyLimiter {
+    limit: Arc<AtomicUsize>,
+    reserved_capacity: Arc<AtomicUsize>,
+    ttl_secs: u64,
+    timestamps: Arc<Mutex<HashMap<u64, Instant>>>,
+}
+
+impl SnapRecvConcurrencyLimiter {
+    // Note that a limit of 0 means there's no limit.
+    pub fn new(limit: usize, ttl_secs: u64) -> Self {
+        SnapRecvConcurrencyLimiter {
+            limit: Arc::new(AtomicUsize::new(limit)),
+            reserved_capacity: Arc::new(AtomicUsize::new(0)),
+            ttl_secs,
+            timestamps: Arc::new(Mutex::new(HashMap::with_capacity_and_hasher(
+                limit,
+                Default::default(),
+            ))),
+        }
+    }
+
+    // Attempts to add a snapshot receive operation if below the concurrency
+    // limit. Returns true if the operation is allowed, false otherwise.
+    pub fn try_recv(&self, region_id: u64) -> bool {
+        let mut timestamps = self.timestamps.lock().unwrap();
+        let current_time = Instant::now();
+        self.evict_expired_timestamps(&mut timestamps, current_time);
+
+        let limit = self.limit.load(Ordering::Relaxed);
+        if limit == 0 {
+            // 0 means no limit. In that case, we avoid inserting into the hash
+            // map to prevent it from growing indefinitely.
+            return true;
+        }
+
+        let reserved_capacity = self.reserved_capacity.load(Ordering::Relaxed);
+        // Insert into the map if its size is within limit. If the region id is
+        // already present in the map, update its timestamp.
+        if timestamps.len() + reserved_capacity < limit || timestamps.contains_key(&region_id) {
+            timestamps.insert(region_id, current_time);
+            return true;
+        }
+        false
+    }
+
+    fn evict_expired_timestamps(
+        &self,
+        timestamps: &mut HashMap<u64, Instant>,
+        current_time: Instant,
+    ) {
+        timestamps.retain(|region_id, timestamp| {
+            if current_time.duration_since(*timestamp) <= Duration::from_secs(self.ttl_secs) {
+                true
+            } else {
+                // This shouldn't happen if the TTL is set properly. When it
+                // does happen, the limiter may permit more snapshots than the
+                // configured limit to be sent and trigger the receiver busy
+                // error.
+                warn!(
+                    "region {} expired in the snap recv concurrency limiter",
+                    region_id
+                );
+                false
+            }
+        });
+        timestamps.shrink_to(self.limit.load(Ordering::Relaxed));
+    }
+
+    // Completes a snapshot receive operation by removing a timestamp from the
+    // queue.
+    pub fn finish_recv(&self, region_id: u64) {
+        self.timestamps.lock().unwrap().remove(&region_id);
+    }
+
+    pub fn set_limit(&self, limit: usize) {
+        self.limit.store(limit, Ordering::Relaxed);
+    }
+
+    // Set the reserved capacity of the limiter. The reserved capacity is
+    // unavailable for use. The actual available capacity is calculated as
+    // the total limit minus the reserved capacity.
+    pub fn set_reserved_capacity(&self, reserved_cap: usize) {
+        self.reserved_capacity
+            .store(reserved_cap, Ordering::Relaxed);
+    }
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
 }
 
 #[derive(Clone, Default)]
