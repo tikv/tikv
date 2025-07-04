@@ -63,7 +63,7 @@ fn get_entry_size(
                 // Estimate the raw blob size using the Titan compression factor.
                 let estimation = (index.blob_size as f64 * titan_compression_factor) as u64;
                 let blob_raw_size = estimation.min(titan_max_blob_size).max(index.blob_size);
-                Ok(blob_raw_size as u64 + value.len() as u64)
+                Ok(blob_raw_size + value.len() as u64)
             }
             Err(_) => Err(()),
         },
