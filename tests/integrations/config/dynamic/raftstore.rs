@@ -2,11 +2,12 @@
 
 use std::{
     iter::FromIterator,
-    sync::{Arc, Mutex, mpsc},
+    sync::{Arc, Mutex, atomic::AtomicU64, mpsc},
     time::Duration,
 };
 
 use concurrency_manager::ConcurrencyManager;
+use crossbeam::epoch::Atomic;
 use engine_rocks::RocksEngine;
 use engine_traits::{ALL_CFS, CF_DEFAULT, Engines};
 use health_controller::HealthController;
@@ -116,6 +117,7 @@ fn start_raftstore(
             None,
             DiskCheckRunner::dummy(),
             GrpcServiceManager::dummy(),
+            Arc::new(AtomicU64::new(0)),
         )
         .unwrap();
 

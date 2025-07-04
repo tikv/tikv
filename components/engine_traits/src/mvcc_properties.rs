@@ -16,6 +16,10 @@ pub struct MvccProperties {
     pub num_versions: u64,     // The number of MVCC versions of all rows.
     pub max_row_versions: u64, // The maximal number of MVCC versions of a single row.
     pub ttl: TtlProperties,    // The ttl properties of all rows, for RawKV only.
+    pub oldest_redundant_version_ts: TimeStamp,
+    pub newest_redundant_version_ts: TimeStamp,
+    pub oldest_delete_ts: TimeStamp,
+    pub newest_delete_ts: TimeStamp,
 }
 
 impl MvccProperties {
@@ -29,6 +33,10 @@ impl MvccProperties {
             num_versions: 0,
             max_row_versions: 0,
             ttl: TtlProperties::default(),
+            oldest_redundant_version_ts: TimeStamp::max(),
+            newest_redundant_version_ts: TimeStamp::zero(),
+            oldest_delete_ts: TimeStamp::max(),
+            newest_delete_ts: TimeStamp::zero(),
         }
     }
 
@@ -41,6 +49,16 @@ impl MvccProperties {
         self.num_versions += other.num_versions;
         self.max_row_versions = cmp::max(self.max_row_versions, other.max_row_versions);
         self.ttl.merge(&other.ttl);
+        self.oldest_redundant_version_ts = cmp::min(
+            self.oldest_redundant_version_ts,
+            other.oldest_redundant_version_ts,
+        );
+        self.newest_redundant_version_ts = cmp::max(
+            self.newest_redundant_version_ts,
+            other.newest_redundant_version_ts,
+        );
+        self.oldest_delete_ts = cmp::min(self.oldest_delete_ts, other.oldest_delete_ts);
+        self.newest_delete_ts = cmp::max(self.newest_delete_ts, other.newest_delete_ts);
     }
 }
 

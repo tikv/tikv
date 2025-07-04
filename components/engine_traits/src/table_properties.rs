@@ -1,19 +1,27 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::{Range, Result};
+use crate::{MvccProperties, Range, Result};
 
 pub trait UserCollectedProperties {
     fn get(&self, index: &[u8]) -> Option<&[u8]>;
     fn approximate_size_and_keys(&self, start: &[u8], end: &[u8]) -> Option<(usize, usize)>;
+    fn get_mvcc_properties(&self) -> Option<MvccProperties>;
+}
+
+pub trait TableProperties {
+    type UserCollectedProperties: UserCollectedProperties;
+
+    fn get_user_collected_properties(&self) -> &Self::UserCollectedProperties;
+    fn get_num_entries(&self) -> u64;
 }
 
 pub trait TablePropertiesCollection {
-    type UserCollectedProperties: UserCollectedProperties;
+    type TableProperties: TableProperties;
 
-    /// Iterator all `UserCollectedProperties`, break if `f` returns false.
-    fn iter_user_collected_properties<F>(&self, f: F)
+    /// Iterator all `TableProperties`, break if `f` returns false.
+    fn iter_table_properties<F>(&self, f: F)
     where
-        F: FnMut(&Self::UserCollectedProperties) -> bool;
+        F: FnMut(&Self::TableProperties) -> bool;
 }
 
 pub trait TablePropertiesExt {

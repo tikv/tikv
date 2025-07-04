@@ -10,7 +10,10 @@ use std::{
     },
     mem,
     ops::{Deref, DerefMut},
-    sync::{Arc, Mutex, Weak, atomic::Ordering},
+    sync::{
+        Arc, Mutex, Weak,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant, SystemTime},
 };
 
@@ -606,6 +609,8 @@ where
     pub write_senders: WriteSenders<EK, ER>,
     pub sync_write_worker: Option<WriteWorker<EK, ER, RaftRouter<EK, ER>, T>>,
     pub pending_latency_inspect: Vec<LatencyInspector>,
+
+    pub gc_safe_point: Arc<AtomicU64>,
 
     pub process_stat: Option<ProcessStat>,
 }
@@ -1292,6 +1297,7 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     feature_gate: FeatureGate,
     write_senders: WriteSenders<EK, ER>,
     node_start_time: Timespec, // monotonic_raw_now
+    gc_safe_point: Arc<AtomicU64>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
@@ -1555,6 +1561,7 @@ where
             write_senders: self.write_senders.clone(),
             sync_write_worker,
             pending_latency_inspect: vec![],
+            gc_safe_point: self.gc_safe_point.clone(),
             process_stat: None,
         };
         ctx.update_ticks_timeout();
@@ -1610,6 +1617,7 @@ where
             feature_gate: self.feature_gate.clone(),
             write_senders: self.write_senders.clone(),
             node_start_time: self.node_start_time,
+            gc_safe_point: self.gc_safe_point.clone(),
         }
     }
 }
@@ -1689,6 +1697,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         mut disk_check_runner: DiskCheckRunner,
         grpc_service_mgr: GrpcServiceManager,
+        gc_safe_point: Arc<AtomicU64>,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1861,6 +1870,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             feature_gate: pd_client.feature_gate().clone(),
             write_senders: self.store_writers.senders(),
             node_start_time: self.node_start_time,
+            gc_safe_point,
         };
         let region_peers = builder.init()?;
         self.start_system::<T, C>(
@@ -2743,6 +2753,8 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
             return;
         }
 
+        let gc_safe_point = self.ctx.gc_safe_point.load(Ordering::Relaxed);
+
         let meta = self.ctx.store_meta.lock().unwrap();
         if meta.region_ranges.is_empty() {
             debug!(
@@ -2771,6 +2783,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
                 compaction_filter_enabled: self.ctx.cfg.compaction_filter_enabled,
                 bottommost_level_force: self.ctx.cfg.check_then_compact_force_bottommost_level,
                 top_n: self.ctx.cfg.check_then_compact_top_n as usize,
+                gc_safe_point,
                 finished,
             },
         )) {

@@ -11,13 +11,17 @@ use std::{
     time::Duration,
 };
 
-use engine_traits::{CF_WRITE, KvEngine, ManualCompactionOptions, RangeStats};
+use engine_traits::{
+    CF_WRITE, KvEngine, ManualCompactionOptions, Range, RangeStats, TableProperties,
+    TablePropertiesCollection, UserCollectedProperties,
+};
 use fail::fail_point;
 use futures_util::compat::Future01CompatExt;
 use thiserror::Error;
 use tikv_util::{
     box_try, debug, error, info, time::Instant, timer::GLOBAL_TIMER_HANDLE, warn, worker::Runnable,
 };
+use txn_types::TimeStamp;
 use yatp::Remote;
 
 use super::metrics::{
@@ -62,6 +66,7 @@ pub enum Task {
         compaction_filter_enabled: bool,
         bottommost_level_force: bool,
         top_n: usize,
+        gc_safe_point: u64,
         // RAII guard to indicate the task is still running. Store FSM will hold a weak ptr to this
         // guard, and will be aware of the task being dropped.
         // If the task is dropped, it means the check is finished or failed.
@@ -230,6 +235,7 @@ impl Display for Task {
                 ref compaction_filter_enabled,
                 ref bottommost_level_force,
                 ref top_n,
+                ref gc_safe_point,
                 ..
             } => f
                 .debug_struct("CheckThenCompactV2")
@@ -253,6 +259,7 @@ impl Display for Task {
                 .field("compaction_filter_enabled", &compaction_filter_enabled)
                 .field("bottommost_level_force", &bottommost_level_force)
                 .field("top_n", &top_n)
+                .field("gc_safe_point", &gc_safe_point)
                 .finish(),
         }
     }
@@ -463,6 +470,7 @@ where
                 compaction_filter_enabled,
                 bottommost_level_force,
                 top_n,
+                gc_safe_point,
                 finished: _,
             } => {
                 fail_point!("raftstore::compact::CheckThenCompactTopN:NotifyStart");
@@ -473,6 +481,7 @@ where
                     compact_threshold,
                     compaction_filter_enabled,
                     top_n,
+                    gc_safe_point,
                 ) {
                     Ok(candidates) => {
                         fail_point!(
@@ -496,10 +505,7 @@ where
                             info!("no ranges need compacting");
                         } else {
                             for CompactionCandidate {
-                                start_key,
-                                end_key,
-                                range_stats,
-                                score,
+                                start_key, end_key, ..
                             } in candidates
                             {
                                 info!("check_then_compact found a range to compact";
@@ -609,24 +615,23 @@ fn collect_ranges_need_compact(
 }
 
 fn get_compact_score(
-    range_stats: &RangeStats,
+    num_tombstones: u64,
+    num_discardable: u64,
+    num_total_entries: u64,
     compact_threshold: &CompactThreshold,
     compaction_filter_enabled: bool,
 ) -> f64 {
     if range_stats.num_entries == 0 || range_stats.num_entries < range_stats.num_versions {
-        return 0.0;
-    }
-
     if !compaction_filter_enabled {
         let num_tombstones = range_stats.num_entries - range_stats.num_versions;
         // Only consider deletes (tombstones)
         if num_tombstones < compact_threshold.tombstones_num_threshold
             && num_tombstones * 100
-                < compact_threshold.tombstones_percent_threshold * range_stats.num_entries
+                < compact_threshold.tombstones_percent_threshold * num_total_entries
         {
             return 0.0;
         }
-        let ratio = num_tombstones as f64 / range_stats.num_entries as f64;
+        let ratio = num_tombstones as f64 / num_total_entries as f64;
         return num_tombstones as f64 * ratio;
     }
     // When compaction filter is enabled, ignore tombstone threshold,
@@ -635,7 +640,7 @@ fn get_compact_score(
     let ratio = num_discardable as f64 / range_stats.num_entries as f64;
     if num_discardable < compact_threshold.redundant_rows_threshold
         && num_discardable * 100
-            < compact_threshold.redundant_rows_percent_threshold * range_stats.num_entries
+            < compact_threshold.redundant_rows_percent_threshold * num_total_entries
     {
         return 0.0;
     }
@@ -647,7 +652,6 @@ struct CompactionCandidate {
     score: f64,
     start_key: Key,
     end_key: Key,
-    range_stats: RangeStats,
 }
 
 impl PartialEq for CompactionCandidate {
@@ -670,12 +674,47 @@ impl Ord for CompactionCandidate {
     }
 }
 
+fn get_estimated_discardable_entries(
+    num_entries: u64,
+    oldest_ts: TimeStamp,
+    newest_ts: TimeStamp,
+    gc_safe_point: u64,
+) -> u64 {
+    // If there are no entries or the timestamps are invalid, return 0.
+    if num_entries == 0 || oldest_ts >= newest_ts {
+        return 0;
+    }
+    let oldest_ts = oldest_ts.into_inner();
+    let newest_ts = newest_ts.into_inner();
+
+    // If gc_safe_point is before or equal to oldest_ts, all entries are
+    // discardable.
+    if gc_safe_point <= oldest_ts {
+        return num_entries;
+    }
+
+    // If gc_safe_point is after or equal to newest_ts, no entries are discardable.
+    if gc_safe_point >= newest_ts {
+        return 0;
+    }
+
+    // Otherwise, calculate the portion of entries between oldest_ts and
+    // gc_safe_point.
+    let total_range = newest_ts - oldest_ts;
+    let discardable_range = gc_safe_point - oldest_ts;
+
+    // Use floating point division for accuracy, then round to nearest integer.
+    let portion = (discardable_range as f64) / (total_range as f64);
+    (num_entries as f64 * portion).round() as u64
+}
+
 fn select_compaction_candidates(
     engine: &impl KvEngine,
     ranges: Vec<Key>,
     compact_threshold: CompactThreshold,
     compaction_filter_enabled: bool,
     top_n: usize,
+    gc_safe_point: u64,
 ) -> Result<Vec<CompactionCandidate>, Error> {
     use std::{cmp::Reverse, collections::BinaryHeap};
     let check_timer = CHECK_THEN_COMPACT_DURATION.check.start_coarse_timer();
