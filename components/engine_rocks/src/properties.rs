@@ -619,8 +619,6 @@ pub fn get_range_stats(
 
 #[cfg(test)]
 mod tests {
-    use std::u64;
-
     use api_version::RawValue;
     use engine_traits::{CF_WRITE, LARGE_CFS, MiscExt, SyncMutable};
     use rand::Rng;
