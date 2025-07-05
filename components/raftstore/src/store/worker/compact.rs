@@ -688,6 +688,12 @@ fn get_estimated_discardable_entries(
     let oldest_ts = oldest_ts.into_inner();
     let newest_ts = newest_ts.into_inner();
 
+    info!("get_estimated_discardable_entries";
+        "num_entries" => num_entries,
+        "oldest_ts" => oldest_ts,
+        "newest_ts" => newest_ts,
+        "gc_safe_point" => gc_safe_point,
+    );
     // If gc_safe_point is before or equal to oldest_ts, all entries are
     // discardable.
     if gc_safe_point <= oldest_ts {
