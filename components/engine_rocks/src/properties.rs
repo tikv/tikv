@@ -9,6 +9,7 @@ use std::{
         Mutex,
         atomic::{AtomicU64, Ordering},
     },
+    u64,
 };
 
 use api_version::{ApiV2, KeyMode, KvFormat};
@@ -328,7 +329,7 @@ impl Default for RangePropertiesCollector {
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             titan_compression_factor: 1.0,
-            titan_max_blob_size: 0,
+            titan_max_blob_size: u64::MAX,
             should_reload_titan_stats: true,
         }
     }
