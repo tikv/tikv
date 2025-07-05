@@ -46,8 +46,8 @@ const FIVE_MINS_IN_SECONDS: u64 = 5 * 60;
 lazy_static! {
     pub static ref TITAN_COMPRESSION_FACTOR_SMOOTHER: Mutex<Smoother<f64, 30, FIVE_MINS_IN_SECONDS, 0>> =
         Mutex::new(Smoother::<f64, 30, FIVE_MINS_IN_SECONDS, 0>::default());
-    pub static ref TITAN_COMPRESSION_FACTOR: AtomicU64 = AtomicU64::new(0);
-    pub static ref TITAN_MAX_BLOB_SIZE_SEEN: AtomicU64 = AtomicU64::new(0);
+    pub static ref TITAN_COMPRESSION_FACTOR: AtomicU64 = AtomicU64::new(f64::to_bits(1.0));
+    pub static ref TITAN_MAX_BLOB_SIZE_SEEN: AtomicU64 = AtomicU64::new(u64::MAX);
 }
 
 fn get_entry_size(
@@ -618,6 +618,8 @@ pub fn get_range_stats(
 
 #[cfg(test)]
 mod tests {
+    use std::u64;
+
     use api_version::RawValue;
     use engine_traits::{CF_WRITE, LARGE_CFS, MiscExt, SyncMutable};
     use rand::Rng;
@@ -934,31 +936,24 @@ mod tests {
     fn test_get_entry_size() {
         let blob_size = 10;
         let val = encode_blob_index(blob_size);
-        assert_eq!(
-            get_entry_size(&val, DBEntryType::BlobIndex, 1.0, 1000).unwrap(),
-            blob_size + val.len() as u64
-        );
-        assert_eq!(
-            get_entry_size(&val, DBEntryType::BlobIndex, 100.0, 1000).unwrap(),
-            1000 + val.len() as u64
-        );
-        // Estimation clamped by max blob size seen.
-        assert_eq!(
-            get_entry_size(&val, DBEntryType::BlobIndex, 100.0, 500).unwrap(),
-            500 + val.len() as u64
-        );
-        // No regress if stats are 0.
-        assert_eq!(
-            get_entry_size(&val, DBEntryType::BlobIndex, 0.0, 0).unwrap(),
-            blob_size + val.len() as u64
-        );
-        assert_eq!(
-            get_entry_size(&val, DBEntryType::BlobIndex, 0.0, 100).unwrap(),
-            blob_size + val.len() as u64
-        );
-        assert_eq!(
-            get_entry_size(&val, DBEntryType::BlobIndex, 100.0, 0).unwrap(),
-            blob_size + val.len() as u64
-        );
+        let test_cases = [
+            (1.0, 1000, blob_size),
+            (100.0, 1000, blob_size * 100),
+            (200.0, u64::MAX, blob_size * 200),
+            // Estimation clamped by max blob size seen.
+            (100.0, 500, 500),
+            // No regress if stats are 0 or default values.
+            (0.0, 0, blob_size),
+            (0.0, 100, blob_size),
+            (100.0, 0, blob_size),
+            (1.0, u64::MAX, blob_size),
+            (0.0, u64::MAX, blob_size),
+        ];
+
+        for (factor, max_blob_size_seen, expect_size) in test_cases {
+            let entry_size =
+                get_entry_size(&val, DBEntryType::BlobIndex, factor, max_blob_size_seen).unwrap();
+            assert_eq!(entry_size, expect_size + val.len() as u64);
+        }
     }
 }

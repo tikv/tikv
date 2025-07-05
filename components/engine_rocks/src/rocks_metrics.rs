@@ -1256,7 +1256,11 @@ pub fn flush_engine_statistics(statistics: &RocksStatistics, name: &str, is_tita
                 TITAN_COMPRESSION_FACTOR.store(smoother.get_avg().to_bits(), Ordering::Relaxed);
                 TITAN_COMPRESSION_FACTOR_GAUGE.set(smoother.get_avg());
             }
-            if v.max as u64 > TITAN_MAX_BLOB_SIZE_SEEN.load(Ordering::Relaxed) {
+
+            // Update the Titan max blob size seen, used to cap blob size
+            // estimation.
+            let current = TITAN_MAX_BLOB_SIZE_SEEN.load(Ordering::Relaxed);
+            if current == u64::MAX || v.max as u64 > current {
                 TITAN_MAX_BLOB_SIZE_SEEN.store(v.max as u64, Ordering::Relaxed);
             }
         }
