@@ -5132,11 +5132,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.4.2"
-<<<<<<< HEAD
-source = "git+https://github.com/tikv/raft-engine.git?branch=tikv-8.5#e5e2b4ea7c61581121013b382568d7336706fed2"
-=======
-source = "git+https://github.com/tikv/raft-engine.git#03f77d90c09793a6f79411ff5f88233715eb23da"
->>>>>>> 81837d71b9 (*: update raft-engine to optimize `fetch_entries_to`. (#18617))
+source = "git+https://github.com/tikv/raft-engine.git?branch=tikv-8.5#2f9f6888dc2c88d3e2b582187c26e196b88b8ef3"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -5170,11 +5166,7 @@ dependencies = [
 [[package]]
 name = "raft-engine-ctl"
 version = "0.4.2"
-<<<<<<< HEAD
-source = "git+https://github.com/tikv/raft-engine.git?branch=tikv-8.5#e5e2b4ea7c61581121013b382568d7336706fed2"
-=======
-source = "git+https://github.com/tikv/raft-engine.git#03f77d90c09793a6f79411ff5f88233715eb23da"
->>>>>>> 81837d71b9 (*: update raft-engine to optimize `fetch_entries_to`. (#18617))
+source = "git+https://github.com/tikv/raft-engine.git?branch=tikv-8.5#2f9f6888dc2c88d3e2b582187c26e196b88b8ef3"
 dependencies = [
  "clap 3.1.6",
  "env_logger 0.10.0",

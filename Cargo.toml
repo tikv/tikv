@@ -58,10 +58,6 @@ openssl-vendored = [
 # for testing configure propegate to other crates
 # https://stackoverflow.com/questions/41700543/can-we-share-test-utilites-between-crates
 testing = []
-<<<<<<< HEAD
-=======
-docker_test = [] # Feature flag for Docker-specific tests
->>>>>>> 81837d71b9 (*: update raft-engine to optimize `fetch_entries_to`. (#18617))
 
 [lib]
 name = "tikv"
