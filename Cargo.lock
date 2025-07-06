@@ -3089,12 +3089,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "95505c38b4572b2d910cecb0281560f54b440a19336cbbcb27bf6ce6adc6f5a8"
 
 [[package]]
-name = "heck"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
-
-[[package]]
 name = "hermit-abi"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3279,7 +3273,7 @@ dependencies = [
  "httpdate",
  "itoa 1.0.1",
  "pin-project-lite",
- "socket2 0.4.7",
+ "socket2",
  "tokio",
  "tower-service",
  "tracing",
@@ -5143,12 +5137,8 @@ dependencies = [
 
 [[package]]
 name = "raft-engine"
-version = "0.4.2"
-<<<<<<< HEAD
-source = "git+https://github.com/tikv/raft-engine.git#de1ec937529e3a88e093db0cf0d403522565fe64"
-=======
-source = "git+https://github.com/tikv/raft-engine.git#03f77d90c09793a6f79411ff5f88233715eb23da"
->>>>>>> 81837d71b9 (*: update raft-engine to optimize `fetch_entries_to`. (#18617))
+version = "0.4.1"
+source = "git+https://github.com/tikv/raft-engine.git?branch=tikv-7.5#ddf3c90b8086fcc6944aaefb0d4ef119e9028dd5"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -5175,18 +5165,14 @@ dependencies = [
  "scopeguard",
  "serde",
  "serde_repr",
- "strum 0.26.3",
+ "strum 0.25.0",
  "thiserror",
 ]
 
 [[package]]
 name = "raft-engine-ctl"
-version = "0.4.2"
-<<<<<<< HEAD
-source = "git+https://github.com/tikv/raft-engine.git#cd1533d79cfea02d005b458bd70fd9675846c9c6"
-=======
-source = "git+https://github.com/tikv/raft-engine.git#03f77d90c09793a6f79411ff5f88233715eb23da"
->>>>>>> 81837d71b9 (*: update raft-engine to optimize `fetch_entries_to`. (#18617))
+version = "0.4.1"
+source = "git+https://github.com/tikv/raft-engine.git?branch=tikv-7.5#ddf3c90b8086fcc6944aaefb0d4ef119e9028dd5"
 dependencies = [
  "clap 3.1.6",
  "env_logger 0.10.0",
@@ -6482,16 +6468,6 @@ dependencies = [
 
 [[package]]
 name = "socket2"
-version = "0.4.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02e2d2db9033d13a1567121ddd7a095ee144db4e1ca1b1bda3419bc0da294ebd"
-dependencies = [
- "libc 0.2.151",
- "winapi 0.3.9",
-]
-
-[[package]]
-name = "socket2"
 version = "0.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ce305eb0b4296696835b71df73eb912e0f1ffd2556a501fcede6e0c50349191c"
@@ -6613,11 +6589,11 @@ dependencies = [
 
 [[package]]
 name = "strum"
-version = "0.26.3"
+version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fec0f0aef304996cf250b31b5a10dee7980c85da9d759361292b8bca5a18f06"
+checksum = "290d54ea6f91c969195bdbcd7442c8c2a2ba87da8bf60a7ee86a235d4bc1e125"
 dependencies = [
- "strum_macros 0.26.4",
+ "strum_macros 0.25.3",
 ]
 
 [[package]]
@@ -6647,11 +6623,11 @@ dependencies = [
 
 [[package]]
 name = "strum_macros"
-version = "0.26.4"
+version = "0.25.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c6bee85a5a24955dc440386795aa378cd9cf82acd5f764469152d2270e581be"
+checksum = "23dc1fa9ac9c169a78ba62f0b841814b7abae11bdd047b9c58f893439e309ea0"
 dependencies = [
- "heck 0.5.0",
+ "heck 0.4.1",
  "proc-macro2",
  "quote",
  "rustversion",
@@ -7861,7 +7837,7 @@ dependencies = [
  "parking_lot 0.12.1",
  "pin-project-lite",
  "signal-hook-registry",
- "socket2 0.5.7",
+ "socket2",
  "tokio-macros",
  "windows-sys 0.48.0",
 ]
