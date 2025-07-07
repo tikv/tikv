@@ -52,10 +52,6 @@ where
         self.disk_engine().ingest_maybe_slowdown_writes(cf)
     }
 
-    fn get_sst_key_ranges(&self, cf: &str, level: usize) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
-        self.disk_engine().get_sst_key_ranges(cf, level)
-    }
-
     fn get_engine_used_size(&self) -> Result<u64> {
         self.disk_engine().get_engine_used_size()
     }
