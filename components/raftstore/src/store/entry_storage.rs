@@ -1225,9 +1225,11 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
         };
 
         self.cache.append(self.region_id, self.peer_id, &entries);
-        // Normally, the incoming entries belongs to one term.
-        self.term_cache
-            .append(entries.first().unwrap().get_index(), last_term);
+        // Using the last entry to update the term cache may slightly reduce query
+        // performance for recently appended indices, but it ensures that the
+        // term cache maintains the integrity and continuity of each term's
+        // lifecycle, making it safe and efficient for access and compaction.
+        self.term_cache.append(last_index, last_term);
 
         // Delete any previously appended log entries which never committed.
         task.set_append(Some(prev_last_index + 1), entries);
