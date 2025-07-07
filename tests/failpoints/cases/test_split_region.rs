@@ -2,8 +2,12 @@
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
+<<<<<<< HEAD
         mpsc::{self, channel, sync_channel},
         Arc, Mutex,
+=======
+        mpsc::{self, channel},
+>>>>>>> d4db90887a (GC: remove compact on split (#18500))
     },
     thread,
     time::Duration,
@@ -17,7 +21,7 @@ use kvproto::{
         Mutation, Op, PessimisticLockRequest, PrewriteRequest, PrewriteRequestPessimisticAction::*,
     },
     metapb::Region,
-    pdpb::{self, CheckPolicy},
+    pdpb::CheckPolicy,
     raft_serverpb::{PeerState, RaftMessage},
     tikvpb::TikvClient,
 };
@@ -40,7 +44,7 @@ use tikv_util::{
     time::Instant,
     HandyRwLock,
 };
-use txn_types::{Key, LastChange, PessimisticLock, TimeStamp};
+use txn_types::{Key, LastChange, PessimisticLock};
 
 #[test]
 fn test_meta_inconsistency() {
@@ -1607,6 +1611,7 @@ fn test_not_reset_has_dirty_data_due_to_slow_split() {
     cluster.must_put(b"k00001", b"val");
 }
 
+<<<<<<< HEAD
 #[test]
 fn test_split_region_with_no_valid_split_keys() {
     let mut cluster = test_raftstore::new_node_cluster(0, 3);
@@ -1658,6 +1663,8 @@ fn test_split_region_with_no_valid_split_keys() {
     rx.try_recv().unwrap_err();
 }
 
+=======
+>>>>>>> d4db90887a (GC: remove compact on split (#18500))
 /// This test case test if a split failed for some reason,
 /// it can continue run split check and eventually the split will finish
 #[test_case(test_raftstore::new_node_cluster)]
@@ -1718,68 +1725,6 @@ fn test_split_by_split_check_on_keys() {
     put_till_count(&mut cluster, region_max_keys / 2 + 3, &mut range);
     // waiting the split,
     cluster.wait_region_split(&region);
-}
-
-fn change(name: &str, value: &str) -> std::collections::HashMap<String, String> {
-    let mut m = std::collections::HashMap::new();
-    m.insert(name.to_owned(), value.to_owned());
-    m
-}
-
-#[test]
-fn test_turn_off_manual_compaction_caused_by_no_valid_split_key() {
-    let mut cluster = new_node_cluster(0, 1);
-    cluster.run();
-    let r = cluster.get_region(b"");
-    cluster.must_split(&r, b"k1");
-    let r = cluster.get_region(b"k1");
-    cluster.must_split(&r, b"k2");
-    cluster.must_put(b"k1", b"val");
-
-    let (tx, rx) = sync_channel(5);
-    fail::cfg_callback("on_compact_range_cf", move || {
-        tx.send(true).unwrap();
-    })
-    .unwrap();
-
-    let safe_point_inject = "safe_point_inject";
-    fail::cfg(safe_point_inject, "return(100)").unwrap();
-
-    {
-        let sim = cluster.sim.rl();
-        let cfg_controller = sim.get_cfg_controller(1).unwrap();
-        cfg_controller
-            .update(change(
-                "raftstore.skip-manual-compaction-in-clean_up-worker",
-                "true",
-            ))
-            .unwrap();
-    }
-
-    let r = cluster.get_region(b"k1");
-    cluster
-        .pd_client
-        .split_region(r.clone(), pdpb::CheckPolicy::Usekey, vec![b"k1".to_vec()]);
-    rx.recv_timeout(Duration::from_secs(1)).unwrap_err();
-
-    {
-        let sim = cluster.sim.rl();
-        let cfg_controller = sim.get_cfg_controller(1).unwrap();
-        cfg_controller
-            .update(change(
-                "raftstore.skip-manual-compaction-in-clean_up-worker",
-                "false",
-            ))
-            .unwrap();
-    }
-
-    cluster
-        .pd_client
-        .split_region(r, pdpb::CheckPolicy::Usekey, vec![b"k1".to_vec()]);
-    fail::cfg(safe_point_inject, "return(200)").unwrap();
-    rx.recv_timeout(Duration::from_secs(1)).unwrap();
-    rx.recv_timeout(Duration::from_secs(1)).unwrap();
-    rx.try_recv().unwrap_err();
 }
 
 /// Test that if the original leader of the parent region is tranfered to
