@@ -44,6 +44,9 @@ pub const TITAN_MAX_COMPACTION_FACTOR: f64 = 5000.0;
 const FIVE_MINS_IN_SECONDS: u64 = 5 * 60;
 
 lazy_static! {
+    // A global smoother used to estimate the Titan blob compression factor over
+    // the last 5 minutes. The window size is 30, roughly matching the number of
+    // data points collected in 5 minutes assuming one data point every 10 secs.
     pub static ref TITAN_COMPRESSION_FACTOR_SMOOTHER: Mutex<Smoother<f64, 30, FIVE_MINS_IN_SECONDS, 0>> =
         Mutex::new(Smoother::<f64, 30, FIVE_MINS_IN_SECONDS, 0>::default());
     pub static ref TITAN_COMPRESSION_FACTOR: AtomicU64 = AtomicU64::new(f64::to_bits(1.0));
