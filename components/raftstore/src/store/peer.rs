@@ -19,13 +19,16 @@ use bytes::Bytes;
 use collections::{HashMap, HashSet};
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
 use engine_traits::{
+<<<<<<< HEAD
     Engines, KvEngine, PerfContext, RaftEngine, Snapshot, WriteBatch, WriteOptions, CF_DEFAULT,
     CF_LOCK, CF_WRITE,
+=======
+    CF_LOCK, Engines, KvEngine, PerfContext, RaftEngine, Snapshot, WriteBatch, WriteOptions,
+>>>>>>> d4db90887a (GC: remove compact on split (#18500))
 };
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use getset::{Getters, MutGetters};
-use keys::{enc_end_key, enc_start_key};
 use kvproto::{
     errorpb,
     kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp},
@@ -89,8 +92,13 @@ use super::{
 };
 use crate::{
     coprocessor::{
+<<<<<<< HEAD
         split_observer::NO_VALID_SPLIT_KEY, CoprocessorHost, RegionChangeEvent, RegionChangeReason,
         RoleChange,
+=======
+        CoprocessorHost, RegionChangeEvent, RegionChangeReason, RoleChange,
+        TransferLeaderCustomContext,
+>>>>>>> d4db90887a (GC: remove compact on split (#18500))
     },
     errors::RAFTSTORE_IS_BUSY,
     router::RaftStoreRouter,
@@ -110,8 +118,8 @@ use crate::{
         unsafe_recovery::{ForceLeaderState, UnsafeRecoveryState},
         util::{admin_cmd_epoch_lookup, RegionReadProgress},
         worker::{
-            CleanupTask, CompactTask, HeartbeatTask, RaftlogGcTask, ReadDelegate, ReadExecutor,
-            ReadProgress, RegionTask, SplitCheckTask,
+            HeartbeatTask, RaftlogGcTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask,
+            SplitCheckTask,
         },
         Callback, Config, GlobalReplicationState, PdTask, PeerMsg, ReadCallback, ReadIndexContext,
         ReadResponse, TxnExt, WriteCallback, RAFT_INIT_LOG_INDEX,
@@ -901,7 +909,6 @@ where
     pub unsafe_recovery_state: Option<UnsafeRecoveryState>,
     pub snapshot_recovery_state: Option<SnapshotBrState>,
 
-    last_record_safe_point: u64,
     /// Used for checking whether the peer is busy on apply.
     /// * `None` => the peer has no pending logs for apply or already finishes
     ///   applying.
@@ -1052,7 +1059,6 @@ where
                 REGION_READ_PROGRESS_CAP,
                 peer_id,
             )),
-            last_record_safe_point: 0,
             memtrace_raft_entries: 0,
             write_router: WriteRouter::new(tag),
             unpersisted_readies: VecDeque::default(),
@@ -4378,6 +4384,7 @@ where
         poll_ctx: &mut PollContext<EK, ER, T>,
         req: &mut RaftCmdRequest,
     ) -> Result<ProposalContext> {
+<<<<<<< HEAD
         poll_ctx
             .coprocessor_host
             .pre_propose(self.region(), req)
@@ -4442,6 +4449,9 @@ where
                 }
                 e
             })?;
+=======
+        poll_ctx.coprocessor_host.pre_propose(self.region(), req)?;
+>>>>>>> d4db90887a (GC: remove compact on split (#18500))
         let mut ctx = ProposalContext::empty();
 
         if get_sync_log_from_request(req) {

@@ -2,7 +2,11 @@
 
 use std::{
     iter::FromIterator,
+<<<<<<< HEAD
     sync::{atomic::AtomicU64, mpsc, Arc, Mutex},
+=======
+    sync::{Arc, Mutex, mpsc},
+>>>>>>> d4db90887a (GC: remove compact on split (#18500))
     time::Duration,
 };
 
@@ -115,7 +119,6 @@ fn start_raftstore(
             None,
             DiskCheckRunner::dummy(),
             GrpcServiceManager::dummy(),
-            Arc::new(AtomicU64::new(0)),
         )
         .unwrap();
 

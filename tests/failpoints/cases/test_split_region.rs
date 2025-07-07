@@ -2,8 +2,12 @@
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
+<<<<<<< HEAD
         mpsc::{self, channel, sync_channel},
         Arc, Mutex,
+=======
+        mpsc::{self, channel},
+>>>>>>> d4db90887a (GC: remove compact on split (#18500))
     },
     thread,
     time::Duration,
@@ -40,7 +44,7 @@ use tikv_util::{
     time::Instant,
     HandyRwLock,
 };
-use txn_types::{Key, LastChange, PessimisticLock, TimeStamp};
+use txn_types::{Key, LastChange, PessimisticLock};
 
 #[test]
 fn test_meta_inconsistency() {
@@ -1608,6 +1612,7 @@ fn test_not_reset_has_dirty_data_due_to_slow_split() {
     cluster.must_put(b"k00001", b"val");
 }
 
+<<<<<<< HEAD
 #[test]
 fn test_split_region_with_no_valid_split_keys() {
     let mut cluster = test_raftstore::new_node_cluster(0, 3);
@@ -1659,6 +1664,8 @@ fn test_split_region_with_no_valid_split_keys() {
     rx.try_recv().unwrap_err();
 }
 
+=======
+>>>>>>> d4db90887a (GC: remove compact on split (#18500))
 /// This test case test if a split failed for some reason,
 /// it can continue run split check and eventually the split will finish
 #[test_case(test_raftstore::new_node_cluster)]

@@ -1,7 +1,11 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
     path::Path,
+<<<<<<< HEAD
     sync::{atomic::AtomicU64, mpsc::sync_channel, Arc, Mutex},
+=======
+    sync::{Arc, Mutex, mpsc::sync_channel},
+>>>>>>> d4db90887a (GC: remove compact on split (#18500))
     time::Duration,
 };
 
@@ -126,7 +130,6 @@ fn test_node_bootstrap_with_prepared_data() {
         None,
         DiskCheckRunner::dummy(),
         GrpcServiceManager::dummy(),
-        Arc::new(AtomicU64::new(0)),
     )
     .unwrap();
     assert!(
