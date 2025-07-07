@@ -7,15 +7,15 @@ use kvproto::kvrpcpb::{IsolationLevel, LockInfo, Op, WriteConflictReason};
 use tikv_util::{
     codec::{
         bytes::{self, BytesEncoder},
-        number::{self, NumberEncoder, MAX_VAR_I64_LEN, MAX_VAR_U64_LEN},
+        number::{self, MAX_VAR_I64_LEN, MAX_VAR_U64_LEN, NumberEncoder},
     },
     memory::HeapSize,
 };
 
 use crate::{
-    timestamp::{TimeStamp, TsSet},
-    types::{Key, Mutation, Value, SHORT_VALUE_PREFIX},
     Error, ErrorInner, LastChange, Result,
+    timestamp::{TimeStamp, TsSet},
+    types::{Key, Mutation, SHORT_VALUE_PREFIX, Value},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -657,7 +657,7 @@ pub enum TxnLockRef<'a> {
     Persisted(&'a Lock),
 }
 
-impl<'a> TxnLockRef<'a> {
+impl TxnLockRef<'_> {
     pub fn get_start_ts(&self) -> TimeStamp {
         match self {
             TxnLockRef::InMemory(pessimistic_lock) => pessimistic_lock.start_ts,
@@ -1217,9 +1217,9 @@ mod tests {
             generation: 0 \
             }"
         );
-        log_wrappers::set_redact_info_log(log_wrappers::RedactOption::Flag(true));
+        log_wrappers::set_redact_info_log(log_wrappers::RedactOption::On);
         let redact_result = format!("{:?}", lock);
-        log_wrappers::set_redact_info_log(log_wrappers::RedactOption::Flag(false));
+        log_wrappers::set_redact_info_log(log_wrappers::RedactOption::Off);
         assert_eq!(
             redact_result,
             "Lock { \
@@ -1243,7 +1243,7 @@ mod tests {
 
         log_wrappers::set_redact_info_log(log_wrappers::RedactOption::Marker);
         let redact_result = format!("{:?}", lock);
-        log_wrappers::set_redact_info_log(log_wrappers::RedactOption::Flag(false));
+        log_wrappers::set_redact_info_log(log_wrappers::RedactOption::Off);
         assert_eq!(
             redact_result,
             "Lock { \
@@ -1289,9 +1289,9 @@ mod tests {
             generation: 10 \
             }"
         );
-        log_wrappers::set_redact_info_log(log_wrappers::RedactOption::Flag(true));
+        log_wrappers::set_redact_info_log(log_wrappers::RedactOption::On);
         let redact_result = format!("{:?}", lock);
-        log_wrappers::set_redact_info_log(log_wrappers::RedactOption::Flag(false));
+        log_wrappers::set_redact_info_log(log_wrappers::RedactOption::Off);
         assert_eq!(
             redact_result,
             "Lock { \
@@ -1365,9 +1365,9 @@ mod tests {
             last_change: Exist { last_change_ts: TimeStamp(8), estimated_versions_to_last_change: 2 }\
             , is_locked_with_conflict: false }"
         );
-        log_wrappers::set_redact_info_log(log_wrappers::RedactOption::Flag(true));
+        log_wrappers::set_redact_info_log(log_wrappers::RedactOption::On);
         let redact_result = format!("{:?}", pessimistic_lock);
-        log_wrappers::set_redact_info_log(log_wrappers::RedactOption::Flag(false));
+        log_wrappers::set_redact_info_log(log_wrappers::RedactOption::Off);
         assert_eq!(
             redact_result,
             "PessimisticLock { primary_key: ?, start_ts: TimeStamp(5), ttl: 1000, \

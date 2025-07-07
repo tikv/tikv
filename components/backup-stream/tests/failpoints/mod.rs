@@ -9,40 +9,42 @@ pub use suite::*;
 
 mod all {
 
+    use core::panic;
     use std::{
         sync::{
-            atomic::{AtomicBool, Ordering},
             Arc,
+            atomic::{AtomicBool, Ordering},
         },
         time::Duration,
     };
 
     use backup_stream::{
+        GetCheckpointResult, RegionCheckpointOperation, RegionSet, Task,
         errors::Error,
         metadata::{
+            PauseStatus,
             keys::MetaKey,
             store::{Keys, MetaStore},
         },
         router::TaskSelector,
-        GetCheckpointResult, RegionCheckpointOperation, RegionSet, Task,
     };
     use encryption::{FileConfig, MasterKeyConfig};
     use futures::executor::block_on;
     use kvproto::encryptionpb::EncryptionMethod;
-    use raftstore::coprocessor::ObserveHandle;
+    use serde_json::Value;
     use tempfile::TempDir;
     use tikv_util::{
-        box_err,
+        HandyRwLock, box_err,
         config::{ReadableDuration, ReadableSize},
-        defer, HandyRwLock,
+        defer,
     };
     use txn_types::Key;
     use walkdir::WalkDir;
 
     use super::{
-        make_record_key, make_split_key_at_record, mutation, run_async_test, SuiteBuilder,
+        SuiteBuilder, make_record_key, make_split_key_at_record, mutation, run_async_test,
     };
-    use crate::{make_table_key, Suite};
+    use crate::{Suite, make_table_key};
 
     #[test]
     fn failed_register_task() {
@@ -119,7 +121,6 @@ mod all {
         suite.run(|| {
             Task::ModifyObserve(backup_stream::ObserveOp::Start {
                 region: suite.cluster.get_region(&make_record_key(1, 886)),
-                handle: ObserveHandle::new(),
             })
         });
         fail::cfg("scan_after_get_snapshot", "off").unwrap();
@@ -512,13 +513,32 @@ mod all {
         // Wait retry...
         std::thread::sleep(Duration::from_secs(6));
         suite.sync();
-        let err = run_async_test(
-            suite
-                .get_meta_cli()
-                .get_last_error_of("test_fatal_error", *victim),
-        )
-        .unwrap()
-        .unwrap();
+        let cli = suite.get_meta_cli();
+        let err = run_async_test(cli.get_last_error_of("test_fatal_error", *victim))
+            .unwrap()
+            .unwrap();
+
+        let pause = match run_async_test(cli.pause_status("test_fatal_error")).unwrap() {
+            PauseStatus::PausedV2Json(pause) => pause,
+            val => {
+                panic!("not paused: {:?}", val);
+            }
+        };
+        let val = serde_json::from_str::<Value>(&pause).unwrap();
+        assert_eq!(val["severity"].as_str().unwrap(), "ERROR");
+        assert_eq!(
+            val["operation_hostname"].as_str().unwrap(),
+            tikv_util::sys::hostname().unwrap()
+        );
+        assert_eq!(
+            val["operation_pid"].as_u64().unwrap(),
+            std::process::id() as u64
+        );
+        assert_eq!(
+            val["payload_type"].as_str().unwrap(),
+            "application/x-protobuf;messageType=brpb.StreamBackupError"
+        );
+
         assert_eq!(err.error_code, error_code::backup_stream::OTHER.code);
         assert!(err.error_message.contains("everything is alright"));
         assert_eq!(err.store_id, *victim);

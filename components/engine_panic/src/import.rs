@@ -13,6 +13,7 @@ impl ImportExt for PanicEngine {
         cf: &str,
         files: &[&str],
         range: Option<Range<'_>>,
+        force_allow_write: bool,
     ) -> Result<()> {
         panic!()
     }

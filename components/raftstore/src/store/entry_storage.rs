@@ -15,22 +15,23 @@ use std::{
 };
 
 use collections::HashMap;
-use engine_traits::{KvEngine, RaftEngine, RAFT_LOG_MULTI_GET_CNT};
+use engine_traits::{KvEngine, RAFT_LOG_MULTI_GET_CNT, RaftEngine};
 use fail::fail_point;
 use kvproto::{
     metapb,
     raft_serverpb::{RaftApplyState, RaftLocalState},
 };
+use prometheus::local::LocalHistogram;
 use protobuf::Message;
-use raft::{prelude::*, util::limit_size, GetEntriesContext, StorageError};
+use raft::{GetEntriesContext, StorageError, prelude::*, util::limit_size};
 use tikv_alloc::TraceEvent;
 use tikv_util::{box_err, debug, error, info, time::Instant, warn, worker::Scheduler};
 
 use super::{
-    metrics::*, peer_storage::storage_error, WriteTask, MEMTRACE_ENTRY_CACHE, RAFT_INIT_LOG_INDEX,
-    RAFT_INIT_LOG_TERM,
+    MEMTRACE_ENTRY_CACHE, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM, WriteTask,
+    local_metrics::RaftMetrics, metrics::*, peer_storage::storage_error,
 };
-use crate::{bytes_capacity, store::ReadTask, Result};
+use crate::{Result, bytes_capacity, store::ReadTask};
 
 const MAX_ASYNC_FETCH_TRY_CNT: usize = 3;
 const SHRINK_CACHE_CAPACITY: usize = 64;
@@ -494,7 +495,7 @@ fn validate_states<ER: RaftEngine>(
     // If so, forward the commit index.
     if commit_index < recorded_commit_index {
         let entry = raft_engine.get_entry(region_id, recorded_commit_index)?;
-        if entry.map_or(true, |e| e.get_term() != apply_state.get_commit_term()) {
+        if entry.is_none_or(|e| e.get_term() != apply_state.get_commit_term()) {
             return Err(box_err!(
                 "log at recorded commit index [{}] {} doesn't exist, may lose data, {}",
                 apply_state.get_commit_term(),
@@ -668,6 +669,9 @@ pub struct EntryStorage<EK: KvEngine, ER> {
     read_scheduler: Scheduler<ReadTask<EK>>,
     raftlog_fetch_stats: AsyncFetchStats,
     async_fetch_results: RefCell<HashMap<u64, RaftlogFetchState>>,
+
+    io_read_raft_term: LocalHistogram,
+    io_read_raft_fetch_log: LocalHistogram,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
@@ -678,6 +682,7 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
         apply_state: RaftApplyState,
         region: &metapb::Region,
         read_scheduler: Scheduler<ReadTask<EK>>,
+        raft_metrics: &RaftMetrics,
     ) -> Result<Self> {
         if let Err(e) = validate_states(region.id, &raft_engine, &mut raft_state, &apply_state) {
             return Err(box_err!(
@@ -701,6 +706,8 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
             read_scheduler,
             raftlog_fetch_stats: AsyncFetchStats::default(),
             async_fetch_results: RefCell::new(HashMap::default()),
+            io_read_raft_term: raft_metrics.io_read_raft_term.clone(),
+            io_read_raft_fetch_log: raft_metrics.io_read_raft_fetch_log.clone(),
         })
     }
 
@@ -832,6 +839,7 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
 
                 // the count of left entries isn't too large, fetch the remaining entries
                 // synchronously one by one
+                let _timer = self.io_read_raft_fetch_log.start_timer();
                 for idx in last + 1..high {
                     let ent = self.raft_engine.get_entry(region_id, idx)?;
                     match ent {
@@ -880,6 +888,7 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
         if tried_cnt >= MAX_ASYNC_FETCH_TRY_CNT {
             // even the larger range is invalid again, fallback to fetch in sync way
             self.raftlog_fetch_stats.fallback_fetch.update(|m| m + 1);
+            let _timer = self.io_read_raft_fetch_log.start_timer();
             let count = self.raft_engine.fetch_entries_to(
                 region_id,
                 low,
@@ -931,6 +940,7 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
                 Ok(ents)
             } else {
                 self.raftlog_fetch_stats.sync_fetch.update(|m| m + 1);
+                let _timer = self.io_read_raft_fetch_log.start_timer();
                 self.raft_engine.fetch_entries_to(
                     self.region_id,
                     low,
@@ -947,6 +957,7 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
                 self.async_fetch(self.region_id, low, cache_low, max_size, context, &mut ents)?
             } else {
                 self.raftlog_fetch_stats.sync_fetch.update(|m| m + 1);
+                let _timer = self.io_read_raft_fetch_log.start_timer();
                 self.raft_engine.fetch_entries_to(
                     self.region_id,
                     low,
@@ -981,6 +992,7 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
         if let Some(e) = self.cache.entry(idx) {
             Ok(e.get_term())
         } else {
+            let _timer = self.io_read_raft_term.start_timer();
             Ok(self
                 .raft_engine
                 .get_entry(self.region_id, idx)
@@ -1299,7 +1311,7 @@ pub mod tests {
     use protobuf::Message;
     use raft::{GetEntriesContext, StorageError};
     use tempfile::Builder;
-    use tikv_util::worker::{dummy_scheduler, LazyWorker, Worker};
+    use tikv_util::worker::{LazyWorker, Worker, dummy_scheduler};
 
     use super::*;
     use crate::store::peer_storage::tests::{append_ents, new_entry, new_storage_from_ents};
@@ -1445,7 +1457,7 @@ pub mod tests {
 
         let mut store = new_storage_from_ents(region_scheduler, dummy_scheduler, &td, &ents);
 
-        let max_u64 = u64::max_value();
+        let max_u64 = u64::MAX;
         let mut tests = vec![
             // already compacted
             (
@@ -1709,7 +1721,7 @@ pub mod tests {
             append_ents(&mut store, &entries);
             let li = store.last_index().unwrap();
             let actual_entries = store
-                .entries(4, li + 1, u64::max_value(), GetEntriesContext::empty(false))
+                .entries(4, li + 1, u64::MAX, GetEntriesContext::empty(false))
                 .unwrap();
             if actual_entries != wentries {
                 panic!("#{}: want {:?}, got {:?}", i, wentries, actual_entries);
@@ -1728,7 +1740,7 @@ pub mod tests {
         store.cache.cache.clear();
         // empty cache should fetch data from rocksdb directly.
         let mut res = store
-            .entries(4, 6, u64::max_value(), GetEntriesContext::empty(false))
+            .entries(4, 6, u64::MAX, GetEntriesContext::empty(false))
             .unwrap();
         assert_eq!(*res, ents[1..]);
 
@@ -1738,7 +1750,7 @@ pub mod tests {
 
         // direct cache access
         res = store
-            .entries(6, 8, u64::max_value(), GetEntriesContext::empty(false))
+            .entries(6, 8, u64::MAX, GetEntriesContext::empty(false))
             .unwrap();
         assert_eq!(res, entries);
 
@@ -1766,7 +1778,7 @@ pub mod tests {
         for low in 4..9 {
             for high in low..9 {
                 let res = store
-                    .entries(low, high, u64::max_value(), GetEntriesContext::empty(false))
+                    .entries(low, high, u64::MAX, GetEntriesContext::empty(false))
                     .unwrap();
                 assert_eq!(*res, exp_res[low as usize - 4..high as usize - 4]);
             }

@@ -23,7 +23,6 @@
 #![feature(proc_macro_hygiene)]
 #![feature(min_specialization)]
 #![feature(box_patterns)]
-#![feature(extract_if)]
 #![feature(deadline_api)]
 #![feature(let_chains)]
 #![feature(read_buf)]
@@ -32,12 +31,9 @@
 #![allow(incomplete_features)]
 #![feature(core_io_borrowed_buf)]
 #![feature(assert_matches)]
-#![feature(associated_type_bounds)]
 
 #[macro_use(fail_point)]
 extern crate fail;
-#[macro_use]
-extern crate lazy_static;
 #[macro_use]
 extern crate serde_derive;
 #[macro_use]

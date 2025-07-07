@@ -7,10 +7,10 @@ use tikv_util::{box_try, debug, info, warn};
 
 use super::{
     super::{
-        error::Result, metrics::*, Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver,
-        SplitChecker,
+        Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker, error::Result,
+        metrics::*,
     },
-    calc_split_keys_count, Host,
+    Host, calc_split_keys_count,
 };
 use crate::coprocessor::dispatcher::StoreHandle;
 
@@ -234,7 +234,7 @@ pub fn get_approximate_split_keys(
 
 #[cfg(test)]
 pub mod tests {
-    use std::{assert_matches::assert_matches, iter, sync::mpsc, u64};
+    use std::{assert_matches::assert_matches, iter, sync::mpsc};
 
     use collections::HashSet;
     use engine_test::{
@@ -242,7 +242,7 @@ pub mod tests {
         kv::KvTestEngine,
     };
     use engine_traits::{
-        CfName, MiscExt, SyncMutable, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, LARGE_CFS,
+        ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, CfName, LARGE_CFS, MiscExt, SyncMutable,
     };
     use kvproto::{
         metapb::{Peer, Region},
@@ -255,7 +255,7 @@ pub mod tests {
     use super::{Checker, *};
     use crate::{
         coprocessor::{
-            dispatcher::SchedTask, Config, CoprocessorHost, ObserverContext, SplitChecker,
+            Config, CoprocessorHost, ObserverContext, SplitChecker, dispatcher::SchedTask,
         },
         store::{BucketRange, KeyEntry, SplitCheckRunner, SplitCheckTask},
     };
@@ -454,8 +454,12 @@ pub mod tests {
             ..Default::default()
         };
 
-        let mut runnable =
-            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
+        let mut runnable = SplitCheckRunner::new(
+            None,
+            engine.clone(),
+            tx.clone(),
+            CoprocessorHost::new(tx, cfg),
+        );
 
         // so split key will be [z0006]
         for i in 0..7 {
@@ -590,7 +594,7 @@ pub mod tests {
             }
         };
         let cop_host = CoprocessorHost::new(tx.clone(), cfg);
-        let mut runnable = SplitCheckRunner::new(engine.clone(), tx, cop_host.clone());
+        let mut runnable = SplitCheckRunner::new(None, engine.clone(), tx, cop_host.clone());
         for i in 0..1000 {
             // if not mvcc, kv size is (6+1)*2 = 14, given bucket size is 3000, expect each
             // bucket has about 210 keys if mvcc, kv size is about 18*2 = 36, expect each
@@ -771,6 +775,7 @@ pub mod tests {
         };
 
         let mut runnable = SplitCheckRunner::new(
+            None,
             engine.clone(),
             tx.clone(),
             CoprocessorHost::new(tx.clone(), cfg.clone()),
@@ -810,8 +815,12 @@ pub mod tests {
         let engine =
             engine_test::kv::new_engine_opt(path_str, DbOptions::default(), cfs_opts).unwrap();
 
-        let mut runnable =
-            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
+        let mut runnable = SplitCheckRunner::new(
+            None,
+            engine.clone(),
+            tx.clone(),
+            CoprocessorHost::new(tx, cfg),
+        );
 
         // Flush a sst of CF_LOCK with range properties.
         for i in 7..15 {
@@ -896,7 +905,7 @@ pub mod tests {
         );
 
         let mut big_value = Vec::with_capacity(256);
-        big_value.extend(iter::repeat(b'v').take(256));
+        big_value.extend(iter::repeat_n(b'v', 256));
         for i in 0..100 {
             let k = format!("key_{:03}", i).into_bytes();
             let k = keys::data_key(Key::from_raw(&k).as_encoded());
@@ -923,7 +932,7 @@ pub mod tests {
         let engine = engine_test::kv::new_engine_opt(path, db_opts, cfs_opts).unwrap();
 
         let mut big_value = Vec::with_capacity(256);
-        big_value.extend(iter::repeat(b'v').take(256));
+        big_value.extend(iter::repeat_n(b'v', 256));
 
         for i in 0..4 {
             let k = format!("key_{:03}", i).into_bytes();

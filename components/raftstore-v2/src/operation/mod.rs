@@ -12,17 +12,16 @@ mod txn_ext;
 mod unsafe_recovery;
 
 pub use command::{
-    merge_source_path, AdminCmdResult, ApplyFlowControl, CatchUpLogs, CommittedEntries,
-    CompactLogContext, MergeContext, ProposalControl, RequestHalfSplit, RequestSplit,
-    SimpleWriteBinary, SimpleWriteEncoder, SimpleWriteReqDecoder, SimpleWriteReqEncoder,
-    SplitFlowControl, SplitPendingAppend, MERGE_IN_PROGRESS_PREFIX, MERGE_SOURCE_PREFIX,
-    SPLIT_PREFIX,
+    AdminCmdResult, ApplyFlowControl, CatchUpLogs, CommittedEntries, CompactLogContext,
+    MERGE_IN_PROGRESS_PREFIX, MERGE_SOURCE_PREFIX, MergeContext, ProposalControl, RequestHalfSplit,
+    RequestSplit, SPLIT_PREFIX, SimpleWriteBinary, SimpleWriteEncoder, SimpleWriteReqDecoder,
+    SimpleWriteReqEncoder, SplitFlowControl, SplitPendingAppend, merge_source_path,
 };
 pub use disk_snapshot_backup::UnimplementedHandle as DiskSnapBackupHandle;
 pub use life::{AbnormalPeerContext, DestroyProgress, GcPeerContext};
 pub use ready::{
-    write_initial_states, ApplyTrace, AsyncWriter, DataTrace, GenSnapTask, ReplayWatch, SnapState,
-    StateStorage,
+    ApplyTrace, AsyncWriter, DataTrace, GenSnapTask, ReplayWatch, SnapState, StateStorage,
+    write_initial_states,
 };
 
 pub(crate) use self::{
@@ -34,11 +33,11 @@ pub(crate) use self::{
 #[cfg(test)]
 pub mod test_util {
     use std::sync::{
-        mpsc::{channel, Receiver, Sender},
         Arc,
+        mpsc::{Receiver, Sender, channel},
     };
 
-    use engine_traits::{CfName, KvEngine, CF_DEFAULT};
+    use engine_traits::{CF_DEFAULT, CfName, KvEngine};
     use kvproto::{kvrpcpb::ApiVersion, metapb::RegionEpoch, raft_cmdpb::RaftRequestHeader};
     use raft::prelude::{Entry, EntryType};
     use raftstore::store::simple_write::SimpleWriteEncoder;

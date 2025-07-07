@@ -248,7 +248,7 @@ mod tests {
     use super::*;
 
     const DEFAULT_REGION_SPLIT_SIZE: ReadableSize = ReadableSize::mb(256);
-    const SMALL_ENOUGH_BLOCK_CACHE_CAPACITY: u64 = (MIN_CAPACITY + 1) / 2;
+    const SMALL_ENOUGH_BLOCK_CACHE_CAPACITY: u64 = MIN_CAPACITY.div_ceil(2);
     const LARGE_ENOUGH_BLOCK_CACHE_CAPACITY: u64 =
         (MIN_CAPACITY + 1) * (1.0 / DEFAULT_CAPACITY_FROM_BLOCK_CACHE_RATIO) as u64;
 

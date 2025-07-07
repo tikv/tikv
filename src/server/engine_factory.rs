@@ -4,22 +4,22 @@ use std::{path::Path, sync::Arc};
 
 use encryption_export::DataKeyManager;
 use engine_rocks::{
-    raw::{Cache, Env},
-    util::RangeCompactionFilterFactory,
     CompactedEventSender, CompactionListener, FlowListener, RocksCfOptions, RocksCompactionJobInfo,
     RocksDbOptions, RocksEngine, RocksEventListener, RocksPersistenceListener, RocksStatistics,
     TabletLogger,
+    raw::{Cache, Env},
+    util::RangeCompactionFilterFactory,
 };
 use engine_traits::{
-    CompactionJobInfo, MiscExt, PersistenceListener, Result, StateStorage, TabletContext,
-    TabletFactory, CF_DEFAULT, CF_WRITE,
+    CF_DEFAULT, CF_WRITE, CompactionJobInfo, MiscExt, PersistenceListener, Result, StateStorage,
+    TabletContext, TabletFactory,
 };
 use kvproto::kvrpcpb::ApiVersion;
 use raftstore::RegionInfoAccessor;
 use tikv_util::worker::Scheduler;
 
 use crate::{
-    config::{CfResources, DbConfig, DbResources, TikvConfig, DEFAULT_ROCKSDB_SUB_DIR},
+    config::{CfResources, DEFAULT_ROCKSDB_SUB_DIR, DbConfig, DbResources, TikvConfig},
     storage::config::EngineType,
 };
 

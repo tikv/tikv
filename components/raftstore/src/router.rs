@@ -15,13 +15,13 @@ use slog_global::warn;
 use tikv_util::time::ThreadReadId;
 
 use crate::{
+    DiscardReason, Error as RaftStoreError, Result as RaftStoreResult,
     store::{
-        fsm::{ChangeObserver, RaftRouter},
-        transport::{CasualRouter, ProposalRouter, SignificantRouter},
         Callback, CasualMessage, LocalReader, PeerMsg, RaftCmdExtraOpts, RaftCommand,
         SignificantMsg, StoreMsg, StoreRouter,
+        fsm::{ChangeObserver, RaftRouter},
+        transport::{CasualRouter, ProposalRouter, SignificantRouter},
     },
-    DiscardReason, Error as RaftStoreError, Result as RaftStoreResult,
 };
 /// Routes messages to the raftstore.
 pub trait RaftStoreRouter<EK>:
@@ -399,6 +399,14 @@ impl<EK: KvEngine, ER: RaftEngine> crate::coprocessor::StoreHandle for RaftRoute
                 bucket_ranges,
                 cb: Callback::None,
             },
+        );
+    }
+
+    fn update_compaction_declined_bytes(&self, region_id: u64, bytes: u64) {
+        let _ = CasualRouter::send(
+            self,
+            region_id,
+            CasualMessage::CompactionDeclinedBytes { bytes },
         );
     }
 }

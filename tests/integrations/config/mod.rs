@@ -32,8 +32,8 @@ use tikv::{
     config::*,
     import::Config as ImportConfig,
     server::{
-        config::GrpcCompressionType, gc_worker::GcConfig,
-        lock_manager::Config as PessimisticTxnConfig, Config as ServerConfig,
+        Config as ServerConfig, config::GrpcCompressionType, gc_worker::GcConfig,
+        lock_manager::Config as PessimisticTxnConfig,
     },
     storage::config::{
         BlockCacheConfig, Config as StorageConfig, EngineType, FlowControlConfig,
@@ -255,6 +255,7 @@ fn test_serde_custom_tikv_config() {
         io_reschedule_concurrent_max_count: 1234,
         io_reschedule_hotpot_duration: ReadableDuration::secs(4321),
         inspect_interval: ReadableDuration::millis(444),
+        inspect_kvdb_interval: ReadableDuration::millis(333),
         inspect_cpu_util_thd: 0.666,
         check_leader_lease_interval: ReadableDuration::millis(123),
         renew_leader_lease_advance_duration: ReadableDuration::millis(456),
@@ -810,7 +811,7 @@ fn test_serde_custom_tikv_config() {
         key_path: "invalid path".to_owned(),
         override_ssl_target: "".to_owned(),
         cert_allowed_cn,
-        redact_info_log: log_wrappers::RedactOption::Flag(true),
+        redact_info_log: log_wrappers::RedactOption::On,
         encryption: EncryptionConfig {
             data_encryption_method: EncryptionMethod::Aes128Ctr,
             data_key_rotation_period: ReadableDuration::days(14),
@@ -954,7 +955,7 @@ fn test_block_cache_backward_compatible() {
     let content = read_file_in_project_dir("integrations/config/test-cache-compatible.toml");
     let mut cfg: TikvConfig = toml::from_str(&content).unwrap();
     assert!(cfg.storage.block_cache.capacity.is_none());
-    cfg.compatible_adjust();
+    cfg.compatible_adjust(None);
     assert!(cfg.storage.block_cache.capacity.is_some());
     assert_eq!(
         cfg.storage.block_cache.capacity.unwrap().0,

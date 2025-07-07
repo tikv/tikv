@@ -12,17 +12,17 @@ use std::{
 };
 
 use collections::HashSet;
-use dashmap::{mapref::entry::Entry, DashMap};
+use dashmap::{DashMap, mapref::entry::Entry};
 use encryption::{DataKeyManager, FileEncryptionInfo, MultiMasterKeyBackend};
 use encryption_export::create_async_backend;
 use engine_traits::{
-    name_to_cf, util::check_key_in_range, CfName, IterOptions, Iterator, KvEngine, RefIterable,
-    SstCompressionType, SstExt, SstMetaInfo, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT,
-    CF_WRITE,
+    CF_DEFAULT, CF_WRITE, CfName, IterOptions, Iterator, KvEngine, RefIterable, SstCompressionType,
+    SstExt, SstMetaInfo, SstReader, SstWriter, SstWriterBuilder, name_to_cf,
+    util::check_key_in_range,
 };
 use external_storage::{
-    compression_reader_dispatcher, encrypt_wrap_reader, wrap_with_checksum_reader_if_needed,
-    ExternalStorage, RestoreConfig,
+    ExternalStorage, RestoreConfig, compression_reader_dispatcher, encrypt_wrap_reader,
+    wrap_with_checksum_reader_if_needed,
 };
 use file_system::{IoType, OpenOptions};
 use kvproto::{
@@ -33,6 +33,7 @@ use kvproto::{
     metapb::Region,
 };
 use tikv_util::{
+    Either, HandyRwLock,
     codec::{
         bytes::{decode_bytes_in_place, encode_bytes},
         stream_event::{EventEncoder, EventIterator, Iterator as EIterator},
@@ -40,21 +41,21 @@ use tikv_util::{
     future::RescheduleChecker,
     memory::{MemoryQuota, OwnedAllocated},
     resizable_threadpool::DeamonRuntimeHandle,
-    sys::{thread::ThreadBuildWrapper, SysQuota},
+    sys::{SysQuota, thread::ThreadBuildWrapper},
     time::{Instant, Limiter},
-    Either, HandyRwLock,
 };
 use tokio::{runtime::Runtime, sync::OnceCell};
 use txn_types::{Key, TimeStamp, WriteRef};
 
 use crate::{
+    Config, ConfigManager as ImportConfigManager, Error, Result,
     caching::cache_map::{CacheMap, ShareOwned},
     import_file::{ImportDir, ImportFile},
     import_mode::{ImportModeSwitcher, RocksDbMetricsFn},
     import_mode2::{HashRange, ImportModeSwitcherV2},
     metrics::*,
     sst_writer::{RawSstWriter, TxnSstWriter},
-    util, Config, ConfigManager as ImportConfigManager, Error, Result,
+    util,
 };
 
 pub struct LoadedFile {
@@ -100,15 +101,20 @@ impl<'a> DownloadExt<'a> {
 pub enum CacheKvFile {
     Mem(Arc<OnceCell<LoadedFile>>),
     Fs(Arc<PathBuf>),
+    /// Tracks the state of a file download operation.
+    /// This struct is used to prevent duplicate downloads of the same file.
+    /// The `meta` field stores the SST file metadata, while `range` indicates
+    /// the key range affected by the download operation.
+    State(Arc<(SstMeta, OnceCell<Option<Range>>)>),
 }
 
 /// returns an error on an invalid internal state.
 /// pass the error back to the client side for further debugging.
 fn error(message: impl std::fmt::Display) -> Error {
-    Error::Io(io::Error::new(
-        ErrorKind::Other,
-        format!("internal error in TiKV: {}", message),
-    ))
+    Error::Io(io::Error::other(format!(
+        "internal error in TiKV: {}",
+        message
+    )))
 }
 
 impl CacheKvFile {
@@ -122,6 +128,7 @@ impl CacheKvFile {
                 Arc::strong_count(buff)
             }
             CacheKvFile::Fs(path) => Arc::strong_count(path),
+            CacheKvFile::State(state) => Arc::strong_count(state),
         }
     }
 
@@ -132,6 +139,8 @@ impl CacheKvFile {
             CacheKvFile::Mem(_) => start.saturating_elapsed() >= Duration::from_secs(60),
             // The expired duration for local file is 10min.
             CacheKvFile::Fs(_) => start.saturating_elapsed() >= Duration::from_secs(600),
+            // The expired duration for memory is 60s.
+            CacheKvFile::State(_) => start.saturating_elapsed() >= Duration::from_secs(60),
         }
     }
 }
@@ -507,7 +516,13 @@ impl<E: KvEngine> SstImporter<E> {
             })?;
         }
 
-        let ext_storage = self.external_storage_or_cache(backend, cache_key)?;
+        // The `DashMap` locks the entry to ensure that only one thread loads the
+        // credentials at a time. However, if the thread gets blocked during the
+        // loading process, it can lead to a deadlock. To avoid this, blocking
+        // operations must be performed outside of the `DashMap`.
+        let ext_storage = tokio::task::block_in_place(move || {
+            self.external_storage_or_cache(backend, cache_key)
+        })?;
         let ext_storage = self.auto_encrypt_local_file_if_needed(ext_storage);
 
         let result = ext_storage
@@ -584,6 +599,13 @@ impl<E: KvEngine> SstImporter<E> {
                         shrink_files.push(p);
                     } else {
                         retain_file_count += 1;
+                    }
+                }
+                // regular check, normally the lock will resolved immediately
+                CacheKvFile::State(_) => {
+                    if c.ref_count() == 1 && c.is_expired(start) {
+                        CACHE_EVENT.with_label_values(&["remain-locks"]).inc();
+                        need_retain = false;
                     }
                 }
             }
@@ -884,6 +906,7 @@ impl<E: KvEngine> SstImporter<E> {
                 }
                 Ok(Arc::from(buffer.into_boxed_slice()))
             }
+            _ => unreachable!(),
         }
     }
 
@@ -1153,7 +1176,67 @@ impl<E: KvEngine> SstImporter<E> {
         ext: DownloadExt<'_>,
     ) -> Result<Option<Range>> {
         let path = self.dir.join_for_write(meta)?;
+        let path_str = path.temp.to_string_lossy().to_string();
 
+        let res = {
+            match self.file_locks.entry(path_str.clone()) {
+                Entry::Occupied(mut entry) => match entry.get_mut() {
+                    (CacheKvFile::State(state), last_used) => {
+                        // safety check
+                        if state.0 != *meta {
+                            error!("same uuid, but different download meta"; "meta" => ?meta, "name" => name);
+                            return Err(Error::MisMatchRequest);
+                        }
+                        // Another download is already in progress
+                        info!("duplicate download request ignored"; "meta" => ?meta, "name" => name);
+                        *last_used = Instant::now();
+                        Arc::clone(state)
+                    }
+                    _ => {
+                        error!("mismatched request type for download"; "meta" => ?meta, "name" => name);
+                        return Err(Error::MisMatchRequest);
+                    }
+                },
+                Entry::Vacant(entry) => {
+                    // We're the first one, insert our marker and proceed with download
+                    let cache = Arc::new((meta.clone(), OnceCell::new()));
+                    entry.insert((CacheKvFile::State(Arc::clone(&cache)), Instant::now()));
+                    cache
+                }
+            }
+        };
+        defer! {{self.file_locks.remove(&path_str);}}
+
+        res.1
+            .get_or_try_init(|| {
+                self.do_download_ext_after_lock_check(
+                    path,
+                    meta,
+                    backend,
+                    name,
+                    rewrite_rule,
+                    crypter,
+                    speed_limiter,
+                    engine,
+                    ext,
+                )
+            })
+            .await
+            .map(|r| r.to_owned())
+    }
+
+    async fn do_download_ext_after_lock_check(
+        &self,
+        path: crate::import_file::ImportPath,
+        meta: &SstMeta,
+        backend: &StorageBackend,
+        name: &str,
+        rewrite_rule: &RewriteRule,
+        crypter: Option<CipherInfo>,
+        speed_limiter: &Limiter,
+        engine: E,
+        ext: DownloadExt<'_>,
+    ) -> Result<Option<Range>> {
         let file_crypter = crypter.map(|c| FileEncryptionInfo {
             method: c.cipher_type,
             key: c.cipher_key,
@@ -1648,18 +1731,17 @@ mod tests {
         io::{self, Cursor},
         ops::Sub,
         sync::{
-            atomic::{AtomicUsize, Ordering},
             Mutex,
+            atomic::{AtomicUsize, Ordering},
         },
-        usize,
     };
 
     use async_compression::tokio::write::ZstdEncoder;
     use encryption::{EncrypterWriter, Iv};
     use engine_rocks::get_env;
     use engine_traits::{
-        collect, Error as TraitError, ExternalSstFileInfo, Iterable, Iterator, RefIterable,
-        SstCompressionType::Zstd, SstReader, SstWriter, CF_DEFAULT, DATA_CFS,
+        CF_DEFAULT, DATA_CFS, Error as TraitError, ExternalSstFileInfo, Iterable, Iterator,
+        RefIterable, SstCompressionType::Zstd, SstReader, SstWriter, collect,
     };
     use external_storage::read_external_storage_info_buff;
     use file_system::Sha256Reader;
@@ -2224,7 +2306,7 @@ mod tests {
 
     #[test]
     fn test_read_external_storage_into_file_timed_out() {
-        use futures_util::stream::{pending, TryStreamExt};
+        use futures_util::stream::{TryStreamExt, pending};
 
         let mut input = pending::<io::Result<&[u8]>>().into_async_read();
         let mut output = Vec::new();
@@ -2311,7 +2393,7 @@ mod tests {
 
     #[test]
     fn test_read_external_storage_info_buff_timed_out() {
-        use futures_util::stream::{pending, TryStreamExt};
+        use futures_util::stream::{TryStreamExt, pending};
 
         let mut input = pending::<io::Result<&[u8]>>().into_async_read();
         let err = block_on_external_io(read_external_storage_info_buff(
@@ -2577,15 +2659,17 @@ mod tests {
 
         // test do_download_kv_file().
         assert!(importer.download_to_disk_only());
-        let output = block_on_external_io(importer.download_kv_file(
-            &kv_meta,
-            ext_storage,
-            &backend,
-            &Limiter::new(f64::INFINITY),
-            None,
-            Vec::new(),
-        ))
-        .unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let output = runtime
+            .block_on(importer.download_kv_file(
+                &kv_meta,
+                ext_storage,
+                &backend,
+                &Limiter::new(f64::INFINITY),
+                None,
+                Vec::new(),
+            ))
+            .unwrap();
         assert_eq!(*output, buff);
         check_file_exists(&path.save, Some(&*key_manager));
 
@@ -3872,15 +3956,17 @@ mod tests {
             )
             .unwrap();
 
-        let output = block_on_external_io(importer.download_kv_file(
-            &kv_meta,
-            ext_storage,
-            &storage_backend,
-            &Limiter::new(f64::INFINITY),
-            opt_cipher_info,
-            master_key_configs,
-        ))
-        .unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let output = runtime
+            .block_on(importer.download_kv_file(
+                &kv_meta,
+                ext_storage,
+                &storage_backend,
+                &Limiter::new(f64::INFINITY),
+                opt_cipher_info,
+                master_key_configs,
+            ))
+            .unwrap();
         assert_eq!(*output, file_content);
         if !in_mem {
             check_file_exists(&path.save, opt_key_manager.as_deref());

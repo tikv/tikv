@@ -4,21 +4,21 @@ use core::pin::Pin;
 use std::{
     borrow::Borrow,
     cell::RefCell,
-    collections::{hash_map::RandomState, BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, hash_map::RandomState},
     future::Future,
     ops::{Bound, RangeBounds},
     path::Path,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
     task::{Context, Waker},
     time::Duration,
 };
 
-use async_compression::{tokio::write::ZstdEncoder, Level};
+use async_compression::{Level, tokio::write::ZstdEncoder};
 use engine_rocks::ReadPerfInstant;
-use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, CfName};
 use futures::{ready, task::Poll};
 use kvproto::{
     brpb::CompressionType,
@@ -27,13 +27,12 @@ use kvproto::{
 };
 use tikv::storage::CfStatistics;
 use tikv_util::{
-    box_err,
+    Either, box_err,
     sys::inspector::{
-        self_thread_inspector, IoStat, ThreadInspector, ThreadInspectorImpl as OsInspector,
+        IoStat, ThreadInspector, ThreadInspectorImpl as OsInspector, self_thread_inspector,
     },
     time::Instant,
     worker::Scheduler,
-    Either,
 };
 use tokio::{
     fs::File,
@@ -43,9 +42,9 @@ use tokio::{
 use txn_types::{Key, Lock, LockType};
 
 use crate::{
+    Task,
     errors::{Error, Result},
     router::TaskSelector,
-    Task,
 };
 
 /// wrap a user key with encoded data key.
@@ -105,7 +104,7 @@ pub type SlotMap<K, V, S = RandomState> = RwLock<HashMap<K, Slot<V>, S>>;
 /// to DSTs.
 struct RangeToInclusiveRef<'a, T: ?Sized>(&'a T);
 
-impl<'a, T: ?Sized> RangeBounds<T> for RangeToInclusiveRef<'a, T> {
+impl<T: ?Sized> RangeBounds<T> for RangeToInclusiveRef<'_, T> {
     fn start_bound(&self) -> Bound<&T> {
         Bound::Unbounded
     }
@@ -117,7 +116,7 @@ impl<'a, T: ?Sized> RangeBounds<T> for RangeToInclusiveRef<'a, T> {
 
 struct RangeToExclusiveRef<'a, T: ?Sized>(&'a T);
 
-impl<'a, T: ?Sized> RangeBounds<T> for RangeToExclusiveRef<'a, T> {
+impl<T: ?Sized> RangeBounds<T> for RangeToExclusiveRef<'_, T> {
     fn start_bound(&self) -> Bound<&T> {
         Bound::Unbounded
     }
@@ -394,7 +393,7 @@ impl Drop for Work {
 
 pub struct WaitAll<'a>(&'a FutureWaitGroup);
 
-impl<'a> Future for WaitAll<'a> {
+impl Future for WaitAll<'_> {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -706,7 +705,7 @@ pub fn debug_key_range<'ret, 'a: 'ret, 'b: 'ret>(
 
 struct DebugKeyRange<'start, 'end>(&'start [u8], &'end [u8]);
 
-impl<'start, 'end> std::fmt::Debug for DebugKeyRange<'start, 'end> {
+impl std::fmt::Debug for DebugKeyRange<'_, '_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let end_key = if self.1.is_empty() {
             Either::Left("inf")
@@ -735,7 +734,7 @@ pub fn debug_region(r: &Region) -> impl std::fmt::Debug + '_ {
 
 struct DebugRegion<'a>(&'a Region);
 
-impl<'a> std::fmt::Debug for DebugRegion<'a> {
+impl std::fmt::Debug for DebugRegion<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let r = self.0;
         f.debug_struct("Region")
@@ -756,7 +755,7 @@ impl<'a> std::fmt::Debug for DebugRegion<'a> {
 
 struct SlogRegion<'a>(&'a Region);
 
-impl<'a> slog::KV for SlogRegion<'a> {
+impl slog::KV for SlogRegion<'_> {
     fn serialize(
         &self,
         _record: &slog::Record<'_>,
@@ -812,8 +811,8 @@ impl<D: std::fmt::Debug, T: Iterator<Item = D>> std::fmt::Debug for DebugIter<D,
 mod test {
     use std::{
         sync::{
-            atomic::{AtomicUsize, Ordering},
             Arc,
+            atomic::{AtomicUsize, Ordering},
         },
         time::Duration,
     };
@@ -824,11 +823,11 @@ mod test {
     use log_wrappers::RedactOption;
     use tokio::io::{AsyncWriteExt, BufReader};
 
-    use crate::utils::{is_in_range, FutureWaitGroup, SegmentMap};
+    use crate::utils::{FutureWaitGroup, SegmentMap, is_in_range};
 
     #[test]
     fn test_redact() {
-        log_wrappers::set_redact_info_log(RedactOption::Flag(true));
+        log_wrappers::set_redact_info_log(RedactOption::On);
         let mut region = Region::default();
         region.set_id(42);
         region.set_start_key(b"TiDB".to_vec());
@@ -993,7 +992,7 @@ mod test {
 
     #[test]
     fn test_recorder() {
-        use engine_traits::{Iterable, KvEngine, Mutable, WriteBatch, WriteBatchExt, CF_DEFAULT};
+        use engine_traits::{CF_DEFAULT, Iterable, KvEngine, Mutable, WriteBatch, WriteBatchExt};
         use tempfile::TempDir;
 
         let p = TempDir::new().unwrap();

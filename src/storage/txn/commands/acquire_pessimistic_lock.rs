@@ -3,23 +3,22 @@
 // #[PerformanceCriticalPath]
 use kvproto::kvrpcpb::ExtraOp;
 use tikv_kv::Modify;
-use txn_types::{insert_old_value_if_resolved, Key, OldValues, TimeStamp, TxnExtra};
+use txn_types::{Key, OldValues, TimeStamp, TxnExtra, insert_old_value_if_resolved};
 
 use crate::storage::{
+    Error as StorageError, PessimisticLockKeyResult, ProcessResult, Result as StorageResult,
+    Snapshot,
     kv::WriteData,
     lock_manager::{LockManager, WaitTimeout},
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader},
     txn::{
-        acquire_pessimistic_lock,
+        Error, ErrorInner, Result, acquire_pessimistic_lock,
         commands::{
             Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
             WriteCommand, WriteContext, WriteResult, WriteResultLockInfo,
         },
-        Error, ErrorInner, Result,
     },
     types::{PessimisticLockParameters, PessimisticLockResults},
-    Error as StorageError, PessimisticLockKeyResult, ProcessResult, Result as StorageResult,
-    Snapshot,
 };
 
 command! {
@@ -86,12 +85,12 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
             ))));
         }
 
-        let (start_ts, ctx, mut keys) = (self.start_ts, self.ctx, self.keys);
+        let (start_ts, ctx, keys) = (self.start_ts, self.ctx, self.keys);
         let mut txn = MvccTxn::new(start_ts, context.concurrency_manager);
-
-        let mut snapshot_reader = SnapshotReader::new_with_ctx(start_ts, snapshot, &ctx);
-        snapshot_reader.setup_with_hint_items(&mut keys, |k| &k.0);
-        let mut reader = ReaderWithStats::new(snapshot_reader, context.statistics);
+        let mut reader = ReaderWithStats::new(
+            SnapshotReader::new_with_ctx(start_ts, snapshot, &ctx),
+            context.statistics,
+        );
 
         let total_keys = keys.len();
         let mut res = PessimisticLockResults::with_capacity(total_keys);
@@ -206,5 +205,153 @@ pub(super) fn make_write_data(modifies: Vec<Modify>, old_values: OldValues) -> W
         WriteData::new(modifies, extra)
     } else {
         WriteData::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::{
+        Statistics, TestEngineBuilder,
+        txn::{
+            actions::{
+                acquire_pessimistic_lock::tests::must_pessimistic_locked,
+                tests::{must_prewrite_delete, must_prewrite_lock, must_prewrite_put},
+            },
+            commands::test_util::pessimistic_lock,
+            tests::{must_commit, must_rollback},
+        },
+    };
+
+    impl PartialEq for PessimisticLockKeyResult {
+        fn eq(&self, other: &Self) -> bool {
+            match (self, other) {
+                (Self::Empty, Self::Empty) => true,
+                (Self::Value(a), Self::Value(b)) => a == b,
+                (Self::Existence(a), Self::Existence(b)) => a == b,
+                (
+                    Self::LockedWithConflict {
+                        value: v1,
+                        conflict_ts: ts1,
+                    },
+                    Self::LockedWithConflict {
+                        value: v2,
+                        conflict_ts: ts2,
+                    },
+                ) => v1 == v2 && ts1 == ts2,
+                (Self::Waiting, Self::Waiting) => true,
+                (Self::Failed(a), Self::Failed(b)) => format!("{:?}", a) == format!("{:?}", b),
+                _ => false,
+            }
+        }
+    }
+
+    #[test]
+    fn test_pessimistic_with_return_values() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut statistics = Statistics::default();
+
+        let k1 = b"k1";
+        let k2 = b"k2";
+        let k3 = b"k3";
+        let k4 = b"k4";
+        let k5 = b"k5";
+
+        let v1 = b"v1";
+        let v2 = b"v2";
+        let v3 = b"v3";
+
+        // MVCC Versions
+        // commit_ts  writes
+        // 20         k1: put(v1)  k2: put(v1) k3: put(v1)    k4: put(v1)
+        // 40         k1: put(v2)  k2: put(v2) k3: delete     k4: delete
+        // 50         k1: rollback             k3: rollback
+        // 60                      k2: lock                   k4: lock
+        // values:    k1: v2       k2: v2      k3: -          k4: -          k5: -
+
+        // version 20
+        for k in [k1, k2, k3, k4] {
+            must_prewrite_put(&mut engine, k, v1, k1, 10);
+        }
+        for k in [k1, k2, k3, k4] {
+            must_commit(&mut engine, k, 10, 20);
+        }
+        // version 40
+        for k in [k1, k2] {
+            must_prewrite_put(&mut engine, k, v2, k1, 30);
+        }
+        for k in [k3, k4] {
+            must_prewrite_delete(&mut engine, k, k1, 30);
+        }
+        for k in [k1, k2, k3, k4] {
+            must_commit(&mut engine, k, 30, 40);
+        }
+        // version 50
+        for k in [k1, k3] {
+            must_prewrite_put(&mut engine, k, v3, k1, 50);
+        }
+        for k in [k1, k3] {
+            must_rollback(&mut engine, k, 50, false)
+        }
+        // version 60
+        for k in [k2, k4] {
+            must_prewrite_lock(&mut engine, k, v2, 51);
+        }
+        for k in [k2, k4] {
+            must_commit(&mut engine, k, 51, 60);
+        }
+
+        for start_ts in [15, 25, 35, 45, 55, 65] {
+            let for_update_ts = start_ts + 50;
+            let pk = k1.to_vec();
+            let keys = vec![k1, k2, k3, k4, k5];
+            let expects: Vec<PessimisticLockKeyResult> = [Some(v2), Some(v2), None, None, None]
+                .iter()
+                .map(|v| PessimisticLockKeyResult::Value(v.map(|b| b.to_vec())))
+                .collect();
+            let res = pessimistic_lock(
+                &mut engine,
+                &mut statistics,
+                keys.clone()
+                    .into_iter()
+                    .map(|k| (k.as_ref(), false))
+                    .collect(),
+                pk,
+                start_ts,
+                for_update_ts,
+                true,
+            );
+            assert_eq!(res.0, expects);
+            for key in keys.clone() {
+                must_pessimistic_locked(&mut engine, key, start_ts, for_update_ts);
+            }
+            for key in keys.clone() {
+                must_rollback(&mut engine, key, start_ts, false)
+            }
+
+            // single key lock test
+            let start_ts = start_ts + 1;
+            let for_update_ts = start_ts + 50;
+            for (i, key) in keys.clone().into_iter().enumerate() {
+                let pk = key.to_vec();
+                let keys = vec![(key.as_ref(), false)];
+                let expect = &expects[i];
+                let res = pessimistic_lock(
+                    &mut engine,
+                    &mut statistics,
+                    keys,
+                    pk,
+                    start_ts,
+                    for_update_ts,
+                    true,
+                );
+                assert_eq!(res.0.len(), 1);
+                assert_eq!(&res.0[0], expect);
+                must_pessimistic_locked(&mut engine, key, start_ts, for_update_ts);
+            }
+            for key in keys {
+                must_rollback(&mut engine, key, start_ts, false);
+            }
+        }
     }
 }

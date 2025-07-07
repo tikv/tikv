@@ -8,18 +8,18 @@ use itertools::Itertools;
 use kvproto::coprocessor::KeyRange;
 use protobuf::Message;
 use tidb_query_common::{
+    Result,
     execute_stats::ExecSummary,
     metrics::*,
     storage::{IntervalRange, Storage},
-    Result,
 };
 use tidb_query_datatype::{
-    expr::{EvalConfig, EvalContext, EvalWarnings},
     EvalType, FieldTypeAccessor,
+    expr::{EvalConfig, EvalContext, EvalWarnings},
 };
 use tikv_util::{
     deadline::Deadline,
-    metrics::{ThrottleType, NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC},
+    metrics::{NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC, ThrottleType},
     quota_limiter::QuotaLimiter,
 };
 use tipb::{
@@ -536,7 +536,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 record_all += record_len;
             }
 
-            if drained.stop() || self.paging_size.map_or(false, |p| record_all >= p as usize) {
+            if drained.stop() || self.paging_size.is_some_and(|p| record_all >= p as usize) {
                 self.out_most_executor
                     .collect_exec_stats(&mut self.exec_stats);
                 let range = if drained == BatchExecIsDrain::Drain {

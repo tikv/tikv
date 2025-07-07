@@ -3,15 +3,15 @@
 use std::{
     fmt,
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 
 use tikv_util::config::VersionTrack;
 
 use crate::{
-    engine::SkiplistEngine, write_batch::NODE_OVERHEAD_SIZE_EXPECTATION, InMemoryEngineConfig,
+    InMemoryEngineConfig, engine::SkiplistEngine, write_batch::NODE_OVERHEAD_SIZE_EXPECTATION,
 };
 
 #[derive(Debug, PartialEq)]
@@ -124,7 +124,7 @@ mod tests {
     use tikv_util::config::ReadableSize;
 
     use super::*;
-    use crate::keys::{encode_key, InternalBytes, ValueType};
+    use crate::keys::{InternalBytes, ValueType, encode_key};
 
     #[test]
     fn test_memory_controller() {

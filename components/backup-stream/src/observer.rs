@@ -6,7 +6,7 @@ use engine_traits::KvEngine;
 use kvproto::metapb::Region;
 use raft::StateRole;
 use raftstore::coprocessor::*;
-use tikv_util::{worker::Scheduler, HandyRwLock};
+use tikv_util::{HandyRwLock, worker::Scheduler};
 
 use crate::{
     debug,
@@ -56,7 +56,6 @@ impl BackupStreamObserver {
             .scheduler
             .schedule(Task::ModifyObserve(ObserveOp::Start {
                 region: region.clone(),
-                handle: ObserveHandle::new(),
             }))
         {
             use crate::errors::Error;
@@ -129,7 +128,6 @@ impl<E: KvEngine> CmdObserver<E> for BackupStreamObserver {
                 self.scheduler,
                 Task::ModifyObserve(ObserveOp::Start {
                     region: region.clone(),
-                    handle: ObserveHandle::new(),
                 })
             );
         }
@@ -187,7 +185,6 @@ impl RegionChangeObserver for BackupStreamObserver {
 }
 
 #[cfg(test)]
-
 mod tests {
     use std::{assert_matches::assert_matches, sync::Arc, time::Duration};
 
@@ -200,7 +197,7 @@ mod tests {
         RegionChangeEvent, RegionChangeObserver, RegionChangeReason, RoleChange, RoleObserver,
     };
     use tikv::storage::txn::txn_status_cache::TxnStatusCache;
-    use tikv_util::{worker::dummy_scheduler, HandyRwLock};
+    use tikv_util::{HandyRwLock, worker::dummy_scheduler};
 
     use super::BackupStreamObserver;
     use crate::{
@@ -233,7 +230,7 @@ mod tests {
         o.register_region(&r);
         let task = rx.recv_timeout(Duration::from_secs(0)).unwrap().unwrap();
         let handle = ObserveHandle::new();
-        if let Task::ModifyObserve(ObserveOp::Start { ref region, .. }) = task {
+        if let Task::ModifyObserve(ObserveOp::Start { ref region }) = task {
             subs.register_region(region, handle.clone(), None);
         } else {
             panic!("unexpected message received: it is {}", task);
@@ -261,7 +258,7 @@ mod tests {
         o.register_region(&r);
         let task = rx.recv_timeout(Duration::from_secs(0)).unwrap().unwrap();
         let handle = ObserveHandle::new();
-        if let Task::ModifyObserve(ObserveOp::Start { ref region, .. }) = task {
+        if let Task::ModifyObserve(ObserveOp::Start { ref region }) = task {
             subs.register_region(region, handle.clone(), None);
         } else {
             panic!("not match, it is {:?}", task);

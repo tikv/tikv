@@ -6,7 +6,7 @@ use std::{
 };
 
 use causal_ts::CausalTsProvider;
-use cdc::{recv_timeout, CdcObserver, Delegate, FeatureGate, Task, Validate};
+use cdc::{CdcObserver, Delegate, FeatureGate, Task, Validate, recv_timeout};
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
@@ -16,7 +16,7 @@ use grpcio::{
     Environment, MetadataBuilder,
 };
 use kvproto::{
-    cdcpb::{create_change_data, ChangeDataClient, ChangeDataEvent, ChangeDataRequest},
+    cdcpb::{ChangeDataClient, ChangeDataEvent, ChangeDataRequest, create_change_data},
     kvrpcpb::{PrewriteRequestPessimisticAction::*, *},
     tikvpb::TikvClient,
 };
@@ -29,10 +29,10 @@ use tikv::{
     storage::kv::LocalTablets,
 };
 use tikv_util::{
+    HandyRwLock,
     config::ReadableDuration,
     memory::MemoryQuota,
     worker::{LazyWorker, Runnable},
-    HandyRwLock,
 };
 use txn_types::TimeStamp;
 static INIT: Once = Once::new();
@@ -699,10 +699,11 @@ impl TestSuite {
 
     pub fn must_wait_delegate_condition(
         &self,
+        node_id: u64,
         region_id: u64,
         cond: Arc<dyn Fn(Option<&Delegate>) -> bool + Sync + Send>,
     ) {
-        let scheduler = self.endpoints[&region_id].scheduler();
+        let scheduler = self.endpoints[&node_id].scheduler();
         let start = Instant::now();
         loop {
             sleep_ms(100);

@@ -3,7 +3,7 @@
 use std::{collections::HashMap, string::ToString};
 
 use kvproto::diagnosticspb::{ServerInfoItem, ServerInfoPair};
-use tikv_util::sys::{cpu_time::LinuxStyleCpuTime, ioload, SysQuota, *};
+use tikv_util::sys::{SysQuota, cpu_time::LinuxStyleCpuTime, ioload, *};
 use walkdir::WalkDir;
 
 use crate::server::service::diagnostics::SYS_INFO;
@@ -682,6 +682,8 @@ mod tests {
 
     #[test]
     #[cfg(target_os = "linux")]
+    // this test verifies that memory quota matches /proc/meminfo which is not true for docker
+    #[cfg(not(feature = "docker_test"))]
     fn test_memory() {
         let mut mem_total_kb: u64 = 0;
         {

@@ -12,7 +12,7 @@ use crate::{
 };
 
 /// A collecting subcompaction.
-
+///
 /// Collecting a stream of [`LogFile`], and generate a stream of compactions.
 #[pin_project::pin_project]
 pub struct CollectSubcompaction<S: Stream<Item = Result<LogFile>>> {

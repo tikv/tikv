@@ -12,14 +12,15 @@ use std::{
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::{errorpb, kvrpcpb, kvrpcpb::ApiVersion};
 use thiserror::Error;
-use tikv_util::deadline::{set_deadline_exceeded_busy_error, DeadlineError};
+use tikv_util::deadline::{DeadlineError, set_deadline_exceeded_busy_error};
 use txn_types::{KvPair, TimeStamp};
 
 use crate::storage::{
+    CommandKind, Result,
     kv::{self, Error as KvError, ErrorInner as KvErrorInner},
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
     txn::{self, Error as TxnError, ErrorInner as TxnErrorInner},
-    CommandKind, Result,
+    types,
 };
 
 #[derive(Debug, Error)]
@@ -364,6 +365,34 @@ pub fn extract_committed(err: &Error) -> Option<TimeStamp> {
     }
 }
 
+fn get_or_insert_default_for_key_error_debug_info(
+    err: &mut kvrpcpb::KeyError,
+) -> &mut kvrpcpb::DebugInfo {
+    let debug_info = &mut err.debug_info;
+    if debug_info.is_none() {
+        debug_info.set_default()
+    } else {
+        debug_info.as_mut().unwrap()
+    }
+}
+
+fn add_debug_mvcc_for_key_error(
+    err: &mut kvrpcpb::KeyError,
+    key: &[u8],
+    mvcc_info: Option<types::MvccInfo>,
+) {
+    if let Some(mut mvcc) = mvcc_info {
+        let debug_info = get_or_insert_default_for_key_error_debug_info(err);
+        // remove the values in default CF to reduce the size of the response.
+        mvcc.values.clear();
+        // set mvcc info to debug_info
+        let mut mvcc_debug_info = kvrpcpb::MvccDebugInfo::default();
+        mvcc_debug_info.set_key(key.to_owned());
+        mvcc_debug_info.set_mvcc(mvcc.into_proto());
+        debug_info.mvcc_info.push(mvcc_debug_info);
+    }
+}
+
 pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
     let mut key_error = kvrpcpb::KeyError::default();
     match err {
@@ -407,10 +436,29 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
         }
         // failed in commit
         Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-            box MvccErrorInner::TxnLockNotFound { .. },
+            box MvccErrorInner::TxnLockNotFound {
+                start_ts,
+                commit_ts,
+                key,
+                mvcc_info,
+            },
         ))))) => {
-            warn!("txn conflicts"; "err" => ?err);
-            key_error.set_retryable(format!("{:?}", err));
+            // use an error without mvcc_info to construct error the error message
+            let err_without_mvcc = &Error::from(TxnError::from(MvccError::from(
+                MvccErrorInner::TxnLockNotFound {
+                    start_ts: *start_ts,
+                    commit_ts: *commit_ts,
+                    key: key.clone(),
+                    mvcc_info: None,
+                },
+            )));
+
+            warn!("txn conflicts"; "err" => ?err_without_mvcc);
+            key_error.set_retryable(format!("{:?}", err_without_mvcc));
+            let mut txn_lock_not_found = kvrpcpb::TxnLockNotFound::default();
+            txn_lock_not_found.set_key(key.clone());
+            key_error.set_txn_lock_not_found(txn_lock_not_found);
+            add_debug_mvcc_for_key_error(&mut key_error, key, mvcc_info.clone());
         }
         Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
             box MvccErrorInner::TxnNotFound { start_ts, key },
@@ -443,6 +491,7 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
                 commit_ts,
                 key,
                 min_commit_ts,
+                mvcc_info,
             },
         ))))) => {
             let mut commit_ts_expired = kvrpcpb::CommitTsExpired::default();
@@ -451,6 +500,7 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
             commit_ts_expired.set_key(key.to_owned());
             commit_ts_expired.set_min_commit_ts(min_commit_ts.into_inner());
             key_error.set_commit_ts_expired(commit_ts_expired);
+            add_debug_mvcc_for_key_error(&mut key_error, key, mvcc_info.clone());
         }
         Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
             box MvccErrorInner::CommitTsTooLarge { min_commit_ts, .. },
@@ -571,8 +621,10 @@ impl TryFrom<SharedError> for Error {
 #[cfg(test)]
 mod test {
     use kvproto::kvrpcpb::WriteConflictReason;
+    use txn_types::{Lock, LockType, Write, WriteType};
 
     use super::*;
+    use crate::storage::types::MvccInfo;
 
     #[test]
     fn test_extract_key_error_write_conflict() {
@@ -604,5 +656,121 @@ mod test {
 
         let got = extract_key_error(&case);
         assert_eq!(got, expect);
+    }
+
+    fn mock_mvcc_info() -> MvccInfo {
+        MvccInfo {
+            lock: Some(Lock::new(
+                LockType::Lock,
+                b"k".to_vec(),
+                10.into(),
+                100,
+                None,
+                10.into(),
+                1,
+                10.into(),
+                false,
+            )),
+            writes: vec![(
+                TimeStamp::new(8),
+                Write::new(WriteType::Lock, 7.into(), None),
+            )],
+            values: vec![(TimeStamp::new(7), b"v".to_vec())],
+        }
+    }
+
+    fn expected_debug_info_from_mvcc(key: Vec<u8>, mvcc: MvccInfo) -> kvrpcpb::DebugInfo {
+        let mut expect_pb_mvcc_info = mvcc.clone().into_proto();
+        // should clear the values in default CF to reduce the size of the response.
+        expect_pb_mvcc_info.values.clear();
+        kvrpcpb::DebugInfo {
+            mvcc_info: vec![kvrpcpb::MvccDebugInfo {
+                key,
+                mvcc: Some(expect_pb_mvcc_info).into(),
+                ..Default::default()
+            }]
+            .into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_extract_key_error_txn_lock_not_found() {
+        fn mock_txn_lock_not_found_err(has_mvcc: bool) -> kvrpcpb::KeyError {
+            extract_key_error(&Error::from(TxnError::from(MvccError::from(
+                MvccErrorInner::TxnLockNotFound {
+                    start_ts: TimeStamp::new(123),
+                    commit_ts: TimeStamp::new(456),
+                    key: b"key".to_vec(),
+                    mvcc_info: has_mvcc.then(|| mock_mvcc_info()),
+                },
+            ))))
+        }
+
+        let key = b"key".to_vec();
+        let mut expect = kvrpcpb::KeyError::default();
+        let mut txn_lock_not_found = kvrpcpb::TxnLockNotFound::default();
+        txn_lock_not_found.set_key(key.clone());
+        expect.set_txn_lock_not_found(txn_lock_not_found);
+        let expected_retryable_msg = format!(
+            "{:?}",
+            Error::from(TxnError::from(MvccError::from(
+                MvccErrorInner::TxnLockNotFound {
+                    start_ts: TimeStamp::new(123),
+                    commit_ts: TimeStamp::new(456),
+                    key: key.clone(),
+                    mvcc_info: None,
+                }
+            ))),
+        );
+        expect.set_retryable(expected_retryable_msg);
+
+        // without mvcc
+        expect.clear_debug_info();
+        assert_eq!(mock_txn_lock_not_found_err(false), expect);
+
+        // with mvcc
+        let mvcc_info = Some(mock_mvcc_info());
+        expect.set_debug_info(expected_debug_info_from_mvcc(
+            key.clone(),
+            mvcc_info.clone().unwrap(),
+        ));
+        assert_eq!(mock_txn_lock_not_found_err(true), expect);
+    }
+
+    #[test]
+    fn test_extract_key_error_commit_ts_expired() {
+        fn mock_commit_ts_expired_err(has_mvcc: bool) -> kvrpcpb::KeyError {
+            extract_key_error(&Error::from(TxnError::from(MvccError::from(
+                MvccErrorInner::CommitTsExpired {
+                    start_ts: TimeStamp::new(123),
+                    commit_ts: TimeStamp::new(456),
+                    key: b"key".to_vec(),
+                    min_commit_ts: TimeStamp::new(789),
+                    mvcc_info: has_mvcc.then(|| mock_mvcc_info()),
+                },
+            ))))
+        }
+
+        let key = b"key".to_vec();
+        let mut expect = kvrpcpb::KeyError::default();
+        let mut commit_ts_expired = kvrpcpb::CommitTsExpired::default();
+        commit_ts_expired.set_key(key.clone());
+        commit_ts_expired.set_start_ts(123);
+        commit_ts_expired.set_attempted_commit_ts(456);
+        commit_ts_expired.set_min_commit_ts(789);
+        expect.set_commit_ts_expired(commit_ts_expired);
+
+        // without mvcc
+        expect.clear_debug_info();
+        assert_eq!(mock_commit_ts_expired_err(false), expect);
+
+        // with mvcc
+        let mvcc = Some(mock_mvcc_info());
+        expect.set_debug_info(expected_debug_info_from_mvcc(
+            key.clone(),
+            mvcc.clone().unwrap(),
+        ));
+        assert_eq!(mock_commit_ts_expired_err(true), expect);
     }
 }

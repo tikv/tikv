@@ -6,8 +6,8 @@ use engine_traits::{CfName, IterOptions, Peekable, ReadOptions, Snapshot};
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use pd_client::BucketMeta;
 use raftstore::{
-    store::{RegionIterator, RegionSnapshot, TxnExt},
     Error as RaftServerError,
+    store::{RegionIterator, RegionSnapshot, TxnExt},
 };
 use txn_types::{Key, Value};
 
@@ -26,7 +26,7 @@ pub struct RegionSnapshotExt<'a, S: Snapshot> {
     snapshot: &'a RegionSnapshot<S>,
 }
 
-impl<'a, S: Snapshot> SnapshotExt for RegionSnapshotExt<'a, S> {
+impl<S: Snapshot> SnapshotExt for RegionSnapshotExt<'_, S> {
     #[inline]
     fn get_data_version(&self) -> Option<u64> {
         self.snapshot.get_data_version().ok()

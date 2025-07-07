@@ -11,15 +11,14 @@ use std::{
     },
     iter::Iterator,
     mem,
-    sync::{atomic::Ordering, Arc, Mutex},
+    sync::{Arc, Mutex, atomic::Ordering},
     time::{Duration, Instant},
-    u64,
 };
 
 use batch_system::{BasicMailbox, Fsm, FsmType};
 use collections::{HashMap, HashSet};
 use engine_traits::{
-    Engines, KvEngine, RaftEngine, RaftLogBatch, SstMetaInfo, WriteBatchExt, CF_LOCK, CF_RAFT,
+    CF_LOCK, CF_RAFT, Engines, KvEngine, RaftEngine, RaftLogBatch, SstMetaInfo, WriteBatchExt,
 };
 use error_code::ErrorCodeExt;
 use fail::fail_point;
@@ -47,23 +46,22 @@ use parking_lot::RwLockWriteGuard;
 use pd_client::BucketMeta;
 use protobuf::Message;
 use raft::{
-    self,
+    self, GetEntriesContext, INVALID_INDEX, NO_LIMIT, Progress, ReadState, SnapshotStatus,
+    StateRole,
     eraftpb::{self, ConfChangeType, MessageType},
-    GetEntriesContext, Progress, ReadState, SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT,
 };
 use smallvec::SmallVec;
 use strum::{EnumCount, VariantNames};
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
-    box_err, debug, defer, error, escape, info, info_or_debug, is_zero_duration,
+    Either, box_err, debug, defer, error, escape, info, info_or_debug, is_zero_duration,
     mpsc::{self, LooseBoundedSender, Receiver},
     slow_log,
     store::{find_peer, find_peer_by_id, is_learner, region_on_same_stores},
     sys::disk::DiskUsage,
-    time::{monotonic_raw_now, Instant as TiInstant, SlowTimer},
+    time::{Instant as TiInstant, SlowTimer, monotonic_raw_now},
     trace, warn,
     worker::{ScheduleError, Scheduler},
-    Either,
 };
 use tracker::GLOBAL_TRACKERS;
 use txn_types::WriteBatchFlags;
@@ -73,15 +71,18 @@ use super::life::forward_destroy_to_source_peer;
 #[cfg(any(test, feature = "testexport"))]
 use crate::store::PeerInternalStat;
 use crate::{
+    Error, Result,
     coprocessor::{RegionChangeEvent, RegionChangeReason},
     store::{
+        CasualMessage, Config, LocksStatus, MergeResultKind, PdTask, PeerMsg, PeerTick,
+        ProposalContext, RAFT_INIT_LOG_INDEX, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult,
+        ReadCallback, ReadIndexContext, ReadTask, SignificantMsg, SnapKey, StoreMsg, WriteCallback,
         cmd_resp::{bind_term, new_error},
         demote_failed_voters_request,
         fsm::{
-            apply,
-            store::{PollContext, StoreMeta},
             ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangeObserver, ChangePeer,
-            ExecResult, SwitchWitness,
+            ExecResult, SwitchWitness, apply,
+            store::{PollContext, StoreMeta},
         },
         hibernate_state::{GroupState, HibernateState},
         local_metrics::{RaftMetrics, TimeTracker},
@@ -93,21 +94,16 @@ use crate::{
         snapshot_backup::{AbortReason, SnapshotBrState, SnapshotBrWaitApplyRequest},
         transport::Transport,
         unsafe_recovery::{
-            exit_joint_request, ForceLeaderState, UnsafeRecoveryExecutePlanSyncer,
-            UnsafeRecoveryFillOutReportSyncer, UnsafeRecoveryForceLeaderSyncer,
-            UnsafeRecoveryState, UnsafeRecoveryWaitApplySyncer,
+            ForceLeaderState, UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
+            UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryState, UnsafeRecoveryWaitApplySyncer,
+            exit_joint_request,
         },
-        util::{self, compare_region_epoch, KeysInfoFormatter, LeaseState},
+        util::{self, KeysInfoFormatter, LeaseState, compare_region_epoch},
         worker::{
             Bucket, BucketRange, CleanupTask, ConsistencyCheckTask, GcSnapshotTask, RaftlogGcTask,
             ReadDelegate, ReadProgress, RegionTask, SplitCheckTask,
         },
-        CasualMessage, Config, LocksStatus, MergeResultKind, PdTask, PeerMsg, PeerTick,
-        ProposalContext, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult, ReadCallback,
-        ReadIndexContext, ReadTask, SignificantMsg, SnapKey, StoreMsg, WriteCallback,
-        RAFT_INIT_LOG_INDEX,
     },
-    Error, Result,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -197,11 +193,6 @@ where
     propose_checked: Option<bool>,
     request: Option<RaftCmdRequest>,
     callbacks: Vec<Callback<E::Snapshot>>,
-
-    // Ref: https://github.com/tikv/tikv/issues/16818.
-    // Check for duplicate key entries batching proposed commands.
-    // TODO: remove this field when the cause of issue 16818 is located.
-    lock_cf_keys: HashSet<Vec<u8>>,
 }
 
 impl<EK, ER> Drop for PeerFsm<EK, ER>
@@ -265,6 +256,7 @@ where
         engines: Engines<EK, ER>,
         region: &metapb::Region,
         wait_data: bool,
+        raft_metrics: &RaftMetrics,
     ) -> Result<SenderFsmPair<EK, ER>> {
         let meta_peer = match find_peer(region, store_id) {
             None => {
@@ -297,6 +289,7 @@ where
                     meta_peer,
                     wait_data,
                     None,
+                    raft_metrics,
                 )?,
                 tick_registry: [false; PeerTick::VARIANT_COUNT],
                 missing_ticks: 0,
@@ -328,6 +321,7 @@ where
         region_id: u64,
         peer: metapb::Peer,
         create_by_peer: metapb::Peer,
+        raft_metrics: &RaftMetrics,
     ) -> Result<SenderFsmPair<EK, ER>> {
         // We will remove tombstone key when apply snapshot
         info!(
@@ -357,6 +351,7 @@ where
                     peer,
                     false,
                     Some(create_by_peer),
+                    raft_metrics,
                 )?,
                 tick_registry: [false; PeerTick::VARIANT_COUNT],
                 missing_ticks: 0,
@@ -440,7 +435,6 @@ where
             propose_checked: None,
             request: None,
             callbacks: vec![],
-            lock_cf_keys: HashSet::default(),
         }
     }
 
@@ -481,21 +475,6 @@ where
             mut callback,
             ..
         } = cmd;
-        // Ref: https://github.com/tikv/tikv/issues/16818.
-        // Check for duplicate key entries batching proposed commands.
-        // TODO: remove this check when the cause of issue 16818 is located.
-        for req in request.get_requests() {
-            if req.has_put() && req.get_put().get_cf() == CF_LOCK {
-                let key = req.get_put().get_key();
-                if !self.lock_cf_keys.insert(key.to_vec()) {
-                    panic!(
-                        "found duplicate key in Lock CF PUT request between batched requests. \
-                            key: {:?}, existing batch request: {:?}, new request to add: {:?}",
-                        key, self.request, request
-                    );
-                }
-            }
-        }
         if let Some(batch_req) = self.request.as_mut() {
             let requests: Vec<_> = request.take_requests().into();
             for q in requests {
@@ -538,7 +517,6 @@ where
             self.batch_req_size = 0;
             self.has_proposed_cb = false;
             self.propose_checked = None;
-            self.lock_cf_keys = HashSet::default();
             if self.callbacks.len() == 1 {
                 let cb = self.callbacks.pop().unwrap();
                 return Some((req, cb));
@@ -709,22 +687,6 @@ where
                     if let Some(Err(e)) = cmd.extra_opts.deadline.map(|deadline| deadline.check()) {
                         cmd.callback.invoke_with_response(new_error(e.into()));
                         continue;
-                    }
-
-                    // Ref: https://github.com/tikv/tikv/issues/16818.
-                    // Check for duplicate key entries within the to be proposed raft cmd.
-                    // TODO: remove this check when the cause of issue 16818 is located.
-                    let mut keys_set = std::collections::HashSet::new();
-                    for req in cmd.request.get_requests() {
-                        if req.has_put() && req.get_put().get_cf() == CF_LOCK {
-                            let key = req.get_put().get_key();
-                            if !keys_set.insert(key.to_vec()) {
-                                panic!(
-                                    "found duplicate key in Lock CF PUT request, key: {:?}, cmd: {:?}",
-                                    key, cmd
-                                );
-                            }
-                        }
                     }
 
                     let req_size = cmd.request.compute_size();
@@ -2086,7 +2048,7 @@ where
             .peer
             .uncampaigned_new_regions
             .as_ref()
-            .map_or(false, |r| r.is_empty());
+            .is_some_and(|r| r.is_empty());
         // If the peer has any uncleared records in the uncampaigned_new_regions list,
         // and there has valid leader in the region, it's safely to clear the records.
         if has_uncompaigned_regions && self.fsm.peer.has_valid_leader() {
@@ -2553,6 +2515,9 @@ where
                     .peer
                     .region_buckets_info_mut()
                     .add_bucket_flow(&res.bucket_stat);
+                // Update the state whether the peer is pending on applying raft
+                // logs if necesssary.
+                self.on_check_peer_complete_apply_logs();
 
                 self.fsm.has_ready |= self.fsm.peer.post_apply(
                     self.ctx,
@@ -2681,10 +2646,7 @@ where
             }
             let disk_full_peers = &self.fsm.peer.disk_full_peers;
 
-            disk_full_peers.is_empty()
-                || disk_full_peers
-                    .get(peer_id)
-                    .map_or(true, |x| x != msg.disk_usage)
+            disk_full_peers.is_empty() || (disk_full_peers.get(peer_id) != Some(msg.disk_usage))
         };
         if refill_disk_usages || self.fsm.peer.has_region_merge_proposal {
             let prev = self.fsm.peer.disk_full_peers.get(peer_id);
@@ -4082,7 +4044,7 @@ where
             if self
                 .fsm
                 .delayed_destroy
-                .map_or(false, |delay| delay.reason == reason)
+                .is_some_and(|delay| delay.reason == reason)
             {
                 panic!(
                     "{} destroy peer twice with same delay reason, original {:?}, now {}",
@@ -4206,6 +4168,7 @@ where
             &mut self.ctx.raft_perf_context,
             merged_by_target,
             &self.ctx.pending_create_peers,
+            &self.ctx.raft_metrics,
         ) {
             // If not panic here, the peer will be recreated in the next restart,
             // then it will be gc again. But if some overlap region is created
@@ -4269,7 +4232,7 @@ where
                 // peer decide to destroy by itself. Without target, the
                 // `pending_merge_targets` for target won't be removed, so here source peer help
                 // target to clear.
-                if meta.regions.get(&target).is_none()
+                if !meta.regions.contains_key(&target)
                     && meta.pending_merge_targets.get(&target).unwrap().is_empty()
                 {
                     meta.pending_merge_targets.remove(&target);
@@ -4652,6 +4615,7 @@ where
                 self.ctx.engines.clone(),
                 &new_region,
                 false,
+                &self.ctx.raft_metrics,
             ) {
                 Ok((sender, new_peer)) => (sender, new_peer),
                 Err(e) => {
@@ -4761,6 +4725,11 @@ where
             .get_id();
 
         let state_key = keys::region_state_key(target_region_id);
+        let _timer = self
+            .ctx
+            .raft_metrics
+            .io_read_peer_check_merge_target_stale
+            .start_timer();
         if let Some(target_state) = self
             .ctx
             .engines
@@ -5297,16 +5266,12 @@ where
         target: metapb::Peer,
         result: MergeResultKind,
     ) {
-        let exists = self
-            .fsm
-            .peer
-            .pending_merge_state
-            .as_ref()
-            .map_or(true, |s| {
-                s.get_target().get_peers().iter().any(|p| {
-                    p.get_store_id() == target.get_store_id() && p.get_id() <= target.get_id()
-                })
-            });
+        let exists = self.fsm.peer.pending_merge_state.as_ref().is_none_or(|s| {
+            s.get_target()
+                .get_peers()
+                .iter()
+                .any(|p| p.get_store_id() == target.get_store_id() && p.get_id() <= target.get_id())
+        });
         if !exists {
             panic!(
                 "{} unexpected merge result: {:?} {:?} {:?}",
@@ -6326,7 +6291,7 @@ where
 
     #[inline]
     fn region_split_skip_max_count(&self) -> usize {
-        fail_point!("region_split_skip_max_count", |_| { usize::max_value() });
+        fail_point!("region_split_skip_max_count", |_| { usize::MAX });
         REGION_SPLIT_SKIP_MAX_COUNT
     }
 
@@ -7013,6 +6978,7 @@ where
             id: uuid::Uuid::new_v4(),
             request: None,
             locked: None,
+            read_index_safe_ts: None,
         };
         self.fsm.peer.raft_group.read_index(rctx.to_bytes());
         debug!(
@@ -7111,7 +7077,7 @@ where
     }
 }
 
-impl<'a, EK, ER, T: Transport> PeerFsmDelegate<'a, EK, ER, T>
+impl<EK, ER, T: Transport> PeerFsmDelegate<'_, EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
@@ -7453,7 +7419,7 @@ fn new_compact_log_request(
     request
 }
 
-impl<'a, EK, ER, T: Transport> PeerFsmDelegate<'a, EK, ER, T>
+impl<EK, ER, T: Transport> PeerFsmDelegate<'_, EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
@@ -7551,8 +7517,8 @@ mod memtrace {
 #[cfg(test)]
 mod tests {
     use std::sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     };
 
     use engine_test::kv::KvTestEngine;
@@ -7712,39 +7678,5 @@ mod tests {
         let _ = q.take_put();
         let req_size = req.compute_size();
         assert!(!builder.can_batch(&cfg, &req, req_size));
-    }
-
-    #[test]
-    #[should_panic]
-    fn test_batch_build_with_duplicate_lock_cf_keys() {
-        let mut builder = BatchRaftCmdRequestBuilder::<KvTestEngine>::new();
-
-        // Create first request.
-        let mut req1 = RaftCmdRequest::default();
-        let mut put1 = Request::default();
-        let mut put_req1 = PutRequest::default();
-        put_req1.set_cf(CF_LOCK.to_string());
-        put_req1.set_key(b"key1".to_vec());
-        put_req1.set_value(b"value1".to_vec());
-        put1.set_cmd_type(CmdType::Put);
-        put1.set_put(put_req1);
-        req1.mut_requests().push(put1);
-
-        // Create second request with same key in Lock CF.
-        let mut req2 = RaftCmdRequest::default();
-        let mut put2 = Request::default();
-        let mut put_req2 = PutRequest::default();
-        put_req2.set_cf(CF_LOCK.to_string());
-        put_req2.set_key(b"key1".to_vec());
-        put_req2.set_value(b"value2".to_vec());
-        put2.set_cmd_type(CmdType::Put);
-        put2.set_put(put_req2);
-        req2.mut_requests().push(put2);
-
-        // Add both requests to batch builder, should cause panic.
-        let size = req1.compute_size();
-        builder.add(RaftCommand::new(req1, Callback::None), size);
-        let size = req2.compute_size();
-        builder.add(RaftCommand::new(req2, Callback::None), size);
     }
 }

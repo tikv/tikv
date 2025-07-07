@@ -6,8 +6,8 @@
 use std::{
     future::Future,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
@@ -15,10 +15,10 @@ use fail::fail_point;
 use futures::channel::oneshot::{self, Canceled};
 use futures_util::future::FutureExt;
 use prometheus::{IntCounter, IntGauge};
-use tracker::TrackedFuture;
+use tracker::TlsTrackedFuture;
 use yatp::{queue::Extras, task::future};
 
-use crate::resource_control::{priority_from_task_meta, TaskPriority};
+use crate::resource_control::{TaskPriority, priority_from_task_meta};
 
 pub type ThreadPool = yatp::ThreadPool<future::TaskCell>;
 
@@ -98,14 +98,15 @@ impl FuturePool {
     where
         F: Future + Send + 'static,
     {
-        self.inner.spawn(TrackedFuture::new(future), None)
+        self.inner.spawn(TlsTrackedFuture::new(future), None)
     }
 
     pub fn spawn_with_extras<F>(&self, future: F, extras: Extras) -> Result<(), Full>
     where
         F: Future + Send + 'static,
     {
-        self.inner.spawn(TrackedFuture::new(future), Some(extras))
+        self.inner
+            .spawn(TlsTrackedFuture::new(future), Some(extras))
     }
 
     /// Spawns a future in the pool and returns a handle to the result of the
@@ -120,7 +121,7 @@ impl FuturePool {
         F: Future + Send + 'static,
         F::Output: Send,
     {
-        self.inner.spawn_handle(TrackedFuture::new(future))
+        self.inner.spawn_handle(TlsTrackedFuture::new(future))
     }
 
     /// Return the min thread count and the max thread count that this pool can
@@ -153,7 +154,7 @@ impl PoolInner {
     fn scale_pool_size(&self, thread_count: usize) {
         self.pool.scale_workers(thread_count);
         let mut max_tasks = self.max_tasks.load(Ordering::Acquire);
-        if max_tasks != std::usize::MAX {
+        if max_tasks != usize::MAX {
             max_tasks = max_tasks
                 .saturating_div(self.pool_size.load(Ordering::Acquire))
                 .saturating_mul(thread_count);
@@ -187,7 +188,7 @@ impl PoolInner {
         }));
 
         let max_tasks = self.max_tasks.load(Ordering::Acquire);
-        if max_tasks == std::usize::MAX {
+        if max_tasks == usize::MAX {
             return Ok(());
         }
 
@@ -283,8 +284,9 @@ impl std::error::Error for Full {
 mod tests {
     use std::{
         sync::{
+            Mutex,
             atomic::{AtomicUsize, Ordering},
-            mpsc, Mutex,
+            mpsc,
         },
         thread,
         time::Duration,
@@ -293,7 +295,7 @@ mod tests {
     use futures::executor::block_on;
 
     use super::{
-        super::{DefaultTicker, PoolTicker, YatpPoolBuilder as Builder, TICK_INTERVAL},
+        super::{DefaultTicker, PoolTicker, TICK_INTERVAL, YatpPoolBuilder as Builder},
         *,
     };
 

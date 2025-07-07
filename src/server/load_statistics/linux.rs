@@ -2,7 +2,7 @@
 
 use std::{
     cmp,
-    sync::{atomic::Ordering, Arc},
+    sync::{Arc, atomic::Ordering},
     time::Instant,
 };
 

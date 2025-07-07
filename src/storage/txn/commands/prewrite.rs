@@ -15,30 +15,30 @@ use kvproto::kvrpcpb::{
 };
 use tikv_kv::SnapshotExt;
 use txn_types::{
-    insert_old_value_if_resolved, Key, Mutation, OldValues, TimeStamp, TxnExtra, Write, WriteType,
+    Key, Mutation, OldValues, TimeStamp, TxnExtra, Write, WriteType, insert_old_value_if_resolved,
 };
 
 use super::ReaderWithStats;
 use crate::storage::{
+    Context, Error as StorageError, ProcessResult, Snapshot,
     kv::WriteData,
     lock_manager::LockManager,
     mvcc::{
-        has_data_in_range, metrics::*, Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn,
-        SnapshotReader,
+        Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader,
+        has_data_in_range, metrics::*,
     },
     txn::{
+        Error, ErrorInner, Result,
         actions::{
             common::check_committed_record_on_err,
-            prewrite::{prewrite, CommitKind, TransactionKind, TransactionProperties},
+            prewrite::{CommitKind, TransactionKind, TransactionProperties, prewrite},
         },
         commands::{
             Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand,
             WriteContext, WriteResult,
         },
-        Error, ErrorInner, Result,
     },
     types::PrewriteResult,
-    Context, Error as StorageError, ProcessResult, Snapshot,
 };
 
 pub(crate) const FORWARD_MIN_MUTATIONS_NUM: usize = 12;
@@ -537,9 +537,10 @@ impl<K: PrewriteKind> Prewriter<K> {
         self.check_max_ts_synced(&snapshot)?;
 
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
-        let mut snapshot_reader = SnapshotReader::new_with_ctx(self.start_ts, snapshot, &self.ctx);
-        snapshot_reader.setup_with_hint_items(&mut self.mutations, |m| m.key());
-        let mut reader = ReaderWithStats::new(snapshot_reader, context.statistics);
+        let mut reader = ReaderWithStats::new(
+            SnapshotReader::new_with_ctx(self.start_ts, snapshot, &self.ctx),
+            context.statistics,
+        );
         // Set extra op here for getting the write record when check write conflict in
         // prewrite.
 
@@ -615,6 +616,7 @@ impl<K: PrewriteKind> Prewriter<K> {
 
         // If there are other errors, return other error prior to `AssertionFailed`.
         let mut assertion_failure = None;
+
         for m in mem::take(&mut self.mutations) {
             let pessimistic_action = m.pessimistic_action();
             let expected_for_update_ts = m.pessimistic_expected_for_update_ts();
@@ -883,7 +885,6 @@ trait MutationLock {
     fn pessimistic_action(&self) -> PrewriteRequestPessimisticAction;
     fn pessimistic_expected_for_update_ts(&self) -> Option<TimeStamp>;
     fn into_mutation(self) -> Mutation;
-    fn key(&self) -> &Key;
 }
 
 impl MutationLock for Mutation {
@@ -897,10 +898,6 @@ impl MutationLock for Mutation {
 
     fn into_mutation(self) -> Mutation {
         self
-    }
-
-    fn key(&self) -> &Key {
-        self.key()
     }
 }
 
@@ -928,10 +925,6 @@ impl MutationLock for PessimisticMutation {
 
     fn into_mutation(self) -> Mutation {
         self.mutation
-    }
-
-    fn key(&self) -> &Key {
-        self.mutation.key()
     }
 }
 
@@ -1014,8 +1007,10 @@ mod tests {
 
     use super::*;
     use crate::storage::{
-        mvcc::{tests::*, Error as MvccError, ErrorInner as MvccErrorInner},
+        Engine, MockLockManager, Snapshot, Statistics, TestEngineBuilder,
+        mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, tests::*},
         txn::{
+            Error, ErrorInner,
             actions::{
                 acquire_pessimistic_lock::tests::must_pessimistic_locked,
                 tests::{
@@ -1035,10 +1030,8 @@ mod tests {
                 must_prewrite_put_err_impl, must_prewrite_put_impl, must_rollback,
             },
             txn_status_cache::TxnStatusCache,
-            Error, ErrorInner,
         },
         types::TxnStatus,
-        Engine, MockLockManager, Snapshot, Statistics, TestEngineBuilder,
     };
 
     fn inner_test_prewrite_skip_constraint_check(pri_key_number: u8, write_num: usize) {
@@ -1161,7 +1154,7 @@ mod tests {
 
     #[test]
     fn test_prewrite_skip_too_many_tombstone() {
-        use engine_rocks::{set_perf_level, PerfLevel};
+        use engine_rocks::{PerfLevel, set_perf_level};
 
         use crate::server::gc_worker::gc_by_compact;
         let mut mutations = Vec::default();
@@ -1207,7 +1200,7 @@ mod tests {
         .unwrap();
         let d = perf.delta();
         assert_eq!(1, statistic.write.seek);
-        assert_eq!(d.internal_delete_skipped_count, 40);
+        assert_eq!(d.internal_delete_skipped_count, 0);
     }
 
     #[test]
@@ -1638,7 +1631,7 @@ mod tests {
         use engine_traits::{IterOptions, ReadOptions};
         use kvproto::kvrpcpb::ExtraOp;
 
-        use crate::storage::{kv::Result, CfName, ConcurrencyManager, MockLockManager, Value};
+        use crate::storage::{CfName, ConcurrencyManager, MockLockManager, Value, kv::Result};
         #[derive(Clone)]
         struct MockSnapshot;
 

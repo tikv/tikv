@@ -6,21 +6,21 @@ use std::{
 };
 
 use batch_system::{BatchRouter, Fsm, FsmTypes, HandlerBuilder, Poller, PoolState, Priority};
-use file_system::{set_io_type, IoType};
+use file_system::{IoType, set_io_type};
 use tikv_util::{
     debug, error, info, safe_panic, sys::thread::StdThreadBuildWrapper, thd_name, warn,
     worker::Runnable, yatp_pool::FuturePool,
 };
 
 use crate::store::{
+    PersistedNotifier,
     async_io::write::{StoreWriters, StoreWritersContext},
     fsm::{
+        PeerFsm,
         apply::{ApplyFsm, ControlFsm},
         store::{RaftRouter, StoreFsm},
-        PeerFsm,
     },
     transport::Transport,
-    PersistedNotifier,
 };
 
 pub struct PoolController<N: Fsm, C: Fsm, H: HandlerBuilder<N, C>> {

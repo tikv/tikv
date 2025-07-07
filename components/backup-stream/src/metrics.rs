@@ -34,7 +34,7 @@ pub fn remove_task_status_metric(task: &str) -> Result<()> {
 // example update the tikv_details.dashboard.py.
 lazy_static! {
     pub static ref INTERNAL_ACTOR_MESSAGE_HANDLE_DURATION: HistogramVec = register_histogram_vec!(
-        "tikv_log_backup_interal_actor_acting_duration_sec",
+        "tikv_log_backup_internal_actor_acting_duration_sec",
         "The internal actor message handling duration.",
         &["message"],
         exponential_buckets(0.001, 2.0, 16).unwrap()
@@ -192,7 +192,11 @@ lazy_static! {
         // The default minimal size of a file being able to be swapped out is 1M.
         exponential_buckets((1024 * 1024) as f64, 2.0, 8).unwrap()
     ).unwrap();
-
+    pub static ref TEMP_FILE_READ_POLL_DURATION: Histogram = register_histogram!(
+        "tikv_log_backup_in_disk_temp_file_poll_duration",
+        "The duration of polling read temp file.",
+        exponential_buckets(0.001, 2.0, 10).unwrap()
+    ).unwrap();
 }
 
 make_static_metric! {

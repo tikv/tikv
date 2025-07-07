@@ -1,20 +1,21 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use txn_types::Key;
+use txn_types::{CommitRole, Key};
 
 use crate::storage::{
+    ProcessResult, Snapshot, TxnStatus,
     kv::WriteData,
     lock_manager::LockManager,
     mvcc::{MvccTxn, SnapshotReader},
     txn::{
+        Error, ErrorInner, Result,
         commands::{
             Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
             WriteCommand, WriteContext, WriteResult,
         },
-        commit, Error, ErrorInner, Result,
+        commit,
     },
-    ProcessResult, Snapshot, TxnStatus,
 };
 
 command! {
@@ -31,6 +32,8 @@ command! {
             lock_ts: txn_types::TimeStamp,
             /// The commit timestamp.
             commit_ts: txn_types::TimeStamp,
+            /// The commit role of the transaction.
+            commit_role: Option<CommitRole>,
         }
         in_heap => {
             keys,
@@ -55,16 +58,22 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Commit {
             }));
         }
         let mut txn = MvccTxn::new(self.lock_ts, context.concurrency_manager);
-        let mut keys = self.keys;
-        let mut snapshot_reader = SnapshotReader::new_with_ctx(self.lock_ts, snapshot, &self.ctx);
-        snapshot_reader.setup_with_hint_items(&mut keys, |k| k);
-        let mut reader = ReaderWithStats::new(snapshot_reader, context.statistics);
+        let mut reader = ReaderWithStats::new(
+            SnapshotReader::new_with_ctx(self.lock_ts, snapshot, &self.ctx),
+            context.statistics,
+        );
 
-        let rows = keys.len();
+        let rows = self.keys.len();
         // Pessimistic txn needs key_hashes to wake up waiters
         let mut released_locks = ReleasedLocks::new();
-        for k in keys {
-            released_locks.push(commit(&mut txn, &mut reader, k, self.commit_ts)?);
+        for k in self.keys {
+            released_locks.push(commit(
+                &mut txn,
+                &mut reader,
+                k,
+                self.commit_ts,
+                self.commit_role,
+            )?);
         }
 
         let pr = ProcessResult::TxnStatus {

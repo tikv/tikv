@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use engine_traits::{KvEngine, ManualCompactionOptions, RangeStats, CF_LOCK, CF_WRITE};
+use engine_traits::{CF_LOCK, CF_WRITE, KvEngine, ManualCompactionOptions, RangeStats};
 use fail::fail_point;
 use futures_util::compat::Future01CompatExt;
 use thiserror::Error;
@@ -510,11 +510,11 @@ mod tests {
 
     use engine_test::{
         ctor::{CfOptions, DbOptions},
-        kv::{new_engine, new_engine_opt, KvTestEngine},
+        kv::{KvTestEngine, new_engine, new_engine_opt},
     };
     use engine_traits::{
-        CompactExt, MiscExt, Mutable, SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK,
-        CF_RAFT, CF_WRITE,
+        CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, CompactExt, MiscExt, Mutable, SyncMutable,
+        WriteBatch, WriteBatchExt,
     };
     use keys::data_key;
     use tempfile::Builder;

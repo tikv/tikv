@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use kvproto::raft_serverpb::RaftMessage;
-use raftstore::{store::Transport, Result as RaftStoreResult};
+use raftstore::{Result as RaftStoreResult, store::Transport};
 use tikv_kv::RaftExtension;
 
 use crate::server::{raft_client::RaftClient, resolve::StoreAddrResolver};

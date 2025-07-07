@@ -2,21 +2,21 @@
 
 use api_version::{ApiV2, KvFormat, RawValue};
 use engine_rocks::RocksEngine;
-use engine_traits::{MiscExt, CF_DEFAULT};
+use engine_traits::{CF_DEFAULT, MiscExt};
 use kvproto::kvrpcpb::{Context, *};
 use tempfile::TempDir;
 use tikv::{
     config::DbConfig,
     server::gc_worker::{
+        STAT_RAW_KEYMODE, TestGcRunner,
         compaction_filter::{
-            test_utils::rocksdb_level_files, GC_COMPACTION_FILTER_PERFORM,
-            GC_COMPACTION_FILTER_SKIP,
+            GC_COMPACTION_FILTER_PERFORM, GC_COMPACTION_FILTER_SKIP,
+            test_utils::rocksdb_level_files,
         },
-        TestGcRunner, STAT_RAW_KEYMODE,
     },
     storage::{
-        kv::{Modify, TestEngineBuilder, WriteData},
         Engine,
+        kv::{Modify, TestEngineBuilder, WriteData},
     },
 };
 use txn_types::{Key, TimeStamp};

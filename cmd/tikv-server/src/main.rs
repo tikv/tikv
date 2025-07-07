@@ -4,12 +4,12 @@
 
 use std::{path::Path, process};
 
-use clap::{crate_authors, App, Arg};
+use clap::{App, Arg, crate_authors};
 use crypto::fips;
 use serde_json::{Map, Value};
 use server::setup::{ensure_no_unrecognized_config, validate_and_persist_config};
 use tikv::{
-    config::{to_flatten_config_info, TikvConfig},
+    config::{TikvConfig, to_flatten_config_info},
     storage::config::EngineType,
 };
 

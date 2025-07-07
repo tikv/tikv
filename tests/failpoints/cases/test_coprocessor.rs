@@ -18,7 +18,7 @@ use test_raftstore::{must_kv_commit, must_kv_prewrite, must_new_cluster_and_kv_c
 use test_raftstore_macro::test_case;
 use test_storage::*;
 use tidb_query_datatype::{
-    codec::{datum, table::encode_row_key, Datum},
+    codec::{Datum, datum, table::encode_row_key},
     expr::EvalContext,
 };
 use tikv_util::HandyRwLock;

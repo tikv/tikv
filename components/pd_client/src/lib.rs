@@ -37,7 +37,7 @@ pub use self::{
     config::Config,
     errors::{Error, Result},
     feature_gate::{Feature, FeatureGate},
-    util::{merge_bucket_stats, new_bucket_stats, PdConnector, REQUEST_RECONNECT_INTERVAL},
+    util::{PdConnector, REQUEST_RECONNECT_INTERVAL, merge_bucket_stats, new_bucket_stats},
 };
 
 pub type Key = Vec<u8>;
@@ -322,7 +322,7 @@ pub trait PdClient: Send + Sync {
     /// recovery mode recovery mode will do
     /// 1. update tikv cluster id from pd
     /// 2. all peer apply the log to last of the leader peer which has the most
-    /// log appended. 3. delete data to some point of time (resolved_ts)
+    ///    log appended. 3. delete data to some point of time (resolved_ts)
     fn is_recovering_marked(&self) -> Result<bool> {
         unimplemented!();
     }
@@ -343,7 +343,7 @@ pub trait PdClient: Send + Sync {
     ///   which Region and Peers will be removed.
     /// - For auto-balance, PD determines how to move the Region from one store
     ///   to another.
-
+    ///
     /// Gets store information if it is not a tombstone store.
     fn get_store(&self, _store_id: u64) -> Result<metapb::Store> {
         unimplemented!();

@@ -36,8 +36,8 @@ pub use background::{BackgroundRunner, BackgroundTask, GcTask};
 pub use config::InMemoryEngineConfig;
 pub use engine::{RegionCacheMemoryEngine, SkiplistHandle};
 pub use keys::{
-    decode_key, encode_key_for_boundary_without_mvcc, encoding_for_filter, InternalBytes,
-    InternalKey, ValueType,
+    InternalBytes, InternalKey, ValueType, decode_key, encode_key_for_boundary_without_mvcc,
+    encoding_for_filter,
 };
 pub use metrics::flush_in_memory_engine_statistics;
 pub use read::RegionCacheSnapshot;

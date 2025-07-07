@@ -2,7 +2,7 @@
 
 use std::{fmt::Display, future::Future, task::Poll};
 
-use engine_traits::{CfName, SstCompressionType, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, CfName, SstCompressionType};
 use external_storage::ExternalStorage;
 
 /// A helper for cooperative concurrency.
@@ -170,7 +170,7 @@ pub fn compression_type_to_u8(c: SstCompressionType) -> u8 {
 #[derive(Eq, PartialEq)]
 pub struct EndKey<'a>(pub &'a [u8]);
 
-impl<'a> PartialOrd for EndKey<'a> {
+impl PartialOrd for EndKey<'_> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         use std::cmp::Ordering::*;
         match (self, other) {
@@ -182,7 +182,7 @@ impl<'a> PartialOrd for EndKey<'a> {
     }
 }
 
-impl<'a> Ord for EndKey<'a> {
+impl Ord for EndKey<'_> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.partial_cmp(other).unwrap()
     }

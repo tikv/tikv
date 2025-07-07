@@ -7,14 +7,15 @@ use std::collections::{
 
 use collections::HashMap;
 use crossbeam::channel::TrySendError;
-use engine_traits::{KvEngine, RaftEngine, CF_DEFAULT, CF_WRITE};
+use engine_traits::{CF_DEFAULT, CF_WRITE, KvEngine, RaftEngine};
 use raftstore::{
-    store::{CompactThreshold, TabletSnapKey},
     Result,
+    store::{CompactThreshold, TabletSnapKey},
 };
 use slog::{debug, error, info};
 
 use crate::{
+    CompactTask::CheckAndCompact,
     batch::StoreContext,
     fsm::{Store, StoreFsmDelegate},
     router::{PeerMsg, StoreTick},
@@ -22,10 +23,9 @@ use crate::{
         cleanup::{self},
         tablet,
     },
-    CompactTask::CheckAndCompact,
 };
 
-impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
+impl<EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'_, EK, ER, T> {
     pub fn register_compact_check_tick(&mut self) {
         self.schedule_tick(
             StoreTick::CompactCheck,

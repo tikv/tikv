@@ -3,8 +3,8 @@
 use std::{
     fmt::{self, Debug, Formatter},
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     vec::IntoIter,
 };
@@ -20,7 +20,7 @@ use kvproto::{
     raft_serverpb::RaftApplyState,
 };
 use pd_client::RegionStat;
-use raft::{eraftpb, StateRole};
+use raft::{StateRole, eraftpb};
 
 pub mod config;
 mod consistency_check;
@@ -52,9 +52,9 @@ pub use self::{
         RegionInfoProvider, SeekRegionCallback,
     },
     split_check::{
-        get_region_approximate_keys, get_region_approximate_middle, get_region_approximate_size,
         HalfCheckObserver, Host as SplitCheckerHost, KeysCheckObserver, SizeCheckObserver,
-        TableCheckObserver,
+        TableCheckObserver, get_region_approximate_keys, get_region_approximate_middle,
+        get_region_approximate_size,
     },
 };
 pub use crate::store::{Bucket, KeyEntry};
@@ -73,7 +73,7 @@ pub struct ObserverContext<'a> {
     pub bypass: bool,
 }
 
-impl<'a> ObserverContext<'a> {
+impl ObserverContext<'_> {
     pub fn new(region: &Region) -> ObserverContext<'_> {
         ObserverContext {
             region,
@@ -221,6 +221,18 @@ pub trait ApplySnapshotObserver: Coprocessor {
     /// We call pre_apply_snapshot only when one of the observer returns true.
     fn should_pre_apply_snapshot(&self) -> bool {
         false
+    }
+
+    // Hook when apply snapshot is ingested, and the state has been changed to
+    // Normal and persisted. The snapshot will not be re-iningested after the
+    // restart if this hook is called.
+    fn on_apply_snapshot_committed(
+        &self,
+        _: &mut ObserverContext<'_>,
+        _: u64,
+        _: &crate::store::SnapKey,
+        _: Option<&crate::store::Snapshot>,
+    ) {
     }
 }
 
@@ -589,7 +601,14 @@ pub trait CmdObserver<E>: Coprocessor {
 
 pub trait ReadIndexObserver: Coprocessor {
     // Hook to call when stepping in raft and the message is a read index message.
-    fn on_step(&self, _msg: &mut eraftpb::Message, _role: StateRole) {}
+    fn on_step(
+        &self,
+        _msg: &mut eraftpb::Message,
+        _role: StateRole,
+        _region_start_key: Option<&[u8]>,
+        _region_end_key: Option<&[u8]>,
+    ) {
+    }
 }
 
 pub trait UpdateSafeTsObserver: Coprocessor {

@@ -21,6 +21,7 @@ impl ImportExt for RocksEngine {
         cf_name: &str,
         files: &[&str],
         range: Option<Range<'_>>,
+        force_allow_write: bool,
     ) -> Result<()> {
         // Acquire latch to prevent concurrency with compaction-filter operations
         // when using RocksDB IngestExternalFileOptions.allow_write = true.
@@ -33,7 +34,7 @@ impl ImportExt for RocksEngine {
         let cf = util::get_cf_handle(self.as_inner(), cf_name)?;
         let mut opts = RocksIngestExternalFileOptions::new();
         opts.move_files(true);
-        let allow_write = range.is_some();
+        let allow_write = range.is_some() || force_allow_write;
         opts.allow_write(allow_write);
         if allow_write {
             INGEST_EXTERNAL_FILE_ALLOW_WRITE_COUNTER
@@ -99,13 +100,13 @@ impl IngestExternalFileOptions for RocksIngestExternalFileOptions {
 #[cfg(test)]
 mod tests {
     use engine_traits::{
-        FlowControlFactorsExt, MiscExt, Mutable, SstWriter, SstWriterBuilder, WriteBatch,
-        WriteBatchExt, ALL_CFS, CF_DEFAULT,
+        ALL_CFS, CF_DEFAULT, FlowControlFactorsExt, MiscExt, Mutable, SstWriter, SstWriterBuilder,
+        WriteBatch, WriteBatchExt,
     };
     use tempfile::Builder;
 
     use super::*;
-    use crate::{util::new_engine_opt, RocksCfOptions, RocksDbOptions, RocksSstWriterBuilder};
+    use crate::{RocksCfOptions, RocksDbOptions, RocksSstWriterBuilder, util::new_engine_opt};
 
     #[test]
     fn test_ingest_multiple_file() {
@@ -171,6 +172,7 @@ mod tests {
             CF_DEFAULT,
             &[p1.to_str().unwrap(), p2.to_str().unwrap()],
             None,
+            false, // force_allow_write
         )
         .unwrap();
     }

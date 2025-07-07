@@ -2,12 +2,12 @@
 
 use std::{
     fs,
-    sync::{mpsc::channel, Arc},
+    sync::{Arc, mpsc::channel},
     thread,
     time::Duration,
 };
 
-use engine_traits::{Peekable, CF_DEFAULT, CF_WRITE};
+use engine_traits::{CF_DEFAULT, CF_WRITE, Peekable};
 use keys::data_key;
 use kvproto::{
     metapb, pdpb,
@@ -17,13 +17,13 @@ use kvproto::{
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use raftstore::{
-    store::{Bucket, BucketRange, Callback, WriteResponse},
     Result,
+    store::{Bucket, BucketRange, Callback, WriteResponse},
 };
 use raftstore_v2::router::QueryResult;
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
-use tikv::storage::{kv::SnapshotExt, Snapshot};
+use tikv::storage::{Snapshot, kv::SnapshotExt};
 use tikv_util::{config::*, future::block_on_timeout};
 use txn_types::{Key, LastChange, PessimisticLock};
 

@@ -27,11 +27,10 @@ use std::{
     marker::PhantomData,
     mem,
     sync::{
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     time::Duration,
-    u64,
 };
 
 use causal_ts::CausalTsProviderImpl;
@@ -39,7 +38,7 @@ use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use crossbeam::utils::CachePadded;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use futures::{compat::Future01CompatExt, FutureExt as _, StreamExt};
+use futures::{FutureExt as _, StreamExt, compat::Future01CompatExt};
 use kvproto::{
     kvrpcpb::{self, CommandPri, Context, DiskFullOpt},
     pdpb::QueryKind,
@@ -49,49 +48,49 @@ use pd_client::{Feature, FeatureGate};
 use raftstore::store::TxnExt;
 use resource_control::{ResourceController, ResourceGroupManager, TaskMetadata};
 use resource_metering::{FutureExt, ResourceTagFactory};
-use smallvec::{smallvec, SmallVec};
+use smallvec::{SmallVec, smallvec};
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData, WriteEvent};
 use tikv_util::{
     memory::MemoryQuota, quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE,
 };
-use tracker::{set_tls_tracker_token, TrackerToken, TrackerTokenArray, GLOBAL_TRACKERS};
+use tracker::{GLOBAL_TRACKERS, TrackerToken, TrackerTokenArray, set_tls_tracker_token, track};
 use txn_types::TimeStamp;
 
 use super::task::Task;
 use crate::{
     server::lock_manager::waiter_manager,
     storage::{
+        DynamicConfigs, Error as StorageError, ErrorInner as StorageErrorInner,
+        PessimisticLockKeyResult, PessimisticLockResults,
         config::Config,
         errors::SharedError,
         get_causal_ts, get_priority_tag, get_raw_key_guard,
         kv::{
-            self, with_tls_engine, Engine, FlowStatsReporter, Result as EngineResult, SnapContext,
-            Statistics,
+            self, Engine, FlowStatsReporter, Result as EngineResult, SnapContext, Statistics,
+            with_tls_engine,
         },
         lock_manager::{
-            self,
+            self, DiagnosticContext, LockManager, LockWaitToken,
             lock_wait_context::{LockWaitContext, PessimisticLockKeyCallback},
             lock_waiting_queue::{DelayedNotifyAllFuture, LockWaitEntry, LockWaitQueues},
-            DiagnosticContext, LockManager, LockWaitToken,
         },
         metrics::*,
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, ReleasedLock},
         txn::{
-            commands,
+            Error, ErrorInner, ProcessResult, commands,
             commands::{
                 Command, RawExt, ReleasedLocks, ResponsePolicy, WriteContext, WriteResult,
                 WriteResultLockInfo,
             },
             flow_controller::FlowController,
             latch::{Latches, Lock},
-            sched_pool::{tls_collect_query, tls_collect_scan_details, SchedPool},
+            sched_pool::{SchedPool, tls_collect_query, tls_collect_scan_details},
+            tracker::TlsFutureTracker,
             txn_status_cache::TxnStatusCache,
-            Error, ErrorInner, ProcessResult,
         },
         types::StorageCallback,
-        DynamicConfigs, Error as StorageError, ErrorInner as StorageErrorInner,
-        PessimisticLockKeyResult, PessimisticLockResults,
     },
+    tikv_util::time::InstantExt,
 };
 
 const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
@@ -566,7 +565,6 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         callback: SchedulerTaskCallback,
         prepared_latches: Option<Lock>,
     ) {
-        let now = Instant::now();
         let cid = task.cid();
         let tracker_token = task.tracker_token();
         let cmd = task.cmd();
@@ -587,7 +585,8 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 .new_task_context(task, callback, prepared_latches)
         });
         GLOBAL_TRACKERS.with_tracker(tracker_token, |tracker| {
-            tracker.metrics.grpc_process_nanos = now.saturating_elapsed().as_nanos() as u64;
+            tracker.metrics.grpc_process_nanos =
+                tracker.req_info.begin.saturating_elapsed().as_nanos() as u64;
             tracker.req_info.request_type = cmd_type;
             tracker.req_info.cid = cid;
         });
@@ -600,61 +599,67 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             return;
         }
         let task = tctx.task.as_ref().unwrap();
-        self.fail_fast_or_check_deadline(cid, task.cmd());
+        self.fail_fast_or_check_deadline(cid, task.cmd(), tracker_token);
         fail_point!("txn_scheduler_acquire_fail");
     }
 
-    fn fail_fast_or_check_deadline(&self, cid: u64, cmd: &Command) {
+    fn fail_fast_or_check_deadline(&self, cid: u64, cmd: &Command, tracker_token: TrackerToken) {
         let tag = cmd.tag();
         let ctx = cmd.ctx().clone();
         let deadline = cmd.deadline();
         let sched = self.clone();
+        let execution = async move {
+            match unsafe { with_tls_engine(|engine: &mut E| engine.precheck_write_with_ctx(&ctx)) }
+            {
+                // Precheck failed, try to return err early.
+                Err(e) => {
+                    let cb = sched.inner.try_own_and_take_cb(cid);
+                    // The task is not processing or finished currently. It's safe
+                    // to response early here. In the future, the task will be waked up
+                    // and it will finished with DeadlineExceeded error.
+                    // As the cb is taken here, it will not be executed anymore.
+                    if let Some(cb) = cb {
+                        let pr = ProcessResult::Failed {
+                            err: StorageError::from(e),
+                        };
+                        Self::early_response(
+                            cid,
+                            cb,
+                            pr,
+                            tag,
+                            CommandStageKind::precheck_write_err,
+                            tracker_token,
+                        );
+                    }
+                }
+                Ok(()) => {
+                    SCHED_STAGE_COUNTER_VEC.get(tag).precheck_write_ok.inc();
+                    // Check deadline in background.
+                    GLOBAL_TIMER_HANDLE
+                        .delay(deadline.to_std_instant())
+                        .compat()
+                        .await
+                        .unwrap();
+                    let cb = sched.inner.try_own_and_take_cb(cid);
+                    if let Some(cb) = cb {
+                        GLOBAL_TRACKERS.with_tracker(tracker_token, |tracker| {
+                            let now = Instant::now();
+                            TlsFutureTracker::collect_to_tracker(now, tracker);
+                        });
+                        cb.execute(ProcessResult::Failed {
+                            err: StorageErrorInner::DeadlineExceeded.into(),
+                        })
+                    }
+                }
+            }
+        };
+        let execution = track(execution, TlsFutureTracker::new(tracker_token, tag, cid));
         self.get_sched_pool()
             .spawn(
                 &cmd.ctx().request_source,
                 TaskMetadata::from_ctx(cmd.resource_control_ctx()),
                 cmd.priority(),
-                async move {
-                    match unsafe {
-                        with_tls_engine(|engine: &mut E| engine.precheck_write_with_ctx(&ctx))
-                    } {
-                        // Precheck failed, try to return err early.
-                        Err(e) => {
-                            let cb = sched.inner.try_own_and_take_cb(cid);
-                            // The task is not processing or finished currently. It's safe
-                            // to response early here. In the future, the task will be waked up
-                            // and it will finished with DeadlineExceeded error.
-                            // As the cb is taken here, it will not be executed anymore.
-                            if let Some(cb) = cb {
-                                let pr = ProcessResult::Failed {
-                                    err: StorageError::from(e),
-                                };
-                                Self::early_response(
-                                    cid,
-                                    cb,
-                                    pr,
-                                    tag,
-                                    CommandStageKind::precheck_write_err,
-                                );
-                            }
-                        }
-                        Ok(()) => {
-                            SCHED_STAGE_COUNTER_VEC.get(tag).precheck_write_ok.inc();
-                            // Check deadline in background.
-                            GLOBAL_TIMER_HANDLE
-                                .delay(deadline.to_std_instant())
-                                .compat()
-                                .await
-                                .unwrap();
-                            let cb = sched.inner.try_own_and_take_cb(cid);
-                            if let Some(cb) = cb {
-                                cb.execute(ProcessResult::Failed {
-                                    err: StorageErrorInner::DeadlineExceeded.into(),
-                                })
-                            }
-                        }
-                    }
-                },
+                execution,
             )
             .unwrap();
     }
@@ -716,6 +721,8 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let metadata = TaskMetadata::from_ctx(task.cmd().resource_control_ctx());
         let request_source = task.cmd().ctx().request_source.clone();
         let priority = task.cmd().priority();
+        let future_tracker =
+            TlsFutureTracker::new(task.tracker_token(), task.cmd().tag(), task.cid());
         let execution = async move {
             fail_point!("scheduler_start_execute");
             if sched.check_task_deadline_exceeded(&task, None) {
@@ -778,6 +785,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 }
             }
         };
+        let execution = track(execution, future_tracker);
         let execution_bytes = std::mem::size_of_val(&execution);
         let memory_quota = self.inner.memory_quota.clone();
         memory_quota.alloc_force(execution_bytes);
@@ -817,9 +825,10 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         );
         if let Some(details) = sched_details {
             let req_info = GLOBAL_TRACKERS.with_tracker(details.tracker, |tracker| {
-                tracker.metrics.scheduler_process_nanos = details
-                    .start_process_instant
-                    .saturating_elapsed()
+                let now = Instant::now();
+                TlsFutureTracker::collect_to_tracker(now, tracker);
+                tracker.metrics.scheduler_process_nanos = now
+                    .saturating_duration_since(details.start_process_instant)
                     .as_nanos() as u64;
                 tracker.metrics.scheduler_throttle_nanos =
                     details.flow_control_nanos + details.quota_limit_delay_nanos;
@@ -938,11 +947,11 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 self.schedule_command(task, cb, None);
             } else {
                 GLOBAL_TRACKERS.with_tracker(sched_details.tracker, |tracker| {
-                    tracker.metrics.scheduler_process_nanos = sched_details
-                        .start_process_instant
-                        .saturating_elapsed()
-                        .as_nanos()
-                        as u64;
+                    let now = Instant::now();
+                    TlsFutureTracker::collect_to_tracker(now, tracker);
+                    tracker.metrics.scheduler_process_nanos =
+                        now.saturating_duration_since(sched_details.start_process_instant)
+                            .as_nanos() as u64;
                     tracker.metrics.scheduler_throttle_nanos =
                         sched_details.flow_control_nanos + sched_details.quota_limit_delay_nanos;
                 });
@@ -1192,9 +1201,14 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         pr: ProcessResult,
         tag: CommandKind,
         stage: CommandStageKind,
+        tracker_token: TrackerToken,
     ) {
         debug!("early return response"; "cid" => cid);
         SCHED_STAGE_COUNTER_VEC.get(tag).get(stage).inc();
+        GLOBAL_TRACKERS.with_tracker(tracker_token, |tracker| {
+            let now = Instant::now();
+            TlsFutureTracker::collect_to_tracker(now, tracker);
+        });
         cb.execute(pr);
         // It won't release locks here until write finished.
     }
@@ -1705,6 +1719,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                             final_pr.take().unwrap(),
                             tag,
                             CommandStageKind::async_apply_prewrite,
+                            tracker_token,
                         );
                     }
                 }
@@ -1731,6 +1746,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                             final_pr.take().unwrap(),
                             tag,
                             CommandStageKind::pipelined_write,
+                            sched_details.tracker,
                         );
                     }
                 }
@@ -2189,6 +2205,7 @@ mod tests {
 
     use super::*;
     use crate::storage::{
+        RocksEngine, SecondaryLocksStatus, TestEngineBuilder, TxnStatus,
         kv::{Error as KvError, ErrorInner as KvErrorInner},
         lock_manager::{MockLockManager, WaitTimeout},
         mvcc::{self, Mutation},
@@ -2199,7 +2216,6 @@ mod tests {
             flow_controller::{EngineFlowController, FlowController},
             latch::*,
         },
-        RocksEngine, SecondaryLocksStatus, TestEngineBuilder, TxnStatus,
     };
 
     #[derive(Clone)]
@@ -2291,6 +2307,7 @@ mod tests {
                 vec![Key::from_raw(b"k")],
                 10.into(),
                 20.into(),
+                None,
                 Context::default(),
             )
             .into(),

@@ -7,17 +7,17 @@ use std::sync::Arc;
 
 use fail::fail_point;
 pub use future_pool::{Full, FuturePool};
-use futures::{compat::Stream01CompatExt, StreamExt};
-use prometheus::{local::LocalHistogram, Histogram, HistogramOpts};
+use futures::{StreamExt, compat::Stream01CompatExt};
+use prometheus::{Histogram, HistogramOpts, local::LocalHistogram};
 use yatp::{
-    pool::{CloneRunnerBuilder, Local, Remote, Runner},
-    queue::{multilevel, priority, Extras, QueueType, TaskCell as _},
-    task::future::{Runner as FutureRunner, TaskCell},
     ThreadPool,
+    pool::{CloneRunnerBuilder, Local, Remote, Runner},
+    queue::{Extras, QueueType, TaskCell as _, multilevel, priority},
+    task::future::{Runner as FutureRunner, TaskCell},
 };
 
 use crate::{
-    resource_control::{priority_from_task_meta, TaskPriority},
+    resource_control::{TaskPriority, priority_from_task_meta},
     thread_group::GroupProperties,
     time::{Duration, Instant},
     timer::GLOBAL_TIMER_HANDLE,
@@ -150,7 +150,7 @@ impl Config {
     pub fn default_for_test() -> Self {
         Self {
             workers: 2,
-            max_tasks_per_worker: std::usize::MAX,
+            max_tasks_per_worker: usize::MAX,
             stack_size: 2_000_000,
         }
     }
@@ -279,7 +279,7 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
             core_thread_count: 1,
             max_thread_count: 1,
             stack_size: 0,
-            max_tasks: std::usize::MAX,
+            max_tasks: usize::MAX,
             cleanup_method: CleanupMethod::InPlace,
 
             enable_task_wait_metrics: false,

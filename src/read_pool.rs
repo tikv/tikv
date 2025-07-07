@@ -4,41 +4,41 @@ use std::{
     convert::TryFrom,
     future::Future,
     sync::{
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
         mpsc::SyncSender,
-        Arc, Mutex,
     },
     time::Duration,
 };
 
-use file_system::{set_io_type, IoType};
+use file_system::{IoType, set_io_type};
 use futures::{
     channel::oneshot,
     future::{FutureExt, TryFutureExt},
 };
 use kvproto::{errorpb, kvrpcpb::CommandPri};
 use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
-use prometheus::{core::Metric, Histogram, IntCounter, IntGauge};
+use prometheus::{Histogram, IntCounter, IntGauge, core::Metric};
 use resource_control::{
-    with_resource_limiter, ControlledFuture, ResourceController, ResourceLimiter, TaskPriority,
+    ControlledFuture, ResourceController, ResourceLimiter, TaskPriority, with_resource_limiter,
 };
 use thiserror::Error;
 use tikv_util::{
     resource_control::TaskMetadata,
-    sys::{cpu_time::ProcessStat, SysQuota},
+    sys::{SysQuota, cpu_time::ProcessStat},
     time::Instant,
     worker::{Runnable, RunnableWithTimer, Scheduler, Worker},
     yatp_pool::{self, CleanupMethod, FuturePool, PoolTicker, YatpPoolBuilder},
 };
-use tracker::TrackedFuture;
+use tracker::TlsTrackedFuture;
 use yatp::{
     metrics::MULTILEVEL_LEVEL_ELAPSED, pool::Remote, queue::Extras, task::future::TaskCell,
 };
 
 use self::metrics::*;
 use crate::{
-    config::{UnifiedReadPoolConfig, UNIFIED_READPOOL_MIN_CONCURRENCY},
-    storage::kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter},
+    config::{UNIFIED_READPOOL_MIN_CONCURRENCY, UnifiedReadPoolConfig},
+    storage::kv::{Engine, FlowStatsReporter, destroy_tls_engine, set_tls_engine},
 };
 
 // the duration to check auto-scale unified-thread-pool's thread
@@ -173,7 +173,7 @@ impl ReadPoolHandle {
                 extras.set_metadata(metadata.to_vec());
                 let task_cell = if let Some(resource_ctl) = resource_ctl {
                     TaskCell::new(
-                        TrackedFuture::new(with_resource_limiter(
+                        TlsTrackedFuture::new(with_resource_limiter(
                             ControlledFuture::new(
                                 f.map(move |_| {
                                     running_tasks.dec();
@@ -187,7 +187,7 @@ impl ReadPoolHandle {
                     )
                 } else {
                     TaskCell::new(
-                        TrackedFuture::new(f.map(move |_| {
+                        TlsTrackedFuture::new(f.map(move |_| {
                             running_tasks.dec();
                         })),
                         extras,
@@ -790,6 +790,7 @@ pub enum ReadPoolError {
 }
 
 mod metrics {
+    use lazy_static::lazy_static;
     use prometheus::*;
 
     lazy_static! {

@@ -2,7 +2,7 @@
 
 use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
-use tidb_query_datatype::codec::{data_type::*, Error};
+use tidb_query_datatype::codec::{Error, data_type::*};
 
 #[rpn_fn(nullable)]
 #[inline]
@@ -281,8 +281,8 @@ fn right_shift(lhs: Option<&Int>, rhs: Option<&Int>) -> Result<Option<Int>> {
 #[cfg(test)]
 mod tests {
     use tidb_query_datatype::{
-        builder::FieldTypeBuilder, codec::mysql::TimeType, expr::EvalContext, FieldTypeFlag,
-        FieldTypeTp,
+        FieldTypeFlag, FieldTypeTp, builder::FieldTypeBuilder, codec::mysql::TimeType,
+        expr::EvalContext,
     };
     use tipb::ScalarFuncSig;
 

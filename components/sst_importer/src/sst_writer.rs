@@ -2,14 +2,14 @@
 
 use std::sync::Arc;
 
-use api_version::{dispatch_api_version, match_template_api_version, KeyMode, KvFormat, RawValue};
+use api_version::{KeyMode, KvFormat, RawValue, dispatch_api_version, match_template_api_version};
 use encryption::DataKeyManager;
-use engine_traits::{raw_ttl::ttl_to_expire_ts, KvEngine, SstWriter};
+use engine_traits::{KvEngine, SstWriter, raw_ttl::ttl_to_expire_ts};
 use kvproto::{import_sstpb::*, kvrpcpb::ApiVersion};
 use tikv_util::time::Instant;
-use txn_types::{is_short_value, Key, TimeStamp, Write as KvWrite, WriteType};
+use txn_types::{Key, TimeStamp, Write as KvWrite, WriteType, is_short_value};
 
-use crate::{import_file::ImportPath, metrics::*, Error, Result};
+use crate::{Error, Result, import_file::ImportPath, metrics::*};
 
 #[derive(Debug)]
 pub enum SstWriterType {
@@ -78,6 +78,13 @@ impl<E: KvEngine> TxnSstWriter<E> {
         let start = Instant::now_coarse();
 
         let commit_ts = TimeStamp::new(batch.get_commit_ts());
+        if commit_ts.is_zero() {
+            return Err(Error::BadFormat(format!(
+                "invalid commit-ts {}",
+                commit_ts.into_inner()
+            )));
+        }
+
         for m in batch.get_pairs().iter() {
             dispatch_api_version!(self.api_version, {
                 self.check_api_version::<API>(m.get_key())?;
@@ -372,6 +379,26 @@ mod tests {
 
         let metas = w.finish().unwrap();
         assert_eq!(metas.len(), 2);
+    }
+
+    #[test]
+    fn test_write_txn_sst_with_invalid_ts() {
+        let (mut w, _handle) = new_writer(SstImporter::new_txn_writer, ApiVersion::V1);
+        let mut batch = WriteBatch::default();
+        let mut pairs = vec![];
+
+        // put short value kv in write cf
+        let mut pair = Pair::default();
+        pair.set_key(b"k1".to_vec());
+        pair.set_value(b"short_value".to_vec());
+        pairs.push(pair);
+
+        // generate two cf metas
+        batch.set_commit_ts(0);
+        batch.set_pairs(pairs.into());
+        let r = w.write(batch);
+        assert!(r.is_err());
+        assert_eq!(r.unwrap_err().to_string(), "bad format invalid commit-ts 0");
     }
 
     #[test]

@@ -1,9 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp::min, collections::HashMap, sync::Arc, time::Duration, u64};
+use std::{cmp::min, collections::HashMap, sync::Arc, time::Duration};
 
 use batch_system::Config as BatchSystemConfig;
-use engine_traits::{perf_level_serde, PerfLevel};
+use engine_traits::{PerfLevel, perf_level_serde};
 use lazy_static::lazy_static;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig};
 use prometheus::register_gauge_vec;
@@ -20,7 +20,7 @@ use tikv_util::{
 use time::Duration as TimeDuration;
 
 use super::worker::{RaftStoreBatchComponent, RefreshConfigTask};
-use crate::{coprocessor::config::RAFTSTORE_V2_SPLIT_SIZE, Result};
+use crate::{Result, coprocessor::config::RAFTSTORE_V2_SPLIT_SIZE};
 
 lazy_static! {
     pub static ref CONFIG_RAFTSTORE_GAUGE: prometheus::GaugeVec = register_gauge_vec!(
@@ -507,12 +507,12 @@ impl Default for Config {
             leader_transfer_max_log_lag: 128,
             snap_apply_batch_size: ReadableSize::mb(10),
             snap_apply_copy_symlink: false,
-            region_worker_tick_interval: if cfg!(feature = "test") {
+            region_worker_tick_interval: if cfg!(test) {
                 ReadableDuration::millis(200)
             } else {
                 ReadableDuration::millis(1000)
             },
-            clean_stale_ranges_tick: if cfg!(feature = "test") { 1 } else { 10 },
+            clean_stale_ranges_tick: if cfg!(test) { 1 } else { 10 },
             lock_cf_compact_interval: ReadableDuration::minutes(10),
             lock_cf_compact_bytes_threshold: ReadableSize::mb(256),
             // Disable consistency check by default as it will hurt performance.
@@ -566,7 +566,7 @@ impl Default for Config {
             region_split_size: ReadableSize(0),
             clean_stale_peer_delay: ReadableDuration::minutes(0),
             inspect_interval: ReadableDuration::millis(100),
-            inspect_kvdb_interval: ReadableDuration::secs(2),
+            inspect_kvdb_interval: ReadableDuration::millis(100),
             // The default value of `inspect_cpu_util_thd` is 0.4, which means
             // when the cpu utilization is greater than 40%, the store might be
             // regarded as a slow node if there exists delayed inspected messages.
@@ -708,18 +708,6 @@ impl Config {
         // to inspect kvdb.
         if !separated_raft_mount_path {
             self.inspect_kvdb_interval = ReadableDuration::ZERO;
-        } else {
-            // If the inspect_kvdb_interval is less than inspect_interval, it should
-            // use `inspect_interval` * 10 as an empirical inspect interval for KvDB Disk
-            // I/O.
-            let inspect_kvdb_interval = if self.inspect_kvdb_interval < self.inspect_interval
-                && self.inspect_kvdb_interval != ReadableDuration::ZERO
-            {
-                self.inspect_interval * 10
-            } else {
-                self.inspect_kvdb_interval
-            };
-            self.inspect_kvdb_interval = inspect_kvdb_interval;
         }
     }
 
@@ -1692,8 +1680,7 @@ mod tests {
 
         cfg = Config::new();
         cfg.inspect_kvdb_interval = ReadableDuration::millis(1);
-        cfg.inspect_interval = ReadableDuration::millis(100);
         cfg.optimize_inspector(true);
-        assert_eq!(cfg.inspect_kvdb_interval, ReadableDuration::secs(1));
+        assert_eq!(cfg.inspect_kvdb_interval, ReadableDuration::millis(1));
     }
 }

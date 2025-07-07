@@ -19,25 +19,25 @@ use std::{
 
 use async_stream::stream;
 use collections::HashMap;
-use flate2::{write::GzEncoder, Compression};
+use flate2::{Compression, write::GzEncoder};
 use futures::{
     compat::Compat01As03,
     future::{ok, poll_fn},
     prelude::*,
 };
-use http::header::{HeaderValue, ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_TYPE};
+use http::header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_TYPE, HeaderValue};
 use hyper::{
-    self, header,
+    self, Body, Method, Request, Response, Server, StatusCode, header,
     server::{
+        Builder as HyperBuilder,
         accept::Accept,
         conn::{AddrIncoming, AddrStream},
-        Builder as HyperBuilder,
     },
     service::{make_service_fn, service_fn},
-    Body, Method, Request, Response, Server, StatusCode,
 };
 use in_memory_engine::RegionCacheMemoryEngine;
 use kvproto::resource_manager::ResourceGroup;
+use lazy_static::lazy_static;
 use metrics::STATUS_REQUEST_DURATION;
 use online_config::OnlineConfig;
 use openssl::{
@@ -55,6 +55,7 @@ use serde_json::Value;
 use service::service_manager::GrpcServiceManager;
 use tikv_kv::RaftExtension;
 use tikv_util::{
+    GLOBAL_SERVER_READINESS,
     logger::set_log_level,
     metrics::{dump, dump_to},
     timer::GLOBAL_TIMER_HANDLE,
@@ -611,6 +612,26 @@ where
         Self::metrics_to_resp(req, should_simplify)
     }
 
+    fn handle_ready_request(req: Request<Body>) -> hyper::Result<Response<Body>> {
+        let verbose = req
+            .uri()
+            .query()
+            .is_some_and(|query| query.contains("verbose"));
+
+        let status_code = if GLOBAL_SERVER_READINESS.is_ready() {
+            StatusCode::OK
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        };
+
+        let body = if verbose {
+            GLOBAL_SERVER_READINESS.to_json()
+        } else {
+            "".to_string()
+        };
+        Ok(make_response(status_code, body))
+    }
+
     fn start_serve<I, C>(&mut self, builder: HyperBuilder<I>)
     where
         I: Accept<Conn = C, Error = std::io::Error> + Send + 'static,
@@ -680,6 +701,9 @@ where
                                 Self::handle_get_metrics(req, &cfg_controller)
                             }
                             (Method::GET, "/status") => Ok(Response::default()),
+                            (Method::GET, "/ready") => {
+                                Self::handle_ready_request(req)
+                            }
                             (Method::GET, "/debug/pprof/heap_list") => {
                                 Ok(make_response(
                                     StatusCode::GONE,
@@ -1206,17 +1230,22 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{env, io::Read, path::PathBuf, sync::Arc};
+    use std::{
+        env,
+        io::Read,
+        path::PathBuf,
+        sync::{Arc, atomic::Ordering},
+    };
 
     use collections::HashSet;
     use flate2::read::GzDecoder;
     use futures::{
         executor::block_on,
-        future::{ok, BoxFuture},
+        future::{BoxFuture, ok},
         prelude::*,
     };
-    use http::header::{HeaderValue, ACCEPT_ENCODING};
-    use hyper::{body::Buf, client::HttpConnector, Body, Client, Method, Request, StatusCode, Uri};
+    use http::header::{ACCEPT_ENCODING, HeaderValue};
+    use hyper::{Body, Client, Method, Request, StatusCode, Uri, body::Buf, client::HttpConnector};
     use hyper_openssl::HttpsConnector;
     use online_config::OnlineConfig;
     use openssl::ssl::{SslConnector, SslFiletype, SslMethod};
@@ -1225,11 +1254,11 @@ mod tests {
     use service::service_manager::GrpcServiceManager;
     use test_util::new_security_cfg;
     use tikv_kv::RaftExtension;
-    use tikv_util::logger::get_log_level;
+    use tikv_util::{GLOBAL_SERVER_READINESS, logger::get_log_level};
 
     use crate::{
         config::{ConfigController, TikvConfig},
-        server::status_server::{profile::TEST_PROFILE_MUTEX, LogLevelRequest, StatusServer},
+        server::status_server::{LogLevelRequest, StatusServer, profile::TEST_PROFILE_MUTEX},
         storage::config::EngineType,
     };
 
@@ -1788,7 +1817,7 @@ mod tests {
             String::from_utf8(body_bytes.as_ref().to_owned())
                 .unwrap()
                 .split(' ')
-                .last()
+                .next_back()
                 .unwrap()
                 .starts_with("backtrace::backtrace")
         );
@@ -1980,5 +2009,63 @@ mod tests {
             }
             status_server.stop();
         }
+    }
+
+    #[test]
+    fn test_ready_endpoint() {
+        let mut status_server = StatusServer::new(
+            1,
+            ConfigController::default(),
+            Arc::new(SecurityConfig::default()),
+            MockRouter,
+            None,
+            GrpcServiceManager::dummy(),
+            None,
+        )
+        .unwrap();
+        let addr = "127.0.0.1:0".to_owned();
+        let _ = status_server.start(addr);
+        let client = Client::new();
+        let uri = Uri::builder()
+            .scheme("http")
+            .authority(status_server.listening_addr().to_string().as_str())
+            .path_and_query("/ready?verbose")
+            .build()
+            .unwrap();
+        let uri2 = uri.clone();
+        // Set one readiness condition to true.
+        GLOBAL_SERVER_READINESS
+            .connected_to_pd
+            .store(true, Ordering::Relaxed);
+        let handle = status_server.thread_pool.spawn(async move {
+            let resp = client.get(uri).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+            let body_bytes = hyper::body::to_bytes(resp.into_body()).await.unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+            assert_eq!(
+                json["connected_to_pd"], true,
+                "connected_to_pd should be false"
+            );
+            assert_eq!(
+                json["raft_peers_caught_up"], false,
+                "raft_peers_caught_up should be false"
+            );
+        });
+        block_on(handle).unwrap();
+
+        // Set the remaining readiness conditions to true.
+        GLOBAL_SERVER_READINESS
+            .raft_peers_caught_up
+            .store(true, Ordering::Relaxed);
+
+        let client = Client::new();
+        let handle2 = status_server.thread_pool.spawn(async move {
+            let resp = client.get(uri2).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+        });
+        block_on(handle2).unwrap();
+
+        status_server.stop();
     }
 }

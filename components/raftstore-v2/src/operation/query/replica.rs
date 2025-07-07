@@ -4,14 +4,14 @@ use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_cmdpb::{self, RaftCmdRequest, RaftCmdResponse};
 use pd_client::INVALID_ID;
 use raftstore::{
+    Error,
     store::{
-        cmd_resp,
+        Config, ReadIndexContext, ReadIndexRequest, cmd_resp,
         fsm::apply::notify_stale_req,
         metrics::RAFT_READ_INDEX_PENDING_COUNT,
         msg::{ErrorCallback, ReadCallback},
-        propose_read_index, Config, ReadIndexContext, ReadIndexRequest,
+        propose_read_index,
     },
-    Error,
 };
 use slog::debug;
 use tikv_util::time::monotonic_raw_now;
@@ -40,8 +40,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             "request to get a read index from follower, retry";
             "request_id" => ?read.id,
         );
-        let ctx =
-            ReadIndexContext::fields_to_bytes(read.id, read.addition_request.as_deref(), None);
+        let ctx = ReadIndexContext::fields_to_bytes(
+            read.id,
+            read.addition_request.as_deref(),
+            None,
+            None,
+        );
         debug_assert!(read.read_index.is_none());
         self.raft_group_mut().read_index(ctx);
     }

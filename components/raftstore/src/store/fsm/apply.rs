@@ -13,12 +13,11 @@ use std::{
     mem,
     ops::{Deref, DerefMut, Range as StdRange},
     sync::{
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         mpsc::SyncSender,
-        Arc, Mutex,
     },
     time::Duration,
-    usize,
     vec::Drain,
 };
 
@@ -28,10 +27,11 @@ use batch_system::{
 };
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
+use derive_more::Debug as DebugMore;
 use engine_traits::{
-    util::SequenceNumber, DeleteStrategy, KvEngine, Mutable, PerfContext, PerfContextKind,
-    RaftEngine, RaftEngineReadOnly, Range as EngineRange, Snapshot, SstMetaInfo, WriteBatch,
-    WriteOptions, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DeleteStrategy, KvEngine, Mutable,
+    PerfContext, PerfContextKind, RaftEngine, RaftEngineReadOnly, Range as EngineRange, Snapshot,
+    SstMetaInfo, WriteBatch, WriteOptions, util::SequenceNumber,
 };
 use fail::fail_point;
 use health_controller::types::LatencyInspector;
@@ -47,42 +47,41 @@ use kvproto::{
 };
 use pd_client::{BucketMeta, BucketStat};
 use prometheus::local::LocalHistogram;
-use protobuf::{wire_format::WireType, CodedInputStream, Message};
+use protobuf::{CodedInputStream, Message, wire_format::WireType};
 use raft::eraftpb::{
     ConfChange, ConfChangeType, ConfChangeV2, Entry, EntryType, Snapshot as RaftSnapshot,
 };
 use raft_proto::ConfChangeI;
 use resource_control::{ResourceConsumeType, ResourceController, ResourceMetered};
-use smallvec::{smallvec, SmallVec};
+use smallvec::{SmallVec, smallvec};
 use sst_importer::SstImporter;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
-    box_err, box_try,
+    Either, MustConsumeVec, box_err, box_try,
     config::{Tracker, VersionTrack},
     debug, error, info,
     memory::HeapSize,
-    mpsc::{loose_bounded, LooseBoundedSender, Receiver},
+    mpsc::{LooseBoundedSender, Receiver, loose_bounded},
     safe_panic, slow_log,
     store::{find_peer, find_peer_by_id, find_peer_mut, is_learner, remove_peer},
-    time::{duration_to_sec, Instant},
+    time::{Instant, duration_to_sec},
     warn,
     worker::Scheduler,
-    Either, MustConsumeVec,
 };
 use time::Timespec;
-use tracker::{TrackerToken, TrackerTokenArray, GLOBAL_TRACKERS};
+use tracker::{GLOBAL_TRACKERS, TrackerToken, TrackerTokenArray};
 use uuid::Builder as UuidBuilder;
 
 use self::memtrace::*;
 use super::metrics::*;
 use crate::{
-    bytes_capacity,
+    Error, Result, bytes_capacity,
     coprocessor::{
         ApplyCtxInfo, Cmd, CmdBatch, CmdObserveInfo, CoprocessorHost, ObserveHandle, ObserveLevel,
         RegionState, WriteBatchWrapper,
     },
     store::{
-        cmd_resp,
+        Config, RegionSnapshot, SnapGenTask, WriteCallback, cmd_resp,
         entry_storage::{self, CachedEntries},
         fsm::RaftPollerBuilder,
         local_metrics::RaftMetrics,
@@ -92,12 +91,10 @@ use crate::{
         peer::Peer,
         peer_storage::{write_initial_apply_state, write_peer_state},
         util::{
-            self, admin_cmd_epoch_lookup, check_flashback_state, check_req_region_epoch,
-            compare_region_epoch, ChangePeerI, ConfChangeKind, KeysInfoFormatter,
+            self, ChangePeerI, ConfChangeKind, KeysInfoFormatter, admin_cmd_epoch_lookup,
+            check_flashback_state, check_req_region_epoch, compare_region_epoch,
         },
-        Config, RegionSnapshot, SnapGenTask, WriteCallback,
     },
-    Error, Result,
 };
 
 // These consts are shared in both v1 and v2.
@@ -201,7 +198,7 @@ impl<C> PendingCmdQueue<C> {
 
     fn pop_compact(&mut self, index: u64) -> Option<PendingCmd<C>> {
         let mut front = None;
-        while self.compacts.front().map_or(false, |c| c.index < index) {
+        while self.compacts.front().is_some_and(|c| c.index < index) {
             front = self.compacts.pop_front();
             front.as_mut().unwrap().cb.take().unwrap();
         }
@@ -873,10 +870,18 @@ fn has_high_latency_operation(cmd: &RaftCmdRequest) -> bool {
 /// Checks if a write is needed to be issued after handling the command.
 fn should_sync_log(cmd: &RaftCmdRequest) -> bool {
     if cmd.has_admin_request() {
-        if cmd.get_admin_request().get_cmd_type() == AdminCmdType::CompactLog {
-            // We do not need to sync WAL before compact log, because this request will send
-            // a msg to raft_gc_log thread to delete the entries before this
-            // index instead of deleting them in apply thread directly.
+        if matches!(
+            cmd.get_admin_request().get_cmd_type(),
+            // We do not need to sync WAL before compact log, because this
+            // request will send a msg to raft_gc_log thread to delete the entries
+            // before this index instead of deleting them in apply thread directly.
+            AdminCmdType::CompactLog
+            // ComputeHash, VerifyHash and TransferLeader are read-only commands,
+            // so they do not need to sync WAL.
+            | AdminCmdType::ComputeHash
+                | AdminCmdType::VerifyHash
+                | AdminCmdType::TransferLeader
+        ) {
             return false;
         }
         return true;
@@ -1005,8 +1010,7 @@ pub struct NewSplitPeer {
 /// Region. The apply worker receives all the apply tasks of different Regions
 /// located at this store, and it will get the corresponding apply delegate to
 /// handle the apply task to make the code logic more clear.
-#[derive(Derivative)]
-#[derivative(Debug)]
+#[derive(DebugMore)]
 pub struct ApplyDelegate<EK>
 where
     EK: KvEngine,
@@ -1076,7 +1080,7 @@ where
     priority: Priority,
 
     /// To fetch Raft entries for applying if necessary.
-    #[derivative(Debug = "ignore")]
+    #[debug(skip)]
     raft_engine: Box<dyn RaftEngineReadOnly>,
 
     trace: ApplyMemoryTrace,
@@ -1452,8 +1456,8 @@ where
     ///
     /// An apply operation can fail in the following situations:
     ///   - it encounters an error that will occur on all stores, it can
-    /// continue applying next entry safely, like epoch not match for
-    /// example;
+    ///     continue applying next entry safely, like epoch not match for
+    ///     example;
     ///   - it encounters an error that may not occur on all stores, in this
     ///     case we should try to apply the entry again or panic. Considering
     ///     that this usually due to disk operation fail, which is rare, so just
@@ -1784,7 +1788,7 @@ where
     ) -> Result<(RaftCmdResponse, ApplyResult<EK::Snapshot>)> {
         fail_point!(
             "on_apply_write_cmd",
-            cfg!(release) || self.id() == 3,
+            !cfg!(debug_assertions) || self.id() == 3,
             |_| {
                 unimplemented!();
             }
@@ -2037,7 +2041,7 @@ where
         if cf.is_empty() {
             cf = CF_DEFAULT;
         }
-        if !ALL_CFS.iter().any(|x| *x == cf) {
+        if !ALL_CFS.contains(&cf) {
             return Err(box_err!("invalid delete range command, cf: {:?}", cf));
         }
 
@@ -2784,7 +2788,7 @@ where
             {
                 Ok(None) => (),
                 Ok(Some(state)) => {
-                    if replace_regions.get(region_id).is_some() {
+                    if replace_regions.contains(region_id) {
                         // It's marked replaced, then further destroy will skip cleanup, so there
                         // should be no region local state.
                         panic!(
@@ -4704,7 +4708,7 @@ pub struct ControlFsm {
 
 impl ControlFsm {
     pub fn new() -> (LooseBoundedSender<ControlMsg>, Box<ControlFsm>) {
-        let (tx, rx) = loose_bounded(std::usize::MAX);
+        let (tx, rx) = loose_bounded(usize::MAX);
         let fsm = Box::new(ControlFsm {
             stopped: false,
             receiver: rx,
@@ -5239,14 +5243,14 @@ mod tests {
 
     use bytes::Bytes;
     use engine_panic::PanicEngine;
-    use engine_test::kv::{new_engine, KvTestEngine, KvTestSnapshot};
+    use engine_test::kv::{KvTestEngine, KvTestSnapshot, new_engine};
     use engine_traits::{Peekable as PeekableTrait, SyncMutable, WriteBatchExt};
     use kvproto::{
         kvrpcpb::ApiVersion,
         metapb::{self, RegionEpoch},
         raft_cmdpb::*,
     };
-    use protobuf::Message;
+    use protobuf::{Message, ProtobufEnum};
     use raft::eraftpb::{ConfChange, ConfChangeV2};
     use sst_importer::Config as ImportConfig;
     use tempfile::{Builder, TempDir};
@@ -5263,10 +5267,10 @@ mod tests {
     use crate::{
         coprocessor::*,
         store::{
+            Config, SnapGenTask,
             msg::WriteResponse,
             peer_storage::RAFT_INIT_LOG_INDEX,
             simple_write::{SimpleWriteEncoder, SimpleWriteReqEncoder},
-            Config, SnapGenTask,
         },
     };
 
@@ -5411,10 +5415,32 @@ mod tests {
     #[test]
     fn test_should_sync_log() {
         // Admin command
-        let mut req = RaftCmdRequest::default();
-        req.mut_admin_request()
-            .set_cmd_type(AdminCmdType::ComputeHash);
-        assert_eq!(should_sync_log(&req), true);
+        for admin_cmd in AdminCmdType::values() {
+            let mut req = RaftCmdRequest::default();
+            req.mut_admin_request().set_cmd_type(*admin_cmd);
+            assert_eq!(
+                should_sync_log(&req),
+                matches!(
+                    admin_cmd,
+                    AdminCmdType::InvalidAdmin |
+                    AdminCmdType::ChangePeer |
+                    AdminCmdType::Split |
+                    // AdminCmdType::CompactLog |
+                    // AdminCmdType::TransferLeader |
+                    // AdminCmdType::ComputeHash |
+                    // AdminCmdType::VerifyHash |
+                    AdminCmdType::PrepareMerge |
+                    AdminCmdType::CommitMerge |
+                    AdminCmdType::RollbackMerge |
+                    AdminCmdType::BatchSplit |
+                    AdminCmdType::ChangePeerV2 |
+                    AdminCmdType::PrepareFlashback |
+                    AdminCmdType::FinishFlashback |
+                    AdminCmdType::BatchSwitchWitness |
+                    AdminCmdType::UpdateGcPeer
+                )
+            );
+        }
 
         // IngestSst command
         let mut req = Request::default();
@@ -6038,18 +6064,15 @@ mod tests {
             _: &RegionState,
             apply_info: &mut ApplyCtxInfo<'_>,
         ) -> bool {
-            match apply_info.pending_handle_ssts {
-                Some(v) => {
-                    // If it is a ingest sst
-                    let mut ssts = std::mem::take(v);
-                    assert_ne!(ssts.len(), 0);
-                    if self.delay_remove_ssts.load(Ordering::SeqCst) {
-                        apply_info.pending_delete_ssts.append(&mut ssts);
-                    } else {
-                        apply_info.delete_ssts.append(&mut ssts);
-                    }
+            if let Some(v) = apply_info.pending_handle_ssts {
+                // If it is a ingest sst
+                let mut ssts = std::mem::take(v);
+                assert_ne!(ssts.len(), 0);
+                if self.delay_remove_ssts.load(Ordering::SeqCst) {
+                    apply_info.pending_delete_ssts.append(&mut ssts);
+                } else {
+                    apply_info.delete_ssts.append(&mut ssts);
                 }
-                None => (),
             }
             self.last_delete_sst_count
                 .store(apply_info.delete_ssts.len() as u64, Ordering::SeqCst);
@@ -7644,7 +7667,7 @@ mod tests {
         epoch: Rc<RefCell<RegionEpoch>>,
     }
 
-    impl<'a, E> SplitResultChecker<'a, E>
+    impl<E> SplitResultChecker<'_, E>
     where
         E: KvEngine,
     {

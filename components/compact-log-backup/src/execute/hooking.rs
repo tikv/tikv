@@ -7,11 +7,11 @@ use external_storage::ExternalStorage;
 use tokio::runtime::Handle;
 
 use crate::{
+    Error,
     compaction::{Subcompaction, SubcompactionResult},
     errors::Result,
     execute::Execution,
     statistic::{CollectSubcompactionStatistic, LoadMetaStatistic},
-    Error,
 };
 
 pub struct NoHooks;
@@ -78,7 +78,7 @@ pub struct SubcompactionStartCtx<'a> {
     pub(super) skip: &'a Cell<bool>,
 }
 
-impl<'a> SubcompactionStartCtx<'a> {
+impl SubcompactionStartCtx<'_> {
     pub fn skip(&self) {
         self.skip.set(true);
     }

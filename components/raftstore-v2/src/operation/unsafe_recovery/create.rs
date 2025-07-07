@@ -7,15 +7,15 @@ use engine_traits::{KvEngine, RaftEngine, TabletContext};
 use keys::{data_end_key, data_key, enc_start_key};
 use kvproto::metapb::Region;
 use raftstore::store::{
-    PeerPessimisticLocks, Transport, UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryState,
-    RAFT_INIT_LOG_INDEX,
+    PeerPessimisticLocks, RAFT_INIT_LOG_INDEX, Transport, UnsafeRecoveryExecutePlanSyncer,
+    UnsafeRecoveryState,
 };
 use slog::{error, info, warn};
 
 use crate::{
     batch::StoreContext,
     fsm::Store,
-    operation::{command::temp_split_path, SplitInit},
+    operation::{SplitInit, command::temp_split_path},
     raft::Peer,
     router::PeerMsg,
 };

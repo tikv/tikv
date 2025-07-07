@@ -156,7 +156,7 @@ pub struct InternalKey<'a> {
     pub sequence: u64,
 }
 
-impl<'a> fmt::Debug for InternalKey<'a> {
+impl fmt::Debug for InternalKey<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -305,7 +305,7 @@ mod tests {
     use bytes::BufMut;
 
     use super::*;
-    use crate::keys::{encode_key, ValueType};
+    use crate::keys::{ValueType, encode_key};
 
     fn construct_key(i: u64, mvcc: u64) -> Vec<u8> {
         let k = format!("zk{:08}", i);

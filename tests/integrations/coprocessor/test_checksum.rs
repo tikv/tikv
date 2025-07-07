@@ -1,8 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::u64;
-
-use api_version::{keyspace::KvPair, ApiV1};
+use api_version::{ApiV1, keyspace::KvPair};
 use futures::executor::block_on;
 use kvproto::{
     coprocessor::{KeyRange, Request},
@@ -11,8 +9,8 @@ use kvproto::{
 use protobuf::Message;
 use test_coprocessor::*;
 use tidb_query_common::storage::{
-    scanner::{RangesScanner, RangesScannerOptions},
     Range,
+    scanner::{RangesScanner, RangesScannerOptions},
 };
 use tikv::{
     coprocessor::{dag::TikvStorage, *},

@@ -1,12 +1,12 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{i64, mem, sync::Arc, u64};
+use std::{mem, sync::Arc};
 
 use bitflags::bitflags;
 use tipb::DagRequest;
 
 use super::{Error, Result};
-use crate::codec::mysql::{Tz, DEFAULT_DIV_FRAC_INCR};
+use crate::codec::mysql::{DEFAULT_DIV_FRAC_INCR, Tz};
 
 bitflags! {
     /// Please refer to SQLMode in `mysql/const.go` in repo `pingcap/parser` for details.

@@ -2,9 +2,9 @@
 
 use std::{
     sync::{
-        atomic::{AtomicBool, Ordering},
-        mpsc::{channel, RecvTimeoutError},
         Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{RecvTimeoutError, channel},
     },
     thread,
     time::Duration,
@@ -28,21 +28,20 @@ use test_raftstore_macro::test_case;
 use tikv::{
     config::{ConfigController, Module},
     storage::{
-        self,
+        self, Error as StorageError, ErrorInner as StorageErrorInner,
         config_manager::StorageConfigManger,
         kv::{Error as KvError, ErrorInner as KvErrorInner, SnapContext, SnapshotExt},
         lock_manager::MockLockManager,
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
         test_util::*,
         txn::{
-            commands,
+            Error as TxnError, ErrorInner as TxnErrorInner, commands,
             flow_controller::{EngineFlowController, FlowController},
-            Error as TxnError, ErrorInner as TxnErrorInner,
         },
-        Error as StorageError, ErrorInner as StorageErrorInner, *,
+        *,
     },
 };
-use tikv_util::{future::paired_future_callback, worker::dummy_scheduler, HandyRwLock};
+use tikv_util::{HandyRwLock, future::paired_future_callback, worker::dummy_scheduler};
 use txn_types::{Key, Mutation, TimeStamp};
 
 #[test_case(test_raftstore::new_server_cluster)]
@@ -533,7 +532,13 @@ fn test_pipelined_pessimistic_lock() {
     rx.recv().unwrap();
     storage
         .sched_txn_command(
-            commands::Commit::new(vec![key.clone()], 10.into(), 20.into(), Context::default()),
+            commands::Commit::new(
+                vec![key.clone()],
+                10.into(),
+                20.into(),
+                None,
+                Context::default(),
+            ),
             expect_ok_callback(tx.clone(), 0),
         )
         .unwrap();
@@ -1051,6 +1056,7 @@ fn test_async_apply_prewrite_impl<E: Engine, F: KvFormat>(
                     vec![Key::from_raw(key)],
                     start_ts,
                     min_commit_ts,
+                    None,
                     ctx.clone(),
                 ),
                 Box::new(move |r| tx.send(r).unwrap()),
@@ -1085,7 +1091,13 @@ fn test_async_apply_prewrite_impl<E: Engine, F: KvFormat>(
         let (tx, rx) = channel();
         storage
             .sched_txn_command(
-                commands::Commit::new(vec![Key::from_raw(key)], start_ts, commit_ts, ctx.clone()),
+                commands::Commit::new(
+                    vec![Key::from_raw(key)],
+                    start_ts,
+                    commit_ts,
+                    None,
+                    ctx.clone(),
+                ),
                 Box::new(move |r| tx.send(r).unwrap()),
             )
             .unwrap();
@@ -1263,7 +1275,13 @@ fn test_async_apply_prewrite_fallback() {
     let (tx, rx) = channel();
     storage
         .sched_txn_command(
-            commands::Commit::new(vec![Key::from_raw(key)], 10.into(), res.min_commit_ts, ctx),
+            commands::Commit::new(
+                vec![Key::from_raw(key)],
+                10.into(),
+                res.min_commit_ts,
+                None,
+                ctx,
+            ),
             Box::new(move |r| tx.send(r).unwrap()),
         )
         .unwrap();

@@ -4,14 +4,14 @@ use std::{fmt::Display, io};
 use async_trait::async_trait;
 use cloud::{
     blob::{
-        none_to_empty, BlobConfig, BlobObject, BlobStorage, BucketConf, DeletableStorage,
-        IterableStorage, PutResource, StringNonEmpty,
+        BlobConfig, BlobObject, BlobStorage, BucketConf, DeletableStorage, IterableStorage,
+        PutResource, StringNonEmpty, none_to_empty, read_to_end,
     },
     metrics,
 };
 use futures_util::{
     future::{FutureExt, LocalBoxFuture, TryFutureExt},
-    io::{self as async_io, AsyncRead, Cursor},
+    io::Cursor,
     stream::{self, Stream, StreamExt, TryStreamExt},
 };
 use http::HeaderValue;
@@ -24,12 +24,12 @@ use tame_gcs::{
 };
 use tame_oauth::gcp::ServiceAccountInfo;
 use tikv_util::{
-    stream::{error_stream, AsyncReadAsSyncStreamOfBytes},
+    stream::{AsyncReadAsSyncStreamOfBytes, error_stream},
     time::Instant,
 };
 
 use crate::{
-    client::{status_code_error, GcpClient, RequestError},
+    client::{GcpClient, RequestError, status_code_error},
     utils::{self, retry},
 };
 
@@ -100,12 +100,9 @@ impl BlobConfig for Config {
     }
 
     fn url(&self) -> io::Result<url::Url> {
-        self.bucket.url("gcs").map_err(|s| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("error creating bucket url: {}", s),
-            )
-        })
+        self.bucket
+            .url("gcs")
+            .map_err(|s| io::Error::other(format!("error creating bucket url: {}", s)))
     }
 }
 
@@ -131,7 +128,7 @@ pub trait ResultExt {
 impl<T, E: Display> ResultExt for Result<T, E> {
     type Ok = T;
     fn or_io_error<D: Display>(self, msg: D) -> io::Result<T> {
-        self.map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}: {}", msg, e)))
+        self.map_err(|e| io::Error::other(format!("{}: {}", msg, e)))
     }
     fn or_invalid_input<D: Display>(self, msg: D) -> io::Result<T> {
         self.map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}: {}", msg, e)))
@@ -310,14 +307,6 @@ fn parse_predefined_acl(acl: &str) -> Result<Option<PredefinedAcl>, &str> {
     }))
 }
 
-/// Like AsyncReadExt::read_to_end, but only try to initialize the buffer once.
-/// Check https://github.com/rust-lang/futures-rs/issues/2658 for the reason we cannot
-/// directly use it.
-async fn read_to_end<R: AsyncRead>(r: R, v: &mut Vec<u8>) -> std::io::Result<u64> {
-    let mut c = Cursor::new(v);
-    async_io::copy(r, &mut c).await
-}
-
 const STORAGE_NAME: &str = "gcs";
 
 #[async_trait]
@@ -332,59 +321,78 @@ impl BlobStorage for GcsStorage {
         reader: PutResource<'_>,
         content_length: u64,
     ) -> io::Result<()> {
-        if content_length == 0 {
-            // It is probably better to just write the empty file
-            // However, currently going forward results in a body write aborted error
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "no content to write",
-            ));
-        }
-
         let key = self.maybe_prefix_key(name);
         debug!("save file to GCS storage"; "key" => %key);
-        let bucket = BucketName::try_from(self.config.bucket.bucket.to_string())
-            .or_invalid_input(format_args!("invalid bucket {}", self.config.bucket.bucket))?;
 
-        let metadata = Metadata {
-            name: Some(key),
-            storage_class: self.config.storage_class,
-            ..Default::default()
-        };
+        // Common setup
+        let oid = ObjectId::new(self.config.bucket.bucket.to_string(), key.clone())
+            .or_invalid_input(format_args!("invalid object id"))?;
 
-        // FIXME: Switch to upload() API so we don't need to read the entire data into
-        // memory in order to retry.
-        let begin = Instant::now_coarse();
-        let mut data = Vec::with_capacity(content_length as usize);
-        read_to_end(reader, &mut data).await?;
-        metrics::CLOUD_REQUEST_HISTOGRAM_VEC
-            .with_label_values(&["gcp", "read_local"])
-            .observe(begin.saturating_elapsed_secs());
-        let begin = Instant::now_coarse();
-        retry(
-            || async {
-                let data = Cursor::new(data.clone());
-                let req = Object::insert_multipart(
-                    &bucket,
-                    data,
-                    content_length,
-                    &metadata,
-                    Some(InsertObjectOptional {
-                        predefined_acl: self.config.predefined_acl,
-                        ..Default::default()
-                    }),
+        match content_length {
+            // Empty file case
+            0 => {
+                let begin = Instant::now_coarse();
+                retry(
+                    || async {
+                        let optional = InsertObjectOptional {
+                            predefined_acl: self.config.predefined_acl,
+                            ..Default::default()
+                        };
+                        let req = Object::insert_simple(&oid, "", 0, Some(optional))
+                            .map_err(RequestError::Gcs)?
+                            .map(|_| Body::empty());
+                        self.make_request(req, tame_gcs::Scopes::ReadWrite).await
+                    },
+                    "insert_simple",
                 )
-                .map_err(RequestError::Gcs)?
-                .map(|reader| Body::wrap_stream(AsyncReadAsSyncStreamOfBytes::new(reader)));
-                self.make_request(req, tame_gcs::Scopes::ReadWrite).await
-            },
-            "insert_multipart",
-        )
-        .await?;
-        metrics::CLOUD_REQUEST_HISTOGRAM_VEC
-            .with_label_values(&["gcp", "insert_multipart"])
-            .observe(begin.saturating_elapsed_secs());
-        Ok::<_, io::Error>(())
+                .await?;
+                metrics::CLOUD_REQUEST_HISTOGRAM_VEC
+                    .with_label_values(&["gcp", "insert_simple"])
+                    .observe(begin.saturating_elapsed_secs());
+                Ok(())
+            }
+            // Non-empty file case
+            _ => {
+                let begin = Instant::now_coarse();
+                let mut data = Vec::with_capacity(content_length as usize);
+                read_to_end(reader, &mut data).await?;
+                metrics::CLOUD_REQUEST_HISTOGRAM_VEC
+                    .with_label_values(&["gcp", "read_local"])
+                    .observe(begin.saturating_elapsed_secs());
+
+                let metadata = Metadata {
+                    name: Some(key),
+                    storage_class: self.config.storage_class,
+                    ..Default::default()
+                };
+                let begin = Instant::now_coarse();
+                retry(
+                    || async {
+                        let optional = InsertObjectOptional {
+                            predefined_acl: self.config.predefined_acl,
+                            ..Default::default()
+                        };
+                        let data = Cursor::new(data.clone());
+                        let req = Object::insert_multipart(
+                            &oid.bucket,
+                            data,
+                            content_length,
+                            &metadata,
+                            Some(optional),
+                        )
+                        .map_err(RequestError::Gcs)?
+                        .map(|reader| Body::wrap_stream(AsyncReadAsSyncStreamOfBytes::new(reader)));
+                        self.make_request(req, tame_gcs::Scopes::ReadWrite).await
+                    },
+                    "insert_multipart",
+                )
+                .await?;
+                metrics::CLOUD_REQUEST_HISTOGRAM_VEC
+                    .with_label_values(&["gcp", "insert_multipart"])
+                    .observe(begin.saturating_elapsed_secs());
+                Ok(())
+            }
+        }
     }
 
     fn get(&self, name: &str) -> cloud::blob::BlobStream<'_> {
@@ -404,7 +412,7 @@ struct GcsPrefixIter<'cli> {
     finished: bool,
 }
 
-impl<'cli> GcsPrefixIter<'cli> {
+impl GcsPrefixIter<'_> {
     async fn one_page(&mut self) -> io::Result<Option<Vec<BlobObject>>> {
         if self.finished {
             return Ok(None);
@@ -427,7 +435,7 @@ impl<'cli> GcsPrefixIter<'cli> {
             .cli
             .make_request(req.map(|_e| Body::empty()), tame_gcs::Scopes::ReadOnly)
             .await
-            .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+            .map_err(|err| io::Error::other(err))?;
         let resp = utils::read_from_http_body::<ListResponse>(res).await?;
         metrics::CLOUD_REQUEST_HISTOGRAM_VEC
             .with_label_values(&["gcp", "list"])
@@ -475,10 +483,6 @@ impl IterableStorage for GcsStorage {
 
 #[cfg(test)]
 mod tests {
-    extern crate test;
-    use std::task::Poll;
-
-    use futures_util::AsyncReadExt;
     use matches::assert_matches;
 
     use super::*;
@@ -567,83 +571,5 @@ mod tests {
             &Config::default(bucket).url().unwrap().to_string(),
             "http://endpoint.com/bucket/backup%2002/prefix/"
         );
-    }
-
-    enum ThrottleReadState {
-        Spawning,
-        Emitting,
-    }
-    /// ThrottleRead throttles a `Read` -- make it emits 2 chars for each
-    /// `read` call. This is copy & paste from the implmentation from s3.rs.
-    #[pin_project::pin_project]
-    struct ThrottleRead<R> {
-        #[pin]
-        inner: R,
-        state: ThrottleReadState,
-    }
-    impl<R: AsyncRead> AsyncRead for ThrottleRead<R> {
-        fn poll_read(
-            self: std::pin::Pin<&mut Self>,
-            cx: &mut std::task::Context<'_>,
-            buf: &mut [u8],
-        ) -> Poll<io::Result<usize>> {
-            let this = self.project();
-            match this.state {
-                ThrottleReadState::Spawning => {
-                    *this.state = ThrottleReadState::Emitting;
-                    cx.waker().wake_by_ref();
-                    Poll::Pending
-                }
-                ThrottleReadState::Emitting => {
-                    *this.state = ThrottleReadState::Spawning;
-                    this.inner.poll_read(cx, &mut buf[..2])
-                }
-            }
-        }
-    }
-    impl<R> ThrottleRead<R> {
-        fn new(r: R) -> Self {
-            Self {
-                inner: r,
-                state: ThrottleReadState::Spawning,
-            }
-        }
-    }
-
-    const BENCH_READ_SIZE: usize = 128 * 1024;
-
-    // 255,120,895 ns/iter (+/- 73,332,249) (futures-util 0.3.15)
-    #[bench]
-    fn bench_read_to_end(b: &mut test::Bencher) {
-        let mut v = [0; BENCH_READ_SIZE];
-        let mut dst = Vec::with_capacity(BENCH_READ_SIZE);
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap();
-
-        b.iter(|| {
-            let mut r = ThrottleRead::new(Cursor::new(&mut v));
-            dst.clear();
-
-            rt.block_on(r.read_to_end(&mut dst)).unwrap();
-            assert_eq!(dst.len(), BENCH_READ_SIZE)
-        })
-    }
-
-    // 5,850,042 ns/iter (+/- 3,787,438)
-    #[bench]
-    fn bench_manual_read_to_end(b: &mut test::Bencher) {
-        let mut v = [0; BENCH_READ_SIZE];
-        let mut dst = Vec::with_capacity(BENCH_READ_SIZE);
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap();
-        b.iter(|| {
-            let r = ThrottleRead::new(Cursor::new(&mut v));
-            dst.clear();
-
-            rt.block_on(read_to_end(r, &mut dst)).unwrap();
-            assert_eq!(dst.len(), BENCH_READ_SIZE)
-        })
     }
 }

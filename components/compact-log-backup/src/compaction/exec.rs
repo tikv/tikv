@@ -6,8 +6,8 @@ use std::{
 
 use engine_rocks::RocksEngine;
 use engine_traits::{
-    ExternalSstFileInfo, SstCompressionType, SstExt, SstWriter, SstWriterBuilder,
-    DATA_KEY_PREFIX_LEN,
+    DATA_KEY_PREFIX_LEN, ExternalSstFileInfo, SstCompressionType, SstExt, SstWriter,
+    SstWriterBuilder,
 };
 use external_storage::{ExternalStorage, UnpinReader};
 use file_system::Sha256Reader;
@@ -22,7 +22,7 @@ use crate::{
     compaction::SST_OUT_REL,
     errors::{OtherErrExt, Result, TraceResultExt},
     source::{Record, Source},
-    statistic::{prom::*, LoadStatistic, SubcompactStatistic},
+    statistic::{LoadStatistic, SubcompactStatistic, prom::*},
     storage::DEFAULT_COMPACTION_OUT_PREFIX,
     util::{self, Cooperate, ExecuteAllExt},
 };
@@ -126,6 +126,15 @@ where
     <<DB as SstExt>::SstWriter as SstWriter>::ExternalSstFileReader: 'static,
 {
     fn update_checksum_diff(a: &Record, b: &Record, diff: &mut ChecksumDiff) {
+        // Records with identical keys (including ts) should have identical values.
+        // Different values for the same key indicates a transaction inconsistency
+        // in the backup, which needs investigation even if restore might tolerate it.
+        //
+        // Known issue: This assertion may fail when compacting protected rollback
+        // and normal rollback transactions. While restore can tolerate this case,
+        // To make the process more safe and predicted, we cannot just disable it.
+        // you can work around it by adjusting the compact interval.
+        // See https://github.com/tikv/tikv/issues/18300 for more details.
         assert_eq!(
             a, b,
             "The record with same key contains different value: the backup might be corrupted."
@@ -255,7 +264,7 @@ where
         meta.set_end_key(end_key);
         meta.set_cf(cf.to_owned());
         meta.name = name.to_owned();
-        meta.end_version = u64::MAX;
+        meta.start_version = u64::MAX;
 
         let mut data_key = keys::DATA_PREFIX_KEY.to_vec();
         for item in sorted_items {
@@ -356,15 +365,17 @@ where
         result.expected_keys -= cdiff.removed_key;
         result.expected_size -= cdiff.decreaed_size;
 
+        let uuid = uuid::Uuid::new_v4();
         let out_name = self
             .out_prefix
             .join(SST_OUT_REL)
             .join(format!(
-                "{}_{}_{}_{}.sst",
+                "{}_{}_{}_{}_{:?}.sst",
                 util::aligned_u64(c.input_min_ts),
                 util::aligned_u64(c.input_max_ts),
                 c.cf,
-                c.region_id
+                c.region_id,
+                uuid,
             ))
             .display()
             .to_string();
@@ -399,7 +410,7 @@ mod test {
         compaction::Subcompaction,
         storage::{Epoch, MetaFile},
         test_util::{
-            gen_step, save_many_log_files, CompactInMem, KvGen, LogFileBuilder, TmpStorage,
+            CompactInMem, KvGen, LogFileBuilder, TmpStorage, gen_step, save_many_log_files,
         },
     };
 

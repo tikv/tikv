@@ -269,6 +269,7 @@ pub(crate) fn make_txn_error(
                 start_ts,
                 commit_ts: TimeStamp::zero(),
                 key: key.to_raw().unwrap(),
+                mvcc_info: None,
             },
             "txnnotfound" => ErrorInner::TxnNotFound {
                 start_ts,
@@ -303,6 +304,7 @@ pub(crate) fn make_txn_error(
                 commit_ts: TimeStamp::zero(),
                 key: key.to_raw().unwrap(),
                 min_commit_ts: TimeStamp::zero(),
+                mvcc_info: None,
             },
             "pessimisticlocknotfound" => ErrorInner::PessimisticLockNotFound {
                 start_ts,
@@ -319,17 +321,17 @@ pub(crate) fn make_txn_error(
 #[cfg(test)]
 pub(crate) mod tests {
     use kvproto::kvrpcpb::{AssertionLevel, Context, PrewriteRequestPessimisticAction::*};
-    use txn_types::{TimeStamp, WriteType, SHORT_VALUE_MAX_LEN};
+    use txn_types::{SHORT_VALUE_MAX_LEN, TimeStamp, WriteType};
 
     use super::*;
     use crate::storage::{
-        kv::{Engine, RocksEngine, ScanMode, TestEngineBuilder, WriteData},
-        mvcc::{tests::*, Error, ErrorInner, Mutation, MvccReader, SnapshotReader},
-        txn::{
-            commands::*, commit, prewrite, tests::*, CommitKind, TransactionKind,
-            TransactionProperties,
-        },
         SecondaryLocksStatus, TxnStatus,
+        kv::{Engine, RocksEngine, ScanMode, TestEngineBuilder, WriteData},
+        mvcc::{Error, ErrorInner, Mutation, MvccReader, SnapshotReader, tests::*},
+        txn::{
+            CommitKind, TransactionKind, TransactionProperties, commands::*, commit, prewrite,
+            tests::*,
+        },
     };
 
     fn test_mvcc_txn_read_imp(k1: &[u8], k2: &[u8], v: &[u8]) {
@@ -354,9 +356,9 @@ pub(crate) mod tests {
         // should read pending locks
         must_get_err(&mut engine, k1, 7);
         // should ignore the primary lock and get none when reading the latest record
-        must_get_none(&mut engine, k1, u64::max_value());
+        must_get_none(&mut engine, k1, u64::MAX);
         // should read secondary locks even when reading the latest record
-        must_get_err(&mut engine, k2, u64::max_value());
+        must_get_err(&mut engine, k2, u64::MAX);
 
         must_commit(&mut engine, k1, 5, 10);
         must_commit(&mut engine, k2, 5, 10);
@@ -365,12 +367,12 @@ pub(crate) mod tests {
         must_get_none(&mut engine, k1, 7);
         // should read with ts > commit_ts
         must_get(&mut engine, k1, 13, v);
-        // should read the latest record if `ts == u64::max_value()`
-        must_get(&mut engine, k1, u64::max_value(), v);
+        // should read the latest record if `ts == u64::MAX`
+        must_get(&mut engine, k1, u64::MAX, v);
 
         must_prewrite_delete(&mut engine, k1, k1, 15);
         // should ignore the lock and get previous record when reading the latest record
-        must_get(&mut engine, k1, u64::max_value(), v);
+        must_get(&mut engine, k1, u64::MAX, v);
         must_commit(&mut engine, k1, 15, 20);
         must_get_none(&mut engine, k1, 3);
         must_get_none(&mut engine, k1, 7);
@@ -387,9 +389,9 @@ pub(crate) mod tests {
         must_get(&mut engine, k1, 30, v);
         must_pessimistic_prewrite_delete(&mut engine, k1, k1, 23, 29, DoPessimisticCheck);
         must_get_err(&mut engine, k1, 30);
-        // should read the latest record when `ts == u64::max_value()`
+        // should read the latest record when `ts == u64::MAX`
         // even if lock.start_ts(23) < latest write.commit_ts(27)
-        must_get(&mut engine, k1, u64::max_value(), v);
+        must_get(&mut engine, k1, u64::MAX, v);
         must_commit(&mut engine, k1, 23, 31);
         must_get(&mut engine, k1, 30, v);
         must_get_none(&mut engine, k1, 32);
@@ -830,7 +832,7 @@ pub(crate) mod tests {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut txn = MvccTxn::new(10.into(), cm);
         let mut reader = SnapshotReader::new(10.into(), snapshot, true);
-        commit(&mut txn, &mut reader, key, 15.into()).unwrap();
+        commit(&mut txn, &mut reader, key, 15.into(), None).unwrap();
         assert!(txn.write_size() > 0);
         engine
             .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
@@ -1243,7 +1245,7 @@ pub(crate) mod tests {
 
         let k = b"k";
         must_acquire_pessimistic_lock(&mut engine, k, k, 10, 10);
-        must_commit_err(&mut engine, k, 20, 30);
+        must_commit_err(&mut engine, k, 20, 30, None);
         must_commit(&mut engine, k, 10, 20);
         must_seek_write_none(&mut engine, k, 30);
     }

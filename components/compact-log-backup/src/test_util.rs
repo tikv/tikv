@@ -6,7 +6,6 @@ use std::{
     ops::Not,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    u64,
 };
 
 use engine_rocks::RocksEngine;
@@ -19,7 +18,7 @@ use futures::{
 };
 use keys::origin_key;
 use kvproto::brpb::{self, Metadata};
-use protobuf::{parse_from_bytes, Message};
+use protobuf::{Message, parse_from_bytes};
 use tempdir::TempDir;
 use tidb_query_datatype::codec::table::encode_row_key;
 use tikv_util::codec::stream_event::EventEncoder;
@@ -27,11 +26,11 @@ use txn_types::Key;
 
 use crate::{
     compaction::{
-        exec::{SubcompactExt, SubcompactionExec},
         Subcompaction, SubcompactionResult,
+        exec::{SubcompactExt, SubcompactionExec},
     },
     errors::{OtherErrExt, Result},
-    storage::{id_of_migration, Epoch, LogFile, LogFileId, MetaFile},
+    storage::{Epoch, LogFile, LogFileId, MetaFile, id_of_migration},
 };
 
 #[derive(Debug, PartialEq, Eq)]
@@ -466,9 +465,45 @@ impl TmpStorage {
 
     #[track_caller]
     pub fn verify_result(&self, res: SubcompactionResult, mut cm: CompactInMem) {
-        let sst_path = self.path().join(&res.meta.sst_outputs[0].name);
-        res.verify_checksum().unwrap();
-        verify_the_same::<RocksEngine>(sst_path, cm.must_iter()).unwrap();
+        // Verify SST file name format
+        for file in &res.meta.sst_outputs {
+            let sst_path = self.path().join(file.get_name());
+            let file_name = sst_path
+                .file_name()
+                .expect("SST path should have a file name")
+                .to_str()
+                .expect("SST file name should be valid UTF-8");
+            // Expected format: "{min_ts}_{max_ts}_{cf}_{region_id}_{uuid}.sst"
+            let parts: Vec<&str> = file_name.split('_').collect();
+            assert_eq!(
+                parts.len(),
+                5,
+                "SST file name should have 5 parts separated by '_'"
+            );
+
+            // Verify UUID format in the last part (removing .sst extension)
+            let uuid_part = parts[4].trim_end_matches(".sst");
+            assert!(
+                uuid::Uuid::parse_str(uuid_part).is_ok(),
+                "Invalid UUID format in SST file name"
+            );
+            // Verify the actual content
+            res.verify_checksum().unwrap();
+            verify_the_same::<RocksEngine>(sst_path, cm.must_iter()).unwrap();
+
+            // For now, only one SSTs should be written.
+            assert_eq!(res.meta.sst_outputs.len(), 1);
+            let sst_file = &res.meta.sst_outputs[0];
+            assert_eq!(res.origin.input_min_ts, sst_file.start_version);
+            assert_eq!(res.origin.input_max_ts, sst_file.end_version);
+            assert_eq!(res.origin.cf, sst_file.cf);
+
+            if res.expected_crc64.is_some() {
+                assert_eq!(res.expected_crc64, Some(sst_file.crc64xor));
+            }
+            assert_eq!(res.expected_size, sst_file.total_bytes);
+            assert_eq!(res.expected_keys, sst_file.total_kvs);
+        }
     }
 
     pub async fn build_log_file(&self, name: &str, kvs: impl Iterator<Item = Kv>) -> LogFile {

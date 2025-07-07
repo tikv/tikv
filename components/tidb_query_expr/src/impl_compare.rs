@@ -1,23 +1,20 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cmp::{max, min, Ordering},
+    cmp::{Ordering, max, min},
     str,
 };
 
 use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
 use tidb_query_datatype::{
-    codec::{collation::Collator, data_type::*, mysql::Time, Error},
+    codec::{Error, collation::Collator, data_type::*, mysql::Time},
     expr::EvalContext,
 };
 
 #[rpn_fn(nullable)]
 #[inline]
-pub fn compare<C: Comparer>(lhs: Option<&C::T>, rhs: Option<&C::T>) -> Result<Option<i64>>
-where
-    C: Comparer,
-{
+pub fn compare<C: Comparer>(lhs: Option<&C::T>, rhs: Option<&C::T>) -> Result<Option<i64>> {
     C::compare(lhs, rhs)
 }
 
@@ -552,7 +549,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use tidb_query_datatype::{builder::FieldTypeBuilder, Collation, FieldTypeFlag, FieldTypeTp};
+    use tidb_query_datatype::{Collation, FieldTypeFlag, FieldTypeTp, builder::FieldTypeBuilder};
     use tipb::ScalarFuncSig;
 
     use super::*;
@@ -942,7 +939,7 @@ mod tests {
                     .push_param_with_field_type(rhs, rhs_field_type.clone())
                     .evaluate(*sig)
                     .unwrap();
-                if accept_orderings.iter().any(|&x| x == ordering) {
+                if accept_orderings.contains(&ordering) {
                     assert_eq!(output, Some(1));
                 } else {
                     assert_eq!(output, Some(0));

@@ -3,13 +3,13 @@
 use std::{sync::Arc, thread::JoinHandle};
 
 use engine_rocks::{
-    raw::CompactOptions, util::get_cf_handle, RocksEngine, RocksEngineIterator, RocksStatistics,
+    RocksEngine, RocksEngineIterator, RocksStatistics, raw::CompactOptions, util::get_cf_handle,
 };
 use engine_traits::{
-    CachedTablet, Iterable, MiscExt, Peekable, RaftEngine, RaftLogBatch, TabletContext,
-    TabletRegistry, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, CachedTablet, Iterable, MiscExt, Peekable, RaftEngine,
+    RaftLogBatch, TabletContext, TabletRegistry,
 };
-use keys::{data_key, enc_end_key, enc_start_key, DATA_MAX_KEY, DATA_PREFIX_KEY};
+use keys::{DATA_MAX_KEY, DATA_PREFIX_KEY, data_key, enc_end_key, enc_start_key};
 use kvproto::{
     debugpb::Db as DbType,
     kvrpcpb::MvccInfo,
@@ -17,7 +17,7 @@ use kvproto::{
     raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent},
 };
 use nom::AsBytes;
-use raft::{prelude::Entry, RawNode};
+use raft::{RawNode, prelude::Entry};
 use raftstore::{
     coprocessor::{get_region_approximate_middle, get_region_approximate_size},
     store::util::check_key_in_region,
@@ -28,10 +28,10 @@ use tikv_util::{
     config::ReadableSize, store::find_peer, sys::thread::StdThreadBuildWrapper, worker::Worker,
 };
 
-use super::debug::{recover_mvcc_for_range, BottommostLevelCompaction, Debugger, RegionInfo};
+use super::debug::{BottommostLevelCompaction, Debugger, RegionInfo, recover_mvcc_for_range};
 use crate::{
     config::ConfigController,
-    server::debug::{dump_default_cf_properties, dump_write_cf_properties, Error, Result},
+    server::debug::{Error, Result, dump_default_cf_properties, dump_write_cf_properties},
     storage::mvcc::{MvccInfoCollector, MvccInfoScanner},
 };
 
@@ -334,7 +334,7 @@ impl<ER: RaftEngine> DebuggerImplV2<ER> {
         let res = handles
             .into_iter()
             .map(|h: JoinHandle<Vec<Result<()>>>| h.join())
-            .map(|results| {
+            .inspect(|results| {
                 if let Err(e) = &results {
                     error!("{:?}", e);
                 } else {
@@ -344,7 +344,6 @@ impl<ER: RaftEngine> DebuggerImplV2<ER> {
                         }
                     }
                 }
-                results
             })
             .all(|results| {
                 if results.is_err() {
@@ -605,7 +604,7 @@ fn set_region_tombstone<ER: RaftEngine>(
         .get_peers()
         .iter()
         .find(|p| p.get_store_id() == store_id)
-        .map_or(true, |p| p.get_id() != peer_id);
+        .is_none_or(|p| p.get_id() != peer_id);
     if !scheduled {
         return Err(box_err!("The peer is still in target peers"));
     }
@@ -982,7 +981,7 @@ fn range_in_region<'a>(
         DATA_PREFIX_KEY
     };
     if range_start == DATA_PREFIX_KEY && range_end == DATA_PREFIX_KEY {
-        return Some((region.get_start_key(), region.get_end_key()));
+        Some((region.get_start_key(), region.get_end_key()))
     } else if range_start == DATA_PREFIX_KEY {
         assert!(range_end.starts_with(DATA_PREFIX_KEY));
         if region.get_start_key() < &range_end[DATA_PREFIX_KEY.len()..] {
@@ -1182,7 +1181,7 @@ fn deivde_regions_for_concurrency<ER: RaftEngine>(
     }
     region_sizes.sort_by(|a, b| a.0.cmp(&b.0));
 
-    let group_size = (total_size + threads - 1) / threads;
+    let group_size = total_size.div_ceil(threads);
     let mut cur_group = vec![];
     let mut cur_size = 0;
     for (region_size, mut region_state) in region_sizes.into_iter() {
@@ -1226,8 +1225,8 @@ pub fn new_debugger(path: &std::path::Path) -> DebuggerImplV2<raft_log_engine::R
 mod tests {
     use collections::HashMap;
     use engine_traits::{
-        RaftEngineReadOnly, RaftLogBatch, SyncMutable, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE,
-        DATA_CFS,
+        ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS, RaftEngineReadOnly, RaftLogBatch,
+        SyncMutable,
     };
     use kvproto::{
         metapb::{self, Peer, PeerRole},
@@ -1699,8 +1698,7 @@ mod tests {
                 region.set_id(region_id);
                 let peers = peers
                     .iter()
-                    .enumerate()
-                    .map(|(_, &sid)| Peer {
+                    .map(|&sid| Peer {
                         id: region_id,
                         store_id: sid,
                         ..Default::default()

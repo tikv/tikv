@@ -9,11 +9,11 @@ use std::{
 use engine_traits::Peekable;
 use kvproto::raft_cmdpb::RaftCmdResponse;
 use raft::eraftpb::MessageType;
-use raftstore::{router::RaftStoreRouter, store::*, Result};
+use raftstore::{Result, router::RaftStoreRouter, store::*};
 use rand::{Rng, RngCore};
 use test_raftstore::*;
-use tikv::storage::{kv::SnapshotExt, Snapshot};
-use tikv_util::{config::*, HandyRwLock};
+use tikv::storage::{Snapshot, kv::SnapshotExt};
+use tikv_util::{HandyRwLock, config::*};
 use txn_types::{Key, LastChange, PessimisticLock};
 
 fn test_multi_base<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -114,7 +114,7 @@ fn test_multi_lost_majority<T: Simulator>(cluster: &mut Cluster<T>, count: usize
     cluster.run();
     let leader = cluster.leader_of_region(1);
 
-    let half = (count as u64 + 1) / 2;
+    let half = (count as u64).div_ceil(2);
     for i in 1..=half {
         cluster.stop_node(i);
     }

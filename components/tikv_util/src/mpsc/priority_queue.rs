@@ -1,14 +1,14 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::{
-    atomic::{AtomicPtr, AtomicU64, AtomicUsize, Ordering},
     Arc,
+    atomic::{AtomicPtr, AtomicU64, AtomicUsize, Ordering},
 };
 
 use crossbeam::channel::{RecvError, SendError, TryRecvError, TrySendError};
 use crossbeam_skiplist::SkipMap;
 use parking_lot_core::{
-    park, unpark_all, unpark_one, SpinWait, DEFAULT_PARK_TOKEN, DEFAULT_UNPARK_TOKEN,
+    DEFAULT_PARK_TOKEN, DEFAULT_UNPARK_TOKEN, SpinWait, park, unpark_all, unpark_one,
 };
 
 // Create a priority based channel. Sender can send message with priority of

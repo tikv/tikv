@@ -5,10 +5,10 @@ use std::collections::VecDeque;
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{metapb::RegionEpoch, raft_serverpb::RaftMessage};
 use raftstore::store::{
-    local_metrics::RaftMetrics, Config, PersistedNotifier, WriteRouter, WriteRouterContext,
-    WriteSenders, WriteTask,
+    Config, PersistedNotifier, WriteRouter, WriteRouterContext, WriteSenders, WriteTask,
+    local_metrics::RaftMetrics,
 };
-use slog::{warn, Logger};
+use slog::{Logger, warn};
 use tikv_util::slog_panic;
 
 use crate::{
@@ -120,7 +120,7 @@ impl<EK: KvEngine, ER: RaftEngine> AsyncWriter<EK, ER> {
         }
 
         let last_unpersisted = self.unpersisted_readies.back();
-        if last_unpersisted.map_or(true, |u| u.number < ready_number) {
+        if last_unpersisted.is_none_or(|u| u.number < ready_number) {
             slog_panic!(
                 logger,
                 "ready number is too large";

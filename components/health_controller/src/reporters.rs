@@ -10,10 +10,10 @@ use pdpb::SlowTrend as SlowTrendPb;
 use prometheus::IntGauge;
 
 use crate::{
+    HealthController, HealthControllerInner, RaftstoreDuration,
     slow_score::{SlowScore, SlowScoreTickResult},
     trend::{RequestPerSecRecorder, Trend},
     types::InspectFactor,
-    HealthController, HealthControllerInner, RaftstoreDuration,
 };
 
 /// The parameters for building a [`RaftstoreReporter`].
@@ -67,10 +67,7 @@ impl UnifiedSlowScore {
         // The second factor is for KvDB Disk I/O.
         unified_slow_score
             .factors
-            .push(SlowScore::new_with_extra_config(
-                cfg.inspect_kvdb_interval,
-                0.6,
-            ));
+            .push(SlowScore::new(cfg.inspect_kvdb_interval));
         unified_slow_score
     }
 

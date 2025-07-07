@@ -6,20 +6,20 @@ use std::{
     time::Duration,
 };
 
-use futures::{compat::Future01CompatExt, stream, StreamExt};
+use futures::{StreamExt, compat::Future01CompatExt, stream};
 use kvproto::{
     meta_storagepb::EventEventType,
     resource_manager::{ResourceGroup, TokenBucketRequest, TokenBucketsRequest},
 };
 use pd_client::{
+    Error as PdError, PdClient, RESOURCE_CONTROL_CONFIG_PATH,
+    RESOURCE_CONTROL_CONTROLLER_CONFIG_PATH, RpcClient,
     meta_storage::{Checked, Get, MetaStorageClient, Sourced, Watch},
-    Error as PdError, PdClient, RpcClient, RESOURCE_CONTROL_CONFIG_PATH,
-    RESOURCE_CONTROL_CONTROLLER_CONFIG_PATH,
 };
 use serde::{Deserialize, Serialize};
 use tikv_util::{error, info, timer::GLOBAL_TIMER_HANDLE};
 
-use crate::{resource_limiter::ResourceType, ResourceGroupManager};
+use crate::{ResourceGroupManager, resource_limiter::ResourceType};
 
 #[derive(Clone)]
 pub struct ResourceManagerService {
@@ -335,11 +335,11 @@ pub mod tests {
     use file_system::IoBytes;
     use futures::executor::block_on;
     use pd_client::{
-        meta_storage::{Delete, Put},
         RpcClient,
+        meta_storage::{Delete, Put},
     };
     use protobuf::Message;
-    use test_pd::{mocker::MetaStorage, util::*, Server as MockServer};
+    use test_pd::{Server as MockServer, mocker::MetaStorage, util::*};
     use tikv_util::{config::ReadableDuration, worker::Builder};
 
     use crate::resource_group::tests::{

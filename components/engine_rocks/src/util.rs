@@ -2,19 +2,19 @@
 
 use std::{ffi::CString, fs, path::Path, str::FromStr, sync::Arc};
 
-use engine_traits::{Engines, Range, Result, CF_DEFAULT};
+use engine_traits::{CF_DEFAULT, Engines, Range, Result};
 use fail::fail_point;
 use rocksdb::{
-    load_latest_options, CColumnFamilyDescriptor, CFHandle, ColumnFamilyOptions, CompactionFilter,
+    CColumnFamilyDescriptor, CFHandle, ColumnFamilyOptions, CompactionFilter,
     CompactionFilterContext, CompactionFilterDecision, CompactionFilterFactory,
-    CompactionFilterValueType, DBTableFileCreationReason, Env, Range as RocksRange, SliceTransform,
-    DB,
+    CompactionFilterValueType, DB, DBTableFileCreationReason, Env, Range as RocksRange,
+    SliceTransform, load_latest_options,
 };
 use slog_global::warn;
 
 use crate::{
-    cf_options::RocksCfOptions, db_options::RocksDbOptions, engine::RocksEngine, r2e,
-    rocks_metrics_defs::*, RocksStatistics,
+    RocksStatistics, cf_options::RocksCfOptions, db_options::RocksDbOptions, engine::RocksEngine,
+    r2e, rocks_metrics_defs::*,
 };
 
 pub fn new_temp_engine(path: &tempfile::TempDir) -> Engines<RocksEngine, RocksEngine> {
@@ -194,6 +194,18 @@ pub fn get_engine_cf_used_size(engine: &DB, handle: &CFHandle) -> u64 {
     }
 
     cf_used_size
+}
+
+pub fn get_engine_cfs_used_size(engine: &DB) -> Result<u64> {
+    let mut cfs_used_size = 0;
+    for cf in engine.cf_names() {
+        let handle = engine
+            .cf_handle(cf)
+            .ok_or_else(|| format!("cf {} not found", cf))
+            .map_err(r2e)?;
+        cfs_used_size += get_engine_cf_used_size(engine, handle);
+    }
+    Ok(cfs_used_size)
 }
 
 /// Gets engine's compression ratio at given level.
@@ -517,7 +529,7 @@ impl CompactionFilter for RangeCompactionFilter {
 #[cfg(test)]
 mod tests {
     use engine_traits::{
-        CfOptionsExt, FlowControlFactorsExt, Iterable, MiscExt, Peekable, SyncMutable, CF_DEFAULT,
+        CF_DEFAULT, CfOptionsExt, FlowControlFactorsExt, Iterable, MiscExt, Peekable, SyncMutable,
     };
     use rocksdb::DB;
     use tempfile::Builder;

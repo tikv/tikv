@@ -670,7 +670,7 @@ mod tests {
             TestEngineBuilder, WriteData,
         },
         mvcc::{Mutation, MvccTxn, SnapshotReader},
-        txn::{commit, prewrite, CommitKind, TransactionKind, TransactionProperties},
+        txn::{CommitKind, TransactionKind, TransactionProperties, commit, prewrite},
     };
 
     const KEY_PREFIX: &str = "key_prefix";
@@ -749,7 +749,7 @@ mod tests {
                 let mut reader = SnapshotReader::new(START_TS, self.snapshot.clone(), true);
                 for key in &self.keys {
                     let key = key.as_bytes();
-                    commit(&mut txn, &mut reader, Key::from_raw(key), COMMIT_TS).unwrap();
+                    commit(&mut txn, &mut reader, Key::from_raw(key), COMMIT_TS, None).unwrap();
                 }
                 let write_data = WriteData::from_modifies(txn.into_modifies());
                 self.engine.write(&self.ctx, write_data).unwrap();

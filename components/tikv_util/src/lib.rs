@@ -14,9 +14,9 @@ use std::{
     cell::RefCell,
     cmp,
     collections::{
+        HashMap,
         hash_map::Entry,
         vec_deque::{Iter, VecDeque},
-        HashMap,
     },
     convert::AsRef,
     env,
@@ -24,17 +24,19 @@ use std::{
     ops::{Deref, DerefMut},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc, RwLock, RwLockReadGuard, RwLockWriteGuard,
+        atomic::{AtomicBool, Ordering},
     },
     thread,
     time::Duration,
 };
 
+use lazy_static::lazy_static;
 use nix::{
-    sys::wait::{wait, WaitStatus},
-    unistd::{fork, ForkResult},
+    sys::wait::{WaitStatus, wait},
+    unistd::{ForkResult, fork},
 };
+use serde::Serialize;
 
 use crate::sys::thread::StdThreadBuildWrapper;
 
@@ -527,7 +529,7 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
 
     let data_dir = data_dir.to_string();
 
-    panic::set_hook(Box::new(move |info: &panic::PanicInfo<'_>| {
+    panic::set_hook(Box::new(move |info: &panic::PanicHookInfo<'_>| {
         let msg = match info.payload().downcast_ref::<&'static str>() {
             Some(s) => *s,
             None => match info.payload().downcast_ref::<String>() {
@@ -643,7 +645,7 @@ pub fn empty_shared_slice<T>() -> Arc<[T]> {
 
 /// A useful hook to check if master branch is being built.
 pub fn build_on_master_branch() -> bool {
-    option_env!("TIKV_BUILD_GIT_BRANCH").map_or(false, |b| "master" == b)
+    option_env!("TIKV_BUILD_GIT_BRANCH").is_some_and(|b| "master" == b)
 }
 
 /// Set the capacity of a vector to the given capacity.
@@ -653,6 +655,48 @@ pub fn set_vec_capacity<T>(v: &mut Vec<T>, cap: usize) {
         cmp::Ordering::Less => v.shrink_to(cap),
         cmp::Ordering::Greater => v.reserve_exact(cap - v.len()),
         cmp::Ordering::Equal => {}
+    }
+}
+
+// Global server readiness state.
+//
+// This is used to track whether TiKV is fully ready to serve requests after
+// startup. It is queried by the `/ready` API of the status server.
+lazy_static! {
+    pub static ref GLOBAL_SERVER_READINESS: Arc<ServerReadiness> =
+        Arc::new(ServerReadiness::default());
+}
+
+/// Represents the readiness state of the server.
+///
+/// Each field is a flag indicating a condition that must be met for the server
+/// to be considered fully ready to serve.
+#[derive(Serialize, Default)]
+pub struct ServerReadiness {
+    /// Indicates whether the server has connected to PD.
+    pub connected_to_pd: AtomicBool,
+    /// Indicates whether a sufficient number of Raft peers have caught up
+    /// applying logs.
+    pub raft_peers_caught_up: AtomicBool,
+}
+
+impl ServerReadiness {
+    /// Checks if the server is ready.
+    ///
+    /// All conditions must be met for the server to be considered ready.
+    pub fn is_ready(&self) -> bool {
+        self.raft_peers_caught_up.load(Ordering::SeqCst)
+            && self.connected_to_pd.load(Ordering::SeqCst)
+    }
+
+    pub fn to_json(&self) -> String {
+        let json_result = serde_json::to_string_pretty(&self);
+        match json_result {
+            Ok(json) => json,
+            Err(e) => {
+                format!("failed to serialize ServerReadiness: {}", e)
+            }
+        }
     }
 }
 

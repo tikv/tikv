@@ -1,7 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(let_chains)]
-#![feature(noop_waker)]
 
 mod backup;
 mod config;
@@ -23,12 +22,12 @@ use std::{io::ErrorKind, path::Path};
 pub use self::{
     backup::backup_encryption::*,
     config::*,
-    crypter::{verify_encryption_config, AesGcmCrypter, FileEncryptionInfo, Iv},
+    crypter::{AesGcmCrypter, FileEncryptionInfo, Iv, verify_encryption_config},
     encrypted_file::EncryptedFile,
-    errors::{cloud_convert_error, Error, Result, RetryCodedError},
+    errors::{Error, Result, RetryCodedError, cloud_convert_error},
     file_dict_file::FileDictionaryFile,
     io::{
-        create_aes_ctr_crypter, DecrypterReader, DecrypterWriter, EncrypterReader, EncrypterWriter,
+        DecrypterReader, DecrypterWriter, EncrypterReader, EncrypterWriter, create_aes_ctr_crypter,
     },
     manager::{DataKeyImporter, DataKeyManager, DataKeyManagerArgs},
     master_key::{

@@ -1,6 +1,6 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{fmt::Debug, u64};
+use std::fmt::Debug;
 
 /// Represent the duration of all stages of raftstore recorded by one
 /// inspecting.

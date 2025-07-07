@@ -8,15 +8,14 @@ use std::{
     },
     fmt::{self, Display, Formatter},
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
-    u64,
 };
 
 use engine_traits::{
-    DeleteStrategy, KvEngine, Mutable, Range, WriteBatch, WriteOptions, CF_LOCK, CF_RAFT,
+    CF_LOCK, CF_RAFT, DeleteStrategy, KvEngine, Mutable, Range, WriteBatch, WriteOptions,
 };
 use fail::fail_point;
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
@@ -33,14 +32,13 @@ use super::metrics::*;
 use crate::{
     coprocessor::CoprocessorHost,
     store::{
-        check_abort,
+        ApplyOptions, CasualMessage, Config, SnapEntry, SnapKey, SnapManager, check_abort,
         peer_storage::{
             JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING, JOB_STATUS_FAILED, JOB_STATUS_FINISHED,
             JOB_STATUS_PENDING, JOB_STATUS_RUNNING,
         },
-        snap::{plain_file_used, Error, Result, SNAPSHOT_CFS},
+        snap::{Error, Result, SNAPSHOT_CFS, plain_file_used},
         transport::CasualRouter,
-        ApplyOptions, CasualMessage, Config, SnapEntry, SnapKey, SnapManager,
     },
 };
 
@@ -354,6 +352,7 @@ where
         self.coprocessor_host
             .post_apply_snapshot(&region, peer_id, &snap_key, Some(&s));
 
+        fail_point!("region_apply_snap_before_write", |_| { Ok(()) });
         // Delete snapshot state and assure the relative region state and snapshot state
         // is updated and flushed into kvdb.
         region_state.set_state(PeerState::Normal);
@@ -365,6 +364,8 @@ where
         wb.write_opt(&wopts).unwrap_or_else(|e| {
             panic!("{} failed to save apply_snap result: {:?}", region_id, e);
         });
+        self.coprocessor_host
+            .on_apply_snapshot_committed(&region, peer_id, &snap_key, Some(&s));
         info!(
             "apply new data";
             "region_id" => region_id,
@@ -389,6 +390,7 @@ where
 
         let tombstone = match self.apply_snap(region_id, peer_id, Arc::clone(&status)) {
             Ok(()) => {
+                fail_point!("region_apply_return_not_change_state");
                 status.swap(JOB_STATUS_FINISHED, Ordering::SeqCst);
                 SNAP_COUNTER.apply.success.inc();
                 false
@@ -565,6 +567,7 @@ where
                 error!("failed to delete files in range"; "err" => %e);
             })
             .unwrap();
+        fail_point!("after_delete_files_in_range", |_| {});
         // Remove all overlapped ranges directly without ingesting.
         if let Err(e) = self.delete_all_in_range(&ranges, true, false) {
             error!("failed to cleanup stale range"; "err" => %e);
@@ -801,8 +804,9 @@ pub(crate) mod tests {
     use std::{
         io,
         sync::{
+            Arc,
             atomic::{AtomicBool, AtomicUsize},
-            mpsc, Arc,
+            mpsc,
         },
         thread,
         time::Duration,
@@ -810,8 +814,8 @@ pub(crate) mod tests {
 
     use engine_test::{ctor::CfOptions, kv::KvTestEngine};
     use engine_traits::{
-        CompactExt, FlowControlFactorsExt, KvEngine, MiscExt, Mutable, Peekable,
-        RaftEngineReadOnly, SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_WRITE,
+        CF_DEFAULT, CF_WRITE, CompactExt, FlowControlFactorsExt, KvEngine, MiscExt, Mutable,
+        Peekable, RaftEngineReadOnly, SyncMutable, WriteBatch, WriteBatchExt,
     };
     use keys::data_key;
     use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftSnapshotData, RegionLocalState};
@@ -830,10 +834,10 @@ pub(crate) mod tests {
             ObserverContext,
         },
         store::{
+            CasualMessage, SnapKey, SnapManager,
             peer_storage::JOB_STATUS_PENDING,
             snap::tests::get_test_db_for_regions,
             worker::{RegionRunner, SnapGenRunner, SnapGenTask},
-            CasualMessage, SnapKey, SnapManager,
         },
     };
 

@@ -123,12 +123,12 @@ mod tests {
 
     use encryption::DataKeyManager;
     use engine_rocks::{
-        util::new_engine_opt, RocksCfOptions, RocksDbOptions, RocksEngine, RocksSstWriterBuilder,
-        RocksTitanDbOptions,
+        RocksCfOptions, RocksDbOptions, RocksEngine, RocksSstWriterBuilder, RocksTitanDbOptions,
+        util::new_engine_opt,
     };
     use engine_traits::{
-        CfName, CfOptions, DbOptions, ImportExt, Peekable, SstWriter, SstWriterBuilder,
-        TitanCfOptions, CF_DEFAULT,
+        CF_DEFAULT, CfName, CfOptions, DbOptions, ImportExt, Peekable, SstWriter, SstWriterBuilder,
+        TitanCfOptions,
     };
     use tempfile::Builder;
     use test_util::encryption::new_test_key_manager;
@@ -210,8 +210,13 @@ mod tests {
         prepare_sst_for_ingestion(&sst_path, &sst_clone, key_manager).unwrap();
         check_hard_link(&sst_path, 2);
         check_hard_link(&sst_clone, 2);
-        db.ingest_external_file_cf(CF_DEFAULT, &[sst_clone.to_str().unwrap()], None)
-            .unwrap();
+        db.ingest_external_file_cf(
+            CF_DEFAULT,
+            &[sst_clone.to_str().unwrap()],
+            None,
+            false, // force_allow_write
+        )
+        .unwrap();
         check_db_with_kvs(&db, CF_DEFAULT, &kvs);
         assert!(!sst_clone.exists());
         // Since we are not using key_manager in db, simulate the db deleting the file
@@ -227,8 +232,13 @@ mod tests {
         prepare_sst_for_ingestion(&sst_path, &sst_clone, key_manager).unwrap();
         check_hard_link(&sst_path, 2);
         check_hard_link(&sst_clone, 1);
-        db.ingest_external_file_cf(CF_DEFAULT, &[sst_clone.to_str().unwrap()], None)
-            .unwrap();
+        db.ingest_external_file_cf(
+            CF_DEFAULT,
+            &[sst_clone.to_str().unwrap()],
+            None,
+            false, // force_allow_write
+        )
+        .unwrap();
         check_db_with_kvs(&db, CF_DEFAULT, &kvs);
         assert!(!sst_clone.exists());
     }
@@ -305,8 +315,13 @@ mod tests {
         check_hard_link(&sst_path, 1);
         check_hard_link(&sst_clone, 1);
 
-        db.ingest_external_file_cf(CF_DEFAULT, &[sst_clone.to_str().unwrap()], None)
-            .unwrap();
+        db.ingest_external_file_cf(
+            CF_DEFAULT,
+            &[sst_clone.to_str().unwrap()],
+            None,
+            false, // force_allow_write
+        )
+        .unwrap();
         check_db_with_kvs(&db, CF_DEFAULT, &kvs);
         assert!(!sst_clone.exists());
     }

@@ -5,7 +5,7 @@ use raftstore::store::msg::StoreMsg as StoreMsgV1;
 use raftstore_v2::router::StoreMsg as StoreMsgV2;
 use test_raftstore::Simulator as S1;
 use test_raftstore_v2::Simulator as S2;
-use tikv_util::{config::ReadableDuration, time::Instant, HandyRwLock};
+use tikv_util::{HandyRwLock, config::ReadableDuration, time::Instant};
 
 #[test]
 fn test_region_detail() {

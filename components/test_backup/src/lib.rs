@@ -8,12 +8,12 @@ use std::{
     time::Duration,
 };
 
-use api_version::{dispatch_api_version, keyspace::KvPair, ApiV1, KvFormat, RawValue};
+use api_version::{ApiV1, KvFormat, RawValue, dispatch_api_version, keyspace::KvPair};
 use backup::Task;
 use collections::HashMap;
 // NOTE: Perhaps we'd better use test engine here. But it seems for now we cannot initialize a
 // mock cluster with `PanicEngine` and in our CI environment clippy will complain that.
-use engine_traits::{CfName, IterOptions, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN};
+use engine_traits::{CF_DEFAULT, CF_WRITE, CfName, DATA_KEY_PREFIX_LEN, IterOptions};
 use external_storage::make_local_backend;
 use futures::{channel::mpsc as future_mpsc, executor::block_on};
 use grpcio::{ChannelBuilder, Environment};
@@ -21,22 +21,22 @@ use kvproto::{brpb::*, kvrpcpb::*, tikvpb::TikvClient};
 use rand::Rng;
 use test_raftstore::*;
 use tidb_query_common::storage::{
-    scanner::{RangesScanner, RangesScannerOptions},
     IntervalRange, Range,
+    scanner::{RangesScanner, RangesScannerOptions},
 };
 use tikv::{
     config::BackupConfig,
     coprocessor::{checksum_crc64_xor, dag::TikvStorage},
     storage::{
-        kv::{Engine, LocalTablets, SnapContext},
         SnapshotStore,
+        kv::{Engine, LocalTablets, SnapContext},
     },
 };
 use tikv_util::{
+    HandyRwLock,
     config::ReadableSize,
     time::Instant,
     worker::{LazyWorker, Worker},
-    HandyRwLock,
 };
 use txn_types::TimeStamp;
 
