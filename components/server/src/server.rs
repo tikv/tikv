@@ -1064,7 +1064,6 @@ where
                 self.causal_ts_provider.clone(),
                 disk_check_runner,
                 self.grpc_service_mgr.clone(),
-                safe_point.clone(),
             )
             .unwrap_or_else(|e| fatal!("failed to start raft_server: {}", e));
 
