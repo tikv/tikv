@@ -2,7 +2,7 @@
 
 use std::{
     iter::FromIterator,
-    sync::{Arc, Mutex, atomic::AtomicU64, mpsc},
+    sync::{Arc, Mutex, mpsc},
     time::Duration,
 };
 
@@ -116,7 +116,6 @@ fn start_raftstore(
             None,
             DiskCheckRunner::dummy(),
             GrpcServiceManager::dummy(),
-            Arc::new(AtomicU64::new(0)),
         )
         .unwrap();
 
