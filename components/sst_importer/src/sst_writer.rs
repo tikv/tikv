@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use api_version::{dispatch_api_version, match_template_api_version, KeyMode, KvFormat, RawValue};
 use encryption::DataKeyManager;
-use engine_traits::{raw_ttl::ttl_to_expire_ts, KvEngine, SstWriter};
+use engine_traits::{raw_ttl::ttl_to_expire_ts, ExternalSstFileInfo, KvEngine, SstWriter};
 use kvproto::{import_sstpb::*, kvrpcpb::ApiVersion};
 use tikv_util::time::Instant;
 use txn_types::{is_short_value, Key, TimeStamp, Write as KvWrite, WriteType};
@@ -119,13 +119,23 @@ impl<E: KvEngine> TxnSstWriter<E> {
         let (w1, w2, key_manager) = (self.default, self.write, self.key_manager);
 
         if default_entries > 0 {
-            w1.finish()?;
+            let info = w1.finish()?;
+            let (start_key, end_key) = (info.smallest_key(), info.largest_key());
             p1.save(key_manager.as_deref())?;
+            info!("[default_cf] debugging for sst ingestion";
+                "start_key" => start_key,
+                "end_key" => end_key,
+                "file_path" => ?p1);
             metas.push(default_meta);
         }
         if write_entries > 0 {
-            w2.finish()?;
+            let info = w2.finish()?;
+            let (start_key, end_key) = (info.smallest_key(), info.largest_key());
             p2.save(key_manager.as_deref())?;
+            info!("[write_cf] debugging for sst ingestion";
+                "start_key" => start_key,
+                "end_key" => end_key,
+                "file_path" => ?p2);
             metas.push(write_meta);
         }
 
