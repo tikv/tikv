@@ -319,7 +319,10 @@ impl MiscExt for RocksEngine {
             .get_approximate_memtable_stats_cf(handle, &range))
     }
 
-    fn ingest_maybe_slowdown_writes(&self, cf: &str) -> Result<bool> {
+    // Checks if ingesting additional SSTs might trigger write slowdown, based
+    // on a conservative estimate of the L0 file count after ingesting the SSTs
+    // that are already inflight for ingestion.
+    fn ingest_maybe_slowdown_writes(&self, cf: &str, inflight_ingest_cnt: u64) -> Result<bool> {
         let handle = util::get_cf_handle(self.as_inner(), cf)?;
         if let Some(n) = util::get_cf_num_files_at_level(self.as_inner(), handle, 0) {
             let options = self.as_inner().get_options_cf(handle);
@@ -327,7 +330,10 @@ impl MiscExt for RocksEngine {
             let compaction_trigger = options.get_level_zero_file_num_compaction_trigger() as u64;
             // Leave enough buffer to tolerate heavy write workload,
             // which may flush some memtables in a short time.
-            if n > u64::from(slowdown_trigger) / 2 && n >= compaction_trigger {
+            let worse_case_l0_file_count = n + inflight_ingest_cnt;
+            if worse_case_l0_file_count > u64::from(slowdown_trigger) / 2
+                && worse_case_l0_file_count >= compaction_trigger
+            {
                 return Ok(true);
             }
         }
