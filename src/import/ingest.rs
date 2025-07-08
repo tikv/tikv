@@ -28,24 +28,25 @@ use super::{pb_error_inc, raft_writer::wait_write};
 use crate::storage::{self, errors::extract_region_error_from_error};
 
 #[derive(Default)]
-pub(super) struct IngestLatch(Mutex<HashSet<(String /* CfName */, PathBuf)>>);
+pub(super) struct IngestLatch(Mutex<HashSet<(String /* cf_name */, PathBuf)>>);
 
 impl IngestLatch {
     pub(super) fn acquire_lock(&self, meta: &SstMeta) -> Result<bool> {
         let mut slots = self.0.lock().unwrap();
         let p = sst_meta_to_path(meta)?;
-        Ok(slots.insert((meta.get_cf_name(), p)))
+        Ok(slots.insert((meta.get_cf_name().to_string(), p)))
     }
 
     pub(super) fn release_lock(&self, meta: &SstMeta) -> Result<bool> {
         let mut slots = self.0.lock().unwrap();
         let p = sst_meta_to_path(meta)?;
-        Ok(slots.remove(&(meta.get_cf_name(), p)))
+        Ok(slots.remove(&(meta.get_cf_name().to_string(), p)))
     }
 
-    pub(super) fn count_ssts_in_cf(&self, cfName: &str) -> usize {
+    pub(super) fn count_ssts_in_cf(&self, cf_name: &str) -> usize {
         let slots = self.0.lock().unwrap();
-        slots.iter().filter(|(cf, _)| cf == cfName).count()
+        let cnt = slots.iter().filter(|(cf, _)| cf == cf_name).count();
+        cnt
     }
 }
 
@@ -99,7 +100,7 @@ fn check_write_stall<E: KvEngine>(
     tablets: &LocalTablets<E>,
     store_meta: &Option<Arc<Mutex<StoreMeta<E>>>>,
     importer: &SstImporter<E>,
-    incoming_write_cf_sst_cnt: u64,
+    inflight_write_cf_sst_cnt: u64,
 ) -> Option<errorpb::Error> {
     let tablet = match tablets.get(region_id) {
         Some(tablet) => tablet,
@@ -130,7 +131,7 @@ fn check_write_stall<E: KvEngine>(
         if let Some((region, _)) = store_meta.lock().unwrap().regions.get(&region_id) {
             if !importer.region_in_import_mode(region)
                 && tablet
-                    .ingest_maybe_slowdown_writes(CF_WRITE, incoming_write_cf_sst_cnt)
+                    .ingest_maybe_slowdown_writes(CF_WRITE, inflight_write_cf_sst_cnt)
                     .expect("cf")
             {
                 return reject_error(Some(region_id));
@@ -143,7 +144,7 @@ fn check_write_stall<E: KvEngine>(
         }
     } else if importer.get_mode() == SwitchMode::Normal
         && tablet
-            .ingest_maybe_slowdown_writes(CF_WRITE, incoming_write_cf_sst_cnt)
+            .ingest_maybe_slowdown_writes(CF_WRITE, inflight_write_cf_sst_cnt)
             .expect("cf")
     {
         match tablet.get_sst_key_ranges(CF_WRITE, 0) {
@@ -159,7 +160,6 @@ fn check_write_stall<E: KvEngine>(
         }
         return reject_error(None);
     }
-
     None
 }
 
@@ -264,6 +264,7 @@ pub async fn ingest<E: Engine>(
     store_meta: &Option<Arc<Mutex<StoreMeta<E::Local>>>>,
     importer: &SstImporter<E::Local>,
     ingest_latch: &Arc<IngestLatch>,
+    ingest_admission_guard: &Arc<Mutex<()>>,
     label: &'static str,
 ) -> Result<IngestResponse> {
     let mut resp = IngestResponse::default();
@@ -274,16 +275,29 @@ pub async fn ingest<E: Engine>(
 
     let mut errorpb = errorpb::Error::default();
     let mut metas = vec![];
-    // Acquire locks for all SSTs before calling `check_write_stall`. This
-    // ensures that all incoming SSTs are tracked — both those that have already
-    // passed the stall check and those currently undergoing it.
-    for meta in req.get_ssts() {
-        if ingest_latch.acquire_lock(meta).unwrap_or(false) {
-            metas.push(meta.clone());
+    {
+        // Serialize admission checks to avoid race conditions between
+        // concurrent ingests.
+        let _guard = ingest_admission_guard.lock().unwrap();
+
+        // Check if there is a write stall.
+        if let Some(errorpb) = check_write_stall(
+            req.get_context().get_region_id(),
+            tablets,
+            store_meta,
+            importer,
+            ingest_latch.count_ssts_in_cf(CF_WRITE) as u64,
+        ) {
+            resp.set_error(errorpb);
+            return Ok(resp);
+        }
+
+        for meta in req.get_ssts() {
+            if ingest_latch.acquire_lock(meta).unwrap_or(false) {
+                metas.push(meta.clone());
+            }
         }
     }
-
-    // Abort if there is file conflict.
     if metas.len() < req.get_ssts().len() {
         for m in metas {
             ingest_latch.release_lock(&m).unwrap();
@@ -292,22 +306,6 @@ pub async fn ingest<E: Engine>(
         resp.set_error(errorpb);
         return Ok(resp);
     }
-
-    // Check if there is a write stall.
-    if let Some(errorpb) = check_write_stall(
-        req.get_context().get_region_id(),
-        tablets,
-        store_meta,
-        importer,
-        ingest_latch.count_ssts_in_cf(CF_WRITE),
-    ) {
-        for m in metas {
-            ingest_latch.release_lock(&m).unwrap();
-        }
-        resp.set_error(errorpb);
-        return Ok(resp);
-    }
-
     let res = ingest_files_impl(
         req.take_context(),
         req.take_ssts().into(),
