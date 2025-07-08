@@ -41,7 +41,10 @@ pub use self::{
     key_handle::{KeyHandle, KeyHandleGuard},
     lock_table::LockTable,
     metrics::*,
-    tracked_arc::{LeakDetector, Operation, TrackedArc, TrackedInfo, TrackedWeak},
+    tracked_arc::{
+        LeakDetector, Operation, TrackedArc, TrackedArcConfig, TrackedArcConfigManager,
+        TrackedInfo, TrackedWeak,
+    },
 };
 
 lazy_static! {

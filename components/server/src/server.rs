@@ -530,6 +530,11 @@ where
 
         cfg_controller.register(tikv::config::Module::Log, Box::new(LogConfigManager));
         cfg_controller.register(tikv::config::Module::Memory, Box::new(MemoryConfigManager));
+        cfg_controller.register(
+            tikv::config::Module::TrackedArc,
+            Box::new(concurrency_manager::TrackedArcConfigManager),
+        );
+        concurrency_manager::LeakDetector::instance().update_config(&self.core.config.tracked_arc);
 
         // Create cdc.
         let mut cdc_worker = Box::new(LazyWorker::new("cdc"));

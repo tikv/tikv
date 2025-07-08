@@ -10,7 +10,7 @@ use std::{
     collections::VecDeque,
     ops::Deref,
     sync::{
-        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex, Weak,
     },
     time::{Duration, Instant},
@@ -19,7 +19,8 @@ use std::{
 use backtrace::Backtrace;
 use dashmap::DashMap;
 use lazy_static::lazy_static;
-use tikv_util::{info, sys::thread::StdThreadBuildWrapper, warn};
+use online_config::{ConfigChange, ConfigManager, OnlineConfig};
+use tikv_util::{error, info, sys::thread::StdThreadBuildWrapper, warn};
 use txn_types::Key;
 
 use crate::{
@@ -27,7 +28,45 @@ use crate::{
     KeyHandle,
 };
 
-const MAX_HISTORY_SIZE: usize = 10;
+/// Configuration structure for TrackedArc debugging framework
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, OnlineConfig)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct TrackedArcConfig {
+    /// Sampling rate: 0=disabled, 1=all, N=1/N sampling
+    pub sampling_rate: u32,
+    /// Enable/disable leak detection
+    pub leak_detection_enabled: bool,
+    /// Minimum age for considering a KeyHandle as potentially leaked (in
+    /// seconds)
+    pub leak_detection_threshold_secs: u64,
+    /// Maximum number of tracked KeyHandles
+    pub max_registry_capacity: u64,
+    /// Maximum access history size per KeyHandle
+    pub max_history_size: usize,
+    /// Maximum number of leaked KeyHandles to log per check
+    pub max_leaks_to_log: u64,
+    /// Registry cleanup period in seconds (0 = disabled)
+    /// When enabled, performs total registry reset for fresh debugging data
+    pub registry_cleanup_period_secs: u64,
+    /// Maximum entries returned by dump API
+    pub max_dump_entries: usize,
+}
+
+impl Default for TrackedArcConfig {
+    fn default() -> Self {
+        Self {
+            sampling_rate: 0,
+            leak_detection_enabled: false,
+            leak_detection_threshold_secs: 180,
+            max_registry_capacity: 10000,
+            max_history_size: 3,
+            max_leaks_to_log: 2,
+            registry_cleanup_period_secs: 3600,
+            max_dump_entries: 50,
+        }
+    }
+}
 
 /// Operation types for TrackedArc access tracking
 #[derive(Debug, Clone, PartialEq)]
@@ -127,39 +166,48 @@ pub struct LeakDetector {
     registry: DashMap<u64, Arc<TrackedInfo>>,
     /// Atomic counter for generating unique KeyHandle IDs
     next_keyhandle_id: AtomicU64,
-    /// Sampling rate (1 = always track, N = track every Nth instance)
-    sampling_rate: AtomicU32,
     /// Counter for sampling decisions
     sampling_counter: AtomicU32,
-    /// Background leak detection enabled
+
+    /// Configuration fields as individual atomics for lock-free access
+    sampling_rate: AtomicU32,
     leak_detection_enabled: AtomicBool,
-    /// Minimum age for considering a KeyHandle as potentially leaked (in
-    /// seconds)
-    leak_detection_threshold: AtomicU64,
-    /// Maximum number of tracked KeyHandles (to prevent unbounded memory
-    /// growth)
+    leak_detection_threshold_secs: AtomicU64,
     max_registry_capacity: AtomicU64,
-    /// Maximum number of leaked KeyHandles to log per check (to prevent log
-    /// spam)
+    max_history_size: AtomicUsize,
     max_leaks_to_log: AtomicU64,
+    registry_cleanup_period_secs: AtomicU64,
+    max_dump_entries: AtomicUsize,
+
+    /// Last cleanup timestamp (for period tracking)
+    last_cleanup_time: AtomicU64,
 }
 
 impl LeakDetector {
     /// Create a new LeakDetector instance
     fn new() -> Self {
+        let config = TrackedArcConfig::default();
         let detector = Self {
             registry: DashMap::new(),
             next_keyhandle_id: AtomicU64::new(1),
-            sampling_rate: AtomicU32::new(1),
             sampling_counter: AtomicU32::new(0),
-            leak_detection_enabled: AtomicBool::new(false),
-            leak_detection_threshold: AtomicU64::new(180),
-            max_registry_capacity: AtomicU64::new(10000),
-            max_leaks_to_log: AtomicU64::new(2),
+            last_cleanup_time: AtomicU64::new(0),
+
+            // Initialize all config fields from default config
+            sampling_rate: AtomicU32::new(config.sampling_rate),
+            leak_detection_enabled: AtomicBool::new(config.leak_detection_enabled),
+            leak_detection_threshold_secs: AtomicU64::new(config.leak_detection_threshold_secs),
+            max_registry_capacity: AtomicU64::new(config.max_registry_capacity),
+            max_history_size: AtomicUsize::new(config.max_history_size),
+            max_leaks_to_log: AtomicU64::new(config.max_leaks_to_log),
+            registry_cleanup_period_secs: AtomicU64::new(config.registry_cleanup_period_secs),
+            max_dump_entries: AtomicUsize::new(config.max_dump_entries),
         };
 
         // Start background leak detection thread
         detector.start_leak_detection_thread();
+        // make sure configs are consistent
+        detector.update_config(&config);
         detector
     }
 
@@ -174,40 +222,69 @@ impl LeakDetector {
     }
 
     /// Set the sampling rate (1 = always track, N = track every Nth instance)
-    pub fn set_sampling_rate(&self, rate: u32) {
+    #[cfg(test)]
+    fn set_sampling_rate(&self, rate: u32) {
         self.sampling_rate.store(rate, Ordering::Relaxed);
         // Reset counter when changing sampling rate
         self.sampling_counter.store(0, Ordering::Relaxed);
     }
 
     /// Get current registry size for testing
-    pub fn registry_size(&self) -> usize {
+    #[cfg(test)]
+    fn registry_size(&self) -> usize {
         self.registry.len()
     }
 
+    pub fn update_config(&self, new_config: &TrackedArcConfig) {
+        self.sampling_rate
+            .store(new_config.sampling_rate, Ordering::Relaxed);
+        self.leak_detection_enabled
+            .store(new_config.leak_detection_enabled, Ordering::Relaxed);
+        self.leak_detection_threshold_secs
+            .store(new_config.leak_detection_threshold_secs, Ordering::Relaxed);
+        self.max_registry_capacity
+            .store(new_config.max_registry_capacity, Ordering::Relaxed);
+        self.max_history_size
+            .store(new_config.max_history_size, Ordering::Relaxed);
+        self.max_leaks_to_log
+            .store(new_config.max_leaks_to_log, Ordering::Relaxed);
+        self.registry_cleanup_period_secs
+            .store(new_config.registry_cleanup_period_secs, Ordering::Relaxed);
+        self.max_dump_entries
+            .store(new_config.max_dump_entries, Ordering::Relaxed);
+        info!("TrackedArc configuration updated"; "config" => ?new_config);
+    }
+
     /// Enable/disable background leak detection
-    pub fn set_leak_detection_enabled(&self, enabled: bool) {
+    #[cfg(test)]
+    fn set_leak_detection_enabled(&self, enabled: bool) {
         self.leak_detection_enabled
             .store(enabled, Ordering::Relaxed);
     }
 
     /// Set the threshold for considering a KeyHandle as potentially leaked (in
     /// seconds)
-    pub fn set_leak_detection_threshold(&self, threshold_seconds: u64) {
-        self.leak_detection_threshold
+    #[cfg(test)]
+    fn set_leak_detection_threshold(&self, threshold_seconds: u64) {
+        self.leak_detection_threshold_secs
             .store(threshold_seconds, Ordering::Relaxed);
     }
 
-    /// Set the maximum registry capacity (to prevent unbounded memory growth)
-    pub fn set_max_registry_capacity(&self, max_capacity: u64) {
-        self.max_registry_capacity
-            .store(max_capacity, Ordering::Relaxed);
-    }
-
-    /// Set the maximum number of leaked KeyHandles to log per check (to prevent
-    /// log spam)
-    pub fn set_max_leaks_to_log(&self, max_leaks: u64) {
-        self.max_leaks_to_log.store(max_leaks, Ordering::Relaxed);
+    /// Get current configuration as a struct
+    pub fn get_config(&self) -> TrackedArcConfig {
+        // Read all config values from atomic fields - no locks needed!
+        TrackedArcConfig {
+            sampling_rate: self.sampling_rate.load(Ordering::Relaxed),
+            leak_detection_enabled: self.leak_detection_enabled.load(Ordering::Relaxed),
+            leak_detection_threshold_secs: self
+                .leak_detection_threshold_secs
+                .load(Ordering::Relaxed),
+            max_registry_capacity: self.max_registry_capacity.load(Ordering::Relaxed),
+            max_history_size: self.max_history_size.load(Ordering::Relaxed),
+            max_leaks_to_log: self.max_leaks_to_log.load(Ordering::Relaxed),
+            registry_cleanup_period_secs: self.registry_cleanup_period_secs.load(Ordering::Relaxed),
+            max_dump_entries: self.max_dump_entries.load(Ordering::Relaxed),
+        }
     }
 
     /// Check if this instance should be tracked based on sampling rate
@@ -228,9 +305,7 @@ impl LeakDetector {
     pub fn register(&self, info: Arc<TrackedInfo>) {
         let max_capacity = self.max_registry_capacity.load(Ordering::Relaxed) as usize;
 
-        // Check capacity before inserting
         if self.registry.len() >= max_capacity {
-            // Use metric instead of log to avoid spam
             TRACKED_ARC_CAPACITY_EXCEEDED.inc();
             return;
         }
@@ -239,19 +314,33 @@ impl LeakDetector {
     }
 
     /// Record an access event for a KeyHandle
+    /// SAFETY: Avoids deadlock by cloning the Arc before acquiring Mutex
     pub fn record_access(&self, key_handle_id: u64, access_info: AccessInfo) {
-        if let Some(tracked_info) = self.registry.get(&key_handle_id) {
-            if let Ok(mut history) = tracked_info.access_history.lock() {
-                history.push_back(access_info);
-                if history.len() > MAX_HISTORY_SIZE {
-                    history.pop_front();
-                }
+        // SAFE: Get Arc<TrackedInfo> and release DashMap lock immediately
+        let tracked_info = match self.registry.get(&key_handle_id) {
+            Some(entry) => entry.value().clone(), // Clone Arc, release DashMap lock
+            None => {
+                // the record may have been cleared
+                TRACKED_ARC_RECORD_NOT_FOUND.inc();
+                return;
             }
-        } else {
-            // This should only happen if there's a bug in the tracking logic
-            // since we check is_tracked before calling record_access
-            // Use metric instead of log to avoid spam
-            TRACKED_ARC_RECORD_NOT_FOUND.inc();
+        };
+
+        // Now safely acquire Mutex without holding DashMap lock
+        let mut history = match tracked_info.access_history.lock() {
+            Ok(history) => history,
+            Err(_) => {
+                error!("lock is poisoned");
+                return;
+            }
+        };
+
+        history.push_back(access_info);
+
+        let max_size = self.max_history_size.load(Ordering::Relaxed);
+
+        if history.len() > max_size {
+            history.pop_front();
         }
     }
 
@@ -260,30 +349,18 @@ impl LeakDetector {
         self.registry.remove(&id);
     }
 
-    /// Retrieve a reference to a TrackedInfo by ID
-    pub fn get_info(
-        &self,
-        id: u64,
-    ) -> Option<dashmap::mapref::one::Ref<'_, u64, Arc<TrackedInfo>>> {
-        self.registry.get(&id)
-    }
-
-    /// Get the current number of tracked objects
-    pub fn count(&self) -> usize {
-        self.registry.len()
-    }
-
-    /// Get all tracked object IDs (useful for debugging)
-    pub fn get_all_ids(&self) -> Vec<u64> {
-        self.registry.iter().map(|entry| *entry.key()).collect()
+    /// Retrieve a cloned Arc<TrackedInfo> by ID (deadlock-safe)
+    /// SAFETY: Returns cloned Arc, immediately releases DashMap lock
+    pub fn get_info(&self, id: u64) -> Option<Arc<TrackedInfo>> {
+        self.registry.get(&id).map(|entry| entry.value().clone())
     }
 
     /// Get summary information about all tracked objects
     pub fn get_summary(&self) -> Vec<(u64, String, usize)> {
         self.registry
             .iter()
-            .map(|entry| {
-                let info = entry.value();
+            .map(|entry| entry.value().clone())
+            .map(|info| {
                 let access_count = info.access_history.lock().map(|h| h.len()).unwrap_or(0);
                 (info.key_handle_id, format!("{:?}", info.key), access_count)
             })
@@ -293,8 +370,8 @@ impl LeakDetector {
     /// Get detailed information about a specific tracked object including
     /// access history
     pub fn get_detailed_info(&self, key_handle_id: u64) -> Option<String> {
-        let info_ref = self.get_info(key_handle_id)?;
-        let info = info_ref.value();
+        // do not hold references into the dashmap
+        let info: Arc<TrackedInfo> = self.get_info(key_handle_id)?;
 
         let mut result = format!(
             "KeyHandle ID: {}\n\
@@ -303,20 +380,7 @@ impl LeakDetector {
         );
 
         if let Ok(access_history) = info.access_history.lock() {
-            result.push_str(&format!(
-                "Access History ({} events):\n",
-                access_history.len()
-            ));
-            for (i, access) in access_history.iter().enumerate() {
-                result.push_str(&format!(
-                    "  #{}: Arc-{} [-{}ms] {} (thread: {})\n",
-                    i + 1,
-                    access.arc_id,
-                    access.timestamp.elapsed().as_millis(),
-                    access.operation,
-                    access.thread_name
-                ));
-            }
+            result.push_str(&Self::format_access_history(&access_history, false));
         }
 
         Some(result)
@@ -327,7 +391,6 @@ impl LeakDetector {
         std::thread::Builder::new()
             .name("leak-detector".to_string())
             .spawn_wrapper(|| {
-                let mut loop_counter: u32 = 0;
                 loop {
                     std::thread::sleep(Duration::from_secs(60));
 
@@ -337,13 +400,9 @@ impl LeakDetector {
                     }
 
                     detector.check_for_leaks_internal();
-                    loop_counter = loop_counter.wrapping_add(1);
-                    // TODO: make this configurable
-                    if loop_counter % 10 == 0 {
-                        // every some time, we clear the tracked info to get some new data.
-                        info!("clear tracked KeyHandles");
-                        detector.registry.clear();
-                    }
+
+                    // Perform registry cleanup if enabled
+                    detector.cleanup_old_entries_if_needed();
                 }
             })
             .expect("Failed to start leak detection thread");
@@ -351,22 +410,24 @@ impl LeakDetector {
 
     /// Check for potentially leaked KeyHandles and log them
     fn check_for_leaks_internal(&self) {
-        let threshold_secs = self.leak_detection_threshold.load(Ordering::Relaxed);
+        let threshold_secs = self.leak_detection_threshold_secs.load(Ordering::Relaxed);
         let max_leaks_to_log = self.max_leaks_to_log.load(Ordering::Relaxed) as usize;
         let now = Instant::now();
 
-        // Collect all leaked KeyHandles with their ages
+        // SAFE: Collect all TrackedInfo Arcs first, releasing DashMap locks
+        let tracked_infos: Vec<Arc<TrackedInfo>> = self.registry
+            .iter()
+            .map(|entry| entry.value().clone()) // Clone Arc, release DashMap lock
+            .collect();
+
         let mut leaked_handles = Vec::new();
-
-        for entry in self.registry.iter() {
-            let tracked_info = entry.value();
-
+        for tracked_info in tracked_infos {
             // Check if this KeyHandle has been alive longer than threshold
             // Use creation_time instead of first access time for accurate age calculation
             let age = now.duration_since(tracked_info.creation_time);
 
             if age.as_secs() > threshold_secs {
-                leaked_handles.push((tracked_info.clone(), age));
+                leaked_handles.push((tracked_info, age));
             }
         }
 
@@ -452,27 +513,98 @@ impl LeakDetector {
         warn!("{}", summary_msg);
     }
 
-    /// Format access history for leak logging
-    fn format_access_history_for_leak(history: &mut VecDeque<AccessInfo>) -> String {
-        let mut result = String::new();
-        for (i, access) in history.iter_mut().enumerate() {
-            access.backtrace.resolve();
-            result.push_str(&format!(
-                "  #{}: Arc-{} [-{}ms] {} (thread: {}) (backtrace: {:?})\n",
-                i + 1,
-                access.arc_id,
-                access.timestamp.elapsed().as_millis(),
-                access.operation,
-                access.thread_name,
-                access.backtrace
-            ));
+    /// Common function to format access history
+    /// `include_backtrace`: whether to include backtrace information
+    fn format_access_history(history: &VecDeque<AccessInfo>, include_backtrace: bool) -> String {
+        let mut result = format!("Access History ({} events):\n", history.len());
+
+        for (i, access) in history.iter().enumerate() {
+            if include_backtrace {
+                // For leak detection, include backtrace (note: backtrace should be resolved by
+                // caller)
+                result.push_str(&format!(
+                    "  #{}: Arc-{} [-{}ms] {} (thread: {}) (backtrace: {:?})\n",
+                    i + 1,
+                    access.arc_id,
+                    access.timestamp.elapsed().as_millis(),
+                    access.operation,
+                    access.thread_name,
+                    access.backtrace
+                ));
+            } else {
+                // For general info, no backtrace needed
+                result.push_str(&format!(
+                    "  #{}: Arc-{} [-{}ms] {} (thread: {})\n",
+                    i + 1,
+                    access.arc_id,
+                    access.timestamp.elapsed().as_millis(),
+                    access.operation,
+                    access.thread_name
+                ));
+            }
         }
+
         result
+    }
+
+    /// Format access history for leak logging (resolves backtraces)
+    fn format_access_history_for_leak(history: &mut VecDeque<AccessInfo>) -> String {
+        // Resolve backtraces first
+        for access in history.iter_mut() {
+            access.backtrace.resolve();
+        }
+
+        // Use common formatting function with backtrace enabled
+        Self::format_access_history(history, true)
+    }
+
+    /// Cleanup old entries if cleanup is enabled and period has elapsed
+    fn cleanup_old_entries_if_needed(&self) {
+        let cleanup_period = self.registry_cleanup_period_secs.load(Ordering::Relaxed);
+
+        if cleanup_period == 0 {
+            return; // Cleanup disabled
+        }
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let last_cleanup = self.last_cleanup_time.load(Ordering::Relaxed);
+
+        // Check if enough time has passed since last cleanup
+        if now.saturating_sub(last_cleanup) >= cleanup_period {
+            self.cleanup_old_entries();
+            self.last_cleanup_time.store(now, Ordering::Relaxed);
+        }
+    }
+
+    /// Cleanup registry - performs a total reset for fresh debugging data
+    /// Returns the number of entries removed
+    fn cleanup_old_entries(&self) {
+        self.registry.clear();
+        info!("Registry cleanup");
     }
 }
 
 lazy_static! {
     static ref LEAK_DETECTOR: LeakDetector = LeakDetector::new();
+}
+
+pub struct TrackedArcConfigManager;
+
+impl ConfigManager for TrackedArcConfigManager {
+    fn dispatch(&mut self, change: ConfigChange) -> online_config::Result<()> {
+        let detector = LeakDetector::instance();
+
+        // Get current config and apply changes using OnlineConfig derive
+        let mut current_config = detector.get_config();
+        current_config.update(change)?;
+
+        // Apply the updated config to atomic fields
+        detector.update_config(&current_config);
+        Ok(())
+    }
 }
 
 /// A smart pointer that wraps Arc<KeyHandle> with diagnostic tracking
@@ -495,17 +627,20 @@ impl TrackedArc {
         let key_handle_id = key_handle.key_handle_id;
         let key = key_handle.key.clone();
 
-        // Check if this KeyHandle is being tracked
         if key_handle.is_tracked {
-            // Check if we already have TrackedInfo for this KeyHandle
-            if !detector.registry.contains_key(&key_handle_id) {
-                let tracked_info = Arc::new(TrackedInfo {
-                    key_handle_id,
-                    key,
-                    creation_time: Instant::now(),
-                    access_history: Mutex::new(std::collections::VecDeque::new()),
+            let max_capacity = detector.max_registry_capacity.load(Ordering::Relaxed) as usize;
+
+            if detector.registry.len() >= max_capacity {
+                TRACKED_ARC_CAPACITY_EXCEEDED.inc();
+            } else {
+                detector.registry.entry(key_handle_id).or_insert_with(|| {
+                    Arc::new(TrackedInfo {
+                        key_handle_id,
+                        key,
+                        creation_time: Instant::now(),
+                        access_history: Mutex::new(VecDeque::new()),
+                    })
                 });
-                detector.register(tracked_info);
             }
 
             // Record creation as the first access
@@ -537,22 +672,25 @@ impl TrackedArc {
         self.inner.key_handle_id
     }
 
-    /// Get access to the TrackedInfo for this instance
-    pub fn tracked_info(&self) -> Option<dashmap::mapref::one::Ref<'_, u64, Arc<TrackedInfo>>> {
+    /// Get a cloned Arc<TrackedInfo> for this instance (deadlock-safe)
+    pub fn tracked_info_safe(&self) -> Option<Arc<TrackedInfo>> {
         LeakDetector::instance().get_info(self.inner.key_handle_id)
     }
 
     /// Get the key associated with this TrackedArc
     pub fn get_key(&self) -> Option<Key> {
-        Some(self.tracked_info()?.key.clone())
+        Some(self.tracked_info_safe()?.key.clone())
     }
 
     /// Get the number of access events for this KeyHandle
+    /// SAFETY: Uses deadlock-safe TrackedInfo access
     pub fn get_access_count(&self) -> Option<usize> {
         if !self.inner.is_tracked {
             return None;
         }
-        Some(self.tracked_info()?.access_history.lock().ok()?.len())
+        let tracked_info = self.tracked_info_safe()?;
+        let history = tracked_info.access_history.lock().ok()?;
+        Some(history.len())
     }
 
     /// Get formatted debug information for this TrackedArc
@@ -937,5 +1075,76 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_secs(1));
         }
+    }
+
+    #[test]
+    fn test_unified_configuration() {
+        let detector = LeakDetector::instance();
+
+        // Test unified configuration update
+        let new_config = TrackedArcConfig {
+            sampling_rate: 50,
+            leak_detection_enabled: true,
+            leak_detection_threshold_secs: 600,
+            max_registry_capacity: 20000,
+            max_history_size: 15,
+            max_leaks_to_log: 5,
+            registry_cleanup_period_secs: 7200,
+            max_dump_entries: 100,
+        };
+
+        detector.update_config(&new_config);
+
+        // Verify configuration was applied
+        let retrieved_config = detector.get_config();
+        assert_eq!(retrieved_config.sampling_rate, 50);
+        assert_eq!(retrieved_config.leak_detection_enabled, true);
+        assert_eq!(retrieved_config.leak_detection_threshold_secs, 600);
+        assert_eq!(retrieved_config.max_registry_capacity, 20000);
+        assert_eq!(retrieved_config.max_leaks_to_log, 5);
+        assert_eq!(retrieved_config.registry_cleanup_period_secs, 7200);
+        assert_eq!(retrieved_config.max_dump_entries, 100);
+
+        // Test individual setters still work
+        detector.set_leak_detection_threshold(300);
+        let updated_config = detector.get_config();
+        assert_eq!(updated_config.leak_detection_threshold_secs, 300);
+
+        // Reset to defaults
+        detector.update_config(&TrackedArcConfig::default());
+    }
+
+    #[test]
+    fn test_tikv_config_integration() {
+        use std::collections::HashMap;
+
+        use online_config::ConfigValue;
+
+        let detector = LeakDetector::instance();
+        let mut config_manager = TrackedArcConfigManager;
+
+        // Test config change through ConfigManager
+        let mut change = HashMap::new();
+        change.insert("sampling_rate".to_string(), ConfigValue::U32(200));
+        change.insert(
+            "leak_detection_enabled".to_string(),
+            ConfigValue::Bool(true),
+        );
+        change.insert(
+            "leak_detection_threshold_secs".to_string(),
+            ConfigValue::U64(600),
+        );
+
+        // Apply config change
+        config_manager.dispatch(change).unwrap();
+
+        // Verify changes were applied
+        let config = detector.get_config();
+        assert_eq!(config.sampling_rate, 200);
+        assert_eq!(config.leak_detection_enabled, true);
+        assert_eq!(config.leak_detection_threshold_secs, 600);
+
+        // Reset to defaults
+        detector.update_config(&TrackedArcConfig::default());
     }
 }

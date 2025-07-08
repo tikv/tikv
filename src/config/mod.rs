@@ -3475,6 +3475,9 @@ pub struct TikvConfig {
 
     #[online_config(submodule)]
     pub resource_control: ResourceControlConfig,
+
+    #[online_config(submodule)]
+    pub tracked_arc: concurrency_manager::TrackedArcConfig,
 }
 
 impl Default for TikvConfig {
@@ -3520,6 +3523,7 @@ impl Default for TikvConfig {
             log_backup: BackupStreamConfig::default(),
             causal_ts: CausalTsConfig::default(),
             resource_control: ResourceControlConfig::default(),
+            tracked_arc: concurrency_manager::TrackedArcConfig::default(),
         }
     }
 }
@@ -4540,6 +4544,7 @@ pub enum Module {
     Quota,
     Log,
     Memory,
+    TrackedArc,
     Unknown(String),
 }
 
@@ -4569,6 +4574,7 @@ impl From<&str> for Module {
             "quota" => Module::Quota,
             "log" => Module::Log,
             "memory" => Module::Memory,
+            "tracked_arc" => Module::TrackedArc,
             n => Module::Unknown(n.to_owned()),
         }
     }
