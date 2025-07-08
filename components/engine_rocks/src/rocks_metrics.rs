@@ -1,5 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::atomic::Ordering;
+
 use collections::HashMap;
 use engine_traits::{CF_DEFAULT, StatisticsReporter};
 use lazy_static::lazy_static;
@@ -9,7 +11,11 @@ use rocksdb::{
     DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType, HistogramData,
 };
 
-use crate::{RocksStatistics, engine::RocksEngine, rocks_metrics_defs::*};
+use crate::{
+    RocksStatistics, TITAN_COMPRESSION_FACTOR, TITAN_COMPRESSION_FACTOR_SMOOTHER,
+    TITAN_MAX_BLOB_SIZE_SEEN, TITAN_MAX_COMPACTION_FACTOR, engine::RocksEngine,
+    rocks_metrics_defs::*,
+};
 
 make_auto_flush_static_metric! {
     pub label_enum TickerName {
@@ -1235,6 +1241,30 @@ pub fn flush_engine_statistics(statistics: &RocksStatistics, name: &str, is_tita
         }
     }
     if is_titan {
+        if let Some(v) = statistics.get_histogram(HistType::TitanValueSize) {
+            // Update the Titan compression factor, which is used to estimate
+            // blob raw size when building SST table properties.
+            let keys_cnt = statistics.get_ticker_count(TickerType::TitanBlobFileNumKeysWritten);
+            let compressed_size =
+                statistics.get_ticker_count(TickerType::TitanBlobFileBytesWritten);
+            let estimated_raw_size = (v.average * keys_cnt as f64) as u64;
+            if estimated_raw_size > 0 && compressed_size > 0 {
+                let compression_factor = (estimated_raw_size as f64 / compressed_size as f64)
+                    .clamp(1.0, TITAN_MAX_COMPACTION_FACTOR);
+                let mut smoother = TITAN_COMPRESSION_FACTOR_SMOOTHER.lock().unwrap();
+                smoother.observe(compression_factor);
+                TITAN_COMPRESSION_FACTOR.store(smoother.get_avg().to_bits(), Ordering::Relaxed);
+                TITAN_COMPRESSION_FACTOR_GAUGE.set(smoother.get_avg());
+            }
+
+            // Update the Titan max blob size seen, used to cap blob size
+            // estimation.
+            let current = TITAN_MAX_BLOB_SIZE_SEEN.load(Ordering::Relaxed);
+            if current == u64::MAX || v.max as u64 > current {
+                TITAN_MAX_BLOB_SIZE_SEEN.store(v.max as u64, Ordering::Relaxed);
+            }
+        }
+
         for t in TITAN_ENGINE_TICKER_TYPES {
             let v = statistics.get_and_reset_ticker_count(*t);
             flush_engine_ticker_metrics(*t, v, name);
@@ -1710,6 +1740,10 @@ lazy_static! {
         "tikv_engine_blob_iter_touch_blob_file_count",
         "Histogram of titan iter touched blob file count",
         &["db", "type"]
+    ).unwrap();
+    pub static ref TITAN_COMPRESSION_FACTOR_GAUGE: Gauge = register_gauge!(
+        "tikv_engine_blob_compression_factor",
+        "Estimated compression factor (raw_size / compressed_size) of Titan"
     ).unwrap();
 }
 
