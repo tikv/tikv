@@ -78,7 +78,7 @@ impl Runner {
         // recent request; older requests become stale and irrelevant. To avoid
         // unnecessary accumulation of multiple requests, we set a small
         // `capacity` for the disk check worker.
-        let (notifier, receiver) = bounded(3);
+        let (notifier, receiver) = bounded(1000);
         Self {
             target,
             notifier,
@@ -184,7 +184,7 @@ impl Runnable for Runner {
     fn run(&mut self, task: Task) {
         // Send the task to the limited capacity channel.
         if let Err(e) = self.notifier.try_send(task) {
-            warn!("failed to send task to disk check bg_worker: {:?}", e);
+            warn!("failed to send task to inspector bg_worker: {:?}", e);
         } else {
             let runner = self.clone();
             if let Some(bg_worker) = self.bg_worker.as_ref() {
