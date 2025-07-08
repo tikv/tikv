@@ -132,7 +132,12 @@ pub struct ImportSstService<E: Engine> {
     threads: Arc<Runtime>,
     importer: Arc<SstImporter>,
     limiter: Limiter,
+<<<<<<< HEAD
     task_slots: Arc<Mutex<HashSet<PathBuf>>>,
+=======
+    ingest_latch: Arc<IngestLatch>,
+    ingest_admission_guard: Arc<Mutex<()>>,
+>>>>>>> 4d704035f8 (import: track inflight ingests during write stall check (#18526))
     raft_entry_max_size: ReadableSize,
     region_info_accessor: Arc<RegionInfoAccessor>,
 
@@ -375,7 +380,12 @@ impl<E: Engine> ImportSstService<E> {
             engine,
             importer,
             limiter: Limiter::new(f64::INFINITY),
+<<<<<<< HEAD
             task_slots: Arc::new(Mutex::new(HashSet::default())),
+=======
+            ingest_latch: Arc::default(),
+            ingest_admission_guard: Arc::default(),
+>>>>>>> 4d704035f8 (import: track inflight ingests during write stall check (#18526))
             raft_entry_max_size,
             region_info_accessor,
             writer,
@@ -1151,7 +1161,17 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
     ) {
         let label = "ingest";
         let timer = Instant::now_coarse();
+<<<<<<< HEAD
         let mut resp = IngestResponse::default();
+=======
+        let import = self.importer.clone();
+        let engine = self.engine.clone();
+        let suspend = self.suspend.clone();
+        let tablets = self.tablets.clone();
+        let store_meta = self.store_meta.clone();
+        let ingest_latch = self.ingest_latch.clone();
+        let ingest_admission_guard = self.ingest_admission_guard.clone();
+>>>>>>> 4d704035f8 (import: track inflight ingests during write stall check (#18526))
 
         if let Err(err) = self.check_suspend() {
             resp.set_error(ImportPbError::from(err).take_store_error());
@@ -1184,8 +1204,27 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let meta = req.take_sst();
         let f = self.ingest_files(req.take_context(), label, vec![meta.clone()]);
         let handle_task = async move {
+<<<<<<< HEAD
             let res = f.await;
             Self::release_lock(&task_slots, &meta).unwrap();
+=======
+            defer! { IMPORT_RPC_COUNT.with_label_values(&[label]).dec() }
+            let mut multi_ingest = MultiIngestRequest::default();
+            multi_ingest.set_context(req.take_context());
+            multi_ingest.mut_ssts().push(req.take_sst());
+            let res = ingest(
+                multi_ingest,
+                engine,
+                &suspend,
+                &tablets,
+                &store_meta,
+                &import,
+                &ingest_latch,
+                &ingest_admission_guard,
+                label,
+            )
+            .await;
+>>>>>>> 4d704035f8 (import: track inflight ingests during write stall check (#18526))
             crate::send_rpc_response!(res, sink, label, timer);
         };
         self.threads.spawn(handle_task);
@@ -1200,12 +1239,22 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
     ) {
         let label = "multi-ingest";
         let timer = Instant::now_coarse();
+<<<<<<< HEAD
         let mut resp = IngestResponse::default();
         if let Err(err) = self.check_suspend() {
             resp.set_error(ImportPbError::from(err).take_store_error());
             ctx.spawn(async move { crate::send_rpc_response!(Ok(resp), sink, label, timer) });
             return;
         }
+=======
+        let import = self.importer.clone();
+        let engine = self.engine.clone();
+        let suspend = self.suspend.clone();
+        let tablets = self.tablets.clone();
+        let store_meta = self.store_meta.clone();
+        let ingest_latch = self.ingest_latch.clone();
+        let ingest_admission_guard = self.ingest_admission_guard.clone();
+>>>>>>> 4d704035f8 (import: track inflight ingests during write stall check (#18526))
 
         if let Some(errorpb) = self.check_write_stall(req.get_context().get_region_id()) {
             resp.set_error(errorpb);
@@ -1238,10 +1287,26 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let task_slots = self.task_slots.clone();
         let f = self.ingest_files(req.take_context(), label, req.take_ssts().into());
         let handle_task = async move {
+<<<<<<< HEAD
             let res = f.await;
             for m in metas {
                 Self::release_lock(&task_slots, &m).unwrap();
             }
+=======
+            defer! { IMPORT_RPC_COUNT.with_label_values(&[label]).dec() }
+            let res = ingest(
+                req,
+                engine,
+                &suspend,
+                &tablets,
+                &store_meta,
+                &import,
+                &ingest_latch,
+                &ingest_admission_guard,
+                label,
+            )
+            .await;
+>>>>>>> 4d704035f8 (import: track inflight ingests during write stall check (#18526))
             crate::send_rpc_response!(res, sink, label, timer);
         };
         self.threads.spawn(handle_task);
