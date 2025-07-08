@@ -73,6 +73,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "aligned-vec"
+version = "0.6.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc890384c8602f339876ded803c97ad529f3842aba97f6392b3dba0dd171769b"
+dependencies = [
+ "equator",
+]
+
+[[package]]
 name = "allocator-api2"
 version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -104,7 +113,7 @@ dependencies = [
  "log_wrappers",
  "match-template",
  "panic_hook",
- "thiserror",
+ "thiserror 1.0.30",
  "tikv_alloc",
  "tikv_util",
  "txn_types",
@@ -227,7 +236,7 @@ checksum = "7b2d0f03b3640e3a630367e40c468cb7f309529c708ed1d88597047b0e7c6ef7"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.79",
+ "syn 2.0.87",
 ]
 
 [[package]]
@@ -291,7 +300,7 @@ dependencies = [
  "rusoto_sts",
  "slog",
  "slog-global",
- "thiserror",
+ "thiserror 1.0.30",
  "tikv_util",
  "tokio",
  "url",
@@ -528,7 +537,7 @@ dependencies = [
  "slog",
  "slog-global",
  "tempfile",
- "thiserror",
+ "thiserror 1.0.30",
  "tidb_query_common",
  "tikv",
  "tikv_alloc",
@@ -567,7 +576,7 @@ dependencies = [
  "futures-io",
  "grpcio",
  "hex 0.4.2",
- "indexmap",
+ "indexmap 1.6.2",
  "kvproto",
  "lazy_static",
  "log_wrappers",
@@ -577,7 +586,7 @@ dependencies = [
  "pin-project",
  "prometheus",
  "prometheus-static-metric",
- "protobuf",
+ "protobuf 2.8.0",
  "raft",
  "raftstore",
  "rand 0.8.5",
@@ -592,7 +601,7 @@ dependencies = [
  "test_pd_client",
  "test_raftstore",
  "test_util",
- "thiserror",
+ "thiserror 1.0.30",
  "tidb_query_datatype",
  "tikv",
  "tikv_alloc",
@@ -656,7 +665,7 @@ dependencies = [
  "byteorder",
  "libc 0.2.146",
  "regex",
- "thiserror",
+ "thiserror 1.0.30",
 ]
 
 [[package]]
@@ -706,7 +715,7 @@ dependencies = [
  "regex",
  "rustc-hash",
  "shlex 1.1.0",
- "syn 2.0.79",
+ "syn 2.0.87",
 ]
 
 [[package]]
@@ -875,7 +884,7 @@ dependencies = [
  "slog",
  "slog-global",
  "test_pd_client",
- "thiserror",
+ "thiserror 1.0.30",
  "tikv_alloc",
  "tikv_util",
  "tokio",
@@ -917,7 +926,7 @@ dependencies = [
  "pd_client",
  "prometheus",
  "prometheus-static-metric",
- "protobuf",
+ "protobuf 2.8.0",
  "raft",
  "raftstore",
  "resolved_ts",
@@ -929,7 +938,7 @@ dependencies = [
  "test_pd_client",
  "test_raftstore",
  "test_util",
- "thiserror",
+ "thiserror 1.0.30",
  "tikv",
  "tikv_kv",
  "tikv_util",
@@ -1015,7 +1024,7 @@ dependencies = [
  "atty",
  "bitflags",
  "clap_derive",
- "indexmap",
+ "indexmap 1.6.2",
  "lazy_static",
  "os_str_bytes",
  "strsim 0.10.0",
@@ -1049,9 +1058,9 @@ dependencies = [
  "lazy_static",
  "openssl",
  "prometheus",
- "protobuf",
+ "protobuf 2.8.0",
  "rusoto_core",
- "thiserror",
+ "thiserror 1.0.30",
  "tikv_util",
  "url",
 ]
@@ -1073,10 +1082,10 @@ dependencies = [
  "error_code",
  "libc 0.2.146",
  "panic_hook",
- "protobuf",
+ "protobuf 2.8.0",
  "rand 0.8.5",
  "static_assertions",
- "thiserror",
+ "thiserror 1.0.30",
  "tikv_alloc",
 ]
 
@@ -1107,7 +1116,7 @@ dependencies = [
  "serde",
  "slog",
  "slog-global",
- "thiserror",
+ "thiserror 1.0.30",
  "tikv_alloc",
  "tikv_util",
  "tokio",
@@ -1558,7 +1567,7 @@ dependencies = [
  "online_config",
  "openssl",
  "prometheus",
- "protobuf",
+ "protobuf 2.8.0",
  "rand 0.8.5",
  "serde",
  "serde_derive",
@@ -1566,7 +1575,7 @@ dependencies = [
  "slog-global",
  "tempfile",
  "test_util",
- "thiserror",
+ "thiserror 1.0.30",
  "tikv_alloc",
  "tikv_util",
  "tokio",
@@ -1588,7 +1597,7 @@ dependencies = [
  "file_system",
  "kvproto",
  "openssl",
- "protobuf",
+ "protobuf 2.8.0",
  "rust-ini",
  "slog",
  "slog-global",
@@ -1629,7 +1638,7 @@ dependencies = [
  "online_config",
  "prometheus",
  "prometheus-static-metric",
- "protobuf",
+ "protobuf 2.8.0",
  "raft",
  "rand 0.8.5",
  "regex",
@@ -1662,7 +1671,7 @@ dependencies = [
  "lazy_static",
  "pd_client",
  "prometheus",
- "protobuf",
+ "protobuf 2.8.0",
  "raftstore",
  "slog",
  "slog-global",
@@ -1699,13 +1708,13 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "log_wrappers",
- "protobuf",
+ "protobuf 2.8.0",
  "raft",
  "serde",
  "serde_derive",
  "slog",
  "slog-global",
- "thiserror",
+ "thiserror 1.0.30",
  "tikv_alloc",
  "tikv_util",
  "toml",
@@ -1765,6 +1774,32 @@ dependencies = [
  "regex",
  "termcolor",
 ]
+
+[[package]]
+name = "equator"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4711b213838dfee0117e3be6ac926007d7f433d7bbe33595975d4190cb07e6fc"
+dependencies = [
+ "equator-macro",
+]
+
+[[package]]
+name = "equator-macro"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "44f23cf4b44bfce11a86ace86f8a73ffdec849c9fd00a386a53d278bd9e81fb3"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.87",
+]
+
+[[package]]
+name = "equivalent"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
 name = "errno"
@@ -1864,7 +1899,7 @@ dependencies = [
  "matches",
  "openssl",
  "prometheus",
- "protobuf",
+ "protobuf 2.8.0",
  "rand 0.8.5",
  "rusoto_core",
  "rust-ini",
@@ -1906,7 +1941,7 @@ dependencies = [
  "matches",
  "nix 0.24.1",
  "once_cell",
- "protobuf",
+ "protobuf 2.8.0",
  "rust-ini",
  "signal-hook",
  "slog",
@@ -1992,7 +2027,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ed3d8a5e20435ff00469e51a0d82049bae66504b5c429920dadf9bb54d47b3f"
 dependencies = [
  "libc 0.2.146",
- "thiserror",
+ "thiserror 1.0.30",
  "winapi 0.3.9",
 ]
 
@@ -2223,7 +2258,7 @@ checksum = "162ee34ebcb7c64a8abebc059ce0fee27c2262618d7b60ed8faf72fef13c3650"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.79",
+ "syn 2.0.87",
 ]
 
 [[package]]
@@ -2430,7 +2465,7 @@ dependencies = [
  "libc 0.2.146",
  "log",
  "parking_lot 0.11.1",
- "protobuf",
+ "protobuf 2.8.0",
 ]
 
 [[package]]
@@ -2439,7 +2474,7 @@ version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed97a17310fd00ff4109357584a00244e2a785d05b7ee0ef4d1e8fb1d84266df"
 dependencies = [
- "protobuf",
+ "protobuf 2.8.0",
 ]
 
 [[package]]
@@ -2452,7 +2487,7 @@ dependencies = [
  "futures-util",
  "grpcio",
  "log",
- "protobuf",
+ "protobuf 2.8.0",
 ]
 
 [[package]]
@@ -2483,7 +2518,7 @@ dependencies = [
  "futures-sink",
  "futures-util",
  "http",
- "indexmap",
+ "indexmap 1.6.2",
  "slab",
  "tokio",
  "tokio-util",
@@ -2511,6 +2546,12 @@ dependencies = [
  "ahash 0.8.3",
  "allocator-api2",
 ]
+
+[[package]]
+name = "hashbrown"
+version = "0.15.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5971ac85611da7067dbfcabef3c70ebb5606018acd9e2a3903a0da507521e0d5"
 
 [[package]]
 name = "heck"
@@ -2754,6 +2795,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "indexmap"
+version = "2.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe4cd85333e22411419a0bcae1297d25e58c9443848b11dc6a86fefe8c78a661"
+dependencies = [
+ "equivalent",
+ "hashbrown 0.15.4",
+]
+
+[[package]]
 name = "infer"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2767,7 +2818,7 @@ checksum = "16d4bde3a7105e59c66a4104cfe9606453af1c7a0eac78cb7d5bc263eb762a70"
 dependencies = [
  "ahash 0.7.4",
  "atty",
- "indexmap",
+ "indexmap 1.6.2",
  "itoa 1.0.1",
  "lazy_static",
  "log",
@@ -2918,7 +2969,7 @@ version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2d63b6407b66fc81fc539dccf3ddecb669f393c5101b6a2be3976c95099a06e8"
 dependencies = [
- "indexmap",
+ "indexmap 1.6.2",
 ]
 
 [[package]]
@@ -2929,7 +2980,7 @@ dependencies = [
  "kvproto",
  "log_wrappers",
  "panic_hook",
- "thiserror",
+ "thiserror 1.0.30",
  "tikv_alloc",
  "tikv_util",
 ]
@@ -2941,7 +2992,7 @@ source = "git+https://github.com/pingcap/kvproto.git?branch=release-7.5#97f4477a
 dependencies = [
  "futures 0.3.15",
  "grpcio",
- "protobuf",
+ "protobuf 2.8.0",
  "protobuf-build",
  "raft-proto",
 ]
@@ -3089,7 +3140,7 @@ name = "log_wrappers"
 version = "0.0.1"
 dependencies = [
  "hex 0.4.2",
- "protobuf",
+ "protobuf 2.8.0",
  "slog",
  "slog-term",
  "tikv_alloc",
@@ -3515,7 +3566,7 @@ checksum = "ed3955f1a9c7c0c15e092f9c887db08b1fc683305fdf6eb6684f22555355e202"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.79",
+ "syn 2.0.87",
 ]
 
 [[package]]
@@ -3603,7 +3654,7 @@ dependencies = [
  "serde_json",
  "serde_path_to_error",
  "sha2 0.9.1",
- "thiserror",
+ "thiserror 1.0.30",
  "url",
 ]
 
@@ -3829,7 +3880,7 @@ dependencies = [
  "serde_derive",
  "slog",
  "slog-global",
- "thiserror",
+ "thiserror 1.0.30",
  "tikv_alloc",
  "tikv_util",
  "tokio",
@@ -3887,7 +3938,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4a13a2fa9d0b63e5f22328828741e523766fff0ee9e779316902290dff3f824f"
 dependencies = [
  "fixedbitset",
- "indexmap",
+ "indexmap 1.6.2",
 ]
 
 [[package]]
@@ -4026,10 +4077,11 @@ dependencies = [
 
 [[package]]
 name = "pprof"
-version = "0.11.1"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "196ded5d4be535690899a4631cc9f18cdc41b7ebf24a79400f46f48e49a11059"
+checksum = "38a01da47675efa7673b032bf8efd8214f1917d89685e07e395ab125ea42b187"
 dependencies = [
+ "aligned-vec",
  "backtrace",
  "cfg-if 1.0.0",
  "findshlibs",
@@ -4038,13 +4090,13 @@ dependencies = [
  "log",
  "nix 0.26.2",
  "once_cell",
- "parking_lot 0.12.1",
- "protobuf",
- "protobuf-codegen-pure",
+ "protobuf 3.7.2",
+ "protobuf-codegen 3.7.2",
  "smallvec",
+ "spin 0.10.0",
  "symbolic-demangle",
  "tempfile",
- "thiserror",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -4070,7 +4122,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3b69d39aab54d069e7f2fe8cb970493e7834601ca2d8c65fd7bbd183578080d1"
 dependencies = [
  "proc-macro2",
- "syn 2.0.79",
+ "syn 2.0.87",
 ]
 
 [[package]]
@@ -4153,9 +4205,9 @@ dependencies = [
  "libc 0.2.146",
  "memchr",
  "parking_lot 0.11.1",
- "protobuf",
+ "protobuf 2.8.0",
  "reqwest",
- "thiserror",
+ "thiserror 1.0.30",
 ]
 
 [[package]]
@@ -4236,6 +4288,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "protobuf"
+version = "3.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d65a1d4ddae7d8b5de68153b48f6aa3bba8cb002b243dbdbc55a5afbc98f99f4"
+dependencies = [
+ "once_cell",
+ "protobuf-support",
+ "thiserror 1.0.30",
+]
+
+[[package]]
 name = "protobuf-build"
 version = "0.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4243,8 +4306,8 @@ checksum = "c852d9625b912c3e50480cdc701f60f49890b5d7ad46198dd583600f15e7c6ec"
 dependencies = [
  "bitflags",
  "grpcio-compiler",
- "protobuf",
- "protobuf-codegen",
+ "protobuf 2.8.0",
+ "protobuf-codegen 2.8.0",
  "protobuf-src",
  "regex",
 ]
@@ -4255,17 +4318,38 @@ version = "2.8.0"
 source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#6642ebaae4352ea01bf00e160480d8da966d3109"
 dependencies = [
  "heck 0.3.1",
- "protobuf",
+ "protobuf 2.8.0",
 ]
 
 [[package]]
-name = "protobuf-codegen-pure"
-version = "2.8.0"
+name = "protobuf-codegen"
+version = "3.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "00993dc5fbbfcf9d8a005f6b6c29fd29fd6d86deba3ae3f41fd20c624c414616"
+checksum = "5d3976825c0014bbd2f3b34f0001876604fe87e0c86cd8fa54251530f1544ace"
 dependencies = [
- "protobuf",
- "protobuf-codegen",
+ "anyhow",
+ "once_cell",
+ "protobuf 3.7.2",
+ "protobuf-parse",
+ "regex",
+ "tempfile",
+ "thiserror 1.0.30",
+]
+
+[[package]]
+name = "protobuf-parse"
+version = "3.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b4aeaa1f2460f1d348eeaeed86aea999ce98c1bded6f089ff8514c9d9dbdc973"
+dependencies = [
+ "anyhow",
+ "indexmap 2.10.0",
+ "log",
+ "protobuf 3.7.2",
+ "protobuf-support",
+ "tempfile",
+ "thiserror 1.0.30",
+ "which",
 ]
 
 [[package]]
@@ -4275,6 +4359,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c7ac8852baeb3cc6fb83b93646fb93c0ffe5d14bf138c945ceb4b9948ee0e3c1"
 dependencies = [
  "autotools",
+]
+
+[[package]]
+name = "protobuf-support"
+version = "3.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e36c2f31e0a47f9280fb347ef5e461ffcd2c52dd520d8e216b52f93b0b0d7d6"
+dependencies = [
+ "thiserror 1.0.30",
 ]
 
 [[package]]
@@ -4313,11 +4406,11 @@ dependencies = [
  "bytes",
  "fxhash",
  "getset",
- "protobuf",
+ "protobuf 2.8.0",
  "raft-proto",
  "rand 0.8.5",
  "slog",
- "thiserror",
+ "thiserror 1.0.30",
 ]
 
 [[package]]
@@ -4344,14 +4437,14 @@ dependencies = [
  "parking_lot 0.12.1",
  "prometheus",
  "prometheus-static-metric",
- "protobuf",
+ "protobuf 2.8.0",
  "rayon",
  "rhai",
  "scopeguard",
  "serde",
  "serde_repr",
  "strum 0.25.0",
- "thiserror",
+ "thiserror 1.0.30",
 ]
 
 [[package]]
@@ -4370,7 +4463,7 @@ version = "0.7.0"
 source = "git+https://github.com/tikv/raft-rs?branch=master#f60fb9e143e5b93f7db8917ea376cda04effcbb4"
 dependencies = [
  "bytes",
- "protobuf",
+ "protobuf 2.8.0",
  "protobuf-build",
 ]
 
@@ -4386,7 +4479,7 @@ dependencies = [
  "lazy_static",
  "num_cpus",
  "online_config",
- "protobuf",
+ "protobuf 2.8.0",
  "raft",
  "raft-engine",
  "serde",
@@ -4443,7 +4536,7 @@ dependencies = [
  "pd_client",
  "prometheus",
  "prometheus-static-metric",
- "protobuf",
+ "protobuf 2.8.0",
  "raft",
  "raft-proto",
  "rand 0.8.5",
@@ -4461,7 +4554,7 @@ dependencies = [
  "strum_macros 0.24.3",
  "tempfile",
  "test_sst_importer",
- "thiserror",
+ "thiserror 1.0.30",
  "tidb_query_datatype",
  "tikv_alloc",
  "tikv_util",
@@ -4498,7 +4591,7 @@ dependencies = [
  "parking_lot 0.12.1",
  "pd_client",
  "prometheus",
- "protobuf",
+ "protobuf 2.8.0",
  "raft",
  "raft-proto",
  "raftstore",
@@ -4513,7 +4606,7 @@ dependencies = [
  "tempfile",
  "test_pd",
  "test_util",
- "thiserror",
+ "thiserror 1.0.30",
  "tikv_util",
  "time 0.1.42",
  "tracker",
@@ -4795,7 +4888,7 @@ dependencies = [
  "panic_hook",
  "pd_client",
  "prometheus",
- "protobuf",
+ "protobuf 2.8.0",
  "raft",
  "raftstore",
  "security",
@@ -4805,7 +4898,7 @@ dependencies = [
  "test_raftstore",
  "test_sst_importer",
  "test_util",
- "thiserror",
+ "thiserror 1.0.30",
  "tikv",
  "tikv_kv",
  "tikv_util",
@@ -4832,7 +4925,7 @@ dependencies = [
  "pd_client",
  "pin-project",
  "prometheus",
- "protobuf",
+ "protobuf 2.8.0",
  "rand 0.8.5",
  "serde",
  "serde_json",
@@ -4921,7 +5014,7 @@ dependencies = [
  "cc",
  "libc 0.2.146",
  "once_cell",
- "spin",
+ "spin 0.5.2",
  "untrusted",
  "web-sys",
  "winapi 0.3.9",
@@ -5285,7 +5378,7 @@ checksum = "a3385e45322e8f9931410f01b3031ec534c3947d0e94c18049af4d9f9907d4e0"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.79",
+ "syn 2.0.87",
 ]
 
 [[package]]
@@ -5303,7 +5396,7 @@ version = "1.0.64"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "799e97dc9fdae36a5c8b8f2cae9ce2ee9fdce2058c57a93e6099d919fd982f79"
 dependencies = [
- "indexmap",
+ "indexmap 1.6.2",
  "itoa 0.4.4",
  "ryu",
  "serde",
@@ -5326,7 +5419,7 @@ checksum = "c7715380eec75f029a4ef7de39a9200e0a63823176b759d055b613f5a87df6a6"
 dependencies = [
  "percent-encoding",
  "serde",
- "thiserror",
+ "thiserror 1.0.30",
 ]
 
 [[package]]
@@ -5406,7 +5499,7 @@ dependencies = [
  "log_wrappers",
  "pd_client",
  "prometheus",
- "protobuf",
+ "protobuf 2.8.0",
  "raft",
  "raft_log_engine",
  "raftstore",
@@ -5609,14 +5702,14 @@ dependencies = [
  "pd_client",
  "prometheus",
  "prometheus-static-metric",
- "protobuf",
+ "protobuf 2.8.0",
  "raft_log_engine",
  "raftstore",
  "slog",
  "slog-global",
  "structopt",
  "tempfile",
- "thiserror",
+ "thiserror 1.0.30",
  "tikv",
  "tikv_alloc",
  "tikv_util",
@@ -5670,6 +5763,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
 
 [[package]]
+name = "spin"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d5fe4ccb98d9c292d56fec89a5e07da7fc4cf0dc11e156b41793132775d3e591"
+dependencies = [
+ "lock_api",
+]
+
+[[package]]
 name = "sst_importer"
 version = "0.1.0"
 dependencies = [
@@ -5694,7 +5796,7 @@ dependencies = [
  "online_config",
  "openssl",
  "prometheus",
- "protobuf",
+ "protobuf 2.8.0",
  "rand 0.8.5",
  "serde",
  "serde_derive",
@@ -5703,7 +5805,7 @@ dependencies = [
  "tempfile",
  "test_sst_importer",
  "test_util",
- "thiserror",
+ "thiserror 1.0.30",
  "tikv_alloc",
  "tikv_util",
  "tokio",
@@ -5824,7 +5926,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "rustversion",
- "syn 2.0.79",
+ "syn 2.0.87",
 ]
 
 [[package]]
@@ -5835,9 +5937,9 @@ checksum = "6bdef32e8150c2a081110b42772ffe7d7c9032b606bc226c8260fd97e0976601"
 
 [[package]]
 name = "symbolic-common"
-version = "10.1.1"
+version = "12.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac457d054f793cedfde6f32d21d692b8351cfec9084fefd0470c0373f6d799bc"
+checksum = "26212dc7aeb75abb4cc84320a50dd482977089402f7b4043b454d6d79d8536e7"
 dependencies = [
  "debugid",
  "memmap2 0.5.10",
@@ -5847,9 +5949,9 @@ dependencies = [
 
 [[package]]
 name = "symbolic-demangle"
-version = "10.1.1"
+version = "12.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "48808b846eef84e0ac06365dc620f028ae632355e5dcffc007bf1b2bf5eab17b"
+checksum = "76f1b0155f588568b2df0d693b30aeedb59360b647b85fc3c23942e81e8cc97a"
 dependencies = [
  "rustc-demangle",
  "symbolic-common",
@@ -5868,9 +5970,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "2.0.79"
+version = "2.0.87"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89132cd0bf050864e1d38dc3bbc07a0eb8e7530af26344d3d2bbbef83499f590"
+checksum = "25aa4ce346d03a6dcd68dd8b4010bcb74e54e62c90c573f394c46eae99aba32d"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5919,7 +6021,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_urlencoded",
- "thiserror",
+ "thiserror 1.0.30",
  "url",
 ]
 
@@ -6018,7 +6120,7 @@ dependencies = [
  "futures-util",
  "grpcio",
  "kvproto",
- "protobuf",
+ "protobuf 2.8.0",
  "raftstore",
  "rand 0.8.5",
  "tempfile",
@@ -6039,7 +6141,7 @@ dependencies = [
  "engine_rocks",
  "futures 0.3.15",
  "kvproto",
- "protobuf",
+ "protobuf 2.8.0",
  "resource_metering",
  "test_storage",
  "tidb_query_common",
@@ -6115,7 +6217,7 @@ dependencies = [
  "lazy_static",
  "log_wrappers",
  "pd_client",
- "protobuf",
+ "protobuf 2.8.0",
  "raft",
  "raftstore",
  "rand 0.8.5",
@@ -6162,7 +6264,7 @@ dependencies = [
  "lazy_static",
  "log_wrappers",
  "pd_client",
- "protobuf",
+ "protobuf 2.8.0",
  "raft",
  "raftstore",
  "raftstore-v2",
@@ -6286,7 +6388,7 @@ dependencies = [
  "perfcnt",
  "procinfo",
  "profiler",
- "protobuf",
+ "protobuf 2.8.0",
  "raft",
  "raft_log_engine",
  "raftstore",
@@ -6352,7 +6454,16 @@ version = "1.0.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "854babe52e4df1653706b98fcfc05843010039b406875930a70e4d9644e5c417"
 dependencies = [
- "thiserror-impl",
+ "thiserror-impl 1.0.30",
+]
+
+[[package]]
+name = "thiserror"
+version = "2.0.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "567b8a2dae586314f7be2a752ec7474332959c6460e02bde30d702a66d488708"
+dependencies = [
+ "thiserror-impl 2.0.12",
 ]
 
 [[package]]
@@ -6364,6 +6475,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.103",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "2.0.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f7cf42b4507d8ea322120659672cf1b9dbb93f8f2d4ecfd6e51350ff5b17a1d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.87",
 ]
 
 [[package]]
@@ -6418,7 +6540,7 @@ dependencies = [
  "prometheus",
  "prometheus-static-metric",
  "serde_json",
- "thiserror",
+ "thiserror 1.0.30",
  "tikv_util",
  "time 0.1.42",
  "yatp",
@@ -6451,14 +6573,14 @@ dependencies = [
  "num-derive 0.3.0",
  "num-traits",
  "ordered-float",
- "protobuf",
+ "protobuf 2.8.0",
  "regex",
  "serde",
  "serde_json",
  "slog",
  "slog-global",
  "static_assertions",
- "thiserror",
+ "thiserror 1.0.30",
  "tidb_query_common",
  "tikv_alloc",
  "tikv_util",
@@ -6480,7 +6602,7 @@ dependencies = [
  "kvproto",
  "log_wrappers",
  "match-template",
- "protobuf",
+ "protobuf 2.8.0",
  "slog",
  "slog-global",
  "smallvec",
@@ -6514,7 +6636,7 @@ dependencies = [
  "openssl",
  "panic_hook",
  "profiler",
- "protobuf",
+ "protobuf 2.8.0",
  "rand 0.8.5",
  "regex",
  "safemem",
@@ -6609,7 +6731,7 @@ dependencies = [
  "procinfo",
  "prometheus",
  "prometheus-static-metric",
- "protobuf",
+ "protobuf 2.8.0",
  "raft",
  "raft_log_engine",
  "raftstore",
@@ -6638,7 +6760,7 @@ dependencies = [
  "tempfile",
  "test_sst_importer",
  "test_util",
- "thiserror",
+ "thiserror 1.0.30",
  "tidb_query_aggr",
  "tidb_query_common",
  "tidb_query_datatype",
@@ -6691,7 +6813,7 @@ dependencies = [
  "log_wrappers",
  "pd_client",
  "prometheus",
- "protobuf",
+ "protobuf 2.8.0",
  "raft",
  "raft-engine",
  "raft-engine-ctl",
@@ -6812,7 +6934,7 @@ dependencies = [
  "slog-global",
  "slog_derive",
  "tempfile",
- "thiserror",
+ "thiserror 1.0.30",
  "tikv_util",
  "tracker",
  "txn_types",
@@ -6862,7 +6984,7 @@ dependencies = [
  "procinfo",
  "prometheus",
  "prometheus-static-metric",
- "protobuf",
+ "protobuf 2.8.0",
  "rand 0.8.5",
  "regex",
  "rusoto_core",
@@ -6875,7 +6997,7 @@ dependencies = [
  "slog-term",
  "sysinfo",
  "tempfile",
- "thiserror",
+ "thiserror 1.0.30",
  "tikv_alloc",
  "time 0.1.42",
  "tokio",
@@ -6945,7 +7067,7 @@ source = "git+https://github.com/pingcap/tipb.git#711da6fede03533302fbc9fa3a8fca
 dependencies = [
  "futures 0.3.15",
  "grpcio",
- "protobuf",
+ "protobuf 2.8.0",
  "protobuf-build",
 ]
 
@@ -7129,7 +7251,7 @@ checksum = "b8fa9be0de6cf49e536ce1851f987bd21a43b771b09473c3549a6c853db37c1c"
 dependencies = [
  "futures-core",
  "futures-util",
- "indexmap",
+ "indexmap 1.6.2",
  "pin-project",
  "pin-project-lite",
  "rand 0.8.5",
@@ -7270,7 +7392,7 @@ dependencies = [
  "panic_hook",
  "rand 0.8.5",
  "slog",
- "thiserror",
+ "thiserror 1.0.30",
  "tikv_alloc",
  "tikv_util",
 ]
