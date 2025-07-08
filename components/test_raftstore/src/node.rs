@@ -8,7 +8,7 @@ use std::{
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::{util, RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{Engines, MiscExt, Peekable};
 use health_controller::HealthController;
@@ -325,8 +325,12 @@ impl Simulator for NodeCluster {
         );
         let cfg_controller = ConfigController::new(cfg.tikv.clone());
 
-        let split_check_runner =
-            SplitCheckRunner::new(engines.kv.clone(), router.clone(), coprocessor_host.clone());
+        let split_check_runner = SplitCheckRunner::new(
+            Some(store_meta.clone()),
+            engines.kv.clone(),
+            router.clone(),
+            coprocessor_host.clone(),
+        );
         let split_scheduler = bg_worker.start("test-split-check", split_check_runner);
         cfg_controller.register(
             Module::Coprocessor,
@@ -334,21 +338,21 @@ impl Simulator for NodeCluster {
         );
         // Spawn a task to update the disk status periodically.
         {
-            let engines = engines.clone();
             let data_dir = PathBuf::from(engines.kv.path());
+            let rocks_engine = Arc::downgrade(engines.kv.as_inner());
             let snap_mgr = snap_mgr.clone();
             bg_worker.spawn_interval_task(std::time::Duration::from_millis(1000), move || {
-                let snap_size = snap_mgr.get_total_snap_size().unwrap();
-                let kv_size = engines
-                    .kv
-                    .get_engine_used_size()
-                    .expect("get kv engine size");
-                let used_size = snap_size + kv_size;
-                let (capacity, available) = disk::get_disk_space_stats(&data_dir).unwrap();
+                if let Some(rocks_engine) = rocks_engine.upgrade() {
+                    let snap_size = snap_mgr.get_total_snap_size().unwrap();
+                    let kv_size = util::get_engine_cfs_used_size(rocks_engine.as_ref())
+                        .expect("get kv engine size");
+                    let used_size = snap_size + kv_size;
+                    let (capacity, available) = disk::get_disk_space_stats(&data_dir).unwrap();
 
-                disk::set_disk_capacity(capacity);
-                disk::set_disk_used_size(used_size);
-                disk::set_disk_available_size(std::cmp::min(available, capacity - used_size));
+                    disk::set_disk_capacity(capacity);
+                    disk::set_disk_used_size(used_size);
+                    disk::set_disk_available_size(std::cmp::min(available, capacity - used_size));
+                }
             });
         }
 

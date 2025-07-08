@@ -260,6 +260,29 @@ impl<T: Simulator> Cluster<T> {
         self.raft_statistics.push(raft_statistics);
     }
 
+    pub fn restart_engine(&mut self, node_id: u64) {
+        let idx = node_id as usize - 1;
+        let path = self.paths.remove(idx);
+        {
+            self.dbs.remove(idx);
+            self.key_managers.remove(idx);
+            self.sst_workers.remove(idx);
+            self.kv_statistics.remove(idx);
+            self.raft_statistics.remove(idx);
+            self.engines.remove(&node_id);
+        }
+        let (engines, key_manager, dir, sst_worker, kv_statistics, raft_statistics) =
+            start_test_engine(None, self.io_rate_limiter.clone(), &self.cfg, path);
+        self.dbs.insert(idx, engines);
+        self.key_managers.insert(idx, key_manager);
+        self.paths.insert(idx, dir);
+        self.sst_workers.insert(idx, sst_worker);
+        self.kv_statistics.insert(idx, kv_statistics);
+        self.raft_statistics.insert(idx, raft_statistics);
+        self.engines
+            .insert(node_id, self.dbs.last().unwrap().clone());
+    }
+
     pub fn create_engines(&mut self) {
         self.io_rate_limiter = Some(Arc::new(
             self.cfg
@@ -1463,6 +1486,17 @@ impl<T: Simulator> Cluster<T> {
         let transfer_leader = new_admin_request(region_id, &epoch, new_transfer_leader_cmd(leader));
         self.call_command_on_leader(transfer_leader, Duration::from_secs(5))
             .unwrap()
+    }
+
+    pub fn try_transfer_leader_with_timeout(
+        &mut self,
+        region_id: u64,
+        leader: metapb::Peer,
+        timeout: Duration,
+    ) -> Result<RaftCmdResponse> {
+        let epoch = self.get_region_epoch(region_id);
+        let transfer_leader = new_admin_request(region_id, &epoch, new_transfer_leader_cmd(leader));
+        self.call_command_on_leader(transfer_leader, timeout)
     }
 
     pub fn get_snap_dir(&self, node_id: u64) -> String {
