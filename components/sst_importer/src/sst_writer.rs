@@ -121,21 +121,21 @@ impl<E: KvEngine> TxnSstWriter<E> {
         if default_entries > 0 {
             let info = w1.finish()?;
             let (start_key, end_key) = (info.smallest_key(), info.largest_key());
-            p1.save(key_manager.as_deref())?;
             info!("[default_cf] debugging for sst ingestion";
-                "start_key" => start_key,
-                "end_key" => end_key,
-                "file_path" => ?p1);
+                "start_key" => ?start_key.to_vec(),
+                "end_key" => ?end_key.to_vec(),
+                "file_path" => ?p1.clone());
+            p1.save(key_manager.as_deref())?;
             metas.push(default_meta);
         }
         if write_entries > 0 {
             let info = w2.finish()?;
             let (start_key, end_key) = (info.smallest_key(), info.largest_key());
-            p2.save(key_manager.as_deref())?;
             info!("[write_cf] debugging for sst ingestion";
-                "start_key" => start_key,
-                "end_key" => end_key,
-                "file_path" => ?p2);
+                "start_key" => ?start_key.to_vec(),
+                "end_key" => ?end_key.to_vec(),
+                "file_path" => ?p2.clone());
+            p2.save(key_manager.as_deref())?;
             metas.push(write_meta);
         }
 
