@@ -5,8 +5,36 @@ use std::path::Path;
 use encryption::DataKeyManager;
 use external_storage::ExternalStorage;
 use file_system::File;
+use kvproto::{import_sstpb::Range, metapb::Region};
 
 use super::Result;
+
+// HashRange used for import_mode to trace range
+#[derive(PartialEq, Eq, Hash, Clone)]
+// implement hash so that it can be a key in HashMap
+pub struct HashRange {
+    pub start_key: std::vec::Vec<u8>,
+    pub end_key: std::vec::Vec<u8>,
+}
+
+impl From<Range> for HashRange {
+    fn from(key_range: Range) -> Self {
+        Self {
+            start_key: key_range.start,
+            end_key: key_range.end,
+        }
+    }
+}
+
+pub fn region_overlap_with_range(range: &HashRange, region: &Region) -> bool {
+    (region.end_key.is_empty() || range.start_key < region.end_key)
+        && (range.end_key.is_empty() || region.start_key < range.end_key)
+}
+
+pub fn range_overlaps(range1: &HashRange, range2: &Range) -> bool {
+    (range2.end.is_empty() || range1.start_key < range2.end)
+        && (range1.end_key.is_empty() || range2.start < range1.end_key)
+}
 
 /// Prepares the SST file for ingestion.
 /// The purpose is to make the ingestion retryable when using the `move_files`

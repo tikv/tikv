@@ -754,7 +754,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
     fn switch_mode(
         &mut self,
         _ctx: RpcContext<'_>,
-        mut req: SwitchModeRequest,
+        req: SwitchModeRequest,
         sink: UnarySink<SwitchModeResponse>,
     ) {
         let label = "switch_mode";
@@ -772,15 +772,16 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                         .set(v);
                 }
 
-                match tablets {
-                    LocalTablets::Singleton(tablet) => match req.get_mode() {
-                        SwitchMode::Normal => importer.enter_normal_mode(tablet, mf),
-                        SwitchMode::Import => importer.enter_import_mode(tablet, mf),
-                    },
-                    LocalTablets::Registry(_) => {
+                let ranges_clear_or_enter_import_mode =
+                    |mut req: SwitchModeRequest,
+                     importer: Arc<SstImporter<E::Local>>|
+                     -> sst_importer::Result<bool> {
                         if req.get_mode() == SwitchMode::Import {
                             if !req.get_ranges().is_empty() {
                                 let ranges = req.take_ranges().to_vec();
+                                info!(
+                                    "ranges enter import mode"; "ranges" => ?ranges
+                                );
                                 importer.ranges_enter_import_mode(ranges);
                                 Ok(true)
                             } else {
@@ -793,6 +794,9 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                             // case SwitchMode::Normal
                             if !req.get_ranges().is_empty() {
                                 let ranges = req.take_ranges().to_vec();
+                                info!(
+                                    "ranges clear import mode"; "ranges" => ?ranges
+                                );
                                 importer.clear_import_mode_regions(ranges);
                                 Ok(true)
                             } else {
@@ -802,7 +806,35 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                                 ))
                             }
                         }
+                    };
+
+                if let LocalTablets::Singleton(tablet) = tablets {
+                    match req.get_mode() {
+                        SwitchMode::Normal => {
+                            // ranges_enter_mode should be called before enter import mode
+                            // because, enter_normal_mode need clear all ranges before exit import
+                            // mode.
+                            if !req.get_ranges().is_empty() {
+                                ranges_clear_or_enter_import_mode(req, importer.clone())?;
+                            } else {
+                                importer.clear_import_mode_regions(vec![Range::default()]);
+                            }
+
+                            importer.enter_normal_mode(tablet, mf)
+                        }
+                        SwitchMode::Import => {
+                            importer.enter_import_mode(tablet, mf)?;
+
+                            if !req.get_ranges().is_empty() {
+                                ranges_clear_or_enter_import_mode(req, importer.clone())
+                            } else {
+                                importer.ranges_enter_import_mode(vec![Range::default()]);
+                                Ok(true)
+                            }
+                        }
                     }
+                } else {
+                    ranges_clear_or_enter_import_mode(req, importer)
                 }
             });
             match handle.await.map_err(|e| Error::Io(e.into())) {

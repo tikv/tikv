@@ -52,7 +52,7 @@ use crate::{
     caching::cache_map::{CacheMap, ShareOwned},
     import_file::{ImportDir, ImportFile},
     import_mode::{ImportModeSwitcher, RocksDbMetricsFn},
-    import_mode2::{HashRange, ImportModeSwitcherV2},
+    import_mode2::ImportModeSwitcherV2,
     metrics::*,
     sst_writer::{RawSstWriter, TxnSstWriter},
     util,
@@ -217,41 +217,51 @@ impl<E: KvEngine> SstImporter<E> {
     }
 
     pub fn ranges_enter_import_mode(&self, ranges: Vec<Range>) {
-        if let Either::Right(ref switcher) = self.switcher {
-            switcher.ranges_enter_import_mode(ranges)
+        if let Either::Right(ref switcher_v2) = self.switcher {
+            switcher_v2.ranges_enter_import_mode(ranges)
+        } else if let Either::Left(ref switcher) = self.switcher {
+            switcher.ranges_enter_import_mode(ranges);
         } else {
             unreachable!();
         }
     }
 
     pub fn clear_import_mode_regions(&self, ranges: Vec<Range>) {
-        if let Either::Right(ref switcher) = self.switcher {
+        if let Either::Right(ref switcher_v2) = self.switcher {
+            switcher_v2.clear_import_mode_range(ranges);
+        } else if let Either::Left(ref switcher) = self.switcher {
             switcher.clear_import_mode_range(ranges);
         } else {
             unreachable!();
         }
     }
 
-    // it always returns false for v1
+    // v1 now support region_in_import_mode/range_in_import_mode
     pub fn region_in_import_mode(&self, region: &Region) -> bool {
-        if let Either::Right(ref switcher) = self.switcher {
+        if let Either::Right(ref switcher_v2) = self.switcher {
+            switcher_v2.region_in_import_mode(region)
+        } else if let Either::Left(ref switcher) = self.switcher {
             switcher.region_in_import_mode(region)
         } else {
-            false
+            unreachable!();
         }
     }
 
-    // it always returns false for v1
+    // v1 now support region_in_import_mode/range_in_import_mode
     pub fn range_in_import_mode(&self, range: &Range) -> bool {
-        if let Either::Right(ref switcher) = self.switcher {
+        if let Either::Right(ref switcher_v2) = self.switcher {
+            switcher_v2.range_in_import_mode(range)
+        } else if let Either::Left(ref switcher) = self.switcher {
             switcher.range_in_import_mode(range)
         } else {
-            false
+            unreachable!();
         }
     }
 
-    pub fn ranges_in_import(&self) -> HashSet<HashRange> {
-        if let Either::Right(ref switcher) = self.switcher {
+    pub fn ranges_in_import(&self) -> HashSet<util::HashRange> {
+        if let Either::Right(ref switcher_v2) = self.switcher {
+            switcher_v2.ranges_in_import()
+        } else if let Either::Left(ref switcher) = self.switcher {
             switcher.ranges_in_import()
         } else {
             unreachable!()
@@ -445,8 +455,10 @@ impl<E: KvEngine> SstImporter<E> {
     }
 
     pub fn get_mode(&self) -> SwitchMode {
-        if let Either::Left(ref switcher) = self.switcher {
-            switcher.get_mode()
+        if let Either::Left(ref _switcher) = self.switcher {
+            // v1 now support region_in_import_mode/range_in_import_mode,
+            // should use region_in_import/range_in_import_mode to check regional mode
+            SwitchMode::Normal
         } else {
             // v2 should use region_in_import_mode/range_in_import_mode to check regional
             // mode
