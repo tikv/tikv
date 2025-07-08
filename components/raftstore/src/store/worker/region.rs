@@ -775,6 +775,7 @@ where
                 // there might be a coprocessor request related to this range
                 self.insert_pending_delete_range(region_id, start_key, end_key);
                 self.clean_stale_ranges();
+                fail_point!("after_region_worker_destroy");
             }
         }
     }

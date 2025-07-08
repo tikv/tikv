@@ -1,21 +1,28 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{Arc, Mutex, atomic::AtomicBool},
-    thread,
+    sync::{Arc, Mutex, atomic::AtomicBool, mpsc},
+    thread::{self, spawn},
     time::Duration,
 };
 
 use crossbeam::channel;
-use engine_traits::RaftEngineReadOnly;
+use engine_rocks::RocksSnapshot;
+use engine_traits::{Peekable, RaftEngineReadOnly};
 use futures::executor::block_on;
-use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
+use kvproto::{
+    kvrpcpb::{Context, KeyRange},
+    raft_serverpb::{PeerState, RaftMessage, RegionLocalState},
+};
+use pd_client::PdClient;
 use raft::eraftpb::MessageType;
+use raftstore::store::RegionSnapshot;
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
 use tikv::storage::config::EngineType;
+use tikv_kv::Result;
 use tikv_util::{HandyRwLock, config::ReadableDuration, future::block_on_timeout};
-use txn_types::{Key, Lock, LockType};
+use txn_types::{Key, Lock, LockType, TimeStamp};
 
 #[test_case(test_raftstore::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
@@ -914,4 +921,134 @@ fn test_read_index_cache() {
         Some(2),
         Duration::from_millis(2000),
     );
+}
+
+#[test]
+fn test_read_index_cache_in_destroied_peer() {
+    let cluster = Arc::new(Mutex::new(new_server_cluster(0, 4)));
+    let pd_client = cluster.lock().unwrap().pd_client.clone();
+
+    fn async_get_raft_engine_snapshot(
+        cluster: Arc<Mutex<Cluster<ServerCluster>>>,
+        start_ts: TimeStamp,
+        store_id: u64,
+        region_id: u64,
+    ) -> mpsc::Receiver<Result<RegionSnapshot<RocksSnapshot>>> {
+        use tikv::storage::kv::SnapContext;
+        use tikv_kv::Engine;
+
+        let cluster = cluster.clone();
+        let pd_client = cluster.lock().unwrap().pd_client.clone();
+        let mut cluster_guard = cluster.lock().unwrap();
+        let region = block_on(pd_client.get_region_by_id(region_id))
+            .unwrap()
+            .unwrap();
+        let epoch = region.get_region_epoch().clone();
+        let peer = region
+            .get_peers()
+            .iter()
+            .find(|p| p.get_store_id() == store_id)
+            .unwrap()
+            .clone();
+        let leader = cluster_guard.leader_of_region(region_id).unwrap();
+        let peer_is_leader = leader.get_id() == peer.get_id();
+        let mut ctx = Context::default();
+        ctx.set_region_id(region_id);
+        ctx.set_peer(peer);
+        ctx.set_region_epoch(epoch);
+        ctx.set_replica_read(!peer_is_leader);
+
+        let mut storage = cluster_guard
+            .sim
+            .rl()
+            .storages
+            .get(&store_id)
+            .unwrap()
+            .clone();
+        drop(cluster_guard);
+
+        let (tx, rx) = mpsc::sync_channel(0);
+        spawn(move || {
+            let mut snap_ctx = SnapContext {
+                pb_ctx: &ctx,
+                ..Default::default()
+            };
+            if !peer_is_leader {
+                snap_ctx.key_ranges.push(KeyRange {
+                    start_key: region.get_start_key().to_vec(),
+                    end_key: region.get_end_key().to_vec(),
+                    ..Default::default()
+                });
+            }
+            snap_ctx.start_ts = Some(start_ts);
+            tx.send(block_on(storage.async_snapshot(snap_ctx))).unwrap();
+        });
+        rx
+    }
+
+    let mut cluster_guard = cluster.lock().unwrap();
+    pd_client.disable_default_operator();
+    let region_id = cluster_guard.run_conf_change();
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+    pd_client.region_leader_must_be(region_id, new_peer(1, 1));
+    cluster_guard.must_put(b"k1", b"v1");
+    drop(cluster_guard);
+
+    pd_client.must_add_peer(region_id, new_peer(4, 4));
+
+    let ts1 = block_on(pd_client.get_tso()).unwrap();
+    let ts2 = block_on(pd_client.get_tso()).unwrap();
+    assert!(ts2 > ts1);
+
+    // push read_index_safe_ts to ts2, after that, ts1 can hit local replica read
+    // safely.
+    let rx2 = async_get_raft_engine_snapshot(cluster.clone(), ts2, 2, region_id);
+    let snap2 = rx2.recv().unwrap().unwrap();
+    let read_opt = engine_traits::ReadOptions::default();
+    assert!(
+        snap2
+            .get_value_opt(&read_opt, b"k1")
+            .unwrap()
+            .unwrap()
+            .eq(&b"v1".as_ref())
+    );
+    // release the snapshot sequence, so it's safe to cleanup the data when peer is
+    // destroied
+    drop(snap2);
+
+    // pause the verification of replica read.
+    fail::cfg("skip_check_stale_read_safe", "pause").unwrap();
+    let rx1 = async_get_raft_engine_snapshot(cluster.clone(), ts1, 2, region_id);
+
+    // remove peer 2 and wait for peer destroy is finished.
+    let (tx, rx) = mpsc::sync_channel(0);
+    fail::cfg_callback("after_region_worker_destroy", move || {
+        tx.send(()).unwrap();
+    })
+    .unwrap();
+    pd_client.must_remove_peer(region_id, new_peer(2, 2));
+    rx.recv().unwrap();
+    fail::remove("after_region_worker_destroy");
+
+    // resume the verification of replica read.
+    fail::remove("skip_check_stale_read_safe");
+    match rx1.recv().unwrap() {
+        Ok(snap1) => {
+            // The test is already failed because we receive a snapshot in a destroyed peer.
+            // Go further check the read result from this INVALID snapshot.
+            assert!(
+                snap1
+                    .get_value_opt(&read_opt, b"k1")
+                    .unwrap()
+                    .unwrap()
+                    .eq(&b"v1".as_ref())
+            );
+            unreachable!("should not get a snapshot from a destroyed peer");
+        }
+        Err(e) => {
+            // check the error result
+            println!("snap1 is none: {:?}", e);
+        }
+    }
 }
