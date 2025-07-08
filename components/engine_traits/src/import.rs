@@ -11,12 +11,13 @@ pub trait ImportExt {
     ///
     /// If the range is specified, it enables `RocksDB
     /// IngestExternalFileOptions.allow_write` and locks the
-    /// specified range.  
+    /// specified range.
     fn ingest_external_file_cf(
         &self,
         cf: &str,
         files: &[&str],
         range: Option<Range<'_>>,
+        force_allow_write: bool,
     ) -> Result<()>;
 
     fn acquire_ingest_latch(&self, range: Range<'_>) -> RangeLatchGuard<'_>;

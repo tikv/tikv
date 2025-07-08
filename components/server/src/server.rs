@@ -1007,6 +1007,7 @@ where
         let importer = Arc::new(importer);
 
         let split_check_runner = SplitCheckRunner::new(
+            Some(engines.store_meta.clone()),
             engines.engines.kv.clone(),
             self.router.clone(),
             self.coprocessor_host.clone().unwrap(),
@@ -1069,7 +1070,6 @@ where
                 self.causal_ts_provider.clone(),
                 disk_check_runner,
                 self.grpc_service_mgr.clone(),
-                safe_point.clone(),
             )
             .unwrap_or_else(|e| fatal!("failed to start raft_server: {}", e));
 

@@ -2,7 +2,7 @@
 
 use std::{
     path::Path,
-    sync::{Arc, Mutex, RwLock, atomic::AtomicU64, mpsc::Receiver},
+    sync::{Arc, Mutex, RwLock, mpsc::Receiver},
     thread,
     time::Duration,
 };
@@ -657,8 +657,12 @@ impl ServerCluster {
         let max_unified_read_pool_thread_count = cfg.readpool.unified.max_thread_count;
         let pessimistic_txn_cfg = cfg.tikv.pessimistic_txn;
 
-        let split_check_runner =
-            SplitCheckRunner::new(engines.kv.clone(), router.clone(), coprocessor_host.clone());
+        let split_check_runner = SplitCheckRunner::new(
+            Some(store_meta.clone()),
+            engines.kv.clone(),
+            router.clone(),
+            coprocessor_host.clone(),
+        );
         let split_check_scheduler = bg_worker.start("split-check", split_check_runner);
         let split_config_manager =
             SplitConfigManager::new(Arc::new(VersionTrack::new(cfg.tikv.split)));
@@ -685,7 +689,6 @@ impl ServerCluster {
             causal_ts_provider,
             DiskCheckRunner::dummy(),
             GrpcServiceManager::dummy(),
-            Arc::new(AtomicU64::new(0)),
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();

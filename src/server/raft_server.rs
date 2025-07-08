@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{Arc, Mutex, atomic::AtomicU64},
+    sync::{Arc, Mutex},
     thread,
     time::Duration,
 };
@@ -167,14 +167,13 @@ where
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<EK>,
         importer: Arc<SstImporter<EK>>,
-        split_check_scheduler: Scheduler<SplitCheckTask>,
+        split_check_scheduler: Scheduler<SplitCheckTask<EK>>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         disk_check_runner: DiskCheckRunner,
         grpc_service_mgr: GrpcServiceManager,
-        safe_point: Arc<AtomicU64>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -214,7 +213,6 @@ where
             causal_ts_provider,
             disk_check_runner,
             grpc_service_mgr,
-            safe_point,
         )?;
 
         Ok(())
@@ -457,14 +455,13 @@ where
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<EK>,
         importer: Arc<SstImporter<EK>>,
-        split_check_scheduler: Scheduler<SplitCheckTask>,
+        split_check_scheduler: Scheduler<SplitCheckTask<EK>>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         disk_check_runner: DiskCheckRunner,
         grpc_service_mgr: GrpcServiceManager,
-        safe_point: Arc<AtomicU64>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -500,7 +497,6 @@ where
             causal_ts_provider,
             disk_check_runner,
             grpc_service_mgr,
-            safe_point,
         )?;
         Ok(())
     }
