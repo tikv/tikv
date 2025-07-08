@@ -20,6 +20,7 @@ from grafanalib.core import (
     SeriesOverride,
     Stat,
     StatValueMappings,
+    Table,
     Target,
     Template,
     TimeSeries,
@@ -1180,3 +1181,87 @@ def heatmap_panel_graph_panel_histogram_quantile_pairs(
             hide_avg=hide_avg,
         ),
     ]
+
+
+DEFAULT_TABLE_OVERRIDES = [
+    {
+        "matcher": {"id": "byName", "options": "Field"},
+        "properties": [
+            {"id": "displayName", "value": "Option"},
+            {"id": "custom.align", "value": None},
+        ],
+    },
+    {
+        "matcher": {"id": "byName", "options": "Last (not null)"},
+        "properties": [{"id": "displayName", "value": "Value"}],
+    },
+]
+DEFAULT_TABLE_TRANSFORMATIONS = [
+    {
+        "id": "organize",
+        "options": {
+            "excludeByName": {
+                "Time": True,
+                "__name__": True,
+                "job": True,
+            },
+            "indexByName": {},
+            "renameByName": {
+                "Time": "",
+                "Value #A": "Value",
+                "name": "Option",
+                "job": "",
+            },
+        },
+    }
+]
+
+
+def table_panel(
+    title: str,
+    targets: list[Target],
+    description=None,
+    data_source=DATASOURCE,
+    overrides=DEFAULT_TABLE_OVERRIDES,
+    columns=None,
+    filterable=False,
+    show_header=True,
+    time_from="1s",
+    transformations=DEFAULT_TABLE_TRANSFORMATIONS,
+) -> Panel:
+    """
+    Create a table panel for displaying configuration data in tabular format.
+
+    Args:
+        title: Panel title
+        targets: List of targets to query data
+        description: Panel description
+        data_source: Data source to use
+        overrides: Field overrides for customizing display
+        columns: Column configuration
+        sort_by: Default sorting configuration
+        filterable: Whether to allow column filtering
+        show_header: Whether to show table header
+        time_from: Time from parameter for the panel
+        transformations: Grafana transformations for the panel
+
+    Returns:
+        Table panel instance
+    """
+    for target in targets:
+        target.format = "table"
+
+    table_args = {
+        "title": title,
+        "dataSource": data_source,
+        "targets": targets,
+        "overrides": overrides,
+        "columns": columns,
+        "filterable": filterable,
+        "showHeader": show_header,
+        "timeFrom": time_from,
+        "transformations": transformations,
+        "description": description,
+    }
+
+    return Table(**table_args)
