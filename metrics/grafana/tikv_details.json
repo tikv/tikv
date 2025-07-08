@@ -81898,6 +81898,516 @@
       "transformations": [],
       "transparent": false,
       "type": "row"
+    },
+    {
+      "cacheTimeout": null,
+      "collapsed": true,
+      "datasource": null,
+      "description": null,
+      "editable": true,
+      "error": false,
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": []
+          }
+        }
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "height": null,
+      "hideTimeOverride": false,
+      "id": 602,
+      "interval": null,
+      "links": [],
+      "maxDataPoints": 100,
+      "maxPerRow": null,
+      "minSpan": null,
+      "panels": [
+        {
+          "cacheTimeout": null,
+          "color": {
+            "mode": "thresholds"
+          },
+          "columns": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "TiKV RocksDB DB Configuration",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "align": "auto",
+                "displayMode": "auto",
+                "filterable": false
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Field"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Option"
+                  },
+                  {
+                    "id": "custom.align",
+                    "value": null
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Last (not null)"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Value"
+                  }
+                ]
+              }
+            ]
+          },
+          "fontSize": "100%",
+          "gridPos": {
+            "h": 7,
+            "w": 24,
+            "x": 0,
+            "y": 0
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 603,
+          "interval": null,
+          "links": [],
+          "mappings": [],
+          "maxDataPoints": 100,
+          "maxPerRow": null,
+          "minSpan": null,
+          "options": {
+            "showHeader": true
+          },
+          "repeat": null,
+          "repeatDirection": null,
+          "span": 6,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "((\n    tikv_config_rocksdb_db\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
+              "format": "table",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "",
+              "metric": "",
+              "query": "((\n    tikv_config_rocksdb_db\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "timeFrom": "1s",
+          "timeShift": null,
+          "title": "RocksDB DB Config",
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time": true,
+                  "__name__": true,
+                  "job": true
+                },
+                "indexByName": {},
+                "renameByName": {
+                  "Time": "",
+                  "Value #A": "Value",
+                  "job": "",
+                  "name": "Option"
+                }
+              }
+            }
+          ],
+          "transparent": false,
+          "type": "table"
+        },
+        {
+          "cacheTimeout": null,
+          "color": {
+            "mode": "thresholds"
+          },
+          "columns": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "TiKV RocksDB CF Configuration",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "align": "auto",
+                "displayMode": "auto",
+                "filterable": false
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Field"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Option"
+                  },
+                  {
+                    "id": "custom.align",
+                    "value": null
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Last (not null)"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Value"
+                  }
+                ]
+              }
+            ]
+          },
+          "fontSize": "100%",
+          "gridPos": {
+            "h": 7,
+            "w": 24,
+            "x": 0,
+            "y": 7
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 604,
+          "interval": null,
+          "links": [],
+          "mappings": [],
+          "maxDataPoints": 100,
+          "maxPerRow": null,
+          "minSpan": null,
+          "options": {
+            "showHeader": true
+          },
+          "repeat": null,
+          "repeatDirection": null,
+          "span": 6,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "((\n    tikv_config_rocksdb_cf\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))   or (tikv_config_rocksdb unless tikv_config_rocksdb_cf)",
+              "format": "table",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": null,
+              "metric": "",
+              "query": "((\n    tikv_config_rocksdb_cf\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))   or (tikv_config_rocksdb unless tikv_config_rocksdb_cf)",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "timeFrom": "1s",
+          "timeShift": null,
+          "title": "RocksDB CF Config",
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time": true,
+                  "__name__": true,
+                  "job": true
+                },
+                "indexByName": {},
+                "renameByName": {
+                  "Time": "",
+                  "Value #A": "Value",
+                  "job": "",
+                  "name": "Option"
+                }
+              }
+            }
+          ],
+          "transparent": false,
+          "type": "table"
+        },
+        {
+          "cacheTimeout": null,
+          "color": {
+            "mode": "thresholds"
+          },
+          "columns": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "TiKV Flow Control Configuration",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "align": "auto",
+                "displayMode": "auto",
+                "filterable": false
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Field"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Option"
+                  },
+                  {
+                    "id": "custom.align",
+                    "value": null
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Last (not null)"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Value"
+                  }
+                ]
+              }
+            ]
+          },
+          "fontSize": "100%",
+          "gridPos": {
+            "h": 7,
+            "w": 24,
+            "x": 0,
+            "y": 14
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 605,
+          "interval": null,
+          "links": [],
+          "mappings": [],
+          "maxDataPoints": 100,
+          "maxPerRow": null,
+          "minSpan": null,
+          "options": {
+            "showHeader": true
+          },
+          "repeat": null,
+          "repeatDirection": null,
+          "span": 6,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "((\n    tikv_config_flow_control\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
+              "format": "table",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": null,
+              "metric": "",
+              "query": "((\n    tikv_config_flow_control\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "timeFrom": "1s",
+          "timeShift": null,
+          "title": "Flow Control Config",
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time": true,
+                  "__name__": true,
+                  "job": true
+                },
+                "indexByName": {},
+                "renameByName": {
+                  "Time": "",
+                  "Value #A": "Value",
+                  "job": "",
+                  "name": "Option"
+                }
+              }
+            }
+          ],
+          "transparent": false,
+          "type": "table"
+        },
+        {
+          "cacheTimeout": null,
+          "color": {
+            "mode": "thresholds"
+          },
+          "columns": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "TiKV Raftstore Configuration",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "align": "auto",
+                "displayMode": "auto",
+                "filterable": false
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Field"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Option"
+                  },
+                  {
+                    "id": "custom.align",
+                    "value": null
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Last (not null)"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Value"
+                  }
+                ]
+              }
+            ]
+          },
+          "fontSize": "100%",
+          "gridPos": {
+            "h": 7,
+            "w": 24,
+            "x": 0,
+            "y": 21
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 606,
+          "interval": null,
+          "links": [],
+          "mappings": [],
+          "maxDataPoints": 100,
+          "maxPerRow": null,
+          "minSpan": null,
+          "options": {
+            "showHeader": true
+          },
+          "repeat": null,
+          "repeatDirection": null,
+          "span": 6,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "((\n    tikv_config_raftstore\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
+              "format": "table",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": null,
+              "metric": "",
+              "query": "((\n    tikv_config_raftstore\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "timeFrom": "1s",
+          "timeShift": null,
+          "title": "Raftstore Config",
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time": true,
+                  "__name__": true,
+                  "job": true
+                },
+                "indexByName": {},
+                "renameByName": {
+                  "Time": "",
+                  "Value #A": "Value",
+                  "job": "",
+                  "name": "Option"
+                }
+              }
+            }
+          ],
+          "transparent": false,
+          "type": "table"
+        }
+      ],
+      "repeat": null,
+      "repeatDirection": null,
+      "span": null,
+      "targets": [],
+      "timeFrom": null,
+      "timeShift": null,
+      "title": "Config",
+      "transformations": [],
+      "transparent": false,
+      "type": "row"
     }
   ],
   "refresh": "1m",

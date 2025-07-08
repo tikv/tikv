@@ -31,6 +31,7 @@ from common import (
     heatmap_panel_graph_panel_histogram_quantile_pairs,
     series_override,
     stat_panel,
+    table_panel,
     target,
     template,
     yaxes,
@@ -10307,6 +10308,146 @@ def ResourceControl() -> RowPanel:
     return layout.row_panel
 
 
+def TikvConfig() -> RowPanel:
+    layout = Layout(title="Config")
+    # RocksDB DB Configuration Table
+    layout.row(
+        [
+            table_panel(
+                title="RocksDB DB Config",
+                description="TiKV RocksDB DB Configuration",
+                targets=[
+                    target(
+                        expr=expr_simple(
+                            "tikv_config_rocksdb_db",
+                            label_selectors=[
+                                'k8s_cluster="$k8s_cluster"',
+                                'tidb_cluster="$tidb_cluster"',
+                                'instance=~"$instance"',
+                            ],
+                        ),
+                        legend_format="",
+                    ),
+                ],
+                overrides=[
+                    {
+                        "matcher": {"id": "byName", "options": "Field"},
+                        "properties": [
+                            {"id": "displayName", "value": "Option"},
+                            {"id": "custom.align", "value": None},
+                        ],
+                    },
+                    {
+                        "matcher": {"id": "byName", "options": "Last (not null)"},
+                        "properties": [{"id": "displayName", "value": "Value"}],
+                    },
+                ],
+                time_from="1s",
+                transformations=[
+                    {
+                        "id": "organize",
+                        "options": {
+                            "excludeByName": {
+                                "Time": True,
+                                "__name__": True,
+                                "job": True,
+                            },
+                            "indexByName": {},
+                            "renameByName": {
+                                "Time": "",
+                                "Value #A": "Value",
+                                "name": "Option",
+                                "job": "",
+                            },
+                        },
+                    }
+                ],
+            ),
+        ]
+    )
+    # RocksDB CF Configuration Table
+    layout.row(
+        [
+            table_panel(
+                title="RocksDB CF Config",
+                description="TiKV RocksDB CF Configuration",
+                targets=[
+                    target(
+                        expr=expr_simple(
+                            "tikv_config_rocksdb_cf",
+                            label_selectors=[
+                                'k8s_cluster="$k8s_cluster"',
+                                'tidb_cluster="$tidb_cluster"',
+                                'instance=~"$instance"',
+                            ],
+                        ).extra(
+                            " or (tikv_config_rocksdb unless tikv_config_rocksdb_cf)"
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+
+    # Flow Control Configuration Table
+    layout.row(
+        [
+            table_panel(
+                title="Flow Control Config",
+                description="TiKV Flow Control Configuration",
+                targets=[
+                    target(
+                        expr=expr_simple(
+                            "tikv_config_flow_control",
+                            label_selectors=[
+                                'k8s_cluster="$k8s_cluster"',
+                                'tidb_cluster="$tidb_cluster"',
+                                'instance=~"$instance"',
+                            ],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    # Raftstore Configuration Table
+    layout.row(
+        [
+            table_panel(
+                title="Raftstore Config",
+                description="TiKV Raftstore Configuration",
+                targets=[
+                    target(
+                        expr=expr_simple(
+                            "tikv_config_raftstore",
+                            label_selectors=[
+                                'k8s_cluster="$k8s_cluster"',
+                                'tidb_cluster="$tidb_cluster"',
+                                'instance=~"$instance"',
+                            ],
+                        ),
+                    ),
+                ],
+                overrides=[
+                    {
+                        "matcher": {"id": "byName", "options": "Field"},
+                        "properties": [
+                            {"id": "displayName", "value": "Option"},
+                            {"id": "custom.align", "value": None},
+                        ],
+                    },
+                    {
+                        "matcher": {"id": "byName", "options": "Last (not null)"},
+                        "properties": [{"id": "displayName", "value": "Value"}],
+                    },
+                ],
+            ),
+        ]
+    )
+
+    return layout.row_panel
+
+
 #### Metrics Definition End ####
 
 
@@ -10374,6 +10515,8 @@ dashboard = Dashboard(
         StatusServer(),
         Encryption(),
         TTL(),
+        # Config
+        TikvConfig(),
     ],
     # Set 14 or larger to support shared crosshair or shared tooltip.
     # See https://github.com/grafana/grafana/blob/v10.2.2/public/app/features/dashboard/state/DashboardMigrator.ts#L443-L445

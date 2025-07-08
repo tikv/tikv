@@ -4348,9 +4348,16 @@ impl TikvConfig {
     /// ```
     #[allow(deprecated)]
     pub fn compatible_adjust(&mut self, last_config: Option<&TikvConfig>) {
-        let (default_raft_store, default_coprocessor) = last_config
-            .map_or((RaftstoreConfig::default(), CopConfig::default()), |cfg| {
-                (cfg.raft_store.clone(), cfg.coprocessor.clone())
+        let (default_raft_store, default_coprocessor) =
+            last_config.map_or((RaftstoreConfig::default(), CopConfig::default()), |cfg| {
+                (
+                    RaftstoreConfig {
+                        region_max_size: cfg.raft_store.region_max_size,
+                        region_split_size: cfg.raft_store.region_split_size,
+                        ..cfg.raft_store.clone()
+                    },
+                    cfg.coprocessor.clone(),
+                )
             });
         if self.raft_store.region_max_size != default_raft_store.region_max_size {
             warn!(
@@ -7587,8 +7594,10 @@ mod tests {
         );
 
         // Case 2: persist and load the last tikv configurations, then make the current
-        // config compatible to it.
+        // config compatible to it. And it manually set `raft_entry_max_size` in
+        // Raftstore, but the new config does not set it.
         cfg.coprocessor.region_split_size = Some(ReadableSize::mb(16));
+        cfg.raft_store.raft_entry_max_size = ReadableSize::kb(16);
         validate_and_persist_config(&mut cfg, true).unwrap();
         let cfg_from_file = TikvConfig::from_file(
             &Path::new(&cfg.storage.data_dir).join(LAST_CONFIG_FILE),
@@ -7620,6 +7629,16 @@ mod tests {
         assert_eq!(
             cfg_from_file.coprocessor.region_split_keys,
             case2_cfg.coprocessor.region_split_keys
+        );
+        // Other configs in RaftstoreConfig should not
+        // inherit the last config.
+        assert_eq!(
+            default_cfg.raft_store.raft_entry_max_size,
+            case2_cfg.raft_store.raft_entry_max_size
+        );
+        assert_ne!(
+            cfg_from_file.raft_store.raft_entry_max_size,
+            case2_cfg.raft_store.raft_entry_max_size
         );
 
         // Case 3: manually specify region-split-size, then make it compatible to the
