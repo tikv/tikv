@@ -765,7 +765,6 @@ where
                 (
                     DeleteStrategy::DeleteByWriter {
                         sst_path: self.mgr.get_temp_path_for_ingest(),
-                        allow_write_during_ingestion,
                     },
                     &CLEAR_OVERLAP_REGION_DURATION.by_ingest_files,
                 )

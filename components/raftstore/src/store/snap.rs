@@ -1468,7 +1468,6 @@ impl Clone for SnapManager {
     fn clone(&self) -> Self {
         SnapManager {
             core: self.core.clone(),
-            max_total_size: self.max_total_size.clone(),
             tablet_snap_manager: self.tablet_snap_manager.clone(),
         }
     }
