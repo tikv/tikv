@@ -92,9 +92,9 @@ impl rocksdb::EventListener for RocksEventListener {
                             }),
                         });
                 }
-                Err(_) => {
+                Err(e) => {
                     slog_global::error!(
-                        "failed to decode MVCC properties";
+                        "failed to decode MVCC properties"; "err" => ?e,
                     );
                 }
             }
@@ -162,9 +162,8 @@ impl rocksdb::EventListener for RocksEventListener {
                             aggregated_output_mvcc_properties.add(&mvcc_properties);
                         }
                     }
-                    Err(_) => {
-                        warn!("Decode MVCC properties from sst file failed");
-                        return;
+                    Err(e) => {
+                        warn!("Decode MVCC properties from sst file failed"; "err" => ?e);
                     }
                 };
             }

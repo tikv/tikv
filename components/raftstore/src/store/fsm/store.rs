@@ -924,12 +924,12 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 } => {
                     self.on_wake_up_regions(abnormal_stores, region_ids);
                 }
-                StoreMsg::DoneCollectWholeRangeMVCCStats { mvcc_stats } => {
+                StoreMsg::InitWholeRangeMVCCStats { mvcc_stats } => {
                     self.fsm.store.mvcc_stats = Some(mvcc_stats);
                     self.update_mvcc_stats_metrics();
                 }
                 StoreMsg::StatsChangeEvent(event) => {
-                    assert!(event.cf() == CF_WRITE);
+                    assert!(event.cf() == CF_WRITE, "cf: {}", event.cf());
                     if let Some(mvcc_stats) = self.fsm.store.mvcc_stats.as_mut() {
                         if let Some(input) = event.get_input_range_stats() {
                             mvcc_stats.sub(input);
@@ -1852,8 +1852,8 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         if let Err(e) = cleanup_scheduler.schedule(CleanupTask::Compact(
             CompactTask::CollectWholeRangeMVCCStats {
                 callback: Box::new(move |mvcc_stats| {
-                    if let Err(e) = router_for_cb
-                        .send_control(StoreMsg::DoneCollectWholeRangeMVCCStats { mvcc_stats })
+                    if let Err(e) =
+                        router_for_cb.send_control(StoreMsg::InitWholeRangeMVCCStats { mvcc_stats })
                     {
                         error!("failed to send compact range stats"; "err" => ?e);
                     }

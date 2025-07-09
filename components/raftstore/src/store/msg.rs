@@ -980,7 +980,7 @@ where
         region_ids: Vec<u64>,
     },
 
-    DoneCollectWholeRangeMVCCStats {
+    InitWholeRangeMVCCStats {
         mvcc_stats: RangeStats,
     },
 
@@ -1021,8 +1021,8 @@ where
             }
             StoreMsg::GcSnapshotFinish => write!(fmt, "GcSnapshotFinish"),
             StoreMsg::AwakenRegions { .. } => write!(fmt, "AwakenRegions"),
-            StoreMsg::DoneCollectWholeRangeMVCCStats { .. } => {
-                write!(fmt, "CollectWholeRangeMVCCStats")
+            StoreMsg::InitWholeRangeMVCCStats { .. } => {
+                write!(fmt, "InitWholeRangeMVCCStats")
             }
             StoreMsg::StatsChangeEvent(event) => write!(fmt, "StatsChangeEvent {:?}", event.cf()),
             #[cfg(any(test, feature = "testexport"))]
@@ -1046,7 +1046,7 @@ impl<EK: KvEngine> StoreMsg<EK> {
             StoreMsg::UnsafeRecoveryCreatePeer { .. } => 9,
             StoreMsg::GcSnapshotFinish => 10,
             StoreMsg::AwakenRegions { .. } => 11,
-            StoreMsg::DoneCollectWholeRangeMVCCStats { .. } => 12,
+            StoreMsg::InitWholeRangeMVCCStats { .. } => 12,
             StoreMsg::StatsChangeEvent(_) => 13,
             #[cfg(any(test, feature = "testexport"))]
             StoreMsg::Validate(_) => 14, // Please keep this always be the last one.
