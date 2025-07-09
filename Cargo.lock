@@ -2100,6 +2100,7 @@ dependencies = [
  "engine_traits",
  "kvproto",
  "raft",
+ "tikv_util",
  "tracker",
  "txn_types",
 ]
@@ -2187,6 +2188,7 @@ dependencies = [
  "log_wrappers",
  "protobuf 2.8.0",
  "raft",
+ "rand 0.8.5",
  "serde",
  "slog",
  "slog-global",
