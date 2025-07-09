@@ -894,11 +894,8 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                     drop(syncer);
                 }
                 StoreMsg::GcSnapshotFinish => self.register_snap_mgr_gc_tick(),
-                StoreMsg::AwakenRegions {
-                    abnormal_stores,
-                    region_ids,
-                } => {
-                    self.on_wake_up_regions(abnormal_stores, region_ids);
+                StoreMsg::AwakenRegions { abnormal_stores } => {
+                    self.on_wake_up_regions(abnormal_stores);
                 }
             }
         }
@@ -2853,21 +2850,12 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         self.register_compact_lock_cf_tick();
     }
 
-    fn on_wake_up_regions(&self, abnormal_stores: Vec<u64>, region_ids: Vec<u64>) {
+    fn on_wake_up_regions(&self, abnormal_stores: Vec<u64>) {
         info!("try to wake up all hibernated regions in this store";
             "to_all" => abnormal_stores.is_empty());
         let meta = self.ctx.store_meta.lock().unwrap();
-
-        for region_id in region_ids {
-            let region = {
-                match meta.regions.get(&region_id) {
-                    None => {
-                        // The region has been merged or removed from this store; skip processing.
-                        continue;
-                    }
-                    Some(r) => r,
-                }
-            };
+        for region_id in meta.regions.keys() {
+            let region = &meta.regions[region_id];
             // Check whether the current region is not found on abnormal stores. If so,
             // this region is not the target to be awaken.
             if !region_on_stores(region, &abnormal_stores) {
@@ -2882,7 +2870,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             {
                 // Send MsgRegionWakeUp to Peer for awakening hibernated regions.
                 let mut message = RaftMessage::default();
-                message.set_region_id(region_id);
+                message.set_region_id(*region_id);
                 message.set_from_peer(peer.clone());
                 message.set_to_peer(peer);
                 message.set_region_epoch(region.get_region_epoch().clone());
