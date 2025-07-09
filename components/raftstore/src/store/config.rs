@@ -445,6 +445,17 @@ pub struct Config {
     #[online_config(hidden)]
     pub min_pending_apply_region_count: u64,
 
+    /// Controls whether RocksDB performs compaction at the bottommost level
+    /// during manual compaction operations.
+    ///
+    /// This option maps to `CompactRangeOptions::bottommost_level_compaction`
+    /// in RocksDB.
+    ///
+    /// Bottommost level compaction is expensive but necessary for space
+    /// reclamation and ensuring data is fully compacted. The default
+    /// behavior (`kIfHaveCompactionFilter`) only performs this operation when a
+    /// compaction filter is present, balancing performance and
+    /// functionality.
     #[doc(hidden)]
     #[online_config(hidden)]
     pub check_then_compact_force_bottommost_level: bool,
