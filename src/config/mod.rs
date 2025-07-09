@@ -33,6 +33,7 @@ use engine_rocks::{
         DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode, Env,
         LRUCacheOptions, PrepopulateBlockCache, RateLimiter, WriteBufferManager,
     },
+    update_max_delete_count_by_key,
     util::{
         FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
         RangeCompactionFilterFactory, StackingCompactionFilterFactory,
@@ -1252,6 +1253,7 @@ pub struct DbConfig {
     pub max_total_wal_size: Option<ReadableSize>,
     pub max_background_jobs: i32,
     pub max_background_flushes: i32,
+    pub max_delete_count_by_write: u64,
     #[online_config(skip)]
     pub max_manifest_file_size: ReadableSize,
     #[online_config(skip)]
@@ -1355,6 +1357,7 @@ impl Default for DbConfig {
             max_background_jobs: 0,
             max_background_flushes: 0,
             max_manifest_file_size: ReadableSize::mb(128),
+            max_delete_count_by_write: 2048,
             create_if_missing: true,
             max_open_files: 40960,
             enable_statistics: true,
@@ -2206,6 +2209,13 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
         {
             let max_background_flushes: i32 = background_flushes_config.1.into();
             self.update_background_cfg(self.cfg.max_background_jobs, max_background_flushes)?;
+        }
+
+        if let Some(max_delete_count_by_write) = change
+            .extract_if(|(name, _)| name == "max_delete_count_by_write")
+            .next()
+        {
+            update_max_delete_count_by_key(max_delete_count_by_write.1.into() as usize);
         }
 
         if !change.is_empty() {
@@ -4948,7 +4958,7 @@ mod tests {
     };
 
     use api_version::{ApiV1, KvFormat};
-    use engine_rocks::raw::LRUCacheOptions;
+    use engine_rocks::{get_max_delete_count_by_key, raw::LRUCacheOptions};
     use engine_traits::{CfOptions as _, CfOptionsExt, DbOptions as _, DbOptionsExt};
     use futures::executor::block_on;
     use grpcio::ResourceQuota;
@@ -5871,6 +5881,11 @@ mod tests {
         let cf_opt = db.get_options_cf("default").unwrap();
         let bsize = cf_opt.get_write_buffer_size();
         assert_eq!(bsize, ReadableSize::mb(102).0);
+
+        cfg_controller
+            .update_config("rocksdb.max-delete-count-by-write", "1024")
+            .unwrap();
+        assert_eq!(get_max_delete_count_by_key(), 1024);
 
         // update some configs on default cf
         let cf_opts = db.get_options_cf(CF_DEFAULT).unwrap();

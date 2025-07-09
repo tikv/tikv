@@ -1,5 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::{atomic, atomic::Ordering};
+
 use engine_traits::{
     CfNamesExt, DeleteStrategy, ImportExt, IterOptions, Iterable, Iterator, MiscExt, Mutable,
     Range, RangeStats, Result, SstWriter, SstWriterBuilder, WriteBatch, WriteBatchExt,
@@ -17,7 +19,16 @@ use crate::{
     util, RocksSstWriter,
 };
 
-pub const MAX_DELETE_COUNT_BY_KEY: usize = 2048;
+// Max delete count by key directly by write_batch.
+static MAX_DELETE_COUNT_BY_KEY: Atomic<usize> = Atomic::new(2048 as usize);
+
+pub fn update_max_delete_count_by_key(count: u64) {
+    MAX_DELETE_COUNT_BY_KEY.store(count, Ordering::Relaxed);
+}
+
+pub fn get_max_delete_count_by_key() -> usize {
+    MAX_DELETE_COUNT_BY_KEY.load(Ordering::Relaxed)
+}
 
 impl RocksEngine {
     fn is_titan(&self) -> bool {
@@ -40,6 +51,7 @@ impl RocksEngine {
         let mut writer_wrapper: Option<RocksSstWriter> = None;
         let mut data: Vec<Vec<u8>> = vec![];
         let mut last_end_key: Option<Vec<u8>> = None;
+        let delete_thd = get_max_delete_count_by_key();
         for r in ranges {
             // There may be a range overlap with next range
             if last_end_key
@@ -72,7 +84,7 @@ impl RocksEngine {
                 } else {
                     data.push(it.key().to_vec());
                 }
-                if data.len() > MAX_DELETE_COUNT_BY_KEY {
+                if data.len() > delete_thd {
                     let builder = RocksSstWriterBuilder::new().set_db(self).set_cf(cf);
                     let mut writer = builder.build(sst_path.as_str())?;
                     for key in data.iter() {
