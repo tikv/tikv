@@ -210,7 +210,7 @@ mod tests {
         prepare_sst_for_ingestion(&sst_path, &sst_clone, key_manager).unwrap();
         check_hard_link(&sst_path, 2);
         check_hard_link(&sst_clone, 2);
-        db.ingest_external_file_cf(CF_DEFAULT, &[sst_clone.to_str().unwrap()])
+        db.ingest_external_file_cf(CF_DEFAULT, &[sst_clone.to_str().unwrap()], None)
             .unwrap();
         check_db_with_kvs(&db, CF_DEFAULT, &kvs);
         assert!(!sst_clone.exists());
@@ -227,7 +227,7 @@ mod tests {
         prepare_sst_for_ingestion(&sst_path, &sst_clone, key_manager).unwrap();
         check_hard_link(&sst_path, 2);
         check_hard_link(&sst_clone, 1);
-        db.ingest_external_file_cf(CF_DEFAULT, &[sst_clone.to_str().unwrap()])
+        db.ingest_external_file_cf(CF_DEFAULT, &[sst_clone.to_str().unwrap()], None)
             .unwrap();
         check_db_with_kvs(&db, CF_DEFAULT, &kvs);
         assert!(!sst_clone.exists());
@@ -305,7 +305,7 @@ mod tests {
         check_hard_link(&sst_path, 1);
         check_hard_link(&sst_clone, 1);
 
-        db.ingest_external_file_cf(CF_DEFAULT, &[sst_clone.to_str().unwrap()])
+        db.ingest_external_file_cf(CF_DEFAULT, &[sst_clone.to_str().unwrap()], None)
             .unwrap();
         check_db_with_kvs(&db, CF_DEFAULT, &kvs);
         assert!(!sst_clone.exists());

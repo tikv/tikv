@@ -35,7 +35,13 @@ pub enum DeleteStrategy {
     DeleteByRange,
     /// Delete by ingesting a SST file with deletions. Useful when the number of
     /// ranges is too many.
-    DeleteByWriter { sst_path: String },
+    /// Set `allow_write_during_ingestion` to true to minimize the impact on
+    /// foreground performance, but you must ensure that no concurrent
+    /// writes overlap with the data being ingested.
+    DeleteByWriter {
+        sst_path: String,
+        allow_write_during_ingestion: bool,
+    },
 }
 
 /// `StatisticsReporter` can be used to report engine's private statistics to
