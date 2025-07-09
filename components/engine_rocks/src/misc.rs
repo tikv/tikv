@@ -463,6 +463,10 @@ impl MiscExt for RocksEngine {
         Ok(crate::properties::get_range_stats(self, cf, start, end))
     }
 
+    fn get_whole_range_stats(&self, cf: &str) -> Result<RangeStats> {
+        crate::properties::get_all_table_stats(self, cf)
+    }
+
     fn is_stalled_or_stopped(&self) -> bool {
         const ROCKSDB_IS_WRITE_STALLED: &str = "rocksdb.is-write-stalled";
         const ROCKSDB_IS_WRITE_STOPPED: &str = "rocksdb.is-write-stopped";

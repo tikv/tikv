@@ -56,7 +56,7 @@ mod tests {
     fn new_test_db(dir: &str) -> (RocksEngine, Arc<IoRateLimiterStatistics>) {
         let limiter = Arc::new(IoRateLimiter::new_for_test());
         let mut db_opts = RocksDbOptions::default();
-        db_opts.add_event_listener(RocksEventListener::new("test_db", None));
+        db_opts.add_event_listener(RocksEventListener::new("test_db", None, None));
         let env = get_env(None, Some(limiter.clone())).unwrap();
         db_opts.set_env(env);
         let mut cf_opts = RocksCfOptions::default();

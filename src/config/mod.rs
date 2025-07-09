@@ -2127,7 +2127,7 @@ impl RaftDbConfig {
         opts.enable_pipelined_write(self.enable_pipelined_write);
         opts.enable_unordered_write(self.enable_unordered_write);
         opts.allow_concurrent_memtable_write(self.allow_concurrent_memtable_write);
-        opts.add_event_listener(RocksEventListener::new("raft", None));
+        opts.add_event_listener(RocksEventListener::new("raft", None, None));
         opts.set_bytes_per_sync(self.bytes_per_sync.0);
         opts.set_wal_bytes_per_sync(self.wal_bytes_per_sync.0);
         // TODO maybe create a new env for raft engine

@@ -61,7 +61,7 @@ use pd_client::{
 };
 use raft_log_engine::RaftLogEngine;
 use raftstore::{
-    RaftRouterCompactedEventSender,
+    RaftRouterCompactedEventSender, RaftRouterStatsChangeEventSender,
     coprocessor::{
         BoxConsistencyCheckObserver, ConsistencyCheckMethod, CoprocessorHost,
         RawConsistencyCheckObserver, RegionInfoAccessor, config::SplitCheckConfigManager,
@@ -1724,6 +1724,9 @@ where
         }))
         .region_info_accessor(self.region_info_accessor.clone().unwrap())
         .sst_recovery_sender(self.init_sst_recovery_sender())
+        .stats_change_event_sender(Arc::new(RaftRouterStatsChangeEventSender {
+            router: Mutex::new(self.router.clone()),
+        }))
         .flow_listener(flow_listener);
         let factory = Box::new(builder.build());
         let kv_engine = factory
