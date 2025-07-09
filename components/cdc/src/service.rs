@@ -428,19 +428,20 @@ impl Service {
             };
             explicit_features = headers.features;
         }
-        info!("cdc connection created"; "downstream" => ctx.peer(), "features" => ?explicit_features);
 
         if let Err(e) = self.scheduler.schedule(Task::OpenConn { conn }) {
             let peer = ctx.peer();
-            error!("cdc connection initiate failed"; "downstream" => ?peer, "error" => ?e);
+            error!("cdc connection initiate failed"; "downstream" => ?peer, "error" => ?e, "conn_id" => ?conn_id);
             ctx.spawn(async move {
                 let status = RpcStatus::with_message(RpcStatusCode::UNKNOWN, format!("{:?}", e));
                 if let Err(e) = sink.fail(status).await {
-                    error!("cdc failed to send error"; "downstream" => ?peer, "error" => ?e);
+                    error!("cdc failed to send error"; "downstream" => ?peer, "error" => ?e, "conn_id" => ?conn_id);
                 }
             });
             return;
         }
+
+        info!("cdc connection created"; "downstream" => ctx.peer(), "features" => ?explicit_features, "conn_id" => ?conn_id);
 
         let peer = ctx.peer();
         let scheduler = self.scheduler.clone();

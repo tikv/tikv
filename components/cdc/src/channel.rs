@@ -437,13 +437,13 @@ impl Drop for Drain {
                 total_bytes += bytes;
             }
             memory_quota.free(total_bytes);
-            info!("drop Drain finished, free memory"; "conn_id" => ?conn_id,
+            info!("cdc drop Drain finished, free memory"; "conn_id" => ?conn_id,
                 "freed_bytes" => total_bytes, "inuse_bytes" => memory_quota.in_use());
         });
         block_on(&mut drain);
         let takes = start.saturating_elapsed();
         if takes >= Duration::from_millis(200) {
-            warn!("drop Drain too slow"; "takes" => ?takes);
+            warn!("cdc drop Drain too slow"; "takes" => ?takes);
         }
     }
 }
