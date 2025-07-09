@@ -213,6 +213,32 @@ impl rocksdb::EventListener for RocksEventListener {
         STORE_ENGINE_INGESTION_PICKED_LEVEL_VEC
             .with_label_values(&[&self.db_name, info.cf_name()])
             .observe(info.picked_level() as f64);
+        if info.cf_name() == CF_WRITE && self.stats_change_event_senders.is_some() {
+            let properties = info.table_properties();
+            let input_num_entries = properties.num_entries();
+            let input_range_stats = match mvcc_properties::RocksMvccProperties::decode(
+                properties.user_collected_properties(),
+            ) {
+                Ok(mvcc_properties) => Some(RangeStats {
+                    num_entries: input_num_entries,
+                    num_versions: mvcc_properties.num_versions,
+                    num_rows: mvcc_properties.num_rows,
+                    num_deletes: mvcc_properties.num_deletes,
+                }),
+                Err(e) => {
+                    warn!("Decode MVCC properties from sst file failed"; "err" => ?e);
+                    None
+                }
+            };
+            self.stats_change_event_senders
+                .as_ref()
+                .unwrap()
+                .send(RocksStatsChangeEvent {
+                    cf_name: info.cf_name().to_string(),
+                    aggr_input_range_stats: input_range_stats,
+                    aggr_output_range_stats: None,
+                });
+        }
     }
 
     fn on_background_error(&self, reason: DBBackgroundErrorReason, status: MutableStatus) {

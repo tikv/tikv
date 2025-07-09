@@ -980,16 +980,16 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
     fn update_mvcc_stats_metrics(&self) {
         if let Some(mvcc_stats) = &self.fsm.store.mvcc_stats {
             STORE_MVCC_STATS_GAUGE_VEC
-                .with_label_values(&["total_rocksdb_entries"])
+                .total_rocksdb_entries
                 .set(mvcc_stats.num_entries as i64);
             STORE_MVCC_STATS_GAUGE_VEC
-                .with_label_values(&["total_tikv_entries"])
+                .total_tikv_entries
                 .set(mvcc_stats.num_versions as i64);
             STORE_MVCC_STATS_GAUGE_VEC
-                .with_label_values(&["total_tikv_rows"])
+                .total_tikv_rows
                 .set(mvcc_stats.num_rows as i64);
             STORE_MVCC_STATS_GAUGE_VEC
-                .with_label_values(&["total_tikv_deleted_rows"])
+                .total_tikv_deleted_rows
                 .set(mvcc_stats.num_deletes as i64);
         }
     }

@@ -351,6 +351,16 @@ make_static_metric! {
     pub struct SnapshotGenerateBytesTypeVec: IntCounter {
         "type" => SnapshotGenerateBytesType,
     }
+
+    pub label_enum StoreMvccStatsType {
+        total_rocksdb_entries,
+        total_tikv_entries,
+        total_tikv_rows,
+        total_tikv_deleted_rows,
+    }
+    pub struct StoreMvccStatsGaugeVec: IntGauge {
+        "type" => StoreMvccStatsType,
+    }
 }
 
 lazy_static! {
@@ -1034,7 +1044,9 @@ lazy_static! {
             "Is raft process busy or not",
             &["type"]
         ).unwrap();
-    pub static ref STORE_MVCC_STATS_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
+
+    pub static ref STORE_MVCC_STATS_GAUGE_VEC: StoreMvccStatsGaugeVec = register_static_int_gauge_vec!(
+        StoreMvccStatsGaugeVec,
         "tikv_raftstore_mvcc_stats",
         "MVCC stats",
         &["type"]
