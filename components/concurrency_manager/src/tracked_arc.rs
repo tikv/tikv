@@ -69,7 +69,7 @@ impl Default for TrackedArcConfig {
 }
 
 /// Operation types for TrackedArc access tracking
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Operation {
     /// Prewrite operation
     Prewrite { start_ts: u64, for_update_ts: u64 },
@@ -229,9 +229,7 @@ impl LeakDetector {
         self.sampling_counter.store(0, Ordering::Relaxed);
     }
 
-    /// Get current registry size for testing
-    #[cfg(test)]
-    fn registry_size(&self) -> usize {
+    pub fn registry_size(&self) -> usize {
         self.registry.len()
     }
 
@@ -581,7 +579,7 @@ impl LeakDetector {
 
     /// Cleanup registry - performs a total reset for fresh debugging data
     /// Returns the number of entries removed
-    fn cleanup_old_entries(&self) {
+    pub fn cleanup_old_entries(&self) {
         self.registry.clear();
         info!("Registry cleanup");
     }

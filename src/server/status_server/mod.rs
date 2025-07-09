@@ -64,7 +64,7 @@ use tokio_openssl::SslStream;
 
 use crate::{
     config::{ConfigController, LogLevel},
-    server::Result,
+    server::{debug::handle_tracked_arc_debug, Result},
     tikv_util::sys::thread::ThreadBuildWrapper,
 };
 
@@ -804,6 +804,9 @@ where
                             }
                             (Method::PUT, "/resume_grpc") => {
                                 Self::handle_resume_grpc(grpc_service_mgr).await
+                            }
+                            (Method::GET, path) if path.starts_with("/debug/tracked-arc") => {
+                                handle_tracked_arc_debug(req).await
                             }
                             _ => Ok(make_response(StatusCode::NOT_FOUND, "path not found")),
                         }
