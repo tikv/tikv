@@ -8,11 +8,46 @@ use crate::{engine::RocksEngine, r2e, util};
 impl ImportExt for RocksEngine {
     type IngestExternalFileOptions = RocksIngestExternalFileOptions;
 
+<<<<<<< HEAD
     fn ingest_external_file_cf(&self, cf: &str, files: &[&str]) -> Result<()> {
         let cf = util::get_cf_handle(self.as_inner(), cf)?;
         let mut opts = RocksIngestExternalFileOptions::new();
         opts.move_files(true);
         opts.set_write_global_seqno(false);
+=======
+    fn ingest_external_file_cf(
+        &self,
+        cf_name: &str,
+        files: &[&str],
+        range: Option<Range<'_>>,
+        force_allow_write: bool,
+    ) -> Result<()> {
+        // Acquire latch to prevent concurrency with compaction-filter operations
+        // when using RocksDB IngestExternalFileOptions.allow_write = true.
+        let _region_inject_latch_guard = range.as_ref().map(|r| {
+            self.ingest_latch
+                .acquire(r.start_key.to_vec(), r.end_key.to_vec())
+        });
+        fail_point!("after_apply_snapshot_ingest_latch_acquired");
+
+        let cf = util::get_cf_handle(self.as_inner(), cf_name)?;
+        let mut opts = RocksIngestExternalFileOptions::new();
+        opts.move_files(true);
+        let allow_write = range.is_some() || force_allow_write;
+        opts.allow_write(allow_write);
+        if allow_write {
+            INGEST_EXTERNAL_FILE_ALLOW_WRITE_COUNTER
+                .with_label_values(&["
+            allow_write"])
+                .inc();
+        } else {
+            INGEST_EXTERNAL_FILE_ALLOW_WRITE_COUNTER
+                .with_label_values(&["
+            not_allow_write"])
+                .inc();
+        }
+
+>>>>>>> c7429059b2 (sst_importer: allow write during ingesting sst (#18514))
         // Note: no need reset the global seqno to 0 for compatibility as #16992
         // enable the TiKV to handle the case on applying abnormal snapshot.
         // This is calling a specially optimized version of
@@ -119,7 +154,17 @@ mod tests {
             sst2.put(v.as_bytes(), v.as_bytes()).unwrap();
         }
         sst2.finish().unwrap();
+<<<<<<< HEAD
         db.ingest_external_file_cf(CF_DEFAULT, &[p1.to_str().unwrap(), p2.to_str().unwrap()])
             .unwrap();
+=======
+        db.ingest_external_file_cf(
+            CF_DEFAULT,
+            &[p1.to_str().unwrap(), p2.to_str().unwrap()],
+            None,
+            false, // force_allow_write
+        )
+        .unwrap();
+>>>>>>> c7429059b2 (sst_importer: allow write during ingesting sst (#18514))
     }
 }

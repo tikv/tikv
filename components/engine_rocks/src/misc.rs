@@ -87,7 +87,33 @@ impl RocksEngine {
 
         if let Some(writer) = writer_wrapper {
             writer.finish()?;
+<<<<<<< HEAD
             self.ingest_external_file_cf(cf, &[sst_path.as_str()])?;
+=======
+            let (min_start_key, max_end_key) = ranges.iter().fold(
+                (ranges[0].start_key, ranges[0].end_key),
+                |(min_start, max_end), range| {
+                    (
+                        std::cmp::min(min_start, range.start_key),
+                        std::cmp::max(max_end, range.end_key),
+                    )
+                },
+            );
+            let range_to_lock = if allow_write_during_ingestion {
+                Some(Range {
+                    start_key: min_start_key,
+                    end_key: max_end_key,
+                })
+            } else {
+                None
+            };
+            self.ingest_external_file_cf(
+                cf,
+                &[sst_path.as_str()],
+                range_to_lock,
+                allow_write_during_ingestion,
+            )?;
+>>>>>>> c7429059b2 (sst_importer: allow write during ingesting sst (#18514))
         } else {
             let mut wb = self.write_batch();
             for key in data.iter() {

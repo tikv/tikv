@@ -210,8 +210,18 @@ mod tests {
         prepare_sst_for_ingestion(&sst_path, &sst_clone, key_manager).unwrap();
         check_hard_link(&sst_path, 2);
         check_hard_link(&sst_clone, 2);
+<<<<<<< HEAD
         db.ingest_external_file_cf(CF_DEFAULT, &[sst_clone.to_str().unwrap()])
             .unwrap();
+=======
+        db.ingest_external_file_cf(
+            CF_DEFAULT,
+            &[sst_clone.to_str().unwrap()],
+            None,
+            false, // force_allow_write
+        )
+        .unwrap();
+>>>>>>> c7429059b2 (sst_importer: allow write during ingesting sst (#18514))
         check_db_with_kvs(&db, CF_DEFAULT, &kvs);
         assert!(!sst_clone.exists());
         // Since we are not using key_manager in db, simulate the db deleting the file
@@ -227,8 +237,18 @@ mod tests {
         prepare_sst_for_ingestion(&sst_path, &sst_clone, key_manager).unwrap();
         check_hard_link(&sst_path, 2);
         check_hard_link(&sst_clone, 1);
+<<<<<<< HEAD
         db.ingest_external_file_cf(CF_DEFAULT, &[sst_clone.to_str().unwrap()])
             .unwrap();
+=======
+        db.ingest_external_file_cf(
+            CF_DEFAULT,
+            &[sst_clone.to_str().unwrap()],
+            None,
+            false, // force_allow_write
+        )
+        .unwrap();
+>>>>>>> c7429059b2 (sst_importer: allow write during ingesting sst (#18514))
         check_db_with_kvs(&db, CF_DEFAULT, &kvs);
         assert!(!sst_clone.exists());
     }
@@ -305,8 +325,18 @@ mod tests {
         check_hard_link(&sst_path, 1);
         check_hard_link(&sst_clone, 1);
 
+<<<<<<< HEAD
         db.ingest_external_file_cf(CF_DEFAULT, &[sst_clone.to_str().unwrap()])
             .unwrap();
+=======
+        db.ingest_external_file_cf(
+            CF_DEFAULT,
+            &[sst_clone.to_str().unwrap()],
+            None,
+            false, // force_allow_write
+        )
+        .unwrap();
+>>>>>>> c7429059b2 (sst_importer: allow write during ingesting sst (#18514))
         check_db_with_kvs(&db, CF_DEFAULT, &kvs);
         assert!(!sst_clone.exists());
     }
