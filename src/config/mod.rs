@@ -2215,7 +2215,8 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
             .extract_if(|(name, _)| name == "max_delete_count_by_write")
             .next()
         {
-            update_max_delete_count_by_key(max_delete_count_by_write.1.into() as usize);
+            let count: u64 = max_delete_count_by_write.1.into();
+            update_max_delete_count_by_key(count as usize);
         }
 
         if !change.is_empty() {
@@ -5883,9 +5884,9 @@ mod tests {
         assert_eq!(bsize, ReadableSize::mb(102).0);
 
         cfg_controller
-            .update_config("rocksdb.max-delete-count-by-write", "1024")
+            .update_config("rocksdb.max-delete-count-by-write", "666")
             .unwrap();
-        assert_eq!(get_max_delete_count_by_key(), 1024);
+        assert_eq!(get_max_delete_count_by_key(), 666 as usize);
 
         // update some configs on default cf
         let cf_opts = db.get_options_cf(CF_DEFAULT).unwrap();

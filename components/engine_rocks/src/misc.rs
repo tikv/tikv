@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{atomic, atomic::Ordering};
+use atomic::{Atomic, Ordering};
 
 use engine_traits::{
     CfNamesExt, DeleteStrategy, ImportExt, IterOptions, Iterable, Iterator, MiscExt, Mutable,
@@ -22,7 +22,7 @@ use crate::{
 // Max delete count by key directly by write_batch.
 static MAX_DELETE_COUNT_BY_KEY: Atomic<usize> = Atomic::new(2048 as usize);
 
-pub fn update_max_delete_count_by_key(count: u64) {
+pub fn update_max_delete_count_by_key(count: usize) {
     MAX_DELETE_COUNT_BY_KEY.store(count, Ordering::Relaxed);
 }
 

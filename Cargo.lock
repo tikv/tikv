@@ -2106,6 +2106,7 @@ name = "engine_rocks"
 version = "0.0.1"
 dependencies = [
  "api_version",
+ "atomic",
  "collections",
  "derive_more",
  "encryption",
