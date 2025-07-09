@@ -740,16 +740,12 @@ where
         let wopts = WriteOptions::default();
         for cf in self.engine.cf_names() {
             // CF_LOCK usually contains fewer keys than other CFs, so we delete them by key.
-            let strategy = if cf == CF_LOCK {
-                DeleteStrategy::DeleteByKey
+            let (strategy, observer) = if cf == CF_LOCK {
+                (
+                    DeleteStrategy::DeleteByKey,
+                    &CLEAR_OVERLAP_REGION_DURATION.by_key,
+                )
             } else if self.use_delete_range {
-<<<<<<< HEAD
-                DeleteStrategy::DeleteByRange
-            } else {
-                DeleteStrategy::DeleteByWriter {
-                    sst_path: self.mgr.get_temp_path_for_ingest(),
-                }
-=======
                 (
                     DeleteStrategy::DeleteByRange,
                     &CLEAR_OVERLAP_REGION_DURATION.by_range,
@@ -769,12 +765,14 @@ where
                 (
                     DeleteStrategy::DeleteByWriter {
                         sst_path: self.mgr.get_temp_path_for_ingest(),
+                        allow_write_during_ingestion,
                     },
                     &CLEAR_OVERLAP_REGION_DURATION.by_ingest_files,
                 )
->>>>>>> effe615237 (raftstore: remove stale ranges by DeleteByKeys rather than ingesting. (#18040))
             };
+            let start = Instant::now();
             box_try!(self.engine.delete_ranges_cf(&wopts, cf, strategy, ranges));
+            observer.observe(start.saturating_elapsed_secs());
         }
 
         Ok(())

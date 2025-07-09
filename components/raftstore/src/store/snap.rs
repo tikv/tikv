@@ -1899,38 +1899,6 @@ impl SnapManager {
     pub fn limiter(&self) -> &Limiter {
         &self.core.limiter
     }
-<<<<<<< HEAD
-=======
-
-    /// recv_snap_precheck is part of the snapshot recv precheck process, which
-    /// aims to reduce unnecessary snapshot drops and regenerations. When a
-    /// leader wants to generate a snapshot for a follower, it first sends a
-    /// precheck message. Upon receiving the message, the follower uses this
-    /// function to consult the concurrency limiter, determining if it can
-    /// receive a new snapshot. If the precheck is successful, the leader will
-    /// proceed to generate and send the snapshot.
-    pub fn recv_snap_precheck(&self, region_id: u64) -> bool {
-        self.core.recv_concurrency_limiter.try_recv(region_id)
-    }
-
-    /// recv_snap_complete is part of the snapshot recv precheck process, and
-    /// should be called when a follower finishes receiving a snapshot.
-    pub fn recv_snap_complete(&self, region_id: u64) {
-        self.core.recv_concurrency_limiter.finish_recv(region_id);
-        // In tests, the first failpoint can be used to trigger a callback while
-        // the second failpoint can be used to pause the thread.
-        fail_point!("post_recv_snap_complete1", region_id == 1, |_| {});
-        fail_point!("post_recv_snap_complete2", region_id == 1, |_| {});
-    }
-
-    /// Adjusts the capacity of the snapshot receive concurrency limiter to
-    /// account for the number of pending applies. This prevents more snapshots
-    /// to be generated if there are too many snapshots waiting to be applied.
-    pub fn set_pending_apply_count(&self, num_pending_applies: usize) {
-        self.core
-            .recv_concurrency_limiter
-            .set_reserved_capacity(num_pending_applies)
-    }
 
     pub fn set_offline(&mut self, state: bool) {
         self.core.offlined.store(state, Ordering::Release);
@@ -1939,7 +1907,6 @@ impl SnapManager {
     pub fn is_offlined(&self) -> bool {
         self.core.offlined.load(Ordering::Acquire)
     }
->>>>>>> effe615237 (raftstore: remove stale ranges by DeleteByKeys rather than ingesting. (#18040))
 }
 
 impl SnapManagerCore {
