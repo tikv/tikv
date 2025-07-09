@@ -109,6 +109,7 @@ impl<S: Storage, F: KvFormat> BatchExecutor for BatchIndexLookupExecutor<S, F> {
         let mut result = child.next_batch(scan_rows).await;
         match result.is_drained {
             Ok(is_drain) if is_drain.stop() => {
+                child.close_storage_scan();
                 self.cur_probe_index += 1;
                 if self.cur_probe_index < self.probe_children.len() {
                     result.is_drained = Ok(BatchExecIsDrain::Remain);

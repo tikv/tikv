@@ -25,6 +25,8 @@ pub trait Storage: Send {
         range: IntervalRange,
     ) -> Result<()>;
 
+    fn close_scan(&mut self);
+
     fn scan_next(&mut self) -> Result<Option<OwnedKvPair>>;
 
     // TODO: Use const generics.
@@ -46,6 +48,10 @@ impl<T: Storage + ?Sized> Storage for Box<T> {
         range: IntervalRange,
     ) -> Result<()> {
         (**self).begin_scan(is_backward_scan, is_key_only, range)
+    }
+
+    fn close_scan(&mut self) {
+        (**self).close_scan();
     }
 
     fn scan_next(&mut self) -> Result<Option<OwnedKvPair>> {

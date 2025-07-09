@@ -1,14 +1,14 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use api_version::{KvFormat, keyspace::KvPair};
+use api_version::{keyspace::KvPair, KvFormat};
 use async_trait::async_trait;
 use kvproto::coprocessor::KeyRange;
 use tidb_query_common::{
-    Result,
     storage::{
-        IntervalRange, Range, Storage,
-        scanner::{RangesScanner, RangesScannerOptions},
+        scanner::{RangesScanner, RangesScannerOptions}, IntervalRange, Range,
+        Storage,
     },
+    Result,
 };
 use tidb_query_datatype::{codec::batch::LazyBatchColumnVec, expr::EvalContext};
 use tipb::{ColumnInfo, FieldType};
@@ -131,6 +131,10 @@ impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> ScanExecutor<S, I, F> {
 
         // Not drained
         Ok(false)
+    }
+
+    pub fn close_storage_scan(&mut self) {
+        self.scanner.close_storage_scan();
     }
 }
 

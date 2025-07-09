@@ -110,6 +110,10 @@ impl<S: Storage, F: KvFormat> BatchTableScanExecutor<S, F> {
         })?;
         Ok(Self(wrapper))
     }
+
+    pub fn close_storage_scan(&mut self) {
+        self.0.close_storage_scan();
+    }
 }
 
 #[async_trait]
