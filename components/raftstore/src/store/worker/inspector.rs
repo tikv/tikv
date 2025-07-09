@@ -54,12 +54,34 @@ impl Display for Task {
 /// The inspector writes a file to the disk and measures the time it takes to
 /// complete the write operation.
 pub struct Runner {
+    disk_runner: InnerRunner,
+    network_runner: InnerRunner,
+
     target: PathBuf,
+    health_client: Arc<dyn HealthClient + Send + Sync>,
+}
+
+#[derive(Clone)]
+struct InnerRunner {
     notifier: Sender<Task>,
     receiver: Receiver<Task>,
     bg_worker: Option<Worker>,
+}
 
-    health_client: Arc<dyn HealthClient + Send + Sync>,
+impl InnerRunner {
+    fn build(cap: usize) -> Self {
+        let (notifier, receiver) = bounded(cap);
+        Self {
+            notifier,
+            receiver,
+            bg_worker: None,
+        }
+    }
+
+    #[inline]
+    pub fn bind_background_worker(&mut self, bg_worker: Worker) {
+        self.bg_worker = Some(bg_worker);
+    }
 }
 
 impl Runner {
@@ -78,12 +100,12 @@ impl Runner {
         // recent request; older requests become stale and irrelevant. To avoid
         // unnecessary accumulation of multiple requests, we set a small
         // `capacity` for the disk check worker.
-        let (notifier, receiver) = bounded(1000);
+        let disk_runner = InnerRunner::build(3);
+        let network_runner = InnerRunner::build(100);
         Self {
+            disk_runner,
+            network_runner,
             target,
-            notifier,
-            receiver,
-            bg_worker: None,
             health_client,
         }
     }
@@ -111,7 +133,8 @@ impl Runner {
 
     #[inline]
     pub fn bind_background_worker(&mut self, bg_worker: Worker) {
-        self.bg_worker = Some(bg_worker);
+        self.disk_runner.bind_background_worker(bg_worker.clone());
+        self.network_runner.bind_background_worker(bg_worker.clone());
     }
 
     fn inspect_disk(&self) -> Option<Duration> {
@@ -153,8 +176,8 @@ impl Runner {
         Some(start.saturating_elapsed())
     }
 
-    fn execute(&self) {
-        if let Ok(task) = self.receiver.try_recv() {
+    fn execute_disk(&self) {
+        if let Ok(task) = self.disk_runner.receiver.try_recv() {
             match task {
                 Task::DiskLatency { mut inspector } => {
                     if let Some(latency) = self.inspect_disk() {
@@ -164,6 +187,14 @@ impl Runner {
                         warn!("failed to inspect disk io latency");
                     }
                 },
+                _ => {},
+            }
+        }
+    }
+
+    fn execute_network(&self) {
+        if let Ok(task) = self.network_runner.receiver.try_recv() {
+            match task {
                 Task::NetworkLatency { mut inspector } => {
                     // For network latency, we don't have a specific implementation here.
                     if let Some(latency) = self.inspect_network() {
@@ -173,6 +204,7 @@ impl Runner {
                         warn!("failed to inspect network io latency");
                     }
                 },
+                _ => {},
             }
         }
     }
@@ -182,17 +214,33 @@ impl Runnable for Runner {
     type Task = Task;
 
     fn run(&mut self, task: Task) {
-        // Send the task to the limited capacity channel.
-        if let Err(e) = self.notifier.try_send(task) {
-            warn!("failed to send task to inspector bg_worker: {:?}", e);
-        } else {
-            let runner = self.clone();
-            if let Some(bg_worker) = self.bg_worker.as_ref() {
-                bg_worker.spawn_async_task(async move {
-                    runner.execute();
-                });
-            }
-        }
+        match task {
+            Task::DiskLatency { inspector: _ } => { 
+                // Send the task to the limited capacity channel.
+                if let Err(e) = self.disk_runner.notifier.try_send(task) {
+                    warn!("failed to send task to inspector bg_worker: {:?}", e);
+                } else {
+                    let runner = self.clone();
+                    if let Some(bg_worker) = self.disk_runner.bg_worker.as_ref() {
+                        bg_worker.spawn_async_task(async move {
+                            runner.execute_disk();
+                        });
+                    }
+                }
+            },
+            Task::NetworkLatency { inspector: _ } => { 
+                if let Err(e) = self.network_runner.notifier.try_send(task) {
+                    warn!("failed to send task to inspector bg_worker: {:?}", e);
+                } else {
+                    let runner = self.clone();
+                    if let Some(bg_worker) = self.network_runner.bg_worker.as_ref() {
+                        bg_worker.spawn_async_task(async move {
+                            runner.execute_network();
+                        });
+                    }
+                }
+            },
+        };
     }
 }
 
@@ -234,7 +282,8 @@ mod tests {
         }
         // Invalid bg_worker and out of capacity
         {
-            runner.bg_worker = None;
+            runner.disk_runner.bg_worker = None;
+            runner.network_runner.bg_worker = None;
             for i in 2..=10 {
                 let tx_2 = tx.clone();
                 let inspector = LatencyInspector::new(

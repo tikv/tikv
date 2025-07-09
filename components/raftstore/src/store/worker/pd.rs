@@ -2657,6 +2657,7 @@ mod tests {
                     Duration::from_secs(interval),
                     Duration::from_secs(interval),
                     Duration::default(),
+                    Duration::from_secs(interval),
                     WrappedScheduler(scheduler),
                 );
                 if let Err(e) = stats_monitor.start(
