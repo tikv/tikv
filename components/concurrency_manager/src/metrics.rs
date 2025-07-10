@@ -26,9 +26,9 @@ lazy_static! {
     .unwrap();
 
     /// Counter for KeyHandle destruction events, labeled by key type (data/meta)
-    pub static ref KEYHANDLE_DESTROYED_TOTAL: IntCounterVec = register_int_counter_vec!(
-        "tikv_keyhandle_destroyed_total",
-        "Total number of KeyHandle instances destroyed",
+    pub static ref KEYHANDLE_RELEASED_TOTAL: IntCounterVec = register_int_counter_vec!(
+        "tikv_keyhandle_released_total",
+        "Total number of KeyHandle instances released",
         &["type"]
     )
     .unwrap();

@@ -13,8 +13,8 @@ use txn_types::{Key, Lock};
 use super::{
     lock_table::LockTable,
     metrics::{
-        get_key_type, KEYHANDLE_CREATED_TOTAL, KEYHANDLE_CURRENT, KEYHANDLE_DESTROYED_TOTAL,
-        KEYHANDLE_GUARD_ACQUIRED_TOTAL, KEYHANDLE_GUARD_RELEASED_TOTAL,
+        get_key_type, KEYHANDLE_CREATED_TOTAL, KEYHANDLE_CURRENT, KEYHANDLE_GUARD_ACQUIRED_TOTAL,
+        KEYHANDLE_GUARD_RELEASED_TOTAL, KEYHANDLE_RELEASED_TOTAL,
     },
 };
 
@@ -101,7 +101,7 @@ impl Drop for KeyHandle {
     fn drop(&mut self) {
         // Increment destruction counter and decrement current gauge based on key type
         let key_type = get_key_type(self.key.as_encoded());
-        KEYHANDLE_DESTROYED_TOTAL
+        KEYHANDLE_RELEASED_TOTAL
             .with_label_values(&[key_type])
             .inc();
         KEYHANDLE_CURRENT.with_label_values(&[key_type]).dec();

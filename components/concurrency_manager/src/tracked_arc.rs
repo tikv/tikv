@@ -76,8 +76,6 @@ impl Default for TrackedArcConfig {
 pub enum Operation {
     /// Prewrite operation
     Prewrite { start_ts: u64, for_update_ts: u64 },
-    /// Commit operation
-    Commit { start_ts: u64, commit_ts: u64 },
     /// Raw key guard for CDC/causal consistency
     RawKeyGuard { ts: u64 },
     /// Test operation
@@ -104,12 +102,6 @@ impl std::fmt::Display for Operation {
                     "prewrite_start_ts_{}_for_update_ts_{}",
                     start_ts, for_update_ts
                 )
-            }
-            Operation::Commit {
-                start_ts,
-                commit_ts,
-            } => {
-                write!(f, "commit_start_ts_{}_commit_ts_{}", start_ts, commit_ts)
             }
             Operation::RawKeyGuard { ts } => write!(f, "raw_key_guard_ts_{}", ts),
             Operation::Test => write!(f, "test"),
@@ -300,18 +292,6 @@ impl LeakDetector {
 
         let count = self.sampling_counter.fetch_add(1, Ordering::Relaxed);
         count % rate == 0
-    }
-
-    /// Register a new TrackedInfo in the registry
-    pub fn register(&self, info: Arc<TrackedInfo>) {
-        let max_capacity = self.max_registry_capacity.load(Ordering::Relaxed) as usize;
-
-        if self.registry.len() >= max_capacity {
-            TRACKED_ARC_CAPACITY_EXCEEDED.inc();
-            return;
-        }
-
-        self.registry.insert(info.key_handle_id, info);
     }
 
     /// Record an access event for a KeyHandle
