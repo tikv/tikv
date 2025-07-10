@@ -10,10 +10,7 @@ use std::{
     },
     mem,
     ops::{Deref, DerefMut},
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, Mutex, atomic::Ordering},
     time::{Duration, Instant, SystemTime},
 };
 
@@ -609,8 +606,6 @@ where
     pub write_senders: WriteSenders<EK, ER>,
     pub sync_write_worker: Option<WriteWorker<EK, ER, RaftRouter<EK, ER>, T>>,
     pub pending_latency_inspect: Vec<LatencyInspector>,
-
-    pub safe_point: Arc<AtomicU64>,
 
     pub process_stat: Option<ProcessStat>,
 }
@@ -1295,7 +1290,6 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     feature_gate: FeatureGate,
     write_senders: WriteSenders<EK, ER>,
     node_start_time: Timespec, // monotonic_raw_now
-    safe_point: Arc<AtomicU64>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
@@ -1559,7 +1553,6 @@ where
             write_senders: self.write_senders.clone(),
             sync_write_worker,
             pending_latency_inspect: vec![],
-            safe_point: self.safe_point.clone(),
             process_stat: None,
         };
         ctx.update_ticks_timeout();
@@ -1615,7 +1608,6 @@ where
             feature_gate: self.feature_gate.clone(),
             write_senders: self.write_senders.clone(),
             node_start_time: self.node_start_time,
-            safe_point: self.safe_point.clone(),
         }
     }
 }
@@ -1695,7 +1687,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         mut disk_check_runner: DiskCheckRunner,
         grpc_service_mgr: GrpcServiceManager,
-        safe_point: Arc<AtomicU64>,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1809,12 +1800,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             ReadRunner::new(self.router.clone(), engines.raft.clone()),
         );
 
-        let compact_runner = CompactRunner::new(
-            engines.kv.clone(),
-            bgworker_remote,
-            cfg.clone().tracker(String::from("compact-runner")),
-            cfg.value().skip_manual_compaction_in_clean_up_worker,
-        );
+        let compact_runner = CompactRunner::new(engines.kv.clone(), bgworker_remote);
         let cleanup_sst_runner = CleanupSstRunner::new(Arc::clone(&importer));
         let gc_snapshot_runner = GcSnapshotRunner::new(
             meta.get_id(),
@@ -1823,7 +1809,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         );
         let cleanup_runner =
             CleanupRunner::new(compact_runner, cleanup_sst_runner, gc_snapshot_runner);
-        let cleanup_scheduler = workers
+        let cleanup_scheduler: Scheduler<CleanupTask> = workers
             .cleanup_worker
             .start("cleanup-worker", cleanup_runner);
         let consistency_check_runner =
@@ -1873,7 +1859,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             feature_gate: pd_client.feature_gate().clone(),
             write_senders: self.store_writers.senders(),
             node_start_time: self.node_start_time,
-            safe_point,
         };
         let region_peers = builder.init()?;
         self.start_system::<T, C>(

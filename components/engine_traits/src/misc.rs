@@ -125,7 +125,7 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt + WriteBatchExt {
     /// memtables of the cf.
     fn get_approximate_memtable_stats_cf(&self, cf: &str, range: &Range<'_>) -> Result<(u64, u64)>;
 
-    fn ingest_maybe_slowdown_writes(&self, cf: &str) -> Result<bool>;
+    fn ingest_maybe_slowdown_writes(&self, cf: &str, inflight_ingest_cnt: u64) -> Result<bool>;
 
     /// Gets total used size of rocksdb engine, including:
     /// * total size (bytes) of all SST files.
