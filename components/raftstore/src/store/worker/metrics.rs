@@ -79,6 +79,15 @@ make_static_metric! {
     pub struct ClearOverlapRegionDuration : Histogram {
         "type" => ClearOverlapRegionType,
     }
+
+    pub label_enum CheckThenCompactType {
+        check,
+        compact,
+    }
+
+    pub struct CheckThenCompactDuration : Histogram {
+        "type" => CheckThenCompactType,
+    }
 }
 
 pub struct LocalReadMetrics {
@@ -212,10 +221,11 @@ lazy_static! {
         "Bucketed histogram of full compaction pauses for the storage."
     )
     .unwrap();
-    pub static ref CHECK_THEN_COMPACT_DURATION: HistogramVec = register_histogram_vec!(
+    pub static ref CHECK_THEN_COMPACT_DURATION: CheckThenCompactDuration = register_static_histogram_vec!(
+        CheckThenCompactDuration,
         "tikv_storage_check_then_compact_duration_seconds",
         "Bucketed histogram of duration in storage check and compact worker",
-        &["type", "cf"],
+        &["type"],
         exponential_buckets(0.001, 2.0, 20).unwrap()
     )
     .unwrap();

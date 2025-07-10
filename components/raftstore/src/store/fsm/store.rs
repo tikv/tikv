@@ -755,7 +755,7 @@ where
 {
     store: Store,
     receiver: Receiver<StoreMsg<EK>>,
-    check_and_compact_running_indicator: Option<Weak<()>>,
+    check_then_compact_running_indicator: Option<Weak<()>>,
 }
 
 impl<EK> StoreFsm<EK>
@@ -774,7 +774,7 @@ where
                 store_reachability: HashMap::default(),
             },
             receiver: rx,
-            check_and_compact_running_indicator: None,
+            check_then_compact_running_indicator: None,
         });
         (tx, fsm)
     }
@@ -2727,7 +2727,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
 
     fn on_compact_check_tick(&mut self) {
         self.register_compact_check_tick();
-        if let Some(token) = &self.fsm.check_and_compact_running_indicator {
+        if let Some(token) = &self.fsm.check_then_compact_running_indicator {
             if token.upgrade().is_some() {
                 info!(
                     "compact check is running, skip compact check";
@@ -2758,7 +2758,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         all_ranges.push(keys::DATA_MAX_KEY.to_vec());
         let cf_names = vec![CF_WRITE.to_owned(), CF_DEFAULT.to_owned()];
         let finished = Arc::new(());
-        self.fsm.check_and_compact_running_indicator = Some(Arc::downgrade(&finished));
+        self.fsm.check_then_compact_running_indicator = Some(Arc::downgrade(&finished));
         if let Err(e) = self.ctx.cleanup_scheduler.schedule(CleanupTask::Compact(
             CompactTask::CheckThenCompactTopN {
                 cf_names,
@@ -2783,6 +2783,8 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         }
     }
 
+    // TODO: remove this function after the check and compact is fully migrated to
+    // check then compact
     #[allow(dead_code)]
     fn on_check_and_compact_tick(&mut self) {
         self.register_compact_check_tick();

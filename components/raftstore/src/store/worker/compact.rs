@@ -491,10 +491,9 @@ where
                                     "num_deletes" => range_stats.num_deletes,
                                     "score" => score,
                                 );
+                                let start_time =
+                                    CHECK_THEN_COMPACT_DURATION.compact.start_coarse_timer();
                                 for cf in &cf_names {
-                                    let start_time = CHECK_THEN_COMPACT_DURATION
-                                        .with_label_values(&["compact", cf])
-                                        .start_coarse_timer();
                                     if let Err(e) = self.compact_range_cf(
                                         cf,
                                         Some(&start_key),
@@ -509,8 +508,8 @@ where
                                             "err" => %e,
                                         );
                                     }
-                                    start_time.observe_duration();
                                 }
+                                start_time.observe_duration();
                             }
                         }
                     }
@@ -662,41 +661,20 @@ fn select_compaction_candidates(
     top_n: usize,
 ) -> Result<Vec<CompactionCandidate>, Error> {
     use std::{cmp::Reverse, collections::BinaryHeap};
-    let check_duration = Instant::now_coarse();
+    let check_timer = CHECK_THEN_COMPACT_DURATION.check.start_coarse_timer();
 
-    if top_n == 0 {
-        // When top_n is 0, return all candidates with score > 0
-        let mut candidates = Vec::new();
-        for range in ranges.windows(2) {
-            if let Some(range_stats) = engine
-                .get_range_stats(CF_WRITE, &range[0], &range[1])
-                .map_err(|e| Error::Other(Box::new(e)))?
-            {
-                let score =
-                    get_compact_score(&range_stats, &compact_threshold, compaction_filter_enabled);
-                if score > 0.0 {
-                    let candidate = CompactionCandidate {
-                        score,
-                        start_key: range[0].clone(),
-                        end_key: range[1].clone(),
-                        range_stats,
-                    };
-                    candidates.push(candidate);
-                }
-            }
-        }
-        CHECK_THEN_COMPACT_DURATION
-            .with_label_values(&["check", "write"])
-            .observe(check_duration.saturating_elapsed_secs());
-        candidates.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        return Ok(candidates);
-    }
+    let capacity = ranges.len().saturating_sub(1);
+    let mut candidates = if top_n == 0 {
+        Vec::with_capacity(capacity)
+    } else {
+        Vec::new()
+    };
+    let mut heap = if top_n != 0 {
+        BinaryHeap::with_capacity(top_n + 1)
+    } else {
+        BinaryHeap::new()
+    };
 
-    let mut heap = BinaryHeap::new();
     for range in ranges.windows(2) {
         if let Some(range_stats) = engine
             .get_range_stats(CF_WRITE, &range[0], &range[1])
@@ -711,33 +689,43 @@ fn select_compaction_candidates(
                     end_key: range[1].clone(),
                     range_stats,
                 };
-                if heap.len() < top_n
-                    || score
-                        > heap
-                            .peek()
-                            .map(|r: &Reverse<CompactionCandidate>| r.0.score)
-                            .unwrap_or(f64::MIN)
-                {
-                    heap.push(Reverse(candidate));
-                    if heap.len() > top_n {
-                        heap.pop();
+                if top_n == 0 {
+                    candidates.push(candidate);
+                } else {
+                    if heap.len() < top_n
+                        || score
+                            > heap
+                                .peek()
+                                .map(|r: &Reverse<CompactionCandidate>| r.0.score)
+                                .unwrap_or(f64::MIN)
+                    {
+                        heap.push(Reverse(candidate));
+                        if heap.len() > top_n {
+                            heap.pop();
+                        }
                     }
                 }
             }
-        } else {
-            continue;
         }
     }
-    CHECK_THEN_COMPACT_DURATION
-        .with_label_values(&["check", "write"])
-        .observe(check_duration.saturating_elapsed_secs());
-    let mut result: Vec<_> = heap
-        .into_sorted_vec()
-        .into_iter()
-        .map(|Reverse(t)| t)
-        .collect();
-    result.reverse();
-    Ok(result)
+    check_timer.observe_duration();
+
+    if top_n == 0 {
+        candidates.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        Ok(candidates)
+    } else {
+        let mut result: Vec<_> = heap
+            .into_sorted_vec()
+            .into_iter()
+            .map(|Reverse(t)| t)
+            .collect();
+        result.reverse();
+        Ok(result)
+    }
 }
 
 #[cfg(test)]
