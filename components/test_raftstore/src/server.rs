@@ -656,8 +656,12 @@ impl ServerCluster {
         let max_unified_read_pool_thread_count = cfg.readpool.unified.max_thread_count;
         let pessimistic_txn_cfg = cfg.tikv.pessimistic_txn;
 
-        let split_check_runner =
-            SplitCheckRunner::new(engines.kv.clone(), router.clone(), coprocessor_host.clone());
+        let split_check_runner = SplitCheckRunner::new(
+            Some(store_meta.clone()),
+            engines.kv.clone(),
+            router.clone(),
+            coprocessor_host.clone(),
+        );
         let split_check_scheduler = bg_worker.start("split-check", split_check_runner);
         let split_config_manager =
             SplitConfigManager::new(Arc::new(VersionTrack::new(cfg.tikv.split)));
@@ -990,7 +994,7 @@ pub fn must_new_and_configure_cluster(
     must_new_and_configure_cluster_mul(1, configure)
 }
 
-fn must_new_and_configure_cluster_mul(
+pub fn must_new_and_configure_cluster_mul(
     count: usize,
     mut configure: impl FnMut(&mut Cluster<ServerCluster>),
 ) -> (Cluster<ServerCluster>, metapb::Peer, Context) {

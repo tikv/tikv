@@ -454,8 +454,12 @@ pub mod tests {
             ..Default::default()
         };
 
-        let mut runnable =
-            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
+        let mut runnable = SplitCheckRunner::new(
+            None,
+            engine.clone(),
+            tx.clone(),
+            CoprocessorHost::new(tx, cfg),
+        );
 
         // so split key will be [z0006]
         for i in 0..7 {
@@ -590,7 +594,7 @@ pub mod tests {
             }
         };
         let cop_host = CoprocessorHost::new(tx.clone(), cfg);
-        let mut runnable = SplitCheckRunner::new(engine.clone(), tx, cop_host.clone());
+        let mut runnable = SplitCheckRunner::new(None, engine.clone(), tx, cop_host.clone());
         for i in 0..1000 {
             // if not mvcc, kv size is (6+1)*2 = 14, given bucket size is 3000, expect each
             // bucket has about 210 keys if mvcc, kv size is about 18*2 = 36, expect each
@@ -771,6 +775,7 @@ pub mod tests {
         };
 
         let mut runnable = SplitCheckRunner::new(
+            None,
             engine.clone(),
             tx.clone(),
             CoprocessorHost::new(tx.clone(), cfg.clone()),
@@ -810,8 +815,12 @@ pub mod tests {
         let engine =
             engine_test::kv::new_engine_opt(path_str, DbOptions::default(), cfs_opts).unwrap();
 
-        let mut runnable =
-            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
+        let mut runnable = SplitCheckRunner::new(
+            None,
+            engine.clone(),
+            tx.clone(),
+            CoprocessorHost::new(tx, cfg),
+        );
 
         // Flush a sst of CF_LOCK with range properties.
         for i in 7..15 {

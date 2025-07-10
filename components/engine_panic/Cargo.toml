@@ -14,5 +14,6 @@ engine_traits = { workspace = true }
 kvproto = { workspace = true }
 encryption = { workspace = true }
 raft = { workspace = true }
+tikv_util = { workspace = true }
 tracker = { workspace = true }
 txn_types = { workspace = true }
