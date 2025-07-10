@@ -456,14 +456,13 @@ pub struct Config {
     /// behavior (`kIfHaveCompactionFilter`) only performs this operation when a
     /// compaction filter is present, balancing performance and
     /// functionality.
-    #[doc(hidden)]
-    #[online_config(hidden)]
     pub check_then_compact_force_bottommost_level: bool,
-    #[doc(hidden)]
-    #[online_config(hidden)]
     pub check_then_compact_top_n: u64,
+    // TODO: remove this field after we have a better way to propagate the
+    // compaction filter enabled flag in GC module to raftstore.
+    // If this does not match the compaction filter enabled flag in GC module,
+    // the compaction score will be incorrect.
     #[doc(hidden)]
-    #[online_config(hidden)]
     pub compaction_filter_enabled: bool,
 }
 
@@ -499,9 +498,9 @@ impl Default for Config {
             region_split_check_diff: None,
             region_compact_check_interval: ReadableDuration::minutes(5),
             region_compact_check_step: None,
-            region_compact_min_tombstones: 3000,
+            region_compact_min_tombstones: 10000,
             region_compact_tombstones_percent: 30,
-            region_compact_min_redundant_rows: 5000,
+            region_compact_min_redundant_rows: 50000,
             region_compact_redundant_rows_percent: Some(20),
             pd_heartbeat_tick_interval: ReadableDuration::minutes(1),
             pd_store_heartbeat_tick_interval: ReadableDuration::secs(10),
