@@ -5,11 +5,12 @@ use std::{
     collections::BinaryHeap,
     fmt::{self, Display, Formatter},
     mem,
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 use engine_traits::{
-    CfName, IterOptions, Iterable, Iterator, KvEngine, TabletRegistry, CF_WRITE, LARGE_CFS,
+    CfName, CompactedEvent, IterOptions, Iterable, Iterator, KvEngine, TabletRegistry, CF_WRITE,
+    LARGE_CFS,
 };
 use file_system::{IoType, WithIoType};
 use itertools::Itertools;
@@ -30,6 +31,10 @@ use crate::{
         dispatcher::StoreHandle,
         split_observer::{is_valid_split_key, strip_timestamp_if_exists},
         Config, CoprocessorHost, SplitCheckerHost,
+    },
+    store::{
+        fsm::StoreMeta,
+        metrics::{COMPACTION_DECLINED_BYTES, COMPACTION_RELATED_REGION_COUNT},
     },
     Result,
 };
@@ -365,7 +370,10 @@ impl BucketStatsInfo {
     }
 }
 
-pub enum Task {
+pub enum Task<EK>
+where
+    EK: KvEngine,
+{
     SplitCheckTask {
         region: Region,
         start_key: Option<Vec<u8>>,
@@ -376,17 +384,25 @@ pub enum Task {
     },
     ApproximateBuckets(Region),
     ChangeConfig(ConfigChange),
+    // Compaction finished event
+    CompactedEvent {
+        event: EK::CompactedEvent,
+        region_split_check_diff: u64,
+    },
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&Config) + Send>),
 }
 
-impl Task {
+impl<EK> Task<EK>
+where
+    EK: KvEngine,
+{
     pub fn split_check(
         region: Region,
         auto_split: bool,
         policy: CheckPolicy,
         bucket_ranges: Option<Vec<BucketRange>>,
-    ) -> Task {
+    ) -> Self {
         Task::SplitCheckTask {
             region,
             start_key: None,
@@ -404,7 +420,7 @@ impl Task {
         auto_split: bool,
         policy: CheckPolicy,
         bucket_ranges: Option<Vec<BucketRange>>,
-    ) -> Task {
+    ) -> Self {
         Task::SplitCheckTask {
             region,
             start_key,
@@ -416,7 +432,10 @@ impl Task {
     }
 }
 
-impl Display for Task {
+impl<EK> Display for Task<EK>
+where
+    EK: KvEngine,
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Task::SplitCheckTask {
@@ -434,6 +453,9 @@ impl Display for Task {
                 auto_split
             ),
             Task::ChangeConfig(_) => write!(f, "[split check worker] Change Config Task"),
+            Task::CompactedEvent { .. } => {
+                write!(f, "[split check worker] Compaction finished Event")
+            }
             #[cfg(any(test, feature = "testexport"))]
             Task::Validate(_) => write!(f, "[split check worker] Validate config"),
             Task::ApproximateBuckets(_) => write!(f, "[split check worker] Approximate buckets"),
@@ -442,6 +464,7 @@ impl Display for Task {
 }
 
 pub struct Runner<EK: KvEngine, S> {
+    store_meta: Option<Arc<Mutex<StoreMeta>>>,
     // We can't just use `TabletRegistry` here, otherwise v1 may create many
     // invalid records and cause other problems.
     engine: Either<EK, TabletRegistry<EK>>,
@@ -450,8 +473,14 @@ pub struct Runner<EK: KvEngine, S> {
 }
 
 impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
-    pub fn new(engine: EK, router: S, coprocessor: CoprocessorHost<EK>) -> Runner<EK, S> {
+    pub fn new(
+        store_meta: Option<Arc<Mutex<StoreMeta>>>,
+        engine: EK,
+        router: S,
+        coprocessor: CoprocessorHost<EK>,
+    ) -> Runner<EK, S> {
         Runner {
+            store_meta,
             engine: Either::Left(engine),
             router,
             coprocessor,
@@ -459,11 +488,13 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
     }
 
     pub fn with_registry(
+        store_meta: Option<Arc<Mutex<StoreMeta>>>,
         registry: TabletRegistry<EK>,
         router: S,
         coprocessor: CoprocessorHost<EK>,
     ) -> Runner<EK, S> {
         Runner {
+            store_meta,
             engine: Either::Right(registry),
             router,
             coprocessor,
@@ -876,6 +907,37 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         Ok(split_keys)
     }
 
+    fn on_compaction_finished(&self, event: EK::CompactedEvent, region_split_check_diff: u64) {
+        if self.store_meta.is_none() || event.is_size_declining_trivial(region_split_check_diff) {
+            return;
+        }
+
+        let output_level_str = event.output_level_label();
+        COMPACTION_DECLINED_BYTES
+            .with_label_values(&[&output_level_str])
+            .observe(event.total_bytes_declined() as f64);
+
+        // region_split_check_diff / 16 is an experienced value.
+        let mut region_declined_bytes = {
+            // TODO: Optimize performance for large numbers of regions.
+            // The current implementation locks store_meta for the duration of the
+            // calculation, which could become a bottleneck when there are many
+            // regions.
+            let store_meta = self.store_meta.clone().unwrap();
+            let meta = store_meta.lock().unwrap();
+            event.calc_ranges_declined_bytes(&meta.region_ranges, region_split_check_diff / 16)
+        };
+
+        COMPACTION_RELATED_REGION_COUNT
+            .with_label_values(&[&output_level_str])
+            .observe(region_declined_bytes.len() as f64);
+
+        for (region_id, declined_bytes) in region_declined_bytes.drain(..) {
+            self.router
+                .update_compaction_declined_bytes(region_id, declined_bytes);
+        }
+    }
+
     fn change_cfg(&mut self, change: ConfigChange) {
         if let Err(e) = self.coprocessor.cfg.update(change.clone()) {
             error!("update split check config failed"; "err" => ?e);
@@ -893,8 +955,8 @@ where
     EK: KvEngine,
     S: StoreHandle,
 {
-    type Task = Task;
-    fn run(&mut self, task: Task) {
+    type Task = Task<EK>;
+    fn run(&mut self, task: Task<EK>) {
         let _io_type_guard = WithIoType::new(IoType::LoadBalance);
         match task {
             Task::SplitCheckTask {
@@ -944,6 +1006,10 @@ where
                     }
                 }
             }
+            Task::CompactedEvent {
+                event,
+                region_split_check_diff,
+            } => self.on_compaction_finished(event, region_split_check_diff),
             #[cfg(any(test, feature = "testexport"))]
             Task::Validate(f) => f(&self.coprocessor.cfg),
         }

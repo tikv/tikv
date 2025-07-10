@@ -55,11 +55,7 @@ impl MiscExt for PanicEngine {
         panic!()
     }
 
-    fn ingest_maybe_slowdown_writes(&self, cf: &str) -> Result<bool> {
-        panic!()
-    }
-
-    fn get_sst_key_ranges(&self, cf: &str, level: usize) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+    fn ingest_maybe_slowdown_writes(&self, cf: &str, inflight_ingest_cnt: u64) -> Result<bool> {
         panic!()
     }
 
