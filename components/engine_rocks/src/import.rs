@@ -21,6 +21,7 @@ impl ImportExt for RocksEngine {
         cf_name: &str,
         files: &[&str],
         range: Option<Range<'_>>,
+        force_allow_write: bool,
     ) -> Result<()> {
         // Acquire latch to prevent concurrency with compaction-filter operations
         // when using RocksDB IngestExternalFileOptions.allow_write = true.
@@ -34,7 +35,7 @@ impl ImportExt for RocksEngine {
         let mut opts = RocksIngestExternalFileOptions::new();
         opts.move_files(true);
         opts.set_write_global_seqno(false);
-        let allow_write = range.is_some();
+        let allow_write = range.is_some() || force_allow_write;
         opts.allow_write(allow_write);
         if allow_write {
             INGEST_EXTERNAL_FILE_ALLOW_WRITE_COUNTER
@@ -180,6 +181,7 @@ mod tests {
             CF_DEFAULT,
             &[p1.to_str().unwrap(), p2.to_str().unwrap()],
             None,
+            false, // force_allow_write
         )
         .unwrap();
     }
