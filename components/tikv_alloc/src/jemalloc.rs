@@ -313,6 +313,84 @@ mod profiling {
     const PROF_DUMP: &[u8] = b"prof.dump\0";
     const PROF_RESET: &[u8] = b"prof.reset\0";
     const OPT_PROF: &[u8] = b"opt.prof\0";
+<<<<<<< HEAD
+=======
+    const ARENAS_CREATE: &[u8] = b"arenas.create\0";
+    const THREAD_ARENA: &[u8] = b"thread.arena\0";
+    const BACKGROUND_THREAD: &[u8] = b"background_thread\0";
+
+    pub fn set_thread_exclusive_arena(enable: bool) {
+        ENABLE_THREAD_EXCLUSIVE_ARENA.store(enable, Ordering::Relaxed);
+    }
+
+    // Set exclusive arena for the current thread to avoid contention.
+    pub fn thread_allocate_exclusive_arena() -> ProfResult<()> {
+        if !ENABLE_THREAD_EXCLUSIVE_ARENA.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+
+        unsafe {
+            let mut index: u32 = tikv_jemalloc_ctl::raw::read(THREAD_ARENA).map_err(|e| {
+                ProfError::JemallocError(format!("failed to get thread's arena: {}", e))
+            })?;
+            let count: usize = tikv_jemalloc_ctl::raw::read(
+                format!("stats.arenas.{}.nthreads\0", index).as_bytes(),
+            )
+            .unwrap_or(0);
+            // If the arena has already been bind to the other thread, create a new arena.
+            if count >= 1 {
+                index = tikv_jemalloc_ctl::raw::read(ARENAS_CREATE).map_err(|e| {
+                    ProfError::JemallocError(format!("failed to create arena: {}", e))
+                })?;
+                if let Err(e) = tikv_jemalloc_ctl::raw::write(THREAD_ARENA, index) {
+                    return Err(ProfError::JemallocError(format!(
+                        "failed to set thread's arena: {}",
+                        e
+                    )));
+                }
+            }
+            super::THREAD_ARENA_MAP.lock().unwrap().insert(
+                std::thread::current().id(),
+                (
+                    std::thread::current()
+                        .name()
+                        .unwrap_or("unknown")
+                        .to_string(),
+                    index as usize,
+                ),
+            );
+        }
+        Ok(())
+    }
+
+    fn enable_background_thread() -> ProfResult<()> {
+        unsafe {
+            if let Err(e) = tikv_jemalloc_ctl::raw::write(BACKGROUND_THREAD, true) {
+                return Err(ProfError::JemallocError(format!(
+                    "failed to enable background thread: {}",
+                    e
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn fetch_arena_stats(index: usize) -> (u64, u64, u64) {
+        let resident = unsafe {
+            tikv_jemalloc_ctl::raw::read(format!("stats.arenas.{}.resident\0", index).as_bytes())
+                .unwrap_or(0)
+        };
+        let mapped = unsafe {
+            tikv_jemalloc_ctl::raw::read(format!("stats.arenas.{}.mapped\0", index).as_bytes())
+                .unwrap_or(0)
+        };
+        let retained = unsafe {
+            tikv_jemalloc_ctl::raw::read(format!("stats.arenas.{}.retained\0", index).as_bytes())
+                .unwrap_or(0)
+        };
+        (resident, mapped, retained)
+    }
+>>>>>>> e15796505d (jemalloc: Enable background thread to reduce tail latency (#16780))
 
     pub fn set_prof_sample(rate: u64) -> ProfResult<()> {
         let rate = (rate as f64).log2().ceil() as usize;
@@ -336,6 +414,7 @@ mod profiling {
                 )));
             }
         }
+        enable_background_thread()?;
         Ok(())
     }
 
