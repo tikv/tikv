@@ -28,19 +28,25 @@ use super::{pb_error_inc, raft_writer::wait_write};
 use crate::storage::{self, errors::extract_region_error_from_error};
 
 #[derive(Default)]
-pub(super) struct IngestLatch(Mutex<HashSet<PathBuf>>);
+pub(super) struct IngestLatch(Mutex<HashSet<(String /* cf_name */, PathBuf)>>);
 
 impl IngestLatch {
     pub(super) fn acquire_lock(&self, meta: &SstMeta) -> Result<bool> {
         let mut slots = self.0.lock().unwrap();
         let p = sst_meta_to_path(meta)?;
-        Ok(slots.insert(p))
+        Ok(slots.insert((meta.get_cf_name().to_string(), p)))
     }
 
     pub(super) fn release_lock(&self, meta: &SstMeta) -> Result<bool> {
         let mut slots = self.0.lock().unwrap();
         let p = sst_meta_to_path(meta)?;
-        Ok(slots.remove(&p))
+        Ok(slots.remove(&(meta.get_cf_name().to_string(), p)))
+    }
+
+    pub(super) fn count_ssts_in_cf(&self, cf_name: &str) -> usize {
+        let slots = self.0.lock().unwrap();
+        let cnt = slots.iter().filter(|(cf, _)| cf == cf_name).count();
+        cnt
     }
 }
 
@@ -94,6 +100,7 @@ fn check_write_stall<E: KvEngine>(
     tablets: &LocalTablets<E>,
     store_meta: &Option<Arc<Mutex<StoreMeta<E>>>>,
     importer: &SstImporter<E>,
+    inflight_write_cf_sst_cnt: u64,
 ) -> Option<errorpb::Error> {
     let tablet = match tablets.get(region_id) {
         Some(tablet) => tablet,
@@ -123,7 +130,9 @@ fn check_write_stall<E: KvEngine>(
     if let Some(ref store_meta) = store_meta {
         if let Some((region, _)) = store_meta.lock().unwrap().regions.get(&region_id) {
             if !importer.region_in_import_mode(region)
-                && tablet.ingest_maybe_slowdown_writes(CF_WRITE).expect("cf")
+                && tablet
+                    .ingest_maybe_slowdown_writes(CF_WRITE, inflight_write_cf_sst_cnt)
+                    .expect("cf")
             {
                 return reject_error(Some(region_id));
             }
@@ -134,22 +143,17 @@ fn check_write_stall<E: KvEngine>(
             return Some(errorpb);
         }
     } else if importer.get_mode() == SwitchMode::Normal
-        && tablet.ingest_maybe_slowdown_writes(CF_WRITE).expect("cf")
+        && tablet
+            .ingest_maybe_slowdown_writes(CF_WRITE, inflight_write_cf_sst_cnt)
+            .expect("cf")
     {
-        match tablet.get_sst_key_ranges(CF_WRITE, 0) {
-            Ok(l0_sst_ranges) => {
-                warn!(
-                    "sst ingest is too slow";
-                    "sst_ranges" => ?l0_sst_ranges,
-                );
-            }
-            Err(e) => {
-                error!("get sst key ranges failed"; "err" => ?e);
-            }
-        }
+        // See https://github.com/tikv/tikv/issues/18549:
+        // Previously, logging SST key ranges by calling `ingest_sst_key_ranges` caused
+        // latency spikes. The logging here has been refined to avoid such
+        // performance issues.
+        warn!("SST ingest is experiencing slowdowns");
         return reject_error(None);
     }
-
     None
 }
 
@@ -259,6 +263,7 @@ pub async fn ingest<E: Engine>(
     store_meta: &Option<Arc<Mutex<StoreMeta<E::Local>>>>,
     importer: &SstImporter<E::Local>,
     ingest_latch: &Arc<IngestLatch>,
+    ingest_admission_guard: &Arc<Mutex<()>>,
     label: &'static str,
 ) -> Result<IngestResponse> {
     let mut resp = IngestResponse::default();
@@ -267,21 +272,29 @@ pub async fn ingest<E: Engine>(
         return Ok(resp);
     }
 
-    if let Some(errorpb) = check_write_stall(
-        req.get_context().get_region_id(),
-        tablets,
-        store_meta,
-        importer,
-    ) {
-        resp.set_error(errorpb);
-        return Ok(resp);
-    }
-
     let mut errorpb = errorpb::Error::default();
     let mut metas = vec![];
-    for meta in req.get_ssts() {
-        if ingest_latch.acquire_lock(meta).unwrap_or(false) {
-            metas.push(meta.clone());
+    {
+        // Serialize admission checks to avoid race conditions between
+        // concurrent ingests.
+        let _guard = ingest_admission_guard.lock().unwrap();
+
+        // Check if there is a write stall.
+        if let Some(errorpb) = check_write_stall(
+            req.get_context().get_region_id(),
+            tablets,
+            store_meta,
+            importer,
+            ingest_latch.count_ssts_in_cf(CF_WRITE) as u64,
+        ) {
+            resp.set_error(errorpb);
+            return Ok(resp);
+        }
+
+        for meta in req.get_ssts() {
+            if ingest_latch.acquire_lock(meta).unwrap_or(false) {
+                metas.push(meta.clone());
+            }
         }
     }
     if metas.len() < req.get_ssts().len() {

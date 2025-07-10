@@ -35,7 +35,13 @@ pub enum DeleteStrategy {
     DeleteByRange,
     /// Delete by ingesting a SST file with deletions. Useful when the number of
     /// ranges is too many.
-    DeleteByWriter { sst_path: String },
+    /// Set `allow_write_during_ingestion` to true to minimize the impact on
+    /// foreground performance, but you must ensure that no concurrent
+    /// writes overlap with the data being ingested.
+    DeleteByWriter {
+        sst_path: String,
+        allow_write_during_ingestion: bool,
+    },
 }
 
 /// `StatisticsReporter` can be used to report engine's private statistics to
@@ -119,9 +125,7 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt + WriteBatchExt {
     /// memtables of the cf.
     fn get_approximate_memtable_stats_cf(&self, cf: &str, range: &Range<'_>) -> Result<(u64, u64)>;
 
-    fn ingest_maybe_slowdown_writes(&self, cf: &str) -> Result<bool>;
-
-    fn get_sst_key_ranges(&self, cf: &str, level: usize) -> Result<Vec<(Vec<u8>, Vec<u8>)>>;
+    fn ingest_maybe_slowdown_writes(&self, cf: &str, inflight_ingest_cnt: u64) -> Result<bool>;
 
     /// Gets total used size of rocksdb engine, including:
     /// * total size (bytes) of all SST files.

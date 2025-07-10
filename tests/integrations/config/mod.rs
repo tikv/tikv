@@ -254,6 +254,7 @@ fn test_serde_custom_tikv_config() {
         io_reschedule_concurrent_max_count: 1234,
         io_reschedule_hotpot_duration: ReadableDuration::secs(4321),
         inspect_interval: ReadableDuration::millis(444),
+        inspect_kvdb_interval: ReadableDuration::millis(333),
         inspect_cpu_util_thd: 0.666,
         check_leader_lease_interval: ReadableDuration::millis(123),
         renew_leader_lease_advance_duration: ReadableDuration::millis(456),
@@ -948,7 +949,7 @@ fn test_block_cache_backward_compatible() {
     let content = read_file_in_project_dir("integrations/config/test-cache-compatible.toml");
     let mut cfg: TikvConfig = toml::from_str(&content).unwrap();
     assert!(cfg.storage.block_cache.capacity.is_none());
-    cfg.compatible_adjust();
+    cfg.compatible_adjust(None);
     assert!(cfg.storage.block_cache.capacity.is_some());
     assert_eq!(
         cfg.storage.block_cache.capacity.unwrap().0,

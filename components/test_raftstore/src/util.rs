@@ -682,6 +682,23 @@ pub fn create_test_engine(
     Option<Arc<RocksStatistics>>,
 ) {
     let dir = test_util::temp_dir("test_cluster", cfg.prefer_mem);
+    start_test_engine(router, limiter, cfg, dir)
+}
+
+pub fn start_test_engine(
+    // TODO: pass it in for all cases.
+    router: Option<RaftRouter<RocksEngine, RaftTestEngine>>,
+    limiter: Option<Arc<IoRateLimiter>>,
+    cfg: &Config,
+    dir: TempDir,
+) -> (
+    Engines<RocksEngine, RaftTestEngine>,
+    Option<Arc<DataKeyManager>>,
+    TempDir,
+    LazyWorker<String>,
+    Arc<RocksStatistics>,
+    Option<Arc<RocksStatistics>>,
+) {
     let mut cfg = cfg.clone();
     cfg.storage.data_dir = dir.path().to_str().unwrap().to_string();
     cfg.raft_store.raftdb_path = cfg.infer_raft_db_path(None).unwrap();
@@ -1305,8 +1322,13 @@ pub fn kv_pessimistic_lock_with_ttl(
 }
 
 pub fn must_kv_pessimistic_lock(client: &TikvClient, ctx: Context, key: Vec<u8>, ts: u64) {
-    let resp = kv_pessimistic_lock(client, ctx, vec![key], ts, ts, false);
-    assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+    let resp = kv_pessimistic_lock(client, ctx.clone(), vec![key], ts, ts, false);
+    assert!(
+        !resp.has_region_error(),
+        "{:?}, ctx:{:?}",
+        resp.get_region_error(),
+        ctx
+    );
     assert!(resp.errors.is_empty(), "{:?}", resp.get_errors());
 }
 
