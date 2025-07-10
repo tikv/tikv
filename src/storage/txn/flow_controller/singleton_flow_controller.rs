@@ -115,6 +115,16 @@ impl EngineFlowController {
         let limiter = Arc::new(
             <Limiter>::builder(f64::INFINITY)
                 .refill(Duration::from_millis(1))
+                // `min_wait` is used in the `consume_duration` method of `Limiter`. The final delay
+                // duration is calculated in the `consume` method of `Bucket`. The formula is:
+                //     self.min_wait - self.value / self.speed_limit.
+                // where `self.value`` represents the current byte quota for write operations; it is
+                // initialized to the maximum allowed value and is decreased by the size of each 
+                // write. When the value becomes negative, write requests will be delayed.
+                // 
+                // By setting min_wait to 1, we can ensure flow control more smooth while avoid the
+                // overhead caused by many short sleep calls.
+                .min_wait(Duration::from_millis(1))
                 .build(),
         );
         let discard_ratio = Arc::new(AtomicU32::new(0));
