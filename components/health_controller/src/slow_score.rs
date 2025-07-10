@@ -10,10 +10,14 @@ use ordered_float::{Float, OrderedFloat};
 
 /// Interval for updating the slow score.
 const UPDATE_INTERVALS: Duration = Duration::from_secs(10);
-/// Recovery intervals for the slow score.
+/// Disk recovery intervals for the disk slow score.
 /// If the score has reached 100 and there is no timeout inspecting requests
 /// during this interval, the score will go back to 1 after 5min.
-const RECOVERY_INTERVALS: Duration = Duration::from_secs(60 * 5);
+pub const DISK_RECOVERY_INTERVALS: Duration = Duration::from_secs(60 * 5);
+/// Network recovery intervals for the network slow score.
+/// If the score has reached 100 and there is no timeout inspecting requests
+/// during this interval, the score will go back to 1 after 120min.
+pub const NETWORK_RECOVERY_INTERVALS: Duration = Duration::from_secs(60 * 120);
 /// After every DISK_ROUND_TICKS, the disk's slow score will be updated.
 pub const DISK_ROUND_TICKS: u64 = 30;
 /// After every NETWORK_ROUND_TICKS, the network's slow score will be updated.
@@ -64,6 +68,7 @@ impl SlowScore {
         inspect_interval: Duration,
         ratio_thresh: f64,
         round_ticks: u64,
+        recovery_interval: Duration,
     ) -> SlowScore {
         let min_timeout_ticks = if inspect_interval.is_zero() {
             1  
@@ -78,7 +83,7 @@ impl SlowScore {
 
             timeout_threshold,
             ratio_thresh: OrderedFloat(ratio_thresh),
-            min_ttr: RECOVERY_INTERVALS,
+            min_ttr: recovery_interval,
             last_record_time: Instant::now(),
             last_update_time: Instant::now(),
             round_ticks,
@@ -98,7 +103,7 @@ impl SlowScore {
 
             timeout_threshold: inspect_interval,
             ratio_thresh: OrderedFloat(timeout_ratio),
-            min_ttr: RECOVERY_INTERVALS,
+            min_ttr: DISK_RECOVERY_INTERVALS,
             last_record_time: Instant::now(),
             last_update_time: Instant::now(),
             // The minimal round ticks is 1 for kvdb.
@@ -230,6 +235,7 @@ mod tests {
             Duration::from_millis(500),
             DISK_TIMEOUT_RATIO_THRESHOLD,
             DISK_ROUND_TICKS,
+            DISK_RECOVERY_INTERVALS,
         );
         slow_score.timeout_requests = 5;
         slow_score.total_requests = 100;
@@ -336,6 +342,7 @@ mod tests {
             Duration::from_millis(100),
             DISK_TIMEOUT_RATIO_THRESHOLD,
             6,
+            DISK_RECOVERY_INTERVALS,
         );
 
         // Record some uncompleted ticks.

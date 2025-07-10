@@ -68,6 +68,7 @@ impl UnifiedSlowScore {
             cfg.inspect_interval, /* inspect interval */
             DISK_TIMEOUT_RATIO_THRESHOLD,
             DISK_ROUND_TICKS,
+            DISK_RECOVERY_INTERVALS,
         ));
         // The second factor is for KvDB Disk I/O.
         unified_slow_score.factors.push(SlowScore::new(
@@ -75,6 +76,7 @@ impl UnifiedSlowScore {
             cfg.inspect_kvdb_interval, /* inspect interval */
             DISK_TIMEOUT_RATIO_THRESHOLD,
             DISK_ROUND_TICKS,
+            DISK_RECOVERY_INTERVALS,
         ));
         // The third factor is for PD Network I/O.
         unified_slow_score.factors.push(SlowScore::new(
@@ -82,6 +84,7 @@ impl UnifiedSlowScore {
             cfg.inspect_network_interval,
             NETWORK_TIMEOUT_RATIO_THRESHOLD,
             NETWORK_ROUND_TICKS,
+            NETWORK_RECOVERY_INTERVALS,
         ));
         unified_slow_score
     }
