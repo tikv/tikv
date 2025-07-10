@@ -879,63 +879,20 @@ where
         }
     }
 
-<<<<<<< HEAD
     pub fn on_force_flush(&self, task: String) {
         self.pool.block_on(async move {
             let handler_res = self.range_router.get_task_handler(&task);
             // This should only happen in testing, it would be to unwrap...
             let _ = handler_res.unwrap().set_flushing_status_cas(false, true);
-            let mts = self.prepare_min_ts().await;
+            let (mts, fts) = self.prepare_min_ts().await;
             let sched = self.scheduler.clone();
             self.region_op(ObserveOp::ResolveRegions {
                 callback: Box::new(move |res| {
-                    try_send!(sched, Task::ExecFlush(task, res));
+                    try_send!(sched, Task::ExecFlush(task, res, fts));
                 }),
                 min_ts: mts,
             })
             .await;
-=======
-    fn subscribe_flush_done(&mut self, task: &str, mailbox: Sender<FlushResult>) {
-        if let Some(old_one) = self.flush_done_subscribers.insert(task.to_owned(), mailbox) {
-            let res = FlushResult {
-                task: task.to_owned(),
-                error: Some(Box::new(Error::Other(box_err!(
-                    "another waiter enters and this one was aborted: try again later"
-                )))),
-            };
-            let _ = old_one.try_send(res);
-        }
-    }
-
-    pub fn on_force_flush(&mut self, task: TaskSelectorRef<'_>, sender: Sender<FlushResult>) {
-        let hnd = self.pool.handle().clone();
-        hnd.block_on(async {
-            info!("Triggering force flush."; "selector" => ?task);
-            let handlers = self.range_router.select_task_handler(task);
-            for hnd in handlers {
-                let (mts, fts) = self.prepare_min_ts().await;
-                let sched = self.scheduler.clone();
-                let sender = sender.clone();
-                self.subscribe_flush_done(&hnd.task.info.name, sender);
-                match hnd.set_flushing_status_cas(false, true) {
-                    Ok(_) => {
-                        self.region_op(ObserveOp::ResolveRegions {
-                            callback: Box::new(move |res| {
-                                try_send!(
-                                    sched,
-                                    Task::ExecFlush(hnd.task.info.name.to_owned(), res, fts)
-                                );
-                            }),
-                            min_ts: mts,
-                        })
-                        .await;
-                    }
-                    Err(_) => {
-                        info!("on_force_flush: a flush is on the way, waiting its finish..."; "task" => %hnd.task.info.name);
-                    }
-                }
-            }
->>>>>>> a0777c2032 (backup_stream: encode ts related field into meta file path (#18482))
         });
     }
 
@@ -956,25 +913,13 @@ where
 
     fn on_exec_flush(&mut self, task: String, resolved: ResolvedRegions, flush_ts: TimeStamp) {
         self.checkpoint_mgr.freeze();
-<<<<<<< HEAD
-        self.pool
-            .spawn(root!("flush"; self.do_flush(task, resolved).map(|r| {
+        self.pool.spawn(
+            root!("flush"; self.do_flush(task, resolved, flush_ts).map(|r| {
                 if let Err(err) = r {
                     err.report("during updating flush status")
                 }
-            })));
-=======
-        let fut = self.do_flush(task.clone(), resolved, flush_ts);
-        let sched = self.scheduler.clone();
-        self.pool.spawn(root!("flush"; async move {
-            let res = fut.await;
-            if let Err(ref err) = &res {
-                err.report("during updating flush status")
-            }
-            let flush_res = FlushResult { task, error: res.err().map(Box::new) };
-            try_send!(sched, Task::Flushed(flush_res));
-        }));
->>>>>>> a0777c2032 (backup_stream: encode ts related field into meta file path (#18482))
+            })),
+        );
     }
 
     fn update_global_checkpoint(&self, task: String) -> future![()] {
