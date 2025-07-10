@@ -465,6 +465,8 @@ where
                 top_n,
                 finished: _,
             } => {
+                fail_point!("raftstore::compact::CheckThenCompactTopN:NotifyStart");
+                fail_point!("raftstore::compact::CheckThenCompactTopN:Start");
                 match select_compaction_candidates(
                     &self.engine,
                     ranges,
@@ -473,6 +475,22 @@ where
                     top_n,
                 ) {
                     Ok(candidates) => {
+                        fail_point!(
+                            "raftstore::compact::CheckThenCompactTopN:CheckRange2",
+                            candidates.len() == 2
+                                && candidates.iter().any(|c| c.range_stats.num_versions == 10),
+                            |_| {
+                                info!("Found candidate with 10 versions (range 2)");
+                            }
+                        );
+                        fail_point!(
+                            "raftstore::compact::CheckThenCompactTopN:CheckRange3",
+                            candidates.len() == 2
+                                && candidates.iter().any(|c| c.range_stats.num_versions == 20),
+                            |_| {
+                                info!("Found candidate with 15 versions (range 3)");
+                            }
+                        );
                         if candidates.is_empty() {
                             // No ranges need compacting.
                             info!("no ranges need compacting");
