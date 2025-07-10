@@ -19,8 +19,8 @@ use raft::eraftpb::MessageType;
 use raftstore::store::RegionSnapshot;
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
-use tikv::storage::config::EngineType;
-use tikv_kv::Result;
+use tikv::storage::{config::EngineType, kv::SnapContext};
+use tikv_kv::{Result, Engine};
 use tikv_util::{HandyRwLock, config::ReadableDuration, future::block_on_timeout};
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
@@ -928,15 +928,12 @@ fn test_read_index_cache_in_destroied_peer() {
     let cluster = Arc::new(Mutex::new(new_server_cluster(0, 4)));
     let pd_client = cluster.lock().unwrap().pd_client.clone();
 
-    fn async_get_raft_engine_snapshot(
+    fn async_snapshot(
         cluster: Arc<Mutex<Cluster<ServerCluster>>>,
         start_ts: TimeStamp,
         store_id: u64,
         region_id: u64,
     ) -> mpsc::Receiver<Result<RegionSnapshot<RocksSnapshot>>> {
-        use tikv::storage::kv::SnapContext;
-        use tikv_kv::Engine;
-
         let cluster = cluster.clone();
         let pd_client = cluster.lock().unwrap().pd_client.clone();
         let mut cluster_guard = cluster.lock().unwrap();
@@ -1003,7 +1000,7 @@ fn test_read_index_cache_in_destroied_peer() {
 
     // push read_index_safe_ts to ts2, after that, ts1 can hit local replica read
     // safely.
-    let rx2 = async_get_raft_engine_snapshot(cluster.clone(), ts2, 2, region_id);
+    let rx2 = async_snapshot(cluster.clone(), ts2, 2, region_id);
     let snap2 = rx2.recv().unwrap().unwrap();
     let read_opt = engine_traits::ReadOptions::default();
     assert!(
@@ -1019,7 +1016,7 @@ fn test_read_index_cache_in_destroied_peer() {
 
     // pause the verification of replica read.
     fail::cfg("skip_check_stale_read_safe", "pause").unwrap();
-    let rx1 = async_get_raft_engine_snapshot(cluster.clone(), ts1, 2, region_id);
+    let rx1 = async_snapshot(cluster.clone(), ts1, 2, region_id);
 
     // remove peer 2 and wait for peer destroy is finished.
     let (tx, rx) = mpsc::sync_channel(0);
