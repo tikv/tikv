@@ -37,16 +37,16 @@ fn test_check_then_compact_top_n_with_failpoints() {
 
     let mut ctx1 = Context::new();
     ctx1.set_region_id(region1.get_id());
-    ctx1.set_region_epoch(region1.get_region_epoch().clone().into());
-    ctx1.set_peer(region1.get_peers()[0].clone().into());
+    ctx1.set_region_epoch(region1.get_region_epoch().clone());
+    ctx1.set_peer(region1.get_peers()[0].clone());
     let mut ctx2 = Context::new();
     ctx2.set_region_id(region2.get_id());
-    ctx2.set_region_epoch(region2.get_region_epoch().clone().into());
-    ctx2.set_peer(region2.get_peers()[0].clone().into());
+    ctx2.set_region_epoch(region2.get_region_epoch().clone());
+    ctx2.set_peer(region2.get_peers()[0].clone());
     let mut ctx3 = Context::new();
     ctx3.set_region_id(region3.get_id());
-    ctx3.set_region_epoch(region3.get_region_epoch().clone().into());
-    ctx3.set_peer(region3.get_peers()[0].clone().into());
+    ctx3.set_region_epoch(region3.get_region_epoch().clone());
+    ctx3.set_peer(region3.get_peers()[0].clone());
 
     // Set up failpoint to notify test when task starts
     let fp_start_notify = "raftstore::compact::CheckThenCompactTopN:NotifyStart";

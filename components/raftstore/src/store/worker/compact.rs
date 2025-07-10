@@ -640,7 +640,7 @@ fn get_compact_score(
     {
         return 0.0;
     }
-    return num_discardable as f64 * ratio;
+    num_discardable as f64 * ratio
 }
 
 #[derive(Debug, Clone)]
@@ -709,18 +709,16 @@ fn select_compaction_candidates(
                 };
                 if top_n == 0 {
                     candidates.push(candidate);
-                } else {
-                    if heap.len() < top_n
-                        || score
-                            > heap
-                                .peek()
-                                .map(|r: &Reverse<CompactionCandidate>| r.0.score)
-                                .unwrap_or(f64::MIN)
-                    {
-                        heap.push(Reverse(candidate));
-                        if heap.len() > top_n {
-                            heap.pop();
-                        }
+                } else if heap.len() < top_n
+                    || score
+                        > heap
+                            .peek()
+                            .map(|r: &Reverse<CompactionCandidate>| r.0.score)
+                            .unwrap_or(f64::MIN)
+                {
+                    heap.push(Reverse(candidate));
+                    if heap.len() > top_n {
+                        heap.pop();
                     }
                 }
             }
