@@ -714,6 +714,7 @@ where
             .enable_receive_tablet_snapshot(
                 self.core.config.raft_store.enable_v2_compatible_learner,
             )
+            .min_ingest_snapshot_limit(self.core.config.server.snap_min_ingest_size)
             .build(snap_path);
 
         // Create coprocessor endpoint.
@@ -949,6 +950,7 @@ where
         let importer = Arc::new(importer);
 
         let split_check_runner = SplitCheckRunner::new(
+            Some(engines.store_meta.clone()),
             engines.engines.kv.clone(),
             self.router.clone(),
             self.coprocessor_host.clone().unwrap(),

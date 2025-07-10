@@ -443,7 +443,7 @@ dependencies = [
  "azure_core",
  "bytes",
  "futures 0.3.15",
- "hmac 0.12.1",
+ "hmac",
  "log",
  "once_cell",
  "serde",
@@ -1356,16 +1356,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "crypto-mac"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4857fd85a0c34b3c3297875b747c1e02e06b6a0ea32dd892d8192b9ce0813ea6"
-dependencies = [
- "generic-array",
- "subtle",
-]
-
-[[package]]
 name = "csv"
 version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1701,6 +1691,7 @@ dependencies = [
  "log_wrappers",
  "protobuf",
  "raft",
+ "rand 0.8.5",
  "serde",
  "serde_derive",
  "slog",
@@ -2559,16 +2550,6 @@ checksum = "644f9158b2f133fd50f5fb3242878846d9eb792e445c893805ff0e3824006e35"
 
 [[package]]
 name = "hmac"
-version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c1441c6b1e930e2817404b5046f1f989899143a12bf92de603b69f4e0aee1e15"
-dependencies = [
- "crypto-mac",
- "digest 0.9.0",
-]
-
-[[package]]
-name = "hmac"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
@@ -2937,7 +2918,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?branch=release-7.5#97f4477a96a0afdf8d19926d39494546bd939efb"
+source = "git+https://github.com/pingcap/kvproto.git?branch=release-7.5#5030ed622c154001aa3e188dd8e56de8d4965732"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -3133,17 +3114,6 @@ name = "matchit"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "73cbba799671b762df5a175adf59ce145165747bb891505c43d09aefbbf38beb"
-
-[[package]]
-name = "md-5"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b5a279bb9607f9f53c22d496eade00d138d1bdcccd07d74650387cf94942a15"
-dependencies = [
- "block-buffer 0.9.0",
- "digest 0.9.0",
- "opaque-debug",
-]
 
 [[package]]
 name = "md5"
@@ -4939,7 +4909,7 @@ dependencies = [
 [[package]]
 name = "rusoto_core"
 version = "0.46.0"
-source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#0d6df7b119c4e757daaa715f261c3150c7ae0a3b"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#2b142c1792062a7a3a8317610d78dd141ab4223d"
 dependencies = [
  "async-trait",
  "base64 0.13.0",
@@ -4963,7 +4933,7 @@ dependencies = [
 [[package]]
 name = "rusoto_credential"
 version = "0.46.0"
-source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#0d6df7b119c4e757daaa715f261c3150c7ae0a3b"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#2b142c1792062a7a3a8317610d78dd141ab4223d"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4980,7 +4950,7 @@ dependencies = [
 [[package]]
 name = "rusoto_kms"
 version = "0.46.0"
-source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#0d6df7b119c4e757daaa715f261c3150c7ae0a3b"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#2b142c1792062a7a3a8317610d78dd141ab4223d"
 dependencies = [
  "async-trait",
  "bytes",
@@ -4993,7 +4963,7 @@ dependencies = [
 [[package]]
 name = "rusoto_mock"
 version = "0.46.0"
-source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#0d6df7b119c4e757daaa715f261c3150c7ae0a3b"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#2b142c1792062a7a3a8317610d78dd141ab4223d"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5007,7 +4977,7 @@ dependencies = [
 [[package]]
 name = "rusoto_s3"
 version = "0.46.0"
-source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#0d6df7b119c4e757daaa715f261c3150c7ae0a3b"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#2b142c1792062a7a3a8317610d78dd141ab4223d"
 dependencies = [
  "async-trait",
  "bytes",
@@ -5021,32 +4991,29 @@ dependencies = [
 [[package]]
 name = "rusoto_signature"
 version = "0.46.0"
-source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#0d6df7b119c4e757daaa715f261c3150c7ae0a3b"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#2b142c1792062a7a3a8317610d78dd141ab4223d"
 dependencies = [
  "base64 0.13.0",
  "bytes",
  "chrono",
- "digest 0.9.0",
  "futures 0.3.15",
  "hex 0.4.2",
- "hmac 0.10.1",
  "http",
  "hyper",
  "log",
- "md-5",
+ "openssl",
  "percent-encoding",
  "pin-project-lite",
  "rusoto_credential",
  "rustc_version 0.3.3",
  "serde",
- "sha2 0.9.1",
  "tokio",
 ]
 
 [[package]]
 name = "rusoto_sts"
 version = "0.46.0"
-source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#0d6df7b119c4e757daaa715f261c3150c7ae0a3b"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#2b142c1792062a7a3a8317610d78dd141ab4223d"
 dependencies = [
  "async-trait",
  "bytes",

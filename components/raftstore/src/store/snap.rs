@@ -35,7 +35,9 @@ use protobuf::Message;
 use raft::eraftpb::Snapshot as RaftSnapshot;
 use thiserror::Error;
 use tikv_util::{
-    box_err, box_try, debug, error, info,
+    box_err, box_try,
+    config::ReadableSize,
+    debug, error, info,
     time::{duration_to_sec, Instant, Limiter, UnixSecs},
     warn, HandyRwLock,
 };
@@ -1100,6 +1102,9 @@ impl Snapshot {
     }
 
     pub fn apply<EK: KvEngine>(&mut self, options: ApplyOptions<EK>) -> Result<()> {
+        let apply_without_ingest = self
+            .mgr
+            .can_apply_cf_without_ingest(self.total_size(), self.total_count());
         let post_check = |cf_file: &CfFile, offset: usize| {
             if !plain_file_used(cf_file.cf) {
                 let file_paths = cf_file.file_paths();
@@ -1126,27 +1131,27 @@ impl Snapshot {
         let abort_checker = ApplyAbortChecker(options.abort);
         let coprocessor_host = options.coprocessor_host;
         let region = options.region;
-        let key_mgr = self.mgr.encryption_key_manager.as_ref();
+        let key_mgr = self.mgr.encryption_key_manager.clone();
+        let batch_size = options.write_batch_size;
         for cf_file in &mut self.cf_files {
             if cf_file.size.is_empty() {
                 // Skip empty cf file.
                 continue;
             }
             let cf = cf_file.cf;
+            let mut cb = |kv: &[(Vec<u8>, Vec<u8>)]| {
+                coprocessor_host.post_apply_plain_kvs_from_snapshot(&region, cf, kv)
+            };
             if plain_file_used(cf_file.cf) {
                 let path = &cf_file.file_paths()[0];
-                let batch_size = options.write_batch_size;
-                let cb = |kv: &[(Vec<u8>, Vec<u8>)]| {
-                    coprocessor_host.post_apply_plain_kvs_from_snapshot(&region, cf, kv)
-                };
                 snap_io::apply_plain_cf_file(
                     path,
-                    key_mgr,
+                    key_mgr.as_ref(),
                     &abort_checker,
                     &options.db,
                     cf,
                     batch_size,
-                    cb,
+                    &mut cb,
                 )?;
             } else {
                 let _timer = INGEST_SST_DURATION_SECONDS.start_coarse_timer();
@@ -1156,8 +1161,28 @@ impl Snapshot {
                     .iter()
                     .map(|s| s.as_str())
                     .collect::<Vec<&str>>();
-                snap_io::apply_sst_cf_file(clone_files.as_slice(), &options.db, cf)?;
-                coprocessor_host.post_apply_sst_from_snapshot(&region, cf, path);
+                if apply_without_ingest {
+                    // Apply the snapshot without ingest, to accelerate the applying process.
+                    snap_io::apply_sst_cf_files_without_ingest(
+                        clone_files.as_slice(),
+                        &options.db,
+                        cf,
+                        key_mgr.clone(),
+                        &abort_checker,
+                        batch_size,
+                        &mut cb,
+                    )?;
+                } else {
+                    // Apply the snapshot by ingest.
+                    snap_io::apply_sst_cf_files_by_ingest(
+                        clone_files.as_slice(),
+                        &options.db,
+                        cf,
+                        enc_start_key(&region),
+                        enc_end_key(&region),
+                    )?;
+                    coprocessor_host.post_apply_sst_from_snapshot(&region, cf, path);
+                }
             }
         }
         Ok(())
@@ -1430,13 +1455,17 @@ struct SnapManagerCore {
     max_per_file_size: Arc<AtomicU64>,
     enable_multi_snapshot_files: Arc<AtomicBool>,
     stats: Arc<Mutex<Vec<SnapshotStat>>>,
+    // Minimal column family size & kv counts for applying by ingest.
+    min_ingest_cf_size: u64,
+    min_ingest_cf_kvs: u64,
+    max_total_size: Arc<AtomicU64>,
+    // Marker to represent the relative store is marked with Offline.
+    offlined: Arc<AtomicBool>,
 }
 
 /// `SnapManagerCore` trace all current processing snapshots.
 pub struct SnapManager {
     core: SnapManagerCore,
-    max_total_size: Arc<AtomicU64>,
-
     // only used to receive snapshot from v2
     tablet_snap_manager: Option<TabletSnapManager>,
 }
@@ -1445,7 +1474,6 @@ impl Clone for SnapManager {
     fn clone(&self) -> Self {
         SnapManager {
             core: self.core.clone(),
-            max_total_size: self.max_total_size.clone(),
             tablet_snap_manager: self.tablet_snap_manager.clone(),
         }
     }
@@ -1730,11 +1758,13 @@ impl SnapManager {
     }
 
     pub fn max_total_snap_size(&self) -> u64 {
-        self.max_total_size.load(Ordering::Acquire)
+        self.core.max_total_size.load(Ordering::Acquire)
     }
 
     pub fn set_max_total_snap_size(&self, max_total_size: u64) {
-        self.max_total_size.store(max_total_size, Ordering::Release);
+        self.core
+            .max_total_size
+            .store(max_total_size, Ordering::Release);
     }
 
     pub fn set_max_per_file_size(&mut self, max_per_file_size: u64) {
@@ -1766,6 +1796,11 @@ impl SnapManager {
 
     pub fn get_speed_limit(&self) -> f64 {
         self.core.limiter.speed_limit()
+    }
+
+    pub fn set_min_ingest_cf_limit(&mut self, bytes: ReadableSize) {
+        self.core.min_ingest_cf_size = bytes.0;
+        self.core.min_ingest_cf_kvs = std::cmp::max(10000, (bytes.as_mb_f64() * 10000.0) as u64);
     }
 
     pub fn collect_stat(&self, snap: SnapshotStat) {
@@ -1869,6 +1904,14 @@ impl SnapManager {
     pub fn limiter(&self) -> &Limiter {
         &self.core.limiter
     }
+
+    pub fn set_offline(&mut self, state: bool) {
+        self.core.offlined.store(state, Ordering::Release);
+    }
+
+    pub fn is_offlined(&self) -> bool {
+        self.core.offlined.load(Ordering::Acquire)
+    }
 }
 
 impl SnapManagerCore {
@@ -1964,6 +2007,17 @@ impl SnapManagerCore {
         }
         u64::MAX
     }
+
+    pub fn can_apply_cf_without_ingest(&self, cf_size: u64, cf_kvs: u64) -> bool {
+        fail_point!("apply_cf_without_ingest_false", |_| { false });
+        if self.min_ingest_cf_size == 0 {
+            return false;
+        }
+        // If the size and the count of keys of cf are relatively small, it's
+        // recommended to directly write it into kvdb rather than ingest,
+        // for mitigating performance issue when ingesting snapshot.
+        cf_size <= self.min_ingest_cf_size && cf_kvs <= self.min_ingest_cf_kvs
+    }
 }
 
 #[derive(Clone, Default)]
@@ -1974,6 +2028,8 @@ pub struct SnapManagerBuilder {
     enable_multi_snapshot_files: bool,
     enable_receive_tablet_snapshot: bool,
     key_manager: Option<Arc<DataKeyManager>>,
+    min_ingest_snapshot_size: u64,
+    min_ingest_snapshot_kvs: u64,
 }
 
 impl SnapManagerBuilder {
@@ -1997,6 +2053,13 @@ impl SnapManagerBuilder {
     }
     pub fn enable_receive_tablet_snapshot(mut self, enabled: bool) -> SnapManagerBuilder {
         self.enable_receive_tablet_snapshot = enabled;
+        self
+    }
+    pub fn min_ingest_snapshot_limit(mut self, bytes: ReadableSize) -> SnapManagerBuilder {
+        self.min_ingest_snapshot_size = bytes.0;
+        // Keeps the same assumptions in region size, "Assume the average size of KVs is
+        // 100B". So, it calculate the count of kvs with `bytes / `MiB` * 10000`.
+        self.min_ingest_snapshot_kvs = std::cmp::max(10000, (bytes.as_mb_f64() * 10000.0) as u64);
         self
     }
     #[must_use]
@@ -2036,9 +2099,12 @@ impl SnapManagerBuilder {
                 enable_multi_snapshot_files: Arc::new(AtomicBool::new(
                     self.enable_multi_snapshot_files,
                 )),
+                max_total_size: Arc::new(AtomicU64::new(max_total_size)),
                 stats: Default::default(),
+                min_ingest_cf_size: self.min_ingest_snapshot_size,
+                min_ingest_cf_kvs: self.min_ingest_snapshot_kvs,
+                offlined: Arc::new(AtomicBool::new(false)),
             },
-            max_total_size: Arc::new(AtomicU64::new(max_total_size)),
             tablet_snap_manager,
         };
         snapshot.set_max_per_file_size(self.max_per_file_size); // set actual max_per_file_size
@@ -2345,9 +2411,6 @@ pub mod tests {
     use tikv_util::time::Limiter;
 
     use super::*;
-    // ApplyOptions, SnapEntry, SnapKey, SnapManager, SnapManagerBuilder, SnapManagerCore,
-    // Snapshot, SnapshotStatistics, META_FILE_SUFFIX, SNAPSHOT_CFS, SNAP_GEN_PREFIX,
-    // };
     use crate::{
         coprocessor::CoprocessorHost,
         store::{peer_storage::JOB_STATUS_RUNNING, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER},
@@ -2522,7 +2585,11 @@ pub mod tests {
             encryption_key_manager: None,
             max_per_file_size: Arc::new(AtomicU64::new(max_per_file_size)),
             enable_multi_snapshot_files: Arc::new(AtomicBool::new(true)),
+            max_total_size: Arc::new(AtomicU64::new(u64::MAX)),
             stats: Default::default(),
+            min_ingest_cf_size: 0,
+            min_ingest_cf_kvs: 0,
+            offlined: Arc::new(AtomicBool::new(false)),
         }
     }
 
