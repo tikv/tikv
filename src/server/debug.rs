@@ -1670,6 +1670,7 @@ pub struct LeakedKeyHandle {
     pub key_handle_id: u64,
     pub key: String,
     pub age_seconds: u64,
+    pub access_count: usize,
 }
 
 /// Response structure for /debug/tracked-arc/keyhandle/{id} endpoint
@@ -1693,8 +1694,8 @@ pub struct AccessEvent {
     pub ms_ago: u128,
     /// Thread name
     pub thread_name: String,
-    /// Backtrace (short format)
-    pub backtrace_short: String,
+    /// Backtrace
+    pub backtrace: String,
 }
 
 /// Main handler for TrackedArc debug endpoints
@@ -1810,6 +1811,7 @@ async fn handle_leaks_list() -> hyper::Result<Response<Body>> {
         if let Some(info) = detector.get_info(key_handle_id) {
             let age = now.duration_since(info.creation_time);
             let age_seconds = age.as_secs();
+            let access_count = info.access_history.lock().map(|h| h.len()).unwrap_or(0);
 
             // Only include leaked keyhandles
             if age_seconds > threshold_secs {
@@ -1817,6 +1819,7 @@ async fn handle_leaks_list() -> hyper::Result<Response<Body>> {
                     key_handle_id,
                     key,
                     age_seconds,
+                    access_count,
                 });
             }
         }
@@ -1990,23 +1993,28 @@ async fn handle_keyhandle_detail(path: &str) -> hyper::Result<Response<Body>> {
     let age_seconds = age.as_secs();
 
     // Get access history (limit to prevent large messages)
-    let access_history = if let Ok(history) = info.access_history.lock() {
-        history.iter().take(10).map(|access| {
-            AccessEvent {
-                arc_id: access.arc_id,
-                operation: access.operation.clone(),
-                ms_ago: access.timestamp.elapsed().as_millis(),
-                thread_name: access.thread_name.chars().take(50).collect(), // Truncate thread name
-                backtrace_short: format!("{:?}", access.backtrace).chars().take(200).collect(), // Truncate backtrace
-            }
-        }).collect()
+    let access_history = if let Ok(mut history) = info.access_history.lock() {
+        history
+            .iter_mut()
+            .take(10)
+            .map(|access| {
+                access.backtrace.resolve();
+                AccessEvent {
+                    arc_id: access.arc_id,
+                    operation: access.operation.clone(),
+                    ms_ago: access.timestamp.elapsed().as_millis(),
+                    thread_name: access.thread_name.clone(),
+                    backtrace: format!("{:?}", access.backtrace),
+                }
+            })
+            .collect()
     } else {
         vec![]
     };
 
     let response = KeyHandleDetailResponse {
         key_handle_id,
-        key: format!("{:?}", info.key).chars().take(200).collect(), // Truncate key
+        key: format!("{:?}", info.key),
         creation_time_ms: info.creation_time.elapsed().as_millis() as u64,
         age_seconds,
         access_history,
