@@ -612,7 +612,7 @@ fn get_compact_score(
     compact_threshold: &CompactThreshold,
     compaction_filter_enabled: bool,
 ) -> f64 {
-    if range_stats.num_entries < range_stats.num_versions {
+    if range_stats.num_entries == 0 || range_stats.num_entries < range_stats.num_versions {
         return 0.0;
     }
 
