@@ -535,6 +535,7 @@ where
                         error!("get top n ranges to compact failed"; "err" => %e);
                     }
                 }
+                fail_point!("raftstore::compact::CheckThenCompactTopN:AfterCompact");
             }
         }
     }
