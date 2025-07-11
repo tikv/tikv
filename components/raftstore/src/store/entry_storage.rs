@@ -1346,7 +1346,6 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
             // should be temporarily skipped. Otherwise, the warmup task may fail.
             return;
         }
-        self.term_cache.compact_to(idx);
         self.cache.compact_to(idx);
     }
 
@@ -1397,6 +1396,12 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
         self.cache.trace_cached_entries(entries);
     }
 
+    #[inline]
+    pub fn compact_term_cache(&mut self, idx: u64) {
+        self.term_cache.compact_to(idx);
+    }
+
+    #[inline]
     pub fn update_term_cache(&mut self, index: u64, term: u64) {
         self.term_cache.append(index, term);
     }

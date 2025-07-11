@@ -652,6 +652,7 @@ where
 
     pub fn on_compact_raftlog(&mut self, idx: u64, state: Option<&mut CacheWarmupState>) {
         self.entry_storage.compact_entry_cache(idx, state);
+        self.entry_storage.compact_term_cache(idx);
         self.cancel_generating_snap(Some(idx));
     }
 
