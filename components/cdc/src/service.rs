@@ -466,7 +466,7 @@ impl Service {
         //         error!("cdc deregister failed"; "error" => ?e, "conn_id" => ?conn_id);
         //     }
         // });
-        let scheduler = self.scheduler.clone();
+        // let scheduler = self.scheduler.clone();
         let peer = ctx.peer();
         ctx.spawn(async move {
             if let Err(e) = recv_req.await {
@@ -474,10 +474,10 @@ impl Service {
             } else {
                 info!("cdc receive closed"; "downstream" => peer, "conn_id" => ?conn_id);
             }
-            let deregister = Deregister::Conn(conn_id);
-            if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
-                error!("cdc deregister failed"; "error" => ?e, "conn_id" => ?conn_id);
-            }
+            // let deregister = Deregister::Conn(conn_id);
+            // if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
+            //     error!("cdc deregister failed"; "error" => ?e, "conn_id" => ?conn_id);
+            // }
         });
 
         let peer = ctx.peer();
