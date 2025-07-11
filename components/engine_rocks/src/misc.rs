@@ -5,6 +5,7 @@ use engine_traits::{
     Range, RangeStats, Result, SstWriter, SstWriterBuilder, WriteBatch, WriteBatchExt,
     WriteOptions,
 };
+use fail::fail_point;
 use rocksdb::{FlushOptions, Range as RocksRange};
 use tikv_util::{box_try, keybuilder::KeyBuilder};
 
@@ -32,6 +33,7 @@ impl RocksEngine {
         cf: &str,
         sst_path: String,
         ranges: &[Range<'_>],
+        allow_write_during_ingestion: bool,
     ) -> Result<bool> {
         let mut written = false;
         let mut ranges = ranges.to_owned();
@@ -40,13 +42,13 @@ impl RocksEngine {
         let mut writer_wrapper: Option<RocksSstWriter> = None;
         let mut data: Vec<Vec<u8>> = vec![];
         let mut last_end_key: Option<Vec<u8>> = None;
-        for r in ranges {
+        for r in &ranges {
             // There may be a range overlap with next range
             if last_end_key
                 .as_ref()
                 .map_or(false, |key| key.as_slice() > r.start_key)
             {
-                written |= self.delete_all_in_range_cf_by_key(wopts, cf, &r)?;
+                written |= self.delete_all_in_range_cf_by_key(wopts, cf, r)?;
                 continue;
             }
             last_end_key = Some(r.end_key.to_owned());
@@ -72,7 +74,11 @@ impl RocksEngine {
                 } else {
                     data.push(it.key().to_vec());
                 }
-                if data.len() > MAX_DELETE_COUNT_BY_KEY {
+                let max_delete_count_by_key = (|| {
+                    fail_point!("manually_set_max_delete_count_by_key", |_| { 0 });
+                    MAX_DELETE_COUNT_BY_KEY
+                })();
+                if data.len() > max_delete_count_by_key {
                     let builder = RocksSstWriterBuilder::new().set_db(self).set_cf(cf);
                     let mut writer = builder.build(sst_path.as_str())?;
                     for key in data.iter() {
@@ -87,7 +93,24 @@ impl RocksEngine {
 
         if let Some(writer) = writer_wrapper {
             writer.finish()?;
-            self.ingest_external_file_cf(cf, &[sst_path.as_str()])?;
+            let (min_start_key, max_end_key) = ranges.iter().fold(
+                (ranges[0].start_key, ranges[0].end_key),
+                |(min_start, max_end), range| {
+                    (
+                        std::cmp::min(min_start, range.start_key),
+                        std::cmp::max(max_end, range.end_key),
+                    )
+                },
+            );
+            let range_to_lock = if allow_write_during_ingestion {
+                Some(Range {
+                    start_key: min_start_key,
+                    end_key: max_end_key,
+                })
+            } else {
+                None
+            };
+            self.ingest_external_file_cf(cf, &[sst_path.as_str()], range_to_lock)?;
         } else {
             let mut wb = self.write_batch();
             for key in data.iter() {
@@ -266,8 +289,17 @@ impl MiscExt for RocksEngine {
                     written |= self.delete_all_in_range_cf_by_key(wopts, cf, r)?;
                 }
             }
-            DeleteStrategy::DeleteByWriter { sst_path } => {
-                written |= self.delete_all_in_range_cf_by_ingest(wopts, cf, sst_path, ranges)?;
+            DeleteStrategy::DeleteByWriter {
+                sst_path,
+                allow_write_during_ingestion,
+            } => {
+                written |= self.delete_all_in_range_cf_by_ingest(
+                    wopts,
+                    cf,
+                    sst_path,
+                    ranges,
+                    allow_write_during_ingestion,
+                )?;
             }
         }
         Ok(written)
@@ -615,7 +647,10 @@ mod tests {
             data.push(i.to_string().as_bytes().to_vec());
         }
         test_delete_ranges(
-            DeleteStrategy::DeleteByWriter { sst_path },
+            DeleteStrategy::DeleteByWriter {
+                sst_path,
+                allow_write_during_ingestion: false,
+            },
             &data,
             &[
                 Range::new(&data[2], &data[499]),
