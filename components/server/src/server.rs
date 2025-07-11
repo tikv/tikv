@@ -580,7 +580,7 @@ where
 
         let engines = self.engines.as_ref().unwrap();
 
-        let pd_worker = LazyWorker::new("pd-worker");
+        let pd_worker = WorkerBuilder::new("pd-worker").thread_count(10).create().lazy_build("pd-worker");
         let pd_sender = pd_worker.scheduler();
 
         if let Some(sst_worker) = &mut self.sst_worker {
