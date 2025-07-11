@@ -235,7 +235,7 @@ fn test_read_on_replica_check_memory_locks() {
         20.into(),
         false,
     );
-    let guard = block_on(leader_cm.lock_key(&encoded_key));
+    let guard = block_on(leader_cm.lock_key(&encoded_key, concurrency_manager::Operation::Test));
     guard.with_lock(|l| *l = Some(lock.clone()));
 
     // read on follower

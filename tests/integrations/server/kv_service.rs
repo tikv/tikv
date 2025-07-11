@@ -1922,7 +1922,7 @@ fn test_with_memory_lock_cluster(
 ) {
     let raw_key = b"key".to_vec();
     let key = Key::from_raw(&raw_key);
-    let guard = block_on(cm.lock_key(&key));
+    let guard = block_on(cm.lock_key(&key, concurrency_manager::Operation::Test));
     let lock = Lock::new(
         LockType::Put,
         b"key".to_vec(),

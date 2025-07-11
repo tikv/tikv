@@ -11,6 +11,8 @@ use std::{
 
 use api_version::KvFormat;
 use collections::HashSet;
+// TrackedArc debug API imports
+use concurrency_manager::{LeakDetector, Operation, TrackedArcConfig};
 use engine_rocks::{
     raw::{CompactOptions, DBBottommostLevelCompaction},
     util::get_cf_handle,
@@ -22,6 +24,7 @@ use engine_traits::{
     SyncMutable, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use futures::future::Future;
+use hyper::{Body, Method, Request, Response, StatusCode};
 use kvproto::{
     debugpb::{self, Db as DbType},
     kvrpcpb::{self, Context, MvccInfo},
@@ -34,6 +37,7 @@ use raftstore::{
     coprocessor::get_region_approximate_middle,
     store::{write_initial_apply_state, write_initial_raft_state, write_peer_state, PeerStorage},
 };
+use serde::Serialize;
 use thiserror::Error;
 use tikv_kv::Engine;
 use tikv_util::{
@@ -1622,6 +1626,417 @@ fn divide_db(db: &RocksEngine, parts: usize) -> raftstore::Result<Vec<Vec<u8>>> 
     ))
 }
 
+// TrackedArc debug API structures and handlers
+
+/// Unified response structure for /debug/tracked-arc endpoint
+#[derive(Serialize)]
+pub struct TrackedArcResponse {
+    /// Total number of tracked keyhandles
+    pub total_tracked: usize,
+    /// Number of potentially leaked keyhandles
+    pub leaked_count: usize,
+    /// Leak detection threshold in seconds
+    pub threshold_seconds: u64,
+    /// Registry capacity information
+    pub registry_capacity: u64,
+    /// KeyHandles list (limited to prevent large messages)
+    pub keyhandles: Vec<KeyHandleSummary>,
+}
+
+/// Summary information for a tracked keyhandle
+#[derive(Serialize)]
+pub struct KeyHandleSummary {
+    pub key_handle_id: u64,
+    pub key: String,
+    pub access_count: usize,
+    pub age_seconds: u64,
+    pub recent_operations: Vec<String>,
+}
+
+/// Response structure for /debug/tracked-arc/leaks endpoint
+#[derive(Serialize)]
+pub struct LeaksListResponse {
+    /// Total number of leaked keyhandles found
+    pub total_leaks: usize,
+    /// Leak detection threshold in seconds
+    pub threshold_seconds: u64,
+    /// Leaked keyhandles (sorted by age, oldest first)
+    pub leaked_keyhandles: Vec<LeakedKeyHandle>,
+}
+
+/// Minimal information for a leaked keyhandle (for easy selection)
+#[derive(Serialize)]
+pub struct LeakedKeyHandle {
+    pub key_handle_id: u64,
+    pub key: String,
+    pub age_seconds: u64,
+    pub access_count: usize,
+}
+
+/// Response structure for /debug/tracked-arc/keyhandle/{id} endpoint
+#[derive(Serialize)]
+pub struct KeyHandleDetailResponse {
+    pub key_handle_id: u64,
+    pub key: String,
+    pub creation_time_ms: u64,
+    pub age_seconds: u64,
+    pub access_history: Vec<AccessEvent>,
+}
+
+/// Access event information
+#[derive(Serialize)]
+pub struct AccessEvent {
+    /// TrackedArc instance ID
+    pub arc_id: u32,
+    /// Operation performed
+    pub operation: Operation,
+    /// Milliseconds ago
+    pub ms_ago: u128,
+    /// Thread name
+    pub thread_name: String,
+    /// Backtrace
+    pub backtrace: String,
+}
+
+/// Main handler for TrackedArc debug endpoints
+pub async fn handle_tracked_arc_debug(req: Request<Body>) -> hyper::Result<Response<Body>> {
+    let path = req.uri().path();
+    let method = req.method();
+
+    match (method, path) {
+        (&Method::GET, "/debug/tracked-arc/summary") => handle_tracked_arc_summary().await,
+        (&Method::GET, "/debug/tracked-arc/leaks") => handle_leaks_list().await,
+        (&Method::POST, "/debug/tracked-arc/clear") => handle_clear_registry().await,
+        (&Method::GET, "/debug/tracked-arc/config") => handle_get_config().await,
+        (&Method::POST, "/debug/tracked-arc/config") => handle_set_config(req).await,
+        (&Method::GET, path) if path.starts_with("/debug/tracked-arc/keyhandle/") => {
+            handle_keyhandle_detail(path).await
+        }
+        _ => Ok(Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(Body::from("Not Found"))
+            .unwrap()),
+    }
+}
+
+/// Handle /debug/tracked-arc/summary endpoint (unified)
+async fn handle_tracked_arc_summary() -> hyper::Result<Response<Body>> {
+    let detector = LeakDetector::instance();
+    let config = detector.get_config();
+
+    // Get summary information
+    let summary_data = detector.get_summary();
+    let total_tracked = summary_data.len();
+    let threshold_secs = config.leak_detection_threshold_secs;
+    let now = std::time::Instant::now();
+
+    // Limit to prevent too large messages
+    let max_entries = std::cmp::min(config.max_dump_entries, 20);
+    let mut keyhandles = Vec::new();
+    let mut leaked_count = 0;
+
+    for (key_handle_id, key, access_count) in summary_data.into_iter().take(max_entries) {
+        if let Some(info) = detector.get_info(key_handle_id) {
+            let age = now.duration_since(info.creation_time);
+            let age_seconds = age.as_secs();
+            let is_leaked = age_seconds > threshold_secs;
+
+            if is_leaked {
+                leaked_count += 1;
+            }
+
+            // Get recent operations (limit to 5 to keep message size manageable)
+            let recent_operations = if let Ok(history) = info.access_history.lock() {
+                history
+                    .iter()
+                    .rev()
+                    .take(5)
+                    .map(|access| access.operation.to_string())
+                    .collect()
+            } else {
+                vec!["<lock error>".to_string()]
+            };
+
+            keyhandles.push(KeyHandleSummary {
+                key_handle_id,
+                key,
+                access_count,
+                age_seconds,
+                recent_operations,
+            });
+        }
+    }
+
+    // Sort by age (oldest first) for better debugging
+    keyhandles.sort_by_key(|kh| std::cmp::Reverse(kh.age_seconds));
+
+    let response = TrackedArcResponse {
+        total_tracked,
+        leaked_count,
+        threshold_seconds: threshold_secs,
+        registry_capacity: config.max_registry_capacity,
+        keyhandles,
+    };
+
+    let json = match serde_json::to_string_pretty(&response) {
+        Ok(json) => json,
+        Err(e) => {
+            return Ok(Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from(format!("JSON serialization error: {}", e)))
+                .unwrap());
+        }
+    };
+
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "application/json")
+        .body(Body::from(json))
+        .unwrap())
+}
+
+/// Handle /debug/tracked-arc/leaks endpoint (focused on leaked keys for
+/// selection)
+async fn handle_leaks_list() -> hyper::Result<Response<Body>> {
+    let detector = LeakDetector::instance();
+    let config = detector.get_config();
+    let threshold_secs = config.leak_detection_threshold_secs;
+    let now = std::time::Instant::now();
+
+    // Get all tracked keyhandles
+    let summary_data = detector.get_summary();
+    let mut leaked_keyhandles = Vec::new();
+
+    for (key_handle_id, key, _access_count) in summary_data {
+        if let Some(info) = detector.get_info(key_handle_id) {
+            let age = now.duration_since(info.creation_time);
+            let age_seconds = age.as_secs();
+            let access_count = info.access_history.lock().map(|h| h.len()).unwrap_or(0);
+
+            // Only include leaked keyhandles
+            if age_seconds > threshold_secs {
+                leaked_keyhandles.push(LeakedKeyHandle {
+                    key_handle_id,
+                    key,
+                    age_seconds,
+                    access_count,
+                });
+            }
+        }
+    }
+
+    // Sort by age (oldest first) for easier identification of problematic keys
+    leaked_keyhandles.sort_by_key(|kh| std::cmp::Reverse(kh.age_seconds));
+
+    // Limit to prevent too large messages - use a reasonable limit for leaked keys
+    let max_leaks = std::cmp::min(config.max_dump_entries, 50);
+    let total_leaks = leaked_keyhandles.len();
+    leaked_keyhandles.truncate(max_leaks);
+
+    let response = LeaksListResponse {
+        total_leaks,
+        threshold_seconds: threshold_secs,
+        leaked_keyhandles,
+    };
+
+    let json = match serde_json::to_string_pretty(&response) {
+        Ok(json) => json,
+        Err(e) => {
+            return Ok(Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from(format!("JSON serialization error: {}", e)))
+                .unwrap());
+        }
+    };
+
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "application/json")
+        .body(Body::from(json))
+        .unwrap())
+}
+
+/// Handle /debug/tracked-arc/clear endpoint (POST method to clear registry)
+async fn handle_clear_registry() -> hyper::Result<Response<Body>> {
+    let detector = LeakDetector::instance();
+    let cleared_count = detector.registry_size();
+    detector.cleanup_old_entries();
+    let response = serde_json::json!({
+        "status": "success",
+        "message": "Registry cleared successfully",
+        "cleared_keyhandles": cleared_count,
+    });
+
+    let json = match serde_json::to_string_pretty(&response) {
+        Ok(json) => json,
+        Err(e) => {
+            return Ok(Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from(format!("JSON serialization error: {}", e)))
+                .unwrap());
+        }
+    };
+
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "application/json")
+        .body(Body::from(json))
+        .unwrap())
+}
+
+/// Handle /debug/tracked-arc/config endpoint (GET method to get current config)
+async fn handle_get_config() -> hyper::Result<Response<Body>> {
+    let detector = LeakDetector::instance();
+    let config = detector.get_config();
+
+    let json = match serde_json::to_string_pretty(&config) {
+        Ok(json) => json,
+        Err(e) => {
+            return Ok(Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from(format!("JSON serialization error: {}", e)))
+                .unwrap());
+        }
+    };
+
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "application/json")
+        .body(Body::from(json))
+        .unwrap())
+}
+
+/// Handle /debug/tracked-arc/config endpoint (POST method to update config)
+async fn handle_set_config(req: Request<Body>) -> hyper::Result<Response<Body>> {
+    use hyper::body::to_bytes;
+
+    // Read request body
+    let body_bytes = match to_bytes(req.into_body()).await {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            return Ok(Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Body::from(format!("Failed to read request body: {}", e)))
+                .unwrap());
+        }
+    };
+
+    // Parse JSON config
+    let new_config: TrackedArcConfig = match serde_json::from_slice(&body_bytes) {
+        Ok(config) => config,
+        Err(e) => {
+            return Ok(Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Body::from(format!("Invalid JSON config: {}", e)))
+                .unwrap());
+        }
+    };
+
+    // Update config
+    let detector = LeakDetector::instance();
+    detector.update_config(&new_config);
+
+    // Return updated config
+    let response = serde_json::json!({
+        "status": "success",
+        "message": "Configuration updated successfully",
+        "config": new_config
+    });
+
+    let json = match serde_json::to_string_pretty(&response) {
+        Ok(json) => json,
+        Err(e) => {
+            return Ok(Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from(format!("JSON serialization error: {}", e)))
+                .unwrap());
+        }
+    };
+
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "application/json")
+        .body(Body::from(json))
+        .unwrap())
+}
+
+/// Handle /debug/tracked-arc/keyhandle/{id} endpoint
+async fn handle_keyhandle_detail(path: &str) -> hyper::Result<Response<Body>> {
+    // Extract ID from path
+    let id_str = path
+        .strip_prefix("/debug/tracked-arc/keyhandle/")
+        .unwrap_or("");
+
+    let key_handle_id: u64 = match id_str.parse() {
+        Ok(id) => id,
+        Err(_) => {
+            return Ok(Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Body::from("Invalid keyhandle ID"))
+                .unwrap());
+        }
+    };
+
+    let detector = LeakDetector::instance();
+    let info = match detector.get_info(key_handle_id) {
+        Some(info) => info,
+        None => {
+            return Ok(Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Body::from("KeyHandle not found"))
+                .unwrap());
+        }
+    };
+
+    let now = std::time::Instant::now();
+    let age = now.duration_since(info.creation_time);
+    let age_seconds = age.as_secs();
+
+    // Get access history (limit to prevent large messages)
+    let access_history = if let Ok(mut history) = info.access_history.lock() {
+        history
+            .iter_mut()
+            .take(10)
+            .map(|access| {
+                access.backtrace.resolve();
+                AccessEvent {
+                    arc_id: access.arc_id,
+                    operation: access.operation.clone(),
+                    ms_ago: access.timestamp.elapsed().as_millis(),
+                    thread_name: access.thread_name.clone(),
+                    backtrace: format!("{:?}", access.backtrace),
+                }
+            })
+            .collect()
+    } else {
+        vec![]
+    };
+
+    let response = KeyHandleDetailResponse {
+        key_handle_id,
+        key: format!("{:?}", info.key),
+        creation_time_ms: info.creation_time.elapsed().as_millis() as u64,
+        age_seconds,
+        access_history,
+    };
+
+    let json = match serde_json::to_string_pretty(&response) {
+        Ok(json) => json,
+        Err(e) => {
+            return Ok(Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from(format!("JSON serialization error: {}", e)))
+                .unwrap());
+        }
+    };
+
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "application/json")
+        .body(Body::from(json))
+        .unwrap())
+}
+
 #[cfg(test)]
 mod tests {
     use api_version::ApiV1;
@@ -2537,5 +2952,83 @@ mod tests {
         compact(DbType::Kv, CF_LOCK).unwrap();
         compact(DbType::Kv, CF_WRITE).unwrap();
         compact(DbType::Raft, CF_DEFAULT).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_tracked_arc_debug_endpoints() {
+        use hyper::{Body, Method, Request};
+
+        // Test summary endpoint
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/debug/tracked-arc/summary")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = handle_tracked_arc_debug(req).await.unwrap();
+        assert_eq!(response.status(), hyper::StatusCode::OK);
+
+        // Test leaks endpoint
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/debug/tracked-arc/leaks")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = handle_tracked_arc_debug(req).await.unwrap();
+        assert_eq!(response.status(), hyper::StatusCode::OK);
+
+        // Test clear registry endpoint
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/debug/tracked-arc/clear")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = handle_tracked_arc_debug(req).await.unwrap();
+        assert_eq!(response.status(), hyper::StatusCode::OK);
+
+        // Test get config endpoint
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/debug/tracked-arc/config")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = handle_tracked_arc_debug(req).await.unwrap();
+        assert_eq!(response.status(), hyper::StatusCode::OK);
+
+        // Test set config endpoint
+        let config_json = r#"{"sampling_rate": 50, "leak_detection_threshold_secs": 300, "max_registry_capacity": 5000, "max_dump_entries": 100}"#;
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/debug/tracked-arc/config")
+            .header("Content-Type", "application/json")
+            .body(Body::from(config_json))
+            .unwrap();
+
+        let response = handle_tracked_arc_debug(req).await.unwrap();
+        assert_eq!(response.status(), hyper::StatusCode::OK);
+
+        // Test keyhandle detail endpoint
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/debug/tracked-arc/keyhandle/123")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = handle_tracked_arc_debug(req).await.unwrap();
+        // Should return 404 since keyhandle 123 doesn't exist
+        assert_eq!(response.status(), hyper::StatusCode::NOT_FOUND);
+
+        // Test invalid endpoint
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/debug/tracked-arc/invalid")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = handle_tracked_arc_debug(req).await.unwrap();
+        assert_eq!(response.status(), hyper::StatusCode::NOT_FOUND);
     }
 }

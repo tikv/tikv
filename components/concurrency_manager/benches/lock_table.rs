@@ -21,7 +21,7 @@ fn prepare_cm() -> ConcurrencyManager {
         thread_rng().fill_bytes(&mut buf[..]);
         let key = Key::from_raw(&buf);
         // Really rare to generate duplicate key. Do not consider it for simplicity.
-        let guard = block_on(cm.lock_key(&key));
+        let guard = block_on(cm.lock_key(&key, concurrency_manager::Operation::Test));
         guard.with_lock(|l| {
             *l = Some(Lock::new(
                 LockType::Put,

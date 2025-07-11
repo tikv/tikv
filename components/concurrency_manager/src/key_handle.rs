@@ -1,12 +1,22 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cell::UnsafeCell, mem, sync::Arc};
+use std::{
+    cell::UnsafeCell,
+    mem,
+    sync::atomic::{AtomicU32, Ordering},
+};
 
 use parking_lot::Mutex;
 use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 use txn_types::{Key, Lock};
 
-use super::lock_table::LockTable;
+use super::{
+    lock_table::LockTable,
+    metrics::{
+        get_key_type, KEYHANDLE_CREATED_TOTAL, KEYHANDLE_CURRENT, KEYHANDLE_GUARD_ACQUIRED_TOTAL,
+        KEYHANDLE_GUARD_RELEASED_TOTAL, KEYHANDLE_RELEASED_TOTAL,
+    },
+};
 
 /// An entry in the in-memory table providing functions related to a specific
 /// key.
@@ -15,26 +25,62 @@ pub struct KeyHandle {
     table: UnsafeCell<Option<LockTable>>,
     mutex: AsyncMutex<()>,
     lock_store: Mutex<Option<Lock>>,
+    pub key_handle_id: u64,
+    /// Counter for generating per-KeyHandle arc IDs
+    pub arc_counter: AtomicU32,
+    /// Whether this KeyHandle is being tracked for memory leak debugging
+    pub is_tracked: bool,
 }
 
 impl KeyHandle {
     pub fn new(key: Key) -> Self {
+        // Increment creation counter and current gauge based on key type
+        let key_type = get_key_type(key.as_encoded());
+        KEYHANDLE_CREATED_TOTAL.with_label_values(&[key_type]).inc();
+        KEYHANDLE_CURRENT.with_label_values(&[key_type]).inc();
+
+        let detector = crate::LeakDetector::instance();
+        let is_tracked = detector.should_track();
+        let key_handle_id = if is_tracked {
+            detector.generate_keyhandle_id()
+        } else {
+            0 // Use dummy ID when not tracked to avoid atomic operation
+        };
+
         KeyHandle {
             key,
             table: UnsafeCell::new(None),
             mutex: AsyncMutex::new(()),
             lock_store: Mutex::new(None),
+            key_handle_id,
+            arc_counter: AtomicU32::new(0),
+            is_tracked,
         }
     }
 
-    pub async fn lock(self: Arc<Self>) -> KeyHandleGuard {
-        // Safety: `_mutex_guard` is declared before `handle_ref` in `KeyHandleGuard`.
-        // So the mutex guard will be released earlier than the `Arc<KeyHandle>`.
+    /// Generate the next arc ID for this KeyHandle
+    pub fn next_arc_id(&self) -> u32 {
+        if self.is_tracked {
+            self.arc_counter.fetch_add(1, Ordering::Relaxed) + 1
+        } else {
+            1 // Use dummy ID when not tracked to avoid atomic operation
+        }
+    }
+
+    pub async fn lock(tracked_arc: crate::TrackedArc) -> KeyHandleGuard {
+        // Increment guard acquisition counter based on key type
+        let key_type = get_key_type(tracked_arc.key.as_encoded());
+        KEYHANDLE_GUARD_ACQUIRED_TOTAL
+            .with_label_values(&[key_type])
+            .inc();
+
+        // Safety: `_mutex_guard` is declared before `handle` in `KeyHandleGuard`.
+        // So the mutex guard will be released earlier than the `TrackedArc`.
         // Then we can make sure the mutex guard doesn't point to released memory.
-        let mutex_guard = unsafe { mem::transmute(self.mutex.lock().await) };
+        let mutex_guard = unsafe { mem::transmute(tracked_arc.mutex.lock().await) };
         KeyHandleGuard {
             _mutex_guard: mutex_guard,
-            handle: self,
+            handle: tracked_arc,
         }
     }
 
@@ -53,6 +99,13 @@ impl KeyHandle {
 
 impl Drop for KeyHandle {
     fn drop(&mut self) {
+        // Increment destruction counter and decrement current gauge based on key type
+        let key_type = get_key_type(self.key.as_encoded());
+        KEYHANDLE_RELEASED_TOTAL
+            .with_label_values(&[key_type])
+            .inc();
+        KEYHANDLE_CURRENT.with_label_values(&[key_type]).dec();
+
         // SAFETY: `&mut self` ensures it's the only thread that can access `table`.
         unsafe {
             if let Some(table) = &*self.table.get() {
@@ -71,7 +124,7 @@ pub struct KeyHandleGuard {
     _mutex_guard: AsyncMutexGuard<'static, ()>,
     // It is unsafe to mutate `handle` to point at another `KeyHandle`.
     // Otherwise `_mutex_guard` can be invalidated.
-    handle: Arc<KeyHandle>,
+    handle: crate::TrackedArc,
 }
 
 impl KeyHandleGuard {
@@ -83,13 +136,19 @@ impl KeyHandleGuard {
         f(&mut self.handle.lock_store.lock())
     }
 
-    pub(crate) fn handle(&self) -> &Arc<KeyHandle> {
+    pub(crate) fn handle(&self) -> &crate::TrackedArc {
         &self.handle
     }
 }
 
 impl Drop for KeyHandleGuard {
     fn drop(&mut self) {
+        // Increment guard release counter based on key type
+        let key_type = get_key_type(self.handle.key.as_encoded());
+        KEYHANDLE_GUARD_RELEASED_TOTAL
+            .with_label_values(&[key_type])
+            .inc();
+
         // We only keep the lock in memory until the write to the underlying
         // store finishes.
         // The guard can be released after finishes writing.
@@ -100,7 +159,10 @@ impl Drop for KeyHandleGuard {
 #[cfg(test)]
 mod tests {
     use std::{
-        sync::atomic::{AtomicUsize, Ordering},
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        },
         time::Duration,
     };
 
@@ -110,7 +172,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_key_mutex() {
-        let key_handle = Arc::new(KeyHandle::new(Key::from_raw(b"k")));
+        let key_handle =
+            crate::TrackedArc::new(KeyHandle::new(Key::from_raw(b"k")), crate::Operation::Test);
 
         let counter = Arc::new(AtomicUsize::new(0));
         let mut handles = Vec::new();
@@ -139,8 +202,8 @@ mod tests {
 
         let k = Key::from_raw(b"k");
 
-        let handle = Arc::new(KeyHandle::new(k.clone()));
-        table.0.insert(k.clone(), Arc::downgrade(&handle));
+        let handle = crate::TrackedArc::new(KeyHandle::new(k.clone()), crate::Operation::Test);
+        table.0.insert(k.clone(), handle.downgrade());
         unsafe {
             handle.set_table(table.clone());
         }

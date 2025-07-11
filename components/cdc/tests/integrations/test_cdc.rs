@@ -1218,7 +1218,8 @@ fn test_cdc_resolve_ts_checking_concurrency_manager_impl<F: KvFormat>() {
     let mut suite = TestSuite::new(1, F::TAG);
     let cm: ConcurrencyManager = suite.get_txn_concurrency_manager(1).unwrap();
     let lock_key = |key: &[u8], ts: u64| {
-        let guard = block_on(cm.lock_key(&Key::from_raw(key)));
+        let guard =
+            block_on(cm.lock_key(&Key::from_raw(key), concurrency_manager::Operation::Test));
         guard.with_lock(|l| {
             *l = Some(Lock::new(
                 LockType::Put,

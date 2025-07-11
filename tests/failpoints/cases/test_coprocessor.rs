@@ -428,7 +428,10 @@ fn test_read_index_lock_checking_on_follower() {
     .use_async_commit(vec![]);
     // Set a memory lock which is in the coprocessor query range on the leader
     let locked_key = req.get_ranges()[0].get_start();
-    let guard = block_on(leader_cm.lock_key(&Key::from_raw(locked_key)));
+    let guard = block_on(leader_cm.lock_key(
+        &Key::from_raw(locked_key),
+        concurrency_manager::Operation::Test,
+    ));
     guard.with_lock(|l| *l = Some(lock.clone()));
 
     let resp = client.coprocessor(&req).unwrap();

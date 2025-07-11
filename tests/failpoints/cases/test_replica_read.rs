@@ -709,7 +709,8 @@ fn test_read_index_lock_checking_on_follower() {
         false,
     )
     .use_async_commit(vec![]);
-    let guard = block_on(leader_cm.lock_key(&Key::from_raw(b"k1")));
+    let guard =
+        block_on(leader_cm.lock_key(&Key::from_raw(b"k1"), concurrency_manager::Operation::Test));
     guard.with_lock(|l| *l = Some(lock.clone()));
 
     // Now, the leader has been transferred to peer 3. The original read index
@@ -789,7 +790,8 @@ fn test_read_index_lock_checking_on_false_leader() {
         false,
     )
     .use_async_commit(vec![]);
-    let guard = block_on(leader_cm.lock_key(&Key::from_raw(b"k1")));
+    let guard =
+        block_on(leader_cm.lock_key(&Key::from_raw(b"k1"), concurrency_manager::Operation::Test));
     guard.with_lock(|l| *l = Some(lock.clone()));
 
     // Read index from peer 2, the read index message will be sent to the old leader

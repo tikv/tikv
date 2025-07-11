@@ -825,6 +825,9 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         metadata: TaskMetadata<'_>,
         sched_details: &SchedulerDetails,
     ) {
+        // Checkpoint: write finished, guards about to be dropped
+        use concurrency_manager::CHECKPOINT_SCHEDULER_WRITE_FINISHED;
+        CHECKPOINT_SCHEDULER_WRITE_FINISHED.inc();
         // TODO: Does async apply prewrite worth a special metric here?
         if pipelined {
             SCHED_STAGE_COUNTER_VEC
@@ -1374,6 +1377,10 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             // `WriteFinished` message when it finishes.
             Ok(res) => res,
         };
+
+        // Checkpoint: guards transferred to scheduler from WriteResult
+        use concurrency_manager::CHECKPOINT_SCHEDULER_GUARDS_TO_WRITE;
+        CHECKPOINT_SCHEDULER_GUARDS_TO_WRITE.inc();
         let region_id = ctx.get_region_id();
         SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
 
@@ -1427,6 +1434,10 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         }
 
         if to_be_write.modifies.is_empty() {
+            // Checkpoint: no write needed, guards will be dropped immediately
+            use concurrency_manager::CHECKPOINT_SCHEDULER_NO_WRITE_NEEDED;
+            CHECKPOINT_SCHEDULER_NO_WRITE_NEEDED.inc();
+
             scheduler.on_write_finished(
                 cid,
                 pr,
@@ -1463,6 +1474,12 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                     engine.schedule_txn_extra(to_be_write.extra);
                 })
             }
+
+            // Checkpoint: in-memory pessimistic locks write, guards will be dropped
+            // immediately
+            use concurrency_manager::CHECKPOINT_SCHEDULER_IN_MEMORY_PESSIMISTIC_LOCK;
+            CHECKPOINT_SCHEDULER_IN_MEMORY_PESSIMISTIC_LOCK.inc();
+
             scheduler.on_write_finished(
                 cid,
                 pr,
@@ -1601,6 +1618,10 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             }
         });
 
+        // Checkpoint: before async write operation
+        use concurrency_manager::CHECKPOINT_SCHEDULER_BEFORE_ASYNC_WRITE;
+        CHECKPOINT_SCHEDULER_BEFORE_ASYNC_WRITE.inc();
+
         let async_write_start = Instant::now_coarse();
         let mut res = unsafe {
             with_tls_engine(|e: &mut E| {
@@ -1609,9 +1630,15 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         };
         drop(downgraded_guard);
 
+        use concurrency_manager::CHECKPOINT_SCHEDULER_ASYNC_WRITE_LOOP_START;
+        CHECKPOINT_SCHEDULER_ASYNC_WRITE_LOOP_START.inc();
+
         while let Some(ev) = res.next().await {
             match ev {
                 WriteEvent::Committed => {
+                    // Checkpoint: async write committed event received
+                    use concurrency_manager::CHECKPOINT_SCHEDULER_ASYNC_WRITE_COMMITTED;
+                    CHECKPOINT_SCHEDULER_ASYNC_WRITE_COMMITTED.inc();
                     let early_return = (|| {
                         fail_point!("before_async_apply_prewrite_finish", |_| false);
                         true
@@ -1619,6 +1646,10 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                     if WriteEvent::subscribed_committed(subscribed) && early_return {
                         // Currently, the only case that response is returned after finishing
                         // commit is async applying prewrites for async commit transactions.
+                        // Checkpoint: early response for async apply prewrite
+                        use concurrency_manager::CHECKPOINT_SCHEDULER_EARLY_RESPONSE_ASYNC_APPLY;
+                        CHECKPOINT_SCHEDULER_EARLY_RESPONSE_ASYNC_APPLY.inc();
+
                         let cb = scheduler.inner.take_task_cb(cid);
                         Self::early_response(
                             cid,
@@ -1645,6 +1676,10 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                         // proposed phase is pipelined pessimistic lock.
                         // TODO: Unify the code structure of pipelined pessimistic lock and
                         // async apply prewrite.
+                        // Checkpoint: early response for pipelined write
+                        use concurrency_manager::CHECKPOINT_SCHEDULER_EARLY_RESPONSE_PIPELINED;
+                        CHECKPOINT_SCHEDULER_EARLY_RESPONSE_PIPELINED.inc();
+
                         let cb = scheduler.inner.take_task_cb(cid);
                         Self::early_response(
                             cid,
@@ -1657,6 +1692,12 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 }
                 WriteEvent::Finished(res) => {
                     fail_point!("scheduler_async_write_finish");
+
+                    // Checkpoint: async write finished event received (about to call
+                    // on_write_finished)
+                    use concurrency_manager::CHECKPOINT_SCHEDULER_ASYNC_WRITE_FINISHED;
+                    CHECKPOINT_SCHEDULER_ASYNC_WRITE_FINISHED.inc();
+
                     let ok = res.is_ok();
 
                     sched.on_write_finished(
@@ -1691,13 +1732,18 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             }
         }
 
-        // If it's not finished while the channel is closed, it means the write
-        // is undeterministic. in this case, we don't know whether the
+        // CRITICAL: If it's not finished while the channel is closed, it means the
+        // write is undeterministic. in this case, we don't know whether the
         // request is finished or not, so we should not release latch as
         // it may break correctness.
         // However, not release latch will cause deadlock which may ultimately block all
         // following txns, so we panic here.
         //
+        // Checkpoint: CRITICAL - async write loop exited without WriteEvent::Finished
+        // This means lock_guards will NEVER be dropped - potential memory leak!
+        use concurrency_manager::CHECKPOINT_SCHEDULER_ASYNC_WRITE_LOOP_EXIT_NO_FINISHED;
+        CHECKPOINT_SCHEDULER_ASYNC_WRITE_LOOP_EXIT_NO_FINISHED.inc();
+
         // todo(spadea): Now, we only panic if it's not shutting down, although even in
         // close, this behavior is not acceptable.
         if !tikv_util::thread_group::is_shutdown(!cfg!(test)) {

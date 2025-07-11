@@ -3226,8 +3226,8 @@ impl ConfigManager for LogConfigManager {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct MemoryConfig {
-    // Whether enable the heap profiling which may have a bit performance overhead about 2% for the
-    // default sample rate.
+    // Whether enables the heap profiling which may have a bit performance overhead about 2% for
+    // the default sample rate.
     pub enable_heap_profiling: bool,
 
     // Average interval between allocation samples, as measured in bytes of allocation activity.
@@ -3236,6 +3236,11 @@ pub struct MemoryConfig {
     // The default sample interval is 512 KB. It only accepts power of two, otherwise it will be
     // rounded up to the next power of two.
     pub profiling_sample_per_bytes: ReadableSize,
+
+    // Whether allocates the exclusive arena for threads.
+    // When disabled, the metric of memory usage for each thread would be unavailable.
+    #[online_config(skip)]
+    pub enable_thread_exclusive_arena: bool,
 }
 
 impl Default for MemoryConfig {
@@ -3243,6 +3248,7 @@ impl Default for MemoryConfig {
         Self {
             enable_heap_profiling: true,
             profiling_sample_per_bytes: ReadableSize::kb(512),
+            enable_thread_exclusive_arena: true,
         }
     }
 }
@@ -3258,6 +3264,7 @@ impl MemoryConfig {
             *activate = Some(None);
             tikv_alloc::set_prof_sample(self.profiling_sample_per_bytes.0).unwrap();
         }
+        tikv_alloc::set_thread_exclusive_arena(self.enable_thread_exclusive_arena);
     }
 }
 
@@ -3468,6 +3475,9 @@ pub struct TikvConfig {
 
     #[online_config(submodule)]
     pub resource_control: ResourceControlConfig,
+
+    #[online_config(submodule)]
+    pub tracked_arc: concurrency_manager::TrackedArcConfig,
 }
 
 impl Default for TikvConfig {
@@ -3513,6 +3523,7 @@ impl Default for TikvConfig {
             log_backup: BackupStreamConfig::default(),
             causal_ts: CausalTsConfig::default(),
             resource_control: ResourceControlConfig::default(),
+            tracked_arc: concurrency_manager::TrackedArcConfig::default(),
         }
     }
 }
@@ -4533,6 +4544,7 @@ pub enum Module {
     Quota,
     Log,
     Memory,
+    TrackedArc,
     Unknown(String),
 }
 
@@ -4562,6 +4574,7 @@ impl From<&str> for Module {
             "quota" => Module::Quota,
             "log" => Module::Log,
             "memory" => Module::Memory,
+            "tracked_arc" => Module::TrackedArc,
             n => Module::Unknown(n.to_owned()),
         }
     }

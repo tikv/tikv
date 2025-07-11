@@ -2050,7 +2050,8 @@ mod tests {
         ));
         let cm = ConcurrencyManager::new(1.into());
         let key = Key::from_raw(b"key");
-        let guard = block_on(cm.lock_key(&key));
+        use concurrency_manager::Operation;
+        let guard = block_on(cm.lock_key(&key, Operation::Test));
         guard.with_lock(|lock| {
             *lock = Some(txn_types::Lock::new(
                 LockType::Put,
