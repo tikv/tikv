@@ -16,8 +16,8 @@ const UPDATE_INTERVALS: Duration = Duration::from_secs(10);
 pub const DISK_RECOVERY_INTERVALS: Duration = Duration::from_secs(60 * 5);
 /// Network recovery intervals for the network slow score.
 /// If the score has reached 100 and there is no timeout inspecting requests
-/// during this interval, the score will go back to 1 after 120min.
-pub const NETWORK_RECOVERY_INTERVALS: Duration = Duration::from_secs(60 * 120);
+/// during this interval, the score will go back to 1 after 60min.
+pub const NETWORK_RECOVERY_INTERVALS: Duration = Duration::from_secs(60 * 60);
 /// After every DISK_ROUND_TICKS, the disk's slow score will be updated.
 pub const DISK_ROUND_TICKS: u64 = 30;
 /// After every NETWORK_ROUND_TICKS, the network's slow score will be updated.

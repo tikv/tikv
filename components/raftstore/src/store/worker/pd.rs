@@ -2092,23 +2092,33 @@ where
                         }
                     }),
                 ),
-                InspectFactor::Network => LatencyInspector::new(
-                    id,
-                    Box::new(move |id, duration| {
-                        STORE_INSPECT_DURATION_HISTOGRAM
-                            .with_label_values(&["network"])
-                            .observe(tikv_util::time::duration_to_sec(
-                                duration.network_duration.unwrap_or_default(),
-                            ));
-                        if let Err(e) = scheduler.schedule(Task::UpdateSlowScore {
-                            id,
-                            factor,
-                            duration,
-                        }) {
-                            warn!("schedule pd task failed"; "err" => ?e);
-                        }
-                    }),
-                ),
+                InspectFactor::Network => {
+                    // If the last slow_score already reached abnormal state and was delayed for
+                    // reporting by `store-heartbeat` to PD, we should report it here manually as
+                    // a FAKE `store-heartbeat`.
+                    if slow_score_tick_result.should_force_report_slow_store
+                        && self.is_store_heartbeat_delayed()
+                    {
+                        self.handle_fake_store_heartbeat();
+                    }
+                    LatencyInspector::new(
+                        id,
+                        Box::new(move |id, duration| {
+                            STORE_INSPECT_DURATION_HISTOGRAM
+                                .with_label_values(&["network"])
+                                .observe(tikv_util::time::duration_to_sec(
+                                    duration.network_duration.unwrap_or_default(),
+                                ));
+                            if let Err(e) = scheduler.schedule(Task::UpdateSlowScore {
+                                id,
+                                factor,
+                                duration,
+                            }) {
+                                warn!("schedule pd task failed"; "err" => ?e);
+                            }
+                        }),
+                    )
+                },
             }
         };
         let msg = StoreMsg::LatencyInspect {
