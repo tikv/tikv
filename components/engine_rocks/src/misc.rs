@@ -1,11 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use atomic::{Atomic, Ordering};
-
 use engine_traits::{
-    CfNamesExt, DeleteStrategy, ImportExt, IterOptions, Iterable, Iterator, MiscExt, Mutable,
-    Range, RangeStats, Result, SstWriter, SstWriterBuilder, WriteBatch, WriteBatchExt,
-    WriteOptions,
+    CfNamesExt, DeleteStrategy, ExternalSstFileInfo, ImportExt, IterOptions, Iterable, Iterator,
+    MiscExt, Mutable, Range, RangeStats, Result, SstWriter, SstWriterBuilder, WriteBatch,
+    WriteBatchExt, WriteOptions,
 };
 use rocksdb::{FlushOptions, Range as RocksRange};
 use tikv_util::{box_try, keybuilder::KeyBuilder};
@@ -98,7 +97,14 @@ impl RocksEngine {
         }
 
         if let Some(writer) = writer_wrapper {
-            writer.finish()?;
+            let info = writer.finish()?;
+            let (start_key, end_key) = (info.smallest_key(), info.largest_key());
+            tikv_util::info!("debugging for sst ingestion, delete_range with ingest";
+            "cf" => cf,
+            "start_key" => ?start_key.to_vec(),
+            "end_key" => ?end_key.to_vec(),
+            "file_path" => sst_path.as_str(),
+            );
             self.ingest_external_file_cf(cf, &[sst_path.as_str()])?;
         } else {
             let mut wb = self.write_batch();
