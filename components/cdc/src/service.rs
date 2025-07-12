@@ -16,7 +16,7 @@ use kvproto::{
     },
     kvrpcpb::ApiVersion,
 };
-use tikv_util::{defer, error, info, memory::MemoryQuota, warn, worker::*};
+use tikv_util::{error, info, memory::MemoryQuota, warn, worker::*};
 
 use crate::{
     channel::{CDC_CHANNLE_CAPACITY, Sink, channel},
