@@ -651,8 +651,10 @@ where
     }
 
     pub fn on_compact_raftlog(&mut self, idx: u64, state: Option<&mut CacheWarmupState>) {
-        self.entry_storage.compact_entry_cache(idx, state);
+        // Before compacting stale terms in advance to reduce the extra I/O costs on
+        // fetching terms.
         self.entry_storage.compact_term_cache(idx);
+        self.entry_storage.compact_entry_cache(idx, state);
         self.cancel_generating_snap(Some(idx));
     }
 

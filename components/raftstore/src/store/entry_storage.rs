@@ -1402,8 +1402,7 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
     #[inline]
     pub fn compact_term_cache(&mut self, idx: u64) {
         // Get the term of the given index.
-        let term = self.term(idx).unwrap();
-        self.term_cache.compact_to(term);
+        let _ = self.term(idx).map(|term| self.term_cache.compact_to(term));
     }
 
     #[inline]

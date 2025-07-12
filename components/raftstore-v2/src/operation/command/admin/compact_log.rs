@@ -203,9 +203,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // entries before `alive_cache_idx` instead of `alive_cache_idx + 1`.
         let mut cache_warmup_state = self.transfer_leader_state_mut().cache_warmup_state.take();
         let compact_idx = std::cmp::min(alive_cache_idx, applied_idx + 1);
+        self.entry_storage_mut().compact_term_cache(compact_idx);
         self.entry_storage_mut()
             .compact_entry_cache(compact_idx, cache_warmup_state.as_mut());
-        self.entry_storage_mut().compact_term_cache(compact_idx);
         self.transfer_leader_state_mut().cache_warmup_state = cache_warmup_state;
 
         let mut compact_idx = if force && replicated_idx > first_idx {
@@ -506,9 +506,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         let mut cache_warmup_state = self.transfer_leader_state_mut().cache_warmup_state.take();
         self.entry_storage_mut()
-            .compact_entry_cache(res.compact_index, cache_warmup_state.as_mut());
-        self.entry_storage_mut()
             .compact_term_cache(res.compact_index);
+        self.entry_storage_mut()
+            .compact_entry_cache(res.compact_index, cache_warmup_state.as_mut());
         self.transfer_leader_state_mut().cache_warmup_state = cache_warmup_state;
 
         self.storage_mut()
