@@ -7,7 +7,7 @@ use std::sync::{
 
 use collections::{HashMap, HashMapEntry};
 use crossbeam::atomic::AtomicCell;
-use futures::{sink::SinkExt, stream::TryStreamExt};
+use futures::stream::TryStreamExt;
 use grpcio::{DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode};
 use kvproto::{
     cdcpb::{
@@ -460,6 +460,7 @@ impl Service {
         };
 
         let peer = ctx.peer();
+        let scheduler = self.scheduler.clone();
         ctx.spawn(async move {
             if let Err(e) = recv_req.await {
                 warn!("cdc receive failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
