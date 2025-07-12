@@ -3089,6 +3089,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "95505c38b4572b2d910cecb0281560f54b440a19336cbbcb27bf6ce6adc6f5a8"
 
 [[package]]
+name = "heck"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
+
+[[package]]
 name = "hermit-abi"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5137,8 +5143,8 @@ dependencies = [
 
 [[package]]
 name = "raft-engine"
-version = "0.4.1"
-source = "git+https://github.com/tikv/raft-engine.git?branch=tikv-7.5#ddf3c90b8086fcc6944aaefb0d4ef119e9028dd5"
+version = "0.4.2"
+source = "git+https://github.com/tikv/raft-engine.git?branch=tikv-8.1#ca1cd6b52c3a275c0f39473f29df66432c3ae5bf"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -5165,14 +5171,14 @@ dependencies = [
  "scopeguard",
  "serde",
  "serde_repr",
- "strum 0.25.0",
+ "strum 0.26.3",
  "thiserror",
 ]
 
 [[package]]
 name = "raft-engine-ctl"
-version = "0.4.1"
-source = "git+https://github.com/tikv/raft-engine.git?branch=tikv-7.5#ddf3c90b8086fcc6944aaefb0d4ef119e9028dd5"
+version = "0.4.2"
+source = "git+https://github.com/tikv/raft-engine.git?branch=tikv-8.1#ca1cd6b52c3a275c0f39473f29df66432c3ae5bf"
 dependencies = [
  "clap 3.1.6",
  "env_logger 0.10.0",
@@ -6589,11 +6595,11 @@ dependencies = [
 
 [[package]]
 name = "strum"
-version = "0.25.0"
+version = "0.26.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "290d54ea6f91c969195bdbcd7442c8c2a2ba87da8bf60a7ee86a235d4bc1e125"
+checksum = "8fec0f0aef304996cf250b31b5a10dee7980c85da9d759361292b8bca5a18f06"
 dependencies = [
- "strum_macros 0.25.3",
+ "strum_macros 0.26.4",
 ]
 
 [[package]]
@@ -6623,11 +6629,11 @@ dependencies = [
 
 [[package]]
 name = "strum_macros"
-version = "0.25.3"
+version = "0.26.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23dc1fa9ac9c169a78ba62f0b841814b7abae11bdd047b9c58f893439e309ea0"
+checksum = "4c6bee85a5a24955dc440386795aa378cd9cf82acd5f764469152d2270e581be"
 dependencies = [
- "heck 0.4.1",
+ "heck 0.5.0",
  "proc-macro2",
  "quote",
  "rustversion",
