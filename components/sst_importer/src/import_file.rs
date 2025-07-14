@@ -409,8 +409,10 @@ impl ImportDir {
 
         for (cf, cf_paths) in paths {
             let files: Vec<&str> = cf_paths.iter().map(|p| p.clone.to_str().unwrap()).collect();
-            // TODO(hwy): Use RocksDB IngestExternalFileOptions.allow_write = true.
-            engine.ingest_external_file_cf(cf, &files, None)?;
+            // TiDB guarantees that region will not receive writes during ingestion.
+            // Set `force_allow_write` to true to minimize the impact on foreground
+            // performance. Refer to https://github.com/tikv/tikv/issues/18081.
+            engine.ingest_external_file_cf(cf, &files, None, true /* force_allow_write */)?;
         }
         INPORTER_INGEST_COUNT.observe(metas.len() as _);
         IMPORTER_INGEST_BYTES.observe(ingest_bytes as _);
