@@ -63,7 +63,8 @@ pub trait StatisticsReporter<T: ?Sized> {
 
 /// RocksDB example:
 /// lv0: f5: [{k1_t6, delete: () /* RocksDB tombstone */}]
-/// lv1: f4: [{k1_t10, put: v13}, {k2_t11, put: tombstone /* MVCC delete */}, {k3_t12, put: v32}]
+/// lv1: f4: [{k1_t10, put: v13}, {k2_t11, put: tombstone /* MVCC delete */},
+/// {k3_t12, put: v32}]
 /// ...
 /// lv5: f3: [{k2_t8, put: v21}], f2: [{k3_t9, put: v31}]
 /// lv6: f1: [{k1_t6, put: v11}, {k1_t7, put: v12}]
