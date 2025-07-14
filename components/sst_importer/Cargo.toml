@@ -8,18 +8,10 @@ license = "Apache-2.0"
 [features]
 default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
 
-test-engines-rocksdb = [
-  "engine_test/test-engines-rocksdb",
-]
-test-engine-kv-rocksdb = [
-  "engine_test/test-engine-kv-rocksdb"
-]
-test-engine-raft-raft-engine = [
-  "engine_test/test-engine-raft-raft-engine"
-]
-test-engines-panic = [
-  "engine_test/test-engines-panic",
-]
+test-engines-rocksdb = ["engine_test/test-engines-rocksdb"]
+test-engine-kv-rocksdb = ["engine_test/test-engine-kv-rocksdb"]
+test-engine-raft-raft-engine = ["engine_test/test-engine-raft-raft-engine"]
+test-engines-panic = ["engine_test/test-engines-panic"]
 
 [dependencies]
 api_version = { workspace = true }
@@ -31,11 +23,12 @@ encryption_export = { workspace = true }
 engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
 error_code = { workspace = true }
-external_storage ={ workspace = true }
+external_storage = { workspace = true }
 file_system = { workspace = true }
 futures = { version = "0.3", features = ["thread-pool"] }
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
 grpcio = { workspace = true }
+hex = "0.4"
 keys = { workspace = true }
 kvproto = { workspace = true }
 lazy_static = "1.3"
