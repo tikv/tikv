@@ -11,6 +11,8 @@ use engine_traits::{Peekable, RaftEngineReadOnly};
 use futures::executor::block_on;
 use kvproto::{
     kvrpcpb::{Context, KeyRange},
+    pdpb,
+    raft_cmdpb::CmdType,
     raft_serverpb::{PeerState, RaftMessage, RegionLocalState},
 };
 use pd_client::PdClient;
@@ -1054,8 +1056,6 @@ fn test_read_index_cache_in_destroied_peer() {
 
 #[test_case(test_raftstore::new_node_cluster)]
 fn test_read_index_cache_region_merge() {
-    use kvproto::{pdpb, raft_cmdpb::CmdType};
-
     let mut cluster = new_cluster(0, 5);
     // Use long election timeout and short lease.
     configure_for_lease_read(&mut cluster.cfg, Some(50), Some(200));

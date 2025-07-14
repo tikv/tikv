@@ -1070,6 +1070,7 @@ impl<T: Simulator> Cluster<T> {
         let req = new_admin_request(region_id, region.get_region_epoch(), add_peer);
         self.async_request(req)
     }
+
     pub fn must_put(&mut self, key: &[u8], value: &[u8]) {
         self.must_put_cf(CF_DEFAULT, key, value);
     }
