@@ -455,10 +455,10 @@ impl<E: KvEngine> SstImporter<E> {
     }
 
     pub fn get_mode(&self) -> SwitchMode {
-        if let Either::Left(ref _switcher) = self.switcher {
+        if let Either::Left(ref switcher) = self.switcher {
             // v1 now support region_in_import_mode/range_in_import_mode,
             // should use region_in_import/range_in_import_mode to check regional mode
-            SwitchMode::Normal
+            switcher.get_mode()
         } else {
             // v2 should use region_in_import_mode/range_in_import_mode to check regional
             // mode
