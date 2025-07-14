@@ -1524,7 +1524,7 @@ impl RegionReadProgress {
             find_store_id(&core.leader_info.peers, core.leader_info.leader_id)
     }
 
-    /// Reset `safe_ts` to 0 and stop updating it
+    /// Reset `safe_ts` and `read_index_safe_ts` to 0 and stop updating them
     pub fn pause(&self) {
         let mut core = self.core.lock().unwrap();
         core.pause = true;
