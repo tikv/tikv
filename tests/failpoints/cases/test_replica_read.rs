@@ -921,9 +921,9 @@ fn test_read_index_cache() {
     );
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
 fn test_read_index_cache_in_destroied_peer() {
-    let cluster = Arc::new(Mutex::new(new_server_cluster(0, 4)));
+    let cluster = Arc::new(Mutex::new(new_cluster(0, 4)));
     let pd_client = cluster.lock().unwrap().pd_client.clone();
 
     fn async_snapshot(
@@ -1050,4 +1050,130 @@ fn test_read_index_cache_in_destroied_peer() {
             }
         },
     }
+}
+
+#[test_case(test_raftstore::new_node_cluster)]
+fn test_read_index_cache_region_merge() {
+    use kvproto::{pdpb, raft_cmdpb::CmdType};
+
+    let mut cluster = new_cluster(0, 5);
+    // Use long election timeout and short lease.
+    configure_for_lease_read(&mut cluster.cfg, Some(50), Some(200));
+    cluster.cfg.raft_store.raft_store_max_leader_lease =
+        ReadableDuration(Duration::from_millis(100));
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let rid = cluster.run_conf_change();
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+    for i in 2..=5 {
+        pd_client.must_add_peer(rid, new_peer(i, i));
+        must_get_equal(&cluster.get_engine(i), b"k1", b"v1");
+        must_get_equal(&cluster.get_engine(i), b"k3", b"v3");
+    }
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    pd_client.must_split_region(region, pdpb::CheckPolicy::Usekey, vec![b"k2".to_vec()]);
+
+    let left_region = pd_client.get_region(b"k1").unwrap();
+    let left_leader = left_region.get_peers()[0].clone();
+    let left_leader_store_id = left_leader.get_store_id();
+    let left_follower = left_region.get_peers()[1].clone();
+    let right_region = pd_client.get_region(b"k3").unwrap();
+    let right_leader = right_region.get_peers()[0].clone();
+    let right_follower = right_region.get_peers()[1].clone();
+    cluster.must_transfer_leader(left_region.get_id(), left_leader);
+    cluster.must_transfer_leader(right_region.get_id(), right_leader);
+
+    println!(
+        "left region: {:?}, right region: {:?}",
+        left_region, right_region
+    );
+
+    // push left region's read_index_safe_ts to 20.
+    let snap = get_snapshot(
+        &mut cluster,
+        left_follower.clone(),
+        left_region.clone(),
+        b"k1",
+        Some(20),
+        Duration::from_millis(2000),
+    );
+    assert_eq!(snap.get_responses()[0].get_cmd_type(), CmdType::Snap);
+
+    // push right region's read_index_safe_ts to 30.
+    let snap = get_snapshot(
+        &mut cluster,
+        right_follower.clone(),
+        right_region.clone(),
+        b"k3",
+        Some(30),
+        Duration::from_millis(2000),
+    );
+    assert_eq!(snap.get_responses()[0].get_cmd_type(), CmdType::Snap);
+
+    // lock k1 on left leader.
+    let leader_cm = cluster
+        .sim
+        .rl()
+        .get_concurrency_manager(left_leader_store_id);
+    let lock = Lock::new(
+        LockType::Put,
+        b"k1".to_vec(),
+        10.into(),
+        20000,
+        None,
+        10.into(),
+        1,
+        20.into(),
+        false,
+    )
+    .use_async_commit(vec![]);
+    let guard = block_on(leader_cm.lock_key(&Key::from_raw(b"k1")));
+    guard.with_lock(|l| *l = Some(lock.clone()));
+
+    // left region should reject snapshot because of the lock.
+    let snap = get_snapshot(
+        &mut cluster,
+        left_follower.clone(),
+        left_region.clone(),
+        b"k1",
+        Some(21),
+        Duration::from_millis(2000),
+    );
+    assert_eq!(snap.get_responses()[0].get_cmd_type(), CmdType::ReadIndex);
+    assert_eq!(
+        snap.get_responses()[0]
+            .get_read_index()
+            .get_locked()
+            .get_key(),
+        b"k1"
+    );
+
+    cluster.must_try_merge(left_region.get_id(), right_region.get_id());
+    for i in 1..=5 {
+        cluster.must_region_not_exist(left_region.get_id(), i);
+    }
+    let right_region = pd_client.get_region(b"k3").unwrap();
+
+    // still lock k1 on merged region.
+    let snap = get_snapshot(
+        &mut cluster,
+        right_follower.clone(),
+        right_region.clone(),
+        b"k1",
+        Some(22),
+        Duration::from_millis(2000),
+    );
+    assert_eq!(snap.get_responses()[0].get_cmd_type(), CmdType::ReadIndex);
+    assert_eq!(
+        snap.get_responses()[0]
+            .get_read_index()
+            .get_locked()
+            .get_key(),
+        b"k1"
+    );
 }
