@@ -1529,6 +1529,7 @@ impl RegionReadProgress {
         let mut core = self.core.lock().unwrap();
         core.pause = true;
         self.safe_ts.store(0, AtomicOrdering::Release);
+        self.read_index_safe_ts.store(0, AtomicOrdering::Release);
     }
 
     /// Discard incoming `read_state` item and stop updating `safe_ts`

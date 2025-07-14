@@ -7,7 +7,6 @@ use std::{
 };
 
 use crossbeam::channel;
-use engine_rocks::RocksSnapshot;
 use engine_traits::{Peekable, RaftEngineReadOnly};
 use futures::executor::block_on;
 use kvproto::{
@@ -16,11 +15,10 @@ use kvproto::{
 };
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
-use raftstore::store::RegionSnapshot;
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
 use tikv::storage::{config::EngineType, kv::SnapContext};
-use tikv_kv::{Result, Engine};
+use tikv_kv::{Engine, ErrorInner, Result, Snapshot};
 use tikv_util::{HandyRwLock, config::ReadableDuration, future::block_on_timeout};
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
@@ -933,7 +931,7 @@ fn test_read_index_cache_in_destroied_peer() {
         start_ts: TimeStamp,
         store_id: u64,
         region_id: u64,
-    ) -> mpsc::Receiver<Result<RegionSnapshot<RocksSnapshot>>> {
+    ) -> mpsc::Receiver<Result<impl Snapshot + Peekable>> {
         let cluster = cluster.clone();
         let pd_client = cluster.lock().unwrap().pd_client.clone();
         let mut cluster_guard = cluster.lock().unwrap();
@@ -962,7 +960,6 @@ fn test_read_index_cache_in_destroied_peer() {
             .get(&store_id)
             .unwrap()
             .clone();
-        drop(cluster_guard);
 
         let (tx, rx) = mpsc::sync_channel(0);
         spawn(move || {
@@ -1014,7 +1011,7 @@ fn test_read_index_cache_in_destroied_peer() {
     // destroied
     drop(snap2);
 
-    // pause the verification of replica read.
+    // pause the verification of replica read in the FIRST check.
     fail::cfg("skip_check_stale_read_safe", "pause").unwrap();
     let rx1 = async_snapshot(cluster.clone(), ts1, 2, region_id);
 
@@ -1043,9 +1040,14 @@ fn test_read_index_cache_in_destroied_peer() {
             );
             unreachable!("should not get a snapshot from a destroyed peer");
         }
-        Err(e) => {
-            // check the error result
-            println!("snap1 is none: {:?}", e);
-        }
+        Err(err) => match err.0.as_ref() {
+            ErrorInner::Request(req_err) => {
+                assert!(req_err.has_region_not_found());
+                assert_eq!(req_err.get_region_not_found().get_region_id(), 1);
+            }
+            _ => {
+                unreachable!("unexpected error type: {:?}", err.0);
+            }
+        },
     }
 }
