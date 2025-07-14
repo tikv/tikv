@@ -33,6 +33,9 @@ impl CompactExt for RocksEngine {
     ) -> Result<()> {
         let db = self.as_inner();
         let handle = util::get_cf_handle(db, cf)?;
+        let cf_opts = db.get_options_cf(handle);
+        let target_level = cf_opts.get_num_levels() as i32 - 2;
+
         let mut compact_opts = CompactOptions::new();
         // `exclusive_manual == false` means manual compaction can
         // concurrently run with other background compactions.
@@ -41,6 +44,10 @@ impl CompactExt for RocksEngine {
         if option.bottommost_level_force {
             compact_opts.set_bottommost_level_compaction(DBBottommostLevelCompaction::Force);
         }
+        // Set level = L_Max - 1 as the target level to use aligning compaction.
+        // Ref: https://rocksdb.org/blog/2022/10/31/align-compaction-output-file.html
+        compact_opts.set_change_level(true);
+        compact_opts.set_target_level(target_level);
         db.compact_range_cf_opt(handle, &compact_opts, start_key, end_key);
         Ok(())
     }
