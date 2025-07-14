@@ -457,6 +457,9 @@ pub struct Config {
     /// compaction filter is present, balancing performance and
     /// functionality.
     pub check_then_compact_force_bottommost_level: bool,
+    /// The maximum number of ranges to compact in a single check.
+    /// Set to 0 to disable the limit, meaning all ranges that have redundant
+    /// keys more than the threshold will be compacted.
     pub check_then_compact_top_n: u64,
     // TODO: remove this field after we have a better way to propagate the
     // compaction filter enabled flag in GC module to raftstore.

@@ -632,8 +632,7 @@ fn get_compact_score(
     }
     // When compaction filter is enabled, ignore tombstone threshold,
     // just add deletes to redundant keys for scoring.
-    let num_discardable =
-        num_tombstones + range_stats.num_entries.saturating_sub(range_stats.num_rows);
+    let num_discardable = num_tombstones + range_stats.redundant_keys();
     let ratio = num_discardable as f64 / range_stats.num_entries as f64;
     if num_discardable < compact_threshold.redundant_rows_threshold
         && num_discardable * 100
