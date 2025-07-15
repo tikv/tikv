@@ -1864,9 +1864,9 @@ mod test {
     fn test_engines_resource_info_update() {
         let mut config = TikvConfig::default();
         config.rocksdb.defaultcf.disable_auto_compactions = true;
-        config.rocksdb.defaultcf.soft_pending_compaction_bytes_limit = Some(ReadableSize(1));
-        config.rocksdb.writecf.soft_pending_compaction_bytes_limit = Some(ReadableSize(1));
-        config.rocksdb.lockcf.soft_pending_compaction_bytes_limit = Some(ReadableSize(1));
+        config.rocksdb.defaultcf.soft_pending_compaction_bytes_limit = ReadableSize(1);
+        config.rocksdb.writecf.soft_pending_compaction_bytes_limit = ReadableSize(1);
+        config.rocksdb.lockcf.soft_pending_compaction_bytes_limit = ReadableSize(1);
         let env = Arc::new(Env::default());
         let path = Builder::new().prefix("test-update").tempdir().unwrap();
         config.validate().unwrap();
