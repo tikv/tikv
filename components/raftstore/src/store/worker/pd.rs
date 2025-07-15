@@ -2093,14 +2093,6 @@ where
                     }),
                 ),
                 InspectFactor::Network => {
-                    // If the last slow_score already reached abnormal state and was delayed for
-                    // reporting by `store-heartbeat` to PD, we should report it here manually as
-                    // a FAKE `store-heartbeat`.
-                    if slow_score_tick_result.should_force_report_slow_store
-                        && self.is_store_heartbeat_delayed()
-                    {
-                        self.handle_fake_store_heartbeat();
-                    }
                     LatencyInspector::new(
                         id,
                         Box::new(move |id, duration| {

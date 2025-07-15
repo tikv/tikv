@@ -160,6 +160,8 @@ pub struct RaftstoreReporter {
     slow_score: UnifiedSlowScore,
     slow_trend: SlowTrendStatistics,
     is_healthy: bool,
+    disk_score_reached_100: bool,
+    network_score_reached_100: bool,
 }
 
 impl RaftstoreReporter {
@@ -171,15 +173,27 @@ impl RaftstoreReporter {
             slow_score: UnifiedSlowScore::new(&cfg),
             slow_trend: SlowTrendStatistics::new(cfg),
             is_healthy: true,
+            disk_score_reached_100: false,
+            network_score_reached_100: false,
         }
     }
 
-    pub fn get_disk_slow_score(&self) -> f64 {
-        self.slow_score.get_disk_score()
+    pub fn get_disk_slow_score(&mut self) -> f64 {
+        if self.disk_score_reached_100 {
+            self.disk_score_reached_100 = false;
+            100.0
+        } else {
+            self.slow_score.get_disk_score()
+        }
     }
 
-    pub fn get_network_slow_score(&self) -> f64 {
-        self.slow_score.get_network_score()
+    pub fn get_network_slow_score(&mut self) -> f64 {
+        if self.network_score_reached_100 {
+            self.network_score_reached_100 = false;
+            100.0
+        } else {
+            self.slow_score.get_network_score()
+        }
     }
 
     pub fn get_slow_trend(&self) -> &SlowTrendStatistics {
@@ -264,6 +278,17 @@ impl RaftstoreReporter {
         if slow_score_tick_result.updated_score.is_some() && !slow_score_tick_result.has_new_record
         {
             self.set_is_healthy(false);
+        }
+
+        if slow_score_tick_result.should_force_report_slow_store {
+            match factor {
+                InspectFactor::RaftDisk | InspectFactor::KvDisk => {
+                    self.disk_score_reached_100 = true
+                }
+                InspectFactor::Network => {
+                    self.network_score_reached_100 = true
+                }
+            }
         }
 
         // Publish the slow score to health controller
