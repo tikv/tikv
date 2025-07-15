@@ -1,14 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    fmt,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::Duration,
-};
-
+use std::{fmt, sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+}, thread, time::Duration};
 use futures::{
     SinkExt, Stream, StreamExt,
     channel::mpsc::{
@@ -395,7 +390,7 @@ impl<'a> Drain {
         let total_event_bytes = CDC_GRPC_ACCUMULATE_MESSAGE_BYTES.with_label_values(&["event"]);
         let total_resolved_ts_bytes =
             CDC_GRPC_ACCUMULATE_MESSAGE_BYTES.with_label_values(&["resolved_ts"]);
-
+        let conn_id = self.conn_id;
         let memory_quota = self.memory_quota.clone();
         let mut chunks = self.drain().ready_chunks(CDC_EVENT_MAX_COUNT);
         while let Some(events) = chunks.next().await {
@@ -413,12 +408,21 @@ impl<'a> Drain {
             for (i, e) in resps.into_iter().enumerate() {
                 // Buffer messages and flush them at once.
                 let write_flags = WriteFlags::default().buffer_hint(i + 1 != resps_len);
-                sink.feed((e, write_flags)).await?;
+                if let Err(e) = sink.feed((e, write_flags)).await {
+                    warn!("cdc forward failed"; "conn_id" => ?conn_id);
+                    thread::sleep(Duration::from_secs(3600));
+                    return Err(e);
+                }
             }
-            sink.flush().await?;
+            if let Err(e) = sink.flush().await {
+                warn!("cdc flush failed"; "conn_id" => ?conn_id);
+                thread::sleep(Duration::from_secs(3600));
+                return Err(e);
+            };
             total_event_bytes.inc_by(event_bytes as u64);
             total_resolved_ts_bytes.inc_by(resolved_ts_bytes as u64);
         }
+        info!("cdc forward finished"; "conn_id" => ?conn_id);
         Ok(())
     }
 }
