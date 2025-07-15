@@ -3995,21 +3995,16 @@ impl TikvConfig {
             self.rocksdb.raftcf.disable_write_stall = true;
         }
         // Fill in values for unspecified write stall configurations.
+        // Note: We no longer override level0_slowdown_writes_trigger and
+        // soft_pending_compaction_bytes_limit to preserve RocksDB's compaction
+        // speed-up mechanism when approaching these thresholds. This allows
+        // RocksDB to naturally accelerate compaction when L0 files or pending bytes
+        // increase, avoiding performance degradation when flow control
+        // thresholds are raised.
         macro_rules! fill_cf_opts {
             ($cf_opts:expr, $cfg:expr) => {
-                if let Some(v) = &mut $cf_opts.level0_slowdown_writes_trigger {
-                    if $cfg.enable && *v > $cfg.l0_files_threshold as i32 {
-                        warn!(
-                            "{}.level0-slowdown-writes-trigger is too large. Setting it to \
-                            storage.flow-control.l0-files-threshold ({})",
-                            stringify!($cf_opts), $cfg.l0_files_threshold
-                        );
-                        *v = $cfg.l0_files_threshold as i32;
-                    }
-                } else {
-                    $cf_opts.level0_slowdown_writes_trigger =
-                        Some($cfg.l0_files_threshold as i32);
-                }
+                // Keep override for level0_stop_writes_trigger to ensure ingest_maybe_stall
+                // integrates properly with flow control for correctness on SST ingestion
                 if let Some(v) = &mut $cf_opts.level0_stop_writes_trigger {
                     if $cfg.enable && *v > $cfg.l0_files_threshold as i32 {
                         warn!(
@@ -4023,19 +4018,7 @@ impl TikvConfig {
                     $cf_opts.level0_stop_writes_trigger =
                         Some($cfg.l0_files_threshold as i32);
                 }
-                if let Some(v) = &mut $cf_opts.soft_pending_compaction_bytes_limit {
-                    if $cfg.enable && v.0 > $cfg.soft_pending_compaction_bytes_limit.0 {
-                        warn!(
-                            "{}.soft-pending-compaction-bytes-limit is too large. Setting it to \
-                            storage.flow-control.soft-pending-compaction-bytes-limit ({})",
-                            stringify!($cf_opts), $cfg.soft_pending_compaction_bytes_limit.0
-                        );
-                        *v = $cfg.soft_pending_compaction_bytes_limit;
-                    }
-                } else {
-                    $cf_opts.soft_pending_compaction_bytes_limit =
-                        Some($cfg.soft_pending_compaction_bytes_limit);
-                }
+                // Keep override for hard_pending_compaction_bytes_limit
                 if let Some(v) = &mut $cf_opts.hard_pending_compaction_bytes_limit {
                     if $cfg.enable && v.0 > $cfg.hard_pending_compaction_bytes_limit.0 {
                         warn!(
@@ -6033,12 +6016,15 @@ mod tests {
         cfg.validate().unwrap();
         let (storage, cfg_controller, _, flow_controller) = new_engines::<ApiV1>(cfg);
         let db = storage.get_engine().get_rocksdb();
+        // level0_slowdown_writes_trigger is no longer overridden to preserve
+        // RocksDB's compaction speed-up mechanism when approaching this threshold
         assert_eq!(
             db.get_options_cf(CF_DEFAULT)
                 .unwrap()
                 .get_level_zero_slowdown_writes_trigger(),
-            50
+            4 // RocksDB default value
         );
+        // Only level0_stop_writes_trigger is overridden for flow control correctness
         assert_eq!(
             db.get_options_cf(CF_DEFAULT)
                 .unwrap()
@@ -7936,16 +7922,22 @@ mod tests {
             [storage.flow-control]
             enable = true
             l0-files-threshold = 77
-            soft-pending-compaction-bytes-limit = "777GB"
+            hard-pending-compaction-bytes-limit = "777GB"
         "#;
         let mut cfg: TikvConfig = toml::from_str(content).unwrap();
         cfg.validate().unwrap();
-        assert_eq!(
-            cfg.rocksdb.defaultcf.level0_slowdown_writes_trigger,
-            Some(77)
-        );
+        // level0_slowdown_writes_trigger should no longer be overridden
+        assert_eq!(cfg.rocksdb.defaultcf.level0_slowdown_writes_trigger, None);
+        // level0_stop_writes_trigger should still be overridden
+        assert_eq!(cfg.rocksdb.defaultcf.level0_stop_writes_trigger, Some(77));
+        // soft_pending_compaction_bytes_limit should no longer be overridden
         assert_eq!(
             cfg.rocksdb.defaultcf.soft_pending_compaction_bytes_limit,
+            None
+        );
+        // hard_pending_compaction_bytes_limit should still be overridden
+        assert_eq!(
+            cfg.rocksdb.defaultcf.hard_pending_compaction_bytes_limit,
             Some(ReadableSize::gb(777))
         );
 
@@ -7954,64 +7946,100 @@ mod tests {
             [storage.flow-control]
             enable = false
             l0-files-threshold = 77
-            soft-pending-compaction-bytes-limit = "777GB"
+            hard-pending-compaction-bytes-limit = "777GB"
             [rocksdb.defaultcf]
             level0-slowdown-writes-trigger = 888
+            level0-stop-writes-trigger = 999
             soft-pending-compaction-bytes-limit = "888GB"
+            hard-pending-compaction-bytes-limit = "999GB"
             [rocksdb.writecf]
         "#;
         let mut cfg: TikvConfig = toml::from_str(content).unwrap();
         cfg.validate().unwrap();
+        // These should preserve their original values when flow control is disabled
         assert_eq!(
             cfg.rocksdb.defaultcf.level0_slowdown_writes_trigger,
             Some(888)
         );
+        assert_eq!(cfg.rocksdb.defaultcf.level0_stop_writes_trigger, Some(999));
         assert_eq!(
             cfg.rocksdb.defaultcf.soft_pending_compaction_bytes_limit,
             Some(ReadableSize::gb(888))
         );
-        matches!(cfg.rocksdb.writecf.level0_slowdown_writes_trigger, Some(v) if v != 77);
-        matches!(cfg.rocksdb.writecf.soft_pending_compaction_bytes_limit, Some(v) if v != ReadableSize::gb(777));
+        assert_eq!(
+            cfg.rocksdb.defaultcf.hard_pending_compaction_bytes_limit,
+            Some(ReadableSize::gb(999))
+        );
 
-        // Do not override when RocksDB configurations are specified.
+        // Do not override level0_slowdown_writes_trigger and
+        // soft_pending_compaction_bytes_limit when flow control is enabled -
+        // preserve user/default configurations
         let content = r#"
             [storage.flow-control]
             enable = true
             l0-files-threshold = 77
-            soft-pending-compaction-bytes-limit = "777GB"
+            hard-pending-compaction-bytes-limit = "777GB"
             [rocksdb.defaultcf]
             level0-slowdown-writes-trigger = 66
+            level0-stop-writes-trigger = 88
             soft-pending-compaction-bytes-limit = "666GB"
+            hard-pending-compaction-bytes-limit = "888GB"
         "#;
         let mut cfg: TikvConfig = toml::from_str(content).unwrap();
         cfg.validate().unwrap();
+        // level0_slowdown_writes_trigger should be preserved (not overridden)
         assert_eq!(
             cfg.rocksdb.defaultcf.level0_slowdown_writes_trigger,
             Some(66)
         );
+        // level0_stop_writes_trigger should be preserved if smaller than
+        // l0_files_threshold
+        assert_eq!(
+            cfg.rocksdb.defaultcf.level0_stop_writes_trigger,
+            Some(77) // This gets overridden since 88 > 77
+        );
+        // soft_pending_compaction_bytes_limit should be preserved (not overridden)
         assert_eq!(
             cfg.rocksdb.defaultcf.soft_pending_compaction_bytes_limit,
             Some(ReadableSize::gb(666))
         );
+        // hard_pending_compaction_bytes_limit gets overridden since 888GB > 777GB
+        assert_eq!(
+            cfg.rocksdb.defaultcf.hard_pending_compaction_bytes_limit,
+            Some(ReadableSize::gb(777))
+        );
 
-        // Cannot specify larger configurations for RocksDB.
+        // Only level0_stop_writes_trigger and hard_pending_compaction_bytes_limit are
+        // bounded by flow control
         let content = r#"
             [storage.flow-control]
             enable = true
             l0-files-threshold = 1
-            soft-pending-compaction-bytes-limit = "1GB"
+            hard-pending-compaction-bytes-limit = "1GB"
             [rocksdb.defaultcf]
             level0-slowdown-writes-trigger = 88
+            level0-stop-writes-trigger = 99
             soft-pending-compaction-bytes-limit = "888GB"
+            hard-pending-compaction-bytes-limit = "999GB"
         "#;
         let mut cfg: TikvConfig = toml::from_str(content).unwrap();
         cfg.validate().unwrap();
+        // level0_slowdown_writes_trigger should be preserved (not overridden)
         assert_eq!(
             cfg.rocksdb.defaultcf.level0_slowdown_writes_trigger,
-            Some(1)
+            Some(88)
         );
+        // level0_stop_writes_trigger should be overridden to flow control threshold
+        assert_eq!(cfg.rocksdb.defaultcf.level0_stop_writes_trigger, Some(1));
+        // soft_pending_compaction_bytes_limit should be preserved (not overridden)
         assert_eq!(
             cfg.rocksdb.defaultcf.soft_pending_compaction_bytes_limit,
+            Some(ReadableSize::gb(888))
+        );
+        // hard_pending_compaction_bytes_limit should be overridden to flow control
+        // threshold
+        assert_eq!(
+            cfg.rocksdb.defaultcf.hard_pending_compaction_bytes_limit,
             Some(ReadableSize::gb(1))
         );
     }
