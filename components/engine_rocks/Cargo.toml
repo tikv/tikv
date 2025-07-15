@@ -60,7 +60,7 @@ txn_types = { workspace = true }
 git = "https://github.com/Connor1996/rust-rocksdb.git"
 package = "rocksdb"
 features = ["encryption"]
-branch = "seperate-lock"
+branch = "opt-mutex"
 
 [dev-dependencies]
 rand = "0.8"
