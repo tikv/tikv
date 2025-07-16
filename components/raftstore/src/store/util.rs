@@ -1559,14 +1559,14 @@ impl RegionReadProgress {
 
     pub fn update_read_index_safe_ts(&self, start_ts: u64) {
         let current_ts: u64 = self.read_index_safe_ts();
-        let core;
-        if current_ts == 0 {
-            core = self.core.lock().unwrap();
-            if core.pause || core.discard {
-                return;
-            }
-        }
         if start_ts > current_ts {
+            let core;
+            if current_ts == 0 {
+                core = self.core.lock().unwrap();
+                if core.pause || core.discard {
+                    return;
+                }
+            }
             let compare_exchange = self.read_index_safe_ts.compare_exchange(
                 current_ts,
                 start_ts,
@@ -2891,5 +2891,10 @@ mod tests {
         rrp.resume();
         rrp.update_read_index_safe_ts(50);
         assert_eq!(rrp.read_index_safe_ts(), 50);
+
+        // reset read index safe ts after region merge
+        let coprocessor_host = CoprocessorHost::<KvTestEngine>::default();
+        rrp.merge_safe_ts(40, 10, &coprocessor_host);
+        assert_eq!(rrp.read_index_safe_ts(), 0);
     }
 }
