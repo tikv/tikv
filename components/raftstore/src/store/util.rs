@@ -1463,6 +1463,8 @@ impl RegionReadProgress {
                 coprocessor.on_update_safe_ts(core.region_id, ts, ts)
             }
         }
+        // Reset `read_index_safe_ts` to 0 after region merge, because the source region's `read_index_safe_ts` may lag from the target region's. 
+        self.read_index_safe_ts.store(0, AtomicOrdering::Release);
     }
 
     // Consume the provided `LeaderInfo` to update `safe_ts` and return whether the
