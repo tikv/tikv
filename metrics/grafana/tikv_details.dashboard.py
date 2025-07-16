@@ -4011,6 +4011,26 @@ def GC() -> RowPanel:
             ),
         ]
     )
+    layout.half_row(
+        [
+            graph_panel(
+                title="Check and Compact duration",
+                description="The duration of check and compact operations",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_storage_check_then_compact_duration_seconds",
+                            by_labels=["instance", "type"],
+                        ),
+                        legend_format="{{instance}}-{{type}}-duration",
+                    ),
+                ],
+            ),
+        ]
+    )
+
     return layout.row_panel
 
 

@@ -444,6 +444,29 @@ pub struct Config {
     #[doc(hidden)]
     #[online_config(hidden)]
     pub min_pending_apply_region_count: u64,
+
+    /// Controls whether RocksDB performs compaction at the bottommost level
+    /// during manual compaction operations.
+    ///
+    /// This option maps to `CompactRangeOptions::bottommost_level_compaction`
+    /// in RocksDB.
+    ///
+    /// Bottommost level compaction is expensive but necessary for space
+    /// reclamation and ensuring data is fully compacted. The default
+    /// behavior (`kIfHaveCompactionFilter`) only performs this operation when a
+    /// compaction filter is present, balancing performance and
+    /// functionality.
+    pub check_then_compact_force_bottommost_level: bool,
+    /// The maximum number of ranges to compact in a single check.
+    /// Set to 0 to disable the limit, meaning all ranges that have redundant
+    /// keys more than the threshold will be compacted.
+    pub check_then_compact_top_n: u64,
+    // TODO: remove this field after we have a better way to propagate the
+    // compaction filter enabled flag in GC module to raftstore.
+    // If this does not match the compaction filter enabled flag in GC module,
+    // the compaction score will be incorrect.
+    #[doc(hidden)]
+    pub compaction_filter_enabled: bool,
 }
 
 impl Default for Config {
@@ -586,6 +609,9 @@ impl Default for Config {
             enable_v2_compatible_learner: false,
             unsafe_disable_check_quorum: false,
             min_pending_apply_region_count: 10,
+            check_then_compact_force_bottommost_level: true,
+            check_then_compact_top_n: 10,
+            compaction_filter_enabled: true,
         }
     }
 }

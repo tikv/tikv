@@ -10,7 +10,7 @@ use std::{
     },
     mem,
     ops::{Deref, DerefMut},
-    sync::{atomic::Ordering, Arc, Mutex},
+    sync::{atomic::Ordering, Arc, Mutex, Weak},
     time::{Duration, Instant, SystemTime},
     u64,
 };
@@ -758,6 +758,7 @@ where
 {
     store: Store,
     receiver: Receiver<StoreMsg<EK>>,
+    check_then_compact_running_indicator: Option<Weak<()>>,
 }
 
 impl<EK> StoreFsm<EK>
@@ -776,6 +777,7 @@ where
                 store_reachability: HashMap::default(),
             },
             receiver: rx,
+            check_then_compact_running_indicator: None,
         });
         (tx, fsm)
     }
@@ -2723,6 +2725,67 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
     }
 
     fn on_compact_check_tick(&mut self) {
+        self.register_compact_check_tick();
+        if let Some(token) = &self.fsm.check_then_compact_running_indicator {
+            if token.upgrade().is_some() {
+                info!(
+                    "compact check is running, skip compact check";
+                    "store_id" => self.fsm.store.id,
+                );
+                return;
+            }
+        }
+        if self.ctx.cleanup_scheduler.is_busy() {
+            debug!(
+                "compact worker is busy, skip compact check";
+                "store_id" => self.fsm.store.id,
+            );
+            return;
+        }
+
+        let meta = self.ctx.store_meta.lock().unwrap();
+        if meta.region_ranges.is_empty() {
+            debug!(
+            "there is no range need to check";
+            "store_id" => self.fsm.store.id
+            );
+            return;
+        }
+        let mut all_ranges = Vec::with_capacity(meta.region_ranges.len() + 2);
+        all_ranges.push(keys::DATA_MIN_KEY.to_vec());
+        all_ranges.extend(meta.region_ranges.keys().cloned());
+        all_ranges.push(keys::DATA_MAX_KEY.to_vec());
+        let cf_names = vec![CF_WRITE.to_owned(), CF_DEFAULT.to_owned()];
+        let finished = Arc::new(());
+        self.fsm.check_then_compact_running_indicator = Some(Arc::downgrade(&finished));
+        if let Err(e) = self.ctx.cleanup_scheduler.schedule(CleanupTask::Compact(
+            CompactTask::CheckThenCompactTopN {
+                cf_names,
+                ranges: all_ranges,
+                compact_threshold: CompactThreshold::new(
+                    self.ctx.cfg.region_compact_min_tombstones,
+                    self.ctx.cfg.region_compact_tombstones_percent,
+                    self.ctx.cfg.region_compact_min_redundant_rows,
+                    self.ctx.cfg.region_compact_redundant_rows_percent(),
+                ),
+                compaction_filter_enabled: self.ctx.cfg.compaction_filter_enabled,
+                bottommost_level_force: self.ctx.cfg.check_then_compact_force_bottommost_level,
+                top_n: self.ctx.cfg.check_then_compact_top_n as usize,
+                finished,
+            },
+        )) {
+            error!(
+                "schedule space check task failed";
+                "store_id" => self.fsm.store.id,
+                "err" => ?e,
+            );
+        }
+    }
+
+    // TODO: remove this function after the check and compact is fully migrated to
+    // check then compact
+    #[allow(dead_code)]
+    fn on_check_and_compact_tick(&mut self) {
         self.register_compact_check_tick();
         if self.ctx.cleanup_scheduler.is_busy() {
             debug!(
