@@ -2867,7 +2867,7 @@ mod tests {
         assert_eq!(rrp.read_index_safe_ts(), 10);
         rrp.update_read_index_safe_ts(15);
         assert_eq!(rrp.read_index_safe_ts(), 15);
-        // read index safe ts will not backward
+        // read index safe ts will not go backward
         rrp.update_read_index_safe_ts(10);
         assert_eq!(rrp.read_index_safe_ts(), 15);
 
@@ -2876,7 +2876,7 @@ mod tests {
         assert_eq!(rrp.read_index_safe_ts(), 0);
         rrp.update_read_index_safe_ts(20);
         assert_eq!(rrp.read_index_safe_ts(), 0);
-        
+
         // resume will reset read index safe ts and the update will work again
         rrp.resume();
         rrp.update_read_index_safe_ts(30);
