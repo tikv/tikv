@@ -3,6 +3,7 @@
 // The cloud crate defines the interaction between
 // the cloud provider crates and other TiKV crates
 
+#![feature(test)]
 #![feature(min_specialization)]
 
 pub mod error;
