@@ -844,6 +844,14 @@ fn test_read_index_cache() {
     let leader_id = 1;
     let r1 = cluster.get_region(b"k1");
 
+    for store_id in 1..=5 {
+        assert_eq!(
+            get_region_read_index_safe_ts(&cluster, store_id, rid),
+            0,
+            "initial state should be zero"
+        );
+    }
+
     // k1 has a memory lock on the new leader
     let leader_cm = cluster.sim.rl().get_concurrency_manager(leader_id);
     let lock = Lock::new(
@@ -866,8 +874,8 @@ fn test_read_index_cache() {
         // peer 1. But the lease of peer 1 has expired and it cannot get majority of
         // heartbeat. So, we cannot get the result here.
         fail::cfg(
-            "reading_from_cache",
-            "panic(reading_from_cache_not_allowed)",
+            "reading_from_follower_read_cache",
+            "panic(reading_from_follower_read_cache_not_allowed)",
         )
         .unwrap();
 
@@ -889,9 +897,10 @@ fn test_read_index_cache() {
         Some(2),
         Duration::from_millis(2000),
     );
+    assert_eq!(get_region_read_index_safe_ts(&cluster, 2, rid), 2);
 
     // this read should be from cache
-    fail::remove("reading_from_cache");
+    fail::remove("reading_from_follower_read_cache");
     fail::cfg(
         "reading_from_leader",
         "panic(reading_from_leader_not_allowed)",
@@ -909,13 +918,13 @@ fn test_read_index_cache() {
     // this read should be from leader
     fail::remove("reading_from_leader");
     fail::cfg(
-        "reading_from_cache",
-        "panic(reading_from_cache_not_allowed)",
+        "reading_from_follower_read_cache",
+        "panic(reading_from_follower_read_cache_not_allowed)",
     )
     .unwrap();
     let _ = get_snapshot(
         &mut cluster,
-        new_peer(2, 2),
+        new_peer(1, 1),
         r1.clone(),
         b"k1",
         Some(2),
@@ -1116,9 +1125,18 @@ fn test_read_index_cache_region_split() {
     }
 
     let all_peers = vec![
-        left_region.get_peers().iter().map(|p| (b"k1", left_region.clone(), p.clone())).collect::<Vec<_>>(),
-        right_region.get_peers().iter().map(|p| (b"k3", right_region.clone(), p.clone())).collect::<Vec<_>>(),
-    ].concat();
+        left_region
+            .get_peers()
+            .iter()
+            .map(|p| (b"k1", left_region.clone(), p.clone()))
+            .collect::<Vec<_>>(),
+        right_region
+            .get_peers()
+            .iter()
+            .map(|p| (b"k3", right_region.clone(), p.clone()))
+            .collect::<Vec<_>>(),
+    ]
+    .concat();
     for (key, region, peer) in all_peers {
         if peer.get_store_id() == 1 {
             continue;
@@ -1197,10 +1215,7 @@ fn test_read_index_cache_region_merge() {
     cluster.must_transfer_leader(right_region.get_id(), right_leader);
 
     // lock k1 on left leader.
-    let leader_cm = cluster
-        .sim
-        .rl()
-        .get_concurrency_manager(1);
+    let leader_cm = cluster.sim.rl().get_concurrency_manager(1);
 
     // push left region's read_index_safe_ts to 20.
     let snap = get_snapshot(
@@ -1226,6 +1241,36 @@ fn test_read_index_cache_region_merge() {
     assert_eq!(snap.get_responses()[0].get_cmd_type(), CmdType::Snap);
     assert_eq!(leader_cm.max_ts(), 30.into());
 
+    let lock = Lock::new(
+        LockType::Put,
+        b"k1".to_vec(),
+        25.into(),
+        20000,
+        None,
+        25.into(),
+        1,
+        25.into(),
+        false,
+    )
+    .use_async_commit(vec![]);
+    let guard = block_on(leader_cm.lock_key(&Key::from_raw(b"k1")));
+    guard.with_lock(|l| *l = Some(lock.clone()));
+
+    let snap = get_snapshot(
+        &mut cluster,
+        left_follower.clone(),
+        left_region.clone(),
+        b"k1",
+        Some(30),
+        Duration::from_millis(2000),
+    );
+    assert_eq!(
+        snap.get_responses()[0].get_cmd_type(),
+        CmdType::Invalid,
+        "snap: {:?}",
+        snap
+    );
+
     cluster.must_try_merge(left_region.get_id(), right_region.get_id());
     for i in 1..=5 {
         cluster.must_region_not_exist(left_region.get_id(), i);
@@ -1233,6 +1278,30 @@ fn test_read_index_cache_region_merge() {
     let merged_region = pd_client.get_region(b"k3").unwrap();
     let merged_follower = merged_region.get_peers()[1].clone();
     assert_eq!(leader_cm.max_ts(), 30.into());
+    for store_id in 1..=5 {
+        assert_eq!(
+            get_region_read_index_safe_ts(&cluster, store_id, merged_region.get_id()),
+            0,
+            "should reset merged region's read_index_safe_ts"
+        );
+    }
+
+    let snap = get_snapshot(
+        &mut cluster,
+        merged_follower.clone(),
+        merged_region.clone(),
+        b"k1",
+        Some(30),
+        Duration::from_millis(2000),
+    );
+    assert_eq!(
+        snap.get_responses()[0].get_cmd_type(),
+        CmdType::Invalid,
+        "snap: {:?}",
+        snap
+    );
+
+    drop(guard);
 
     let lock = Lock::new(
         LockType::Put,
@@ -1249,7 +1318,6 @@ fn test_read_index_cache_region_merge() {
     let guard = block_on(leader_cm.lock_key(&Key::from_raw(b"k1")));
     guard.with_lock(|l| *l = Some(lock.clone()));
 
-    // safe_ts <= 30 can safely read from follower region cache.
     let snap = get_snapshot(
         &mut cluster,
         merged_follower.clone(),
@@ -1284,8 +1352,10 @@ fn test_read_index_cache_region_merge() {
 
 #[test_case(test_raftstore::new_node_cluster)]
 fn test_read_index_cache_region_transfer_leader() {
-    // During leader transfer, the new leader's store will update its max_ts from PD, which is guaranteed to be greater than the old leader's max_ts.
-    // Since the read-index-safe-ts is less than or equal to the old leader's max_ts, the cache remains correct on the new leader as well.
+    // During leader transfer, the new leader's store will update its max_ts from
+    // PD, which is guaranteed to be greater than the old leader's max_ts. Since
+    // the read-index-safe-ts is less than or equal to the old leader's max_ts, the
+    // cache remains correct on the new leader as well.
     let mut cluster = new_cluster(0, 5);
     // Use long election timeout and short lease.
     configure_for_lease_read(&mut cluster.cfg, Some(50), Some(200));
@@ -1327,4 +1397,12 @@ fn test_read_index_cache_region_transfer_leader() {
     let leader_cm = cluster.sim.rl().get_concurrency_manager(5);
     // new leader's max_ts > ts2 > ts1 >= read-index-safe-ts
     assert!(leader_cm.max_ts() > ts2);
+    assert_eq!(
+        get_region_read_index_safe_ts(&cluster, 1, region.get_id()),
+        0,
+        "when leader becomes follower, it's read_index_safe_ts should be 0"
+    );
+    for i in 2..=5 {
+        assert!(get_region_read_index_safe_ts(&cluster, i, region.get_id()) <= ts1.into_inner());
+    }
 }
