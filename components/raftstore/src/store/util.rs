@@ -1558,20 +1558,17 @@ impl RegionReadProgress {
     }
 
     pub fn update_read_index_safe_ts(&self, start_ts: u64) {
+        let core = self.core.lock().unwrap();
+        if core.pause || core.discard {
+            return;
+        }
         let current_ts: u64 = self.read_index_safe_ts();
         if start_ts > current_ts {
-            let core;
-            if current_ts == 0 {
-                core = self.core.lock().unwrap();
-                if core.pause || core.discard {
-                    return;
-                }
-            }
             let compare_exchange = self.read_index_safe_ts.compare_exchange(
                 current_ts,
                 start_ts,
                 AtomicOrdering::AcqRel,
-                AtomicOrdering::Relaxed,
+                AtomicOrdering::Acquire,
             );
             // it is a single threaded function
             debug_assert!(
