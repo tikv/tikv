@@ -1465,7 +1465,7 @@ impl RegionReadProgress {
         }
         // Reset `read_index_safe_ts` to 0 after region merge, because the source
         // region's `read_index_safe_ts` may lag from the target region's.
-        self.read_index_safe_ts.store(0, AtomicOrdering::SeqCst);
+        self.read_index_safe_ts.store(0, AtomicOrdering::Release);
     }
 
     // Consume the provided `LeaderInfo` to update `safe_ts` and return whether the
@@ -1573,7 +1573,7 @@ impl RegionReadProgress {
     }
 
     pub fn read_index_safe_ts(&self) -> u64 {
-        self.read_index_safe_ts.load(AtomicOrdering::Relaxed)
+        self.read_index_safe_ts.load(AtomicOrdering::Acquire)
     }
 
     // `safe_ts` is calculated from the `resolved_ts`, they are the same thing
