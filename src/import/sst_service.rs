@@ -132,7 +132,8 @@ pub struct ImportSstService<E: Engine> {
     threads: Arc<Runtime>,
     importer: Arc<SstImporter>,
     limiter: Limiter,
-    task_slots: Arc<Mutex<HashSet<PathBuf>>>,
+    task_slots: Arc<Mutex<HashSet<(String /* cf_name */, PathBuf)>>>,
+    ingest_admission_guard: Arc<Mutex<()>>,
     raft_entry_max_size: ReadableSize,
     region_info_accessor: Arc<RegionInfoAccessor>,
 
@@ -376,6 +377,7 @@ impl<E: Engine> ImportSstService<E> {
             importer,
             limiter: Limiter::new(f64::INFINITY),
             task_slots: Arc::new(Mutex::new(HashSet::default())),
+            ingest_admission_guard: Arc::default(),
             raft_entry_max_size,
             region_info_accessor,
             writer,
@@ -398,16 +400,31 @@ impl<E: Engine> ImportSstService<E> {
         }
     }
 
-    fn acquire_lock(task_slots: &Arc<Mutex<HashSet<PathBuf>>>, meta: &SstMeta) -> Result<bool> {
+    fn acquire_lock(
+        task_slots: &Arc<Mutex<HashSet<(String, PathBuf)>>>,
+        meta: &SstMeta,
+    ) -> Result<bool> {
         let mut slots = task_slots.lock().unwrap();
         let p = sst_meta_to_path(meta)?;
-        Ok(slots.insert(p))
+        Ok(slots.insert((meta.get_cf_name().to_string(), p)))
     }
 
-    fn release_lock(task_slots: &Arc<Mutex<HashSet<PathBuf>>>, meta: &SstMeta) -> Result<bool> {
+    fn release_lock(
+        task_slots: &Arc<Mutex<HashSet<(String, PathBuf)>>>,
+        meta: &SstMeta,
+    ) -> Result<bool> {
         let mut slots = task_slots.lock().unwrap();
         let p = sst_meta_to_path(meta)?;
-        Ok(slots.remove(&p))
+        Ok(slots.remove(&(meta.get_cf_name().to_string(), p)))
+    }
+
+    fn count_ssts_in_cf(
+        task_slots: &Arc<Mutex<HashSet<(String, PathBuf)>>>,
+        cf_name: &str,
+    ) -> usize {
+        let slots = task_slots.lock().unwrap();
+        let cnt = slots.iter().filter(|(cf, _)| cf == cf_name).count();
+        cnt
     }
 
     fn async_snapshot(
@@ -437,7 +454,11 @@ impl<E: Engine> ImportSstService<E> {
         }
     }
 
-    fn check_write_stall(&self, region_id: u64) -> Option<errorpb::Error> {
+    fn check_write_stall(
+        &self,
+        region_id: u64,
+        inflight_write_cf_sst_cnt: u64,
+    ) -> Option<errorpb::Error> {
         let tablet = match self.tablets.get(region_id) {
             Some(tablet) => tablet,
             None => {
@@ -466,7 +487,9 @@ impl<E: Engine> ImportSstService<E> {
         if let Some(ref store_meta) = self.store_meta {
             if let Some((region, _)) = store_meta.lock().unwrap().regions.get(&region_id) {
                 if !self.importer.region_in_import_mode(region)
-                    && tablet.ingest_maybe_slowdown_writes(CF_WRITE).expect("cf")
+                    && tablet
+                        .ingest_maybe_slowdown_writes(CF_WRITE, inflight_write_cf_sst_cnt)
+                        .expect("cf")
                 {
                     return reject_error(Some(region_id));
                 }
@@ -477,7 +500,9 @@ impl<E: Engine> ImportSstService<E> {
                 return Some(errorpb);
             }
         } else if self.importer.get_mode() == SwitchMode::Normal
-            && tablet.ingest_maybe_slowdown_writes(CF_WRITE).expect("cf")
+            && tablet
+                .ingest_maybe_slowdown_writes(CF_WRITE, inflight_write_cf_sst_cnt)
+                .expect("cf")
         {
             // See https://github.com/tikv/tikv/issues/18549:
             // Previously, logging SST key ranges by calling `ingest_sst_key_ranges` caused
@@ -1159,25 +1184,34 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             return;
         }
 
-        let region_id = req.get_context().get_region_id();
-        if let Some(errorpb) = self.check_write_stall(region_id) {
-            resp.set_error(errorpb);
-            ctx.spawn(
-                sink.success(resp)
-                    .unwrap_or_else(|e| warn!("send rpc failed"; "err" => %e)),
-            );
-            return;
-        }
-
         let mut errorpb = errorpb::Error::default();
-        if !Self::acquire_lock(&self.task_slots, req.get_sst()).unwrap_or(false) {
-            errorpb.set_message(Error::FileConflict.to_string());
-            resp.set_error(errorpb);
-            ctx.spawn(
-                sink.success(resp)
-                    .unwrap_or_else(|e| warn!("send rpc failed"; "err" => %e)),
-            );
-            return;
+        {
+            // Serialize admission checks to avoid race conditions between
+            // concurrent ingests.
+            let _guard = self.ingest_admission_guard.lock().unwrap();
+
+            let region_id = req.get_context().get_region_id();
+            if let Some(errorpb) = self.check_write_stall(
+                region_id,
+                Self::count_ssts_in_cf(&self.task_slots, CF_WRITE) as u64,
+            ) {
+                resp.set_error(errorpb);
+                ctx.spawn(
+                    sink.success(resp)
+                        .unwrap_or_else(|e| warn!("send rpc failed"; "err" => %e)),
+                );
+                return;
+            }
+
+            if !Self::acquire_lock(&self.task_slots, req.get_sst()).unwrap_or(false) {
+                errorpb.set_message(Error::FileConflict.to_string());
+                resp.set_error(errorpb);
+                ctx.spawn(
+                    sink.success(resp)
+                        .unwrap_or_else(|e| warn!("send rpc failed"; "err" => %e)),
+                );
+                return;
+            }
         }
 
         let task_slots = self.task_slots.clone();
@@ -1207,20 +1241,30 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             return;
         }
 
-        if let Some(errorpb) = self.check_write_stall(req.get_context().get_region_id()) {
-            resp.set_error(errorpb);
-            ctx.spawn(
-                sink.success(resp)
-                    .unwrap_or_else(|e| warn!("send rpc failed"; "err" => %e)),
-            );
-            return;
-        }
-
         let mut errorpb = errorpb::Error::default();
         let mut metas = vec![];
-        for sst in req.get_ssts() {
-            if Self::acquire_lock(&self.task_slots, sst).unwrap_or(false) {
-                metas.push(sst.clone());
+        {
+            // Serialize admission checks to avoid race conditions between
+            // concurrent ingests.
+            let _guard = self.ingest_admission_guard.lock().unwrap();
+
+            let region_id = req.get_context().get_region_id();
+            if let Some(errorpb) = self.check_write_stall(
+                region_id,
+                Self::count_ssts_in_cf(&self.task_slots, CF_WRITE) as u64,
+            ) {
+                resp.set_error(errorpb);
+                ctx.spawn(
+                    sink.success(resp)
+                        .unwrap_or_else(|e| warn!("send rpc failed"; "err" => %e)),
+                );
+                return;
+            }
+
+            for sst in req.get_ssts() {
+                if Self::acquire_lock(&self.task_slots, sst).unwrap_or(false) {
+                    metas.push(sst.clone());
+                }
             }
         }
         if metas.len() < req.get_ssts().len() {
