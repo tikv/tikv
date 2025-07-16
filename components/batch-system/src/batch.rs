@@ -545,7 +545,6 @@ where
         let t = thread::Builder::new()
             .name(name)
             .spawn_wrapper(move || {
-                tikv_alloc::thread_allocate_exclusive_arena().unwrap();
                 tikv_util::thread_group::set_properties(props);
                 set_io_type(IoType::ForegroundWrite);
                 poller.poll();
