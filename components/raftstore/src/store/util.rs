@@ -1540,6 +1540,7 @@ impl RegionReadProgress {
         let mut core = self.core.lock().unwrap();
         core.pause = true;
         core.discard = true;
+        self.read_index_safe_ts.store(0, AtomicOrdering::Release);
     }
 
     /// Reset `safe_ts` and resume updating it
@@ -1549,6 +1550,7 @@ impl RegionReadProgress {
         core.discard = false;
         self.safe_ts
             .store(core.read_state.ts, AtomicOrdering::Release);
+        self.read_index_safe_ts.store(0, AtomicOrdering::Release);
     }
 
     pub fn safe_ts(&self) -> u64 {
@@ -1557,11 +1559,18 @@ impl RegionReadProgress {
 
     pub fn update_read_index_safe_ts(&self, start_ts: u64) {
         let current_ts: u64 = self.read_index_safe_ts();
+        let core;
+        if current_ts == 0 {
+            core = self.core.lock().unwrap();
+            if core.pause || core.discard {
+                return;
+            }
+        }
         if start_ts > current_ts {
             let compare_exchange = self.read_index_safe_ts.compare_exchange(
                 current_ts,
                 start_ts,
-                AtomicOrdering::SeqCst,
+                AtomicOrdering::AcqRel,
                 AtomicOrdering::Relaxed,
             );
             // it is a single threaded function
@@ -2847,5 +2856,40 @@ mod tests {
                 assert!(result.is_err(), "{:?}", cp);
             }
         }
+    }
+
+    #[test]
+    fn test_read_index_safe_ts() {
+        let cap = 10;
+        let region = Region::default();
+        let rrp = RegionReadProgress::new(&region, 10, cap, 1);
+        rrp.update_read_index_safe_ts(10);
+        assert_eq!(rrp.read_index_safe_ts(), 10);
+        rrp.update_read_index_safe_ts(15);
+        assert_eq!(rrp.read_index_safe_ts(), 15);
+        // read index safe ts will not backward
+        rrp.update_read_index_safe_ts(10);
+        assert_eq!(rrp.read_index_safe_ts(), 15);
+
+        // read index safe ts is set to 0 when pause and cannot be updated
+        rrp.pause();
+        assert_eq!(rrp.read_index_safe_ts(), 0);
+        rrp.update_read_index_safe_ts(20);
+        assert_eq!(rrp.read_index_safe_ts(), 0);
+        
+        // resume will reset read index safe ts and the update will work again
+        rrp.resume();
+        rrp.update_read_index_safe_ts(30);
+        assert_eq!(rrp.read_index_safe_ts(), 30);
+
+        // donot update read index safe ts when discarded
+        rrp.discard();
+        assert_eq!(rrp.read_index_safe_ts(), 0);
+        rrp.update_read_index_safe_ts(40);
+        assert_eq!(rrp.read_index_safe_ts(), 0);
+
+        rrp.resume();
+        rrp.update_read_index_safe_ts(50);
+        assert_eq!(rrp.read_index_safe_ts(), 50);
     }
 }
