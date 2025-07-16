@@ -238,6 +238,13 @@ pub fn send_write_sst(
     })
 }
 
+pub fn ingest_sst(client: &ImportSstClient, context: Context, meta: SstMeta) -> IngestResponse {
+    let mut ingest_request = IngestRequest::default();
+    ingest_request.set_context(context);
+    ingest_request.set_sst(meta);
+    client.ingest(&ingest_request).unwrap()
+}
+
 pub fn check_ingested_kvs(tikv: &TikvClient, ctx: &Context, sst_range: (u8, u8)) {
     check_ingested_kvs_cf(tikv, ctx, "", sst_range);
 }
