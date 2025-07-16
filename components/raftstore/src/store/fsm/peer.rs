@@ -171,6 +171,11 @@ where
     skip_gc_raft_log_ticks: usize,
     reactivate_memory_lock_ticks: usize,
 
+    /// This is used to detect long-time high log lag.
+    high_log_lag_ticks: usize,
+
+    accumulated_log_lag_count: u64,
+
     /// Batch raft command which has the same header into an entry
     batch_req_builder: BatchRaftCmdRequestBuilder<EK>,
 
@@ -301,6 +306,8 @@ where
                 skip_split_count: 0,
                 skip_gc_raft_log_ticks: 0,
                 reactivate_memory_lock_ticks: 0,
+                high_log_lag_ticks: 0,
+                accumulated_log_lag_count: 0,
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(),
                 trace: PeerMemoryTrace::default(),
                 delayed_destroy: None,
@@ -363,6 +370,8 @@ where
                 skip_split_count: 0,
                 skip_gc_raft_log_ticks: 0,
                 reactivate_memory_lock_ticks: 0,
+                high_log_lag_ticks: 0,
+                accumulated_log_lag_count: 0,
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(),
                 trace: PeerMemoryTrace::default(),
                 delayed_destroy: None,
@@ -6116,13 +6125,43 @@ where
                 self.register_entry_cache_evict_tick();
             }
         }
+        let applied_count = applied_idx - first_idx;
+
+        self.fsm.accumulated_log_lag_count += applied_count;
+        self.fsm.high_log_lag_ticks += 1;
+
+        if self.fsm.accumulated_log_lag_count >= self.ctx.cfg.raft_log_gc_count_limit() {
+            self.fsm.high_log_lag_ticks += 1;
+        }
 
         let mut compact_idx = if force_compact && replicated_idx > first_idx {
             replicated_idx
-        } else if (applied_idx > first_idx
-            && applied_idx - first_idx >= self.ctx.cfg.raft_log_gc_count_limit())
-            || (self.fsm.peer.raft_log_size_hint >= self.ctx.cfg.raft_log_gc_size_limit().0)
+        } else if applied_count >= self.ctx.cfg.raft_log_gc_count_limit() {
+            self.fsm.high_log_lag_ticks = 0;
+            self.ctx
+                .raft_metrics
+                .raft_log_gc
+                .log_force_gc_count_limit
+                .inc();
+            std::cmp::max(first_idx + (last_idx - first_idx) / 2, replicated_idx)
+        } else if applied_count > 0
+            && self.fsm.peer.raft_log_size_hint >= self.ctx.cfg.raft_log_gc_size_limit().0
         {
+            self.fsm.high_log_lag_ticks = 0;
+            self.ctx
+                .raft_metrics
+                .raft_log_gc
+                .log_force_gc_size_limit
+                .inc();
+            std::cmp::max(first_idx + (last_idx - first_idx) / 2, replicated_idx)
+        } else if applied_count > 0
+            && self.fsm.high_log_lag_ticks >= self.ctx.cfg.raft_log_force_gc_ticks
+            && self.fsm.accumulated_log_lag_count
+                >= self.ctx.cfg.raft_log_gc_area_limit * self.ctx.cfg.raft_log_gc_count_limit()
+        {
+            self.fsm.high_log_lag_ticks = 0;
+            self.fsm.accumulated_log_lag_count = 0;
+            self.ctx.raft_metrics.raft_log_gc.high_log_lag.inc();
             std::cmp::max(first_idx + (last_idx - first_idx) / 2, replicated_idx)
         } else if replicated_idx < first_idx || last_idx - first_idx < 3 {
             // In the current implementation one compaction can't delete all stale Raft
@@ -6147,6 +6186,7 @@ where
             self.register_raft_gc_log_tick();
             return;
         } else {
+            self.ctx.raft_metrics.raft_log_gc.max_ticks.inc();
             replicated_idx
         };
         // Avoid compacting unpersisted raft logs when persist is far behind apply.

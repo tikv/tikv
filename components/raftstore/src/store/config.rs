@@ -77,6 +77,10 @@ pub struct Config {
     pub raft_log_compact_sync_interval: ReadableDuration,
     // Interval to gc unnecessary raft log.
     pub raft_log_gc_tick_interval: ReadableDuration,
+    // The number of ticks to force gc raft log when high log lag.
+    pub raft_log_force_gc_ticks: usize,
+    // When the count of gc stale area exceed this value, gc will be forced trigger.
+    pub raft_log_gc_area_limit: u64,
     // Interval to request voter_replicated_index for gc unnecessary raft log,
     // if the leader has not initiated gc for a long time.
     pub request_voter_replicated_index_interval: ReadableDuration,
@@ -463,6 +467,8 @@ impl Default for Config {
             raft_entry_max_size: ReadableSize::mb(8),
             raft_log_compact_sync_interval: ReadableDuration::secs(2),
             raft_log_gc_tick_interval: ReadableDuration::secs(3),
+            raft_log_force_gc_ticks: 100,
+            raft_log_gc_area_limit: 5,
             request_voter_replicated_index_interval: ReadableDuration::minutes(5),
             raft_log_gc_threshold: 50,
             raft_log_gc_count_limit: None,
@@ -1063,6 +1069,12 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_log_gc_tick_interval"])
             .set(self.raft_log_gc_tick_interval.as_secs_f64());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["raft_log_force_gc_ticks"])
+            .set(self.raft_log_force_gc_ticks as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["raft_log_gc_area_limit"])
+            .set(self.raft_log_gc_area_limit as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["request_voter_replicated_index_interval"])
             .set(self.request_voter_replicated_index_interval.as_secs_f64());
