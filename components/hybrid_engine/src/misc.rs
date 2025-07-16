@@ -48,8 +48,8 @@ where
             .get_approximate_memtable_stats_cf(cf, range)
     }
 
-    fn ingest_maybe_slowdown_writes(&self, cf: &str) -> Result<bool> {
-        self.disk_engine().ingest_maybe_slowdown_writes(cf)
+    fn ingest_maybe_slowdown_writes(&self, cf: &str, inflight_ingest_cnt: u64) -> Result<bool> {
+        self.disk_engine().ingest_maybe_slowdown_writes(cf, inflight_ingest_cnt)
     }
 
     fn get_sst_key_ranges(&self, cf: &str, level: usize) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
