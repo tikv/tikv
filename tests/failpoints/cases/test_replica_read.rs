@@ -1124,7 +1124,7 @@ fn test_read_index_cache_region_split() {
         guards.push(guard);
     }
 
-    let all_peers = vec![
+    let all_peers = [
         left_region
             .get_peers()
             .iter()
