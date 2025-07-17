@@ -861,6 +861,12 @@ fn test_serde_custom_tikv_config() {
         enable_compaction_filter: false,
         compaction_filter_skip_version_check: true,
         num_threads: 2,
+        auto_compaction_check_interval_secs: 12,
+        compaction_tombstones_num_threshold: 999,
+        compaction_tombstones_percent_threshold: 33,
+        compaction_redundant_rows_threshold: 999,
+        compaction_redundant_rows_percent_threshold: 33,
+        compaction_bottommost_level_force: true,
     };
     value.pessimistic_txn = PessimisticTxnConfig {
         wait_for_lock_timeout: ReadableDuration::millis(10),
