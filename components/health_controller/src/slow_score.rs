@@ -21,7 +21,7 @@ pub const NETWORK_RECOVERY_INTERVALS: Duration = Duration::from_secs(60 * 30);
 /// After every DISK_ROUND_TICKS, the disk's slow score will be updated.
 pub const DISK_ROUND_TICKS: u64 = 30;
 /// After every NETWORK_ROUND_TICKS, the network's slow score will be updated.
-pub const NETWORK_ROUND_TICKS: u64 = 1;
+pub const NETWORK_ROUND_TICKS: u64 = 2;
 /// DISK_TIMEOUT_RATIO_THRESHOLD is the maximal tolerated timeout ratio
 /// for disk inspecting requests. If the timeout ratio is larger than this
 /// threshold, the disk's slow score will be multiplied by 2.
@@ -29,9 +29,9 @@ pub const DISK_TIMEOUT_RATIO_THRESHOLD: f64 = 0.1;
 /// NETWORK_TIMEOUT_RATIO_THRESHOLD is the maximal tolerated timeout ratio
 /// for network inspecting requests. If the timeout ratio is larger than this
 /// threshold, the network's slow score will be multiplied by 2.
-pub const NETWORK_TIMEOUT_RATIO_THRESHOLD: f64 = 0.5;
+pub const NETWORK_TIMEOUT_RATIO_THRESHOLD: f64 = 1.0;
 /// The timeout threshold for network inspecting requests.
-pub const NETWORK_TIMEOUT_THRESHOLD: Duration = Duration::from_secs(1);
+pub const NETWORK_TIMEOUT_THRESHOLD: Duration = Duration::from_secs(2);
 // Slow score is a value that represents the speed of a store and ranges in [1,
 // 100]. It is maintained in the AIMD way.
 // If there are some inspecting requests timeout during a round, by default the
@@ -132,7 +132,7 @@ impl SlowScore {
 
     pub fn record_timeout(&mut self) {
         self.last_record_time = Instant::now();
-        let threshold = self.last_tick_id.saturating_sub(self.min_timeout_ticks + 1);
+        let threshold = self.last_tick_id.saturating_sub(self.min_timeout_ticks - 1);
         let timeout_requests = self
             .uncompleted_ticks
             .iter()
@@ -183,7 +183,7 @@ impl SlowScore {
     // Check if the last timeout tick is finished. If a tick id is less than
     // `last_tick_id` - `min_timeout_ticks`, we view this tick as timeout.
     pub fn last_tick_finished(&self) -> bool {
-        let threshold = self.last_tick_id.saturating_sub(self.min_timeout_ticks + 1);
+        let threshold = self.last_tick_id.saturating_sub(self.min_timeout_ticks - 1);
         let exist_uncompleted_tick = self.uncompleted_ticks.iter().any(|&id| id <= threshold);
 
         !exist_uncompleted_tick
