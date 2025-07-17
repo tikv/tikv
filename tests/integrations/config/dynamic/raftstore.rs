@@ -7,7 +7,6 @@ use std::{
 };
 
 use concurrency_manager::ConcurrencyManager;
-use crossbeam::epoch::Atomic;
 use engine_rocks::RocksEngine;
 use engine_traits::{ALL_CFS, CF_DEFAULT, Engines};
 use health_controller::HealthController;
