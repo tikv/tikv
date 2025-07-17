@@ -399,6 +399,7 @@ impl<'a> Drain {
         let total_event_bytes = CDC_GRPC_ACCUMULATE_MESSAGE_BYTES.with_label_values(&["event"]);
         let total_resolved_ts_bytes =
             CDC_GRPC_ACCUMULATE_MESSAGE_BYTES.with_label_values(&["resolved_ts"]);
+        let conn_id = self.conn_id;
         let memory_quota = self.memory_quota.clone();
         let mut chunks = self.drain().ready_chunks(CDC_EVENT_MAX_COUNT);
         while let Some(events) = chunks.next().await {
@@ -416,12 +417,16 @@ impl<'a> Drain {
             for (i, e) in resps.into_iter().enumerate() {
                 // Buffer messages and flush them at once.
                 let write_flags = WriteFlags::default().buffer_hint(i + 1 != resps_len);
+                info!("cdc forward sink.feed to be called"; "conn_id" => ?conn_id);
                 sink.feed((e, write_flags)).await?
             }
+            info!("cdc forward sink.flush to be called"; "conn_id" => ?conn_id);
             sink.flush().await?;
             total_event_bytes.inc_by(event_bytes as u64);
             total_resolved_ts_bytes.inc_by(resolved_ts_bytes as u64);
+            info!("cdc forward sink flushed, go to chunks.next().await"; "conn_id" => ?conn_id);
         }
+        info!("cdc forward exited"; "conn_id" => ?conn_id);
         Ok(())
     }
 }
