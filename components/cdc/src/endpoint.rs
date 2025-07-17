@@ -719,6 +719,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     self.deregister_downstream(region_id, downstream_id, None);
                 });
                 CDC_CONNECTION_COUNT.dec();
+                info!("cdc connection deregistered"; "conn_id" => ?conn_id)
             }
             Deregister::Request {
                 conn_id,
@@ -770,10 +771,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     HashMapEntry::Occupied(x) => {
                         // To avoid ABA problem, we must check the unique ObserveId.
                         if x.get().handle.id != observe_id {
-                            warn!("cdc deregister delegate with wrong observe_id";
-                                "region_id" => region_id,
-                                "observe_id" => ?observe_id,
-                                "expected_observe_id" => ?x.get().handle.id);
                             return;
                         }
                         x.remove()
