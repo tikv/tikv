@@ -3,7 +3,7 @@
 use std::{fmt, sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
-}, thread, time::Duration};
+}, time::Duration};
 use futures::{
     SinkExt, Stream, StreamExt,
     channel::mpsc::{
@@ -310,7 +310,10 @@ impl Sink {
         }
         let ob_event = ObservedEvent::new(Instant::now_coarse(), observed_event, bytes);
         match self.unbounded_sender.unbounded_send(ob_event) {
-            Ok(_) => Ok(()),
+            Ok(_) => {
+                CDC_PENDING_EVENT_COUNT.with_label_values(&["unbounded"]).inc();
+                Ok(())
+            },
             Err(e) => {
                 // Free quota if send fails.
                 self.memory_quota.free(bytes);
@@ -326,6 +329,7 @@ impl Sink {
         truncated: Arc<AtomicBool>,
     ) -> Result<(), SendError> {
         // Allocate quota in advance.
+        let event_count = scaned_events.len();
         let mut total_bytes = 0;
         for event in &scaned_events {
             let bytes = event.size();
@@ -348,6 +352,7 @@ impl Sink {
             self.memory_quota.free(total_bytes as _);
             return Err(SendError::from(e));
         }
+        CDC_PENDING_EVENT_COUNT.with_label_values(&["bounded"]).add(event_count as _);
         Ok(())
     }
 }
@@ -361,8 +366,12 @@ pub struct Drain {
 
 impl<'a> Drain {
     pub fn drain(&'a mut self) -> impl Stream<Item = (CdcEvent, usize)> + 'a {
-        let observed = (&mut self.unbounded_receiver).map(|x| (x.created, x.event, x.size));
+        let observed = (&mut self.unbounded_receiver).map(|x|{
+            CDC_PENDING_EVENT_COUNT.with_label_values(&["unbounded"]).dec();
+            (x.created, x.event, x.size)
+        });
         let scaned = (&mut self.bounded_receiver).filter_map(|x| {
+            CDC_PENDING_EVENT_COUNT.with_label_values(&["bounded"]).dec();
             if x.truncated.load(Ordering::Acquire) {
                 self.memory_quota.free(x.size as _);
                 return futures::future::ready(None);
@@ -390,7 +399,6 @@ impl<'a> Drain {
         let total_event_bytes = CDC_GRPC_ACCUMULATE_MESSAGE_BYTES.with_label_values(&["event"]);
         let total_resolved_ts_bytes =
             CDC_GRPC_ACCUMULATE_MESSAGE_BYTES.with_label_values(&["resolved_ts"]);
-        let conn_id = self.conn_id;
         let memory_quota = self.memory_quota.clone();
         let mut chunks = self.drain().ready_chunks(CDC_EVENT_MAX_COUNT);
         while let Some(events) = chunks.next().await {
@@ -408,21 +416,12 @@ impl<'a> Drain {
             for (i, e) in resps.into_iter().enumerate() {
                 // Buffer messages and flush them at once.
                 let write_flags = WriteFlags::default().buffer_hint(i + 1 != resps_len);
-                if let Err(e) = sink.feed((e, write_flags)).await {
-                    warn!("cdc forward failed"; "conn_id" => ?conn_id);
-                    thread::sleep(Duration::from_secs(3600));
-                    return Err(e);
-                }
+                sink.feed((e, write_flags)).await?
             }
-            if let Err(e) = sink.flush().await {
-                warn!("cdc flush failed"; "conn_id" => ?conn_id);
-                thread::sleep(Duration::from_secs(3600));
-                return Err(e);
-            };
+            sink.flush().await?;
             total_event_bytes.inc_by(event_bytes as u64);
             total_resolved_ts_bytes.inc_by(resolved_ts_bytes as u64);
         }
-        info!("cdc forward finished"; "conn_id" => ?conn_id);
         Ok(())
     }
 }
@@ -433,21 +432,21 @@ impl Drop for Drain {
         self.unbounded_receiver.close();
         let start = Instant::now();
         let mut total_bytes = 0;
+        let conn_id = self.conn_id;
         let mut drain = Box::pin(async move {
-            let conn_id = self.conn_id;
             let memory_quota = self.memory_quota.clone();
             let mut drain = self.drain();
             while let Some((_, bytes)) = drain.next().await {
                 total_bytes += bytes;
             }
             memory_quota.free(total_bytes);
-            info!("cdc drop Drain finished, free memory"; "conn_id" => ?conn_id,
-                "freed_bytes" => total_bytes, "inuse_bytes" => memory_quota.in_use());
+            info!("cdc drop Drain finished, free memory"; "freed_bytes" => total_bytes,
+                "inuse_bytes" => memory_quota.in_use(), "conn_id" => ?conn_id);
         });
         block_on(&mut drain);
         let takes = start.saturating_elapsed();
         if takes >= Duration::from_millis(200) {
-            warn!("cdc drop Drain too slow"; "takes" => ?takes);
+            warn!("cdc drop Drain too slow"; "takes" => ?takes, "conn_id" => ?conn_id);
         }
     }
 }
