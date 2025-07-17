@@ -457,11 +457,6 @@ impl Service {
             while let Some(request) = stream.try_next().await? {
                 Self::handle_request(&scheduler, &peer, request, conn_id)?;
             }
-            if conn_id.0 >= 5 {
-                warn!("conn id is large or equal to 5, sleep the recv_req for one hour, do not return in time";
-                    "downstream" => peer, "conn_id" => ?conn_id);
-                thread::sleep(Duration::from_secs(3600));
-            }
             Ok::<(), String>(())
         };
 
