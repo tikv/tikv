@@ -46,7 +46,9 @@ impl engine_traits::TablePropertiesCollection for TablePropertiesCollection {
         F: FnMut(&Self::TableProperties) -> bool,
     {
         for (_, props) in self.0.into_iter() {
-            let props = unsafe { std::mem::transmute::<_, &TableProperties>(props) };
+            let props = unsafe {
+                std::mem::transmute::<&rocksdb::TableProperties, &TableProperties>(props)
+            };
             if !f(props) {
                 break;
             }

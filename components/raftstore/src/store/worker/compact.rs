@@ -693,6 +693,18 @@ impl Ord for CompactionCandidate {
     }
 }
 
+/// Estimates the number of discardable MVCC entries based on GC safe point.
+///
+/// This function assumes uniform distribution of timestamps across the time
+/// range [oldest_ts, newest_ts] and calculates how many entries fall before the
+/// GC safe point.
+///
+/// Used for two types of discardable entries:
+/// 1. Stale versions: num_versions - num_rows (redundant versions from updates)
+/// 2. Delete versions: num_deletes (deleted rows)
+///
+/// The uniform distribution assumption works well in practice for estimating
+/// compaction benefits without expensive range scans.
 fn get_estimated_discardable_entries(
     num_entries: u64,
     oldest_ts: TimeStamp,
@@ -768,16 +780,21 @@ fn select_compaction_candidates(
                 // RocksDB tombstones are guaranteed to be discardable
                 num_tombstones += num_entries - mvcc_properties.num_versions;
                 if compaction_filter_enabled {
+                    // Estimate discardable TiKV MVCC delete versions
+                    // These are deleted rows that can be physically removed after GC safe point
                     num_discardable += get_estimated_discardable_entries(
                         mvcc_properties.num_deletes,
                         mvcc_properties.oldest_delete_ts,
                         mvcc_properties.newest_delete_ts,
                         gc_safe_point,
                     );
+                    // Estimate discardable stale MVCC versions
+                    // These are redundant versions from row updates that can be physically removed
+                    // after GC safe point
                     num_discardable += get_estimated_discardable_entries(
                         mvcc_properties.num_versions - mvcc_properties.num_rows,
-                        mvcc_properties.oldest_redundant_version_ts,
-                        mvcc_properties.newest_redundant_version_ts,
+                        mvcc_properties.oldest_stale_version_ts,
+                        mvcc_properties.newest_stale_version_ts,
                         gc_safe_point,
                     );
                 }

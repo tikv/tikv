@@ -13,8 +13,8 @@ pub const PROP_NUM_PUTS: &str = "tikv.num_puts";
 pub const PROP_NUM_DELETES: &str = "tikv.num_deletes";
 pub const PROP_NUM_VERSIONS: &str = "tikv.num_versions";
 pub const PROP_MAX_ROW_VERSIONS: &str = "tikv.max_row_versions";
-pub const PROP_OLDEST_REDUNDANT_VERSION_TS: &str = "tikv.oldest_redundant_version_ts";
-pub const PROP_NEWEST_REDUNDANT_VERSION_TS: &str = "tikv.newest_redundant_version_ts";
+pub const PROP_OLDEST_STALE_VERSION_TS: &str = "tikv.oldest_stale_version_ts";
+pub const PROP_NEWEST_STALE_VERSION_TS: &str = "tikv.newest_stale_version_ts";
 pub const PROP_OLDEST_DELETE_TS: &str = "tikv.oldest_delete_ts";
 pub const PROP_NEWEST_DELETE_TS: &str = "tikv.newest_delete_ts";
 
@@ -34,12 +34,12 @@ impl RocksMvccProperties {
         props.encode_u64(PROP_NUM_VERSIONS, mvcc_props.num_versions);
         props.encode_u64(PROP_MAX_ROW_VERSIONS, mvcc_props.max_row_versions);
         props.encode_u64(
-            PROP_OLDEST_REDUNDANT_VERSION_TS,
-            mvcc_props.oldest_redundant_version_ts.into_inner(),
+            PROP_OLDEST_STALE_VERSION_TS,
+            mvcc_props.oldest_stale_version_ts.into_inner(),
         );
         props.encode_u64(
-            PROP_NEWEST_REDUNDANT_VERSION_TS,
-            mvcc_props.newest_redundant_version_ts.into_inner(),
+            PROP_NEWEST_STALE_VERSION_TS,
+            mvcc_props.newest_stale_version_ts.into_inner(),
         );
         props.encode_u64(
             PROP_OLDEST_DELETE_TS,
@@ -67,12 +67,12 @@ impl RocksMvccProperties {
         res.max_row_versions = props.decode_u64(PROP_MAX_ROW_VERSIONS)?;
         // The following 4 properties may not exist in old releases, so use min_ts for
         // oldest, max_ts for newest if not found.
-        res.oldest_redundant_version_ts = props
-            .decode_u64(PROP_OLDEST_REDUNDANT_VERSION_TS)
+        res.oldest_stale_version_ts = props
+            .decode_u64(PROP_OLDEST_STALE_VERSION_TS)
             .map(Into::into)
             .unwrap_or(res.min_ts);
-        res.newest_redundant_version_ts = props
-            .decode_u64(PROP_NEWEST_REDUNDANT_VERSION_TS)
+        res.newest_stale_version_ts = props
+            .decode_u64(PROP_NEWEST_STALE_VERSION_TS)
             .map(Into::into)
             .unwrap_or(res.max_ts);
         res.oldest_delete_ts = props
