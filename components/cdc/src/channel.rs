@@ -416,7 +416,7 @@ impl<'a> Drain {
             for (i, e) in resps.into_iter().enumerate() {
                 // Buffer messages and flush them at once.
                 let write_flags = WriteFlags::default().buffer_hint(i + 1 != resps_len);
-                sink.feed((e, write_flags)).await?
+                sink.feed((e, write_flags)).await?;
             }
             sink.flush().await?;
             total_event_bytes.inc_by(event_bytes as u64);
