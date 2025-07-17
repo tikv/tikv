@@ -173,6 +173,7 @@ pub struct ServerCluster {
     pub causal_ts_providers: HashMap<u64, Arc<CausalTsProviderImpl>>,
     pub encryption: Option<Arc<DataKeyManager>>,
     pub in_memory_engines: HashMap<u64, Option<HybridEngineImpl>>,
+    pub gc_safe_point: Arc<AtomicU64>,
 }
 
 impl ServerCluster {
@@ -219,6 +220,7 @@ impl ServerCluster {
             txn_extra_schedulers: HashMap::default(),
             causal_ts_providers: HashMap::default(),
             encryption: None,
+            gc_safe_point: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -689,7 +691,7 @@ impl ServerCluster {
             causal_ts_provider,
             DiskCheckRunner::dummy(),
             GrpcServiceManager::dummy(),
-            Arc::new(AtomicU64::new(0)),
+            self.gc_safe_point.clone(),
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
