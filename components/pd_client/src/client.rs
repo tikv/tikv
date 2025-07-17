@@ -20,6 +20,7 @@ use futures::{
 };
 use grpcio::{EnvBuilder, Environment, WriteFlags};
 use grpcio_health::{HealthClient as GrpcHealthClient, proto::{HealthCheckRequest,HealthCheckResponse}};
+use grpcio::CallOption;
 use kvproto::{
     meta_storagepb::{
         self as mpb, DeleteRequest, GetRequest, PutRequest, WatchRequest, WatchResponse,
@@ -1259,7 +1260,8 @@ impl HealthClient for RpcClient {
         let health_client = GrpcHealthClient::new(
             self.pd_client.inner.rl().client_stub.client.channel().clone(),
         );
-        let resp = health_client.check_opt(&req, call_option_inner(&self.pd_client.inner.rl()))?;
+        let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+        let resp = health_client.check_opt(&req, option)?;
 
         Ok(resp)
     }

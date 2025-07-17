@@ -2011,6 +2011,9 @@ where
         let slow_score_tick_result = self
             .health_reporter
             .tick(self.store_stat.maybe_busy(), factor);
+        if slow_score_tick_result.tick_id == 0 {
+            return;
+        }
         if let Some(score) = slow_score_tick_result.updated_score {
             STORE_SLOW_SCORE_GAUGE
                 .with_label_values(&[factor.as_str()])

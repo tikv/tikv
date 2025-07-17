@@ -60,6 +60,7 @@ pub struct SlowScore {
     // this tick as timeout.
     min_timeout_ticks: u64,
     uncompleted_ticks: HashSet<u64>,
+    max_running_ticks: u64,
 }
 
 impl SlowScore {
@@ -90,6 +91,7 @@ impl SlowScore {
             last_tick_id: 0,
             min_timeout_ticks,
             uncompleted_ticks: HashSet::new(),
+            max_running_ticks: 3, // the worker thread count is 3.
         }
     }
 
@@ -114,6 +116,7 @@ impl SlowScore {
             last_tick_id: 0,
             min_timeout_ticks: 1,
             uncompleted_ticks: HashSet::new(),
+            max_running_ticks: 3,
         }
     }
 
@@ -189,6 +192,13 @@ impl SlowScore {
         !exist_uncompleted_tick
     }
 
+    pub fn exceed_max_running_ticks(&self) -> bool {
+        let threshold = self.last_tick_id.saturating_sub(self.max_running_ticks - 1);
+        let exist_uncompleted_tick = self.uncompleted_ticks.iter().any(|&id| id <= threshold);
+
+        !exist_uncompleted_tick
+    }
+
     pub fn tick(&mut self) -> SlowScoreTickResult {
         let should_force_report_slow_store = self.should_force_report_slow_store();
 
@@ -216,6 +226,7 @@ impl SlowScore {
     }
 }
 
+#[derive(Default)]
 pub struct SlowScoreTickResult {
     pub tick_id: u64,
     // None if skipped in this tick
