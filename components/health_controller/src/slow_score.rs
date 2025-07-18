@@ -196,7 +196,7 @@ impl SlowScore {
         let threshold = self.last_tick_id.saturating_sub(self.max_running_ticks - 1);
         let exist_uncompleted_tick = self.uncompleted_ticks.iter().any(|&id| id <= threshold);
 
-        !exist_uncompleted_tick
+        exist_uncompleted_tick
     }
 
     pub fn tick(&mut self) -> SlowScoreTickResult {
