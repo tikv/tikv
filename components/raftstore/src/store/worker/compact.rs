@@ -11,13 +11,17 @@ use std::{
     time::Duration,
 };
 
-use engine_traits::{CF_WRITE, KvEngine, ManualCompactionOptions, RangeStats};
+use engine_traits::{
+    CF_WRITE, KvEngine, ManualCompactionOptions, Range, RangeStats, TableProperties,
+    TablePropertiesCollection, UserCollectedProperties,
+};
 use fail::fail_point;
 use futures_util::compat::Future01CompatExt;
 use thiserror::Error;
 use tikv_util::{
     box_try, debug, error, info, time::Instant, timer::GLOBAL_TIMER_HANDLE, warn, worker::Runnable,
 };
+use txn_types::TimeStamp;
 use yatp::Remote;
 
 use super::metrics::{
@@ -62,6 +66,7 @@ pub enum Task {
         compaction_filter_enabled: bool,
         bottommost_level_force: bool,
         top_n: usize,
+        gc_safe_point: u64,
         // RAII guard to indicate the task is still running. Store FSM will hold a weak ptr to this
         // guard, and will be aware of the task being dropped.
         // If the task is dropped, it means the check is finished or failed.
@@ -230,6 +235,7 @@ impl Display for Task {
                 ref compaction_filter_enabled,
                 ref bottommost_level_force,
                 ref top_n,
+                ref gc_safe_point,
                 ..
             } => f
                 .debug_struct("CheckThenCompactV2")
@@ -253,6 +259,7 @@ impl Display for Task {
                 .field("compaction_filter_enabled", &compaction_filter_enabled)
                 .field("bottommost_level_force", &bottommost_level_force)
                 .field("top_n", &top_n)
+                .field("gc_safe_point", &gc_safe_point)
                 .finish(),
         }
     }
@@ -463,6 +470,7 @@ where
                 compaction_filter_enabled,
                 bottommost_level_force,
                 top_n,
+                gc_safe_point,
                 finished: _,
             } => {
                 fail_point!("raftstore::compact::CheckThenCompactTopN:NotifyStart");
@@ -473,22 +481,37 @@ where
                     compact_threshold,
                     compaction_filter_enabled,
                     top_n,
+                    gc_safe_point,
                 ) {
                     Ok(candidates) => {
                         fail_point!(
                             "raftstore::compact::CheckThenCompactTopN:CheckRange2",
-                            candidates.len() == 2
-                                && candidates.iter().any(|c| c.range_stats.num_versions == 10),
+                            candidates.len() == 3
+                                && candidates
+                                    .iter()
+                                    .any(|c| c.num_total_entries == 10 && c.num_discardable == 5),
                             |_| {
-                                info!("Found candidate with 10 versions (range 2)");
+                                info!("Found candidate with 10 entries (range 2)");
                             }
                         );
                         fail_point!(
-                            "raftstore::compact::CheckThenCompactTopN:CheckRange3",
-                            candidates.len() == 2
-                                && candidates.iter().any(|c| c.range_stats.num_versions == 20),
+                            "raftstore::compact::CheckThenCompactTopN:CheckRange4",
+                            candidates.len() == 3
+                                && candidates
+                                    .iter()
+                                    .any(|c| c.num_total_entries == 20 && c.num_discardable == 7),
                             |_| {
-                                info!("Found candidate with 15 versions (range 3)");
+                                info!("Found candidate with 20 entries (range 4)");
+                            }
+                        );
+                        fail_point!(
+                            "raftstore::compact::CheckThenCompactTopN:CheckRange5",
+                            candidates.len() == 3
+                                && candidates
+                                    .iter()
+                                    .any(|c| c.num_total_entries == 30 && c.num_discardable == 10),
+                            |_| {
+                                info!("Found candidate with 30 entries (range 5)");
                             }
                         );
                         if candidates.is_empty() {
@@ -496,18 +519,19 @@ where
                             info!("no ranges need compacting");
                         } else {
                             for CompactionCandidate {
+                                score,
                                 start_key,
                                 end_key,
-                                range_stats,
-                                score,
+                                num_tombstones,
+                                num_discardable,
+                                num_total_entries,
                             } in candidates
                             {
                                 info!("check_then_compact found a range to compact";
-                                    "num_entries" => range_stats.num_entries,
-                                    "num_versions" => range_stats.num_versions,
-                                    "num_rows" => range_stats.num_rows,
-                                    "num_deletes" => range_stats.num_deletes,
                                     "score" => score,
+                                    "num_tombstones" => num_tombstones,
+                                    "num_discardable" => num_discardable,
+                                    "num_total_entries" => num_total_entries,
                                 );
                                 let start_time =
                                     CHECK_THEN_COMPACT_DURATION.compact.start_coarse_timer();
@@ -609,33 +633,30 @@ fn collect_ranges_need_compact(
 }
 
 fn get_compact_score(
-    range_stats: &RangeStats,
+    num_tombstones: u64,
+    num_discardable: u64,
+    num_total_entries: u64,
     compact_threshold: &CompactThreshold,
     compaction_filter_enabled: bool,
 ) -> f64 {
-    if range_stats.num_entries == 0 || range_stats.num_entries < range_stats.num_versions {
+    if num_total_entries == 0 || num_total_entries < num_discardable {
         return 0.0;
     }
-
     if !compaction_filter_enabled {
-        let num_tombstones = range_stats.num_entries - range_stats.num_versions;
         // Only consider deletes (tombstones)
+        let ratio = num_tombstones as f64 / num_total_entries as f64;
         if num_tombstones < compact_threshold.tombstones_num_threshold
-            && num_tombstones * 100
-                < compact_threshold.tombstones_percent_threshold * range_stats.num_entries
+            && ratio < compact_threshold.tombstones_percent_threshold as f64 / 100.0
         {
             return 0.0;
         }
-        let ratio = num_tombstones as f64 / range_stats.num_entries as f64;
         return num_tombstones as f64 * ratio;
     }
     // When compaction filter is enabled, ignore tombstone threshold,
     // just add deletes to redundant keys for scoring.
-    let num_discardable = range_stats.redundant_keys();
-    let ratio = num_discardable as f64 / range_stats.num_entries as f64;
+    let ratio = (num_tombstones + num_discardable) as f64 / num_total_entries as f64;
     if num_discardable < compact_threshold.redundant_rows_threshold
-        && num_discardable * 100
-            < compact_threshold.redundant_rows_percent_threshold * range_stats.num_entries
+        && ratio < compact_threshold.redundant_rows_percent_threshold as f64 / 100.0
     {
         return 0.0;
     }
@@ -647,7 +668,9 @@ struct CompactionCandidate {
     score: f64,
     start_key: Key,
     end_key: Key,
-    range_stats: RangeStats,
+    num_tombstones: u64,  // RocksDB tombstones
+    num_discardable: u64, // Estimated discardable TiKV MVCC versions
+    num_total_entries: u64,
 }
 
 impl PartialEq for CompactionCandidate {
@@ -670,12 +693,59 @@ impl Ord for CompactionCandidate {
     }
 }
 
+/// Estimates the number of discardable MVCC entries based on GC safe point.
+///
+/// This function assumes uniform distribution of timestamps across the time
+/// range [oldest_ts, newest_ts] and calculates how many entries fall before the
+/// GC safe point.
+///
+/// Used for two types of discardable entries:
+/// 1. Stale versions: num_versions - num_rows (redundant versions from updates)
+/// 2. Delete versions: num_deletes (deleted rows)
+///
+/// The uniform distribution assumption works well in practice for estimating
+/// compaction benefits without expensive range scans.
+fn get_estimated_discardable_entries(
+    num_entries: u64,
+    oldest_ts: TimeStamp,
+    newest_ts: TimeStamp,
+    gc_safe_point: u64,
+) -> u64 {
+    // If there are no entries or the timestamps are invalid, return 0.
+    if num_entries == 0 || oldest_ts > newest_ts {
+        return 0;
+    }
+    let oldest_ts = oldest_ts.into_inner();
+    let newest_ts = newest_ts.into_inner();
+
+    // If gc_safe_point is before or equal to oldest_ts, all entries are
+    // discardable.
+    if gc_safe_point >= newest_ts {
+        return num_entries;
+    }
+
+    // If gc_safe_point is after or equal to newest_ts, no entries are discardable.
+    if gc_safe_point < oldest_ts {
+        return 0;
+    }
+
+    // Otherwise, calculate the portion of entries between oldest_ts and
+    // gc_safe_point.
+    let total_range = newest_ts - oldest_ts;
+    let discardable_range = gc_safe_point - oldest_ts;
+
+    // Use floating point division for accuracy, then round to nearest integer.
+    let portion = (discardable_range as f64) / (total_range as f64);
+    (num_entries as f64 * portion).round() as u64
+}
+
 fn select_compaction_candidates(
     engine: &impl KvEngine,
     ranges: Vec<Key>,
     compact_threshold: CompactThreshold,
     compaction_filter_enabled: bool,
     top_n: usize,
+    gc_safe_point: u64,
 ) -> Result<Vec<CompactionCandidate>, Error> {
     use std::{cmp::Reverse, collections::BinaryHeap};
     let check_timer = CHECK_THEN_COMPACT_DURATION.check.start_coarse_timer();
@@ -693,33 +763,76 @@ fn select_compaction_candidates(
     };
 
     for range in ranges.windows(2) {
-        if let Some(range_stats) = engine
-            .get_range_stats(CF_WRITE, &range[0], &range[1])
-            .map_err(|e| Error::Other(Box::new(e)))?
-        {
-            let score =
-                get_compact_score(&range_stats, &compact_threshold, compaction_filter_enabled);
-            if score > 0.0 {
-                let candidate = CompactionCandidate {
-                    score,
-                    start_key: range[0].clone(),
-                    end_key: range[1].clone(),
-                    range_stats,
-                };
-                if top_n == 0 {
-                    candidates.push(candidate);
-                } else if heap.len() < top_n
-                    || score
-                        > heap
-                            .peek()
-                            .map(|r: &Reverse<CompactionCandidate>| r.0.score)
-                            .unwrap_or(f64::MIN)
-                {
-                    heap.push(Reverse(candidate));
-                    if heap.len() > top_n {
-                        heap.pop();
-                    }
+        let mut num_tombstones = 0;
+        let mut num_discardable = 0;
+        let mut num_total_entries = 0;
+        let collection = engine
+            .table_properties_collection(CF_WRITE, &[Range::new(&range[0], &range[1])])
+            .map_err(|e| Error::Other(Box::new(e)))?;
+        collection.iter_table_properties(|table_prop| {
+            let num_entries = table_prop.get_num_entries();
+            num_total_entries += num_entries;
+
+            if let Some(mvcc_properties) = table_prop
+                .get_user_collected_properties()
+                .get_mvcc_properties()
+            {
+                // RocksDB tombstones are guaranteed to be discardable
+                num_tombstones += num_entries - mvcc_properties.num_versions;
+                if compaction_filter_enabled {
+                    // Estimate discardable TiKV MVCC delete versions
+                    // These are deleted rows that can be physically removed after GC safe point
+                    num_discardable += get_estimated_discardable_entries(
+                        mvcc_properties.num_deletes,
+                        mvcc_properties.oldest_delete_ts,
+                        mvcc_properties.newest_delete_ts,
+                        gc_safe_point,
+                    );
+                    // Estimate discardable stale MVCC versions
+                    // These are redundant versions from row updates that can be physically removed
+                    // after GC safe point
+                    num_discardable += get_estimated_discardable_entries(
+                        mvcc_properties.num_versions - mvcc_properties.num_rows,
+                        mvcc_properties.oldest_stale_version_ts,
+                        mvcc_properties.newest_stale_version_ts,
+                        gc_safe_point,
+                    );
                 }
+            }
+
+            true
+        });
+        let score = get_compact_score(
+            num_tombstones,
+            num_discardable,
+            num_total_entries,
+            &compact_threshold,
+            compaction_filter_enabled,
+        );
+        if score <= 0.0 {
+            continue;
+        }
+        let candidate = CompactionCandidate {
+            score,
+            start_key: range[0].clone(),
+            end_key: range[1].clone(),
+            num_tombstones,
+            num_discardable,
+            num_total_entries,
+        };
+
+        if top_n == 0 {
+            candidates.push(candidate);
+        } else if heap.len() < top_n
+            || score
+                > heap
+                    .peek()
+                    .map(|r: &Reverse<CompactionCandidate>| r.0.score)
+                    .unwrap_or(f64::MIN)
+        {
+            heap.push(Reverse(candidate));
+            if heap.len() > top_n {
+                heap.pop();
             }
         }
     }
