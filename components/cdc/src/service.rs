@@ -4,7 +4,8 @@ use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
-
+use std::thread;
+use std::time::Duration;
 use collections::{HashMap, HashMapEntry};
 use crossbeam::atomic::AtomicCell;
 use futures::stream::TryStreamExt;
@@ -416,11 +417,11 @@ impl Service {
                 Ok(headers) => headers,
                 Err(e) => {
                     let peer = ctx.peer();
-                    error!("cdc connection with bad headers"; "downstream" => ?peer, "headers" => &e);
+                    error!("cdc connection with bad headers"; "headers" => &e, "downstream" => ?peer, "conn_id" => ?conn_id);
                     ctx.spawn(async move {
                         let status = RpcStatus::with_message(RpcStatusCode::UNIMPLEMENTED, e);
                         if let Err(e) = sink.fail(status).await {
-                            error!("cdc failed to send error"; "downstream" => ?peer, "error" => ?e);
+                            error!("cdc failed to send error"; "error" => ?e, "downstream" => ?peer, "conn_id" => ?conn_id);
                         }
                     });
                     return;
@@ -428,19 +429,20 @@ impl Service {
             };
             explicit_features = headers.features;
         }
-        info!("cdc connection created"; "downstream" => ctx.peer(), "features" => ?explicit_features);
 
         if let Err(e) = self.scheduler.schedule(Task::OpenConn { conn }) {
             let peer = ctx.peer();
-            error!("cdc connection initiate failed"; "downstream" => ?peer, "error" => ?e);
+            error!("cdc connection initiate failed"; "error" => ?e, "downstream" => ?peer, "conn_id" => ?conn_id);
             ctx.spawn(async move {
                 let status = RpcStatus::with_message(RpcStatusCode::UNKNOWN, format!("{:?}", e));
                 if let Err(e) = sink.fail(status).await {
-                    error!("cdc failed to send error"; "downstream" => ?peer, "error" => ?e);
+                    error!("cdc failed to send error"; "error" => ?e, "downstream" => ?peer, "conn_id" => ?conn_id);
                 }
             });
             return;
         }
+
+        info!("cdc connection created"; "features" => ?explicit_features, "downstream" => ctx.peer(), "conn_id" => ?conn_id);
 
         let peer = ctx.peer();
         let scheduler = self.scheduler.clone();
@@ -458,17 +460,16 @@ impl Service {
             Ok::<(), String>(())
         };
 
-        let scheduler_dereg = self.scheduler.clone();
         let peer = ctx.peer();
+        let scheduler = self.scheduler.clone();
         ctx.spawn(async move {
             if let Err(e) = recv_req.await {
                 warn!("cdc receive failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
             } else {
                 info!("cdc receive closed"; "downstream" => peer, "conn_id" => ?conn_id);
             }
-
             let deregister = Deregister::Conn(conn_id);
-            if let Err(e) = scheduler_dereg.schedule(Task::Deregister(deregister)) {
+            if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
                 error!("cdc deregister failed"; "error" => ?e, "conn_id" => ?conn_id);
             }
         });
