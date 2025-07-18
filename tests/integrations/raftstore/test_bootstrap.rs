@@ -15,7 +15,7 @@ use kvproto::{kvrpcpb::ApiVersion, metapb, raft_serverpb::RegionLocalState};
 use raftstore::{
     coprocessor::CoprocessorHost,
     store::{
-        AutoSplitController, DiskCheckRunner, SnapManager, bootstrap_store, fsm,
+        AutoSplitController, InpectorRunner, SnapManager, bootstrap_store, fsm,
         fsm::store::StoreMeta,
     },
 };
@@ -125,7 +125,7 @@ fn test_node_bootstrap_with_prepared_data() {
         ConcurrencyManager::new_for_test(1.into()),
         CollectorRegHandle::new_for_test(),
         None,
-        DiskCheckRunner::dummy(),
+        InpectorRunner::dummy(),
         GrpcServiceManager::dummy(),
         Arc::new(AtomicU64::new(0)),
     )
