@@ -651,6 +651,9 @@ where
     }
 
     pub fn on_compact_raftlog(&mut self, idx: u64, state: Option<&mut CacheWarmupState>) {
+        // Before compacting stale terms in advance to reduce the extra I/O costs on
+        // fetching terms.
+        self.entry_storage.compact_term_cache(idx);
         self.entry_storage.compact_entry_cache(idx, state);
         self.cancel_generating_snap(Some(idx));
     }
@@ -1339,7 +1342,9 @@ pub mod tests {
         let mut write_task: WriteTask<KvTestEngine, _> =
             WriteTask::new(store.get_region_id(), store.peer_id, 1);
         store.append(ents[1..].to_vec(), &mut write_task);
-        store.update_cache_persisted(ents.last().unwrap().get_index());
+        let last_entry = ents.last().unwrap();
+        store.update_cache_persisted(last_entry.get_index());
+        store.update_term_cache(last_entry.get_index(), last_entry.get_term());
         store
             .apply_state_mut()
             .mut_truncated_state()
