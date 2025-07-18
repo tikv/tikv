@@ -496,7 +496,6 @@ fn default_collect_tick_interval() -> Duration {
     DEFAULT_COLLECT_TICK_INTERVAL
 }
 
-<<<<<<< HEAD
 fn config(interval: Duration) -> Duration {
     fail_point!("mock_min_resolved_ts_interval", |_| {
         Duration::from_millis(50)
@@ -505,7 +504,8 @@ fn config(interval: Duration) -> Duration {
         Duration::from_millis(0)
     });
     interval
-=======
+}
+
 /// Determines the minimal interval for latency inspection ticks based on raft
 /// and kvdb inspection intervals.
 ///
@@ -550,7 +550,6 @@ fn get_minimal_inspect_tick_interval(
             std::cmp::min(inspect_latency_interval, inspect_kvdb_latency_interval)
         }
     }
->>>>>>> 6ebcdd9d98 (raftstore: enhance the detection to cover I/O jitters on kvdb. (#18439))
 }
 
 #[inline]
@@ -662,14 +661,9 @@ where
     collect_store_infos_interval: Duration,
     load_base_split_check_interval: Duration,
     collect_tick_interval: Duration,
-<<<<<<< HEAD
     report_min_resolved_ts_interval: Duration,
-    inspect_latency_interval: Duration,
-    inspect_kvdb_latency_interval: Duration,
-=======
     inspect_latency_interval: Duration,      // for raft mount path
     inspect_kvdb_latency_interval: Duration, // for kvdb mount path
->>>>>>> 6ebcdd9d98 (raftstore: enhance the detection to cover I/O jitters on kvdb. (#18439))
 }
 
 impl<T> StatsMonitor<T>
@@ -694,12 +688,8 @@ where
                 DEFAULT_LOAD_BASE_SPLIT_CHECK_INTERVAL,
                 interval,
             ),
-<<<<<<< HEAD
             report_min_resolved_ts_interval: config(report_min_resolved_ts_interval),
-            // Use `inspect_latency_interval` as the minimal limitation for collecting tick.
-=======
             // Use the smallest inspect latency as the minimal limitation for collecting tick.
->>>>>>> 6ebcdd9d98 (raftstore: enhance the detection to cover I/O jitters on kvdb. (#18439))
             collect_tick_interval: cmp::min(
                 get_minimal_inspect_tick_interval(
                     inspect_latency_interval,
