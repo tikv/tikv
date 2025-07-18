@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, atomic::AtomicU64},
     thread,
     time::Duration,
 };
@@ -174,6 +174,7 @@ where
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         disk_check_runner: DiskCheckRunner,
         grpc_service_mgr: GrpcServiceManager,
+        gc_safe_point: Arc<AtomicU64>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -213,6 +214,7 @@ where
             causal_ts_provider,
             disk_check_runner,
             grpc_service_mgr,
+            gc_safe_point,
         )?;
 
         Ok(())
@@ -462,6 +464,7 @@ where
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         disk_check_runner: DiskCheckRunner,
         grpc_service_mgr: GrpcServiceManager,
+        gc_safe_point: Arc<AtomicU64>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -497,6 +500,7 @@ where
             causal_ts_provider,
             disk_check_runner,
             grpc_service_mgr,
+            gc_safe_point,
         )?;
         Ok(())
     }
