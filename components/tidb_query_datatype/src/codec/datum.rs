@@ -16,20 +16,21 @@ use mysql::VectorFloat32;
 use tikv_util::{codec::BytesSlice, escape};
 
 use super::{
-    Result,
     mysql::{
-        self, DEFAULT_FSP, Decimal, DecimalDecoder, DecimalEncoder, Duration, Enum, Json,
-        JsonDecoder, JsonEncoder, MAX_FSP, PathExpression, Set, Time, VectorFloat32Decoder,
-        VectorFloat32Encoder, parse_json_path_expr,
+        self, parse_json_path_expr, Decimal, DecimalDecoder, DecimalEncoder, Duration, Enum, Json,
+        JsonDecoder, JsonEncoder, PathExpression, Set, Time, VectorFloat32Decoder, VectorFloat32Encoder,
+        DEFAULT_FSP, MAX_FSP,
     },
+    Result,
 };
 use crate::{
-    FieldTypeTp,
     codec::{
         convert::{ConvertTo, ToInt, ToStringValue},
-        data_type::AsMySqlBool,
-    },
-    expr::EvalContext,
+        data_type::{AsMySqlBool, ScalarValueRef},
+    }, expr::EvalContext,
+    match_template_collator,
+    FieldTypeAccessor,
+    FieldTypeTp,
 };
 
 pub const NIL_FLAG: u8 = 0;
@@ -68,6 +69,51 @@ pub enum Datum {
 }
 
 impl Datum {
+    #[inline]
+    pub fn from_scalar(
+        val: ScalarValueRef<'_>,
+        ft: &impl FieldTypeAccessor,
+        for_collation_sort: bool,
+    ) -> Result<Self> {
+        fn map<T>(o: Option<T>, f: impl FnOnce(T) -> Datum) -> Datum {
+            o.map_or(Datum::Null, f)
+        }
+
+        use crate::codec::data_type::ScalarValueRef::*;
+        Ok(match val {
+            Int(o) => map(o, |&v| {
+                if ft.is_unsigned() {
+                    Self::U64(v as u64)
+                } else {
+                    Self::I64(v)
+                }
+            }),
+            Real(o) => map(o, |v| Self::F64(v.into_inner())),
+            Decimal(o) => map(o, |&v| Self::Dec(v)),
+            Bytes(o) => {
+                if o.is_none() {
+                    Datum::Null
+                } else if !for_collation_sort {
+                    Self::Bytes(o.unwrap().to_vec())
+                } else {
+                    use crate::{codec::collation::Collator, Collation};
+                    let sort_key = match_template_collator! {
+                        TT, match ft.collation()? {
+                            Collation::TT => TT::sort_key(o.unwrap())?
+                        }
+                    };
+                    Self::Bytes(sort_key)
+                }
+            }
+            DateTime(o) => map(o, |&v| Self::Time(v)),
+            Duration(o) => map(o, |&v| Self::Dur(v)),
+            Json(o) => map(o, |v| Self::Json(v.to_owned())),
+            Enum(o) => map(o, |v| Self::Enum(v.to_owned())),
+            Set(o) => map(o, |v| Self::Set(v.to_owned())),
+            VectorFloat32(o) => map(o, |v| Self::VectorFloat32(v.to_owned())),
+        })
+    }
+
     #[inline]
     pub fn as_int(&self) -> Result<Option<i64>> {
         match *self {
@@ -1180,7 +1226,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        codec::mysql::{Decimal, Duration, MAX_FSP, Time},
+        codec::mysql::{Decimal, Duration, Time, MAX_FSP},
         expr::{EvalConfig, EvalContext},
     };
 
