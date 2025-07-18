@@ -42,6 +42,6 @@ pub use self::{
     raftkv::RaftKv,
     raftkv2::{Extension, NodeV2, RaftKv2},
     resolve::{PdStoreAddrResolver, StoreAddrResolver},
-    server::{GRPC_THREAD_PREFIX, Server},
+    server::{GRPC_THREAD_PREFIX, RAFT_CLIENT_THREAD_PREFIX, Server},
     transport::ServerTransport,
 };

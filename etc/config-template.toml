@@ -201,6 +201,9 @@
 ## Size of the thread pool for the gRPC server.
 # grpc-concurrency = 5
 
+## Size of the thread pool for the raft client.
+# raft-client-concurrency = 5
+
 ## The number of max concurrent streams/requests on a client connection.
 # grpc-concurrent-stream = 1024
 

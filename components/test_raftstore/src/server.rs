@@ -170,6 +170,7 @@ pub struct ServerCluster {
     conn_builder: ConnectionBuilder<AddressMap, FakeExtension>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
     env: Arc<Environment>,
+    raft_client_env: Arc<Environment>,
     pub causal_ts_providers: HashMap<u64, Arc<CausalTsProviderImpl>>,
     pub encryption: Option<Arc<DataKeyManager>>,
     pub in_memory_engines: HashMap<u64, Option<HybridEngineImpl>>,
@@ -184,6 +185,14 @@ impl ServerCluster {
                 .name_prefix(thd_name!("server-cluster"))
                 .build(),
         );
+
+        let raft_client_env = Arc::new(
+            EnvBuilder::new()
+                .cq_count(2)
+                .name_prefix(thd_name!("server-cluster"))
+                .build(),
+        );
+
         let security_mgr = Arc::new(SecurityManager::new(&Default::default()).unwrap());
         let map = AddressMap::default();
         // We don't actually need to handle snapshot message, just create a dead worker
@@ -217,6 +226,7 @@ impl ServerCluster {
             conn_builder,
             concurrency_managers: HashMap::default(),
             env,
+            raft_client_env,
             txn_extra_schedulers: HashMap::default(),
             causal_ts_providers: HashMap::default(),
             encryption: None,
@@ -613,6 +623,7 @@ impl ServerCluster {
                 gc_worker.clone(),
                 check_leader_scheduler.clone(),
                 self.env.clone(),
+                self.raft_client_env.clone(),
                 None,
                 debug_thread_pool.clone(),
                 health_controller.clone(),

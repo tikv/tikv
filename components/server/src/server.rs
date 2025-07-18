@@ -96,7 +96,7 @@ use tikv::{
     },
     server::{
         CPU_CORES_QUOTA_GAUGE, GRPC_THREAD_PREFIX, KvEngineFactoryBuilder, MEMORY_LIMIT_GAUGE,
-        MultiRaftServer, RaftKv, Server,
+        MultiRaftServer, RAFT_CLIENT_THREAD_PREFIX, RaftKv, Server,
         config::{Config as ServerConfig, ServerConfigManager},
         debug::{Debugger, DebuggerImpl},
         gc_worker::{AutoGcConfig, GcWorker},
@@ -267,6 +267,7 @@ where
     coprocessor_host: Option<CoprocessorHost<RocksEngine>>,
     concurrency_manager: ConcurrencyManager,
     env: Arc<Environment>,
+    raft_client_env: Arc<Environment>,
     check_leader_worker: Worker,
     sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
@@ -336,6 +337,14 @@ where
                 })
                 .build(),
         );
+
+        let raft_client_env = Arc::new(
+            EnvBuilder::new()
+                .cq_count(config.server.raft_client_concurrency)
+                .name_prefix(thd_name!(RAFT_CLIENT_THREAD_PREFIX))
+                .build(),
+        );
+
         let pd_client = TikvServerCore::connect_to_pd_cluster(
             &mut config,
             env.clone(),
@@ -474,6 +483,7 @@ where
             coprocessor_host,
             concurrency_manager,
             env,
+            raft_client_env,
             check_leader_worker,
             sst_worker: None,
             quota_limiter,
@@ -888,6 +898,7 @@ where
             gc_worker.clone(),
             check_leader_scheduler,
             self.env.clone(),
+            self.raft_client_env.clone(),
             unified_read_pool,
             debug_thread_pool,
             health_controller,

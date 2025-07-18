@@ -23,6 +23,7 @@ pub const DEFAULT_CLUSTER_ID: u64 = 0;
 pub const DEFAULT_LISTENING_ADDR: &str = "127.0.0.1:20160";
 const DEFAULT_ADVERTISE_LISTENING_ADDR: &str = "";
 const DEFAULT_STATUS_ADDR: &str = "127.0.0.1:20180";
+const DEFAULT_RAFT_CLIENT_CONCURRENCY: usize = 3;
 const DEFAULT_GRPC_CONCURRENCY: usize = 5;
 const DEFAULT_GRPC_CONCURRENT_STREAM: i32 = 1024;
 const DEFAULT_GRPC_RAFT_CONN_NUM: usize = 1;
@@ -117,6 +118,8 @@ pub struct Config {
     pub raft_client_grpc_send_msg_buffer: usize,
     #[online_config(skip)]
     pub raft_client_queue_size: usize,
+    #[online_config(skip)]
+    pub raft_client_concurrency: usize,
     // Test only
     #[doc(hidden)]
     #[serde(skip_serializing)]
@@ -262,6 +265,7 @@ impl Default for Config {
             // increased from 8192 to 16384 to reduce the message delays under too many messages
             // load. Additionally, the raft_msg_max_batch_size has also been increased.
             raft_client_queue_size: 16384,
+            raft_client_concurrency: DEFAULT_RAFT_CLIENT_CONCURRENCY,
             raft_client_max_backoff: ReadableDuration::secs(5),
             raft_client_initial_reconnect_backoff: ReadableDuration::secs(1),
             raft_msg_max_batch_size: 256,

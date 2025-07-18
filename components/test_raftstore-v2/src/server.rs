@@ -297,6 +297,7 @@ pub struct ServerCluster<EK: KvEngine> {
     conn_builder: ConnectionBuilder<AddressMap, FakeExtension>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
     env: Arc<Environment>,
+    raft_client_env: Arc<Environment>,
     pub pending_services: HashMap<u64, PendingServices>,
     // This is used to work around that server cluster is generic over KvEngine while the debug
     // service implementation is specific overal RocksDB.
@@ -315,6 +316,14 @@ impl<EK: KvEngine> ServerCluster<EK> {
                 .name_prefix(thd_name!("server-cluster"))
                 .build(),
         );
+
+        let raft_client_env = Arc::new(
+            EnvBuilder::new()
+                .cq_count(2)
+                .name_prefix(thd_name!("server-cluster"))
+                .build(),
+        );
+
         let security_mgr = Arc::new(SecurityManager::new(&Default::default()).unwrap());
         let map = AddressMap::default();
         // We don't actually need to handle snapshot message, just create a dead worker
@@ -345,6 +354,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
             conn_builder,
             concurrency_managers: HashMap::default(),
             env,
+            raft_client_env,
             txn_extra_schedulers: HashMap::default(),
             causal_ts_providers: HashMap::default(),
         }
@@ -638,6 +648,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
                 gc_worker.clone(),
                 check_leader_scheduler.clone(),
                 self.env.clone(),
+                self.raft_client_env.clone(),
                 None,
                 debug_thread_pool.clone(),
                 health_controller.clone(),

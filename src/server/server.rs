@@ -55,6 +55,7 @@ use crate::{
 const LOAD_STATISTICS_SLOTS: usize = 4;
 const LOAD_STATISTICS_INTERVAL: Duration = Duration::from_millis(100);
 const MEMORY_USAGE_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+pub const RAFT_CLIENT_THREAD_PREFIX: &str = "raft-client-server";
 pub const GRPC_THREAD_PREFIX: &str = "grpc-server";
 pub const READPOOL_NORMAL_THREAD_PREFIX: &str = "store-read-norm";
 pub const STATS_THREAD_PREFIX: &str = "transport-stats";
@@ -182,6 +183,7 @@ where
         gc_worker: GcWorker<E>,
         check_leader_scheduler: Scheduler<CheckLeaderTask>,
         env: Arc<Environment>,
+        raft_client_env: Arc<Environment>,
         yatp_read_pool: Option<ReadPool>,
         debug_thread_pool: Arc<Runtime>,
         health_controller: HealthController,
@@ -247,7 +249,7 @@ where
         let builder = Either::Left(builder_factory.create_builder(env.clone())?);
 
         let conn_builder = ConnectionBuilder::new(
-            env.clone(),
+            raft_client_env.clone(),
             Arc::clone(cfg),
             security_mgr.clone(),
             resolver,
@@ -647,6 +649,13 @@ mod tests {
                 .build(),
         );
 
+        let raft_client_env = Arc::new(
+            EnvBuilder::new()
+                .cq_count(1)
+                .name_prefix(thd_name!(RAFT_CLIENT_THREAD_PREFIX))
+                .build(),
+        );
+
         let (tx, _rx) = mpsc::channel();
         let mut gc_worker = GcWorker::new(
             storage.get_engine(),
@@ -701,6 +710,7 @@ mod tests {
             gc_worker,
             check_leader_scheduler,
             env,
+            raft_client_env,
             None,
             debug_thread_pool,
             HealthController::new(),

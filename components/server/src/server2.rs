@@ -84,7 +84,7 @@ use tikv::{
     },
     server::{
         CPU_CORES_QUOTA_GAUGE, GRPC_THREAD_PREFIX, KvEngineFactoryBuilder, MEMORY_LIMIT_GAUGE,
-        NodeV2, RaftKv2, Server,
+        NodeV2, RAFT_CLIENT_THREAD_PREFIX, RaftKv2, Server,
         config::{Config as ServerConfig, ServerConfigManager},
         debug::Debugger,
         debug2::DebuggerImplV2,
@@ -247,6 +247,7 @@ struct TikvServer<ER: RaftEngine> {
     coprocessor_host: Option<CoprocessorHost<RocksEngine>>,
     concurrency_manager: ConcurrencyManager,
     env: Arc<Environment>,
+    raft_client_env: Arc<Environment>,
     cdc_worker: Option<Box<LazyWorker<cdc::Task>>>,
     cdc_scheduler: Option<Scheduler<cdc::Task>>,
     cdc_memory_quota: Option<Arc<MemoryQuota>>,
@@ -307,6 +308,14 @@ where
                 })
                 .build(),
         );
+
+        let raft_client_env = Arc::new(
+            EnvBuilder::new()
+                .cq_count(config.server.raft_client_concurrency)
+                .name_prefix(thd_name!(RAFT_CLIENT_THREAD_PREFIX))
+                .build(),
+        );
+
         let pd_client = TikvServerCore::connect_to_pd_cluster(
             &mut config,
             env.clone(),
@@ -409,6 +418,7 @@ where
             coprocessor_host: None,
             concurrency_manager,
             env,
+            raft_client_env,
             cdc_worker: None,
             cdc_scheduler: None,
             cdc_memory_quota: None,
@@ -826,6 +836,7 @@ where
             gc_worker.clone(),
             check_leader_scheduler,
             self.env.clone(),
+            self.raft_client_env.clone(),
             unified_read_pool,
             debug_thread_pool,
             health_controller,
