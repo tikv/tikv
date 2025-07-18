@@ -759,6 +759,7 @@ where
 {
     store: Store,
     receiver: Receiver<StoreMsg<EK>>,
+
     check_then_compact_running_indicator: Option<Weak<()>>,
 }
 
@@ -812,7 +813,10 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             StoreTick::PdStoreHeartbeat => self.on_pd_store_heartbeat_tick(),
             StoreTick::SnapGc => self.on_snap_mgr_gc(),
             StoreTick::CompactLockCf => self.on_compact_lock_cf(),
-            StoreTick::CompactCheck => self.on_compact_check_tick(),
+            StoreTick::CompactCheck => {
+                // Disabled: replaced by GC worker auto compaction
+                debug!("CompactCheck tick disabled, using GC worker auto compaction instead");
+            }
             StoreTick::PeriodicFullCompact => self.on_full_compact_tick(),
             StoreTick::LoadMetricsWindow => self.on_load_metrics_window_tick(),
             StoreTick::ConsistencyCheck => self.on_consistency_check_tick(),
@@ -955,7 +959,8 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
         self.fsm.store.id = store.get_id();
         self.fsm.store.start_time = Some(time::get_time());
         self.register_cleanup_import_sst_tick();
-        self.register_compact_check_tick();
+        // self.register_compact_check_tick(); // Disabled: replaced by GC worker auto
+        // compaction
         self.register_full_compact_tick();
         self.register_load_metrics_window_tick();
         self.register_pd_store_heartbeat_tick();
@@ -2734,6 +2739,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         )
     }
 
+    #[allow(dead_code)]
     fn on_compact_check_tick(&mut self) {
         self.register_compact_check_tick();
         if let Some(token) = &self.fsm.check_then_compact_running_indicator {

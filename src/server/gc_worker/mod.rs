@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 pub mod compaction_filter;
+mod compaction_runner;
 mod config;
 mod gc_manager;
 mod gc_worker;
@@ -10,6 +11,10 @@ pub mod rawkv_compaction_filter;
 pub use compaction_filter::WriteCompactionFilterFactory;
 #[cfg(any(test, feature = "failpoints"))]
 pub use compaction_filter::test_utils::{TestGcRunner, gc_by_compact};
+pub use compaction_runner::{
+    CompactionRunner, CompactionRunnerHandle, 
+    CompactionCandidate
+};
 pub use config::{DEFAULT_GC_BATCH_KEYS, GcConfig, GcWorkerConfigManager};
 use engine_traits::MvccProperties;
 pub use gc_manager::AutoGcConfig;
