@@ -1,11 +1,14 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    thread,
+    time::Duration,
 };
-use std::thread;
-use std::time::Duration;
+
 use collections::{HashMap, HashMapEntry};
 use crossbeam::atomic::AtomicCell;
 use futures::stream::TryStreamExt;
