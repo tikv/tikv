@@ -21,7 +21,7 @@ pub const NETWORK_RECOVERY_INTERVALS: Duration = Duration::from_secs(60 * 30);
 /// After every DISK_ROUND_TICKS, the disk's slow score will be updated.
 pub const DISK_ROUND_TICKS: u64 = 30;
 /// After every NETWORK_ROUND_TICKS, the network's slow score will be updated.
-pub const NETWORK_ROUND_TICKS: u64 = 2;
+pub const NETWORK_ROUND_TICKS: u64 = 3;
 /// DISK_TIMEOUT_RATIO_THRESHOLD is the maximal tolerated timeout ratio
 /// for disk inspecting requests. If the timeout ratio is larger than this
 /// threshold, the disk's slow score will be multiplied by 2.
