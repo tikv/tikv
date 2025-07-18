@@ -1,7 +1,11 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
     path::Path,
+<<<<<<< HEAD
     sync::{atomic::AtomicU64, mpsc::sync_channel, Arc, Mutex},
+=======
+    sync::{Arc, Mutex, atomic::AtomicU64, mpsc::sync_channel},
+>>>>>>> 81055e47dc (GC: Estimate compaction effectiveness based on stats and GC safe point (#18670))
     time::Duration,
 };
 
