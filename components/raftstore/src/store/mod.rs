@@ -89,7 +89,7 @@ pub use self::{
         AutoSplitController, BIG_REGION_CPU_OVERLOAD_THRESHOLD_RATIO, BatchComponent, Bucket,
         BucketRange, BucketStatsInfo, CachedReadDelegate, CheckLeaderRunner, CheckLeaderTask,
         CompactThreshold, DEFAULT_BIG_REGION_BYTE_THRESHOLD, DEFAULT_BIG_REGION_QPS_THRESHOLD,
-        DEFAULT_BYTE_THRESHOLD, DEFAULT_QPS_THRESHOLD, DiskCheckRunner, FlowStatistics,
+        DEFAULT_BYTE_THRESHOLD, DEFAULT_QPS_THRESHOLD, InpectorRunner, FlowStatistics,
         FlowStatsReporter, FullCompactController, KeyEntry, LocalReadContext, LocalReader,
         LocalReaderCore, NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT, PdStatsMonitor, PdTask,
         REGION_CPU_OVERLOAD_THRESHOLD_RATIO, ReadDelegate, ReadExecutor, ReadExecutorProvider,
