@@ -102,7 +102,7 @@ where
     where
         F: FnMut(&BasicMailbox<N>) -> Option<R>,
     {
-        let mailbox = match self.normals.get_mut(&addr) {
+        let mailbox = match self.normals.get(&addr) {
             Some(mailbox) => mailbox,
             None => {
                 return CheckDoResult::NotExist;
