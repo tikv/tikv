@@ -266,6 +266,124 @@ fn test_switch_mode_v2() {
 }
 
 #[test]
+fn test_switch_mode_v1() {
+    let mut cfg = TikvConfig::default();
+    cfg.server.grpc_concurrency = 1;
+    cfg.rocksdb.writecf.disable_auto_compactions = true;
+    cfg.raft_store.right_derive_when_split = true;
+    // cfg.rocksdb.writecf.level0_slowdown_writes_trigger = Some(2);
+    let (mut cluster, mut ctx, _tikv, import) = open_cluster_and_tikv_import_client_v2(Some(cfg));
+
+    let region = cluster.get_region(b"");
+    cluster.must_split(&region, &[50]);
+    let region = cluster.get_region(&[50]);
+    ctx.set_region_epoch(region.get_region_epoch().clone());
+
+    let mut key_range = Range::default();
+    key_range.set_start([50].to_vec());
+    switch_mode(&import, key_range.clone(), SwitchMode::Import);
+
+    let temp_dir = Builder::new().prefix("test_ingest_sst").tempdir().unwrap();
+
+    let upload_and_ingest =
+        |sst_range, import: &ImportSstClient, path_name, ctx: &Context| -> IngestResponse {
+            let sst_path = temp_dir.path().join(path_name);
+            let (mut meta, data) = gen_sst_file(sst_path, sst_range);
+            meta.set_cf_name("write".to_string());
+            // Set region id and epoch.
+            meta.set_region_id(ctx.get_region_id());
+            meta.set_region_epoch(ctx.get_region_epoch().clone());
+            send_upload_sst(import, &meta, &data).unwrap();
+            let mut ingest = IngestRequest::default();
+            ingest.set_context(ctx.clone());
+            ingest.set_sst(meta);
+            import.ingest(&ingest).unwrap()
+        };
+
+    // The first one will be ingested at the bottom level. And as the following ssts
+    // are overlapped with the previous one, they will all be ingested at level 0.
+    for i in 0..10 {
+        let resp = upload_and_ingest((50, 100), &import, format!("test{}.sst", i), &ctx);
+        assert!(!resp.has_error());
+    }
+
+    // For this region, it is not in the key range, so it is normal mode.
+    let region = cluster.get_region(&[20]);
+    let mut ctx2 = ctx.clone();
+    ctx2.set_region_id(region.get_id());
+    ctx2.set_region_epoch(region.get_region_epoch().clone());
+    ctx2.set_peer(region.get_peers()[0].clone());
+    for i in 0..6 {
+        upload_and_ingest((0, 49), &import, format!("test-{}.sst", i), &ctx2);
+    }
+    // Propose another switch mode request to let this region to ingest.
+    let mut key_range2 = Range::default();
+    key_range2.set_end([50].to_vec());
+    switch_mode(&import, key_range2.clone(), SwitchMode::Import);
+    let resp = upload_and_ingest((0, 49), &import, "test-6.sst".to_string(), &ctx2);
+    assert!(!resp.has_error());
+    // switching back to normal should make further ingest be rejected
+    switch_mode(&import, key_range2, SwitchMode::Normal);
+    let resp = upload_and_ingest((0, 49), &import, "test-7.sst".to_string(), &ctx2);
+    assert!(resp.get_error().has_server_is_busy());
+
+    // switch back to normal, so region 1 also starts to reject
+    switch_mode(&import, key_range, SwitchMode::Normal);
+    let resp = upload_and_ingest((50, 100), &import, "test10".to_string(), &ctx);
+    assert!(resp.get_error().has_server_is_busy());
+}
+
+#[test]
+fn test_switch_mode_v1_compatibility() {
+    let mut cfg = TikvConfig::default();
+    cfg.server.grpc_concurrency = 1;
+    cfg.rocksdb.writecf.disable_auto_compactions = true;
+    let (_cluster, ctx, _tikv, import) = open_cluster_and_tikv_import_client(Some(cfg));
+
+    let temp_dir = Builder::new().prefix("test_v1_compat").tempdir().unwrap();
+
+    let upload_and_ingest =
+        |sst_range, import: &ImportSstClient, path_name: String| -> IngestResponse {
+            let sst_path = temp_dir.path().join(path_name);
+            let (mut meta, data) = gen_sst_file(sst_path, sst_range);
+            meta.set_cf_name("write".to_string());
+            meta.set_region_id(ctx.get_region_id());
+            meta.set_region_epoch(ctx.get_region_epoch().clone());
+            send_upload_sst(import, &meta, &data).unwrap();
+            let mut ingest = IngestRequest::default();
+            ingest.set_context(ctx.clone());
+            ingest.set_sst(meta);
+            import.ingest(&ingest).unwrap()
+        };
+
+    let mut req = SwitchModeRequest::default();
+    req.set_mode(SwitchMode::Import);
+    let _switch_resp = import.switch_mode(&req).unwrap();
+
+    let resp = upload_and_ingest((0, 100), &import, "test_traditional_import.sst".to_string());
+    assert!(
+        !resp.has_error(),
+        "Should accept ingest in traditional import mode"
+    );
+
+    // Switch back to normal mode
+    req.set_mode(SwitchMode::Normal);
+    let _switch_resp = import.switch_mode(&req).unwrap();
+
+    // Should reject ingest in normal mode after some attempts
+    let mut rejected = false;
+    for i in 0..10 {
+        let filename = format!("test_traditional_normal_{}.sst", i);
+        let resp = upload_and_ingest((0, 49), &import, filename);
+        if resp.has_error() && resp.get_error().has_server_is_busy() {
+            rejected = true;
+            break;
+        }
+    }
+    assert!(rejected, "Should reject ingest in traditional normal mode");
+}
+
+#[test]
 fn test_upload_and_ingest_with_tde() {
     let (_tmp_dir, _cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client_tde();
 

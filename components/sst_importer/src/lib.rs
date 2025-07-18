@@ -26,8 +26,7 @@ pub use self::{
     config::{Config, ConfigManager},
     errors::{Error, Result, error_inc},
     import_file::{API_VERSION_2, sst_meta_to_path},
-    import_mode2::range_overlaps,
     sst_importer::SstImporter,
     sst_writer::{RawSstWriter, TxnSstWriter},
-    util::{copy_sst_for_ingestion, prepare_sst_for_ingestion},
+    util::{copy_sst_for_ingestion, prepare_sst_for_ingestion, range_overlaps},
 };
