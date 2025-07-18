@@ -1558,6 +1558,9 @@ impl RegionReadProgress {
     }
 
     pub fn update_read_index_safe_ts(&self, start_ts: u64) {
+        if start_ts == u64::MAX {
+            return;
+        }
         let core = self.core.lock().unwrap();
         if core.pause || core.discard {
             return;
@@ -2866,6 +2869,9 @@ mod tests {
         assert_eq!(rrp.read_index_safe_ts(), 15);
         // read index safe ts will not go backward
         rrp.update_read_index_safe_ts(10);
+        assert_eq!(rrp.read_index_safe_ts(), 15);
+        // read index will not be updated if the ts is max
+        rrp.update_read_index_safe_ts(u64::MAX);
         assert_eq!(rrp.read_index_safe_ts(), 15);
 
         // read index safe ts is set to 0 when pause and cannot be updated
