@@ -274,11 +274,6 @@ impl RaftstoreReporter {
             }
         }
 
-        if self.slow_score.get_mut(factor).exceed_max_running_ticks() {
-            // If the tick is not finished, not continue to tick. Otherwise,
-            // the worker bufffer will be busy during network jitter.
-            return SlowScoreTickResult::default()
-        }
         let slow_score_tick_result = self.slow_score.get_mut(factor).tick();
         if slow_score_tick_result.updated_score.is_some() && !slow_score_tick_result.has_new_record
         {
