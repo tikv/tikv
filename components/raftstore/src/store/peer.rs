@@ -3140,6 +3140,13 @@ where
         for entry in committed_entries.iter().rev() {
             // raft meta is very small, can be ignored.
             self.raft_log_size_hint += entry.get_data().len() as u64;
+            // Using per committed entry to update the term cache may slightly reduce
+            // `raft::Storage::term()` query performance for recently appended
+            // indices, but it ensures that the term cache maintains the
+            // integrity and continuity of each term's lifecycle, making it safe
+            // and efficient for access and compaction.
+            self.mut_store()
+                .update_term_cache(entry.get_index(), entry.get_term());
             if lease_to_be_updated {
                 let propose_time = self
                     .proposals
@@ -3230,13 +3237,6 @@ where
             apply.on_schedule(&ctx.raft_metrics);
             self.mut_store()
                 .trace_cached_entries(apply.entries[0].clone());
-            // Using the latest committed entry to update the term cache may
-            // slightly reduce `raft::Storage::term()` query performance for
-            // recently appended indices, but it ensures that the term cache
-            // maintains the integrity and continuity of each term's lifecycle,
-            // making it safe and efficient for access and compaction.
-            self.mut_store()
-                .update_term_cache(commit_index, commit_term);
             if needs_evict_entry_cache(ctx.cfg.evict_cache_on_memory_ratio) {
                 // Compact all cached entries instead of half evict.
                 self.mut_store().evict_entry_cache(false);
