@@ -1573,7 +1573,7 @@ pub mod tests {
             cache.append(5, 2);
             cache.append(4, 2); // skip as rewrite with old idx
             cache.append(3, 2); // skip as rewrite with old idx
-            for i in 1..=10 {
+            for i in (1..=10).rev() {
                 cache.append(i + 5, 3);
             }
             for i in 1..=5 {
@@ -1632,6 +1632,14 @@ pub mod tests {
             assert_eq!(cache.entry(45), Some(11));
             cache.compact_to(12);
             assert_eq!(cache.entry(45), None);
+            // Append reversely, the first term should be cleared.
+            for i in (12..20).rev() {
+                cache.append(48 + i - 11, i);
+            }
+            assert_eq!(cache.entry(48), None);
+            assert_eq!(cache.entry(49), Some(12));
+            assert_eq!(cache.entry(56), Some(19));
+            assert_eq!(cache.entry(57), Some(19));
         }
         // Abnormal cases
         {
