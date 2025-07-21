@@ -474,12 +474,14 @@ impl TermCache {
         }
     }
 
-    /// Compact all terms whose term_id are less than the given term.
-    fn compact_to(&mut self, term: u64) {
-        if let Some((first_term, _)) = self.cache.front() {
-            self.cache
-                .drain(0..term.saturating_sub(*first_term) as usize);
-        }
+    /// Compact all terms whose start_index are less than the given index.
+    fn compact_to(&mut self, index: u64) {
+        // This operation has low cost.
+        // Since consistency and safety have been assured, compaction of the
+        // `TermCache` is only called when `UnsafeForceCompact` is triggered.
+        // Meanwhile, the capacity of `TermCache` is limited to 8, so the
+        // traversal cost is low.
+        self.cache.retain(|(_, start_idx)| *start_idx >= index);
     }
 
     /// Return the term of the given index.
@@ -1400,9 +1402,8 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
     }
 
     #[inline]
-    pub fn compact_term_cache(&mut self, idx: u64) {
-        // Get the term of the given index.
-        let _ = self.term(idx).map(|term| self.term_cache.compact_to(term));
+    pub fn compact_term_cache(&mut self, index: u64) {
+        self.term_cache.compact_to(index);
     }
 
     #[inline]
@@ -1620,17 +1621,17 @@ pub mod tests {
             assert_eq!(cache.entry(39), Some(9));
             assert_eq!(cache.entry(44), Some(10));
             // compact to (index = 40, term = 10)
-            cache.compact_to(10);
+            cache.compact_to(40);
             assert_eq!(cache.cache.len(), 2);
             assert_eq!(cache.entry(39), None);
             assert_eq!(cache.entry(40), Some(10));
             // compact to (index = 45, term = 11)
-            cache.compact_to(11);
+            cache.compact_to(45);
             assert_eq!(cache.cache.len(), 1);
             cache.append(48, 12);
             assert_eq!(cache.cache.len(), 2);
             assert_eq!(cache.entry(45), Some(11));
-            cache.compact_to(12);
+            cache.compact_to(46);
             assert_eq!(cache.entry(45), None);
             // Append reversely, the first term should be cleared.
             for i in (12..20).rev() {

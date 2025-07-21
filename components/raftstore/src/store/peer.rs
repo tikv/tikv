@@ -1105,7 +1105,7 @@ where
             peer.raft_group.raft.term,
         );
         peer.mut_store().update_cache_persisted(persisted_index);
-        // For initilization, uses the last committed raft log to initialize the term
+        // For initialization, uses the last committed raft log to initialize the term
         // cache.
         peer.mut_store().update_term_cache(committed_index, term);
         Ok(peer)
