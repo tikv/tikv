@@ -31,7 +31,7 @@ pub const DISK_TIMEOUT_RATIO_THRESHOLD: f64 = 0.1;
 /// threshold, the network's slow score will be multiplied by 2.
 pub const NETWORK_TIMEOUT_RATIO_THRESHOLD: f64 = 1.0;
 /// The timeout threshold for network inspecting requests.
-pub const NETWORK_TIMEOUT_THRESHOLD: Duration = Duration::from_secs(2);
+pub const NETWORK_TIMEOUT_THRESHOLD: Duration = Duration::from_secs(1);
 // Slow score is a value that represents the speed of a store and ranges in [1,
 // 100]. It is maintained in the AIMD way.
 // If there are some inspecting requests timeout during a round, by default the
