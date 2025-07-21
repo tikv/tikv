@@ -1426,6 +1426,8 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
         Ok(region_peers)
     }
 
+    // Clear stale meta data of a region if it's tombstone (either being merged or
+    // removed by confchange).
     fn clear_stale_meta(
         &self,
         kv_wb: &mut EK::WriteBatch,
