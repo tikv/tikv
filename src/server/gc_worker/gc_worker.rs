@@ -1292,7 +1292,10 @@ where
         Ok(())
     }
 
-    pub fn start_auto_compaction<S: GcSafePointProvider, R: RegionInfoProvider + Clone + 'static>(
+    pub fn start_auto_compaction<
+        S: GcSafePointProvider,
+        R: RegionInfoProvider + Clone + 'static,
+    >(
         &self,
         safe_point_provider: S,
         region_info_provider: R,
@@ -1315,9 +1318,10 @@ where
             self.config_manager.clone(),
         );
 
-        let new_handle = compaction_runner.start()
+        let new_handle = compaction_runner
+            .start()
             .map_err(|e| -> Error { box_err!("failed to start compaction runner: {:?}", e) })?;
-        
+
         *handle = Some(new_handle);
         info!("compaction runner started");
         Ok(())

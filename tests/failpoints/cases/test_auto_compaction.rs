@@ -227,7 +227,7 @@ fn test_gc_worker_auto_compaction_with_failpoints() {
         thread::sleep(Duration::from_millis(100));
         timeout -= 1;
     }
-    
+
     if !thread_started.load(Ordering::SeqCst) {
         // Auto compaction couldn't start (likely due to test engine limitations)
         // This is acceptable - just verify no crash occurred
@@ -259,7 +259,8 @@ fn test_gc_worker_auto_compaction_with_failpoints() {
     fail::remove(fp_pause_after_candidates);
 
     // Set up failpoints to check which specific regions are found as candidates
-    // We expect ranges k05-k10, k10-k15, k15-k20, and k20-k35 to be candidates (high redundancy)
+    // We expect ranges k05-k10, k10-k15, k15-k20, and k20-k35 to be candidates
+    // (high redundancy)
     let fp_k05_k10 = "gc_worker::auto_compaction::candidate_k05_k10";
     let k05_k10_found = Arc::new(AtomicBool::new(false));
     let k05_k10_found_clone = k05_k10_found.clone();
@@ -308,9 +309,10 @@ fn test_gc_worker_auto_compaction_with_failpoints() {
         timeout -= 1;
     }
 
-    // We expect ranges k5-k10, k10-k15, k15-k20, and k20-k35 to be found as compaction candidates
-    // but NOT k0-k5 (clean data with only single versions)
-    
+    // We expect ranges k5-k10, k10-k15, k15-k20, and k20-k35 to be found as
+    // compaction candidates but NOT k0-k5 (clean data with only single
+    // versions)
+
     // Range k5-k10: Should be a candidate
     // - 10 total entries (5 keys × 2 versions each)
     // - 5 redundant versions (older puts that are superseded)
@@ -320,7 +322,7 @@ fn test_gc_worker_auto_compaction_with_failpoints() {
         "Expected range k5-k10 with 10 total entries, 5 discardable versions to be found as a compact candidate"
     );
 
-    // Range k10-k15: Should be a candidate  
+    // Range k10-k15: Should be a candidate
     // - 15 total entries (5 keys × 2 versions each) + 5 deletes = 15 total
     // - 2 discardable versions estimated by formula
     // - 5 tombstones (delete entries)
@@ -331,7 +333,7 @@ fn test_gc_worker_auto_compaction_with_failpoints() {
     );
 
     // Range k15-k20: Should be a candidate
-    // - 20 total entries (5 keys × 3 versions each) + 5 deletes = 20 total  
+    // - 20 total entries (5 keys × 3 versions each) + 5 deletes = 20 total
     // - 7 discardable versions estimated by formula
     // - 5 tombstones (delete entries)
     // - Very high redundancy ratio exceeds threshold

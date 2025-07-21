@@ -36,11 +36,11 @@ pub struct GcConfig {
     pub compaction_filter_skip_version_check: bool,
     /// gc threads count
     pub num_threads: usize,
-    
+
     // Auto compaction settings
     /// How often to check for new compaction candidates (in seconds)
     pub auto_compaction_check_interval_secs: u64,
-    
+
     // Compaction threshold settings
     /// Minimum number of tombstones to trigger compaction
     pub compaction_tombstones_num_threshold: u64,
@@ -88,7 +88,9 @@ impl GcConfig {
             return Err("gc.compaction_tombstones_percent_threshold should not exceed 100".into());
         }
         if self.compaction_redundant_rows_percent_threshold > 100 {
-            return Err("gc.compaction_redundant_rows_percent_threshold should not exceed 100".into());
+            return Err(
+                "gc.compaction_redundant_rows_percent_threshold should not exceed 100".into(),
+            );
         }
         Ok(())
     }

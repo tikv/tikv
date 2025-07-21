@@ -4111,22 +4111,49 @@ def GC() -> RowPanel:
             ),
         ]
     )
-    layout.half_row(
+    # Auto Compaction panels
+    layout.row(
         [
-            graph_panel(
-                title="Check and Compact duration " + OPTIONAL_QUANTILE_INPUT,
-                description="The duration of check and compact operations",
+            graph_panel_histogram_quantiles(
+                title="Auto Compaction Duration",
+                description="Time spent on auto compaction operations by type",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_auto_compaction_duration_seconds",
+                by_labels=["type"],
+                hide_count=True,
+            ),
+            graph_panel(
+                title="Auto Compaction Operations Rate",
+                description="Rate of compaction operations by type",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
                 targets=[
                     target(
-                        expr=expr_histogram_quantile(
-                            0.99,
-                            "tikv_storage_check_then_compact_duration_seconds",
-                            by_labels=["instance", "type"],
-                            is_optional_quantile=True,
+                        expr=expr_sum_rate(
+                            "tikv_auto_compaction_operations_total",
+                            by_labels=["type"],
                         ),
-                        legend_format="{{instance}}-{{type}}-duration "
-                        + OPTIONAL_QUANTILE_INPUT,
+                        legend_format="{{type}}",
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
+        ]
+    )
+
+    layout.row(
+        [
+            graph_panel(
+                title="Top 10 Candidates - MVCC Stats (Sum)",
+                description="Sum of MVCC statistics in top compaction candidates by type",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_auto_compaction_top_candidates_entries",
+                            by_labels=["type"],
+                        ),
+                        legend_format="{{type}}",
+                        additional_groupby=True,
                     ),
                 ],
             ),

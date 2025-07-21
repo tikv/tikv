@@ -405,13 +405,12 @@ impl ServerCluster {
             Arc::new(region_info_accessor.clone()),
         );
         gc_worker.start(node_id, coprocessor_host.clone()).unwrap();
-        
+
         // Start auto compaction
         info!("Starting auto compaction for node {}", node_id);
-        if let Err(e) = gc_worker.start_auto_compaction(
-            self.pd_client.clone(),
-            region_info_accessor.clone(),
-        ) {
+        if let Err(e) =
+            gc_worker.start_auto_compaction(self.pd_client.clone(), region_info_accessor.clone())
+        {
             warn!("failed to start auto_compaction: {}", e);
         } else {
             info!("Auto compaction started successfully for node {}", node_id);

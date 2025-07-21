@@ -1091,7 +1091,7 @@ where
         if let Err(e) = gc_worker.start_auto_gc(auto_gc_config, safe_point) {
             fatal!("failed to start auto_gc on storage, error: {}", e);
         }
-        
+
         // Start auto compaction
         if let Err(e) = gc_worker.start_auto_compaction(
             self.pd_client.clone(),
