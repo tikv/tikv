@@ -1,7 +1,7 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cmp::{Ordering, Reverse},
+    cmp::Reverse,
     collections::BinaryHeap,
     sync::mpsc,
     thread::{self, Builder as ThreadBuilder, JoinHandle},
