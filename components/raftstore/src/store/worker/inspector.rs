@@ -9,7 +9,7 @@ use std::{
 };
 
 use std::sync::Arc;
-use crossbeam::channel::{Receiver, Sender, bounded};
+use crossbeam::channel::{TrySendError, Receiver, Sender, bounded};
 use health_controller::types::LatencyInspector;
 use tikv_util::{
     time::Instant,
@@ -34,7 +34,10 @@ fn is_network_error(err: &pd_client::Error) -> bool {
 #[derive(Debug)]
 pub enum Task {
     DiskLatency { inspector: LatencyInspector },
-    NetworkLatency { inspector: LatencyInspector },
+    NetworkLatency { 
+        inspector: LatencyInspector,
+        start: Instant,
+    },
 }
 
 impl Display for Task {
@@ -153,8 +156,7 @@ impl Runner {
         Some(start.saturating_elapsed())
     }
 
-    fn inspect_network(&self) -> Option<Duration> {
-        let start = Instant::now();
+    fn inspect_network(&self, start: Instant) -> Option<Duration> {
         match self.health_client.check() {
             Ok(resp) => {
                 if resp.status != Serving {
@@ -195,9 +197,8 @@ impl Runner {
     fn execute_network(&self) {
         if let Ok(task) = self.network_runner.receiver.try_recv() {
             match task {
-                Task::NetworkLatency { mut inspector } => {
-                    // For network latency, we don't have a specific implementation here.
-                    if let Some(latency) = self.inspect_network() {
+                Task::NetworkLatency { mut inspector, start } => {
+                    if let Some(latency) = self.inspect_network(start) {
                         inspector.record_network_io_duration(latency);
                         inspector.finish();
                     } else {
@@ -228,8 +229,22 @@ impl Runnable for Runner {
                     }
                 }
             },
-            Task::NetworkLatency { inspector: _ } => { 
-                if let Err(e) = self.network_runner.notifier.try_send(task) {
+            Task::NetworkLatency { inspector: _, start: _ } => {
+                let mut task_opt = Some(task);
+                if let Err(e) = self.network_runner.notifier.try_send(task_opt.take().unwrap()) {
+                    let e = match e {
+                        TrySendError::Full(_) => {
+                            // Try to make space and resend once
+                            let _ = self.network_runner.receiver.try_recv();
+                            if let Err(e2) = self.network_runner.notifier.try_send(task_opt.take().unwrap()) {
+                                e2
+                            } else {
+                                // Successfully sent after making space, so return early
+                                return;
+                            }
+                        },
+                        other => other,
+                    };
                     warn!("failed to send task to inspector bg_worker: {:?}", e);
                 } else {
                     let runner = self.clone();

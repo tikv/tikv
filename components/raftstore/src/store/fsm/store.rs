@@ -913,10 +913,14 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                             }
                         }
                         InspectFactor::Network => {
+                            let start = TiInstant::now();
                             if let Err(e) = self
                                 .ctx
                                 .inspector_scheduler
-                                .schedule(InspectorTask::NetworkLatency { inspector })
+                                .schedule(InspectorTask::NetworkLatency { 
+                                    inspector,
+                                    start,
+                                })
                             {
                                 warn!(
                                     "Failed to schedule network check task";
