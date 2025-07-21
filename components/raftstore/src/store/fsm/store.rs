@@ -10,10 +10,7 @@ use std::{
     },
     mem,
     ops::{Deref, DerefMut},
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, Mutex, Weak, atomic::Ordering},
     time::{Duration, Instant, SystemTime},
 };
 
@@ -610,8 +607,6 @@ where
     pub sync_write_worker: Option<WriteWorker<EK, ER, RaftRouter<EK, ER>, T>>,
     pub pending_latency_inspect: Vec<LatencyInspector>,
 
-    pub safe_point: Arc<AtomicU64>,
-
     pub process_stat: Option<ProcessStat>,
 }
 
@@ -759,6 +754,7 @@ where
 {
     store: Store,
     receiver: Receiver<StoreMsg<EK>>,
+    check_then_compact_running_indicator: Option<Weak<()>>,
 }
 
 impl<EK> StoreFsm<EK>
@@ -777,6 +773,7 @@ where
                 store_reachability: HashMap::default(),
             },
             receiver: rx,
+            check_then_compact_running_indicator: None,
         });
         (tx, fsm)
     }
@@ -1295,7 +1292,6 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     feature_gate: FeatureGate,
     write_senders: WriteSenders<EK, ER>,
     node_start_time: Timespec, // monotonic_raw_now
-    safe_point: Arc<AtomicU64>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
@@ -1430,6 +1426,8 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
         Ok(region_peers)
     }
 
+    // Clear stale meta data of a region if it's tombstone (either being merged or
+    // removed by confchange).
     fn clear_stale_meta(
         &self,
         kv_wb: &mut EK::WriteBatch,
@@ -1559,7 +1557,6 @@ where
             write_senders: self.write_senders.clone(),
             sync_write_worker,
             pending_latency_inspect: vec![],
-            safe_point: self.safe_point.clone(),
             process_stat: None,
         };
         ctx.update_ticks_timeout();
@@ -1615,7 +1612,6 @@ where
             feature_gate: self.feature_gate.clone(),
             write_senders: self.write_senders.clone(),
             node_start_time: self.node_start_time,
-            safe_point: self.safe_point.clone(),
         }
     }
 }
@@ -1695,7 +1691,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         mut disk_check_runner: DiskCheckRunner,
         grpc_service_mgr: GrpcServiceManager,
-        safe_point: Arc<AtomicU64>,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1809,12 +1804,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             ReadRunner::new(self.router.clone(), engines.raft.clone()),
         );
 
-        let compact_runner = CompactRunner::new(
-            engines.kv.clone(),
-            bgworker_remote,
-            cfg.clone().tracker(String::from("compact-runner")),
-            cfg.value().skip_manual_compaction_in_clean_up_worker,
-        );
+        let compact_runner = CompactRunner::new(engines.kv.clone(), bgworker_remote);
         let cleanup_sst_runner = CleanupSstRunner::new(Arc::clone(&importer));
         let gc_snapshot_runner = GcSnapshotRunner::new(
             meta.get_id(),
@@ -1823,7 +1813,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         );
         let cleanup_runner =
             CleanupRunner::new(compact_runner, cleanup_sst_runner, gc_snapshot_runner);
-        let cleanup_scheduler = workers
+        let cleanup_scheduler: Scheduler<CleanupTask> = workers
             .cleanup_worker
             .start("cleanup-worker", cleanup_runner);
         let consistency_check_runner =
@@ -1873,7 +1863,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             feature_gate: pd_client.feature_gate().clone(),
             write_senders: self.store_writers.senders(),
             node_start_time: self.node_start_time,
-            safe_point,
         };
         let region_peers = builder.init()?;
         self.start_system::<T, C>(
@@ -2739,6 +2728,67 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
 
     fn on_compact_check_tick(&mut self) {
         self.register_compact_check_tick();
+        if let Some(token) = &self.fsm.check_then_compact_running_indicator {
+            if token.upgrade().is_some() {
+                info!(
+                    "compact check is running, skip compact check";
+                    "store_id" => self.fsm.store.id,
+                );
+                return;
+            }
+        }
+        if self.ctx.cleanup_scheduler.is_busy() {
+            debug!(
+                "compact worker is busy, skip compact check";
+                "store_id" => self.fsm.store.id,
+            );
+            return;
+        }
+
+        let meta = self.ctx.store_meta.lock().unwrap();
+        if meta.region_ranges.is_empty() {
+            debug!(
+            "there is no range need to check";
+            "store_id" => self.fsm.store.id
+            );
+            return;
+        }
+        let mut all_ranges = Vec::with_capacity(meta.region_ranges.len() + 2);
+        all_ranges.push(keys::DATA_MIN_KEY.to_vec());
+        all_ranges.extend(meta.region_ranges.keys().cloned());
+        all_ranges.push(keys::DATA_MAX_KEY.to_vec());
+        let cf_names = vec![CF_WRITE.to_owned(), CF_DEFAULT.to_owned()];
+        let finished = Arc::new(());
+        self.fsm.check_then_compact_running_indicator = Some(Arc::downgrade(&finished));
+        if let Err(e) = self.ctx.cleanup_scheduler.schedule(CleanupTask::Compact(
+            CompactTask::CheckThenCompactTopN {
+                cf_names,
+                ranges: all_ranges,
+                compact_threshold: CompactThreshold::new(
+                    self.ctx.cfg.region_compact_min_tombstones,
+                    self.ctx.cfg.region_compact_tombstones_percent,
+                    self.ctx.cfg.region_compact_min_redundant_rows,
+                    self.ctx.cfg.region_compact_redundant_rows_percent(),
+                ),
+                compaction_filter_enabled: self.ctx.cfg.compaction_filter_enabled,
+                bottommost_level_force: self.ctx.cfg.check_then_compact_force_bottommost_level,
+                top_n: self.ctx.cfg.check_then_compact_top_n as usize,
+                finished,
+            },
+        )) {
+            error!(
+                "schedule space check task failed";
+                "store_id" => self.fsm.store.id,
+                "err" => ?e,
+            );
+        }
+    }
+
+    // TODO: remove this function after the check and compact is fully migrated to
+    // check then compact
+    #[allow(dead_code)]
+    fn on_check_and_compact_tick(&mut self) {
+        self.register_compact_check_tick();
         if self.ctx.cleanup_scheduler.is_busy() {
             debug!(
                 "compact worker is busy, check space redundancy next time";
@@ -2840,7 +2890,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
             min_resolved_ts,
         };
         if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
-            error!("failed to send min resolved ts to pd worker";
+            warn!("failed to send min resolved ts to pd worker";
                 "store_id" => self.fsm.store.id,
                 "err" => ?e
             );

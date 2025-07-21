@@ -5,10 +5,15 @@ use std::{
     collections::HashMap,
     io::Read,
     ops::{Deref, DerefMut},
+    sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use api_version::{ApiV2, KeyMode, KvFormat};
 use engine_traits::{MvccProperties, Range, RangeStats, raw_ttl::ttl_current_ts};
+use lazy_static::lazy_static;
 use rocksdb::{
     DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex,
     UserCollectedProperties,
@@ -19,6 +24,7 @@ use tikv_util::{
         number::{self, NumberEncoder},
     },
     info,
+    smoother::Smoother,
 };
 use txn_types::{Key, Write, WriteType};
 
@@ -33,11 +39,35 @@ const PROP_RANGE_INDEX: &str = "tikv.range_index";
 pub const DEFAULT_PROP_SIZE_INDEX_DISTANCE: u64 = 4 * 1024 * 1024;
 pub const DEFAULT_PROP_KEYS_INDEX_DISTANCE: u64 = 40 * 1024;
 
-fn get_entry_size(value: &[u8], entry_type: DBEntryType) -> std::result::Result<u64, ()> {
+/// Caps the compaction factor to avoid unrealistic estimates.
+pub const TITAN_MAX_COMPACTION_FACTOR: f64 = 5000.0;
+const FIVE_MINS_IN_SECONDS: u64 = 5 * 60;
+
+lazy_static! {
+    // A global smoother used to estimate the Titan blob compression factor over
+    // the last 5 minutes. The window size is 30, roughly matching the number of
+    // data points collected in 5 minutes assuming one data point every 10 secs.
+    pub static ref TITAN_COMPRESSION_FACTOR_SMOOTHER: Mutex<Smoother<f64, 30, FIVE_MINS_IN_SECONDS, 0>> =
+        Mutex::new(Smoother::<f64, 30, FIVE_MINS_IN_SECONDS, 0>::default());
+    pub static ref TITAN_COMPRESSION_FACTOR: AtomicU64 = AtomicU64::new(f64::to_bits(1.0));
+    pub static ref TITAN_MAX_BLOB_SIZE_SEEN: AtomicU64 = AtomicU64::new(u64::MAX);
+}
+
+fn get_entry_size(
+    value: &[u8],
+    entry_type: DBEntryType,
+    titan_compression_factor: f64,
+    titan_max_blob_size: u64,
+) -> std::result::Result<u64, ()> {
     match entry_type {
         DBEntryType::Put => Ok(value.len() as u64),
         DBEntryType::BlobIndex => match TitanBlobIndex::decode(value) {
-            Ok(index) => Ok(index.blob_size + value.len() as u64),
+            Ok(index) => {
+                // Estimate the raw blob size using the Titan compression factor.
+                let estimation = (index.blob_size as f64 * titan_compression_factor) as u64;
+                let blob_raw_size = estimation.min(titan_max_blob_size).max(index.blob_size);
+                Ok(blob_raw_size + value.len() as u64)
+            }
             Err(_) => Err(()),
         },
         _ => Err(()),
@@ -286,6 +316,9 @@ pub struct RangePropertiesCollector {
     cur_offsets: RangeOffsets,
     prop_size_index_distance: u64,
     prop_keys_index_distance: u64,
+    titan_compression_factor: f64,
+    titan_max_blob_size: u64,
+    should_reload_titan_stats: bool,
 }
 
 impl Default for RangePropertiesCollector {
@@ -297,6 +330,9 @@ impl Default for RangePropertiesCollector {
             cur_offsets: RangeOffsets::default(),
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+            titan_compression_factor: 1.0,
+            titan_max_blob_size: u64::MAX,
+            should_reload_titan_stats: true,
         }
     }
 }
@@ -326,8 +362,20 @@ impl RangePropertiesCollector {
 
 impl TablePropertiesCollector for RangePropertiesCollector {
     fn add(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
+        if self.should_reload_titan_stats {
+            self.titan_compression_factor =
+                f64::from_bits(TITAN_COMPRESSION_FACTOR.load(Ordering::Relaxed))
+                    .clamp(1.0, TITAN_MAX_COMPACTION_FACTOR);
+            self.titan_max_blob_size = TITAN_MAX_BLOB_SIZE_SEEN.load(Ordering::Relaxed);
+            self.should_reload_titan_stats = false;
+        }
         // size
-        let size = match get_entry_size(value, entry_type) {
+        let size = match get_entry_size(
+            value,
+            entry_type,
+            self.titan_compression_factor,
+            self.titan_max_blob_size,
+        ) {
             Ok(entry_size) => key.len() as u64 + entry_size,
             Err(_) => return,
         };
@@ -346,6 +394,7 @@ impl TablePropertiesCollector for RangePropertiesCollector {
     }
 
     fn finish(&mut self) -> HashMap<Vec<u8>, Vec<u8>> {
+        self.should_reload_titan_stats = true;
         if self.size_in_last_range() > 0 || self.keys_in_last_range() > 0 {
             let key = self.last_key.clone();
             self.insert_new_point(key);
@@ -876,5 +925,36 @@ mod tests {
                 collector.add(k, v, DBEntryType::Put, 0, 0);
             }
         });
+    }
+
+    fn encode_blob_index(blob_size: u64) -> Vec<u8> {
+        let mut index = TitanBlobIndex::default();
+        index.blob_size = blob_size;
+        index.encode()
+    }
+
+    #[test]
+    fn test_get_entry_size() {
+        let blob_size = 10;
+        let val = encode_blob_index(blob_size);
+        let test_cases = [
+            (1.0, 1000, blob_size),
+            (100.0, 1000, blob_size * 100),
+            (200.0, u64::MAX, blob_size * 200),
+            // Estimation clamped by max blob size seen.
+            (100.0, 500, 500),
+            // No regress if stats are 0 or default values.
+            (0.0, 0, blob_size),
+            (0.0, 100, blob_size),
+            (100.0, 0, blob_size),
+            (1.0, u64::MAX, blob_size),
+            (0.0, u64::MAX, blob_size),
+        ];
+
+        for (factor, max_blob_size_seen, expect_size) in test_cases {
+            let entry_size =
+                get_entry_size(&val, DBEntryType::BlobIndex, factor, max_blob_size_seen).unwrap();
+            assert_eq!(entry_size, expect_size + val.len() as u64);
+        }
     }
 }

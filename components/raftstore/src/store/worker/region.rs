@@ -603,7 +603,7 @@ where
             if plain_file_used(cf) {
                 continue;
             }
-            if self.engine.ingest_maybe_slowdown_writes(cf).expect("cf") {
+            if self.engine.ingest_maybe_slowdown_writes(cf, 0).expect("cf") {
                 return true;
             }
         }
