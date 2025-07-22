@@ -62,6 +62,7 @@ use tikv_util::{
     time::{Instant as TiInstant, SlowTimer, monotonic_raw_now},
     trace, warn,
     worker::{ScheduleError, Scheduler},
+    sys::memory_usage_reaches_near_high_water,
 };
 use tracker::GLOBAL_TRACKERS;
 use txn_types::WriteBatchFlags;
@@ -6125,19 +6126,26 @@ where
                 self.register_entry_cache_evict_tick();
             }
         }
+        
+        let mut usage = 0;
+        let is_near = memory_usage_reaches_near_high_water(&mut usage);
         let applied_count = applied_idx - first_idx;
 
         self.fsm.accumulated_log_lag_count += applied_count;
         self.fsm.high_log_lag_ticks += 1;
 
-        if self.fsm.accumulated_log_lag_count >= self.ctx.cfg.raft_log_gc_count_limit() {
-            self.fsm.high_log_lag_ticks += 1;
-        }
-
         let mut compact_idx = if force_compact && replicated_idx > first_idx {
             replicated_idx
+        } else if is_near && applied_count >= self.ctx.cfg.raft_log_gc_count_limit()/5 {
+            self.ctx
+                .raft_metrics
+                .raft_log_gc
+                .high_water
+                .inc();
+            std::cmp::max(first_idx + (last_idx - first_idx) / 2, replicated_idx)
         } else if applied_count >= self.ctx.cfg.raft_log_gc_count_limit() {
             self.fsm.high_log_lag_ticks = 0;
+            self.fsm.accumulated_log_lag_count = 0;
             self.ctx
                 .raft_metrics
                 .raft_log_gc
@@ -6148,20 +6156,12 @@ where
             && self.fsm.peer.raft_log_size_hint >= self.ctx.cfg.raft_log_gc_size_limit().0
         {
             self.fsm.high_log_lag_ticks = 0;
+            self.fsm.accumulated_log_lag_count = 0;
             self.ctx
                 .raft_metrics
                 .raft_log_gc
                 .log_force_gc_size_limit
                 .inc();
-            std::cmp::max(first_idx + (last_idx - first_idx) / 2, replicated_idx)
-        } else if applied_count > 0
-            && self.fsm.high_log_lag_ticks >= self.ctx.cfg.raft_log_force_gc_ticks
-            && self.fsm.accumulated_log_lag_count
-                >= self.ctx.cfg.raft_log_gc_area_limit * self.ctx.cfg.raft_log_gc_count_limit()
-        {
-            self.fsm.high_log_lag_ticks = 0;
-            self.fsm.accumulated_log_lag_count = 0;
-            self.ctx.raft_metrics.raft_log_gc.high_log_lag.inc();
             std::cmp::max(first_idx + (last_idx - first_idx) / 2, replicated_idx)
         } else if replicated_idx < first_idx || last_idx - first_idx < 3 {
             // In the current implementation one compaction can't delete all stale Raft

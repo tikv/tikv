@@ -4192,6 +4192,28 @@ def GC() -> RowPanel:
             ),
         ]
     )
+    layout.half_row(
+        [
+            graph_panel(
+                title="Check and Compact duration " + OPTIONAL_QUANTILE_INPUT,
+                description="The duration of check and compact operations",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_storage_check_then_compact_duration_seconds",
+                            by_labels=["instance", "type"],
+                            is_optional_quantile=True,
+                        ),
+                        legend_format="{{instance}}-{{type}}-duration "
+                        + OPTIONAL_QUANTILE_INPUT,
+                    ),
+                ],
+            ),
+        ]
+    )
+
     return layout.row_panel
 
 
@@ -10401,47 +10423,9 @@ def TikvConfig() -> RowPanel:
                     target(
                         expr=expr_simple(
                             "tikv_config_rocksdb_db",
-                            label_selectors=[
-                                'k8s_cluster="$k8s_cluster"',
-                                'tidb_cluster="$tidb_cluster"',
-                                'instance=~"$instance"',
-                            ],
                         ),
                         legend_format="",
                     ),
-                ],
-                overrides=[
-                    {
-                        "matcher": {"id": "byName", "options": "Field"},
-                        "properties": [
-                            {"id": "displayName", "value": "Option"},
-                            {"id": "custom.align", "value": None},
-                        ],
-                    },
-                    {
-                        "matcher": {"id": "byName", "options": "Last (not null)"},
-                        "properties": [{"id": "displayName", "value": "Value"}],
-                    },
-                ],
-                time_from="1s",
-                transformations=[
-                    {
-                        "id": "organize",
-                        "options": {
-                            "excludeByName": {
-                                "Time": True,
-                                "__name__": True,
-                                "job": True,
-                            },
-                            "indexByName": {},
-                            "renameByName": {
-                                "Time": "",
-                                "Value #A": "Value",
-                                "name": "Option",
-                                "job": "",
-                            },
-                        },
-                    }
                 ],
             ),
         ]
@@ -10456,11 +10440,6 @@ def TikvConfig() -> RowPanel:
                     target(
                         expr=expr_simple(
                             "tikv_config_rocksdb_cf",
-                            label_selectors=[
-                                'k8s_cluster="$k8s_cluster"',
-                                'tidb_cluster="$tidb_cluster"',
-                                'instance=~"$instance"',
-                            ],
                         ).extra(
                             " or (tikv_config_rocksdb unless tikv_config_rocksdb_cf)"
                         ),
@@ -10480,11 +10459,6 @@ def TikvConfig() -> RowPanel:
                     target(
                         expr=expr_simple(
                             "tikv_config_flow_control",
-                            label_selectors=[
-                                'k8s_cluster="$k8s_cluster"',
-                                'tidb_cluster="$tidb_cluster"',
-                                'instance=~"$instance"',
-                            ],
                         ),
                     ),
                 ],
@@ -10501,26 +10475,8 @@ def TikvConfig() -> RowPanel:
                     target(
                         expr=expr_simple(
                             "tikv_config_raftstore",
-                            label_selectors=[
-                                'k8s_cluster="$k8s_cluster"',
-                                'tidb_cluster="$tidb_cluster"',
-                                'instance=~"$instance"',
-                            ],
                         ),
                     ),
-                ],
-                overrides=[
-                    {
-                        "matcher": {"id": "byName", "options": "Field"},
-                        "properties": [
-                            {"id": "displayName", "value": "Option"},
-                            {"id": "custom.align", "value": None},
-                        ],
-                    },
-                    {
-                        "matcher": {"id": "byName", "options": "Last (not null)"},
-                        "properties": [{"id": "displayName", "value": "Value"}],
-                    },
                 ],
             ),
         ]
