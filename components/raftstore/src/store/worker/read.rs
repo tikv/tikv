@@ -376,6 +376,14 @@ where
                     if let Some(reader) = meta.readers.get(id) {
                         match &reader.leader_lease {
                             Some(lease) => {
+                                if lease.expired_time.load(Ordering::Acquire) == 0 {
+                                    warn!(
+                                        "[ILP] leader lease is 0 for region: {}, term: {}",
+                                        reader.region.id, reader.term
+                                    );
+                                    return None;
+                                }
+
                                 let now = monotonic_raw_now();
                                 warn!(
                                     "[ILP] lease in leader: {}, now: {:?} for region: {}, term: {}, lease: {:?}",
@@ -388,7 +396,7 @@ where
                             }
                             _ => {
                                 warn!(
-                                    "[ILP] not leader lease for region: {}, term: {}",
+                                    "[ILP] no leader lease for region: {}, term: {}",
                                     reader.region.id, reader.term
                                 );
                                 return None;
