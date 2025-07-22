@@ -108,10 +108,9 @@ use crate::{
         worker::{
             AutoSplitController, CleanupRunner, CleanupSstRunner, CleanupSstTask, CleanupTask,
             CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
-            InpectorRunner, InspectorTask, GcSnapshotRunner, GcSnapshotTask, PdRunner,
-            RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RefreshConfigRunner, RefreshConfigTask,
-            RegionRunner, RegionTask, SNAP_GENERATOR_MAX_POOL_SIZE, SnapGenRunner, SnapGenTask,
-            SplitCheckTask,
+            GcSnapshotRunner, GcSnapshotTask, InspectorRunner, PdRunner, RaftlogGcRunner,
+            RaftlogGcTask, ReadDelegate, RefreshConfigRunner, RefreshConfigTask, RegionRunner,
+            RegionTask, SNAP_GENERATOR_MAX_POOL_SIZE, SnapGenRunner, SnapGenTask, SplitCheckTask,
         },
         worker_metrics::PROCESS_STAT_CPU_USAGE,
     },
@@ -558,7 +557,6 @@ where
     pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
     pub raftlog_fetch_scheduler: Scheduler<ReadTask<EK>>,
     pub region_scheduler: Scheduler<RegionTask>,
-    pub inspector_scheduler: Scheduler<InspectorTask>,
     pub apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
     pub importer: Arc<SstImporter<EK>>,
@@ -898,37 +896,7 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                             self.ctx.raft_metrics.health_stats.reset();
                             self.ctx.pending_latency_inspect.push(inspector);
                         }
-                        InspectFactor::KvDisk => {
-                            // Send LatencyInspector to inspector_scheduler to inspect latency.
-                            if let Err(e) = self
-                                .ctx
-                                .inspector_scheduler
-                                .schedule(InspectorTask::DiskLatency { inspector })
-                            {
-                                warn!(
-                                    "Failed to schedule disk check task";
-                                    "error" => ?e,
-                                    "store_id" => self.fsm.store.id
-                                );
-                            }
-                        }
-                        InspectFactor::Network => {
-                            let start = TiInstant::now();
-                            if let Err(e) = self
-                                .ctx
-                                .inspector_scheduler
-                                .schedule(InspectorTask::NetworkLatency { 
-                                    inspector,
-                                    start,
-                                })
-                            {
-                                warn!(
-                                    "Failed to schedule network check task";
-                                    "error" => ?e,
-                                    "store_id" => self.fsm.store.id
-                                );
-                            }
-                        }
+                        _ => {}
                     }
                 }
                 StoreMsg::UnsafeRecoveryReport(report) => self.store_heartbeat_pd(Some(report)),
@@ -1293,7 +1261,6 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
     raftlog_fetch_scheduler: Scheduler<ReadTask<EK>>,
     pub snap_gen_scheduler: Scheduler<SnapGenTask<EK::Snapshot>>,
-    inspector_scheduler: Scheduler<InspectorTask>,
     pub region_scheduler: Scheduler<RegionTask>,
     apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
@@ -1533,7 +1500,6 @@ where
             store: self.store.clone(),
             pd_scheduler: self.pd_scheduler.clone(),
             consistency_check_scheduler: self.consistency_check_scheduler.clone(),
-            inspector_scheduler: self.inspector_scheduler.clone(),
             split_check_scheduler: self.split_check_scheduler.clone(),
             region_scheduler: self.region_scheduler.clone(),
             apply_router: self.apply_router.clone(),
@@ -1613,7 +1579,6 @@ where
             raftlog_gc_scheduler: self.raftlog_gc_scheduler.clone(),
             raftlog_fetch_scheduler: self.raftlog_fetch_scheduler.clone(),
             snap_gen_scheduler: self.snap_gen_scheduler.clone(),
-            inspector_scheduler: self.inspector_scheduler.clone(),
             region_scheduler: self.region_scheduler.clone(),
             apply_router: self.apply_router.clone(),
             router: self.router.clone(),
@@ -1707,7 +1672,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         collector_reg_handle: CollectorRegHandle,
         health_controller: HealthController,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
-        mut inspector_runner: InpectorRunner,
+        inspector_runner: InspectorRunner,
         grpc_service_mgr: GrpcServiceManager,
         safe_point: Arc<AtomicU64>,
     ) -> Result<()> {
@@ -1845,12 +1810,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let consistency_check_scheduler = workers
             .background_worker
             .start("consistency-check", consistency_check_runner);
-        // The scheduler dedicated to health checking the KvEngine disk when it's using
-        // a separate disk from RaftEngine.
-        inspector_runner.bind_background_worker(workers.background_worker.clone());
-        let inspector_scheduler = workers
-            .background_worker
-            .start("inspector-worker", inspector_runner);
 
         self.store_writers.spawn(
             meta.get_id(),
@@ -1869,7 +1828,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             split_check_scheduler,
             region_scheduler,
             snap_gen_scheduler,
-            inspector_scheduler,
             pd_scheduler: workers.pd_worker.scheduler(),
             consistency_check_scheduler,
             cleanup_scheduler,
@@ -1903,6 +1861,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             causal_ts_provider,
             snap_generator_pool,
             grpc_service_mgr,
+            inspector_runner,
         )?;
         Ok(())
     }
@@ -1921,6 +1880,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         snap_generator_pool: FuturePool,
         grpc_service_mgr: GrpcServiceManager,
+        mut inspector_runner: InspectorRunner,
     ) -> Result<()> {
         let cfg = builder.cfg.value().clone();
         let store = builder.store.clone();
@@ -1997,6 +1957,13 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         );
         assert!(workers.refresh_config_worker.start(refresh_config_runner));
 
+        // The scheduler dedicated to health checking the KvEngine disk when it's using
+        // a separate disk from RaftEngine.
+        inspector_runner.bind_background_worker(workers.background_worker.clone());
+        let inspector_scheduler = workers
+            .background_worker
+            .start("inspector-worker", inspector_runner);
+
         let pd_runner = PdRunner::new(
             &cfg,
             store.get_id(),
@@ -2012,6 +1979,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             coprocessor_host,
             causal_ts_provider,
             grpc_service_mgr,
+            inspector_scheduler,
         );
         assert!(workers.pd_worker.start(pd_runner));
 

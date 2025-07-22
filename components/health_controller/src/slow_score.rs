@@ -71,7 +71,7 @@ impl SlowScore {
         recovery_interval: Duration,
     ) -> SlowScore {
         let min_timeout_ticks = if inspect_interval.is_zero() {
-            1  
+            1
         } else {
             timeout_threshold.div_duration_f64(inspect_interval).ceil() as u64
         };

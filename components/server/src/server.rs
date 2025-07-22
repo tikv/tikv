@@ -68,7 +68,7 @@ use raftstore::{
     },
     router::{CdcRaftRouter, ServerRaftStoreRouter},
     store::{
-        AutoSplitController, CheckLeaderRunner, InpectorRunner, LocalReader, SnapManager,
+        AutoSplitController, CheckLeaderRunner, InspectorRunner, LocalReader, SnapManager,
         SnapManagerBuilder, SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
         config::RaftstoreConfigManager,
         fsm,
@@ -1051,7 +1051,8 @@ where
             .registry
             .register_consistency_check_observer(100, observer);
 
-        let inspector_runner = InpectorRunner::new(self.core.store_path.clone(), self.pd_client.clone());
+        let inspector_runner =
+            InspectorRunner::new(self.core.store_path.clone(), self.pd_client.clone());
 
         raft_server
             .start(

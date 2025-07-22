@@ -19,7 +19,7 @@ use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{KvEngine, RaftEngine};
 use fail::fail_point;
-use futures::{FutureExt, compat::Future01CompatExt, future::Inspect};
+use futures::{FutureExt, compat::Future01CompatExt};
 use health_controller::{
     HealthController,
     reporters::{RaftstoreReporter, RaftstoreReporterConfig},
@@ -68,7 +68,7 @@ use crate::{
         },
         util::{KeysInfoFormatter, is_epoch_stale},
         worker::{
-            AutoSplitController, ReadStats, SplitConfigChange, WriteStats,
+            AutoSplitController, InspectorTask, ReadStats, SplitConfigChange, WriteStats,
             split_controller::{SplitInfo, TOP_N},
         },
     },
@@ -953,6 +953,8 @@ where
 
     // Service manager for grpc service.
     grpc_service_manager: GrpcServiceManager,
+
+    inspector_scheduler: Scheduler<InspectorTask>,
 }
 
 impl<EK, ER, T> Runner<EK, ER, T>
@@ -976,6 +978,7 @@ where
         coprocessor_host: CoprocessorHost<EK>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         grpc_service_manager: GrpcServiceManager,
+        inspector_scheduler: Scheduler<InspectorTask>,
     ) -> Runner<EK, ER, T> {
         let mut store_stat = StoreStat::default();
         store_stat.set_cpu_quota(SysQuota::cpu_cores_quota(), cfg.inspect_cpu_util_thd);
@@ -1042,6 +1045,7 @@ where
             coprocessor_host,
             causal_ts_provider,
             grpc_service_manager,
+            inspector_scheduler,
         }
     }
 
@@ -2092,34 +2096,54 @@ where
                         }
                     }),
                 ),
-                InspectFactor::Network => {
-                    LatencyInspector::new(
-                        id,
-                        Box::new(move |id, duration| {
-                            STORE_INSPECT_DURATION_HISTOGRAM
-                                .with_label_values(&["network"])
-                                .observe(tikv_util::time::duration_to_sec(
-                                    duration.network_duration.unwrap_or_default(),
-                                ));
-                            if let Err(e) = scheduler.schedule(Task::UpdateSlowScore {
-                                id,
-                                factor,
-                                duration,
-                            }) {
-                                warn!("schedule pd task failed"; "err" => ?e);
-                            }
-                        }),
-                    )
-                },
+                InspectFactor::Network => LatencyInspector::new(
+                    id,
+                    Box::new(move |id, duration| {
+                        STORE_INSPECT_DURATION_HISTOGRAM
+                            .with_label_values(&["network"])
+                            .observe(tikv_util::time::duration_to_sec(
+                                duration.network_duration.unwrap_or_default(),
+                            ));
+                        if let Err(e) = scheduler.schedule(Task::UpdateSlowScore {
+                            id,
+                            factor,
+                            duration,
+                        }) {
+                            warn!("schedule pd task failed"; "err" => ?e);
+                        }
+                    }),
+                ),
             }
         };
-        let msg = StoreMsg::LatencyInspect {
-            factor,
-            send_time: TiInstant::now(),
-            inspector,
-        };
-        if let Err(e) = self.router.send_control(msg) {
-            warn!("pd worker send latency inspecter failed"; "err" => ?e);
+        match factor {
+            InspectFactor::RaftDisk => {
+                let msg = StoreMsg::LatencyInspect {
+                    factor,
+                    send_time: TiInstant::now(),
+                    inspector,
+                };
+                if let Err(e) = self.router.send_control(msg) {
+                    warn!("pd worker send latency inspector failed"; "err" => ?e, "factor" => ?factor);
+                }
+            }
+            InspectFactor::KvDisk => {
+                if let Err(e) = self
+                    .inspector_scheduler
+                    .schedule(InspectorTask::DiskLatency { inspector })
+                {
+                    warn!("pd worker send latency inspector failed"; "err" => ?e, "factor" => ?factor);
+                }
+            }
+            InspectFactor::Network => {
+                let start = TiInstant::now();
+
+                if let Err(e) = self
+                    .inspector_scheduler
+                    .schedule(InspectorTask::NetworkLatency { inspector, start })
+                {
+                    warn!("pd worker send latency inspector failed"; "err" => ?e, "factor" => ?factor);
+                }
+            }
         }
     }
 }

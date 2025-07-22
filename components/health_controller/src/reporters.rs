@@ -64,16 +64,16 @@ impl UnifiedSlowScore {
         let mut unified_slow_score = UnifiedSlowScore::default();
         // The first factor is for Raft Disk I/O.
         unified_slow_score.factors.push(SlowScore::new(
-            cfg.inspect_interval, /* timeout */
-            cfg.inspect_interval, /* inspect interval */
+            cfg.inspect_interval, // timeout
+            cfg.inspect_interval, // inspect interval
             DISK_TIMEOUT_RATIO_THRESHOLD,
             DISK_ROUND_TICKS,
             DISK_RECOVERY_INTERVALS,
         ));
         // The second factor is for KvDB Disk I/O.
         unified_slow_score.factors.push(SlowScore::new(
-            cfg.inspect_kvdb_interval, /* timeout */
-            cfg.inspect_kvdb_interval, /* inspect interval */
+            cfg.inspect_kvdb_interval, // timeout
+            cfg.inspect_kvdb_interval, // inspect interval
             DISK_TIMEOUT_RATIO_THRESHOLD,
             DISK_ROUND_TICKS,
             DISK_RECOVERY_INTERVALS,
@@ -285,9 +285,7 @@ impl RaftstoreReporter {
                 InspectFactor::RaftDisk | InspectFactor::KvDisk => {
                     self.disk_score_reached_100 = true
                 }
-                InspectFactor::Network => {
-                    self.network_score_reached_100 = true
-                }
+                InspectFactor::Network => self.network_score_reached_100 = true,
             }
         }
 

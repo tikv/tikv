@@ -28,7 +28,7 @@ pub use self::{
         need_compact,
     },
     consistency_check::{Runner as ConsistencyCheckRunner, Task as ConsistencyCheckTask},
-    inspector::{Runner as InpectorRunner, Task as InspectorTask},
+    inspector::{Runner as InspectorRunner, Task as InspectorTask},
     pd::{
         FlowStatistics, FlowStatsReporter, HeartbeatTask, NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
         Runner as PdRunner, StatsMonitor as PdStatsMonitor, StoreStatsReporter, Task as PdTask,

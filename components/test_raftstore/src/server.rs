@@ -40,7 +40,7 @@ use raftstore::{
     errors::Error as RaftError,
     router::{CdcRaftRouter, LocalReadRouter, RaftStoreRouter, ReadContext, ServerRaftStoreRouter},
     store::{
-        AutoSplitController, Callback, CheckLeaderRunner, InpectorRunner, LocalReader,
+        AutoSplitController, Callback, CheckLeaderRunner, InspectorRunner, LocalReader,
         RegionSnapshot, SnapManager, SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
         StoreMetaDelegate,
         fsm::{ApplyRouter, RaftBatchSystem, RaftRouter, store::StoreMeta},
@@ -683,7 +683,7 @@ impl ServerCluster {
             concurrency_manager.clone(),
             collector_reg_handle,
             causal_ts_provider,
-            InpectorRunner::dummy(),
+            InspectorRunner::dummy(),
             GrpcServiceManager::dummy(),
             Arc::new(AtomicU64::new(0)),
         )?;

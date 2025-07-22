@@ -1,40 +1,42 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    cmp,
     fmt::{self, Display, Formatter},
     io::Write,
     path::PathBuf,
+    sync::Arc,
     time::Duration,
-    cmp,
 };
 
-use std::sync::Arc;
-use crossbeam::channel::{TrySendError, Receiver, Sender, bounded};
+use crossbeam::channel::{Receiver, Sender, TrySendError, bounded};
+use grpcio::{Error, RpcStatusCode};
+use grpcio_health::{ServingStatus::Serving, proto::HealthCheckResponse};
 use health_controller::types::LatencyInspector;
+use pd_client::health::HealthClient;
 use tikv_util::{
     time::Instant,
     warn,
     worker::{Runnable, Worker},
 };
-use pd_client::health::HealthClient;
-use grpcio_health::proto::HealthCheckResponse;
-use grpcio_health::ServingStatus::Serving;
-use grpcio::{Error, RpcStatusCode};
 
 fn is_network_error(err: &pd_client::Error) -> bool {
     warn!("[test] checking network error"; "err" => ?err);
     match err {
-        pd_client::Error::Grpc(Error::RpcFailure(status)) => 
-            status.code() == RpcStatusCode::DEADLINE_EXCEEDED,
-            // leader restart will return unavailable, message: "failed to connect to all addresses"
+        pd_client::Error::Grpc(Error::RpcFailure(status)) => {
+            status.code() == RpcStatusCode::DEADLINE_EXCEEDED
+        }
+        // leader restart will return unavailable, message: "failed to connect to all addresses"
         _ => false,
     }
 }
 
 #[derive(Debug)]
 pub enum Task {
-    DiskLatency { inspector: LatencyInspector },
-    NetworkLatency { 
+    DiskLatency {
+        inspector: LatencyInspector,
+    },
+    NetworkLatency {
         inspector: LatencyInspector,
         start: Instant,
     },
@@ -115,7 +117,10 @@ impl Runner {
 
     #[inline]
     pub fn new(inspect_dir: PathBuf, health_client: Arc<dyn HealthClient + Send + Sync>) -> Self {
-        Self::build(inspect_dir.join(Self::DISK_IO_LATENCY_INSPECT_FILENAME), health_client)
+        Self::build(
+            inspect_dir.join(Self::DISK_IO_LATENCY_INSPECT_FILENAME),
+            health_client,
+        )
     }
 
     #[inline]
@@ -129,7 +134,7 @@ impl Runner {
             }
         }
         Self::build(
-            PathBuf::from("./").join(Self::DISK_IO_LATENCY_INSPECT_FILENAME), 
+            PathBuf::from("./").join(Self::DISK_IO_LATENCY_INSPECT_FILENAME),
             Arc::new(DummyHealthClient),
         )
     }
@@ -137,7 +142,8 @@ impl Runner {
     #[inline]
     pub fn bind_background_worker(&mut self, bg_worker: Worker) {
         self.disk_runner.bind_background_worker(bg_worker.clone());
-        self.network_runner.bind_background_worker(bg_worker.clone());
+        self.network_runner
+            .bind_background_worker(bg_worker.clone());
     }
 
     fn inspect_disk(&self) -> Option<Duration> {
@@ -162,9 +168,12 @@ impl Runner {
                 if resp.status != Serving {
                     warn!("pd server is not serving."; "status" => ?resp.status);
                     // Non-network problem, we do not consider it as a timeout
-                    return Some(cmp::max(start.saturating_elapsed(), Self::NETWORK_NOT_TIMEOUT));
+                    return Some(cmp::max(
+                        start.saturating_elapsed(),
+                        Self::NETWORK_NOT_TIMEOUT,
+                    ));
                 }
-            },
+            }
             Err(e) => {
                 if is_network_error(&e) {
                     warn!("network error when checking pd health"; "err" => ?e);
@@ -172,7 +181,10 @@ impl Runner {
                 }
                 warn!("unexpected error when checking pd health"; "err" => ?e);
                 // Non-network problem, we do not consider it as a timeout
-                return Some(cmp::max(start.saturating_elapsed(), Self::NETWORK_NOT_TIMEOUT));
+                return Some(cmp::max(
+                    start.saturating_elapsed(),
+                    Self::NETWORK_NOT_TIMEOUT,
+                ));
             }
         };
         Some(start.saturating_elapsed())
@@ -188,8 +200,8 @@ impl Runner {
                     } else {
                         warn!("failed to inspect disk io latency");
                     }
-                },
-                _ => {},
+                }
+                _ => {}
             }
         }
     }
@@ -197,15 +209,18 @@ impl Runner {
     fn execute_network(&self) {
         if let Ok(task) = self.network_runner.receiver.try_recv() {
             match task {
-                Task::NetworkLatency { mut inspector, start } => {
+                Task::NetworkLatency {
+                    mut inspector,
+                    start,
+                } => {
                     if let Some(latency) = self.inspect_network(start) {
                         inspector.record_network_io_duration(latency);
                         inspector.finish();
                     } else {
                         warn!("failed to inspect network io latency");
                     }
-                },
-                _ => {},
+                }
+                _ => {}
             }
         }
     }
@@ -216,7 +231,7 @@ impl Runnable for Runner {
 
     fn run(&mut self, task: Task) {
         match task {
-            Task::DiskLatency { inspector: _ } => { 
+            Task::DiskLatency { inspector: _ } => {
                 // Send the task to the limited capacity channel.
                 if let Err(e) = self.disk_runner.notifier.try_send(task) {
                     warn!("failed to send task to inspector bg_worker: {:?}", e);
@@ -228,21 +243,32 @@ impl Runnable for Runner {
                         });
                     }
                 }
-            },
-            Task::NetworkLatency { inspector: _, start: _ } => {
+            }
+            Task::NetworkLatency {
+                inspector: _,
+                start: _,
+            } => {
                 let mut task_opt = Some(task);
-                if let Err(e) = self.network_runner.notifier.try_send(task_opt.take().unwrap()) {
+                if let Err(e) = self
+                    .network_runner
+                    .notifier
+                    .try_send(task_opt.take().unwrap())
+                {
                     let e = match e {
                         TrySendError::Full(_) => {
                             // Try to make space and resend once
                             let _ = self.network_runner.receiver.try_recv();
-                            if let Err(e2) = self.network_runner.notifier.try_send(task_opt.take().unwrap()) {
+                            if let Err(e2) = self
+                                .network_runner
+                                .notifier
+                                .try_send(task_opt.take().unwrap())
+                            {
                                 e2
                             } else {
                                 // Successfully sent after making space, so return early
                                 return;
                             }
-                        },
+                        }
                         other => other,
                     };
                     warn!("failed to send task to inspector bg_worker: {:?}", e);
@@ -254,7 +280,7 @@ impl Runnable for Runner {
                         });
                     }
                 }
-            },
+            }
         };
     }
 }

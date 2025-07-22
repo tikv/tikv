@@ -15,7 +15,7 @@ use raftstore::{
     Result,
     coprocessor::CoprocessorHost,
     store::{
-        AutoSplitController, InpectorRunner, SnapManager, StoreMsg, Transport,
+        AutoSplitController, InspectorRunner, SnapManager, StoreMsg, Transport,
         config::{Config, RaftstoreConfigManager},
         fsm::{StoreMeta, *},
     },
@@ -114,7 +114,7 @@ fn start_raftstore(
             CollectorRegHandle::new_for_test(),
             HealthController::new(),
             None,
-            InpectorRunner::dummy(),
+            InspectorRunner::dummy(),
             GrpcServiceManager::dummy(),
             Arc::new(AtomicU64::new(0)),
         )
