@@ -180,8 +180,9 @@ impl SlowScore {
         self.value >= OrderedFloat(100.0) && (self.last_tick_id % self.round_ticks == 0)
     }
 
-    // Check if the last timeout tick is finished. If a tick id is less than
-    // `last_tick_id` - `min_timeout_ticks`, we view this tick as timeout.
+    // Check if the last timeout tick is finished. If a tick id is less than or
+    // equal to `last_tick_id` - `min_timeout_ticks` + 1, we view this tick as
+    // timeout.
     pub fn last_tick_finished(&self) -> bool {
         let threshold = self.last_tick_id.saturating_sub(self.min_timeout_ticks - 1);
         let exist_uncompleted_tick = self.uncompleted_ticks.iter().any(|&id| id <= threshold);
