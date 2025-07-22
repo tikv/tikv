@@ -241,6 +241,7 @@ impl<S> AsyncRegion<S> {
     }
 
     pub async fn get_region_store(&self, key: &[KeyRange]) -> Option<S> {
+        warn!("[IPL] GetRegionStore for region: {}", self.region.id);
         (self.async_store_fn)(key).await
     }
 }
