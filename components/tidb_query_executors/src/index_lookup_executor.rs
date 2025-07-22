@@ -376,7 +376,7 @@ impl<'a, T: Handle> SortedHandles<'a, T> {
         for (i, result) in self.results.iter().enumerate() {
             let row_len = result.logical_rows.len();
             if pos < row_len {
-                return Ok((i, pos));
+                return Ok((i, result.logical_rows[pos]));
             }
             pos -= row_len
         }
