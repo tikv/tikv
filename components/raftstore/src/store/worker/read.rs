@@ -29,6 +29,7 @@ use tikv_util::{
     lru::LruCache,
     store::find_peer_by_id,
     time::{monotonic_raw_now, ThreadReadId},
+    warn,
 };
 use time::Timespec;
 use tracker::GLOBAL_TRACKERS;
@@ -373,8 +374,25 @@ where
                 let end = Unbounded::<Vec<u8>>;
                 for (_end_key, id) in meta.region_ranges.range((start, end)) {
                     if let Some(reader) = meta.readers.get(id) {
-                        if !reader.is_in_leader_lease(monotonic_raw_now()) {
-                            return None;
+                        match &reader.leader_lease {
+                            Some(lease) => {
+                                let now = monotonic_raw_now();
+                                warn!(
+                                    "[ILP] lease in leader: {}, now: {:?} for region: {}, term: {}, lease: {:?}",
+                                    reader.is_in_leader_lease(now),
+                                    now,
+                                    reader.region.id,
+                                    reader.term,
+                                    lease,
+                                );
+                            }
+                            _ => {
+                                warn!(
+                                    "[ILP] not leader lease for region: {}, term: {}",
+                                    reader.region.id, reader.term
+                                );
+                                return None;
+                            }
                         }
 
                         if util::check_key_in_region(key, &reader.region).is_ok() {
