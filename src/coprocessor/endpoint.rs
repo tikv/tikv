@@ -2251,6 +2251,7 @@ fn new_fn_async_region<E: Engine>(
         }
     }
 
+    let region_id = region.get_id();
     AsyncRegion::new(
         region,
         Box::new(move |ranges| -> _ {
@@ -2276,7 +2277,13 @@ fn new_fn_async_region<E: Engine>(
                         TsSet::Empty,
                         check_has_newer_ts_data,
                     )),
-                    Err(_) => None,
+                    Err(err) => {
+                        warn!(
+                            "[IPL] Failed to get snapshot for region: {}, error: {:?}",
+                            region_id, err
+                        );
+                        None
+                    }
                 }
             })
         }),

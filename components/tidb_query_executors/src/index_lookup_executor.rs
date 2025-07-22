@@ -323,8 +323,8 @@ async fn build_index_lookup_probe_ranges_for_handles<S: Storage, T: Handle>(
                     "[ILP] Region: {} failed to get store",
                     region.get_region().id
                 );
-                for pos in &sorted_handles.orders[slice.0..=slice.1] {
-                    left_handles.insert(sorted_handles.get_position_in_results(*pos)?);
+                for pos in slice.0..=slice.1 {
+                    left_handles.insert(sorted_handles.get_position_in_results(pos)?);
                 }
             }
         }
