@@ -10,14 +10,18 @@ use ordered_float::{Float, OrderedFloat};
 
 /// Interval for updating the slow score.
 const UPDATE_INTERVALS: Duration = Duration::from_secs(10);
-/// Recovery intervals for the slow score.
+/// Disk recovery intervals for the disk slow score.
 /// If the score has reached 100 and there is no timeout inspecting requests
 /// during this interval, the score will go back to 1 after 5min.
-const RECOVERY_INTERVALS: Duration = Duration::from_secs(60 * 5);
+pub const DISK_RECOVERY_INTERVALS: Duration = Duration::from_secs(60 * 5);
+/// Network recovery intervals for the network slow score.
+/// If the score has reached 100 and there is no timeout inspecting requests
+/// during this interval, the score will go back to 1 after 30min.
+pub const NETWORK_RECOVERY_INTERVALS: Duration = Duration::from_secs(60 * 30);
 /// After every DISK_ROUND_TICKS, the disk's slow score will be updated.
 pub const DISK_ROUND_TICKS: u64 = 30;
 /// After every NETWORK_ROUND_TICKS, the network's slow score will be updated.
-pub const NETWORK_ROUND_TICKS: u64 = 10;
+pub const NETWORK_ROUND_TICKS: u64 = 3;
 /// DISK_TIMEOUT_RATIO_THRESHOLD is the maximal tolerated timeout ratio
 /// for disk inspecting requests. If the timeout ratio is larger than this
 /// threshold, the disk's slow score will be multiplied by 2.
@@ -25,7 +29,7 @@ pub const DISK_TIMEOUT_RATIO_THRESHOLD: f64 = 0.1;
 /// NETWORK_TIMEOUT_RATIO_THRESHOLD is the maximal tolerated timeout ratio
 /// for network inspecting requests. If the timeout ratio is larger than this
 /// threshold, the network's slow score will be multiplied by 2.
-pub const NETWORK_TIMEOUT_RATIO_THRESHOLD: f64 = 0.5;
+pub const NETWORK_TIMEOUT_RATIO_THRESHOLD: f64 = 1.0;
 /// The timeout threshold for network inspecting requests.
 pub const NETWORK_TIMEOUT_THRESHOLD: Duration = Duration::from_secs(1);
 // Slow score is a value that represents the speed of a store and ranges in [1,
@@ -64,9 +68,10 @@ impl SlowScore {
         inspect_interval: Duration,
         ratio_thresh: f64,
         round_ticks: u64,
+        recovery_interval: Duration,
     ) -> SlowScore {
         let min_timeout_ticks = if inspect_interval.is_zero() {
-            1  
+            1
         } else {
             timeout_threshold.div_duration_f64(inspect_interval).ceil() as u64
         };
@@ -78,7 +83,7 @@ impl SlowScore {
 
             timeout_threshold,
             ratio_thresh: OrderedFloat(ratio_thresh),
-            min_ttr: RECOVERY_INTERVALS,
+            min_ttr: recovery_interval,
             last_record_time: Instant::now(),
             last_update_time: Instant::now(),
             round_ticks,
@@ -98,7 +103,7 @@ impl SlowScore {
 
             timeout_threshold: inspect_interval,
             ratio_thresh: OrderedFloat(timeout_ratio),
-            min_ttr: RECOVERY_INTERVALS,
+            min_ttr: DISK_RECOVERY_INTERVALS,
             last_record_time: Instant::now(),
             last_update_time: Instant::now(),
             // The minimal round ticks is 1 for kvdb.
@@ -127,7 +132,7 @@ impl SlowScore {
 
     pub fn record_timeout(&mut self) {
         self.last_record_time = Instant::now();
-        let threshold = self.last_tick_id.saturating_sub(self.min_timeout_ticks + 1);
+        let threshold = self.last_tick_id.saturating_sub(self.min_timeout_ticks - 1);
         let timeout_requests = self
             .uncompleted_ticks
             .iter()
@@ -175,10 +180,10 @@ impl SlowScore {
         self.value >= OrderedFloat(100.0) && (self.last_tick_id % self.round_ticks == 0)
     }
 
-    // Check if the last timeout tick is finished. If a tick id is less than
-    // `last_tick_id` - `min_timeout_ticks`, we view this tick as timeout.
+    // Check if the last timeout tick is finished. If a tick id is less than or equal to
+    // `last_tick_id` - `min_timeout_ticks` + 1, we view this tick as timeout.
     pub fn last_tick_finished(&self) -> bool {
-        let threshold = self.last_tick_id.saturating_sub(self.min_timeout_ticks + 1);
+        let threshold = self.last_tick_id.saturating_sub(self.min_timeout_ticks - 1);
         let exist_uncompleted_tick = self.uncompleted_ticks.iter().any(|&id| id <= threshold);
 
         !exist_uncompleted_tick
@@ -230,6 +235,7 @@ mod tests {
             Duration::from_millis(500),
             DISK_TIMEOUT_RATIO_THRESHOLD,
             DISK_ROUND_TICKS,
+            DISK_RECOVERY_INTERVALS,
         );
         slow_score.timeout_requests = 5;
         slow_score.total_requests = 100;
@@ -336,6 +342,7 @@ mod tests {
             Duration::from_millis(100),
             DISK_TIMEOUT_RATIO_THRESHOLD,
             6,
+            DISK_RECOVERY_INTERVALS,
         );
 
         // Record some uncompleted ticks.
