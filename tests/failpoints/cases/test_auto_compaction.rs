@@ -1,4 +1,4 @@
-// Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2025 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
     sync::{
@@ -12,6 +12,7 @@ use std::{
 use engine_traits::{CF_WRITE, MiscExt};
 use kvproto::kvrpcpb::*;
 use test_raftstore::*;
+use tikv_util::config::ReadableDuration;
 
 #[test]
 fn test_gc_worker_auto_compaction_with_failpoints() {
@@ -20,11 +21,15 @@ fn test_gc_worker_auto_compaction_with_failpoints() {
     // even though it may not actually compact in test environments
     let (mut cluster, client, _ctx) = must_new_cluster_with_cfg_and_kv_client_mul(1, |cluster| {
         cluster.cfg.rocksdb.writecf.disable_auto_compactions = true;
-        cluster.cfg.gc.auto_compaction_check_interval_secs = 1; // 1 second for fast testing
-        cluster.cfg.gc.compaction_tombstones_num_threshold = 3; // Low threshold for testing
-        cluster.cfg.gc.compaction_redundant_rows_threshold = 3; // Low threshold for testing
-        cluster.cfg.gc.compaction_tombstones_percent_threshold = 10; // Low threshold for testing
-        cluster.cfg.gc.compaction_redundant_rows_percent_threshold = 10; // Low threshold for testing
+        cluster.cfg.gc.auto_compaction.check_interval = ReadableDuration::secs(1); // 1 second for fast testing
+        cluster.cfg.gc.auto_compaction.tombstones_num_threshold = 3; // Low threshold for testing
+        cluster.cfg.gc.auto_compaction.redundant_rows_threshold = 3; // Low threshold for testing
+        cluster.cfg.gc.auto_compaction.tombstones_percent_threshold = 10; // Low threshold for testing
+        cluster
+            .cfg
+            .gc
+            .auto_compaction
+            .redundant_rows_percent_threshold = 10; // Low threshold for testing
     });
 
     cluster.pd_client.disable_default_operator();
@@ -73,7 +78,7 @@ fn test_gc_worker_auto_compaction_with_failpoints() {
     ctx5.set_peer(region5.get_peers()[0].clone());
 
     // Set up failpoint to notify test when auto compaction thread starts
-    let fp_thread_start = "gc_worker::auto_compaction::thread_start";
+    let fp_thread_start = "gc_worker_auto_compaction_thread_start";
     let thread_started = Arc::new(AtomicBool::new(false));
     let thread_started_clone = thread_started.clone();
 
@@ -83,7 +88,7 @@ fn test_gc_worker_auto_compaction_with_failpoints() {
     .unwrap();
 
     // Set up failpoint to notify test when auto compaction main loop starts
-    let fp_start_notify = "gc_worker::auto_compaction::start";
+    let fp_start_notify = "gc_worker_auto_compaction_start";
     let compaction_started = Arc::new(AtomicBool::new(false));
     let compaction_started_clone = compaction_started.clone();
 
@@ -93,7 +98,7 @@ fn test_gc_worker_auto_compaction_with_failpoints() {
     .unwrap();
 
     // Set up failpoint to pause execution after candidates are collected
-    let fp_pause_after_candidates = "gc_worker::auto_compaction::candidates_collected";
+    let fp_pause_after_candidates = "gc_worker_auto_compaction_candidates_collected";
     fail::cfg(fp_pause_after_candidates, "pause").unwrap();
 
     let large_value = vec![b'x'; 100];
@@ -261,7 +266,7 @@ fn test_gc_worker_auto_compaction_with_failpoints() {
     // Set up failpoints to check which specific regions are found as candidates
     // We expect ranges k05-k10, k10-k15, k15-k20, and k20-k35 to be candidates
     // (high redundancy)
-    let fp_k05_k10 = "gc_worker::auto_compaction::candidate_k05_k10";
+    let fp_k05_k10 = "gc_worker_auto_compaction_candidate_k05_k10";
     let k05_k10_found = Arc::new(AtomicBool::new(false));
     let k05_k10_found_clone = k05_k10_found.clone();
 
@@ -270,7 +275,7 @@ fn test_gc_worker_auto_compaction_with_failpoints() {
     })
     .unwrap();
 
-    let fp_k10_k15 = "gc_worker::auto_compaction::candidate_k10_k15";
+    let fp_k10_k15 = "gc_worker_auto_compaction_candidate_k10_k15";
     let k10_k15_found = Arc::new(AtomicBool::new(false));
     let k10_k15_found_clone = k10_k15_found.clone();
 
@@ -279,7 +284,7 @@ fn test_gc_worker_auto_compaction_with_failpoints() {
     })
     .unwrap();
 
-    let fp_k15_k20 = "gc_worker::auto_compaction::candidate_k15_k20";
+    let fp_k15_k20 = "gc_worker_auto_compaction_candidate_k15_k20";
     let k15_k20_found = Arc::new(AtomicBool::new(false));
     let k15_k20_found_clone = k15_k20_found.clone();
 
@@ -288,7 +293,7 @@ fn test_gc_worker_auto_compaction_with_failpoints() {
     })
     .unwrap();
 
-    let fp_k20_k35 = "gc_worker::auto_compaction::candidate_k20_k35";
+    let fp_k20_k35 = "gc_worker_auto_compaction_candidate_k20_k35";
     let k20_k35_found = Arc::new(AtomicBool::new(false));
     let k20_k35_found_clone = k20_k35_found.clone();
 

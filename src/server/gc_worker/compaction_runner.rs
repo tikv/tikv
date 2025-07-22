@@ -1,4 +1,4 @@
-// Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2025 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
     cmp::Reverse,
@@ -174,7 +174,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
 
     /// Starts the compaction runner in a separate thread
     pub fn start(mut self) -> Result<CompactionRunnerHandle> {
-        fail_point!("gc_worker::auto_compaction::thread_start");
+        fail_point!("gc_worker_auto_compaction_thread_start");
         let (tx, rx) = mpsc::channel();
         self.stop_signal_receiver = Some(rx);
 
@@ -196,7 +196,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
     /// Main loop for the compaction runner
     fn run(&mut self) {
         info!("compaction-runner started");
-        fail_point!("gc_worker::auto_compaction::start");
+        fail_point!("gc_worker_auto_compaction_start");
         loop {
             if self.check_stopped() {
                 debug!("compaction-runner stopped");
@@ -205,38 +205,48 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
 
             // Get consistent config snapshot for this run
             let config = self.cfg_tracker.value().clone();
-            let check_interval = config.auto_compaction_check_interval();
+            let check_interval = config.auto_compaction.check_interval.0;
 
             // Get current safe point
             let gc_safe_point = self.curr_safe_point().into_inner();
+
+            // Skip compaction if safe point is zero (GC not initialized)
+            if gc_safe_point == 0 {
+                info!("skipping compaction: GC safe point is zero");
+                if self.sleep_or_stop(check_interval) {
+                    debug!("compaction-runner stopped");
+                    break;
+                }
+                continue;
+            }
 
             // Collect and rank compaction candidates
             let candidates = match self.collect_compaction_candidates(gc_safe_point, &config) {
                 Ok(candidates) => {
                     // Add failpoints to check specific candidates (using compact_top_n pattern)
                     fail_point!(
-                        "gc_worker::auto_compaction::candidate_k05_k10",
+                        "gc_worker_auto_compaction_candidate_k05_k10",
                         candidates
                             .iter()
                             .any(|c| c.num_total_entries == 10 && c.num_discardable == 5),
                         |_| {}
                     );
                     fail_point!(
-                        "gc_worker::auto_compaction::candidate_k10_k15",
+                        "gc_worker_auto_compaction_candidate_k10_k15",
                         candidates
                             .iter()
                             .any(|c| c.num_total_entries == 15 && c.num_discardable == 2),
                         |_| {}
                     );
                     fail_point!(
-                        "gc_worker::auto_compaction::candidate_k15_k20",
+                        "gc_worker_auto_compaction_candidate_k15_k20",
                         candidates
                             .iter()
                             .any(|c| c.num_total_entries == 20 && c.num_discardable == 7),
                         |_| {}
                     );
                     fail_point!(
-                        "gc_worker::auto_compaction::candidate_k20_k35",
+                        "gc_worker_auto_compaction_candidate_k20_k35",
                         candidates
                             .iter()
                             .any(|c| c.num_total_entries == 30 && c.num_discardable == 10),
@@ -291,7 +301,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
     ) -> Result<Vec<CompactionCandidate>> {
         // Calculate heap capacity based on check duration (assuming 1 sec per
         // compaction)
-        let check_duration_secs = config.auto_compaction_check_interval().as_secs() as usize;
+        let check_duration_secs = config.auto_compaction.check_interval.as_secs() as usize;
         let heap_capacity = check_duration_secs.max(10); // At least 10 candidates
 
         debug!(
@@ -300,6 +310,10 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
         );
 
         // Use a min-heap to keep top candidates (using Reverse for min-heap behavior)
+        // We use a heap to retain only the top candidates, which helps limit memory
+        // usage in case we need to track compaction scores for all regions.
+        // This module assumes that each compaction takes at least 1 second, ensuring
+        // full utilization of the time window between check intervals.
         let mut candidates_heap: BinaryHeap<Reverse<CompactionCandidate>> =
             BinaryHeap::with_capacity(heap_capacity);
         let mut current_key = Key::from_encoded(b"".to_vec());
@@ -376,7 +390,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
         }
 
         info!("collected {} compaction candidates", candidates.len());
-        fail_point!("gc_worker::auto_compaction::candidates_collected");
+        fail_point!("gc_worker_auto_compaction_candidates_collected");
         Ok(candidates)
     }
 
@@ -388,7 +402,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
     ) -> Option<Duration> {
         let start_time = Instant::now();
         let mut processed_count = 0;
-        fail_point!("gc_worker::auto_compaction::start_compacting");
+        fail_point!("gc_worker_auto_compaction_start_compacting");
 
         for candidate in candidates {
             if self.check_stopped() {
@@ -430,16 +444,18 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
                 error!("failed to compact candidate: {:?}", e);
                 continue;
             }
+            let compact_duration = compact_start.elapsed();
             AUTO_COMPACTION_DURATION_HISTOGRAM_VEC
                 .compact
-                .observe(compact_start.elapsed().as_secs_f64());
+                .observe(compact_duration.as_secs_f64());
             AUTO_COMPACTION_OPERATION_COUNTER_VEC.completed.inc();
 
             processed_count += 1;
             info!("compacted candidate"; 
                   "region_id" => current_candidate.region_id,
                   "score" => current_candidate.score,
-                  "processed_count" => processed_count);
+                  "processed_count" => processed_count,
+                  "duration_ms" => compact_duration.as_millis());
         }
 
         Some(start_time.elapsed())
@@ -447,7 +463,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
 
     /// Compacts a single candidate
     fn compact_candidate(&self, candidate: &CompactionCandidate, config: &GcConfig) -> Result<()> {
-        let bottommost_level_force = config.compaction_bottommost_level_force;
+        let bottommost_level_force = config.auto_compaction.bottommost_level_force;
 
         // Compact write CF first (most important for GC)
         self.compact_range_cf(
@@ -482,12 +498,6 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
             .map_err(|e: engine_traits::Error| -> Error {
                 box_err!("compact range failed: {:?}", e)
             })?;
-
-        info!("compact range finished";
-            "cf" => cf_name,
-            "start_key" => start_key.map(|k| format!("{:?}", k)),
-            "end_key" => end_key.map(|k| format!("{:?}", k)),
-        );
         Ok(())
     }
 
@@ -595,7 +605,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
             .observe(start_time.elapsed().as_secs_f64());
 
         if score > 0.0 {
-            fail_point!("gc_worker::auto_compaction::candidate_found");
+            fail_point!("gc_worker_auto_compaction_candidate_found");
             Ok(Some(CompactionCandidate {
                 score,
                 start_key: start_key.to_vec(),
@@ -619,7 +629,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
         newest_ts: TimeStamp,
         gc_safe_point: u64,
     ) -> u64 {
-        if num_entries == 0 || oldest_ts > newest_ts {
+        if num_entries == 0 || oldest_ts >= newest_ts {
             return 0;
         }
         let oldest_ts = oldest_ts.into_inner();
@@ -653,8 +663,8 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
         if !config.enable_compaction_filter {
             // Only consider deletes (tombstones)
             let ratio = num_tombstones as f64 / num_total_entries as f64;
-            if num_tombstones < config.compaction_tombstones_num_threshold
-                && ratio < config.compaction_tombstones_percent_threshold as f64 / 100.0
+            if num_tombstones < config.auto_compaction.tombstones_num_threshold
+                && ratio < config.auto_compaction.tombstones_percent_threshold as f64 / 100.0
             {
                 return 0.0;
             }
@@ -664,8 +674,8 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
         // When compaction filter is enabled, ignore tombstone threshold,
         // just add deletes to redundant keys for scoring.
         let ratio = (num_tombstones + num_discardable) as f64 / num_total_entries as f64;
-        if num_discardable < config.compaction_redundant_rows_threshold
-            && ratio < config.compaction_redundant_rows_percent_threshold as f64 / 100.0
+        if num_discardable < config.auto_compaction.redundant_rows_threshold
+            && ratio < config.auto_compaction.redundant_rows_percent_threshold as f64 / 100.0
         {
             return 0.0;
         }
