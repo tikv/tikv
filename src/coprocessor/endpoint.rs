@@ -2279,7 +2279,7 @@ fn new_fn_async_region<E: Engine>(
                     )),
                     Err(err) => {
                         warn!(
-                            "[IPL] Failed to get snapshot for region: {}, error: {:?}",
+                            "[ILP] Failed to get snapshot for region: {}, error: {:?}",
                             region_id, err
                         );
                         None

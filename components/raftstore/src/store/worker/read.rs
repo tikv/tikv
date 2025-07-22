@@ -377,28 +377,28 @@ where
                         match &reader.leader_lease {
                             Some(lease) => {
                                 if lease.expired_time.load(Ordering::Acquire) == 0 {
-                                    warn!(
-                                        "[ILP] leader lease is 0 for region: {}, term: {}",
-                                        reader.region.id, reader.term
-                                    );
+                                    // warn!(
+                                    //     "[ILP] leader lease is 0 for region: {}, term: {}",
+                                    //     reader.region.id, reader.term
+                                    // );
                                     return None;
                                 }
-
-                                let now = monotonic_raw_now();
-                                warn!(
-                                    "[ILP] lease in leader: {}, now: {:?} for region: {}, term: {}, lease: {:?}",
-                                    reader.is_in_leader_lease(now),
-                                    now,
-                                    reader.region.id,
-                                    reader.term,
-                                    lease,
-                                );
+                                // let now = monotonic_raw_now();
+                                // warn!(
+                                //     "[ILP] lease in leader: {}, now: {:?} for
+                                // region: {}, term: {}, lease: {:?}",
+                                //     reader.is_in_leader_lease(now),
+                                //     now,
+                                //     reader.region.id,
+                                //     reader.term,
+                                //     lease,
+                                // );
                             }
                             _ => {
-                                warn!(
-                                    "[ILP] no leader lease for region: {}, term: {}",
-                                    reader.region.id, reader.term
-                                );
+                                // warn!(
+                                //     "[ILP] no leader lease for region: {}, term: {}",
+                                //     reader.region.id, reader.term
+                                // );
                                 return None;
                             }
                         }

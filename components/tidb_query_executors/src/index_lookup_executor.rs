@@ -253,26 +253,26 @@ async fn build_index_lookup_probe_ranges_for_handles<S: Storage, T: Handle>(
                 {
                     let lat_handle = &sorted_handles.handles[sorted_handles.orders[i - 1]];
                     if lat_handle.is_next(handle) {
-                        warn!(
-                            "[ILP][{} {} {:?}] Append the region: {}, exist range, key: {:?}",
-                            i,
-                            handle_idx,
-                            pos_in_result,
-                            region.get_region().id,
-                            key,
-                        );
+                        // warn!(
+                        //     "[ILP][{} {} {:?}] Append the region: {}, exist range, key: {:?}",
+                        //     i,
+                        //     handle_idx,
+                        //     pos_in_result,
+                        //     region.get_region().id,
+                        //     key,
+                        // );
                         let last_range = ranges.last_mut().unwrap();
                         raw_key.push(0);
                         last_range.set_end(raw_key);
                     } else {
-                        warn!(
-                            "[ILP][{} {} {:?}] Append the region: {}, new range, key: {:?}",
-                            i,
-                            handle_idx,
-                            pos_in_result,
-                            region.get_region().id,
-                            key,
-                        );
+                        // warn!(
+                        //     "[ILP][{} {} {:?}] Append the region: {}, new range, key: {:?}",
+                        //     i,
+                        //     handle_idx,
+                        //     pos_in_result,
+                        //     region.get_region().id,
+                        //     key,
+                        // );
                         let mut r = KeyRange::new();
                         r.set_start(raw_key);
                         let mut raw_end = Vec::with_capacity(raw_key_len + 1);
@@ -286,14 +286,14 @@ async fn build_index_lookup_probe_ranges_for_handles<S: Storage, T: Handle>(
                 _ => {
                     region_has_end = current_region.take();
                     if let Some(region) = locate_key(key.as_encoded()).take() {
-                        warn!(
-                            "[ILP] [{} {} {:?}] Start new region: {}, key: {:?}",
-                            i,
-                            handle_idx,
-                            pos_in_result,
-                            region.get_region().id,
-                            key,
-                        );
+                        // warn!(
+                        //     "[ILP] [{} {} {:?}] Start new region: {}, key: {:?}",
+                        //     i,
+                        //     handle_idx,
+                        //     pos_in_result,
+                        //     region.get_region().id,
+                        //     key,
+                        // );
                         let mut r = KeyRange::new();
                         r.set_start(raw_key);
                         let mut raw_end = Vec::with_capacity(raw_key_len + 1);
@@ -302,10 +302,10 @@ async fn build_index_lookup_probe_ranges_for_handles<S: Storage, T: Handle>(
                         r.set_end(raw_end);
                         current_region = Some((region, vec![r], (i, i)));
                     } else {
-                        warn!(
-                            "[ILP] [{} {} {:?}] Miss region, key: {:?}",
-                            i, handle_idx, pos_in_result, key
-                        );
+                        // warn!(
+                        //     "[ILP] [{} {} {:?}] Miss region, key: {:?}",
+                        //     i, handle_idx, pos_in_result, key
+                        // );
                         left_handles.insert(sorted_handles.get_position_in_results(i)?);
                     }
                 }
@@ -319,10 +319,10 @@ async fn build_index_lookup_probe_ranges_for_handles<S: Storage, T: Handle>(
             if store.is_some() {
                 probe_side_ranges.push((store.unwrap(), ranges));
             } else {
-                warn!(
-                    "[ILP] Region: {} failed to get store",
-                    region.get_region().id
-                );
+                // warn!(
+                //     "[ILP] Region: {} failed to get store",
+                //     region.get_region().id
+                // );
                 for pos in slice.0..=slice.1 {
                     left_handles.insert(sorted_handles.get_position_in_results(pos)?);
                 }
@@ -331,26 +331,26 @@ async fn build_index_lookup_probe_ranges_for_handles<S: Storage, T: Handle>(
     }
 
     let no_left_handles = left_handles.is_empty();
-    warn!(
-        "[ILP] Left handles, size: {}, pos: {:?}",
-        left_handles.len(),
-        left_handles
-    );
+    // warn!(
+    //     "[ILP] Left handles, size: {}, pos: {:?}",
+    //     left_handles.len(),
+    //     left_handles
+    // );
     for (i, result) in build_side_results.iter_mut().enumerate() {
         if no_left_handles {
             result.logical_rows = vec![];
         } else {
-            warn!(
-                "[ILP] Before retain, logic rows of result {}: {:?}",
-                i, result.logical_rows
-            );
+            // warn!(
+            //     "[ILP] Before retain, logic rows of result {}: {:?}",
+            //     i, result.logical_rows
+            // );
             result
                 .logical_rows
                 .retain(|row| left_handles.contains(&(i, *row)));
-            warn!(
-                "[ILP] After retain, logic rows of result {}: {:?}",
-                i, result.logical_rows
-            );
+            // warn!(
+            //     "[ILP] After retain, logic rows of result {}: {:?}",
+            //     i, result.logical_rows
+            // );
         }
     }
 
