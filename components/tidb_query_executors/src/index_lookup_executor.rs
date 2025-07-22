@@ -243,6 +243,7 @@ async fn build_index_lookup_probe_ranges_for_handles<S: Storage, T: Handle>(
         if i < handles_len {
             let handle_idx = sorted_handles.orders[i];
             let handle = &sorted_handles.handles[handle_idx];
+            let pos_in_result = sorted_handles.get_position_in_results(i)?;
             let mut raw_key = handle.encode_raw_key(table_id);
             let raw_key_len = raw_key.len();
             let key = Key::from_raw(&raw_key);
@@ -253,8 +254,10 @@ async fn build_index_lookup_probe_ranges_for_handles<S: Storage, T: Handle>(
                     let lat_handle = &sorted_handles.handles[sorted_handles.orders[i - 1]];
                     if lat_handle.is_next(handle) {
                         warn!(
-                            "[ILP][{}] Append the region: {}, exist range, key: {:?}",
+                            "[ILP][{} {} {:?}] Append the region: {}, exist range, key: {:?}",
                             i,
+                            handle_idx,
+                            pos_in_result,
                             region.get_region().id,
                             key,
                         );
@@ -263,8 +266,10 @@ async fn build_index_lookup_probe_ranges_for_handles<S: Storage, T: Handle>(
                         last_range.set_end(raw_key);
                     } else {
                         warn!(
-                            "[ILP][{}] Append the region: {}, new range, key: {:?}",
+                            "[ILP][{} {} {:?}] Append the region: {}, new range, key: {:?}",
                             i,
+                            handle_idx,
+                            pos_in_result,
                             region.get_region().id,
                             key,
                         );
@@ -282,8 +287,10 @@ async fn build_index_lookup_probe_ranges_for_handles<S: Storage, T: Handle>(
                     region_has_end = current_region.take();
                     if let Some(region) = locate_key(key.as_encoded()).take() {
                         warn!(
-                            "[ILP] [{}] Start new region: {}, key: {:?}",
+                            "[ILP] [{} {} {:?}] Start new region: {}, key: {:?}",
                             i,
+                            handle_idx,
+                            pos_in_result,
                             region.get_region().id,
                             key,
                         );
@@ -295,7 +302,10 @@ async fn build_index_lookup_probe_ranges_for_handles<S: Storage, T: Handle>(
                         r.set_end(raw_end);
                         current_region = Some((region, vec![r], (i, i)));
                     } else {
-                        warn!("[ILP] [{}] Miss region, key: {:?}", i, key);
+                        warn!(
+                            "[ILP] [{} {} {:?}] Miss region, key: {:?}",
+                            i, handle_idx, pos_in_result, key
+                        );
                         left_handles.insert(sorted_handles.get_position_in_results(i)?);
                     }
                 }
@@ -330,9 +340,17 @@ async fn build_index_lookup_probe_ranges_for_handles<S: Storage, T: Handle>(
         if no_left_handles {
             result.logical_rows = vec![];
         } else {
+            warn!(
+                "[ILP] Before retain, logic rows of result {}: {:?}",
+                i, result.logical_rows
+            );
             result
                 .logical_rows
-                .retain(|row| left_handles.contains(&(i, *row)))
+                .retain(|row| left_handles.contains(&(i, *row)));
+            warn!(
+                "[ILP] After retain, logic rows of result {}: {:?}",
+                i, result.logical_rows
+            );
         }
     }
 
