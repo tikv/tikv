@@ -864,12 +864,12 @@ fn test_serde_custom_tikv_config() {
         compaction_filter_skip_version_check: true,
         num_threads: 2,
         auto_compaction: AutoCompactionConfig {
-            check_interval: ReadableDuration::secs(12),
-            tombstones_num_threshold: 999,
-            tombstones_percent_threshold: 33,
-            redundant_rows_threshold: 999,
-            redundant_rows_percent_threshold: 33,
-            bottommost_level_force: true,
+            check_interval: ReadableDuration::secs(300),
+            tombstones_num_threshold: 10000,
+            tombstones_percent_threshold: 30,
+            redundant_rows_threshold: 50000,
+            redundant_rows_percent_threshold: 20,
+            bottommost_level_force: false,
         },
     };
     value.pessimistic_txn = PessimisticTxnConfig {
