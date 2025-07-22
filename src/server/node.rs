@@ -1,11 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-<<<<<<< HEAD:src/server/node.rs
-    sync::{atomic::AtomicU64, Arc, Mutex},
-=======
     sync::{Arc, Mutex},
->>>>>>> d4db90887a (GC: remove compact on split (#18500)):src/server/raft_server.rs
     thread,
     time::Duration,
 };

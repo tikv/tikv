@@ -2,11 +2,7 @@
 
 use std::{
     iter::FromIterator,
-<<<<<<< HEAD
-    sync::{atomic::AtomicU64, mpsc, Arc, Mutex},
-=======
-    sync::{Arc, Mutex, mpsc},
->>>>>>> d4db90887a (GC: remove compact on split (#18500))
+    sync::{mpsc, Arc, Mutex},
     time::Duration,
 };
 

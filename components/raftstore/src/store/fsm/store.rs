@@ -10,14 +10,7 @@ use std::{
     },
     mem,
     ops::{Deref, DerefMut},
-<<<<<<< HEAD
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
-    },
-=======
-    sync::{Arc, Mutex, atomic::Ordering},
->>>>>>> d4db90887a (GC: remove compact on split (#18500))
+    sync::{atomic::Ordering, Arc, Mutex},
     time::{Duration, Instant, SystemTime},
     u64,
 };
@@ -609,12 +602,6 @@ where
     pub write_senders: WriteSenders<EK, ER>,
     pub sync_write_worker: Option<WriteWorker<EK, ER, RaftRouter<EK, ER>, T>>,
     pub pending_latency_inspect: Vec<util::LatencyInspector>,
-
-<<<<<<< HEAD
-    pub safe_point: Arc<AtomicU64>,
-=======
-    pub process_stat: Option<ProcessStat>,
->>>>>>> d4db90887a (GC: remove compact on split (#18500))
 }
 
 impl<EK, ER, T> PollContext<EK, ER, T>
@@ -1533,11 +1520,6 @@ where
             write_senders: self.write_senders.clone(),
             sync_write_worker,
             pending_latency_inspect: vec![],
-<<<<<<< HEAD
-            safe_point: self.safe_point.clone(),
-=======
-            process_stat: None,
->>>>>>> d4db90887a (GC: remove compact on split (#18500))
         };
         ctx.update_ticks_timeout();
         let tag = format!("[store {}]", ctx.store.get_id());
@@ -1735,11 +1717,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             ReadRunner::new(self.router.clone(), engines.raft.clone()),
         );
 
-<<<<<<< HEAD
         let compact_runner = CompactRunner::new(engines.kv.clone());
-=======
-        let compact_runner = CompactRunner::new(engines.kv.clone(), bgworker_remote);
->>>>>>> d4db90887a (GC: remove compact on split (#18500))
         let cleanup_sst_runner = CleanupSstRunner::new(Arc::clone(&importer));
         let gc_snapshot_runner = GcSnapshotRunner::new(
             meta.get_id(),
@@ -1748,7 +1726,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         );
         let cleanup_runner =
             CleanupRunner::new(compact_runner, cleanup_sst_runner, gc_snapshot_runner);
-        let cleanup_scheduler: Scheduler<CleanupTask> = workers
+        let cleanup_scheduler = workers
             .cleanup_worker
             .start("cleanup-worker", cleanup_runner);
         let consistency_check_runner =

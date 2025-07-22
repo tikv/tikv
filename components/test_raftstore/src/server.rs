@@ -2,11 +2,7 @@
 
 use std::{
     path::Path,
-<<<<<<< HEAD
-    sync::{atomic::AtomicU64, Arc, Mutex, RwLock},
-=======
-    sync::{Arc, Mutex, RwLock, mpsc::Receiver},
->>>>>>> d4db90887a (GC: remove compact on split (#18500))
+    sync::{Arc, Mutex, RwLock},
     thread,
     time::Duration,
     usize,

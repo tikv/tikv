@@ -1,13 +1,8 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-<<<<<<< HEAD
     path::Path,
-    sync::{atomic::AtomicU64, Arc, Mutex, RwLock},
-=======
-    path::{Path, PathBuf},
     sync::{Arc, Mutex, RwLock},
->>>>>>> d4db90887a (GC: remove compact on split (#18500))
 };
 
 use collections::{HashMap, HashSet};
