@@ -47,7 +47,6 @@ make_static_metric! {
     pub struct AutoCompactionOperationCounterVec: IntCounter {
         "type" => AutoCompactionOperationType,
     }
-
 }
 
 lazy_static::lazy_static! {
@@ -66,6 +65,10 @@ lazy_static::lazy_static! {
         &["type"]
     ).unwrap();
 
+    pub static ref AUTO_COMPACTION_SCANNED_REGIONS_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_auto_compaction_scanned_regions",
+        "Number of regions scanned in each compaction run"
+    ).unwrap();
 }
 
 /// A candidate for compaction with its priority score
@@ -301,8 +304,10 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
         let mut candidates_heap: BinaryHeap<Reverse<CompactionCandidate>> =
             BinaryHeap::with_capacity(heap_capacity);
         let mut current_key = b"".to_vec();
+        let mut scanned_regions_count = 0;
 
         while let Some(region) = self.get_next_region_context(&current_key) {
+            scanned_regions_count += 1;
             // Evaluate this region as a compaction candidate
             let evaluation_start = Instant::now();
             match self.evaluate_range_candidate(&region, gc_safe_point, config) {
@@ -363,6 +368,10 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
         }
 
         info!("collected {} compaction candidates", candidates.len());
+        
+        // Record how many regions were scanned in this run
+        AUTO_COMPACTION_SCANNED_REGIONS_GAUGE.set(scanned_regions_count);
+        
         fail_point!("gc_worker_auto_compaction_candidates_collected");
         Ok(candidates)
     }
@@ -519,6 +528,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
         gc_safe_point: u64,
         config: &GcConfig,
     ) -> Result<Option<CompactionCandidate>> {
+        let region_id = region.get_id();
         let start_key = enc_start_key(region);
         let end_key = enc_end_key(region);
 
@@ -584,6 +594,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
                     "newest_delete_ts" => mvcc_properties.newest_delete_ts.into_inner(),
                     "oldest_stale_version_ts" => mvcc_properties.oldest_stale_version_ts.into_inner(),
                     "newest_stale_version_ts" => mvcc_properties.newest_stale_version_ts.into_inner(),
+                    "gc_safe_point" => gc_safe_point,
                 );
             }
             true

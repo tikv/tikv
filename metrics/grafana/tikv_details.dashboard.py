@@ -4140,6 +4140,24 @@ def GC() -> RowPanel:
         ]
     )
 
+    layout.row(
+        [
+            graph_panel(
+                title="Auto Compaction Scanned Regions",
+                description="Number of regions scanned in each auto compaction run",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_auto_compaction_scanned_regions",
+                        ),
+                        legend_format="scanned_regions",
+                    ),
+                ],
+            ),
+        ]
+    )
+
     return layout.row_panel
 
 
