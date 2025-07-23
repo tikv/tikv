@@ -2955,15 +2955,13 @@ def RaftLog() -> RowPanel:
         [
             graph_panel(
                 title="GC Raft Log Total",
-                description="The total number of raft log GC operations (actual GC发生次数)",
+                description="The total number of GC raft log",
                 yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
                 targets=[
                     target(
                         expr=expr_sum_rate(
                             "tikv_raftstore_gc_raft_log_total",
-                            by_labels=["instance"],
                         ),
-                        legend_format="{{instance}}",
                     ),
                 ],
             ),
@@ -2993,7 +2991,7 @@ def RaftLog() -> RowPanel:
                 ],
             ),
             graph_panel(
-                title="Raft log gc count",
+                title="Raft log gc ok",
                 targets=[
                     target(
                         expr=expr_sum_rate(

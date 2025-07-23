@@ -58,11 +58,10 @@ use tikv_util::{
     mpsc::{self, LooseBoundedSender, Receiver},
     slow_log,
     store::{find_peer, find_peer_by_id, is_learner, region_on_same_stores},
-    sys::disk::DiskUsage,
+    sys::{disk::DiskUsage, memory_usage_reaches_near_high_water},
     time::{Instant as TiInstant, SlowTimer, monotonic_raw_now},
     trace, warn,
     worker::{ScheduleError, Scheduler},
-    sys::memory_usage_reaches_near_high_water,
 };
 use tracker::GLOBAL_TRACKERS;
 use txn_types::WriteBatchFlags;
@@ -171,11 +170,6 @@ where
     /// deleted if the skip time reaches this `skip_gc_raft_log_ticks`.
     skip_gc_raft_log_ticks: usize,
     reactivate_memory_lock_ticks: usize,
-
-    /// This is used to detect long-time high log lag.
-    high_log_lag_ticks: usize,
-
-    accumulated_log_lag_count: u64,
 
     /// Batch raft command which has the same header into an entry
     batch_req_builder: BatchRaftCmdRequestBuilder<EK>,
@@ -307,8 +301,6 @@ where
                 skip_split_count: 0,
                 skip_gc_raft_log_ticks: 0,
                 reactivate_memory_lock_ticks: 0,
-                high_log_lag_ticks: 0,
-                accumulated_log_lag_count: 0,
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(),
                 trace: PeerMemoryTrace::default(),
                 delayed_destroy: None,
@@ -371,8 +363,6 @@ where
                 skip_split_count: 0,
                 skip_gc_raft_log_ticks: 0,
                 reactivate_memory_lock_ticks: 0,
-                high_log_lag_ticks: 0,
-                accumulated_log_lag_count: 0,
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(),
                 trace: PeerMemoryTrace::default(),
                 delayed_destroy: None,
@@ -6126,26 +6116,26 @@ where
                 self.register_entry_cache_evict_tick();
             }
         }
-        
+
         let mut usage = 0;
         let is_near = memory_usage_reaches_near_high_water(&mut usage);
         let applied_count = applied_idx - first_idx;
 
-        self.fsm.accumulated_log_lag_count += applied_count;
-        self.fsm.high_log_lag_ticks += 1;
-
-        let mut compact_idx = if force_compact && replicated_idx > first_idx {
-            replicated_idx
-        } else if is_near && applied_count >= self.ctx.cfg.raft_log_gc_count_limit()/5 {
-            self.ctx
-                .raft_metrics
-                .raft_log_gc
-                .high_water
-                .inc();
+        let mut compact_idx = if force_compact && replicated_idx >= first_idx {
+            if applied_count > self.ctx.cfg.raft_log_gc_count_limit() / 3 {
+                self.ctx
+                    .raft_metrics
+                    .raft_log_gc
+                    .raft_engine_memory_limit
+                    .inc();
+                std::cmp::max(first_idx + (last_idx - first_idx) / 2, replicated_idx)
+            } else {
+                replicated_idx
+            }
+        } else if is_near && applied_count > self.ctx.cfg.raft_log_gc_count_limit() / 3 {
+            self.ctx.raft_metrics.raft_log_gc.memory_high_water.inc();
             std::cmp::max(first_idx + (last_idx - first_idx) / 2, replicated_idx)
         } else if applied_count >= self.ctx.cfg.raft_log_gc_count_limit() {
-            self.fsm.high_log_lag_ticks = 0;
-            self.fsm.accumulated_log_lag_count = 0;
             self.ctx
                 .raft_metrics
                 .raft_log_gc
@@ -6155,8 +6145,6 @@ where
         } else if applied_count > 0
             && self.fsm.peer.raft_log_size_hint >= self.ctx.cfg.raft_log_gc_size_limit().0
         {
-            self.fsm.high_log_lag_ticks = 0;
-            self.fsm.accumulated_log_lag_count = 0;
             self.ctx
                 .raft_metrics
                 .raft_log_gc

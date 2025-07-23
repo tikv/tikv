@@ -77,10 +77,6 @@ pub struct Config {
     pub raft_log_compact_sync_interval: ReadableDuration,
     // Interval to gc unnecessary raft log.
     pub raft_log_gc_tick_interval: ReadableDuration,
-    // The number of ticks to force gc raft log when high log lag.
-    pub raft_log_force_gc_ticks: usize,
-    // When the count of gc stale area exceed this value, gc will be forced trigger.
-    pub raft_log_gc_area_limit: u64,
     // Interval to request voter_replicated_index for gc unnecessary raft log,
     // if the leader has not initiated gc for a long time.
     pub request_voter_replicated_index_interval: ReadableDuration,
@@ -91,6 +87,8 @@ pub struct Config {
     // When the approximate size of raft log entries exceed this value,
     // gc will be forced trigger.
     pub raft_log_gc_size_limit: Option<ReadableSize>,
+    // The maximum memory limit of raft engine.
+    pub raft_engine_memory_limit: ReadableSize,
     /// The maximum raft log numbers that applied_index can be ahead of
     /// persisted_index.
     pub max_apply_unpersisted_log_limit: u64,
@@ -106,6 +104,8 @@ pub struct Config {
     pub raft_log_reserve_max_ticks: usize,
     // Old logs in Raft engine needs to be purged peridically.
     pub raft_engine_purge_interval: ReadableDuration,
+    // Logs in Raft Engine memory needs to be purged peridically.
+    pub raft_log_force_gc_interval: ReadableDuration,
     #[doc(hidden)]
     #[online_config(hidden)]
     pub max_manual_flush_rate: f64,
@@ -490,16 +490,16 @@ impl Default for Config {
             raft_entry_max_size: ReadableSize::mb(8),
             raft_log_compact_sync_interval: ReadableDuration::secs(2),
             raft_log_gc_tick_interval: ReadableDuration::secs(3),
-            raft_log_force_gc_ticks: 100,
-            raft_log_gc_area_limit: 5,
             request_voter_replicated_index_interval: ReadableDuration::minutes(5),
             raft_log_gc_threshold: 50,
             raft_log_gc_count_limit: None,
             raft_log_gc_size_limit: None,
+            raft_engine_memory_limit: ReadableSize::mb(1024),
             max_apply_unpersisted_log_limit: 1024,
             follower_read_max_log_gap: 100,
             raft_log_reserve_max_ticks: 6,
             raft_engine_purge_interval: ReadableDuration::secs(10),
+            raft_log_force_gc_interval: ReadableDuration::secs(60),
             max_manual_flush_rate: 3.0,
             raft_entry_cache_life_time: ReadableDuration::secs(30),
             raft_reject_transfer_leader_duration: ReadableDuration::secs(3),
@@ -1096,12 +1096,6 @@ impl Config {
             .with_label_values(&["raft_log_gc_tick_interval"])
             .set(self.raft_log_gc_tick_interval.as_secs_f64());
         CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["raft_log_force_gc_ticks"])
-            .set(self.raft_log_force_gc_ticks as f64);
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["raft_log_gc_area_limit"])
-            .set(self.raft_log_gc_area_limit as f64);
-        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["request_voter_replicated_index_interval"])
             .set(self.request_voter_replicated_index_interval.as_secs_f64());
         CONFIG_RAFTSTORE_GAUGE
@@ -1110,6 +1104,9 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_log_gc_count_limit"])
             .set(self.raft_log_gc_count_limit.unwrap_or_default() as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["raft_engine_memory_limit"])
+            .set(self.raft_engine_memory_limit.0 as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_log_gc_size_limit"])
             .set(self.raft_log_gc_size_limit.unwrap_or_default().0 as f64);
@@ -1122,6 +1119,9 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_engine_purge_interval"])
             .set(self.raft_engine_purge_interval.as_secs_f64());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["raft_log_force_gc_interval"])
+            .set(self.raft_log_force_gc_interval.as_secs_f64());
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["max_manual_flush_rate"])
             .set(self.max_manual_flush_rate);

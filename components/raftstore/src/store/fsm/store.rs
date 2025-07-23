@@ -818,6 +818,7 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             StoreTick::ConsistencyCheck => self.on_consistency_check_tick(),
             StoreTick::CleanupImportSst => self.on_cleanup_import_sst_tick(),
             StoreTick::PdReportMinResolvedTs => self.on_pd_report_min_resolved_ts_tick(),
+            StoreTick::RaftEngineForceGc => self.on_raft_engine_force_gc_tick(),
         }
         let elapsed = timer.saturating_elapsed();
         self.ctx
@@ -963,6 +964,7 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
         self.register_compact_lock_cf_tick();
         self.register_snap_mgr_gc_tick();
         self.register_consistency_check_tick();
+        self.register_raft_engine_force_gc_tick();
     }
 }
 
@@ -1700,19 +1702,19 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         gc_safe_point: Arc<AtomicU64>,
     ) -> Result<()> {
         assert!(self.workers.is_none());
+        let raft_clone_for_purge = engines.raft.clone();
+        let router_clone_for_purge = self.router();
         // TODO: we can get cluster meta regularly too later.
         let purge_worker = if engines.raft.need_manual_purge()
             && !cfg.value().raft_engine_purge_interval.0.is_zero()
         {
             let worker = Worker::new("purge-worker");
-            let raft_clone = engines.raft.clone();
-            let router_clone = self.router();
             worker.spawn_interval_task(cfg.value().raft_engine_purge_interval.0, move || {
                 let _guard = WithIoType::new(IoType::RewriteLog);
-                match raft_clone.manual_purge() {
+                match raft_clone_for_purge.manual_purge() {
                     Ok(regions) => {
                         for region_id in regions {
-                            let _ = router_clone.send(
+                            let _ = router_clone_for_purge.send(
                                 region_id,
                                 PeerMsg::CasualMessage(Box::new(
                                     CasualMessage::ForceCompactRaftLogs,
@@ -1729,6 +1731,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         } else {
             None
         };
+
         let bgworker_remote = background_worker.remote();
         let snap_gen_worker = WorkerBuilder::new("snap-generator")
             .thread_count(cfg.value().snap_generator_pool_size)
@@ -3250,6 +3253,41 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
             StoreTick::CompactLockCf,
             self.ctx.cfg.lock_cf_compact_interval.0,
         )
+    }
+
+    fn register_raft_engine_force_gc_tick(&self) {
+        self.ctx.schedule_store_tick(
+            StoreTick::RaftEngineForceGc,
+            self.ctx.cfg.raft_log_force_gc_interval.0,
+        )
+    }
+
+    fn on_raft_engine_force_gc_tick(&mut self) {
+        self.register_raft_engine_force_gc_tick();
+
+        // 检查 raft engine 内存使用量
+        let mem_usage = match self.ctx.engines.raft.get_memory_usage() {
+            Ok(usage) => usage,
+            Err(_e) => {
+                return;
+            }
+        };
+
+        let raft_engine_memory_limit = self.ctx.cfg.raft_engine_memory_limit.0;
+        if mem_usage > raft_engine_memory_limit {
+            // When memory usage exceeds limit, send force compact message to all regions
+            let _ = self
+                .ctx
+                .engines
+                .raft
+                .for_each_raft_group::<engine_traits::Error, _>(&mut |region_id| {
+                    let _ = self.ctx.router.send(
+                        region_id,
+                        PeerMsg::CasualMessage(Box::new(CasualMessage::ForceCompactRaftLogs)),
+                    );
+                    Ok(())
+                });
+        }
     }
 }
 

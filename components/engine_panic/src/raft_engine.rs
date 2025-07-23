@@ -153,6 +153,10 @@ impl RaftEngine for PanicEngine {
         panic!()
     }
 
+    fn get_memory_usage(&self) -> Result<u64> {
+        panic!()
+    }
+
     fn get_engine_path(&self) -> &str {
         panic!()
     }

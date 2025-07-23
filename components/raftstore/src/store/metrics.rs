@@ -227,6 +227,7 @@ make_static_metric! {
         raft_engine_purge,
         peer_msg,
         store_msg,
+        raft_engine_force_gc,
     }
 
     pub label_enum RaftLogGcSkippedReason {
@@ -238,7 +239,8 @@ make_static_metric! {
 
     pub label_enum RaftLogGcReason {
         max_ticks,
-        high_water,
+        memory_high_water,
+        raft_engine_memory_limit,
         log_force_gc_count_limit,
         log_force_gc_size_limit,
     }
