@@ -32,7 +32,9 @@ use tikv::{
     config::*,
     import::Config as ImportConfig,
     server::{
-        Config as ServerConfig, config::GrpcCompressionType, gc_worker::GcConfig,
+        Config as ServerConfig,
+        config::GrpcCompressionType,
+        gc_worker::{AutoCompactionConfig, GcConfig},
         lock_manager::Config as PessimisticTxnConfig,
     },
     storage::config::{
@@ -861,6 +863,14 @@ fn test_serde_custom_tikv_config() {
         enable_compaction_filter: false,
         compaction_filter_skip_version_check: true,
         num_threads: 2,
+        auto_compaction: AutoCompactionConfig {
+            check_interval: ReadableDuration::secs(300),
+            tombstones_num_threshold: 10000,
+            tombstones_percent_threshold: 30,
+            redundant_rows_threshold: 50000,
+            redundant_rows_percent_threshold: 20,
+            bottommost_level_force: false,
+        },
     };
     value.pessimistic_txn = PessimisticTxnConfig {
         wait_for_lock_timeout: ReadableDuration::millis(10),
