@@ -11,9 +11,8 @@ use std::{
 
 use crossbeam::channel::{Receiver, Sender, TrySendError, bounded};
 use grpcio::{Error, RpcStatusCode};
-use grpcio_health::{ServingStatus::Serving, proto::HealthCheckResponse};
+use grpcio_health::{ServingStatus::Serving, proto::Health, proto::HealthClient};
 use health_controller::types::LatencyInspector;
-use pd_client::health::HealthClient;
 use tikv_util::{
     time::Instant,
     warn,
@@ -63,7 +62,7 @@ pub struct Runner {
     network_runner: InnerRunner,
 
     target: PathBuf,
-    health_client: Arc<dyn HealthClient + Send + Sync>,
+    health_client: HealthClient,
 }
 
 #[derive(Clone)]
@@ -100,7 +99,7 @@ impl Runner {
     const NETWORK_NOT_TIMEOUT: Duration = Duration::from_millis(500);
 
     #[inline]
-    fn build(target: PathBuf, health_client: Arc<dyn HealthClient + Send + Sync>) -> Self {
+    fn build(target: PathBuf, health_client: HealthClient) -> Self {
         // The disk check mechanism only cares about the latency of the most
         // recent request; older requests become stale and irrelevant. To avoid
         // unnecessary accumulation of multiple requests, we set a small
@@ -116,7 +115,7 @@ impl Runner {
     }
 
     #[inline]
-    pub fn new(inspect_dir: PathBuf, health_client: Arc<dyn HealthClient + Send + Sync>) -> Self {
+    pub fn new(inspect_dir: PathBuf, health_client: HealthClient) -> Self {
         Self::build(
             inspect_dir.join(Self::DISK_IO_LATENCY_INSPECT_FILENAME),
             health_client,
@@ -127,15 +126,12 @@ impl Runner {
     /// Only for test.
     /// Generate a dummy Runner.
     pub fn dummy() -> Self {
-        struct DummyHealthClient;
-        impl HealthClient for DummyHealthClient {
-            fn check(&self) -> Result<HealthCheckResponse, pd_client::Error> {
-                Ok(HealthCheckResponse::default())
-            }
-        }
+        let channel = grpcio::ChannelBuilder::new(
+            Arc::new(grpcio::EnvBuilder::new().build()))
+            .connect("127.0.0.1:0");
         Self::build(
             PathBuf::from("./").join(Self::DISK_IO_LATENCY_INSPECT_FILENAME),
-            Arc::new(DummyHealthClient),
+            HealthClient::new(channel),
         )
     }
 
@@ -163,31 +159,32 @@ impl Runner {
     }
 
     fn inspect_network(&self, start: Instant) -> Option<Duration> {
-        match self.health_client.check() {
-            Ok(resp) => {
-                if resp.status != Serving {
-                    warn!("pd server is not serving."; "status" => ?resp.status);
-                    // Non-network problem, we do not consider it as a timeout
-                    return Some(cmp::max(
-                        start.saturating_elapsed(),
-                        Self::NETWORK_NOT_TIMEOUT,
-                    ));
-                }
-            }
-            Err(e) => {
-                if is_network_error(&e) {
-                    warn!("network error when checking pd health"; "err" => ?e);
-                    return Some(Self::NETWORK_TIMEOUT);
-                }
-                warn!("unexpected error when checking pd health"; "err" => ?e);
-                // Non-network problem, we do not consider it as a timeout
-                return Some(cmp::max(
-                    start.saturating_elapsed(),
-                    Self::NETWORK_NOT_TIMEOUT,
-                ));
-            }
-        };
-        Some(start.saturating_elapsed())
+        // match self.health_client.check() {
+        //     Ok(resp) => {
+        //         if resp.status != Serving {
+        //             warn!("pd server is not serving."; "status" => ?resp.status);
+        //             // Non-network problem, we do not consider it as a timeout
+        //             return Some(cmp::max(
+        //                 start.saturating_elapsed(),
+        //                 Self::NETWORK_NOT_TIMEOUT,
+        //             ));
+        //         }
+        //     }
+        //     Err(e) => {
+        //         if is_network_error(&e) {
+        //             warn!("network error when checking pd health"; "err" => ?e);
+        //             return Some(Self::NETWORK_TIMEOUT);
+        //         }
+        //         warn!("unexpected error when checking pd health"; "err" => ?e);
+        //         // Non-network problem, we do not consider it as a timeout
+        //         return Some(cmp::max(
+        //             start.saturating_elapsed(),
+        //             Self::NETWORK_NOT_TIMEOUT,
+        //         ));
+        //     }
+        // };
+        // Some(start.saturating_elapsed())
+        Some(Duration::from_secs(1))
     }
 
     fn execute_disk(&self) {
