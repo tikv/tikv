@@ -611,7 +611,7 @@ mod tests {
         cfg.validate().unwrap();
         assert_eq!(cfg.addr, cfg.advertise_addr);
         assert_eq!(cfg.status_addr, cfg.advertise_status_addr);
-        let base_num = calculate_cpu_quota_base_num();
+        let base_num = calculate_cpu_quota_base_num().clamp(1, 4);
         assert_eq!(cfg.grpc_raft_conn_num, base_num);
         assert_eq!(cfg.grpc_concurrency, base_num * 3 + 2);
 
