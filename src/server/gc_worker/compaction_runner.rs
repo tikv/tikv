@@ -546,29 +546,61 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
                 num_rows += mvcc_properties.num_rows;
 
                 // RocksDB tombstones are guaranteed to be discardable
-                num_tombstones += num_entries - mvcc_properties.num_versions;
+                let table_tombstones = num_entries - mvcc_properties.num_versions;
+                num_tombstones += table_tombstones;
+                
+                let mut table_estimated_deletes = 0;
+                let mut table_estimated_stale_versions = 0;
                 if config.enable_compaction_filter {
                     // Estimate discardable TiKV MVCC delete versions
-                    num_discardable += self.get_estimated_discardable_entries(
+                    table_estimated_deletes = self.get_estimated_discardable_entries(
                         mvcc_properties.num_deletes,
                         mvcc_properties.oldest_delete_ts,
                         mvcc_properties.newest_delete_ts,
                         gc_safe_point,
                     );
+                    num_discardable += table_estimated_deletes;
+                    
                     // Estimate discardable stale MVCC versions
-                    num_discardable += self.get_estimated_discardable_entries(
+                    table_estimated_stale_versions = self.get_estimated_discardable_entries(
                         mvcc_properties.num_versions - mvcc_properties.num_rows,
                         mvcc_properties.oldest_stale_version_ts,
                         mvcc_properties.newest_stale_version_ts,
                         gc_safe_point,
                     );
+                    num_discardable += table_estimated_stale_versions;
                 }
+
+                // Debug info for each table
+                info!("table stats for region"; 
+                    "region_id" => region_id,
+                    "num_entries" => num_entries,
+                    "num_tombstones" => table_tombstones,
+                    "num_stale_versions" => mvcc_properties.num_versions - mvcc_properties.num_rows,
+                    "num_deletes" => mvcc_properties.num_deletes,
+                    "estimated_deleted" => table_estimated_deletes,
+                    "estimated_stale_version" => table_estimated_stale_versions,
+                    "oldest_delete_ts" => mvcc_properties.oldest_delete_ts.into_inner(),
+                    "newest_delete_ts" => mvcc_properties.newest_delete_ts.into_inner(),
+                    "oldest_stale_version_ts" => mvcc_properties.oldest_stale_version_ts.into_inner(),
+                    "newest_stale_version_ts" => mvcc_properties.newest_stale_version_ts.into_inner(),
+                );
             }
             true
         });
 
         let score =
             self.get_compact_score(num_tombstones, num_discardable, num_total_entries, config);
+
+        // Debug aggregated stats for this candidate
+        info!("candidate aggregated stats";
+            "region_id" => region_id,
+            "score" => score,
+            "num_entries" => num_total_entries,
+            "num_tombstones" => num_tombstones,
+            "num_discardable" => num_discardable,
+            "num_rows" => num_rows,
+        );
 
         if score > 0.0 {
             fail_point!("gc_worker_auto_compaction_candidate_found");
