@@ -14,7 +14,6 @@ mod util;
 
 mod config;
 pub mod errors;
-pub mod health;
 pub mod meta_storage;
 use std::{cmp::Ordering, ops::Deref, sync::Arc, time::Duration};
 

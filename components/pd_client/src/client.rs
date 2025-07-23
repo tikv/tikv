@@ -19,10 +19,6 @@ use futures::{
     stream::{ErrInto, StreamExt},
 };
 use grpcio::{EnvBuilder, Environment, WriteFlags};
-use grpcio_health::{
-    HealthClient as GrpcHealthClient,
-    proto::{HealthCheckRequest, HealthCheckResponse},
-};
 use kvproto::{
     meta_storagepb::{
         self as mpb, DeleteRequest, GetRequest, PutRequest, WatchRequest, WatchResponse,
@@ -43,7 +39,6 @@ use yatp::{ThreadPool, task::future::TaskCell};
 use super::{
     BucketStat, Config, Error, FeatureGate, PdClient, PdFuture, REQUEST_TIMEOUT, RegionInfo,
     RegionStat, Result, UnixSecs,
-    health::HealthClient,
     meta_storage::{Delete, Get, MetaStorageClient, Put, Watch},
     metrics::*,
     util::{Client, PdConnector, call_option_inner, check_resp_header, sync_request},
@@ -1253,23 +1248,4 @@ impl MetaStorageClient for RpcClient {
     type WatchStream = TryFlattenStream<
         PdFuture<ErrInto<grpcio::ClientSStreamReceiver<WatchResponse>, crate::Error>>,
     >;
-}
-
-impl HealthClient for RpcClient {
-    fn check(&self) -> Result<HealthCheckResponse> {
-        let req = HealthCheckRequest::default();
-
-        let health_client = GrpcHealthClient::new(
-            self.pd_client
-                .inner
-                .rl()
-                .client_stub
-                .client
-                .channel()
-                .clone(),
-        );
-        let resp = health_client.check_opt(&req, call_option_inner(&self.pd_client.inner.rl()))?;
-
-        Ok(resp)
-    }
 }
