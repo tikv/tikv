@@ -346,10 +346,14 @@ mod tests {
             DISK_RECOVERY_INTERVALS,
         );
 
+        assert_eq!(5, slow_score.min_timeout_ticks);
+
         // Record some uncompleted ticks.
         for i in 0..=slow_score.min_timeout_ticks {
             slow_score.uncompleted_ticks.insert(i);
         }
+        assert_eq!(6, slow_score.uncompleted_ticks.len());
+        assert!(slow_score.uncompleted_ticks.contains(&5));
         slow_score.last_tick_id = 5;
 
         // Record a timeout and completed tick.
@@ -369,10 +373,11 @@ mod tests {
         // A new tick is coming, the last_tick_id is false. So we should record
         // the timeout requests.
         slow_score.record_timeout();
-        assert_eq!(2, slow_score.timeout_requests);
-        assert_eq!(3, slow_score.total_requests);
+        assert_eq!(3, slow_score.timeout_requests);
+        assert_eq!(4, slow_score.total_requests);
         assert!(slow_score.last_tick_finished());
         assert!(!slow_score.uncompleted_ticks.contains(&0)); // The uncompleted ticks should be removed.
+        assert!(!slow_score.uncompleted_ticks.contains(&1));
 
         let result = slow_score.tick();
         assert_eq!(6, result.tick_id);
