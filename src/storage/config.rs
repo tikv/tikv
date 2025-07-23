@@ -24,6 +24,10 @@ const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
 const DEFAULT_MAX_KEY_SIZE: usize = 8 * 1024;
 const DEFAULT_SCHED_CONCURRENCY: usize = 1024 * 512;
 const MAX_SCHED_CONCURRENCY: usize = 2 * 1024 * 1024;
+// The default GC life time is 10 minutes, we use 6 minutes as the default
+// scan lock smooth rate period, so that the scan lock can be smoothed in 6
+// minutes.
+const DEFAULT_SCAN_LOCK_SMOOTH_RATE_PERIOD: ReadableDuration = ReadableDuration::minutes(6);
 
 // According to "Little's law", assuming you can write 100MB per
 // second, and it takes about 100ms to process the write requests
@@ -110,6 +114,7 @@ pub struct Config {
     #[online_config(skip)]
     pub txn_status_cache_capacity: usize,
     pub memory_quota: ReadableSize,
+    pub scan_lock_rate_limit_period: ReadableDuration,
     #[online_config(submodule)]
     pub flow_control: FlowControlConfig,
     #[online_config(submodule)]
@@ -148,6 +153,7 @@ impl Default for Config {
             background_error_recovery_window: ReadableDuration::hours(1),
             memory_quota: DEFAULT_TXN_MEMORY_QUOTA_CAPACITY,
             max_ts: MaxTsConfig::default(),
+            scan_lock_rate_limit_period: DEFAULT_SCAN_LOCK_SMOOTH_RATE_PERIOD,
         }
     }
 }
