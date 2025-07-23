@@ -6,7 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use ordered_float::{Float, OrderedFloat};
+use ordered_float::OrderedFloat;
 
 /// Interval for updating the slow score.
 const UPDATE_INTERVALS: Duration = Duration::from_secs(10);
