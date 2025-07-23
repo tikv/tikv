@@ -3,7 +3,7 @@
 use std::{
     char::from_u32,
     path::Path,
-    sync::{atomic::AtomicU64, *},
+    sync::*,
     thread,
     time::{Duration, Instant},
 };
@@ -1412,7 +1412,6 @@ fn test_double_run_node() {
             None,
             DiskCheckRunner::dummy(),
             GrpcServiceManager::dummy(),
-            Arc::new(AtomicU64::new(0)),
         )
         .unwrap_err();
     assert!(format!("{:?}", e).contains("already started"), "{:?}", e);
