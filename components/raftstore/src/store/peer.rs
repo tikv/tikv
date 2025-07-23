@@ -1099,15 +1099,8 @@ where
             peer.raft_group.campaign()?;
         }
 
-        let (persisted_index, committed_index, term) = (
-            peer.raft_group.raft.raft_log.persisted,
-            peer.raft_group.raft.raft_log.committed,
-            peer.raft_group.raft.term,
-        );
+        let persisted_index = peer.raft_group.raft.raft_log.persisted;
         peer.mut_store().update_cache_persisted(persisted_index);
-        // For initialization, uses the last committed raft log to initialize the term
-        // cache.
-        peer.mut_store().update_term_cache(committed_index, term);
         Ok(peer)
     }
 
