@@ -13,12 +13,13 @@ use engine_traits::{
     CF_DEFAULT, CF_WRITE, KvEngine, ManualCompactionOptions, Range, TableProperties,
     TablePropertiesCollection, UserCollectedProperties,
 };
+use keys::{enc_end_key, enc_start_key};
 use kvproto::metapb::Region;
 use prometheus::*;
 use prometheus_static_metric::*;
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::{box_err, debug, error, info, sys::thread::StdThreadBuildWrapper, warn};
-use txn_types::{Key, TimeStamp};
+use txn_types::TimeStamp;
 
 use super::{
     Error, Result,
@@ -86,13 +87,11 @@ lazy_static::lazy_static! {
 #[derive(Debug, Clone)]
 pub struct CompactionCandidate {
     pub score: f64,
-    pub start_key: Vec<u8>,
-    pub end_key: Vec<u8>,
     pub num_tombstones: u64,  // RocksDB tombstones
     pub num_discardable: u64, // Estimated discardable TiKV MVCC versions
     pub num_total_entries: u64,
     pub num_rows: u64, // TiKV rows
-    pub region_id: u64,
+    pub region: Region,
 }
 
 impl PartialEq for CompactionCandidate {
@@ -316,14 +315,12 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
         // full utilization of the time window between check intervals.
         let mut candidates_heap: BinaryHeap<Reverse<CompactionCandidate>> =
             BinaryHeap::with_capacity(heap_capacity);
-        let mut current_key = Key::from_encoded(b"".to_vec());
+        let mut current_key = b"".to_vec();
 
-        while let (Some(region), next_key) = self.get_next_region_context(current_key) {
+        while let Some(region) = self.get_next_region_context(&current_key) {
             // Evaluate this region as a compaction candidate
             match self.evaluate_range_candidate(
-                region.get_start_key(),
-                region.get_end_key(),
-                region.get_id(),
+                &region,
                 gc_safe_point,
                 config,
             ) {
@@ -349,9 +346,11 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
                 }
             }
 
-            match next_key {
-                Some(key) => current_key = key,
-                None => break,
+            if region.get_end_key().is_empty() {
+                // Reached the end of regions, stop seeking
+                break;
+            } else {
+                current_key = region.get_end_key().to_vec();
             }
         }
 
@@ -380,7 +379,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
 
             info!("top compaction candidate";
                 "rank" => rank + 1,
-                "region_id" => candidate.region_id,
+                "region_id" => candidate.region.get_id(),
                 "score" => candidate.score,
                 "total_entries" => candidate.num_total_entries,
                 "tikv_estimated_discardable" => candidate.num_discardable,
@@ -414,9 +413,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
 
             // Recheck candidate before compacting in case it's been resolved
             let current_candidate = match self.evaluate_range_candidate(
-                &candidate.start_key,
-                &candidate.end_key,
-                candidate.region_id,
+                &candidate.region,
                 current_gc_safe_point,
                 config,
             ) {
@@ -424,7 +421,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
                 Ok(None) => {
                     info!(
                         "candidate region {} no longer needs compaction, skipping",
-                        candidate.region_id
+                        candidate.region.get_id()
                     );
                     AUTO_COMPACTION_OPERATION_COUNTER_VEC.bypassed.inc();
                     continue;
@@ -432,7 +429,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
                 Err(e) => {
                     warn!(
                         "failed to recheck candidate region {}: {:?}, proceeding with original",
-                        candidate.region_id, e
+                        candidate.region.get_id(), e
                     );
                     candidate
                 }
@@ -452,7 +449,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
 
             processed_count += 1;
             info!("compacted candidate"; 
-                  "region_id" => current_candidate.region_id,
+                  "region_id" => current_candidate.region.get_id(),
                   "score" => current_candidate.score,
                   "processed_count" => processed_count,
                   "duration_ms" => compact_duration.as_millis());
@@ -464,20 +461,22 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
     /// Compacts a single candidate
     fn compact_candidate(&self, candidate: &CompactionCandidate, config: &GcConfig) -> Result<()> {
         let bottommost_level_force = config.auto_compaction.bottommost_level_force;
+        let start_key = enc_start_key(&candidate.region);
+        let end_key = enc_end_key(&candidate.region);
 
         // Compact write CF first (most important for GC)
         self.compact_range_cf(
             CF_WRITE,
-            Some(&candidate.start_key),
-            Some(&candidate.end_key),
+            Some(&start_key),
+            Some(&end_key),
             bottommost_level_force,
         )?;
 
         // Then compact default CF
         self.compact_range_cf(
             CF_DEFAULT,
-            Some(&candidate.start_key),
-            Some(&candidate.end_key),
+            Some(&start_key),
+            Some(&end_key),
             bottommost_level_force,
         )?;
 
@@ -502,11 +501,11 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
     }
 
     /// Gets the next region for compaction evaluation
-    fn get_next_region_context(&self, key: Key) -> (Option<Region>, Option<Key>) {
+    fn get_next_region_context(&self, key: &[u8]) -> Option<Region> {
         let (tx, rx) = mpsc::channel();
 
         let res = self.region_info_provider.seek_region(
-            key.as_encoded(),
+            key,
             Box::new(move |iter| {
                 if let Some(info) = iter.next() {
                     // Assume any region returned by seek_region has a peer on this store
@@ -519,23 +518,17 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
 
         if let Err(e) = res {
             error!("failed to get next region information: {:?}", e);
-            return (None, None);
+            return None;
         }
 
         match rx.recv() {
             Ok(Some(region)) => {
-                let end_key = region.get_end_key();
-                let next_key = if end_key.is_empty() {
-                    None
-                } else {
-                    Some(Key::from_encoded_slice(end_key))
-                };
-                (Some(region), next_key)
+                Some(region)
             }
-            Ok(None) => (None, None),
+            Ok(None) => None,
             Err(e) => {
                 error!("failed to receive region information: {:?}", e);
-                (None, None)
+                None
             }
         }
     }
@@ -543,13 +536,14 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
     /// Evaluates a key range as a compaction candidate using MVCC-aware scoring
     fn evaluate_range_candidate(
         &self,
-        start_key: &[u8],
-        end_key: &[u8],
-        region_id: u64,
+        region: &Region,
         gc_safe_point: u64,
         config: &GcConfig,
     ) -> Result<Option<CompactionCandidate>> {
         let start_time = Instant::now();
+        let region_id = region.get_id();
+        let start_key = enc_start_key(region);
+        let end_key = enc_end_key(region);
 
         let mut num_tombstones = 0;
         let mut num_discardable = 0;
@@ -558,7 +552,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
 
         let collection = self
             .engine
-            .table_properties_collection(CF_WRITE, &[Range::new(start_key, end_key)])
+            .table_properties_collection(CF_WRITE, &[Range::new(&start_key, &end_key)])
             .map_err(|e: engine_traits::Error| -> Error {
                 box_err!("failed to get table properties: {:?}", e)
             })?;
@@ -608,13 +602,11 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
             fail_point!("gc_worker_auto_compaction_candidate_found");
             Ok(Some(CompactionCandidate {
                 score,
-                start_key: start_key.to_vec(),
-                end_key: end_key.to_vec(),
                 num_tombstones,
                 num_discardable,
                 num_total_entries,
                 num_rows,
-                region_id,
+                region: region.clone(),
             }))
         } else {
             Ok(None)
