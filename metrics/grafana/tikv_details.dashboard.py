@@ -4140,26 +4140,6 @@ def GC() -> RowPanel:
         ]
     )
 
-    layout.row(
-        [
-            graph_panel(
-                title="Top 10 Candidates - MVCC Stats (Sum)",
-                description="Sum of MVCC statistics in top compaction candidates by type",
-                yaxes=yaxes(left_format=UNITS.SHORT),
-                targets=[
-                    target(
-                        expr=expr_sum(
-                            "tikv_auto_compaction_top_candidates_entries",
-                            by_labels=["type"],
-                        ),
-                        legend_format="{{type}}",
-                        additional_groupby=True,
-                    ),
-                ],
-            ),
-        ]
-    )
-
     return layout.row_panel
 
 

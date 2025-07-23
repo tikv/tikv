@@ -59228,139 +59228,6 @@
             "align": false,
             "alignLevel": 0
           }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "cacheTimeout": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Sum of MVCC statistics in top compaction candidates by type",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            }
-          },
-          "fill": 1,
-          "fillGradient": 1,
-          "grid": {
-            "threshold1": null,
-            "threshold1Color": "rgba(216, 200, 27, 0.27)",
-            "threshold2": null,
-            "threshold2Color": "rgba(234, 112, 112, 0.22)"
-          },
-          "gridPos": {
-            "h": 7,
-            "w": 24,
-            "x": 0,
-            "y": 56
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 418,
-          "interval": null,
-          "isNew": true,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "max",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "maxDataPoints": null,
-          "maxPerRow": null,
-          "minSpan": null,
-          "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true,
-            "dataLinks": []
-          },
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "repeat": null,
-          "repeatDirection": null,
-          "seriesOverrides": [],
-          "span": null,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum((\n    tikv_auto_compaction_top_candidates_entries\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (type, $additional_groupby) ",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{type}} {{$additional_groupby}}",
-              "metric": "",
-              "query": "sum((\n    tikv_auto_compaction_top_candidates_entries\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (type, $additional_groupby) ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Top 10 Candidates - MVCC Stats (Sum)",
-          "tooltip": {
-            "msResolution": true,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "transformations": [],
-          "transparent": false,
-          "type": "graph",
-          "xaxis": {
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "decimals": null,
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "decimals": null,
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": 0
-          }
         }
       ],
       "repeat": null,
@@ -59397,7 +59264,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 419,
+      "id": 418,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -59436,7 +59303,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 420,
+          "id": 419,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59584,7 +59451,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 421,
+          "id": 420,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59717,7 +59584,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 422,
+          "id": 421,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59918,7 +59785,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 423,
+          "id": 422,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60066,7 +59933,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 424,
+          "id": 423,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60267,7 +60134,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 425,
+          "id": 424,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60400,7 +60267,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 426,
+          "id": 425,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60533,7 +60400,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 427,
+          "id": 426,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60666,7 +60533,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 428,
+          "id": 427,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60799,7 +60666,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 429,
+          "id": 428,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60939,7 +60806,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 430,
+          "id": 429,
           "interval": null,
           "legend": {
             "show": false
@@ -61037,7 +60904,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 431,
+          "id": 430,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61241,7 +61108,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 432,
+      "id": 431,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -61280,7 +61147,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 433,
+          "id": 432,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61413,7 +61280,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 434,
+          "id": 433,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61546,7 +61413,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 435,
+          "id": 434,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61679,7 +61546,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 436,
+          "id": 435,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61815,7 +61682,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 437,
+      "id": 436,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -61854,7 +61721,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 438,
+          "id": 437,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61987,7 +61854,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 439,
+          "id": 438,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62120,7 +61987,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 440,
+          "id": 439,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62268,7 +62135,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 441,
+          "id": 440,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62401,7 +62268,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 442,
+          "id": 441,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62534,7 +62401,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 443,
+          "id": 442,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62667,7 +62534,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 444,
+          "id": 443,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62803,7 +62670,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 445,
+      "id": 444,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -62842,7 +62709,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 446,
+          "id": 445,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62975,7 +62842,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 447,
+          "id": 446,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63108,7 +62975,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 448,
+          "id": 447,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63241,7 +63108,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 449,
+          "id": 448,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63374,7 +63241,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 450,
+          "id": 449,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63507,7 +63374,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 451,
+          "id": 450,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63643,7 +63510,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 452,
+      "id": 451,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -63682,7 +63549,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 453,
+          "id": 452,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63815,7 +63682,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 454,
+          "id": 453,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63948,7 +63815,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 455,
+          "id": 454,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64096,7 +63963,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 456,
+          "id": 455,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64259,7 +64126,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 457,
+          "id": 456,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64392,7 +64259,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 458,
+          "id": 457,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64525,7 +64392,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 459,
+          "id": 458,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64688,7 +64555,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 460,
+          "id": 459,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64836,7 +64703,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 461,
+          "id": 460,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64972,7 +64839,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 462,
+      "id": 461,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -65011,7 +64878,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 463,
+          "id": 462,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65144,7 +65011,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 464,
+          "id": 463,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65277,7 +65144,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 465,
+          "id": 464,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65410,7 +65277,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 466,
+          "id": 465,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65543,7 +65410,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 467,
+          "id": 466,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65676,7 +65543,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 468,
+          "id": 467,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65809,7 +65676,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 469,
+          "id": 468,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65942,7 +65809,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 470,
+          "id": 469,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66075,7 +65942,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 471,
+          "id": 470,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66215,7 +66082,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 472,
+          "id": 471,
           "interval": null,
           "legend": {
             "show": false
@@ -66313,7 +66180,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 473,
+          "id": 472,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66446,7 +66313,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 474,
+          "id": 473,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66594,7 +66461,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 475,
+          "id": 474,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66742,7 +66609,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 476,
+          "id": 475,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66882,7 +66749,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 477,
+          "id": 476,
           "interval": null,
           "legend": {
             "show": false
@@ -66980,7 +66847,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 478,
+          "id": 477,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67113,7 +66980,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 479,
+          "id": 478,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67249,7 +67116,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 480,
+      "id": 479,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -67288,7 +67155,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 481,
+          "id": 480,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67421,7 +67288,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 482,
+          "id": 481,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67584,7 +67451,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 483,
+          "id": 482,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67732,7 +67599,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 484,
+          "id": 483,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67865,7 +67732,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 485,
+          "id": 484,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68005,7 +67872,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 486,
+          "id": 485,
           "interval": null,
           "legend": {
             "show": false
@@ -68110,7 +67977,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 487,
+          "id": 486,
           "interval": null,
           "legend": {
             "show": false
@@ -68215,7 +68082,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 488,
+          "id": 487,
           "interval": null,
           "legend": {
             "show": false
@@ -68313,7 +68180,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 489,
+          "id": 488,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68453,7 +68320,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 490,
+          "id": 489,
           "interval": null,
           "legend": {
             "show": false
@@ -68558,7 +68425,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 491,
+          "id": 490,
           "interval": null,
           "legend": {
             "show": false
@@ -68663,7 +68530,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 492,
+          "id": 491,
           "interval": null,
           "legend": {
             "show": false
@@ -68761,7 +68628,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 493,
+          "id": 492,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68894,7 +68761,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 494,
+          "id": 493,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69027,7 +68894,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 495,
+          "id": 494,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69167,7 +69034,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 496,
+          "id": 495,
           "interval": null,
           "legend": {
             "show": false
@@ -69265,7 +69132,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 497,
+          "id": 496,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69401,7 +69268,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 498,
+      "id": 497,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -69440,7 +69307,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 499,
+          "id": 498,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69603,7 +69470,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 500,
+          "id": 499,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69736,7 +69603,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 501,
+          "id": 500,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69876,7 +69743,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 502,
+          "id": 501,
           "interval": null,
           "legend": {
             "show": false
@@ -69981,7 +69848,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 503,
+          "id": 502,
           "interval": null,
           "legend": {
             "show": false
@@ -70079,7 +69946,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 504,
+          "id": 503,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -70234,7 +70101,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 505,
+          "id": 504,
           "interval": null,
           "legend": {
             "show": false
@@ -70339,7 +70206,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 506,
+          "id": 505,
           "interval": null,
           "legend": {
             "show": false
@@ -70444,7 +70311,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 507,
+          "id": 506,
           "interval": null,
           "legend": {
             "show": false
@@ -70542,7 +70409,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 508,
+          "id": 507,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -70712,7 +70579,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 509,
+          "id": 508,
           "interval": null,
           "legend": {
             "show": false
@@ -70810,7 +70677,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 510,
+          "id": 509,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71011,7 +70878,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 511,
+          "id": 510,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71212,7 +71079,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 512,
+          "id": 511,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71345,7 +71212,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 513,
+          "id": 512,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71508,7 +71375,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 514,
+          "id": 513,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71641,7 +71508,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 515,
+          "id": 514,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71774,7 +71641,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 516,
+          "id": 515,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71975,7 +71842,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 517,
+          "id": 516,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -72108,7 +71975,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 518,
+          "id": 517,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -72248,7 +72115,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 519,
+          "id": 518,
           "interval": null,
           "legend": {
             "show": false
@@ -72353,7 +72220,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 520,
+          "id": 519,
           "interval": null,
           "legend": {
             "show": false
@@ -72458,7 +72325,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 521,
+          "id": 520,
           "interval": null,
           "legend": {
             "show": false
@@ -72563,7 +72430,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 522,
+          "id": 521,
           "interval": null,
           "legend": {
             "show": false
@@ -72668,7 +72535,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 523,
+          "id": 522,
           "interval": null,
           "legend": {
             "show": false
@@ -72773,7 +72640,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 524,
+          "id": 523,
           "interval": null,
           "legend": {
             "show": false
@@ -72878,7 +72745,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 525,
+          "id": 524,
           "interval": null,
           "legend": {
             "show": false
@@ -72976,7 +72843,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 526,
+          "id": 525,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -73124,7 +72991,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 527,
+          "id": 526,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -73257,7 +73124,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 528,
+          "id": 527,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -73390,7 +73257,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 529,
+          "id": 528,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -73538,7 +73405,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 530,
+          "id": 529,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -73674,7 +73541,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 531,
+      "id": 530,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -73725,7 +73592,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 532,
+          "id": 531,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -73821,7 +73688,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 533,
+          "id": 532,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -73896,7 +73763,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 534,
+          "id": 533,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -73971,7 +73838,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 535,
+          "id": 534,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -74046,7 +73913,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 536,
+          "id": 535,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -74121,7 +73988,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 537,
+          "id": 536,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -74196,7 +74063,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 538,
+          "id": 537,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -74271,7 +74138,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 539,
+          "id": 538,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -74350,7 +74217,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 540,
+          "id": 539,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -74483,7 +74350,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 541,
+          "id": 540,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -74616,7 +74483,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 542,
+          "id": 541,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -74749,7 +74616,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 543,
+          "id": 542,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -74882,7 +74749,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 544,
+          "id": 543,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -75015,7 +74882,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 545,
+          "id": 544,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -75163,7 +75030,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 546,
+          "id": 545,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -75296,7 +75163,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 547,
+          "id": 546,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -75429,7 +75296,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 548,
+          "id": 547,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -75595,7 +75462,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 549,
+          "id": 548,
           "interval": null,
           "legend": {
             "show": false
@@ -75700,7 +75567,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 550,
+          "id": 549,
           "interval": null,
           "legend": {
             "show": false
@@ -75805,7 +75672,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 551,
+          "id": 550,
           "interval": null,
           "legend": {
             "show": false
@@ -75910,7 +75777,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 552,
+          "id": 551,
           "interval": null,
           "legend": {
             "show": false
@@ -76015,7 +75882,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 553,
+          "id": 552,
           "interval": null,
           "legend": {
             "show": false
@@ -76120,7 +75987,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 554,
+          "id": 553,
           "interval": null,
           "legend": {
             "show": false
@@ -76225,7 +76092,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 555,
+          "id": 554,
           "interval": null,
           "legend": {
             "show": false
@@ -76330,7 +76197,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 556,
+          "id": 555,
           "interval": null,
           "legend": {
             "show": false
@@ -76428,7 +76295,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 557,
+          "id": 556,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -76561,7 +76428,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 558,
+          "id": 557,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -76694,7 +76561,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 559,
+          "id": 558,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -76827,7 +76694,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 560,
+          "id": 559,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -76960,7 +76827,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 561,
+          "id": 560,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -77093,7 +76960,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 562,
+          "id": 561,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -77226,7 +77093,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 563,
+          "id": 562,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -77359,7 +77226,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 564,
+          "id": 563,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -77499,7 +77366,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 565,
+          "id": 564,
           "interval": null,
           "legend": {
             "show": false
@@ -77604,7 +77471,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 566,
+          "id": 565,
           "interval": null,
           "legend": {
             "show": false
@@ -77702,7 +77569,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 567,
+          "id": 566,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -77835,7 +77702,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 568,
+          "id": 567,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -77968,7 +77835,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 569,
+          "id": 568,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78101,7 +77968,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 570,
+          "id": 569,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78234,7 +78101,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 571,
+          "id": 570,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78367,7 +78234,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 572,
+          "id": 571,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78503,7 +78370,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 573,
+      "id": 572,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -78542,7 +78409,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 574,
+          "id": 573,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78690,7 +78557,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 575,
+          "id": 574,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78823,7 +78690,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 576,
+          "id": 575,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78956,7 +78823,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 577,
+          "id": 576,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79092,7 +78959,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 578,
+      "id": 577,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -79131,7 +78998,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 579,
+          "id": 578,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79264,7 +79131,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 580,
+          "id": 579,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79397,7 +79264,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 581,
+          "id": 580,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79530,7 +79397,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 582,
+          "id": 581,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79663,7 +79530,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 583,
+          "id": 582,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79796,7 +79663,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 584,
+          "id": 583,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79932,7 +79799,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 585,
+      "id": 584,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -79971,7 +79838,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 586,
+          "id": 585,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80104,7 +79971,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 587,
+          "id": 586,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80240,7 +80107,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 588,
+      "id": 587,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -80279,7 +80146,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 589,
+          "id": 588,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80480,7 +80347,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 590,
+          "id": 589,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80616,7 +80483,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 591,
+      "id": 590,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -80655,7 +80522,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 592,
+          "id": 591,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80788,7 +80655,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 593,
+          "id": 592,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80921,7 +80788,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 594,
+          "id": 593,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81054,7 +80921,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 595,
+          "id": 594,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81187,7 +81054,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 596,
+          "id": 595,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81335,7 +81202,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 597,
+          "id": 596,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81539,7 +81406,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 598,
+      "id": 597,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -81578,7 +81445,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 599,
+          "id": 598,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81711,7 +81578,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 600,
+          "id": 599,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81844,7 +81711,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 601,
+          "id": 600,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81977,7 +81844,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 602,
+          "id": 601,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82110,7 +81977,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 603,
+          "id": 602,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82307,7 +82174,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 604,
+          "id": 603,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -82389,7 +82256,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 605,
+      "id": 604,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -82458,7 +82325,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 606,
+          "id": 605,
           "interval": null,
           "links": [],
           "mappings": [],
@@ -82575,7 +82442,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 607,
+          "id": 606,
           "interval": null,
           "links": [],
           "mappings": [],
@@ -82692,7 +82559,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 608,
+          "id": 607,
           "interval": null,
           "links": [],
           "mappings": [],
@@ -82809,7 +82676,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 609,
+          "id": 608,
           "interval": null,
           "links": [],
           "mappings": [],

@@ -29,7 +29,8 @@ use super::{
 
 make_static_metric! {
     pub label_enum AutoCompactionDurationType {
-        stats_check,
+        initial_evaluation,
+        re_evaluation,
         compact,
     }
 
@@ -38,12 +39,6 @@ make_static_metric! {
         bypassed,
     }
 
-    pub label_enum AutoCompactionCandidateType {
-        total,
-        tikv_estimated_discardable,
-        rocksdb_tombstones,
-        tikv_rows,
-    }
 
     pub struct AutoCompactionDurationHistogramVec: Histogram {
         "type" => AutoCompactionDurationType,
@@ -53,9 +48,6 @@ make_static_metric! {
         "type" => AutoCompactionOperationType,
     }
 
-    pub struct AutoCompactionCandidateHistogramVec: Histogram {
-        "type" => AutoCompactionCandidateType,
-    }
 }
 
 lazy_static::lazy_static! {
@@ -74,13 +66,6 @@ lazy_static::lazy_static! {
         &["type"]
     ).unwrap();
 
-    pub static ref AUTO_COMPACTION_CANDIDATE_HISTOGRAM_VEC: AutoCompactionCandidateHistogramVec = register_static_histogram_vec!(
-        AutoCompactionCandidateHistogramVec,
-        "tikv_auto_compaction_top_candidates_entries",
-        "Entry counts in top compaction candidates by type",
-        &["type"],
-        exponential_buckets(1.0, 2.0, 20).unwrap()
-    ).unwrap();
 }
 
 /// A candidate for compaction with its priority score
@@ -168,7 +153,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
     fn curr_safe_point(&self) -> TimeStamp {
         self.safe_point_provider
             .get_safe_point()
-            .unwrap_or_else(|_| TimeStamp::zero())
+            .unwrap_or(TimeStamp::zero())
     }
 
     /// Starts the compaction runner in a separate thread
@@ -319,11 +304,8 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
 
         while let Some(region) = self.get_next_region_context(&current_key) {
             // Evaluate this region as a compaction candidate
-            match self.evaluate_range_candidate(
-                &region,
-                gc_safe_point,
-                config,
-            ) {
+            let evaluation_start = Instant::now();
+            match self.evaluate_range_candidate(&region, gc_safe_point, config) {
                 Ok(Some(candidate)) => {
                     if candidates_heap.len() < heap_capacity {
                         // Heap not full, add candidate
@@ -346,6 +328,11 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
                 }
             }
 
+            // Record initial evaluation duration
+            AUTO_COMPACTION_DURATION_HISTOGRAM_VEC
+                .initial_evaluation
+                .observe(evaluation_start.elapsed().as_secs_f64());
+
             if region.get_end_key().is_empty() {
                 // Reached the end of regions, stop seeking
                 break;
@@ -362,21 +349,8 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
             .collect();
         candidates.reverse(); // Min-heap gives us lowest first, we want highest first
 
-        // Record MVCC stats for top 10 candidates and log details
+        // Log details for top 10 candidates
         for (rank, candidate) in candidates.iter().take(10).enumerate() {
-            AUTO_COMPACTION_CANDIDATE_HISTOGRAM_VEC
-                .total
-                .observe(candidate.num_total_entries as f64);
-            AUTO_COMPACTION_CANDIDATE_HISTOGRAM_VEC
-                .tikv_estimated_discardable
-                .observe(candidate.num_discardable as f64);
-            AUTO_COMPACTION_CANDIDATE_HISTOGRAM_VEC
-                .rocksdb_tombstones
-                .observe(candidate.num_tombstones as f64);
-            AUTO_COMPACTION_CANDIDATE_HISTOGRAM_VEC
-                .tikv_rows
-                .observe(candidate.num_rows as f64);
-
             info!("top compaction candidate";
                 "rank" => rank + 1,
                 "region_id" => candidate.region.get_id(),
@@ -412,6 +386,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
             let current_gc_safe_point = self.curr_safe_point().into_inner();
 
             // Recheck candidate before compacting in case it's been resolved
+            let re_evaluation_start = Instant::now();
             let current_candidate = match self.evaluate_range_candidate(
                 &candidate.region,
                 current_gc_safe_point,
@@ -429,11 +404,17 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
                 Err(e) => {
                     warn!(
                         "failed to recheck candidate region {}: {:?}, proceeding with original",
-                        candidate.region.get_id(), e
+                        candidate.region.get_id(),
+                        e
                     );
                     candidate
                 }
             };
+
+            // Record re-evaluation duration
+            AUTO_COMPACTION_DURATION_HISTOGRAM_VEC
+                .re_evaluation
+                .observe(re_evaluation_start.elapsed().as_secs_f64());
 
             // Compact this candidate
             let compact_start = Instant::now();
@@ -522,9 +503,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
         }
 
         match rx.recv() {
-            Ok(Some(region)) => {
-                Some(region)
-            }
+            Ok(Some(region)) => Some(region),
             Ok(None) => None,
             Err(e) => {
                 error!("failed to receive region information: {:?}", e);
@@ -540,8 +519,6 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
         gc_safe_point: u64,
         config: &GcConfig,
     ) -> Result<Option<CompactionCandidate>> {
-        let start_time = Instant::now();
-        let region_id = region.get_id();
         let start_key = enc_start_key(region);
         let end_key = enc_end_key(region);
 
@@ -592,11 +569,6 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
 
         let score =
             self.get_compact_score(num_tombstones, num_discardable, num_total_entries, config);
-
-        // Record stats check duration
-        AUTO_COMPACTION_DURATION_HISTOGRAM_VEC
-            .stats_check
-            .observe(start_time.elapsed().as_secs_f64());
 
         if score > 0.0 {
             fail_point!("gc_worker_auto_compaction_candidate_found");
@@ -686,7 +658,9 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => false, // Continue
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    panic!("stop_signal_receiver unexpectedly disconnected")
+                    error!("stop_signal_receiver unexpectedly disconnected");
+                    self.is_stopped = true;
+                    true // Stop
                 }
             },
             None => {
