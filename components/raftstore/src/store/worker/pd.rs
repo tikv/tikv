@@ -19,7 +19,7 @@ use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{KvEngine, RaftEngine};
 use fail::fail_point;
-use futures::{FutureExt, compat::Future01CompatExt, future::Inspect};
+use futures::{FutureExt, compat::Future01CompatExt};
 use health_controller::{
     HealthController,
     reporters::{RaftstoreReporter, RaftstoreReporterConfig},
