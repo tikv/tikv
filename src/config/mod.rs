@@ -7379,6 +7379,8 @@ mod tests {
             default_cfg.readpool.coprocessor.normal_concurrency;
         cfg.readpool.coprocessor.low_concurrency = default_cfg.readpool.coprocessor.low_concurrency;
         cfg.server.grpc_memory_pool_quota = default_cfg.server.grpc_memory_pool_quota;
+        cfg.server.grpc_concurrency = default_cfg.server.grpc_concurrency;
+        cfg.server.grpc_raft_conn_num = default_cfg.server.grpc_raft_conn_num;
         cfg.server.background_thread_count = default_cfg.server.background_thread_count;
         cfg.server.end_point_max_concurrency = default_cfg.server.end_point_max_concurrency;
         cfg.server.end_point_memory_quota = default_cfg.server.end_point_memory_quota;
