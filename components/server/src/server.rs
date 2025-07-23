@@ -68,7 +68,7 @@ use raftstore::{
     },
     router::{CdcRaftRouter, ServerRaftStoreRouter},
     store::{
-        AutoSplitController, CheckLeaderRunner, DiskCheckRunner, LocalReader, SnapManager,
+        AutoSplitController, CheckLeaderRunner, InpectorRunner, LocalReader, SnapManager,
         SnapManagerBuilder, SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
         config::RaftstoreConfigManager,
         fsm,
@@ -580,7 +580,7 @@ where
 
         let engines = self.engines.as_ref().unwrap();
 
-        let pd_worker = LazyWorker::new("pd-worker");
+        let pd_worker = WorkerBuilder::new("pd-worker").thread_count(10).create().lazy_build("pd-worker");
         let pd_sender = pd_worker.scheduler();
 
         if let Some(sst_worker) = &mut self.sst_worker {
@@ -1052,7 +1052,7 @@ where
             .registry
             .register_consistency_check_observer(100, observer);
 
-        let disk_check_runner = DiskCheckRunner::new(self.core.store_path.clone());
+        let inspector_runner = InpectorRunner::new(self.core.store_path.clone(), self.pd_client.clone());
 
         raft_server
             .start(
@@ -1068,7 +1068,7 @@ where
                 self.concurrency_manager.clone(),
                 collector_reg_handle,
                 self.causal_ts_provider.clone(),
-                disk_check_runner,
+                inspector_runner,
                 self.grpc_service_mgr.clone(),
                 safe_point.clone(),
             )
