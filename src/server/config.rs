@@ -36,11 +36,11 @@ lazy_static! {
         let base_num = SysQuota::cpu_cores_quota().div(8.0).floor() as usize;
         // Max count for the default setting of raft connection num is limited
         // to 4.
-        std::cmp::min(std::cmp::max(1, base_num), 4)
+        base_num.clamp(1, 4)
     };
 
     static ref DEFAULT_GRPC_CONCURRENCY: usize = {
-        DEFAULT_GRPC_RAFT_CONN_NUM.mul(3 as usize) + 2 as usize
+        DEFAULT_GRPC_RAFT_CONN_NUM.mul(3_usize) + 2_usize
     };
 }
 const DEFAULT_GRPC_CONCURRENT_STREAM: i32 = 1024;
@@ -594,10 +594,7 @@ mod tests {
         cfg.validate().unwrap();
         assert_eq!(cfg.addr, cfg.advertise_addr);
         assert_eq!(cfg.status_addr, cfg.advertise_status_addr);
-        let base_num = std::cmp::min(
-            std::cmp::max(1, SysQuota::cpu_cores_quota().div(8.0).floor() as usize),
-            4,
-        );
+        let base_num = (SysQuota::cpu_cores_quota().div(8.0).floor() as usize).clamp(1, 4);
         assert_eq!(cfg.grpc_raft_conn_num, base_num);
         assert_eq!(cfg.grpc_concurrency, base_num * 3 + 2);
 
