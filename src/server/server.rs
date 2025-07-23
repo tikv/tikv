@@ -8,7 +8,7 @@ use std::{
 };
 
 use api_version::KvFormat;
-use futures::{compat::Stream01CompatExt, stream::StreamExt};
+use futures::{compat::Stream01CompatExt, executor::ThreadPoolBuilder, stream::StreamExt};
 use grpcio::{
     ChannelBuilder,
     CompressionLevel::{
@@ -56,6 +56,7 @@ const LOAD_STATISTICS_SLOTS: usize = 4;
 const LOAD_STATISTICS_INTERVAL: Duration = Duration::from_millis(100);
 const MEMORY_USAGE_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 pub const GRPC_THREAD_PREFIX: &str = "grpc-server";
+pub const RAFT_THREAD_PREFIX: &str = "raft";
 pub const READPOOL_NORMAL_THREAD_PREFIX: &str = "store-read-norm";
 pub const STATS_THREAD_PREFIX: &str = "transport-stats";
 
@@ -216,6 +217,13 @@ where
         };
 
         let proxy = Proxy::new(security_mgr.clone(), &env, Arc::new(cfg.value().clone()));
+
+        let raft_threadpool = ThreadPoolBuilder::new()
+            .pool_size(cfg.value().grpc_raft_concurrency)
+            .name_prefix(RAFT_THREAD_PREFIX)
+            .create()
+            .unwrap();
+
         let kv_service = KvService::new(
             cfg.value().cluster_id,
             store_id,
@@ -233,7 +241,9 @@ where
             health_controller.clone(),
             health_feedback_interval,
             raft_message_filter,
+            raft_threadpool,
         );
+
         let builder_factory = Box::new(BuilderFactory::new(
             kv_service,
             cfg.clone(),

@@ -23,6 +23,7 @@ pub const DEFAULT_CLUSTER_ID: u64 = 0;
 pub const DEFAULT_LISTENING_ADDR: &str = "127.0.0.1:20160";
 const DEFAULT_ADVERTISE_LISTENING_ADDR: &str = "";
 const DEFAULT_STATUS_ADDR: &str = "127.0.0.1:20180";
+const DEFAULT_GRPC_RAFT_CONCURRENCY: usize = 5;
 const DEFAULT_GRPC_CONCURRENCY: usize = 5;
 const DEFAULT_GRPC_CONCURRENT_STREAM: i32 = 1024;
 const DEFAULT_GRPC_RAFT_CONN_NUM: usize = 1;
@@ -117,6 +118,7 @@ pub struct Config {
     pub raft_client_grpc_send_msg_buffer: usize,
     #[online_config(skip)]
     pub raft_client_queue_size: usize,
+
     // Test only
     #[doc(hidden)]
     #[serde(skip_serializing)]
@@ -139,6 +141,8 @@ pub struct Config {
     pub grpc_min_message_size_to_compress: usize,
     #[online_config(skip)]
     pub grpc_concurrency: usize,
+    #[online_config(skip)]
+    pub grpc_raft_concurrency: usize,
     #[online_config(skip)]
     pub grpc_concurrent_stream: i32,
     #[online_config(skip)]
@@ -269,6 +273,7 @@ impl Default for Config {
             grpc_gzip_compression_level: DEFAULT_GRPC_GZIP_COMPRESSION_LEVEL,
             grpc_min_message_size_to_compress: DEFAULT_GRPC_MIN_MESSAGE_SIZE_TO_COMPRESS,
             grpc_concurrency: DEFAULT_GRPC_CONCURRENCY,
+            grpc_raft_concurrency: DEFAULT_GRPC_RAFT_CONCURRENCY,
             grpc_concurrent_stream: DEFAULT_GRPC_CONCURRENT_STREAM,
             grpc_raft_conn_num: DEFAULT_GRPC_RAFT_CONN_NUM,
             grpc_stream_initial_window_size: ReadableSize(DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE),
