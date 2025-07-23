@@ -8,7 +8,6 @@ use std::{
 use kvproto::pdpb;
 use pdpb::SlowTrend as SlowTrendPb;
 use prometheus::IntGauge;
-use tikv_util::info;
 
 use crate::{
     HealthController, HealthControllerInner, RaftstoreDuration, UnifiedDuration,
