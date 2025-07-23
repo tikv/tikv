@@ -29,19 +29,36 @@ pub const DEFAULT_LISTENING_ADDR: &str = "127.0.0.1:20160";
 const DEFAULT_ADVERTISE_LISTENING_ADDR: &str = "";
 const DEFAULT_STATUS_ADDR: &str = "127.0.0.1:20180";
 
+fn calculate_cpu_quota_base_num() -> usize {
+    // Use 8c as the default quota unit for the limit calculations
+    const DEFAULT_CPU_QUOTA_UNIT: f64 = 8.0;
+
+    SysQuota::cpu_cores_quota()
+        .div(DEFAULT_CPU_QUOTA_UNIT)
+        .floor() as usize
+}
+
+fn calculate_grpc_concurrency() -> usize {
+    // Multiplier applied to the number of raft connections to determine base
+    // concurrency.
+    const GRPC_RAFT_CONN_MULTIPLIER: usize = 3;
+
+    // Additional offset added to the calculated concurrency to ensure sufficient
+    // threads for handling gRPC requests and system overhead.
+    const GRPC_CONCURRENCY_OFFSET: usize = 2;
+
+    DEFAULT_GRPC_RAFT_CONN_NUM.mul(GRPC_RAFT_CONN_MULTIPLIER) + GRPC_CONCURRENCY_OFFSET
+}
+
 // Default settings related to gRPC
 lazy_static! {
      static ref DEFAULT_GRPC_RAFT_CONN_NUM: usize = {
-        // Use 8c as the default quota unit.
-        let base_num = SysQuota::cpu_cores_quota().div(8.0).floor() as usize;
         // Max count for the default setting of raft connection num is limited
         // to 4.
-        base_num.clamp(1, 4)
+        calculate_cpu_quota_base_num().clamp(1, 4)
     };
 
-    static ref DEFAULT_GRPC_CONCURRENCY: usize = {
-        DEFAULT_GRPC_RAFT_CONN_NUM.mul(3_usize) + 2_usize
-    };
+    static ref DEFAULT_GRPC_CONCURRENCY: usize = calculate_grpc_concurrency();
 }
 const DEFAULT_GRPC_CONCURRENT_STREAM: i32 = 1024;
 const DEFAULT_GRPC_MEMORY_POOL_QUOTA: u64 = isize::MAX as u64;
@@ -594,7 +611,7 @@ mod tests {
         cfg.validate().unwrap();
         assert_eq!(cfg.addr, cfg.advertise_addr);
         assert_eq!(cfg.status_addr, cfg.advertise_status_addr);
-        let base_num = (SysQuota::cpu_cores_quota().div(8.0).floor() as usize).clamp(1, 4);
+        let base_num = calculate_cpu_quota_base_num();
         assert_eq!(cfg.grpc_raft_conn_num, base_num);
         assert_eq!(cfg.grpc_concurrency, base_num * 3 + 2);
 
