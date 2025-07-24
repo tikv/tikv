@@ -24,10 +24,14 @@ pub use self::{
     cleanup::{Runner as CleanupRunner, Task as CleanupTask},
     cleanup_snapshot::{Runner as GcSnapshotRunner, Task as GcSnapshotTask},
     cleanup_sst::{Runner as CleanupSstRunner, Task as CleanupSstTask},
+<<<<<<< HEAD
     compact::{
         need_compact, CompactThreshold, FullCompactController, Runner as CompactRunner,
         Task as CompactTask,
     },
+=======
+    compact::{FullCompactController, Runner as CompactRunner, Task as CompactTask},
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
     consistency_check::{Runner as ConsistencyCheckRunner, Task as ConsistencyCheckTask},
     disk_check::{Runner as DiskCheckRunner, Task as DiskCheckTask},
     pd::{
