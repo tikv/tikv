@@ -555,7 +555,7 @@ impl<E: KvEngine> Initializer<E> {
                 if prop
                     .get(PROP_MAX_TS.as_bytes())
                     .and_then(|mut x| number::decode_u64(&mut x).ok())
-                    .is_some_and(|max_ts| max_ts < hint_min_ts)
+                    .map_or(false, |max_ts| max_ts < hint_min_ts)
                 {
                     filtered_count += keys;
                 }
