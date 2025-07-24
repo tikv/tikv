@@ -1,16 +1,14 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::VecDeque,
     error::Error as StdError,
     fmt::{self, Display, Formatter},
 };
 
-use engine_traits::KvEngine;
+use engine_traits::{KvEngine, ManualCompactionOptions};
 use fail::fail_point;
 use thiserror::Error;
 use tikv_util::{box_try, error, info, time::Instant, worker::Runnable};
-use txn_types::TimeStamp;
 
 use super::metrics::COMPACT_RANGE_CF;
 
@@ -74,10 +72,12 @@ where
     ) -> Result<(), Error> {
         fail_point!("on_compact_range_cf");
         let timer = Instant::now();
-        box_try!(
-            self.engine
-                .compact_range_cf(cf_name, start_key, end_key, false, 1 /* threads */,)
-        );
+        box_try!(self.engine.compact_range_cf(
+            cf_name,
+            start_key,
+            end_key,
+            ManualCompactionOptions::new(false, 1, false)
+        ));
         info!(
             "compact range finished";
             "range_start" => start_key.map(::log_wrappers::Value::key),
@@ -120,17 +120,12 @@ where
 mod tests {
     use std::{thread::sleep, time::Duration};
 
-    use engine_test::{
-        ctor::{CfOptions, DbOptions},
-        kv::{new_engine, new_engine_opt, KvTestEngine},
-    };
+    use engine_test::kv::new_engine;
     use engine_traits::{
-        CompactExt, MiscExt, Mutable, SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK,
-        CF_RAFT, CF_WRITE,
+        CompactExt, ManualCompactionOptions, MiscExt, Mutable, WriteBatch, WriteBatchExt,
+        CF_DEFAULT,
     };
-    use keys::data_key;
     use tempfile::Builder;
-    use txn_types::{Key, TimeStamp, Write, WriteType};
 
     use super::*;
 
@@ -170,7 +165,12 @@ mod tests {
             let _ = db.disable_manual_compaction();
 
             // Manually compact range.
-            let _ = db.compact_range_cf(CF_DEFAULT, None, None, false, 1);
+            let _ = db.compact_range_cf(
+                CF_DEFAULT,
+                None,
+                None,
+                ManualCompactionOptions::new(false, 1, false),
+            );
 
             // Get the total SST files size after compact range.
             let new_sst_files_size = db.get_total_sst_files_size_cf(CF_DEFAULT).unwrap().unwrap();
@@ -181,7 +181,12 @@ mod tests {
             let _ = db.enable_manual_compaction();
 
             // Manually compact range.
-            let _ = db.compact_range_cf(CF_DEFAULT, None, None, false, 1);
+            let _ = db.compact_range_cf(
+                CF_DEFAULT,
+                None,
+                None,
+                ManualCompactionOptions::new(false, 1, false),
+            );
 
             // Get the total SST files size after compact range.
             let new_sst_files_size = db.get_total_sst_files_size_cf(CF_DEFAULT).unwrap().unwrap();
@@ -233,30 +238,5 @@ mod tests {
         // Get the total SST files size after compact range.
         let new_sst_files_size = db.get_total_sst_files_size_cf(CF_DEFAULT).unwrap().unwrap();
         assert!(old_sst_files_size > new_sst_files_size);
-    }
-
-    fn mvcc_put(db: &KvTestEngine, k: &[u8], v: &[u8], start_ts: TimeStamp, commit_ts: TimeStamp) {
-        let k = Key::from_encoded(data_key(k)).append_ts(commit_ts);
-        let w = Write::new(WriteType::Put, start_ts, Some(v.to_vec()));
-        db.put_cf(CF_WRITE, k.as_encoded(), &w.as_ref().to_bytes())
-            .unwrap();
-    }
-
-    fn delete(db: &KvTestEngine, k: &[u8], commit_ts: TimeStamp) {
-        let k = Key::from_encoded(data_key(k)).append_ts(commit_ts);
-        db.delete_cf(CF_WRITE, k.as_encoded()).unwrap();
-    }
-
-    fn open_db(path: &str) -> KvTestEngine {
-        let db_opts = DbOptions::default();
-        let mut cf_opts = CfOptions::new();
-        cf_opts.set_level_zero_file_num_compaction_trigger(8);
-        let cfs_opts = vec![
-            (CF_DEFAULT, CfOptions::new()),
-            (CF_RAFT, CfOptions::new()),
-            (CF_LOCK, CfOptions::new()),
-            (CF_WRITE, cf_opts),
-        ];
-        new_engine_opt(path, db_opts, cfs_opts).unwrap()
     }
 }

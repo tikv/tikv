@@ -10,8 +10,8 @@ use std::{
 };
 
 use engine_traits::{
-    CF_DEFAULT, CF_WRITE, KvEngine, ManualCompactionOptions, Range, TableProperties,
-    TablePropertiesCollection, UserCollectedProperties,
+    KvEngine, ManualCompactionOptions, Range, TableProperties, TablePropertiesCollection,
+    UserCollectedProperties, CF_DEFAULT, CF_WRITE,
 };
 use keys::{enc_end_key, enc_start_key};
 use kvproto::metapb::Region;
@@ -22,9 +22,9 @@ use tikv_util::{box_err, debug, error, info, sys::thread::StdThreadBuildWrapper,
 use txn_types::TimeStamp;
 
 use super::{
-    Error, Result,
     config::{GcConfig, GcWorkerConfigManager},
     gc_worker::GcSafePointProvider,
+    Error, Result,
 };
 
 make_static_metric! {

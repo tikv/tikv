@@ -4,14 +4,13 @@ use collections::HashMap;
 use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine};
 use raftstore::{store::TabletSnapKey, Result};
-use slog::{debug, error, info};
+use slog::error;
 
 use crate::{
     batch::StoreContext,
     fsm::{Store, StoreFsmDelegate},
     router::{PeerMsg, StoreTick},
     worker::tablet,
-    CompactTask::CheckAndCompact,
 };
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {

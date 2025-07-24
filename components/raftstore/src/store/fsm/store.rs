@@ -12,7 +12,7 @@ use std::{
     ops::{Deref, DerefMut},
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Mutex, Weak,
+        Arc, Mutex,
     },
     time::{Duration, Instant, SystemTime},
     u64,
@@ -106,9 +106,8 @@ use crate::{
             RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RefreshConfigRunner, RefreshConfigTask,
             RegionRunner, RegionTask, SplitCheckTask,
         },
-        Callback, CasualMessage, CompactThreshold, GlobalReplicationState, InspectedRaftMessage,
-        MergeResultKind, PdTask, PeerMsg, PeerTick, RaftCommand, SignificantMsg, SnapManager,
-        StoreMsg, StoreTick,
+        Callback, CasualMessage, GlobalReplicationState, InspectedRaftMessage, MergeResultKind,
+        PdTask, PeerMsg, PeerTick, RaftCommand, SignificantMsg, SnapManager, StoreMsg, StoreTick,
     },
     Error, Result,
 };
