@@ -56,6 +56,7 @@ const LOAD_STATISTICS_SLOTS: usize = 4;
 const LOAD_STATISTICS_INTERVAL: Duration = Duration::from_millis(100);
 const MEMORY_USAGE_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 pub const GRPC_THREAD_PREFIX: &str = "grpc-server";
+pub const RAFT_THREAD_PREFIX: &str = "raft";
 pub const READPOOL_NORMAL_THREAD_PREFIX: &str = "store-read-norm";
 pub const STATS_THREAD_PREFIX: &str = "transport-stats";
 
@@ -216,6 +217,15 @@ where
         };
 
         let proxy = Proxy::new(security_mgr.clone(), &env, Arc::new(cfg.value().clone()));
+
+        let raft_threadpool = Arc::new(
+            RuntimeBuilder::new_multi_thread()
+                .thread_name(RAFT_THREAD_PREFIX)
+                .worker_threads(cfg.value().grpc_raft_concurrency)
+                .build()
+                .unwrap(),
+        );
+
         let kv_service = KvService::new(
             cfg.value().cluster_id,
             store_id,
@@ -233,7 +243,9 @@ where
             health_controller.clone(),
             health_feedback_interval,
             raft_message_filter,
+            raft_threadpool.clone(),
         );
+
         let builder_factory = Box::new(BuilderFactory::new(
             kv_service,
             cfg.clone(),
