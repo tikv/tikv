@@ -190,7 +190,6 @@ where
             self.engine
                 .compact_range_cf(cf_name, start_key, end_key, false, 1 /* threads */,)
         );
-        compact_range_timer.observe_duration();
         info!(
             "compact range finished";
             "range_start" => start_key.map(::log_wrappers::Value::key),
@@ -253,7 +252,7 @@ where
                 ranges,
                 compact_threshold,
                 compaction_filter_enabled,
-                bottommost_level_force,
+                bottommost_level_force: _,
                 top_n,
                 finished: _,
             } => {
@@ -304,12 +303,9 @@ where
                                 let start_time =
                                     CHECK_THEN_COMPACT_DURATION.compact.start_coarse_timer();
                                 for cf in &cf_names {
-                                    if let Err(e) = self.compact_range_cf(
-                                        cf,
-                                        Some(&start_key),
-                                        Some(&end_key),
-                                        bottommost_level_force,
-                                    ) {
+                                    if let Err(e) =
+                                        self.compact_range_cf(cf, Some(&start_key), Some(&end_key))
+                                    {
                                         error!(
                                             "compact range failed";
                                             "range_start" => log_wrappers::Value::key(&start_key),

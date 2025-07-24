@@ -2,21 +2,21 @@
 
 use std::{
     sync::{
-        Arc,
         atomic::{AtomicBool, Ordering},
+        Arc,
     },
     thread,
     time::Duration,
 };
 
-use engine_traits::{CF_WRITE, MiscExt};
+use engine_traits::{MiscExt, CF_WRITE};
 use kvproto::kvrpcpb::*;
 use test_raftstore::*;
 use tikv_util::config::ReadableDuration;
 
 #[test]
 fn test_check_then_compact_top_n_with_failpoints() {
-    let (mut cluster, client, _ctx) = must_new_cluster_with_cfg_and_kv_client_mul(1, |cluster| {
+    let (mut cluster, client, _ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
         cluster.cfg.rocksdb.writecf.disable_auto_compactions = true;
         cluster.cfg.raft_store.region_compact_check_interval = ReadableDuration::millis(100);
         cluster.cfg.raft_store.check_then_compact_top_n = 2; // Compact top 2 candidates
