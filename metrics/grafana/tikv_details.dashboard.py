@@ -4123,17 +4123,21 @@ def GC() -> RowPanel:
                 hide_count=True,
             ),
             graph_panel(
-                title="Auto Compaction Operations Rate",
-                description="Rate of compaction operations by type",
-                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                title="Auto Compaction Regions Status",
+                description="Number of regions meeting compaction threshold and pending candidates",
+                yaxes=yaxes(left_format=UNITS.SHORT),
                 targets=[
                     target(
-                        expr=expr_sum_rate(
-                            "tikv_auto_compaction_operations_total",
-                            by_labels=["type"],
+                        expr=expr_sum(
+                            "tikv_auto_compaction_regions_meet_threshold",
                         ),
-                        legend_format="{{type}}",
-                        additional_groupby=True,
+                        legend_format="regions meet threshold",
+                    ),
+                    target(
+                        expr=expr_sum(
+                            "tikv_auto_compaction_pending_candidates",
+                        ),
+                        legend_format="pending candidates",
                     ),
                 ],
             ),

@@ -59101,7 +59101,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Rate of compaction operations by type",
+          "description": "Number of regions meeting compaction threshold and pending candidates",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -59171,15 +59171,30 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_auto_compaction_operations_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, $additional_groupby) ",
+              "expr": "sum((\n    tikv_auto_compaction_regions_meet_threshold\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
               "format": "time_series",
               "hide": false,
               "instant": false,
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "{{type}} {{$additional_groupby}}",
+              "legendFormat": "regions meet threshold",
               "metric": "",
-              "query": "sum(rate(\n    tikv_auto_compaction_operations_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, $additional_groupby) ",
+              "query": "sum((\n    tikv_auto_compaction_regions_meet_threshold\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum((\n    tikv_auto_compaction_pending_candidates\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "pending candidates",
+              "metric": "",
+              "query": "sum((\n    tikv_auto_compaction_pending_candidates\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -59188,7 +59203,7 @@
           "thresholds": [],
           "timeFrom": null,
           "timeShift": null,
-          "title": "Auto Compaction Operations Rate",
+          "title": "Auto Compaction Regions Status",
           "tooltip": {
             "msResolution": true,
             "shared": true,
@@ -59207,7 +59222,7 @@
           "yaxes": [
             {
               "decimals": null,
-              "format": "ops",
+              "format": "short",
               "label": null,
               "logBase": 1,
               "max": null,

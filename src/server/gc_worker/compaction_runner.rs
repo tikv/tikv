@@ -34,19 +34,10 @@ make_static_metric! {
         compact,
     }
 
-    pub label_enum AutoCompactionOperationType {
-        completed,
-        bypassed,
-    }
-
-
     pub struct AutoCompactionDurationHistogramVec: Histogram {
         "type" => AutoCompactionDurationType,
     }
 
-    pub struct AutoCompactionOperationCounterVec: IntCounter {
-        "type" => AutoCompactionOperationType,
-    }
 
 }
 
@@ -59,11 +50,14 @@ lazy_static::lazy_static! {
         exponential_buckets(0.0001, 2.0, 26).unwrap()
     ).unwrap();
 
-    pub static ref AUTO_COMPACTION_OPERATION_COUNTER_VEC: AutoCompactionOperationCounterVec = register_static_int_counter_vec!(
-        AutoCompactionOperationCounterVec,
-        "tikv_auto_compaction_operations_total",
-        "Total number of auto compaction operations by type",
-        &["type"]
+    pub static ref AUTO_COMPACTION_REGIONS_MEET_THRESHOLD_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_auto_compaction_regions_meet_threshold",
+        "Number of regions that meet the compaction threshold"
+    ).unwrap();
+
+    pub static ref AUTO_COMPACTION_PENDING_CANDIDATES_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_auto_compaction_pending_candidates",
+        "Number of pending compaction candidates"
     ).unwrap();
 
 }
@@ -296,12 +290,14 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
         let mut candidates_heap: BinaryHeap<Reverse<CompactionCandidate>> =
             BinaryHeap::with_capacity(heap_capacity);
         let mut current_key = b"".to_vec();
+        let mut regions_meeting_threshold = 0;
 
         while let Some(region) = self.get_next_region_context(&current_key) {
             // Evaluate this region as a compaction candidate
             let evaluation_start = Instant::now();
             match self.evaluate_range_candidate(&region, gc_safe_point, config) {
                 Ok(Some(candidate)) => {
+                    regions_meeting_threshold += 1;
                     if candidates_heap.len() < heap_capacity {
                         // Heap not full, add candidate
                         candidates_heap.push(Reverse(candidate));
@@ -357,6 +353,10 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
             );
         }
 
+        // Update gauge metrics
+        AUTO_COMPACTION_REGIONS_MEET_THRESHOLD_GAUGE.set(regions_meeting_threshold as i64);
+        AUTO_COMPACTION_PENDING_CANDIDATES_GAUGE.set(candidates.len() as i64);
+
         info!("collected {} compaction candidates", candidates.len());
         fail_point!("gc_worker_auto_compaction_candidates_collected");
         Ok(candidates)
@@ -370,12 +370,16 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
     ) -> Option<Duration> {
         let start_time = Instant::now();
         let mut processed_count = 0;
+        let total_candidates = candidates.len();
         fail_point!("gc_worker_auto_compaction_start_compacting");
 
-        for candidate in candidates {
+        for (index, candidate) in candidates.into_iter().enumerate() {
             if self.check_stopped() {
                 return None; // Stopped
             }
+
+            // Update pending candidates gauge (remaining candidates)
+            AUTO_COMPACTION_PENDING_CANDIDATES_GAUGE.set((total_candidates - index) as i64);
 
             // Get current safe point for this candidate (might have advanced)
             let current_gc_safe_point = self.curr_safe_point().into_inner();
@@ -393,7 +397,6 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
                         "candidate region {} no longer needs compaction, skipping",
                         candidate.region.get_id()
                     );
-                    AUTO_COMPACTION_OPERATION_COUNTER_VEC.bypassed.inc();
                     continue;
                 }
                 Err(e) => {
@@ -421,7 +424,6 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
             AUTO_COMPACTION_DURATION_HISTOGRAM_VEC
                 .compact
                 .observe(compact_duration.as_secs_f64());
-            AUTO_COMPACTION_OPERATION_COUNTER_VEC.completed.inc();
 
             processed_count += 1;
             info!("compacted candidate"; 
