@@ -7642,12 +7642,15 @@ version = "0.1.0"
 dependencies = [
  "collections",
  "grpcio",
+ "grpcio-health",
  "kvproto",
  "lazy_static",
  "pd_client",
  "prometheus 0.14.0",
  "protobuf 3.7.2",
  "security",
+ "slog",
+ "slog-global",
  "tikv_util",
  "tokio",
 ]

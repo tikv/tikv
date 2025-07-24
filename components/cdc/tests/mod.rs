@@ -241,8 +241,6 @@ impl TestSuiteBuilder {
                 cdc_ob,
                 cluster.store_metas[id].clone(),
                 cm.clone(),
-                env,
-                sim.security_mgr.clone(),
                 quotas[id].clone(),
                 sim.get_causal_ts_provider(*id),
                 tikv_clients_mgr.clone(),

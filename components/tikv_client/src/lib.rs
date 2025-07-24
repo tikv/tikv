@@ -22,11 +22,13 @@ use grpcio::{
     Channel,
     ChannelBuilder, CompressionAlgorithms, Environment,
 };
+use grpcio_health::proto::HealthClient;
 use kvproto::tikvpb::TikvClient;
 use pd_client::PdClient;
 use security::SecurityManager;
 use tokio::sync::Mutex;
 use tikv_util::time::Instant;
+use tikv_util::info;
 
 pub struct TikvClientsMgr {
     tikv_clients: Mutex<HashMap<u64, Channel>>,
@@ -72,6 +74,7 @@ impl TikvClientsMgr {
             .await
             .map_err(|e| pd_client::Error::Other(Box::new(e)))
             .flatten()?;
+
         let mut clients = self.tikv_clients.lock().await;
         let start = Instant::now_coarse();
         // hack: so it's different args, grpc will always create a new connection.
@@ -97,9 +100,27 @@ impl TikvClientsMgr {
         store_id: u64,
         timeout: Duration,
     ) -> pd_client::Result<TikvClient> {
+        info!("Fetched tikv_client"; "store_id" => %store_id);
         let channel = self.get_channel(store_id, timeout).await?;
         let cli = TikvClient::new(channel);
         Ok(cli)
+    }
+
+    pub async fn get_health_clients(
+        &mut self,
+        timeout: Duration,
+    ) -> pd_client::Result<Vec<HealthClient>> {
+        let stores = self.pd_client.get_all_stores(true)?;
+        info!("Fetched stores:"; "stores" => ?stores);
+
+        let mut health_clients = Vec::<HealthClient>::new();
+        for store in stores {
+            let channel = self.get_channel(store.get_id(), timeout).await?;
+            let cli = HealthClient::new(channel);
+            health_clients.push(cli);
+        }
+
+        Ok(health_clients)
     }
 }
 

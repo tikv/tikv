@@ -10,10 +10,11 @@ use std::{
 };
 
 use tokio::sync::Mutex;
+use futures::future::join_all;
 
 use crossbeam::channel::{Receiver, Sender, TrySendError, bounded};
 use grpcio::{Error, RpcStatusCode};
-use grpcio_health::{ServingStatus::Serving, proto::Health, proto::HealthClient};
+use grpcio_health::{ServingStatus::Serving, proto::Health, proto::HealthClient, proto::HealthCheckRequest};
 use health_controller::types::LatencyInspector;
 use tikv_client::TikvClientsMgr;
 use tikv_util::{
@@ -22,10 +23,10 @@ use tikv_util::{
     worker::{Runnable, Worker},
 };
 
-fn is_network_error(err: &pd_client::Error) -> bool {
+fn is_network_error(err: &grpcio::Error) -> bool {
     warn!("[test] checking network error"; "err" => ?err);
     match err {
-        pd_client::Error::Grpc(Error::RpcFailure(status)) => {
+        Error::RpcFailure(status) => {
             status.code() == RpcStatusCode::DEADLINE_EXCEEDED
         }
         // leader restart will return unavailable, message: "failed to connect to all addresses"
@@ -158,33 +159,65 @@ impl Runner {
         Some(start.saturating_elapsed())
     }
 
-    fn inspect_network(&self, start: Instant) -> Option<Duration> {
-        // match self.health_client.check() {
-        //     Ok(resp) => {
-        //         if resp.status != Serving {
-        //             warn!("pd server is not serving."; "status" => ?resp.status);
-        //             // Non-network problem, we do not consider it as a timeout
-        //             return Some(cmp::max(
-        //                 start.saturating_elapsed(),
-        //                 Self::NETWORK_NOT_TIMEOUT,
-        //             ));
-        //         }
-        //     }
-        //     Err(e) => {
-        //         if is_network_error(&e) {
-        //             warn!("network error when checking pd health"; "err" => ?e);
-        //             return Some(Self::NETWORK_TIMEOUT);
-        //         }
-        //         warn!("unexpected error when checking pd health"; "err" => ?e);
-        //         // Non-network problem, we do not consider it as a timeout
-        //         return Some(cmp::max(
-        //             start.saturating_elapsed(),
-        //             Self::NETWORK_NOT_TIMEOUT,
-        //         ));
-        //     }
-        // };
-        // Some(start.saturating_elapsed())
-        Some(Duration::from_secs(1))
+    async fn inspect_network(&self, start: Instant) -> Option<Duration> {
+        let health_clients = match self
+            .tikv_clients_mgr
+            .lock()
+            .await
+            .get_health_clients(Duration::from_secs(1))
+            .await
+        {
+            Ok(clients) => clients,
+            Err(e) => {
+                warn!("failed to get health clients"; "err" => ?e);
+                return None;
+            }
+        };
+        let check_health = |client: HealthClient| async move {
+            match client.check(&HealthCheckRequest::default()) {
+                Ok(resp) => {
+                    if resp.status != Serving {
+                        warn!("pd server is not serving."; "status" => ?resp.status);
+                        // Non-network problem, we do not consider it as a timeout
+                        return Some(cmp::max(
+                            start.saturating_elapsed(),
+                            Self::NETWORK_NOT_TIMEOUT,
+                        ));
+                    }
+                }
+                Err(e) => {
+                    if is_network_error(&e) {
+                        warn!("network error when checking pd health"; "err" => ?e);
+                        return Some(Self::NETWORK_TIMEOUT);
+                    }
+                    warn!("unexpected error when checking pd health"; "err" => ?e);
+                    // Non-network problem, we do not consider it as a timeout
+                    return Some(cmp::max(
+                        start.saturating_elapsed(),
+                        Self::NETWORK_NOT_TIMEOUT,
+                    ));
+                }
+            };
+            Some(start.saturating_elapsed())
+        };
+        let handles = health_clients
+            .iter()
+            .map(|client| check_health(client.clone()));
+        let results = join_all(handles).await;
+
+        results
+            .iter()
+            .flatten()
+            .copied()
+            .reduce(|a, b| a + b)
+            .and_then(|sum| {
+                let count = results.iter().flatten().count() as u32;
+                if count > 0 {
+                    Some(sum / count)
+                } else {
+                    None
+                }
+            })
     }
 
     fn execute_disk(&self) {
@@ -203,14 +236,14 @@ impl Runner {
         }
     }
 
-    fn execute_network(&self) {
+    async fn execute_network(&self) {
         if let Ok(task) = self.network_runner.receiver.try_recv() {
             match task {
                 Task::NetworkLatency {
                     mut inspector,
                     start,
                 } => {
-                    if let Some(latency) = self.inspect_network(start) {
+                    if let Some(latency) = self.inspect_network(start).await {
                         inspector.record_network_io_duration(latency);
                         inspector.finish();
                     } else {
@@ -245,20 +278,19 @@ impl Runnable for Runner {
                 inspector: _,
                 start: _,
             } => {
-                let mut task_opt = Some(task);
                 if let Err(e) = self
                     .network_runner
                     .notifier
-                    .try_send(task_opt.take().unwrap())
+                    .try_send(task)
                 {
                     let e = match e {
-                        TrySendError::Full(_) => {
+                        TrySendError::Full(back_task) => {
                             // Try to make space and resend once
                             let _ = self.network_runner.receiver.try_recv();
                             if let Err(e2) = self
                                 .network_runner
                                 .notifier
-                                .try_send(task_opt.take().unwrap())
+                                .try_send(back_task)
                             {
                                 e2
                             } else {
@@ -273,7 +305,7 @@ impl Runnable for Runner {
                     let runner = self.clone();
                     if let Some(bg_worker) = self.network_runner.bg_worker.as_ref() {
                         bg_worker.spawn_async_task(async move {
-                            runner.execute_network();
+                            runner.execute_network().await;
                         });
                     }
                 }
