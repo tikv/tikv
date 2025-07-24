@@ -95,8 +95,9 @@ where
             .router
             .report_snapshot_status(region_id, to_peer_id, status)
         {
-            error!(?e;
+            warn!(
                 "report snapshot to peer failes";
+                "err" => ?e,
                 "to_peer_id" => to_peer_id,
                 "status" => ?status,
                 "region_id" => region_id,

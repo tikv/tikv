@@ -12,7 +12,7 @@ use raftstore::{
     Result,
     store::{CompactThreshold, TabletSnapKey},
 };
-use slog::{debug, error, info};
+use slog::{debug, error, info, warn};
 
 use crate::{
     CompactTask::CheckAndCompact,
@@ -117,7 +117,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'_, EK, ER, T> {
     #[inline]
     pub fn on_snapshot_gc(&mut self) {
         if let Err(e) = self.fsm.store.on_snapshot_gc(self.store_ctx) {
-            error!(self.fsm.store.logger(), "cleanup import sst failed"; "error" => ?e);
+            warn!(self.fsm.store.logger(), "cleanup import sst failed"; "error" => ?e);
         }
         self.schedule_tick(
             StoreTick::SnapGc,

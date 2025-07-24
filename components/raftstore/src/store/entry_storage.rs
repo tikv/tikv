@@ -1140,7 +1140,7 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
             Ok(_) => {
                 // This should not happen, but it's OK :)
                 debug_assert!(false, "entries should not have been fetched");
-                error!("entries are fetched unexpectedly during warming up");
+                warn!("entries are fetched unexpectedly during warming up");
                 None
             }
             Err(raft::Error::Store(raft::StorageError::LogTemporarilyUnavailable)) => {
