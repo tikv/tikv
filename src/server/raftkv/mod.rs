@@ -518,6 +518,7 @@ where
         if txn_extra.allowed_in_flashback {
             flags |= WriteBatchFlags::FLASHBACK.bits();
         }
+        header.set_flag_data(ctx.get_txn_source().to_le_bytes().to_vec());
         header.set_flags(flags);
 
         let mut cmd = RaftCmdRequest::default();
