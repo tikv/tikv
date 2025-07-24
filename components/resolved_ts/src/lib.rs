@@ -13,7 +13,6 @@
 //!   its term.
 
 #![feature(box_patterns)]
-#![feature(result_flattening)]
 #![feature(let_chains)]
 
 #[macro_use]

@@ -40,7 +40,7 @@ use raftstore::{
     errors::Error as RaftError,
     router::{CdcRaftRouter, LocalReadRouter, RaftStoreRouter, ReadContext, ServerRaftStoreRouter},
     store::{
-        AutoSplitController, Callback, CheckLeaderRunner, DiskCheckRunner, LocalReader,
+        AutoSplitController, Callback, CheckLeaderRunner, InspectorRunner, LocalReader,
         RegionSnapshot, SnapManager, SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
         StoreMetaDelegate,
         fsm::{ApplyRouter, RaftBatchSystem, RaftRouter, store::StoreMeta},
@@ -414,6 +414,15 @@ impl ServerCluster {
             rts_ob.register_to(&mut coprocessor_host);
             // resolved ts endpoint needs store id.
             store_meta.lock().unwrap().store_id = Some(node_id);
+            let tikv_clients_mgr = Arc::new(
+                tkMutex::new(
+                    TikvClientsMgr::new(
+                        self.pd_client.clone(),
+                        self.env.clone(),
+                        self.security_mgr.clone(),    
+                    )
+                )
+            );
             // Resolved ts endpoint
             let rts_endpoint = resolved_ts::Endpoint::new(
                 &cfg.resolved_ts,
@@ -422,9 +431,8 @@ impl ServerCluster {
                 store_meta.clone(),
                 self.pd_client.clone(),
                 concurrency_manager.clone(),
-                self.env.clone(),
-                self.security_mgr.clone(),
                 txn_status_cache.clone(),
+                tikv_clients_mgr.clone(),
             );
             // Start the worker
             rts_worker.start(rts_endpoint);
@@ -689,7 +697,7 @@ impl ServerCluster {
             concurrency_manager.clone(),
             collector_reg_handle,
             causal_ts_provider,
-            DiskCheckRunner::dummy(),
+            InspectorRunner::dummy(),
             GrpcServiceManager::dummy(),
             self.gc_safe_point.clone(),
         )?;

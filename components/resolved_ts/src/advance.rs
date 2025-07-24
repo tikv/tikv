@@ -2,11 +2,7 @@
 
 use std::{
     cmp,
-    ffi::CString,
-    sync::{
-        Arc,
-        atomic::{AtomicI32, Ordering},
-    },
+    sync::Arc,
     time::Duration,
 };
 
@@ -16,12 +12,11 @@ use engine_traits::KvEngine;
 use fail::fail_point;
 use futures::{FutureExt, TryFutureExt, compat::Future01CompatExt, future::select_all};
 use grpcio::{
-    ChannelBuilder, CompressionAlgorithms, Environment, Error as GrpcError, RpcStatusCode,
+    Error as GrpcError, RpcStatusCode,
 };
 use kvproto::{
     kvrpcpb::{CheckLeaderRequest, CheckLeaderResponse},
     metapb::{Peer, PeerRole},
-    tikvpb::TikvClient,
 };
 use pd_client::PdClient;
 use protobuf::Message;
@@ -29,7 +24,6 @@ use raftstore::{
     router::CdcHandle,
     store::{msg::Callback, util::RegionReadProgressRegistry},
 };
-use security::SecurityManager;
 use tikv_util::{
     info,
     sys::thread::ThreadBuildWrapper,
@@ -37,6 +31,7 @@ use tikv_util::{
     timer::SteadyTimer,
     worker::Scheduler,
 };
+use tikv_client::TikvClientsMgr;
 use tokio::{
     runtime::{Builder, Runtime},
     sync::{Mutex, Notify},
@@ -46,8 +41,6 @@ use txn_types::TimeStamp;
 use crate::{TsSource, endpoint::Task, metrics::*};
 
 pub(crate) const DEFAULT_CHECK_LEADER_TIMEOUT_DURATION: Duration = Duration::from_secs(5); // 5s
-const DEFAULT_GRPC_GZIP_COMPRESSION_LEVEL: usize = 2;
-const DEFAULT_GRPC_MIN_MESSAGE_SIZE_TO_COMPRESS: usize = 4096;
 
 pub struct AdvanceTsWorker {
     pd_client: Arc<dyn PdClient>,
@@ -162,10 +155,7 @@ impl AdvanceTsWorker {
 }
 
 pub struct LeadershipResolver {
-    tikv_clients: Mutex<HashMap<u64, TikvClient>>,
-    pd_client: Arc<dyn PdClient>,
-    env: Arc<Environment>,
-    security_mgr: Arc<SecurityManager>,
+    tikv_clients_mgr: Arc<Mutex<TikvClientsMgr>>,
     region_read_progress: RegionReadProgressRegistry,
     store_id: u64,
 
@@ -182,18 +172,13 @@ pub struct LeadershipResolver {
 impl LeadershipResolver {
     pub fn new(
         store_id: u64,
-        pd_client: Arc<dyn PdClient>,
-        env: Arc<Environment>,
-        security_mgr: Arc<SecurityManager>,
+        tikv_clients_mgr: Arc<Mutex<TikvClientsMgr>>,
         region_read_progress: RegionReadProgressRegistry,
         gc_interval: Duration,
     ) -> LeadershipResolver {
         LeadershipResolver {
-            tikv_clients: Mutex::default(),
+            tikv_clients_mgr,
             store_id,
-            pd_client,
-            env,
-            security_mgr,
             region_read_progress,
 
             store_req_map: HashMap::default(),
@@ -311,10 +296,6 @@ impl LeadershipResolver {
             }
         });
 
-        let env = &self.env;
-        let pd_client = &self.pd_client;
-        let security_mgr = &self.security_mgr;
-        let tikv_clients = &self.tikv_clients;
         // Approximate `LeaderInfo` size
         let leader_info_size = store_req_map
             .values()
@@ -327,27 +308,23 @@ impl LeadershipResolver {
             if req.regions.is_empty() {
                 continue;
             }
-            let env = env.clone();
             let to_store = *store_id;
             let region_num = req.regions.len() as u32;
             CHECK_LEADER_REQ_SIZE_HISTOGRAM.observe((leader_info_size * region_num) as f64);
             CHECK_LEADER_REQ_ITEM_COUNT_HISTOGRAM.observe(region_num as f64);
 
+            let tikv_clients_mgr = self.tikv_clients_mgr.clone();
             // Check leadership for `regions` on `to_store`.
             let rpc = async move {
                 PENDING_CHECK_LEADER_REQ_COUNT.inc();
                 defer!(PENDING_CHECK_LEADER_REQ_COUNT.dec());
-                let client = get_tikv_client(
+
+                let client = tikv_clients_mgr.lock().await.get_tikv_client(
                     to_store,
-                    pd_client,
-                    security_mgr,
-                    env,
-                    tikv_clients,
                     timeout,
                 )
                 .await
-                .map_err(|e| (to_store, e.retryable(), format!("[get tikv client] {}", e)))?;
-
+                .map_err(|e| (to_store, e.retryable(), format!("[get tikv client] {}", e)))?;    
                 // Set min_ts in the request.
                 req.set_ts(min_ts.into_inner());
                 let slow_timer = SlowTimer::default();
@@ -418,7 +395,7 @@ impl LeadershipResolver {
                 Err((to_store, reconnect, err)) => {
                     info!("check leader failed"; "error" => ?err, "to_store" => to_store);
                     if reconnect {
-                        self.tikv_clients.lock().await.remove(&to_store);
+                        self.tikv_clients_mgr.lock().await.remove(to_store);
                     }
                 }
             }
@@ -524,46 +501,6 @@ fn region_has_quorum(peers: &[Peer], stores: &[u64]) -> bool {
     has_incoming_majority && has_demoting_majority
 }
 
-static CONN_ID: AtomicI32 = AtomicI32::new(0);
-
-async fn get_tikv_client(
-    store_id: u64,
-    pd_client: &Arc<dyn PdClient>,
-    security_mgr: &SecurityManager,
-    env: Arc<Environment>,
-    tikv_clients: &Mutex<HashMap<u64, TikvClient>>,
-    timeout: Duration,
-) -> pd_client::Result<TikvClient> {
-    {
-        let clients = tikv_clients.lock().await;
-        if let Some(client) = clients.get(&store_id).cloned() {
-            return Ok(client);
-        }
-    }
-    let store = tokio::time::timeout(timeout, pd_client.get_store_async(store_id))
-        .await
-        .map_err(|e| pd_client::Error::Other(Box::new(e)))
-        .flatten()?;
-    let mut clients = tikv_clients.lock().await;
-    let start = Instant::now_coarse();
-    // hack: so it's different args, grpc will always create a new connection.
-    // the check leader requests may be large but not frequent, compress it to
-    // reduce the traffic.
-    let cb = ChannelBuilder::new(env.clone())
-        .raw_cfg_int(
-            CString::new("random id").unwrap(),
-            CONN_ID.fetch_add(1, Ordering::SeqCst),
-        )
-        .default_compression_algorithm(CompressionAlgorithms::GRPC_COMPRESS_GZIP)
-        .default_gzip_compression_level(DEFAULT_GRPC_GZIP_COMPRESSION_LEVEL)
-        .default_grpc_min_message_size_to_compress(DEFAULT_GRPC_MIN_MESSAGE_SIZE_TO_COMPRESS);
-
-    let channel = security_mgr.connect(cb, &store.peer_address);
-    let cli = TikvClient::new(channel);
-    clients.insert(store_id, cli.clone());
-    RTS_TIKV_CLIENT_INIT_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());
-    Ok(cli)
-}
 
 struct RegionProgress {
     resolved: bool,
@@ -658,16 +595,21 @@ mod tests {
         let progress2 = RegionReadProgress::new(&region2, 1, 1, 2);
         progress2.update_leader_info(2, 2, &region2);
 
+        let tikv_clients_mgr = Arc::new(Mutex::new(
+            TikvClientsMgr::new(
+                Arc::new(MockPdClient {}),      
+                env.clone(),
+                Arc::new(SecurityManager::default()),
+            )
+        ));
         let mut leader_resolver = LeadershipResolver::new(
             1, // store id
-            Arc::new(MockPdClient {}),
-            env.clone(),
-            Arc::new(SecurityManager::default()),
+            tikv_clients_mgr,
             RegionReadProgressRegistry::new(),
             Duration::from_secs(1),
         );
         leader_resolver
-            .tikv_clients
+            .tikv_clients_mgr
             .lock()
             .await
             .insert(2 /* store id */, tikv_client);

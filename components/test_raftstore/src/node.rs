@@ -371,7 +371,7 @@ impl Simulator for NodeCluster {
             cm,
             CollectorRegHandle::new_for_test(),
             None,
-            DiskCheckRunner::dummy(),
+            InspectorRunner::dummy(),
             GrpcServiceManager::dummy(),
             Arc::new(AtomicU64::new(0)),
         )?;

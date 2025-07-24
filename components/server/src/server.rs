@@ -68,7 +68,7 @@ use raftstore::{
     },
     router::{CdcRaftRouter, ServerRaftStoreRouter},
     store::{
-        AutoSplitController, CheckLeaderRunner, DiskCheckRunner, LocalReader, SnapManager,
+        AutoSplitController, CheckLeaderRunner, InspectorRunner, LocalReader, SnapManager,
         SnapManagerBuilder, SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
         config::RaftstoreConfigManager,
         fsm,
@@ -123,6 +123,7 @@ use tikv::{
 use tikv_alloc::{
     add_thread_memory_accessor, remove_thread_memory_accessor, thread_allocate_exclusive_arena,
 };
+use tikv_client::TikvClientsMgr;
 use tikv_util::{
     Either, check_environment_variables,
     config::VersionTrack,
@@ -136,6 +137,7 @@ use tikv_util::{
     yatp_pool::CleanupMethod,
 };
 use tokio::runtime::Builder;
+use tokio::sync::Mutex as tkMutex;
 
 use crate::{
     common::{
@@ -911,6 +913,16 @@ where
         rejector.register_to(self.coprocessor_host.as_mut().unwrap());
         self.snap_br_rejector = Some(rejector);
 
+        let tikv_clients_mgr = Arc::new(
+            tkMutex::new(
+                TikvClientsMgr::new(
+                    self.pd_client.clone(),
+                    self.env.clone(),
+                    self.security_mgr.clone(),
+                )
+            )
+        );
+
         // Start backup stream
         let backup_stream_scheduler = if self.core.config.log_backup.enable {
             // Create backup stream.
@@ -937,9 +949,7 @@ where
                 .clone();
             let leadership_resolver = LeadershipResolver::new(
                 raft_server.id(),
-                self.pd_client.clone(),
-                self.env.clone(),
-                self.security_mgr.clone(),
+                tikv_clients_mgr.clone(),
                 region_read_progress,
                 Duration::from_secs(60),
             );
@@ -1052,7 +1062,8 @@ where
             .registry
             .register_consistency_check_observer(100, observer);
 
-        let disk_check_runner = DiskCheckRunner::new(self.core.store_path.clone());
+        let inspector_runner =
+            InspectorRunner::new(self.core.store_path.clone(), tikv_clients_mgr.clone());
 
         raft_server
             .start(
@@ -1068,7 +1079,7 @@ where
                 self.concurrency_manager.clone(),
                 collector_reg_handle,
                 self.causal_ts_provider.clone(),
-                disk_check_runner,
+                inspector_runner,
                 self.grpc_service_mgr.clone(),
                 safe_point.clone(),
             )
@@ -1116,10 +1127,9 @@ where
             cdc_ob,
             engines.store_meta.clone(),
             self.concurrency_manager.clone(),
-            server.env(),
-            self.security_mgr.clone(),
             cdc_memory_quota.clone(),
             self.causal_ts_provider.clone(),
+            tikv_clients_mgr.clone(),
         );
         cdc_worker.start_with_timer(cdc_endpoint);
         self.core.to_stop.push(cdc_worker);
@@ -1133,9 +1143,8 @@ where
                 engines.store_meta.clone(),
                 self.pd_client.clone(),
                 self.concurrency_manager.clone(),
-                server.env(),
-                self.security_mgr.clone(),
                 storage.get_scheduler().get_txn_status_cache(),
+                tikv_clients_mgr.clone(),
             );
             self.resolved_ts_scheduler = Some(rts_worker.scheduler());
             rts_worker.start_with_timer(rts_endpoint);

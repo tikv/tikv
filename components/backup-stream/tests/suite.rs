@@ -8,6 +8,8 @@ use std::{
     time::Duration,
 };
 
+use tokio::sync::Mutex;
+
 use async_compression::futures::write::ZstdDecoder;
 use backup_stream::{
     BackupStreamGrpcService, BackupStreamResolver, Endpoint, GetCheckpointResult,
@@ -44,6 +46,7 @@ use tikv::{
     config::{BackupStreamConfig, ResolvedTsConfig},
     storage::txn::txn_status_cache::TxnStatusCache,
 };
+use tikv_client::TikvClientsMgr;
 use tikv_util::{
     HandyRwLock,
     codec::{
@@ -386,11 +389,16 @@ impl Suite {
         let ob = self.obs.get(&id).unwrap().clone();
         cfg.enable = true;
         cfg.temp_path = format!("/{}/{}", self.temp_files.path().display(), id);
+        let tikv_clients_mgr = Arc::new(Mutex::new(
+            TikvClientsMgr::new(
+                cluster.pd_client.clone(),       
+                Arc::clone(&self.env),
+                Arc::clone(&sim.security_mgr),
+            )
+        ));
         let resolver = LeadershipResolver::new(
             id,
-            cluster.pd_client.clone(),
-            Arc::clone(&self.env),
-            Arc::clone(&sim.security_mgr),
+            tikv_clients_mgr,
             cluster.store_metas[&id]
                 .lock()
                 .unwrap()

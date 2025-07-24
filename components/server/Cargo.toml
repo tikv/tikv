@@ -69,6 +69,7 @@ snap_recovery = { workspace = true }
 tempfile = "3.0"
 tikv = { workspace = true }
 tikv_alloc = { workspace = true }
+tikv_client = { workspace = true }
 tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["rt-multi-thread"] }
 yatp = { workspace = true }

@@ -18,7 +18,6 @@ use crossbeam::atomic::AtomicCell;
 use engine_traits::KvEngine;
 use fail::fail_point;
 use futures::compat::Future01CompatExt;
-use grpcio::Environment;
 use kvproto::{
     cdcpb::{
         ChangeDataRequest, ClusterIdMismatch as ErrorClusterIdMismatch,
@@ -36,11 +35,11 @@ use raftstore::{
     store::fsm::store::StoreRegionMeta,
 };
 use resolved_ts::{LeadershipResolver, resolve_by_raft};
-use security::SecurityManager;
 use tikv::{
     config::{CdcConfig, ResolvedTsConfig},
     storage::{Statistics, kv::LocalTablets},
 };
+use tikv_client::TikvClientsMgr;
 use tikv_util::{
     debug, defer, error, impl_display_as_debug, info,
     memory::MemoryQuota,
@@ -54,8 +53,9 @@ use tikv_util::{
 };
 use tokio::{
     runtime::{Builder, Runtime},
-    sync::Semaphore,
+    sync::{Semaphore, Mutex},
 };
+
 use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler};
 
 use crate::{
@@ -523,10 +523,9 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         observer: CdcObserver,
         store_meta: Arc<StdMutex<S>>,
         concurrency_manager: ConcurrencyManager,
-        env: Arc<Environment>,
-        security_mgr: Arc<SecurityManager>,
         sink_memory_quota: Arc<MemoryQuota>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
+        tikv_clients_mgr: Arc<Mutex<TikvClientsMgr>>,
     ) -> Endpoint<T, E, S> {
         let workers = Builder::new_multi_thread()
             .thread_name("cdcwkr")
@@ -568,9 +567,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let store_resolver_gc_interval = Duration::from_secs(60);
         let leader_resolver = LeadershipResolver::new(
             store_meta.lock().unwrap().store_id(),
-            pd_client.clone(),
-            env,
-            security_mgr,
+            tikv_clients_mgr.clone(),
             region_read_progress,
             store_resolver_gc_interval,
         );
@@ -1518,8 +1515,6 @@ mod tests {
             CdcObserver::new(task_sched, memory_quota.clone()),
             Arc::new(StdMutex::new(store_meta)),
             ConcurrencyManager::new_for_test(1.into()),
-            env,
-            security_mgr,
             memory_quota,
             causal_ts_provider,
         );

@@ -5,14 +5,13 @@ use std::{
     collections::HashMap,
     fmt,
     marker::PhantomData,
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{Arc, Mutex as stdMutex, MutexGuard},
     time::Duration,
 };
 
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use futures::channel::oneshot::{Receiver, Sender, channel};
-use grpcio::Environment;
 use kvproto::{kvrpcpb::LeaderInfo, metapb::Region, raft_cmdpb::AdminCmdType};
 use online_config::{self, ConfigChange, ConfigManager, OnlineConfig};
 use pd_client::PdClient;
@@ -26,14 +25,14 @@ use raftstore::{
         },
     },
 };
-use security::SecurityManager;
 use tikv::{config::ResolvedTsConfig, storage::txn::txn_status_cache::TxnStatusCache};
+use tikv_client::TikvClientsMgr;
 use tikv_util::{
     memory::{HeapSize, MemoryQuota},
     warn,
     worker::{Runnable, RunnableWithTimer, Scheduler},
 };
-use tokio::sync::{Notify, Semaphore};
+use tokio::sync::{Mutex, Notify, Semaphore};
 use txn_types::{Key, TimeStamp};
 
 use crate::{
@@ -400,7 +399,7 @@ pub struct Endpoint<T, E: KvEngine, S> {
     cfg: ResolvedTsConfig,
     memory_quota: Arc<MemoryQuota>,
     advance_notify: Arc<Notify>,
-    store_meta: Arc<Mutex<S>>,
+    store_meta: Arc<stdMutex<S>>,
     region_read_progress: RegionReadProgressRegistry,
     regions: HashMap<u64, ObserveRegion>,
     scanner_pool: ScannerPool<T, E>,
@@ -682,12 +681,11 @@ where
         cfg: &ResolvedTsConfig,
         scheduler: Scheduler<Task>,
         cdc_handle: T,
-        store_meta: Arc<Mutex<S>>,
+        store_meta: Arc<stdMutex<S>>,
         pd_client: Arc<dyn PdClient>,
         concurrency_manager: ConcurrencyManager,
-        env: Arc<Environment>,
-        security_mgr: Arc<SecurityManager>,
         txn_status_cache: Arc<TxnStatusCache>,
+        tikv_clients_mgr: Arc<Mutex<TikvClientsMgr>>
     ) -> Self {
         let (region_read_progress, store_id) = {
             let meta = store_meta.lock().unwrap();
@@ -699,9 +697,7 @@ where
         let store_resolver_gc_interval = Duration::from_secs(60);
         let leader_resolver = LeadershipResolver::new(
             store_id,
-            pd_client.clone(),
-            env,
-            security_mgr,
+            tikv_clients_mgr,
             region_read_progress.clone(),
             store_resolver_gc_interval,
         );
