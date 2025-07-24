@@ -429,29 +429,33 @@ impl Default for TermCache {
 
 impl TermCache {
     fn append(&mut self, index: u64, term: u64) {
-        // Update the previous entry if it's in the same term.
+        // Check if we can update an existing entry or insert into the cache
         if let Some(first_term) = self.cache.front().map(|(first_term, _)| *first_term) {
-            if first_term > term {
-                // Still has enough space for caching this older term.
+            if first_term > term + 1 {
+                // Skip terms with gaps, as they represent stale/unfresh information.
+                return;
+            } else if first_term == term + 1 {
+                // Insert older term at the front if there's available space.
                 if self.cache.len() < self.capacity {
                     self.cache.push_front((term, index));
                 }
                 return;
             }
+
+            // Calculate position of the term in the cache (terms are stored sequentially)
             let pos = (term - first_term) as usize;
             if pos < self.cache.len() {
-                let (t, idx) = self.cache[pos];
-                assert_eq!(t, term);
-                // Only updates if the inserted index is smaller than
-                // the current start_index of this target term.
-                if idx > index {
+                let (cached_term, cached_start_idx) = self.cache[pos];
+                assert_eq!(cached_term, term);
+
+                // Update start index only if the new index is smaller (extends the term range)
+                if cached_start_idx > index {
                     self.cache[pos].1 = index;
                 }
                 return;
             } else if self.cache.back().unwrap().0 + 1 < term {
-                // Received a hopping term from other peers. It means that this
-                // node might be partitioned from the majority. We need to clear the
-                // cache to avoid returning stale terms.
+                // Detected a term jump indicating potential network partition.
+                // Clear the cache to prevent serving stale term information.
                 self.cache.clear();
             }
         }
@@ -463,6 +467,7 @@ impl TermCache {
     }
 
     /// Push entries to the left of the cache.
+    #[cfg(test)]
     fn prepend(&mut self, entries: &[Entry]) {
         for e in entries.iter().rev() {
             self.append(e.get_index(), e.get_term());
@@ -1319,7 +1324,6 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
                             return;
                         }
                         entries.truncate((range.1 - range.0) as usize);
-                        self.term_cache.prepend(&entries);
                         self.cache.prepend(entries);
                         WARM_UP_ENTRY_CACHE_COUNTER.finished.inc();
                         fail_point!("on_entry_cache_warmed_up");
@@ -1598,7 +1602,7 @@ pub mod tests {
                 assert_eq!(cache.entry(i), Some(i - 12));
             }
         }
-        // Prepend & Compact
+        // Prepend sequentail entries & Compact
         {
             let mut cache = TermCache::default();
             cache.append(20, 6);
@@ -1642,7 +1646,7 @@ pub mod tests {
             assert_eq!(cache.entry(56), Some(19));
             assert_eq!(cache.entry(57), Some(19));
         }
-        // Abnormal cases
+        // Abnormal cases: index hopping
         {
             let mut cache = TermCache::default();
             cache.append(5, 5);
@@ -1665,6 +1669,28 @@ pub mod tests {
             cache.append(5, 4);
             cache.append(10, 6);
             assert_eq!(cache.cache.len(), 3);
+        }
+        // Abnormal cases: prepend hopping index
+        {
+            let mut cache = TermCache::default();
+            let ents = vec![
+                new_entry(10, 5),
+                new_entry(15, 6),
+                new_entry(18, 7),
+                // multi election timeout
+                new_entry(20, 10),
+                new_entry(25, 11),
+            ];
+            cache.prepend(&ents);
+            assert_eq!(cache.cache.len(), 2);
+            assert_eq!(cache.entry(18), None);
+            assert_eq!(cache.entry(20), Some(10));
+            cache.append(30, 12);
+            assert_eq!(cache.cache.len(), 3);
+            cache.append(19, 9);
+            assert_eq!(cache.cache.len(), 4);
+            assert_eq!(cache.entry(18), None);
+            assert_eq!(cache.entry(19), Some(9));
         }
     }
 
