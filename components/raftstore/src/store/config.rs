@@ -535,7 +535,7 @@ impl Default for Config {
             split_region_check_tick_interval: ReadableDuration::secs(10),
             region_split_check_diff: None,
             region_compact_check_interval: ReadableDuration::minutes(5),
-            region_compact_check_step: None,
+            region_compact_check_step: Some(100),
             region_compact_min_tombstones: 10000,
             region_compact_tombstones_percent: 30,
             region_compact_min_redundant_rows: 50000,
