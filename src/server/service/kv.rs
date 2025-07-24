@@ -14,7 +14,6 @@ use api_version::KvFormat;
 use fail::fail_point;
 use futures::{
     compat::Future01CompatExt,
-    executor::ThreadPool,
     future::{self, Future, FutureExt, TryFutureExt},
     sink::SinkExt,
     stream::{StreamExt, TryStreamExt},
@@ -45,6 +44,7 @@ use tikv_util::{
     time::{Instant, nanos_to_secs},
     worker::Scheduler,
 };
+use tokio::runtime::Runtime;
 use tracker::{GLOBAL_TRACKERS, RequestInfo, RequestType, Tracker, set_tls_tracker_token};
 use txn_types::{self, Key};
 
@@ -141,7 +141,7 @@ pub struct Service<E: Engine, L: LockManager, F: KvFormat> {
     raft_message_filter: Arc<dyn RaftGrpcMessageFilter>,
 
     // thread_pool for raft
-    raft_executor: ThreadPool,
+    raft_executor: Arc<Runtime>,
 }
 
 impl<E: Engine, L: LockManager, F: KvFormat> Drop for Service<E, L, F> {
@@ -194,7 +194,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
         health_controller: HealthController,
         health_feedback_interval: Option<Duration>,
         raft_message_filter: Arc<dyn RaftGrpcMessageFilter>,
-        raft_executor: ThreadPool,
+        raft_executor: Arc<Runtime>,
     ) -> Self {
         let now_unix = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -823,7 +823,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             Ok::<(), Error>(())
         };
 
-        self.raft_executor.spawn_ok(async move {
+        self.raft_executor.spawn(async move {
             let status = match res.await {
                 Err(e) => {
                     let msg = format!("{:?}", e);
@@ -887,7 +887,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             Ok::<(), Error>(())
         };
 
-        self.raft_executor.spawn_ok(async move {
+        self.raft_executor.spawn(async move {
             let status = match res.await {
                 Err(e) => {
                     fail_point!("on_batch_raft_stream_drop_by_err");
@@ -914,7 +914,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             RAFT_SNAPSHOT_REJECTS.inc();
             let status =
                 RpcStatus::with_message(RpcStatusCode::UNAVAILABLE, "rejected by peer".to_string());
-            self.raft_executor.spawn_ok(sink.fail(status).map(|_| ()));
+            self.raft_executor.spawn(sink.fail(status).map(|_| ()));
             return;
         };
         let task = SnapTask::Recv { stream, sink };
@@ -925,7 +925,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                 _ => unreachable!(),
             };
             let status = RpcStatus::with_message(RpcStatusCode::RESOURCE_EXHAUSTED, err_msg);
-            self.raft_executor.spawn_ok(sink.fail(status).map(|_| ()));
+            self.raft_executor.spawn(sink.fail(status).map(|_| ()));
         }
     }
 
@@ -943,7 +943,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                 _ => unreachable!(),
             };
             let status = RpcStatus::with_message(RpcStatusCode::RESOURCE_EXHAUSTED, err_msg);
-            self.raft_executor.spawn_ok(sink.fail(status).map(|_| ()));
+            self.raft_executor.spawn(sink.fail(status).map(|_| ()));
         }
     }
 
@@ -1034,7 +1034,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         })
         .map(|_| ());
 
-        self.raft_executor.spawn_ok(task);
+        self.raft_executor.spawn(task);
     }
 
     fn batch_commands(

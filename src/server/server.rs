@@ -8,7 +8,7 @@ use std::{
 };
 
 use api_version::KvFormat;
-use futures::{compat::Stream01CompatExt, executor::ThreadPoolBuilder, stream::StreamExt};
+use futures::{compat::Stream01CompatExt, stream::StreamExt};
 use grpcio::{
     ChannelBuilder,
     CompressionLevel::{
@@ -218,11 +218,13 @@ where
 
         let proxy = Proxy::new(security_mgr.clone(), &env, Arc::new(cfg.value().clone()));
 
-        let raft_threadpool = ThreadPoolBuilder::new()
-            .pool_size(cfg.value().grpc_raft_concurrency)
-            .name_prefix(RAFT_THREAD_PREFIX)
-            .create()
-            .unwrap();
+        let raft_threadpool = Arc::new(
+            RuntimeBuilder::new_multi_thread()
+                .thread_name(RAFT_THREAD_PREFIX)
+                .worker_threads(cfg.value().grpc_raft_concurrency)
+                .build()
+                .unwrap(),
+        );
 
         let kv_service = KvService::new(
             cfg.value().cluster_id,
@@ -241,7 +243,7 @@ where
             health_controller.clone(),
             health_feedback_interval,
             raft_message_filter,
-            raft_threadpool,
+            raft_threadpool.clone(),
         );
 
         let builder_factory = Box::new(BuilderFactory::new(
