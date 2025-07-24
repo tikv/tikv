@@ -7,6 +7,7 @@
 use std::{
     cell::{Cell, RefCell},
     cmp,
+    cmp::Ordering::*,
     collections::VecDeque,
     mem,
     ops::Range,
@@ -431,32 +432,37 @@ impl TermCache {
     fn append(&mut self, index: u64, term: u64) {
         // Check if we can update an existing entry or insert into the cache
         if let Some(first_term) = self.cache.front().map(|(first_term, _)| *first_term) {
-            if first_term > term + 1 {
-                // Skip terms with gaps, as they represent stale/unfresh information.
-                return;
-            } else if first_term == term + 1 {
-                // Insert older term at the front if there's available space.
-                if self.cache.len() < self.capacity {
-                    self.cache.push_front((term, index));
+            match first_term.cmp(&(term + 1)) {
+                Greater => {
+                    // Skip terms with gaps, as they represent stale/unfresh information.
+                    return;
                 }
-                return;
-            }
-
-            // Calculate position of the term in the cache (terms are stored sequentially)
-            let pos = (term - first_term) as usize;
-            if pos < self.cache.len() {
-                let (cached_term, cached_start_idx) = self.cache[pos];
-                assert_eq!(cached_term, term);
-
-                // Update start index only if the new index is smaller (extends the term range)
-                if cached_start_idx > index {
-                    self.cache[pos].1 = index;
+                Equal => {
+                    // Insert older term at the front if there's available space.
+                    if self.cache.len() < self.capacity {
+                        self.cache.push_front((term, index));
+                    }
+                    return;
                 }
-                return;
-            } else if self.cache.back().unwrap().0 + 1 < term {
-                // Detected a term jump indicating potential network partition.
-                // Clear the cache to prevent serving stale term information.
-                self.cache.clear();
+                Less => {
+                    // Calculate position of the term in the cache (terms are stored sequentially)
+                    let pos = (term - first_term) as usize;
+                    if pos < self.cache.len() {
+                        let (cached_term, cached_start_idx) = self.cache[pos];
+                        assert_eq!(cached_term, term);
+
+                        // Update start index only if the new index is smaller (extends the term
+                        // range)
+                        if cached_start_idx > index {
+                            self.cache[pos].1 = index;
+                        }
+                        return;
+                    } else if self.cache.back().unwrap().0 + 1 < term {
+                        // Detected a term jump indicating potential network partition.
+                        // Clear the cache to prevent serving stale term information.
+                        self.cache.clear();
+                    }
+                }
             }
         }
         // New term.
