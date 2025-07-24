@@ -172,6 +172,7 @@ tidb_query_executors = { workspace = true }
 tidb_query_expr = { workspace = true }
 tikv_alloc = { workspace = true }
 tikv_kv = { workspace = true }
+tikv_client = { workspace = true }
 tikv_util = { workspace = true }
 time = { workspace = true }
 tipb = { workspace = true }
@@ -354,6 +355,7 @@ tidb_query_executors = { path = "components/tidb_query_executors" }
 tidb_query_expr = { path = "components/tidb_query_expr" }
 tikv = { path = ".", default-features = false }
 tikv_alloc = { path = "components/tikv_alloc" }
+tikv_client = { path = "components/tikv_client" }
 tikv_kv = { path = "components/tikv_kv", default-features = false }
 tikv_util = { path = "components/tikv_util" }
 tipb_helper = { path = "components/tipb_helper" }

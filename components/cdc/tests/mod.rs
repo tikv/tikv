@@ -5,6 +5,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use tokio::sync::Mutex;
+
 use causal_ts::CausalTsProvider;
 use cdc::{CdcObserver, Delegate, FeatureGate, Task, Validate, recv_timeout};
 use collections::HashMap;
@@ -211,6 +213,7 @@ impl TestSuiteBuilder {
         }
 
         runner(&mut cluster);
+
         for (id, worker) in &mut endpoints {
             let sim = cluster.sim.wl();
             let raft_router = sim.get_server_router(*id);
@@ -218,6 +221,13 @@ impl TestSuiteBuilder {
             let cm = sim.get_concurrency_manager(*id);
             let env = Arc::new(Environment::new(1));
             let cfg = CdcConfig::default();
+            let tikv_clients_mgr = Arc::new(Mutex::new(
+                TikvClientsMgr::new(
+                    cluster.pd_client.clone(),       
+                    env.clone(),
+                    Arc::clone(&sim.security_mgr),
+                )
+            ));
             let mut cdc_endpoint = cdc::Endpoint::new(
                 DEFAULT_CLUSTER_ID,
                 &cfg,
@@ -235,6 +245,7 @@ impl TestSuiteBuilder {
                 sim.security_mgr.clone(),
                 quotas[id].clone(),
                 sim.get_causal_ts_provider(*id),
+                tikv_clients_mgr.clone(),
             );
             let mut updated_cfg = cfg.clone();
             updated_cfg.min_ts_interval = ReadableDuration::millis(100);

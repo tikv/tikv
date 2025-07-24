@@ -110,6 +110,7 @@ use tikv::{
 use tikv_alloc::{
     add_thread_memory_accessor, remove_thread_memory_accessor, thread_allocate_exclusive_arena,
 };
+use tikv_client::TikvClientsMgr;
 use tikv_util::{
     Either, check_environment_variables,
     config::VersionTrack,
@@ -123,6 +124,7 @@ use tikv_util::{
     yatp_pool::CleanupMethod,
 };
 use tokio::runtime::Builder;
+use tokio::sync::Mutex;
 
 use crate::{
     common::{
@@ -684,6 +686,14 @@ where
             tikv::config::Module::Cdc,
             Box::new(CdcConfigManager(cdc_scheduler.clone())),
         );
+
+        let tikv_clients_mgr = Arc::new(Mutex::new(
+            TikvClientsMgr::new(
+                self.pd_client.clone(),       
+                self.env.clone(),
+                self.security_mgr.clone(),
+            )
+        ));
         // Start cdc endpoint.
         let cdc_endpoint = cdc::Endpoint::new(
             self.core.config.server.cluster_id,
@@ -698,10 +708,9 @@ where
             cdc_ob,
             self.router.as_ref().unwrap().store_meta().clone(),
             self.concurrency_manager.clone(),
-            self.env.clone(),
-            self.security_mgr.clone(),
             cdc_memory_quota.clone(),
             self.causal_ts_provider.clone(),
+            tikv_clients_mgr.clone(),
         );
         cdc_worker.start_with_timer(cdc_endpoint);
         self.core.to_stop.push(cdc_worker);
@@ -726,9 +735,8 @@ where
                 self.router.as_ref().unwrap().store_meta().clone(),
                 self.pd_client.clone(),
                 self.concurrency_manager.clone(),
-                self.env.clone(),
-                self.security_mgr.clone(),
                 storage.get_scheduler().get_txn_status_cache(),
+                tikv_clients_mgr.clone(),
             );
             self.resolved_ts_scheduler = Some(rts_worker.scheduler());
             rts_worker.start_with_timer(rts_endpoint);

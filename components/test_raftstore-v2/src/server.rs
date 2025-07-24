@@ -472,6 +472,15 @@ impl<EK: KvEngine> ServerCluster<EK> {
         gc_worker.start(node_id, coprocessor_host.clone()).unwrap();
 
         let txn_status_cache = Arc::new(TxnStatusCache::new_for_test());
+        let tikv_clients_mgr = Arc::new(
+            tkMutex::new(
+                TikvClientsMgr::new(
+                    self.pd_client.clone(),
+                    self.env.clone(),
+                    self.security_mgr.clone(),    
+                )
+            )
+        );
         let rts_worker = if cfg.resolved_ts.enable {
             // Resolved ts worker
             let mut rts_worker = LazyWorker::new("resolved-ts");
@@ -487,9 +496,8 @@ impl<EK: KvEngine> ServerCluster<EK> {
                 store_meta.clone(),
                 self.pd_client.clone(),
                 concurrency_manager.clone(),
-                self.env.clone(),
-                self.security_mgr.clone(),
                 txn_status_cache.clone(),
+                tikv_clients_mgr.clone(),
             );
             // Start the worker
             rts_worker.start(rts_endpoint);

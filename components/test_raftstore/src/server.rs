@@ -412,6 +412,15 @@ impl ServerCluster {
             rts_ob.register_to(&mut coprocessor_host);
             // resolved ts endpoint needs store id.
             store_meta.lock().unwrap().store_id = Some(node_id);
+            let tikv_clients_mgr = Arc::new(
+                tkMutex::new(
+                    TikvClientsMgr::new(
+                        self.pd_client.clone(),
+                        self.env.clone(),
+                        self.security_mgr.clone(),    
+                    )
+                )
+            );
             // Resolved ts endpoint
             let rts_endpoint = resolved_ts::Endpoint::new(
                 &cfg.resolved_ts,
@@ -420,9 +429,8 @@ impl ServerCluster {
                 store_meta.clone(),
                 self.pd_client.clone(),
                 concurrency_manager.clone(),
-                self.env.clone(),
-                self.security_mgr.clone(),
                 txn_status_cache.clone(),
+                tikv_clients_mgr.clone(),
             );
             // Start the worker
             rts_worker.start(rts_endpoint);

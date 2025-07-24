@@ -1,0 +1,17 @@
+[package]
+name = "tikv_client"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[dependencies]
+collections.workspace = true
+grpcio.workspace = true
+kvproto.workspace = true
+lazy_static = "1.5.0"
+pd_client.workspace = true
+prometheus = "0.14.0"
+protobuf = "3.7.2"
+security.workspace = true
+tikv_util.workspace = true
+tokio = "1.46.1"

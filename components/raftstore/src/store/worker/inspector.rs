@@ -9,10 +9,13 @@ use std::{
     time::Duration,
 };
 
+use tokio::sync::Mutex;
+
 use crossbeam::channel::{Receiver, Sender, TrySendError, bounded};
 use grpcio::{Error, RpcStatusCode};
 use grpcio_health::{ServingStatus::Serving, proto::Health, proto::HealthClient};
 use health_controller::types::LatencyInspector;
+use tikv_client::TikvClientsMgr;
 use tikv_util::{
     time::Instant,
     warn,
@@ -62,7 +65,7 @@ pub struct Runner {
     network_runner: InnerRunner,
 
     target: PathBuf,
-    health_client: HealthClient,
+    tikv_clients_mgr: Arc<Mutex<TikvClientsMgr>>,
 }
 
 #[derive(Clone)]
@@ -99,7 +102,7 @@ impl Runner {
     const NETWORK_NOT_TIMEOUT: Duration = Duration::from_millis(500);
 
     #[inline]
-    fn build(target: PathBuf, health_client: HealthClient) -> Self {
+    fn build(target: PathBuf, tikv_clients_mgr: Arc<Mutex<TikvClientsMgr>>) -> Self {
         // The disk check mechanism only cares about the latency of the most
         // recent request; older requests become stale and irrelevant. To avoid
         // unnecessary accumulation of multiple requests, we set a small
@@ -110,15 +113,15 @@ impl Runner {
             disk_runner,
             network_runner,
             target,
-            health_client,
+            tikv_clients_mgr,
         }
     }
 
     #[inline]
-    pub fn new(inspect_dir: PathBuf, health_client: HealthClient) -> Self {
+    pub fn new(inspect_dir: PathBuf, tikv_clients_mgr: Arc<Mutex<TikvClientsMgr>>) -> Self {
         Self::build(
             inspect_dir.join(Self::DISK_IO_LATENCY_INSPECT_FILENAME),
-            health_client,
+            tikv_clients_mgr,
         )
     }
 
@@ -126,12 +129,9 @@ impl Runner {
     /// Only for test.
     /// Generate a dummy Runner.
     pub fn dummy() -> Self {
-        let channel = grpcio::ChannelBuilder::new(
-            Arc::new(grpcio::EnvBuilder::new().build()))
-            .connect("127.0.0.1:0");
         Self::build(
             PathBuf::from("./").join(Self::DISK_IO_LATENCY_INSPECT_FILENAME),
-            HealthClient::new(channel),
+            Arc::new(Mutex::new(TikvClientsMgr::default())),
         )
     }
 
