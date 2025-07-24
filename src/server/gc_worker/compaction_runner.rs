@@ -183,7 +183,6 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
         fail_point!("gc_worker_auto_compaction_start");
         loop {
             if self.check_stopped() {
-                debug!("compaction-runner stopped");
                 break;
             }
 
@@ -198,7 +197,6 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
             if gc_safe_point == 0 {
                 info!("skipping compaction: GC safe point is zero");
                 if self.sleep_or_stop(check_interval) {
-                    debug!("compaction-runner stopped");
                     break;
                 }
                 continue;
@@ -241,7 +239,6 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
                 Err(e) => {
                     error!("failed to collect compaction candidates: {:?}", e);
                     if self.sleep_or_stop(check_interval) {
-                        debug!("compaction-runner stopped");
                         break;
                     }
                     continue;
@@ -251,7 +248,6 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
             if candidates.is_empty() {
                 info!("no compaction candidates found, sleeping");
                 if self.sleep_or_stop(check_interval) {
-                    debug!("compaction-runner stopped");
                     break;
                 }
                 continue;
@@ -261,7 +257,6 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
             let elapsed = match self.compact_candidates(candidates, &config) {
                 Some(elapsed) => elapsed,
                 None => {
-                    debug!("compaction-runner stopped");
                     break;
                 }
             };
@@ -270,11 +265,11 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
             if elapsed < check_interval {
                 let remaining_sleep = check_interval - elapsed;
                 if self.sleep_or_stop(remaining_sleep) {
-                    debug!("compaction-runner stopped");
                     break;
                 }
             }
         }
+        debug!("compaction-runner stopped");
     }
 
     /// Collects all compaction candidates from all regions
