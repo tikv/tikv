@@ -56,7 +56,7 @@ lazy_static::lazy_static! {
         "tikv_auto_compaction_duration_seconds",
         "Time spent on auto compaction operations",
         &["type"],
-        exponential_buckets(0.0001, 2.0, 20).unwrap()
+        exponential_buckets(0.0001, 2.0, 26).unwrap()
     ).unwrap();
 
     pub static ref AUTO_COMPACTION_OPERATION_COUNTER_VEC: AutoCompactionOperationCounterVec = register_static_int_counter_vec!(
