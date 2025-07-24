@@ -63,7 +63,7 @@ use crate::{
     },
     raft::Storage,
     router::{PeerMsg, PeerTick, StoreMsg},
-    worker::{cleanup, pd, refresh_config, tablet},
+    worker::{pd, refresh_config, tablet},
 };
 
 const MIN_MANUAL_FLUSH_RATE: f64 = 0.2;
@@ -590,7 +590,6 @@ pub struct Schedulers<EK: KvEngine, ER: RaftEngine> {
     pub pd: Scheduler<pd::Task>,
     pub tablet: Scheduler<tablet::Task<EK>>,
     pub write: WriteSenders<EK, ER>,
-    pub cleanup: Scheduler<cleanup::Task>,
     pub refresh_config: Scheduler<RefreshConfigTask>,
 
     // Following is not maintained by raftstore itself.
@@ -616,7 +615,6 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
     checkpoint: Worker,
     async_write: StoreWriters<EK, ER>,
     purge: Option<Worker>,
-    cleanup_worker: Worker,
 
     refresh_config_worker: LazyWorker<RefreshConfigTask>,
 
@@ -643,7 +641,6 @@ impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
             checkpoint,
             async_write: StoreWriters::new(resource_control),
             purge,
-            cleanup_worker: Worker::new("cleanup-worker"),
             refresh_config_worker: LazyWorker::new("refreash-config-worker"),
             background,
             high_priority_pool: YatpPoolBuilder::new(DefaultTicker::default())
@@ -841,12 +838,6 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             ),
         );
 
-        let compact_runner =
-            cleanup::CompactRunner::new(tablet_registry.clone(), self.logger.clone());
-        let cleanup_worker_scheduler = workers
-            .cleanup_worker
-            .start("cleanup-worker", cleanup::Runner::new(compact_runner));
-
         let refresh_config_scheduler = workers.refresh_config_worker.scheduler();
 
         let schedulers = Schedulers {
@@ -855,7 +846,6 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             tablet: tablet_scheduler,
             write: workers.async_write.senders(),
             split_check: split_check_scheduler,
-            cleanup: cleanup_worker_scheduler,
             refresh_config: refresh_config_scheduler,
         };
 

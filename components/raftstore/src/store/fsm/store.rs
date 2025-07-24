@@ -11,7 +11,7 @@ use std::{
     mem,
     ops::{Deref, DerefMut},
     sync::{
-        Arc, Mutex, Weak,
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
     time::{Duration, Instant, SystemTime},
@@ -26,8 +26,8 @@ use collections::{HashMap, HashMapEntry, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::{
-    CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DeleteStrategy, Engines, KvEngine, Mutable,
-    PerfContextKind, RaftEngine, RaftLogBatch, Range, WriteBatch, WriteOptions,
+    CF_LOCK, CF_RAFT, DeleteStrategy, Engines, KvEngine, Mutable, PerfContextKind, RaftEngine,
+    RaftLogBatch, Range, WriteBatch, WriteOptions,
 };
 use fail::fail_point;
 use file_system::{IoType, WithIoType};
@@ -80,7 +80,7 @@ use crate::{
     Error, Result, bytes_capacity,
     coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason},
     store::{
-        Callback, CasualMessage, CompactThreshold, FullCompactController, GlobalReplicationState,
+        Callback, CasualMessage, FullCompactController, GlobalReplicationState,
         InspectedRaftMessage, MergeResultKind, PdTask, PeerMsg, PeerTick, RaftCommand,
         SignificantMsg, SnapManager, StoreMsg, StoreTick,
         async_io::{
@@ -116,8 +116,6 @@ use crate::{
         worker_metrics::PROCESS_STAT_CPU_USAGE,
     },
 };
-
-type Key = Vec<u8>;
 
 pub const PENDING_MSG_CAP: usize = 100;
 pub const ENTRY_CACHE_EVICT_TICK_DURATION: Duration = Duration::from_secs(1);
@@ -741,7 +739,6 @@ where
 struct Store {
     // store id, before start the id is 0.
     id: u64,
-    last_compact_checked_key: Key,
     stopped: bool,
     start_time: Option<Timespec>,
     consistency_check_time: HashMap<u64, Instant>,
@@ -759,7 +756,6 @@ where
 {
     store: Store,
     receiver: Receiver<StoreMsg<EK>>,
-    check_then_compact_running_indicator: Option<Weak<()>>,
 }
 
 impl<EK> StoreFsm<EK>
@@ -771,14 +767,12 @@ where
         let fsm = Box::new(StoreFsm {
             store: Store {
                 id: 0,
-                last_compact_checked_key: keys::DATA_MIN_KEY.to_vec(),
                 stopped: false,
                 start_time: None,
                 consistency_check_time: HashMap::default(),
                 store_reachability: HashMap::default(),
             },
             receiver: rx,
-            check_then_compact_running_indicator: None,
         });
         (tx, fsm)
     }
@@ -812,7 +806,10 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             StoreTick::PdStoreHeartbeat => self.on_pd_store_heartbeat_tick(),
             StoreTick::SnapGc => self.on_snap_mgr_gc(),
             StoreTick::CompactLockCf => self.on_compact_lock_cf(),
-            StoreTick::CompactCheck => self.on_compact_check_tick(),
+            StoreTick::CompactCheck => {
+                // Disabled: replaced by GC worker auto compaction
+                debug!("CompactCheck tick disabled, using GC worker auto compaction instead");
+            }
             StoreTick::PeriodicFullCompact => self.on_full_compact_tick(),
             StoreTick::LoadMetricsWindow => self.on_load_metrics_window_tick(),
             StoreTick::ConsistencyCheck => self.on_consistency_check_tick(),
@@ -955,7 +952,6 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
         self.fsm.store.id = store.get_id();
         self.fsm.store.start_time = Some(time::get_time());
         self.register_cleanup_import_sst_tick();
-        self.register_compact_check_tick();
         self.register_full_compact_tick();
         self.register_load_metrics_window_tick();
         self.register_pd_store_heartbeat_tick();
@@ -2724,168 +2720,6 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
                 return false;
             }
             true
-        }
-    }
-
-    fn register_compact_check_tick(&self) {
-        self.ctx.schedule_store_tick(
-            StoreTick::CompactCheck,
-            self.ctx.cfg.region_compact_check_interval.0,
-        )
-    }
-
-    fn on_compact_check_tick(&mut self) {
-        self.register_compact_check_tick();
-        if let Some(token) = &self.fsm.check_then_compact_running_indicator {
-            if token.upgrade().is_some() {
-                info!(
-                    "compact check is running, skip compact check";
-                    "store_id" => self.fsm.store.id,
-                );
-                return;
-            }
-        }
-        if self.ctx.cleanup_scheduler.is_busy() {
-            debug!(
-                "compact worker is busy, skip compact check";
-                "store_id" => self.fsm.store.id,
-            );
-            return;
-        }
-
-        let gc_safe_point = self.ctx.gc_safe_point.load(Ordering::Relaxed);
-
-        let meta = self.ctx.store_meta.lock().unwrap();
-        if meta.region_ranges.is_empty() {
-            debug!(
-            "there is no range need to check";
-            "store_id" => self.fsm.store.id
-            );
-            return;
-        }
-        let mut all_ranges = Vec::with_capacity(meta.region_ranges.len() + 2);
-        all_ranges.push(keys::DATA_MIN_KEY.to_vec());
-        all_ranges.extend(meta.region_ranges.keys().cloned());
-        all_ranges.push(keys::DATA_MAX_KEY.to_vec());
-        let cf_names = vec![CF_WRITE.to_owned(), CF_DEFAULT.to_owned()];
-        let finished = Arc::new(());
-        self.fsm.check_then_compact_running_indicator = Some(Arc::downgrade(&finished));
-        if let Err(e) = self.ctx.cleanup_scheduler.schedule(CleanupTask::Compact(
-            CompactTask::CheckThenCompactTopN {
-                cf_names,
-                ranges: all_ranges,
-                compact_threshold: CompactThreshold::new(
-                    self.ctx.cfg.region_compact_min_tombstones,
-                    self.ctx.cfg.region_compact_tombstones_percent,
-                    self.ctx.cfg.region_compact_min_redundant_rows,
-                    self.ctx.cfg.region_compact_redundant_rows_percent(),
-                ),
-                compaction_filter_enabled: self.ctx.cfg.compaction_filter_enabled,
-                bottommost_level_force: self.ctx.cfg.check_then_compact_force_bottommost_level,
-                top_n: self.ctx.cfg.check_then_compact_top_n as usize,
-                gc_safe_point,
-                finished,
-            },
-        )) {
-            error!(
-                "schedule space check task failed";
-                "store_id" => self.fsm.store.id,
-                "err" => ?e,
-            );
-        }
-    }
-
-    // TODO: remove this function after the check and compact is fully migrated to
-    // check then compact
-    #[allow(dead_code)]
-    fn on_check_and_compact_tick(&mut self) {
-        self.register_compact_check_tick();
-        if self.ctx.cleanup_scheduler.is_busy() {
-            debug!(
-                "compact worker is busy, check space redundancy next time";
-                "store_id" => self.fsm.store.id,
-            );
-            return;
-        }
-
-        if self
-            .ctx
-            .engines
-            .kv
-            .auto_compactions_is_disabled()
-            .expect("cf")
-        {
-            debug!(
-                "skip compact check when disabled auto compactions";
-                "store_id" => self.fsm.store.id,
-            );
-            return;
-        }
-
-        // Start from last checked key.
-        let mut ranges_need_check =
-            Vec::with_capacity(self.ctx.cfg.region_compact_check_step() as usize + 1);
-        ranges_need_check.push(self.fsm.store.last_compact_checked_key.clone());
-
-        let largest_key = {
-            let meta = self.ctx.store_meta.lock().unwrap();
-            if meta.region_ranges.is_empty() {
-                debug!(
-                    "there is no range need to check";
-                    "store_id" => self.fsm.store.id
-                );
-                return;
-            }
-
-            // Collect continuous ranges.
-            let left_ranges = meta.region_ranges.range((
-                Excluded(self.fsm.store.last_compact_checked_key.clone()),
-                Unbounded::<Key>,
-            ));
-            ranges_need_check.extend(
-                left_ranges
-                    .take(self.ctx.cfg.region_compact_check_step() as usize)
-                    .map(|(k, _)| k.to_owned()),
-            );
-
-            // Update last_compact_checked_key.
-            meta.region_ranges.keys().last().unwrap().to_vec()
-        };
-
-        let last_key = ranges_need_check.last().unwrap().clone();
-        if last_key == largest_key {
-            // Range [largest key, DATA_MAX_KEY) also need to check.
-            if last_key != keys::DATA_MAX_KEY.to_vec() {
-                ranges_need_check.push(keys::DATA_MAX_KEY.to_vec());
-            }
-            // Next task will start from the very beginning.
-            self.fsm.store.last_compact_checked_key = keys::DATA_MIN_KEY.to_vec();
-        } else {
-            self.fsm.store.last_compact_checked_key = last_key;
-        }
-
-        // Schedule the task.
-        // Since compaction-filter only works for the write-cf and during compaction it
-        // may perform(write) deletion operations in the default-cf, so we compact the
-        // write-cf before the default-cf.
-        let cf_names = vec![CF_WRITE.to_owned(), CF_DEFAULT.to_owned()];
-        if let Err(e) = self.ctx.cleanup_scheduler.schedule(CleanupTask::Compact(
-            CompactTask::CheckAndCompact {
-                cf_names,
-                ranges: ranges_need_check,
-                compact_threshold: CompactThreshold::new(
-                    self.ctx.cfg.region_compact_min_tombstones,
-                    self.ctx.cfg.region_compact_tombstones_percent,
-                    self.ctx.cfg.region_compact_min_redundant_rows,
-                    self.ctx.cfg.region_compact_redundant_rows_percent(),
-                ),
-            },
-        )) {
-            error!(
-                "schedule space check task failed";
-                "store_id" => self.fsm.store.id,
-                "err" => ?e,
-            );
         }
     }
 
