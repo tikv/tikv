@@ -2,7 +2,7 @@
 
 use std::{
     path::Path,
-    sync::{Arc, Mutex, RwLock},
+    sync::{atomic::AtomicU64, Arc, Mutex, RwLock},
     thread,
     time::Duration,
     usize,
@@ -162,6 +162,7 @@ pub struct ServerCluster {
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
     env: Arc<Environment>,
     pub causal_ts_providers: HashMap<u64, Arc<CausalTsProviderImpl>>,
+    pub gc_safe_point: Arc<AtomicU64>,
 }
 
 impl ServerCluster {
@@ -205,6 +206,7 @@ impl ServerCluster {
             env,
             txn_extra_schedulers: HashMap::default(),
             causal_ts_providers: HashMap::default(),
+            gc_safe_point: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -625,6 +627,7 @@ impl ServerCluster {
             causal_ts_provider,
             DiskCheckRunner::dummy(),
             GrpcServiceManager::dummy(),
+            self.gc_safe_point.clone(),
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
