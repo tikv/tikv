@@ -130,18 +130,42 @@ pub struct Config {
     /// will be checked again whether it should be split.
     pub region_split_check_diff: Option<ReadableSize>,
     /// Interval (ms) to check whether start compaction for a region.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been removed. Check and compact is done in GC module."]
     pub region_compact_check_interval: ReadableDuration,
     /// Number of regions for each time checking.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been removed. Check and compact is done in GC module."]
     pub region_compact_check_step: Option<u64>,
     /// Minimum number of tombstones to trigger manual compaction.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been removed. Check and compact is done in GC module."]
     pub region_compact_min_tombstones: u64,
     /// Minimum percentage of tombstones to trigger manual compaction.
     /// Should between 1 and 100.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been removed. Check and compact is done in GC module."]
     pub region_compact_tombstones_percent: u64,
     /// Minimum number of redundant rows to trigger manual compaction.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been removed. Check and compact is done in GC module."]
     pub region_compact_min_redundant_rows: u64,
     /// Minimum percentage of redundant rows to trigger manual compaction.
     /// Should between 1 and 100.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been removed. Check and compact is done in GC module."]
     pub region_compact_redundant_rows_percent: Option<u64>,
     pub pd_heartbeat_tick_interval: ReadableDuration,
     pub pd_store_heartbeat_tick_interval: ReadableDuration,
@@ -456,16 +480,27 @@ pub struct Config {
     /// behavior (`kIfHaveCompactionFilter`) only performs this operation when a
     /// compaction filter is present, balancing performance and
     /// functionality.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been removed. Check then compact is done in GC module."]
     pub check_then_compact_force_bottommost_level: bool,
     /// The maximum number of ranges to compact in a single check.
     /// Set to 0 to disable the limit, meaning all ranges that have redundant
     /// keys more than the threshold will be compacted.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been removed. Check then compact is done in GC module."]
     pub check_then_compact_top_n: u64,
     // TODO: remove this field after we have a better way to propagate the
     // compaction filter enabled flag in GC module to raftstore.
     // If this does not match the compaction filter enabled flag in GC module,
     // the compaction score will be incorrect.
     #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been removed. Check then compact is done in GC module."]
     pub compaction_filter_enabled: bool,
 }
 
