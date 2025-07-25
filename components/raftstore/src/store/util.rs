@@ -1558,6 +1558,9 @@ impl RegionReadProgress {
     }
 
     pub fn update_read_index_safe_ts(&self, start_ts: u64) {
+        if start_ts == u64::MAX {
+            return;
+        }
         let core = self.core.lock().unwrap();
         if core.pause || core.discard {
             return;
