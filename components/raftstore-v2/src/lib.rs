@@ -41,7 +41,6 @@ pub use fsm::StoreMeta;
 pub use operation::{SimpleWriteBinary, SimpleWriteEncoder, StateStorage, write_initial_states};
 pub use raftstore::{Error, Result, store::Config};
 pub use worker::{
-    cleanup::CompactTask,
     pd::{PdReporter, Task as PdTask},
     tablet::Task as TabletTask,
 };

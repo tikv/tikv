@@ -3216,7 +3216,7 @@ where
         }
 
         if !msg.has_region_epoch() {
-            info!(
+            warn!(
                 "missing epoch in raft message, ignore it";
                 "region_id" => region_id,
             );

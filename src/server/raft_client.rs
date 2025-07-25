@@ -593,7 +593,13 @@ where
         }
 
         let (sink_err, recv_err) = (res.0.err(), res.1.err());
-        warn!("connection aborted"; "store_id" => self.store_id, "sink_error" => ?sink_err, "receiver_err" => ?recv_err, "addr" => %self.sender.addr);
+        warn!(
+            "connection aborted";
+            "store_id" => self.store_id,
+            "sink_error" => ?sink_err,
+            "receiver_err" => ?recv_err,
+            "addr" => %self.sender.addr,
+        );
         if let Some(tx) = self.lifetime.take() {
             let should_fallback = [sink_err, recv_err]
                 .iter()

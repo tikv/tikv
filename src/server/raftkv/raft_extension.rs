@@ -96,7 +96,7 @@ where
             .report_snapshot_status(region_id, to_peer_id, status)
         {
             warn!(
-                "report snapshot to peer failes";
+                "report snapshot to peer fails";
                 "err" => ?e,
                 "to_peer_id" => to_peer_id,
                 "status" => ?status,

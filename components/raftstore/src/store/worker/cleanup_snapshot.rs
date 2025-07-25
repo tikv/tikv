@@ -149,7 +149,7 @@ where
                 let msg = StoreMsg::GcSnapshotFinish;
                 if let Err(e) = StoreRouter::send(&self.router, msg) {
                     warn!(
-                        "send StoreMsg::GcSnapshotFinish failed";
+                        "send StoreMsg::GcSnapshotFinish failed, are we shutting down?";
                         "err" => ?e,
                     );
                 }

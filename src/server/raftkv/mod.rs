@@ -246,7 +246,7 @@ pub fn async_write_callback_dropped_err() -> errorpb::Error {
 
 pub fn drop_on_applied_callback() -> WriteResponse {
     let bt = backtrace::Backtrace::new();
-    warn!("async write on_applied callback is dropped"; "backtrace" => ?bt);
+    error!("async write on_applied callback is dropped"; "backtrace" => ?bt);
     let mut write_resp = WriteResponse {
         response: Default::default(),
     };

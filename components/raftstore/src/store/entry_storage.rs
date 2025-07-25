@@ -1187,7 +1187,7 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
                         // FIXME: the assertion below doesn't hold.
                         // assert!(is_valid, "the warmup range should still be valid");
                         if !is_valid {
-                            error!(
+                            warn!(
                                 "unexpected warmup state";
                                 "region_id" => self.region_id,
                                 "peer_id" => self.peer_id,
