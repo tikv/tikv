@@ -12,11 +12,13 @@ use std::{
 
 use api_version::api_v2::TIDB_RANGES_COMPLEMENT;
 use encryption::{DataKeyManager, EncrypterWriter};
-use engine_traits::{Iterator, KvEngine, RefIterable, SstMetaInfo, SstReader, iter_option};
+use engine_traits::{
+    ImportType, Iterator, KvEngine, RefIterable, SstMetaInfo, SstReader, iter_option,
+};
 use file_system::{File, OpenOptions, sync_dir};
 use keys::data_key;
 use kvproto::{import_sstpb::*, kvrpcpb::ApiVersion};
-use tikv_util::time::Instant;
+use tikv_util::{config::ReadableSize, time::Instant};
 use uuid::{Builder as UuidBuilder, Uuid};
 
 use crate::{Error, Result, metrics::*};
@@ -325,7 +327,19 @@ impl<E: KvEngine> ImportDir<E> {
         &self,
         meta: &SstMeta,
         key_manager: Option<Arc<DataKeyManager>>,
+        ingest_size_limit: u64,
     ) -> Result<SstMetaInfo> {
+        let can_import_without_ingest = |size_limit: u64, size: u64, kvs: u64| -> bool {
+            let kvs_limit = std::cmp::max(
+                10000,
+                (ReadableSize(size_limit).as_mb_f64() * 10000.0) as u64,
+            );
+            // If the size and the count of keys of cf are relatively small, it's
+            // recommended to directly write it into kvdb rather than ingest,
+            // for mitigating performance issue when ingesting too many ssts.
+            size <= size_limit && kvs <= kvs_limit
+        };
+
         let path = self.join_for_read(meta)?;
         let path_str = path.save.to_str().unwrap();
         let sst_reader = E::SstReader::open(path_str, key_manager)?;
@@ -335,6 +349,11 @@ impl<E: KvEngine> ImportDir<E> {
             total_kvs: count,
             total_bytes: size,
             meta: meta.to_owned(),
+            import_type: if can_import_without_ingest(ingest_size_limit, size, count) {
+                ImportType::WriteBatch
+            } else {
+                ImportType::Ingest
+            },
         };
         Ok(meta_info)
     }
@@ -401,25 +420,56 @@ impl<E: KvEngine> ImportDir<E> {
             panic!("cannot ingest because of incompatible api version");
         }
 
-        let mut paths = HashMap::new();
-        let mut ingest_bytes = 0;
+        // Maps for recording the paths of ssts.
+        // It consists of two collections, the first one is collection of ssts waited
+        // for ingestion, the second one is the collection waited to be directly
+        // write into kvengine.
+        let mut paths_for_ingest = HashMap::new();
+        let mut paths_for_directly_write = HashMap::new();
+        let mut ingest_bytes = (0, 0);
         for info in metas {
             let path = self.join_for_read(&info.meta)?;
             let cf = info.meta.get_cf_name();
             super::prepare_sst_for_ingestion(&path.save, &path.clone, key_manager.as_deref())?;
-            ingest_bytes += info.total_bytes;
-            paths.entry(cf).or_insert_with(Vec::new).push(path);
+            match info.import_type {
+                ImportType::Ingest => {
+                    ingest_bytes.0 += info.total_bytes;
+                    paths_for_ingest
+                        .entry(cf)
+                        .or_insert_with(Vec::new)
+                        .push(path)
+                }
+                ImportType::WriteBatch => {
+                    ingest_bytes.1 += info.total_bytes;
+                    paths_for_directly_write
+                        .entry(cf)
+                        .or_insert_with(Vec::new)
+                        .push(path)
+                }
+            }
         }
 
-        for (cf, cf_paths) in paths {
+        let ingest_count = (paths_for_ingest.len(), paths_for_directly_write.len());
+        for (cf, cf_paths) in paths_for_ingest {
             let files: Vec<&str> = cf_paths.iter().map(|p| p.clone.to_str().unwrap()).collect();
             // TiDB guarantees that region will not receive writes during ingestion.
             // Set `force_allow_write` to true to minimize the impact on foreground
             // performance. Refer to https://github.com/tikv/tikv/issues/18081.
             engine.ingest_external_file_cf(cf, &files, None, true /* force_allow_write */)?;
         }
-        INPORTER_INGEST_COUNT.observe(metas.len() as _);
-        IMPORTER_INGEST_BYTES.observe(ingest_bytes as _);
+        for (cf, cf_paths) in paths_for_directly_write {
+            let files: Vec<&str> = cf_paths.iter().map(|p| p.clone.to_str().unwrap()).collect();
+            engine.import_external_file_cf_without_ingest(cf, &files, key_manager.clone())?;
+        }
+
+        IMPORTER_INGEST_COUNT.ingest.observe(ingest_count.0 as _);
+        IMPORTER_INGEST_BYTES.ingest.observe(ingest_bytes.0 as _);
+        IMPORTER_INGEST_COUNT
+            .directly_write
+            .observe(ingest_count.1 as _);
+        IMPORTER_INGEST_BYTES
+            .directly_write
+            .observe(ingest_bytes.1 as _);
         IMPORTER_INGEST_DURATION
             .with_label_values(&["ingest"])
             .observe(start.saturating_elapsed().as_secs_f64());
