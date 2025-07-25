@@ -625,7 +625,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
             // Only consider deletes (tombstones)
             let ratio = num_tombstones as f64 / num_total_entries as f64;
             if num_tombstones < config.auto_compaction.tombstones_num_threshold
-                && ratio < config.auto_compaction.tombstones_percent_threshold as f64 / 100.0
+                || ratio < config.auto_compaction.tombstones_percent_threshold as f64 / 100.0
             {
                 return 0.0;
             }
@@ -636,7 +636,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
         // just add deletes to redundant keys for scoring.
         let ratio = (num_tombstones + num_discardable) as f64 / num_total_entries as f64;
         if num_discardable < config.auto_compaction.redundant_rows_threshold
-            && ratio < config.auto_compaction.redundant_rows_percent_threshold as f64 / 100.0
+            || ratio < config.auto_compaction.redundant_rows_percent_threshold as f64 / 100.0
         {
             return 0.0;
         }
