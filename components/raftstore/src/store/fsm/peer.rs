@@ -58,7 +58,7 @@ use tikv_util::{
     mpsc::{self, LooseBoundedSender, Receiver},
     slow_log,
     store::{find_peer, find_peer_by_id, is_learner, region_on_same_stores},
-    sys::disk::DiskUsage,
+    sys::{disk::DiskUsage, memory_usage_reaches_near_high_water},
     time::{Instant as TiInstant, SlowTimer, monotonic_raw_now},
     trace, warn,
     worker::{ScheduleError, Scheduler},
@@ -6117,12 +6117,39 @@ where
             }
         }
 
-        let mut compact_idx = if force_compact && replicated_idx > first_idx {
-            replicated_idx
-        } else if (applied_idx > first_idx
-            && applied_idx - first_idx >= self.ctx.cfg.raft_log_gc_count_limit())
-            || (self.fsm.peer.raft_log_size_hint >= self.ctx.cfg.raft_log_gc_size_limit().0)
+        let mut usage = 0;
+        let is_near = memory_usage_reaches_near_high_water(&mut usage);
+        let applied_count = applied_idx - first_idx;
+
+        let mut compact_idx = if force_compact && replicated_idx >= first_idx {
+            if applied_count > self.ctx.cfg.raft_log_gc_count_limit() / 3 {
+                self.ctx
+                    .raft_metrics
+                    .raft_log_gc
+                    .raft_engine_memory_limit
+                    .inc();
+                std::cmp::max(first_idx + (last_idx - first_idx) / 2, replicated_idx)
+            } else {
+                replicated_idx
+            }
+        } else if is_near && applied_count > self.ctx.cfg.raft_log_gc_count_limit() / 3 {
+            self.ctx.raft_metrics.raft_log_gc.memory_high_water.inc();
+            std::cmp::max(first_idx + (last_idx - first_idx) / 2, replicated_idx)
+        } else if applied_count >= self.ctx.cfg.raft_log_gc_count_limit() {
+            self.ctx
+                .raft_metrics
+                .raft_log_gc
+                .log_force_gc_count_limit
+                .inc();
+            std::cmp::max(first_idx + (last_idx - first_idx) / 2, replicated_idx)
+        } else if applied_count > 0
+            && self.fsm.peer.raft_log_size_hint >= self.ctx.cfg.raft_log_gc_size_limit().0
         {
+            self.ctx
+                .raft_metrics
+                .raft_log_gc
+                .log_force_gc_size_limit
+                .inc();
             std::cmp::max(first_idx + (last_idx - first_idx) / 2, replicated_idx)
         } else if replicated_idx < first_idx || last_idx - first_idx < 3 {
             // In the current implementation one compaction can't delete all stale Raft
@@ -6147,6 +6174,7 @@ where
             self.register_raft_gc_log_tick();
             return;
         } else {
+            self.ctx.raft_metrics.raft_log_gc.max_ticks.inc();
             replicated_idx
         };
         // Avoid compacting unpersisted raft logs when persist is far behind apply.

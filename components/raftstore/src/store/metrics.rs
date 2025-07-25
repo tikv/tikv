@@ -227,12 +227,22 @@ make_static_metric! {
         raft_engine_purge,
         peer_msg,
         store_msg,
+        raft_engine_force_gc,
     }
 
     pub label_enum RaftLogGcSkippedReason {
         reserve_log,
         compact_idx_too_small,
         threshold_limit,
+        high_log_lag_tick,
+    }
+
+    pub label_enum RaftLogGcReason {
+        max_ticks,
+        memory_high_water,
+        raft_engine_memory_limit,
+        log_force_gc_count_limit,
+        log_force_gc_size_limit,
     }
 
     pub label_enum LoadBaseSplitEventType {
@@ -328,6 +338,10 @@ make_static_metric! {
 
     pub struct RaftLogGcSkippedCounterVec: LocalIntCounter {
         "reason" => RaftLogGcSkippedReason,
+    }
+
+    pub struct RaftLogGcCounterVec: LocalIntCounter {
+        "reason" => RaftLogGcReason,
     }
 
     pub struct LoadBaseSplitEventCounterVec: IntCounter {
@@ -957,6 +971,13 @@ lazy_static! {
     pub static ref RAFT_LOG_GC_SKIPPED_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_raftstore_raft_log_gc_skipped",
         "Total number of skipped raft log gc.",
+        &["reason"]
+    )
+    .unwrap();
+
+    pub static ref RAFT_LOG_GC_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_raftstore_raft_log_gc",
+        "Total number of ok raft log gc.",
         &["reason"]
     )
     .unwrap();
