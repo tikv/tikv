@@ -419,11 +419,7 @@ impl Delegate {
         false
     }
 
-    fn finish_prepare_lock_tracker(
-        &mut self,
-        region: Region,
-        mut locks: BTreeMap<Key, MiniLock>,
-    ) -> Result<()> {
+    fn finish_prepare_lock_tracker(&mut self, region: Region, mut locks: BTreeMap<Key, MiniLock>) {
         let delta_locks = match std::mem::replace(&mut self.lock_tracker, LockTracker::Pending) {
             LockTracker::Preparing(locks) => locks,
             _ => unreachable!(),
@@ -462,7 +458,6 @@ impl Delegate {
         CDC_PENDING_BYTES_GAUGE.add(alloc_bytes as _);
 
         self.lock_tracker = LockTracker::Prepared { region, locks };
-        Ok(())
     }
 
     pub(crate) fn finish_scan_locks(
@@ -474,8 +469,8 @@ impl Delegate {
             Error::MemoryQuotaExceeded(tikv_util::memory::MemoryQuotaExceeded)
         ));
 
+        self.finish_prepare_lock_tracker(region, locks);
         info!("cdc region is ready"; "region_id" => self.region_id);
-        self.finish_prepare_lock_tracker(region, locks)?;
 
         let region = match &self.lock_tracker {
             LockTracker::Prepared { region, .. } => region,
@@ -1923,9 +1918,7 @@ mod tests {
         scaned_locks.insert(Key::from_raw(b"key1"), MiniLock::from_ts(100));
         scaned_locks.insert(Key::from_raw(b"key2"), MiniLock::from_ts(100));
         scaned_locks.insert(Key::from_raw(b"key3"), MiniLock::from_ts(100));
-        delegate
-            .finish_prepare_lock_tracker(Default::default(), scaned_locks)
-            .unwrap();
+        delegate.finish_prepare_lock_tracker(Default::default(), scaned_locks);
         assert_eq!(quota.in_use(), 34);
 
         delegate
@@ -1960,8 +1953,6 @@ mod tests {
             .unwrap();
         let mut scaned_locks = BTreeMap::default();
         scaned_locks.insert(Key::from_raw(b"key2"), MiniLock::from_ts(100));
-        delegate
-            .finish_prepare_lock_tracker(Default::default(), scaned_locks)
-            .unwrap();
+        delegate.finish_prepare_lock_tracker(Default::default(), scaned_locks);
     }
 }
