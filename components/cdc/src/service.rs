@@ -11,7 +11,7 @@ use std::{
 
 use collections::{HashMap, HashMapEntry};
 use crossbeam::atomic::AtomicCell;
-use futures::stream::TryStreamExt;
+use futures::{sink::SinkExt, stream::TryStreamExt};
 use grpcio::{DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode};
 use kvproto::{
     cdcpb::{
@@ -413,8 +413,8 @@ impl Service {
         let (event_sink, mut event_drain) =
             channel(conn_id, CDC_CHANNLE_CAPACITY, self.memory_quota.clone());
         let conn = Conn::new(conn_id, event_sink, ctx.peer());
-        let mut explicit_features = vec![];
 
+        let mut explicit_features = vec![];
         if event_feed_v2 {
             let headers = match Self::parse_headers(&ctx) {
                 Ok(headers) => headers,
@@ -444,7 +444,6 @@ impl Service {
             });
             return;
         }
-
         info!("cdc connection created"; "features" => ?explicit_features, "downstream" => ctx.peer(), "conn_id" => ?conn_id);
 
         let peer = ctx.peer();
@@ -483,8 +482,13 @@ impl Service {
             sleep_before_drain_change_event().await;
             if let Err(e) = event_drain.forward(&mut sink).await {
                 warn!("cdc send failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
+                let status = RpcStatus::with_message(RpcStatusCode::UNKNOWN,  format!("{:?}", e));
+                sink.fail(status).await.unwrap_or_else(|e| {
+                    error!("cdc failed to send error"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
+                });
             } else {
                 info!("cdc send closed"; "downstream" => peer, "conn_id" => ?conn_id);
+                let _ = sink.close().await;
             }
         });
     }
