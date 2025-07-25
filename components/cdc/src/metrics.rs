@@ -108,12 +108,6 @@ lazy_static! {
         "Total number of CDC connections"
     ).unwrap();
 
-    pub static ref CDC_PENDING_EVENT_COUNT: IntGaugeVec = register_int_gauge_vec!(
-        "tikv_cdc_pending_event_count",
-        "Total number of pending CDC events",
-        &["type"]
-    ).unwrap();
-
     pub static ref CDC_DROP_TXN_EXTRA_TASKS_COUNT:IntCounter = register_int_counter!(
         "tikv_cdc_drop_txn_extra_task_count",
         "Total count of dropped txn extra tasks"

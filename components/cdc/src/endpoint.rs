@@ -1177,7 +1177,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     Ok(_) | Err(ScheduleError::Stopped(_)) => (),
                     // Must schedule `MinTS` event otherwise resolved ts can not
                     // advance normally.
-                    Err(err) => panic!("cdc failed to schedule min ts event, error: {:?}", err),
+                    Err(e) => panic!("cdc failed to schedule min ts event"; "error" => ?e),
                 }
             }
         };
