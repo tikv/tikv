@@ -23,10 +23,7 @@ pub use self::{
     cleanup::{Runner as CleanupRunner, Task as CleanupTask},
     cleanup_snapshot::{Runner as GcSnapshotRunner, Task as GcSnapshotTask},
     cleanup_sst::{Runner as CleanupSstRunner, Task as CleanupSstTask},
-    compact::{
-        CompactThreshold, FullCompactController, Runner as CompactRunner, Task as CompactTask,
-        need_compact,
-    },
+    compact::{FullCompactController, Runner as CompactRunner, Task as CompactTask},
     consistency_check::{Runner as ConsistencyCheckRunner, Task as ConsistencyCheckTask},
     disk_check::{Runner as DiskCheckRunner, Task as DiskCheckTask},
     pd::{

@@ -513,7 +513,6 @@ pub fn disable_all_auto_ticks(cfg: &mut Config) {
     cfg.raft_log_compact_sync_interval = ReadableDuration::ZERO;
     cfg.raft_engine_purge_interval = ReadableDuration::ZERO;
     cfg.split_region_check_tick_interval = ReadableDuration::ZERO;
-    cfg.region_compact_check_interval = ReadableDuration::ZERO;
     cfg.pd_heartbeat_tick_interval = ReadableDuration::ZERO;
     cfg.pd_store_heartbeat_tick_interval = ReadableDuration::ZERO;
     cfg.pd_report_min_resolved_ts_interval = ReadableDuration::ZERO;

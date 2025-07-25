@@ -169,6 +169,9 @@ where
     /// compact means less sync-log in apply threads. Stale logs will be
     /// deleted if the skip time reaches this `skip_gc_raft_log_ticks`.
     skip_gc_raft_log_ticks: usize,
+
+    raft_engine_memory_high_water_duration: Duration,
+
     reactivate_memory_lock_ticks: usize,
 
     /// Batch raft command which has the same header into an entry
@@ -300,6 +303,7 @@ where
                 receiver: rx,
                 skip_split_count: 0,
                 skip_gc_raft_log_ticks: 0,
+                raft_engine_memory_high_water_duration: Duration::from_secs(0),
                 reactivate_memory_lock_ticks: 0,
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(),
                 trace: PeerMemoryTrace::default(),
@@ -362,6 +366,7 @@ where
                 receiver: rx,
                 skip_split_count: 0,
                 skip_gc_raft_log_ticks: 0,
+                raft_engine_memory_high_water_duration: Duration::from_secs(0),
                 reactivate_memory_lock_ticks: 0,
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(),
                 trace: PeerMemoryTrace::default(),
@@ -6072,8 +6077,12 @@ where
 
         let mut voter_replicated_idx = last_idx;
         let (mut replicated_idx, mut alive_cache_idx) = (last_idx, last_idx);
+        // 收集所有 voter 副本的 matched 索引，用于计算 quorum apply_index
+        let mut voter_matched_indices = Vec::new();
+        voter_matched_indices.push(last_idx);
         for (peer_id, p) in self.fsm.peer.raft_group.raft.prs().iter() {
             let peer = find_peer_by_id(self.region(), *peer_id).unwrap();
+            voter_matched_indices.push(p.matched);
             if !is_learner(peer) && voter_replicated_idx > p.matched {
                 voter_replicated_idx = p.matched;
             }
@@ -6091,8 +6100,15 @@ where
                 }
             }
         }
-
+        let quorum_replicated_idx = if voter_matched_indices.len() > 0 {
+            voter_matched_indices.sort_unstable();
+            let quorum_index = (voter_matched_indices.len() + 1) / 2 - 1;
+            voter_matched_indices[quorum_index]
+        } else {
+            applied_idx
+        };
         // When an election happened or a new peer is added, replicated_idx can be 0.
+        let log_lag = (last_idx - replicated_idx) as f64;
         if replicated_idx > 0 {
             assert!(
                 last_idx >= replicated_idx,
@@ -6100,7 +6116,7 @@ where
                 last_idx,
                 replicated_idx
             );
-            REGION_MAX_LOG_LAG.observe((last_idx - replicated_idx) as f64);
+            REGION_MAX_LOG_LAG.observe(log_lag);
         }
 
         // leader may call `get_term()` on the latest replicated index, so compact
@@ -6121,27 +6137,46 @@ where
         let is_near = memory_usage_reaches_near_high_water(&mut usage);
         let applied_count = applied_idx - first_idx;
 
-        let mut compact_idx = if force_compact && replicated_idx >= first_idx {
-            if applied_count > self.ctx.cfg.raft_log_gc_count_limit() / 3 {
+        if applied_count > self.ctx.cfg.raft_log_gc_count_limit() / 3 {
+            self.fsm.raft_engine_memory_high_water_duration +=
+                self.ctx.cfg.raft_log_gc_tick_interval.0;
+        } else {
+            self.fsm.raft_engine_memory_high_water_duration = Duration::from_secs(0);
+        }
+        let ratio = if log_lag > 0.0 {
+            (last_idx - first_idx) as f64 / log_lag
+        } else {
+            1.0
+        };
+        let raft_engine_memory_high_water_limit_duration = Duration::from_secs_f64(60.0 * ratio);
+
+        let should_force_compact = self.fsm.raft_engine_memory_high_water_duration
+            >= raft_engine_memory_high_water_limit_duration;
+
+        let mut compact_idx = if force_compact {
+            if should_force_compact {
                 self.ctx
                     .raft_metrics
                     .raft_log_gc
                     .raft_engine_memory_limit
                     .inc();
-                std::cmp::max(first_idx + (last_idx - first_idx) / 2, replicated_idx)
+                self.fsm.raft_engine_memory_high_water_duration = Duration::from_secs(0);
+                std::cmp::min(applied_idx, quorum_replicated_idx)
             } else {
-                replicated_idx
+                std::cmp::max(replicated_idx, first_idx)
             }
         } else if is_near && applied_count > self.ctx.cfg.raft_log_gc_count_limit() / 3 {
             self.ctx.raft_metrics.raft_log_gc.memory_high_water.inc();
-            std::cmp::max(first_idx + (last_idx - first_idx) / 2, replicated_idx)
+            self.fsm.raft_engine_memory_high_water_duration = Duration::from_secs(0);
+            std::cmp::min(applied_idx, quorum_replicated_idx)
         } else if applied_count >= self.ctx.cfg.raft_log_gc_count_limit() {
             self.ctx
                 .raft_metrics
                 .raft_log_gc
                 .log_force_gc_count_limit
                 .inc();
-            std::cmp::max(first_idx + (last_idx - first_idx) / 2, replicated_idx)
+            self.fsm.raft_engine_memory_high_water_duration = Duration::from_secs(0);
+            std::cmp::min(applied_idx, quorum_replicated_idx)
         } else if applied_count > 0
             && self.fsm.peer.raft_log_size_hint >= self.ctx.cfg.raft_log_gc_size_limit().0
         {
@@ -6150,7 +6185,8 @@ where
                 .raft_log_gc
                 .log_force_gc_size_limit
                 .inc();
-            std::cmp::max(first_idx + (last_idx - first_idx) / 2, replicated_idx)
+            self.fsm.raft_engine_memory_high_water_duration = Duration::from_secs(0);
+            std::cmp::min(applied_idx, quorum_replicated_idx)
         } else if replicated_idx < first_idx || last_idx - first_idx < 3 {
             // In the current implementation one compaction can't delete all stale Raft
             // logs. There will be at least 3 entries left after one compaction:
