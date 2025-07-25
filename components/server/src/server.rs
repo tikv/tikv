@@ -1052,7 +1052,12 @@ where
             .register_consistency_check_observer(100, observer);
 
         let inspector_runner =
-            InspectorRunner::new(self.core.store_path.clone(), self.pd_client.clone());
+            InspectorRunner::new(
+                self.core.store_path.clone(),
+                self.pd_client.clone(),
+                self.env.clone(),
+                self.security_mgr.clone(),
+            );
 
         raft_server
             .start(

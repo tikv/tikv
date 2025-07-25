@@ -5,24 +5,34 @@ use std::{
     fmt::{self, Display, Formatter},
     io::Write,
     path::PathBuf,
+    hash::BuildHasherDefault,
     sync::Arc,
     time::Duration,
 };
+use collections::HashMap;
+
+use fxhash::FxHasher;
+use pd_client::{Config as PdConfig, PdClient, RpcClient};
+use security::SecurityConfig;
 
 use crossbeam::channel::{Receiver, Sender, TrySendError, bounded};
-use grpcio::{Error, RpcStatusCode};
-use grpcio_health::{ServingStatus::Serving, proto::Health, proto::HealthClient};
+use grpcio::{Error, RpcStatusCode, Environment, ChannelBuilder};
+use grpcio_health::{proto::{HealthCheckRequest, HealthClient}, ServingStatus::Serving};
 use health_controller::types::LatencyInspector;
 use tikv_util::{
     time::Instant,
     warn,
     worker::{Runnable, Worker},
 };
+use std::sync::Mutex;
 
-fn is_network_error(err: &pd_client::Error) -> bool {
+use security::SecurityManager;
+
+
+fn is_network_error(err: &grpcio::Error) -> bool {
     warn!("[test] checking network error"; "err" => ?err);
     match err {
-        pd_client::Error::Grpc(Error::RpcFailure(status)) => {
+        Error::RpcFailure(status) => {
             status.code() == RpcStatusCode::DEADLINE_EXCEEDED
         }
         // leader restart will return unavailable, message: "failed to connect to all addresses"
@@ -62,7 +72,11 @@ pub struct Runner {
     network_runner: InnerRunner,
 
     target: PathBuf,
-    health_client: HealthClient,
+    pd_client: Arc<dyn PdClient>,
+    // store_address -> client
+    health_clients: Arc<Mutex<HashMap<String, HealthClient>>>,
+    env: Arc<Environment>,
+    security_mgr: Arc<SecurityManager>,
 }
 
 #[derive(Clone)]
@@ -99,39 +113,114 @@ impl Runner {
     const NETWORK_NOT_TIMEOUT: Duration = Duration::from_millis(500);
 
     #[inline]
-    fn build(target: PathBuf, health_client: HealthClient) -> Self {
-        // The disk check mechanism only cares about the latency of the most
-        // recent request; older requests become stale and irrelevant. To avoid
-        // unnecessary accumulation of multiple requests, we set a small
-        // `capacity` for the disk check worker.
-        let disk_runner = InnerRunner::build(3);
-        let network_runner = InnerRunner::build(100);
-        Self {
-            disk_runner,
-            network_runner,
+    // fn build(target: PathBuf, pd_client: Arc<RpcClient, Global>) -> Self {
+    //     // The disk check mechanism only cares about the latency of the most
+    //     // recent request; older requests become stale and irrelevant. To avoid
+    //     // unnecessary accumulation of multiple requests, we set a small
+    //     // `capacity` for the disk check worker.
+    //     let disk_runner = InnerRunner::build(3);
+    //     let network_runner = InnerRunner::build(100);
+    //     Self {
+    //         disk_runner,
+    //         network_runner,
+    //         target,
+    //         pd_client,
+    //         health_clients: None,
+    //     }
+    // }
+    fn build(
+        target: PathBuf,
+        pd_client: Arc<dyn PdClient>,
+        env: Arc<Environment>,
+        security_mgr: Arc<SecurityManager>,
+    ) -> Self {
+        let runner = Runner {
+            disk_runner: InnerRunner::build(3),
+            network_runner: InnerRunner::build(100),
             target,
-            health_client,
-        }
+            pd_client: pd_client.clone(),
+            health_clients: Arc::new(Mutex::new(HashMap::default())),
+            env: env.clone(),
+            security_mgr: security_mgr.clone(),
+        };
+    
+        let runner_clone = runner.clone();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            rt.block_on(async move {
+                loop {
+                    runner_clone.update_health_clients();
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                }
+            });
+        });
+    
+        runner
     }
 
     #[inline]
-    pub fn new(inspect_dir: PathBuf, health_client: HealthClient) -> Self {
+    pub fn new(
+        inspect_dir: PathBuf,
+        pd_client: Arc<dyn PdClient>,
+        env: Arc<Environment>,
+        security_mgr: Arc<SecurityManager>,
+    ) -> Self {
         Self::build(
             inspect_dir.join(Self::DISK_IO_LATENCY_INSPECT_FILENAME),
-            health_client,
+            pd_client,
+            env,
+            security_mgr,
         )
+    }
+
+    fn update_health_clients(&self) {
+        let stores = match self.pd_client.get_all_stores(true) {
+            Ok(stores) => stores,
+            Err(e) => {
+                warn!("failed to get stores from PD"; "err" => ?e);
+                return;
+            }
+        };
+
+        let mut clients = self.health_clients.lock().unwrap();
+        let existing_addrs: std::collections::HashSet<_> = clients.keys().cloned().collect();
+
+        for store in stores {
+            let addr = store.get_address().to_string();
+            if !existing_addrs.contains(&addr) {
+                let channel = self.security_mgr.connect(
+                    ChannelBuilder::new(self.env.clone()),
+                    &addr,
+                );
+                let client = HealthClient::new(channel);
+                clients.insert(addr, client);
+            }
+        }
     }
 
     #[inline]
     /// Only for test.
     /// Generate a dummy Runner.
     pub fn dummy() -> Self {
-        let channel = grpcio::ChannelBuilder::new(
-            Arc::new(grpcio::EnvBuilder::new().build()))
-            .connect("127.0.0.1:0");
+        // 创建 PD client，连接默认 TiDB 的 PD 地址
+        let pd_endpoints = vec!["127.0.0.1:2379".to_owned()];
+        let cfg = PdConfig::new(pd_endpoints);
+        cfg.validate().unwrap();
+        let env = Arc::new(Environment::new(1));
+        let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
+
+        let pd_client = Arc::new(
+            RpcClient::new(&cfg, None, security_mgr.clone())
+                .unwrap(),
+        );
         Self::build(
             PathBuf::from("./").join(Self::DISK_IO_LATENCY_INSPECT_FILENAME),
-            HealthClient::new(channel),
+            pd_client,
+            env,
+            security_mgr,
         )
     }
 
@@ -159,32 +248,26 @@ impl Runner {
     }
 
     fn inspect_network(&self, start: Instant) -> Option<Duration> {
-        // match self.health_client.check() {
-        //     Ok(resp) => {
-        //         if resp.status != Serving {
-        //             warn!("pd server is not serving."; "status" => ?resp.status);
-        //             // Non-network problem, we do not consider it as a timeout
-        //             return Some(cmp::max(
-        //                 start.saturating_elapsed(),
-        //                 Self::NETWORK_NOT_TIMEOUT,
-        //             ));
-        //         }
-        //     }
-        //     Err(e) => {
-        //         if is_network_error(&e) {
-        //             warn!("network error when checking pd health"; "err" => ?e);
-        //             return Some(Self::NETWORK_TIMEOUT);
-        //         }
-        //         warn!("unexpected error when checking pd health"; "err" => ?e);
-        //         // Non-network problem, we do not consider it as a timeout
-        //         return Some(cmp::max(
-        //             start.saturating_elapsed(),
-        //             Self::NETWORK_NOT_TIMEOUT,
-        //         ));
-        //     }
-        // };
-        // Some(start.saturating_elapsed())
-        Some(Duration::from_secs(1))
+        let clients = self.health_clients.lock().unwrap();
+        for (addr, client) in clients.iter() {
+            match client.check(&HealthCheckRequest::new()) {
+                Ok(resp) => {
+                    if resp.status != Serving {
+                        warn!("store is not serving"; "addr" => addr);
+                        return Some(Self::NETWORK_NOT_TIMEOUT);
+                    }
+                }
+                Err(e) => {
+                    if is_network_error(&e) {
+                        warn!("network error from"; "addr" => addr);
+                        return Some(Self::NETWORK_TIMEOUT);
+                    }
+                    warn!("non-network error from"; "addr" => addr, "err" => ?e);
+                    return Some(Self::NETWORK_NOT_TIMEOUT);
+                }
+            }
+        }
+        Some(start.saturating_elapsed())
     }
 
     fn execute_disk(&self) {
@@ -335,5 +418,38 @@ mod tests {
                 rx.recv_timeout(Duration::from_secs(1)).unwrap_err();
             }
         }
+    }
+
+    use std::time::Duration;
+
+    use tikv_util::time::Instant;
+
+    use super::Runner;
+
+    // #[tokio::test(flavor = "multi_thread")]
+    #[test]
+    fn test_update_health_clients_with_tidb_cluster() {
+        let runner = Runner::dummy();
+
+        runner.update_health_clients();
+
+        {
+            let clients = runner.health_clients.lock().unwrap();
+            assert!(
+                !clients.is_empty(),
+                "No health clients found, maybe TiKV not registered in PD?"
+            );
+            for (addr, _) in clients.iter() {
+                println!("Registered health client for store: {}", addr);
+            }
+        }
+
+        let start = Instant::now();
+        let dur = runner.inspect_network(start);
+        assert!(
+            dur.is_some(),
+            "Network inspection should return latency duration"
+        );
+        println!("Measured network latency: {:?}", dur.unwrap());
     }
 }
