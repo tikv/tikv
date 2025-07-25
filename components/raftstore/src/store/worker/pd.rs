@@ -1592,7 +1592,7 @@ where
                         .inc();
                 }
                 Err(e) => {
-                    error!("get region failed"; "err" => ?e);
+                    warn!("get region failed"; "err" => ?e);
                 }
             }
         };

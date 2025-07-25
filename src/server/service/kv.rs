@@ -819,7 +819,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             let status = match res.await {
                 Err(e) => {
                     let msg = format!("{:?}", e);
-                    error!("dispatch raft msg from gRPC to raftstore fail"; "err" => %msg);
+                    warn!("dispatch raft msg from gRPC to raftstore fail"; "err" => %msg);
                     RpcStatus::with_message(RpcStatusCode::UNKNOWN, msg)
                 }
                 Ok(_) => RpcStatus::new(RpcStatusCode::UNKNOWN),
@@ -884,14 +884,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                 Err(e) => {
                     fail_point!("on_batch_raft_stream_drop_by_err");
                     let msg = format!("{:?}", e);
-                    error!("dispatch raft msg from gRPC to raftstore fail"; "err" => %msg);
+                    warn!("dispatch raft msg from gRPC to raftstore fail"; "err" => %msg);
                     RpcStatus::with_message(RpcStatusCode::UNKNOWN, msg)
                 }
                 Ok(_) => RpcStatus::new(RpcStatusCode::UNKNOWN),
             };
             let _ = sink
                 .fail(status)
-                .map_err(|e| error!("KvService::batch_raft send response fail"; "err" => ?e))
+                .map_err(|e| warn!("KvService::batch_raft send response fail"; "err" => ?e))
                 .await;
         });
     }
@@ -1089,7 +1089,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             }
             future::ok(())
         });
-        ctx.spawn(request_handler.unwrap_or_else(|e| error!("batch_commands error"; "err" => %e)));
+        ctx.spawn(request_handler.unwrap_or_else(|e| warn!("batch_commands error"; "err" => %e)));
 
         let grpc_thread_load = Arc::clone(&self.grpc_thread_load);
         let response_retriever = BatchReceiver::new(
@@ -1320,13 +1320,13 @@ fn response_batch_commands_request<F, T>(
             Ok(resp) => {
                 let task = MeasuredSingleResponse::new(id, resp, measure, None);
                 if let Err(e) = tx.send_with(task, WakePolicy::Immediately) {
-                    error!("KvService response batch commands fail"; "err" => ?e);
+                    warn!("KvService response batch commands fail"; "err" => ?e);
                 }
             }
             Err(server_err @ Error::ClusterIDMisMatch { .. }) => {
                 let task = MeasuredSingleResponse::new(id, T::default(), measure, Some(server_err));
                 if let Err(e) = tx.send_with(task, WakePolicy::Immediately) {
-                    error!("KvService response batch commands fail"; "err" => ?e);
+                    warn!("KvService response batch commands fail"; "err" => ?e);
                 }
             }
             _ => {}
