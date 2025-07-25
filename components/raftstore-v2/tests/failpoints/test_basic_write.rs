@@ -3,7 +3,8 @@
 use std::{assert_matches::assert_matches, time::Duration};
 
 use engine_traits::{
-    CompactExt, DbOptionsExt, MiscExt, Peekable, RaftEngineReadOnly, CF_DEFAULT, CF_RAFT, CF_WRITE,
+    CompactExt, DbOptionsExt, ManualCompactionOptions, MiscExt, Peekable, RaftEngineReadOnly,
+    CF_DEFAULT, CF_RAFT, CF_WRITE,
 };
 use futures::executor::block_on;
 use raftstore_v2::{router::PeerMsg, SimpleWriteEncoder};
@@ -200,7 +201,12 @@ fn test_delete_range_does_not_block_flushed_index() {
     cached
         .latest()
         .unwrap()
-        .compact_range_cf(CF_DEFAULT, Some(b"A"), Some(b"{"), false, 1)
+        .compact_range_cf(
+            CF_DEFAULT,
+            Some(b"A"),
+            Some(b"{"),
+            ManualCompactionOptions::new(false, 1, false),
+        )
         .unwrap();
     // delete range by files.
     let header = Box::new(router.new_request_for(2).take_header());
