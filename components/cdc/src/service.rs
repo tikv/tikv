@@ -1,12 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
-    thread,
-    time::Duration,
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
 };
 
 use collections::{HashMap, HashMapEntry};
@@ -481,7 +477,7 @@ impl Service {
             #[cfg(feature = "failpoints")]
             sleep_before_drain_change_event().await;
             if let Err(e) = event_drain.forward(&mut sink).await {
-                warn!("cdc send failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
+                warn!("cdc send failed"; "error" => ?e, "downstream" => peer.clone(), "conn_id" => ?conn_id);
                 let status = RpcStatus::with_message(RpcStatusCode::UNKNOWN,  format!("{:?}", e));
                 sink.fail(status).await.unwrap_or_else(|e| {
                     error!("cdc failed to send error"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
