@@ -933,7 +933,7 @@ fn test_read_index_cache() {
 }
 
 #[test_case(test_raftstore::new_server_cluster)]
-fn test_read_index_cache_in_destroied_peer() {
+fn test_read_index_cache_in_destroyed_peer() {
     let cluster = Arc::new(Mutex::new(new_cluster(0, 4)));
     let pd_client = cluster.lock().unwrap().pd_client.clone();
 
