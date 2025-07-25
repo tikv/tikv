@@ -51,6 +51,7 @@ pub mod macros;
 pub mod callback;
 pub mod deadline;
 pub mod keybuilder;
+pub mod linearizability_track;
 pub mod logger;
 pub mod lru;
 pub mod math;
