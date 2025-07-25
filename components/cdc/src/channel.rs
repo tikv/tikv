@@ -393,7 +393,7 @@ impl<'a> Drain {
         });
 
         stream::select(scaned, observed).map(|(start, mut event, size)| {
-            CDC_EVENTS_PENDING_DURATION.observe(start.saturating_elapsed_secs() * 1000.0);
+            CDC_EVENTS_PENDING_DURATION.observe(start.saturating_elapsed_secs());
             if let CdcEvent::Barrier(ref mut barrier) = event {
                 if let Some(barrier) = barrier.take() {
                     // Unset barrier when it is received.
