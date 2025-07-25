@@ -130,18 +130,42 @@ pub struct Config {
     /// will be checked again whether it should be split.
     pub region_split_check_diff: Option<ReadableSize>,
     /// Interval (ms) to check whether start compaction for a region.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been removed. Check and compact is done in GC module."]
     pub region_compact_check_interval: ReadableDuration,
     /// Number of regions for each time checking.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been removed. Check and compact is done in GC module."]
     pub region_compact_check_step: Option<u64>,
     /// Minimum number of tombstones to trigger manual compaction.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been removed. Check and compact is done in GC module."]
     pub region_compact_min_tombstones: u64,
     /// Minimum percentage of tombstones to trigger manual compaction.
     /// Should between 1 and 100.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been removed. Check and compact is done in GC module."]
     pub region_compact_tombstones_percent: u64,
     /// Minimum number of redundant rows to trigger manual compaction.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been removed. Check and compact is done in GC module."]
     pub region_compact_min_redundant_rows: u64,
     /// Minimum percentage of redundant rows to trigger manual compaction.
     /// Should between 1 and 100.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been removed. Check and compact is done in GC module."]
     pub region_compact_redundant_rows_percent: Option<u64>,
     pub pd_heartbeat_tick_interval: ReadableDuration,
     pub pd_store_heartbeat_tick_interval: ReadableDuration,
@@ -456,16 +480,27 @@ pub struct Config {
     /// behavior (`kIfHaveCompactionFilter`) only performs this operation when a
     /// compaction filter is present, balancing performance and
     /// functionality.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been removed. Check then compact is done in GC module."]
     pub check_then_compact_force_bottommost_level: bool,
     /// The maximum number of ranges to compact in a single check.
     /// Set to 0 to disable the limit, meaning all ranges that have redundant
     /// keys more than the threshold will be compacted.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been removed. Check then compact is done in GC module."]
     pub check_then_compact_top_n: u64,
     // TODO: remove this field after we have a better way to propagate the
     // compaction filter enabled flag in GC module to raftstore.
     // If this does not match the compaction filter enabled flag in GC module,
     // the compaction score will be incorrect.
     #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been removed. Check then compact is done in GC module."]
     pub compaction_filter_enabled: bool,
 }
 
@@ -500,7 +535,7 @@ impl Default for Config {
             split_region_check_tick_interval: ReadableDuration::secs(10),
             region_split_check_diff: None,
             region_compact_check_interval: ReadableDuration::minutes(5),
-            region_compact_check_step: None,
+            region_compact_check_step: Some(100),
             region_compact_min_tombstones: 10000,
             region_compact_tombstones_percent: 30,
             region_compact_min_redundant_rows: 50000,
@@ -671,14 +706,6 @@ impl Config {
         self.follower_read_max_log_gap
     }
 
-    pub fn region_compact_check_step(&self) -> u64 {
-        self.region_compact_check_step.unwrap()
-    }
-
-    pub fn region_compact_redundant_rows_percent(&self) -> u64 {
-        self.region_compact_redundant_rows_percent.unwrap()
-    }
-
     #[inline]
     pub fn warmup_entry_cache_enabled(&self) -> bool {
         self.max_entry_cache_warmup_duration.0 != Duration::from_secs(0)
@@ -699,14 +726,6 @@ impl Config {
     }
 
     pub fn optimize_for(&mut self, raft_kv_v2: bool) {
-        if self.region_compact_check_step.is_none() {
-            if raft_kv_v2 {
-                self.region_compact_check_step = Some(5);
-            } else {
-                self.region_compact_check_step = Some(100);
-            }
-        }
-
         // When use raft kv v2, we can set raft log gc size limit to a smaller value to
         // avoid too many entry logs in cache.
         // The snapshot support to increment snapshot sst, so the old snapshot files
@@ -873,24 +892,6 @@ impl Config {
             ));
         }
 
-        if self.region_compact_tombstones_percent < 1
-            || self.region_compact_tombstones_percent > 100
-        {
-            return Err(box_err!(
-                "region-compact-tombstones-percent must between 1 and 100, current value is {}",
-                self.region_compact_tombstones_percent
-            ));
-        }
-
-        let region_compact_redundant_rows_percent =
-            self.region_compact_redundant_rows_percent.unwrap();
-        if !(1..=100).contains(&region_compact_redundant_rows_percent) {
-            return Err(box_err!(
-                "region-compact-redundant-rows-percent must between 1 and 100, current value is {}",
-                region_compact_redundant_rows_percent
-            ));
-        }
-
         if self.local_read_batch_size == 0 {
             return Err(box_err!("local-read-batch-size must be greater than 0"));
         }
@@ -1028,7 +1029,6 @@ impl Config {
                 }
             }
         }
-        assert!(self.region_compact_check_step.is_some());
         if raft_kv_v2 && self.use_delete_range {
             return Err(box_err!(
                 "partitioned-raft-kv doesn't support RocksDB delete range."
@@ -1123,27 +1123,6 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["region_split_check_diff"])
             .set(self.region_split_check_diff.unwrap_or_default().0 as f64);
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["region_compact_check_interval"])
-            .set(self.region_compact_check_interval.as_secs_f64());
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["region_compact_check_step"])
-            .set(self.region_compact_check_step.unwrap_or_default() as f64);
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["region_compact_min_tombstones"])
-            .set(self.region_compact_min_tombstones as f64);
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["region_compact_tombstones_percent"])
-            .set(self.region_compact_tombstones_percent as f64);
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["region_compact_min_redundant_rows"])
-            .set(self.region_compact_min_redundant_rows as f64);
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["region_compact_redundant_rows_percent"])
-            .set(
-                self.region_compact_redundant_rows_percent
-                    .unwrap_or_default() as f64,
-            );
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["pd_heartbeat_tick_interval"])
             .set(self.pd_heartbeat_tick_interval.as_secs_f64());

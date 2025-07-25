@@ -88,7 +88,7 @@ pub use self::{
     worker::{
         AutoSplitController, BIG_REGION_CPU_OVERLOAD_THRESHOLD_RATIO, BatchComponent, Bucket,
         BucketRange, BucketStatsInfo, CachedReadDelegate, CheckLeaderRunner, CheckLeaderTask,
-        CompactThreshold, DEFAULT_BIG_REGION_BYTE_THRESHOLD, DEFAULT_BIG_REGION_QPS_THRESHOLD,
+        DEFAULT_BIG_REGION_BYTE_THRESHOLD, DEFAULT_BIG_REGION_QPS_THRESHOLD,
         DEFAULT_BYTE_THRESHOLD, DEFAULT_QPS_THRESHOLD, DiskCheckRunner, FlowStatistics,
         FlowStatsReporter, FullCompactController, KeyEntry, LocalReadContext, LocalReader,
         LocalReaderCore, NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT, PdStatsMonitor, PdTask,
@@ -96,6 +96,5 @@ pub use self::{
         ReadProgress, ReadStats, RefreshConfigTask, RegionTask, SnapGenTask, SplitCheckRunner,
         SplitCheckTask, SplitConfig, SplitConfigManager, SplitInfo, StoreMetaDelegate,
         StoreStatsReporter, TrackVer, WriteStats, WriterContoller, metrics as worker_metrics,
-        need_compact,
     },
 };

@@ -32,7 +32,9 @@ use tikv::{
     config::*,
     import::Config as ImportConfig,
     server::{
-        Config as ServerConfig, config::GrpcCompressionType, gc_worker::GcConfig,
+        Config as ServerConfig,
+        config::GrpcCompressionType,
+        gc_worker::{AutoCompactionConfig, GcConfig},
         lock_manager::Config as PessimisticTxnConfig,
     },
     storage::config::{
@@ -197,12 +199,6 @@ fn test_serde_custom_tikv_config() {
         raft_entry_cache_life_time: ReadableDuration::secs(12),
         split_region_check_tick_interval: ReadableDuration::secs(12),
         region_split_check_diff: Some(ReadableSize::mb(20)),
-        region_compact_check_interval: ReadableDuration::secs(12),
-        region_compact_check_step: Some(1_234),
-        region_compact_min_tombstones: 999,
-        region_compact_tombstones_percent: 33,
-        region_compact_min_redundant_rows: 999,
-        region_compact_redundant_rows_percent: Some(33),
         pd_heartbeat_tick_interval: ReadableDuration::minutes(12),
         pd_store_heartbeat_tick_interval: ReadableDuration::secs(12),
         pd_report_min_resolved_ts_interval: ReadableDuration::millis(233),
@@ -861,6 +857,14 @@ fn test_serde_custom_tikv_config() {
         enable_compaction_filter: false,
         compaction_filter_skip_version_check: true,
         num_threads: 2,
+        auto_compaction: AutoCompactionConfig {
+            check_interval: ReadableDuration::secs(300),
+            tombstones_num_threshold: 10000,
+            tombstones_percent_threshold: 30,
+            redundant_rows_threshold: 50000,
+            redundant_rows_percent_threshold: 20,
+            bottommost_level_force: false,
+        },
     };
     value.pessimistic_txn = PessimisticTxnConfig {
         wait_for_lock_timeout: ReadableDuration::millis(10),
