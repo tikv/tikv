@@ -7,12 +7,12 @@ use std::{
     time::Duration,
 };
 
-use engine_traits::{CF_DEFAULT, CF_WRITE, Peekable};
+use engine_traits::{CF_DEFAULT, CF_RAFT, CF_WRITE, Peekable, RaftEngineReadOnly};
 use keys::data_key;
 use kvproto::{
     metapb, pdpb,
     raft_cmdpb::*,
-    raft_serverpb::{ExtraMessageType, RaftMessage},
+    raft_serverpb::{ExtraMessageType, RaftMessage, RegionLocalState},
 };
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
@@ -23,6 +23,7 @@ use raftstore::{
 use raftstore_v2::router::QueryResult;
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
+use test_util::eventually;
 use tikv::storage::{Snapshot, kv::SnapshotExt};
 use tikv_util::{config::*, future::block_on_timeout};
 use txn_types::{Key, LastChange, PessimisticLock};
@@ -1540,4 +1541,135 @@ fn test_clear_uncampaigned_regions_after_split() {
         cluster.leader_of_region(region.get_id()).unwrap(),
         new_peer(3, 3)
     );
+}
+
+#[test]
+fn test_split_init_raft_state_recovery() {
+    let mut cluster = new_node_cluster(0, 3);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    cluster.run();
+    cluster.must_put(b"k2", b"v2");
+    let region = cluster.get_region(b"k2");
+
+    // Block prevote so that new peers do not update and persist raft state.
+    cluster.add_send_filter(CloneFilterFactory(DropMessageFilter::new(Arc::new(
+        move |m| {
+            let msg_type = m.get_message().get_msg_type();
+            msg_type != MessageType::MsgRequestPreVote
+        },
+    ))));
+
+    // Split region
+    cluster.split_region(&region, b"k2", Callback::None);
+    // New regions are created with region id 1000.
+    let new_region_id = 1000;
+    eventually(Duration::from_millis(100), Duration::from_secs(5), || {
+        let region_state: Option<RegionLocalState> = cluster
+            .get_engine(2)
+            .get_msg_cf(CF_RAFT, &keys::region_state_key(new_region_id))
+            .unwrap();
+        region_state.is_some()
+    });
+    let new_region = cluster.get_region(b"");
+    assert_eq!(new_region.get_id(), new_region_id);
+    let new_peer_on_store_2 = find_peer(&new_region, 2).unwrap().to_owned();
+
+    // Restart node 2.
+    cluster.stop_node(2);
+
+    // Make sure raft_state is not persisted.
+    let raft_state = cluster
+        .get_raft_engine(2)
+        .get_raft_state(new_region_id)
+        .unwrap();
+    assert!(
+        raft_state.is_none(),
+        "raft state should not be persisted: {:?}",
+        raft_state
+    );
+
+    cluster.run_node(2).unwrap();
+
+    cluster.clear_send_filters();
+
+    // Make sure raft_state is recovered.
+    eventually(Duration::from_millis(100), Duration::from_secs(5), || {
+        let raft_state = cluster
+            .get_raft_engine(2)
+            .get_raft_state(new_region_id)
+            .unwrap();
+        raft_state.is_some()
+    });
+    cluster.must_transfer_leader(new_region_id, new_peer_on_store_2);
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+}
+
+#[test]
+fn test_split_init_raft_state_overwritten_by_snapshot() {
+    let mut cluster = new_node_cluster(0, 3);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    cluster.run();
+    let region = cluster.get_region(b"k2");
+    let peer1 = find_peer(&region, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(region.get_id(), peer1);
+    cluster.must_put(b"k2", b"v2");
+
+    // New regions are created with region id 1000.
+    let new_region_id = 1000;
+
+    // Block messages to new regions on store 2 so that it does not update and
+    // persist raft state.
+    cluster.add_recv_filter_on_node(
+        2,
+        Box::new(DropMessageFilter::new(Arc::new(move |m| {
+            m.get_region_id() != new_region_id
+        }))),
+    );
+
+    // Split region
+    cluster.split_region(&region, b"k2", Callback::None);
+    eventually(Duration::from_millis(100), Duration::from_secs(5), || {
+        let region_state: Option<RegionLocalState> = cluster
+            .get_engine(2)
+            .get_msg_cf(CF_RAFT, &keys::region_state_key(new_region_id))
+            .unwrap();
+        region_state.is_some()
+    });
+
+    let new_region = cluster.get_region(b"");
+    assert_eq!(new_region.get_id(), new_region_id);
+    let new_peer_on_store_2 = find_peer(&new_region, 2).unwrap().to_owned();
+    pd_client.must_remove_peer(new_region_id, new_peer_on_store_2.clone());
+    let mut new_peer_on_store_2_successor = new_peer_on_store_2.clone();
+    new_peer_on_store_2_successor.set_id(pd_client.alloc_id().unwrap());
+    pd_client.must_add_peer(new_region_id, new_peer_on_store_2_successor.clone());
+
+    // Make sure raft_state is not persisted.
+    let raft_state = cluster
+        .get_raft_engine(2)
+        .get_raft_state(new_region_id)
+        .unwrap();
+    assert!(
+        raft_state.is_none(),
+        "raft state should not be persisted: {:?}",
+        raft_state
+    );
+
+    cluster.clear_recv_filter_on_node(2);
+
+    // Make sure raft_state is persisted.
+    eventually(Duration::from_millis(100), Duration::from_secs(5), || {
+        let raft_state = cluster
+            .get_raft_engine(2)
+            .get_raft_state(new_region_id)
+            .unwrap();
+        raft_state.is_some()
+    });
+
+    cluster.must_transfer_leader(new_region_id, new_peer_on_store_2_successor);
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
 }
