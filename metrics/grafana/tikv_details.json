@@ -23884,36 +23884,36 @@
         {
           "aliasColors": {},
           "bars": false,
-          "cacheTimeout": null,
-          "datasource": "${DS_TEST-CLUSTER}",
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PB0C37C6A9EC17FDC"
+          },
           "description": "Time spent on auto compaction operations by type",
           "editable": true,
           "error": false,
           "fieldConfig": {
             "defaults": {
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            }
+              "links": []
+            },
+            "overrides": []
           },
           "fill": 1,
           "fillGradient": 1,
           "grid": {
-            "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
-            "threshold2": null,
             "threshold2Color": "rgba(234, 112, 112, 0.22)"
           },
           "gridPos": {
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 49
+            "y": 168
           },
-          "height": null,
+          "hiddenSeries": false,
           "hideTimeOverride": false,
-          "interval": null,
+          "id": 24763573287,
           "isNew": true,
           "legend": {
             "alignAsTable": true,
@@ -23925,7 +23925,6 @@
             "min": false,
             "rightSide": true,
             "show": true,
-            "sideWidth": null,
             "sort": "max",
             "sortDesc": true,
             "total": false,
@@ -23934,20 +23933,15 @@
           "lines": true,
           "linewidth": 1,
           "links": [],
-          "maxDataPoints": null,
-          "maxPerRow": null,
-          "minSpan": null,
           "nullPointMode": "null as zero",
           "options": {
-            "alertThreshold": true,
-            "dataLinks": []
+            "alertThreshold": true
           },
           "percentage": false,
+          "pluginVersion": "8.5.27",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
-          "repeat": null,
-          "repeatDirection": null,
           "seriesOverrides": [
             {
               "alias": "/^count/",
@@ -23955,7 +23949,6 @@
               "dashLength": 1,
               "dashes": true,
               "fill": 2,
-              "fillBelowTo": null,
               "lines": true,
               "spaceLength": 1,
               "transform": "negative-Y",
@@ -23966,19 +23959,21 @@
               "alias": "/^avg/",
               "bars": false,
               "fill": 7,
-              "fillBelowTo": null,
               "lines": true,
               "yaxis": 1,
               "zindex": 0
             }
           ],
-          "span": null,
+          "spaceLength": 10,
           "stack": false,
           "steppedLine": false,
           "targets": [
             {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_auto_compaction_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, le, $additional_groupby) \n    \n    \n))  ",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "PB0C37C6A9EC17FDC"
+              },
+              "expr": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_auto_compaction_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"} [1m]\n)) by (le,type)))",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -23987,13 +23982,16 @@
               "legendFormat": "99.99%-{{type}} {{$additional_groupby}}",
               "metric": "",
               "query": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_auto_compaction_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, le, $additional_groupby) \n    \n    \n))  ",
-              "refId": "",
+              "refId": "A",
               "step": 10,
               "target": ""
             },
             {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_auto_compaction_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, le, $additional_groupby) \n    \n    \n))  ",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "PB0C37C6A9EC17FDC"
+              },
+              "expr": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_auto_compaction_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [1m]\n)) by (le, type)))  ",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -24002,13 +24000,16 @@
               "legendFormat": "99%-{{type}} {{$additional_groupby}}",
               "metric": "",
               "query": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_auto_compaction_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, le, $additional_groupby) \n    \n    \n))  ",
-              "refId": "",
+              "refId": "B",
               "step": 10,
               "target": ""
             },
             {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "(sum(rate(\n    tikv_auto_compaction_duration_seconds_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, $additional_groupby)  / sum(rate(\n    tikv_auto_compaction_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, $additional_groupby) )",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "PB0C37C6A9EC17FDC"
+              },
+              "expr": "(sum(rate(\n    tikv_auto_compaction_duration_seconds_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [1m]\n)) by (type)  / sum(rate(\n    tikv_auto_compaction_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [1m]\n)) by (type))",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -24017,13 +24018,16 @@
               "legendFormat": "avg-{{type}} {{$additional_groupby}}",
               "metric": "",
               "query": "(sum(rate(\n    tikv_auto_compaction_duration_seconds_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, $additional_groupby)  / sum(rate(\n    tikv_auto_compaction_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, $additional_groupby) )",
-              "refId": "",
+              "refId": "C",
               "step": 10,
               "target": ""
             },
             {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_auto_compaction_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, $additional_groupby) ",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "PB0C37C6A9EC17FDC"
+              },
+              "expr": "sum(rate(\n    tikv_auto_compaction_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [1m]\n)) by (type)",
               "format": "time_series",
               "hide": true,
               "instant": false,
@@ -24032,14 +24036,13 @@
               "legendFormat": "count-{{type}} {{$additional_groupby}}",
               "metric": "",
               "query": "sum(rate(\n    tikv_auto_compaction_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, $additional_groupby) ",
-              "refId": "",
+              "refId": "D",
               "step": 10,
               "target": ""
             }
           ],
           "thresholds": [],
-          "timeFrom": null,
-          "timeShift": null,
+          "timeRegions": [],
           "title": "Auto Compaction Duration",
           "tooltip": {
             "msResolution": true,
@@ -24048,31 +24051,21 @@
             "value_type": "individual"
           },
           "transformations": [],
-          "transparent": false,
           "type": "graph",
           "xaxis": {
             "mode": "time",
-            "name": null,
             "show": true,
             "values": []
           },
           "yaxes": [
             {
-              "decimals": null,
               "format": "s",
-              "label": null,
               "logBase": 1,
-              "max": null,
-              "min": null,
               "show": true
             },
             {
-              "decimals": null,
               "format": "short",
-              "label": null,
               "logBase": 1,
-              "max": null,
-              "min": null,
               "show": true
             }
           ],
@@ -24084,36 +24077,36 @@
         {
           "aliasColors": {},
           "bars": false,
-          "cacheTimeout": null,
-          "datasource": "${DS_TEST-CLUSTER}",
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PB0C37C6A9EC17FDC"
+          },
           "description": "Number of regions meeting compaction threshold and pending candidates",
           "editable": true,
           "error": false,
           "fieldConfig": {
             "defaults": {
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            }
+              "links": []
+            },
+            "overrides": []
           },
           "fill": 1,
           "fillGradient": 1,
           "grid": {
-            "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
-            "threshold2": null,
             "threshold2Color": "rgba(234, 112, 112, 0.22)"
           },
           "gridPos": {
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 49
+            "y": 168
           },
-          "height": null,
+          "hiddenSeries": false,
           "hideTimeOverride": false,
-          "interval": null,
+          "id": 24763573288,
           "isNew": true,
           "legend": {
             "alignAsTable": true,
@@ -24125,7 +24118,6 @@
             "min": false,
             "rightSide": true,
             "show": true,
-            "sideWidth": null,
             "sort": "max",
             "sortDesc": true,
             "total": false,
@@ -24134,27 +24126,25 @@
           "lines": true,
           "linewidth": 1,
           "links": [],
-          "maxDataPoints": null,
-          "maxPerRow": null,
-          "minSpan": null,
           "nullPointMode": "null as zero",
           "options": {
-            "alertThreshold": true,
-            "dataLinks": []
+            "alertThreshold": true
           },
           "percentage": false,
+          "pluginVersion": "8.5.27",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
-          "repeat": null,
-          "repeatDirection": null,
           "seriesOverrides": [],
-          "span": null,
+          "spaceLength": 10,
           "stack": false,
           "steppedLine": false,
           "targets": [
             {
-              "datasource": "${DS_TEST-CLUSTER}",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "PB0C37C6A9EC17FDC"
+              },
               "expr": "sum((\n    tikv_auto_compaction_regions_meet_threshold\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
               "format": "time_series",
               "hide": false,
@@ -24164,12 +24154,15 @@
               "legendFormat": "regions meet threshold",
               "metric": "",
               "query": "sum((\n    tikv_auto_compaction_regions_meet_threshold\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
-              "refId": "",
+              "refId": "A",
               "step": 10,
               "target": ""
             },
             {
-              "datasource": "${DS_TEST-CLUSTER}",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "PB0C37C6A9EC17FDC"
+              },
               "expr": "sum((\n    tikv_auto_compaction_pending_candidates\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
               "format": "time_series",
               "hide": false,
@@ -24179,14 +24172,13 @@
               "legendFormat": "pending candidates",
               "metric": "",
               "query": "sum((\n    tikv_auto_compaction_pending_candidates\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
-              "refId": "",
+              "refId": "B",
               "step": 10,
               "target": ""
             }
           ],
           "thresholds": [],
-          "timeFrom": null,
-          "timeShift": null,
+          "timeRegions": [],
           "title": "Auto Compaction Regions Status",
           "tooltip": {
             "msResolution": true,
@@ -24195,31 +24187,21 @@
             "value_type": "individual"
           },
           "transformations": [],
-          "transparent": false,
           "type": "graph",
           "xaxis": {
             "mode": "time",
-            "name": null,
             "show": true,
             "values": []
           },
           "yaxes": [
             {
-              "decimals": null,
               "format": "short",
-              "label": null,
               "logBase": 1,
-              "max": null,
-              "min": null,
               "show": true
             },
             {
-              "decimals": null,
               "format": "short",
-              "label": null,
               "logBase": 1,
-              "max": null,
-              "min": null,
               "show": true
             }
           ],
