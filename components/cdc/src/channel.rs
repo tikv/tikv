@@ -315,12 +315,7 @@ impl Sink {
         }
         let ob_event = ObservedEvent::new(Instant::now_coarse(), observed_event, bytes);
         match self.unbounded_sender.unbounded_send(ob_event) {
-            Ok(_) => {
-                CDC_PENDING_EVENT_COUNT
-                    .with_label_values(&["unbounded"])
-                    .inc();
-                Ok(())
-            }
+            Ok(_) => Ok(()),
             Err(e) => {
                 // Free quota if send fails.
                 self.memory_quota.free(bytes);
@@ -359,9 +354,6 @@ impl Sink {
             self.memory_quota.free(total_bytes as _);
             return Err(SendError::from(e));
         }
-        CDC_PENDING_EVENT_COUNT
-            .with_label_values(&["bounded"])
-            .add(event_count as _);
         Ok(())
     }
 }
@@ -375,16 +367,8 @@ pub struct Drain {
 
 impl<'a> Drain {
     pub fn drain(&'a mut self) -> impl Stream<Item = (CdcEvent, usize)> + 'a {
-        let observed = (&mut self.unbounded_receiver).map(|x| {
-            CDC_PENDING_EVENT_COUNT
-                .with_label_values(&["unbounded"])
-                .dec();
-            (x.created, x.event, x.size)
-        });
+        let observed = (&mut self.unbounded_receiver).map(|x| (x.created, x.event, x.size));
         let scaned = (&mut self.bounded_receiver).filter_map(|x| {
-            CDC_PENDING_EVENT_COUNT
-                .with_label_values(&["bounded"])
-                .dec();
             if x.truncated.load(Ordering::Acquire) {
                 self.memory_quota.free(x.size as _);
                 return futures::future::ready(None);
