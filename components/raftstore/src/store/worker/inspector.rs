@@ -1,17 +1,10 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cmp,
-    fmt::{self, Display, Formatter},
-    io::Write,
-    path::PathBuf,
-    hash::BuildHasherDefault,
-    sync::Arc,
-    time::Duration,
+    fmt::{self, Display, Formatter}, io::Write, path::PathBuf, sync::Arc, time::Duration, thread
 };
 use collections::HashMap;
 
-use fxhash::FxHasher;
 use pd_client::{Config as PdConfig, PdClient, RpcClient};
 use security::SecurityConfig;
 
@@ -21,7 +14,7 @@ use grpcio_health::{proto::{HealthCheckRequest, HealthClient}, ServingStatus::Se
 use health_controller::types::LatencyInspector;
 use tikv_util::{
     time::Instant,
-    warn,
+    warn, info,
     worker::{Runnable, Worker},
 };
 use std::sync::Mutex;
@@ -74,7 +67,7 @@ pub struct Runner {
     target: PathBuf,
     pd_client: Arc<dyn PdClient>,
     // store_address -> client
-    health_clients: Arc<Mutex<HashMap<String, HealthClient>>>,
+    health_clients: Arc<Mutex<HashMap<u64, HealthClient>>>,
     env: Arc<Environment>,
     security_mgr: Arc<SecurityManager>,
 }
@@ -186,17 +179,18 @@ impl Runner {
         };
 
         let mut clients = self.health_clients.lock().unwrap();
-        let existing_addrs: std::collections::HashSet<_> = clients.keys().cloned().collect();
+        let existing_stores: std::collections::HashSet<_> = clients.keys().cloned().collect();
 
         for store in stores {
             let addr = store.get_address().to_string();
-            if !existing_addrs.contains(&addr) {
+            let store_id = store.get_id();
+            if !existing_stores.contains(&store_id) {
                 let channel = self.security_mgr.connect(
                     ChannelBuilder::new(self.env.clone()),
                     &addr,
                 );
                 let client = HealthClient::new(channel);
-                clients.insert(addr, client);
+                clients.insert(store_id, client);
             }
         }
     }
@@ -205,7 +199,6 @@ impl Runner {
     /// Only for test.
     /// Generate a dummy Runner.
     pub fn dummy() -> Self {
-        // 创建 PD client，连接默认 TiDB 的 PD 地址
         let pd_endpoints = vec!["127.0.0.1:2379".to_owned()];
         let cfg = PdConfig::new(pd_endpoints);
         cfg.validate().unwrap();
@@ -247,27 +240,71 @@ impl Runner {
         Some(start.saturating_elapsed())
     }
 
-    fn inspect_network(&self, start: Instant) -> Option<Duration> {
-        let clients = self.health_clients.lock().unwrap();
-        for (addr, client) in clients.iter() {
-            match client.check(&HealthCheckRequest::new()) {
-                Ok(resp) => {
-                    if resp.status != Serving {
-                        warn!("store is not serving"; "addr" => addr);
-                        return Some(Self::NETWORK_NOT_TIMEOUT);
+    // fn inspect_network(&self, start: Instant) -> Option<Duration> {
+    //     let clients = self.health_clients.lock().unwrap();
+    //     for (store_id, client) in clients.iter() {
+    //         match client.check(&HealthCheckRequest::new()) {
+    //             Ok(resp) => {
+    //                 if resp.status != Serving {
+    //                     warn!("store is not serving"; "store" => store_id);
+    //                     return Some(Self::NETWORK_NOT_TIMEOUT);
+    //                 }
+    //             }
+    //             Err(e) => {
+    //                 if is_network_error(&e) {
+    //                     warn!("network error from"; "store" => store_id);
+    //                     return Some(Self::NETWORK_TIMEOUT);
+    //                 }
+    //                 warn!("non-network error from"; "store" => store_id, "err" => ?e);
+    //                 return Some(Self::NETWORK_NOT_TIMEOUT);
+    //             }
+    //         }
+    //     }
+    //     Some(start.saturating_elapsed())
+    // }
+    async fn inspect_network(
+        &self,
+        start: Instant,
+        inspector: Arc<Mutex<LatencyInspector>>,
+    ) {
+        let clients = {
+            let guard = self.health_clients.lock().unwrap();
+            guard.clone()
+        };
+
+        let mut handles = Vec::with_capacity(clients.len());
+        for (store_id, client) in clients {
+            let inspector = inspector.clone();
+            let client = client.clone();
+
+            let handle = thread::spawn(move || {
+                // info!("start health check");
+                let result = client.check(&HealthCheckRequest::new());
+                // info!("end health check");
+                let dur = match result {
+                    Ok(resp) if resp.status != Serving => {
+                        warn!("store is not serving"; "store" => store_id);
+                        Self::NETWORK_NOT_TIMEOUT
                     }
-                }
-                Err(e) => {
-                    if is_network_error(&e) {
-                        warn!("network error from"; "addr" => addr);
-                        return Some(Self::NETWORK_TIMEOUT);
+                    Err(e) if is_network_error(&e) => {
+                        warn!("network error from"; "store" => store_id);
+                        Self::NETWORK_TIMEOUT
                     }
-                    warn!("non-network error from"; "addr" => addr, "err" => ?e);
-                    return Some(Self::NETWORK_NOT_TIMEOUT);
-                }
-            }
+                    Err(e) => {
+                        warn!("non-network error from"; "store" => store_id, "err" => ?e);
+                        Self::NETWORK_NOT_TIMEOUT
+                    }
+                    _ => start.saturating_elapsed()
+                };
+            
+                inspector.lock().unwrap().record_network_io_duration(store_id, dur);
+            });
+            handles.push(handle);
         }
-        Some(start.saturating_elapsed())
+
+        for handle in handles {
+            let _ = handle.join();
+        }
     }
 
     fn execute_disk(&self) {
@@ -286,19 +323,19 @@ impl Runner {
         }
     }
 
-    fn execute_network(&self) {
+    async fn execute_network(&self) {
+        // info!("execute_network called");
         if let Ok(task) = self.network_runner.receiver.try_recv() {
             match task {
                 Task::NetworkLatency {
-                    mut inspector,
+                    inspector,
                     start,
                 } => {
-                    if let Some(latency) = self.inspect_network(start) {
-                        inspector.record_network_io_duration(latency);
-                        inspector.finish();
-                    } else {
-                        warn!("failed to inspect network io latency");
-                    }
+                    let inspector = Arc::new(Mutex::new(inspector));
+                    let this = self.clone();
+
+                    this.inspect_network(start, inspector.clone()).await;
+                    inspector.lock().unwrap().finish();
                 }
                 _ => {}
             }
@@ -335,13 +372,13 @@ impl Runnable for Runner {
                     .try_send(task_opt.take().unwrap())
                 {
                     let e = match e {
-                        TrySendError::Full(_) => {
+                        TrySendError::Full(task) => {
                             // Try to make space and resend once
                             let _ = self.network_runner.receiver.try_recv();
                             if let Err(e2) = self
                                 .network_runner
                                 .notifier
-                                .try_send(task_opt.take().unwrap())
+                                .try_send(task)
                             {
                                 e2
                             } else {
@@ -356,11 +393,49 @@ impl Runnable for Runner {
                     let runner = self.clone();
                     if let Some(bg_worker) = self.network_runner.bg_worker.as_ref() {
                         bg_worker.spawn_async_task(async move {
-                            runner.execute_network();
+                            runner.execute_network().await;
                         });
                     }
                 }
             }
+            // Task::NetworkLatency { .. } => {
+            //     let mut retry_task = Some(task);
+            
+            //     // take task out of Option for first try
+            //     let first_try = retry_task.take().unwrap();
+            //     match self.network_runner.notifier.try_send(first_try) {
+            //         Ok(_) => {
+            //             info!("successfully sent task to inspector network_runner");
+            //             if let Some(bg_worker) = self.network_runner.bg_worker.as_ref() {
+            //                 info!("spawning network inspector task");
+            //                 let runner = self.clone();
+            //                 bg_worker.spawn_async_task(async move {
+            //                     runner.execute_network();
+            //                 });
+            //             } else {
+            //                 warn!("network_runner.bg_worker is None!");
+            //             }
+            //         }
+            //         Err(TrySendError::Full(_)) => {
+            //             // make room and retry
+            //             let _ = self.network_runner.receiver.try_recv();
+            
+            //             if let Some(task) = retry_task {
+            //                 if let Err(e) = self.network_runner.notifier.try_send(task) {
+            //                     warn!("failed to resend task to inspector bg_worker: {:?}", e);
+            //                 } else if let Some(bg_worker) = self.network_runner.bg_worker.as_ref() {
+            //                     let runner = self.clone();
+            //                     bg_worker.spawn_async_task(async move {
+            //                         runner.execute_network().await;
+            //                     });
+            //                 }
+            //             }
+            //         }
+            //         Err(e) => {
+            //             warn!("failed to send task to inspector bg_worker: {:?}", e);
+            //         }
+            //     }
+            // }
         };
     }
 }

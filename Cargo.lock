@@ -3750,7 +3750,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/okjiang/kvproto?branch=network-slow-store#c8dbf06da7c2c661d5c6bbd8bb0f56b53da3350b"
+source = "git+https://github.com/okjiang/kvproto?branch=network-slow-store#3af8a4931fac31c9aafcd4d9ebca2f8df4ebf097"
 dependencies = [
  "futures 0.3.15",
  "grpcio",

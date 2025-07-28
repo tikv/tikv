@@ -3,18 +3,19 @@
 use std::fmt::Debug;
 
 use tikv_util::info;
+use std::collections::HashMap;
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct UnifiedDuration {
     /// The duration of all stages of raftstore.
     pub raftstore_duration: RaftstoreDuration,
     /// The duration of inspection to PD.
-    pub network_duration: Option<std::time::Duration>,
+    pub network_duration: HashMap<u64, Option<std::time::Duration>>,
 }
 
 /// Represent the duration of all stages of raftstore recorded by one
 /// inspecting.
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct RaftstoreDuration {
     pub store_wait_duration: Option<std::time::Duration>,
     pub store_process_duration: Option<std::time::Duration>,
@@ -82,7 +83,7 @@ impl InspectFactor {
 pub struct LatencyInspector {
     id: u64,
     duration: UnifiedDuration,
-    cb: Box<dyn FnOnce(u64, UnifiedDuration) + Send>,
+    cb: Box<dyn Fn(u64, UnifiedDuration) + Send>,
 }
 
 impl Debug for LatencyInspector {
@@ -96,7 +97,7 @@ impl Debug for LatencyInspector {
 }
 
 impl LatencyInspector {
-    pub fn new(id: u64, cb: Box<dyn FnOnce(u64, UnifiedDuration) + Send>) -> Self {
+    pub fn new(id: u64, cb: Box<dyn Fn(u64, UnifiedDuration) + Send>) -> Self {
         Self {
             id,
             cb,
@@ -128,17 +129,17 @@ impl LatencyInspector {
         self.duration.raftstore_duration.apply_process_duration = Some(duration);
     }
 
-    pub fn record_network_io_duration(&mut self, duration: std::time::Duration) {
+    pub fn record_network_io_duration(&mut self, store_id: u64, duration: std::time::Duration) {
         info!(
             "record network io duration";
             "id" => self.id,
             "duration" => ?duration
         );
-        self.duration.network_duration = Some(duration);
+        self.duration.network_duration.insert(store_id, Some(duration));
     }
 
     /// Call the callback.
-    pub fn finish(self) {
-        (self.cb)(self.id, self.duration);
+    pub fn finish(&self) {
+        (self.cb)(self.id, self.duration.clone());
     }
 }

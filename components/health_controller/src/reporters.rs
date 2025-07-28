@@ -2,6 +2,7 @@
 
 use std::{
     sync::Arc,
+    collections::HashMap,
     time::{Duration, Instant},
 };
 
@@ -91,28 +92,31 @@ impl UnifiedSlowScore {
     }
 
     #[inline]
-    pub fn record(
+    pub fn record_disk(
         &mut self,
         id: u64,
         factor: InspectFactor,
         duration: &UnifiedDuration,
         not_busy: bool,
     ) {
-        let dur = if factor == InspectFactor::Network {
-            duration.network_duration.unwrap_or_default()
-        } else {
-            // For disk factors, we care about the raftstore duration.
-            duration.raftstore_duration.delays_on_disk_io(false)
-        };
-        info!(
-            "recording slow score: factor {}, id: {}, duration: {}, not_busy: {}, input_duration: {:?}",
-            factor.as_str(),
-            id,
-            tikv_util::time::duration_to_us(dur),
-            not_busy,
-            duration
-        );
+        // For disk factors, we care about the raftstore duration.
+        let dur = duration.raftstore_duration.delays_on_disk_io(false);   
         self.factors[factor as usize].record(id, dur, not_busy);
+    }
+
+    pub fn record_network(
+        &mut self,
+        id: u64,
+        duration: &UnifiedDuration,
+        not_busy: bool,
+    ) {
+        info!(
+            "recording slow score: id: {}, not_busy: {}, input_duration: {:?}",
+            id,
+            not_busy,
+            duration.network_duration
+        );
+        self.factors[InspectFactor::Network as usize].record_mutil(id, duration.network_duration.clone(), not_busy);
     }
 
     #[inline]
@@ -138,17 +142,12 @@ impl UnifiedSlowScore {
             .fold(1.0, f64::max)
     }
 
-    // Returns the maximum score of network factors.
-    pub fn get_network_score(&self) -> f64 {
-        self.factors
-            .iter()
-            .enumerate()
-            // the factor InspectFactor::Network is the final element when 
-            // initializing the factors list, where other factors related to 
-            // disk-io are placed ahead of it.
-            .filter(|(idx, _)| *idx >= InspectFactor::Network as usize)
-            .map(|(_, factor)| factor.get())
-            .fold(1.0, f64::max)
+    pub fn get_network_score(&self) -> HashMap<u64, u64> {
+        self.factors[InspectFactor::Network as usize]
+            .get_mutil()
+            .into_iter()
+            .map(|(k, v)| (k, v.into_inner().round() as u64)) 
+            .collect()
     }
 
     pub fn last_tick_finished(&self) -> bool {
@@ -188,13 +187,8 @@ impl RaftstoreReporter {
         }
     }
 
-    pub fn get_network_slow_score(&mut self) -> f64 {
-        if self.network_score_reached_100 {
-            self.network_score_reached_100 = false;
-            100.0
-        } else {
-            self.slow_score.get_network_score()
-        }
+    pub fn get_network_slow_score(&mut self) -> HashMap<u64, u64> {
+        self.slow_score.get_network_score()
     }
 
     pub fn get_slow_trend(&self) -> &SlowTrendStatistics {
@@ -209,19 +203,22 @@ impl RaftstoreReporter {
         store_not_busy: bool,
     ) {
         // Fine-tuned, `SlowScore` only takes the I/O jitters on the disk into account.
-        self.slow_score
-            .record(id, factor, &duration, store_not_busy);
-        self.slow_trend.record(duration.raftstore_duration);
+        
+        self.slow_trend.record(&duration.raftstore_duration);
 
         match factor {
             InspectFactor::RaftDisk | InspectFactor::KvDisk => {
+                self.slow_score
+                    .record_disk(id, factor, &duration, store_not_busy);
                 // Publish slow score to health controller
                 self.health_controller_inner
                     .update_raftstore_slow_score(self.slow_score.get_disk_score());
             }
             InspectFactor::Network => {
-                self.health_controller_inner
-                    .update_network_slow_score(self.slow_score.get_network_score());
+                self.slow_score
+                    .record_network(id, &duration, store_not_busy);
+                // self.health_controller_inner
+                //     .update_network_slow_score(self.slow_score.get_network_score());
             }
         }
     }
@@ -299,8 +296,8 @@ impl RaftstoreReporter {
                         .update_raftstore_slow_score(self.slow_score.get_disk_score());
                 }
                 InspectFactor::Network => {
-                    self.health_controller_inner
-                        .update_network_slow_score(self.slow_score.get_network_score());
+                    // self.health_controller_inner
+                    //     .update_network_slow_score(self.slow_score.get_network_score());
                 }
             }
         }
@@ -389,7 +386,7 @@ impl SlowTrendStatistics {
     }
 
     #[inline]
-    pub fn record(&mut self, duration: RaftstoreDuration) {
+    pub fn record(&mut self, duration: &RaftstoreDuration) {
         // TODO: It's more appropriate to divide the factor into `Disk IO factor` and
         // `Net IO factor`.
         // Currently, when `network ratio == 1`, it summarizes all factors by `sum`

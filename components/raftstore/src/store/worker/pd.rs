@@ -1330,7 +1330,7 @@ where
         self.store_stat.region_keys_read.flush();
 
         stats.set_slow_score(self.health_reporter.get_disk_slow_score() as u64);
-        stats.set_network_slow_score(self.health_reporter.get_network_slow_score() as u64);
+        stats.set_network_slow_score(self.health_reporter.get_network_slow_score());
 
         let (rps, slow_trend_pb) = self
             .health_reporter
@@ -2099,11 +2099,14 @@ where
                 InspectFactor::Network => LatencyInspector::new(
                     id,
                     Box::new(move |id, duration| {
-                        STORE_INSPECT_DURATION_HISTOGRAM
-                            .with_label_values(&["network"])
-                            .observe(tikv_util::time::duration_to_sec(
-                                duration.network_duration.unwrap_or_default(),
-                            ));
+                        for (store_id, network_duration) in duration.network_duration.iter() {
+                            STORE_INSPECT_NETWORK_DURATION_HISTOGRAM
+                                .with_label_values(&[&store_id.to_string()])
+                                .observe(tikv_util::time::duration_to_sec(
+                                    network_duration.unwrap_or_default(),
+                                ));
+                        }
+                        
                         if let Err(e) = scheduler.schedule(Task::UpdateSlowScore {
                             id,
                             factor,
