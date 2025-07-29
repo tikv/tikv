@@ -1373,7 +1373,10 @@ pub struct RegionReadProgress {
     core: Mutex<RegionReadProgressCore>,
     // The fast path to read `safe_ts` without acquiring the mutex
     // on `core`
+    // Use `AcqRel` to ensure that the `safe_ts` is always visible to
+    // the readers after it is updated.
     safe_ts: AtomicU64,
+    // Use `AcqRel` same as `safe_ts`.
     pub read_index_safe_ts: AtomicU64,
 }
 
