@@ -1897,3 +1897,13 @@ pub fn wait_down_peers<T: Simulator>(cluster: &Cluster<T>, count: u64, peer: Opt
         peers, count, peer
     );
 }
+
+pub fn get_region_read_index_safe_ts<T: Simulator>(
+    cluster: &Cluster<T>,
+    store_id: u64,
+    region_id: u64,
+) -> u64 {
+    let store_meta = cluster.store_metas.get(&store_id).unwrap().lock().unwrap();
+    let region_read_progress = store_meta.region_read_progress.get(&region_id).unwrap();
+    region_read_progress.read_index_safe_ts()
+}
