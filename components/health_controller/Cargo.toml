@@ -6,11 +6,15 @@ edition = "2021"
 publish = false
 
 [dependencies]
-grpcio-health = { workspace = true }
+grpcio.workspace = true
+grpcio-health.workspace = true
 kvproto = { workspace = true }
 ordered-float = "2.6"
 parking_lot = "0.12.1"
+pd_client.workspace = true
 prometheus = { version = "0.13", features = ["nightly"] }
+security.workspace = true
 slog = { workspace = true }
 slog-global = { workspace = true }
 tikv_util = { workspace = true }
+tokio = "1.47.0"

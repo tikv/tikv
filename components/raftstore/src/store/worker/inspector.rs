@@ -11,12 +11,17 @@ use security::SecurityConfig;
 use crossbeam::channel::{Receiver, Sender, TrySendError, bounded};
 use grpcio::{Error, RpcStatusCode, Environment, ChannelBuilder};
 use grpcio_health::{proto::{HealthCheckRequest, HealthClient}, ServingStatus::Serving};
-use health_controller::types::LatencyInspector;
+use health_controller::{
+    reporters::TikvClientMgr,
+    types::LatencyInspector
+};
 use tikv_util::{
     time::Instant,
-    warn, info,
+    warn, 
+    info,
     worker::{Runnable, Worker},
 };
+
 use std::sync::Mutex;
 
 use security::SecurityManager;
@@ -65,11 +70,7 @@ pub struct Runner {
     network_runner: InnerRunner,
 
     target: PathBuf,
-    pd_client: Arc<dyn PdClient>,
-    // store_address -> client
-    health_clients: Arc<Mutex<HashMap<u64, HealthClient>>>,
-    env: Arc<Environment>,
-    security_mgr: Arc<SecurityManager>,
+    tikv_client_mgr: Arc<Mutex<TikvClientMgr>>,
 }
 
 #[derive(Clone)]
@@ -123,99 +124,37 @@ impl Runner {
     // }
     fn build(
         target: PathBuf,
-        pd_client: Arc<dyn PdClient>,
-        env: Arc<Environment>,
-        security_mgr: Arc<SecurityManager>,
+        tikv_client_mgr: Arc<Mutex<TikvClientMgr>>,
     ) -> Self {
         let runner = Runner {
             disk_runner: InnerRunner::build(3),
             network_runner: InnerRunner::build(100),
             target,
-            pd_client: pd_client.clone(),
-            health_clients: Arc::new(Mutex::new(HashMap::default())),
-            env: env.clone(),
-            security_mgr: security_mgr.clone(),
+            tikv_client_mgr,
         };
-    
-        let runner_clone = runner.clone();
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
-            rt.block_on(async move {
-                loop {
-                    runner_clone.update_health_clients();
-                    tokio::time::sleep(Duration::from_secs(60)).await;
-                }
-            });
-        });
-    
+        
         runner
     }
 
     #[inline]
     pub fn new(
         inspect_dir: PathBuf,
-        pd_client: Arc<dyn PdClient>,
-        env: Arc<Environment>,
-        security_mgr: Arc<SecurityManager>,
+        tikv_client_mgr: Arc<Mutex<TikvClientMgr>>,
     ) -> Self {
         Self::build(
             inspect_dir.join(Self::DISK_IO_LATENCY_INSPECT_FILENAME),
-            pd_client,
-            env,
-            security_mgr,
+            tikv_client_mgr,
         )
-    }
-
-    fn update_health_clients(&self) {
-        let stores = match self.pd_client.get_all_stores(true) {
-            Ok(stores) => stores,
-            Err(e) => {
-                warn!("failed to get stores from PD"; "err" => ?e);
-                return;
-            }
-        };
-
-        let mut clients = self.health_clients.lock().unwrap();
-        let existing_stores: std::collections::HashSet<_> = clients.keys().cloned().collect();
-
-        for store in stores {
-            let addr = store.get_address().to_string();
-            let store_id = store.get_id();
-            if !existing_stores.contains(&store_id) {
-                let channel = self.security_mgr.connect(
-                    ChannelBuilder::new(self.env.clone()),
-                    &addr,
-                );
-                let client = HealthClient::new(channel);
-                clients.insert(store_id, client);
-            }
-        }
     }
 
     #[inline]
     /// Only for test.
     /// Generate a dummy Runner.
-    pub fn dummy() -> Self {
-        let pd_endpoints = vec!["127.0.0.1:2379".to_owned()];
-        let cfg = PdConfig::new(pd_endpoints);
-        cfg.validate().unwrap();
-        let env = Arc::new(Environment::new(1));
-        let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
-
-        let pd_client = Arc::new(
-            RpcClient::new(&cfg, None, security_mgr.clone())
-                .unwrap(),
-        );
-        Self::build(
-            PathBuf::from("./").join(Self::DISK_IO_LATENCY_INSPECT_FILENAME),
-            pd_client,
-            env,
-            security_mgr,
-        )
-    }
+    // pub fn dummy() -> Self {
+    //     Self::build(
+    //         PathBuf::from("./").join(Self::DISK_IO_LATENCY_INSPECT_FILENAME),
+    //     )
+    // }
 
     #[inline]
     pub fn bind_background_worker(&mut self, bg_worker: Worker) {
@@ -267,24 +206,18 @@ impl Runner {
         start: Instant,
         inspector: Arc<Mutex<LatencyInspector>>,
     ) {
-        let clients = {
-            let guard = self.health_clients.lock().unwrap();
-            guard.clone()
-        };
-
-        let mut handles = Vec::with_capacity(clients.len());
-        for (store_id, client) in clients {
+        let mut handles = Vec::new();
+        for (store_id, client) in self.tikv_client_mgr.lock().unwrap().get_health_clients() {
             let inspector = inspector.clone();
             let client = client.clone();
 
             let handle = thread::spawn(move || {
-                // info!("start health check");
+                info!("start health check"; "inspect_id" => inspector.lock().unwrap().id, "store_id" => store_id);
                 let result = client.check(&HealthCheckRequest::new());
-                // info!("end health check");
+                info!("end health check"; "inspect_id" => inspector.lock().unwrap().id, "store_id" => store_id);
                 let dur = match result {
-                    Ok(resp) if resp.status != Serving => {
-                        warn!("store is not serving"; "store" => store_id);
-                        Self::NETWORK_NOT_TIMEOUT
+                    Ok(_) => {
+                        start.saturating_elapsed()
                     }
                     Err(e) if is_network_error(&e) => {
                         warn!("network error from"; "store" => store_id);
@@ -294,10 +227,11 @@ impl Runner {
                         warn!("non-network error from"; "store" => store_id, "err" => ?e);
                         Self::NETWORK_NOT_TIMEOUT
                     }
-                    _ => start.saturating_elapsed()
                 };
             
-                inspector.lock().unwrap().record_network_io_duration(store_id, dur);
+                let mut guard = inspector.lock().unwrap();
+                guard.record_network_io_duration(store_id, dur);
+                guard.finish();
             });
             handles.push(handle);
         }
@@ -335,7 +269,6 @@ impl Runner {
                     let this = self.clone();
 
                     this.inspect_network(start, inspector.clone()).await;
-                    inspector.lock().unwrap().finish();
                 }
                 _ => {}
             }
@@ -501,7 +434,6 @@ mod tests {
 
     use super::Runner;
 
-    // #[tokio::test(flavor = "multi_thread")]
     #[test]
     fn test_update_health_clients_with_tidb_cluster() {
         let runner = Runner::dummy();

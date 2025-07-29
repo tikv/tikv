@@ -10,7 +10,7 @@ use api_version::api_v2::TIDB_RANGES_COMPLEMENT;
 use causal_ts::CausalTsProviderImpl;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{DATA_CFS, DATA_KEY_PREFIX_LEN, Engines, Iterable, KvEngine, RaftEngine};
-use health_controller::HealthController;
+use health_controller::{HealthController, reporters::TikvClientMgr};
 use kvproto::{
     kvrpcpb::ApiVersion, metapb, raft_serverpb::StoreIdent, replication_modepb::ReplicationStatus,
 };
@@ -175,6 +175,7 @@ where
         inspector_runner: InspectorRunner,
         grpc_service_mgr: GrpcServiceManager,
         safe_point: Arc<AtomicU64>,
+        tikv_client_mgr: Arc<Mutex<TikvClientMgr>>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -215,6 +216,7 @@ where
             inspector_runner,
             grpc_service_mgr,
             safe_point,
+            tikv_client_mgr,
         )?;
 
         Ok(())
@@ -465,6 +467,7 @@ where
         inspector_runner: InspectorRunner,
         grpc_service_mgr: GrpcServiceManager,
         safe_point: Arc<AtomicU64>,
+        tikv_client_mgr: Arc<Mutex<TikvClientMgr>>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -501,6 +504,7 @@ where
             inspector_runner,
             grpc_service_mgr,
             safe_point,
+            tikv_client_mgr,
         )?;
         Ok(())
     }

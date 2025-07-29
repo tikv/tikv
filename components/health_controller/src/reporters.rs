@@ -5,10 +5,17 @@ use std::{
     collections::HashMap,
     time::{Duration, Instant},
 };
+use std::sync::Mutex;
 
 use kvproto::pdpb;
 use pdpb::SlowTrend as SlowTrendPb;
 use prometheus::IntGauge;
+use security::SecurityManager;
+use security::SecurityConfig;
+use grpcio::{Error, RpcStatusCode, Environment, ChannelBuilder, Channel};
+use pd_client::{Config as PdConfig, PdClient, RpcClient};
+use grpcio_health::{proto::{HealthCheckRequest, HealthClient}, ServingStatus::Serving};
+use tikv_util::warn;
 
 use tikv_util::info;
 
@@ -56,14 +63,22 @@ pub struct RaftstoreReporterConfig {
 /// the store's performance. Typically, we have two factors: Raft Disk I/O and
 /// KvDB Disk I/O. If there are more factors in the future, we can add them
 /// here.
-#[derive(Default)]
 pub struct UnifiedSlowScore {
     factors: Vec<SlowScore>,
+    network_factors: Arc<Mutex<HashMap<u64, SlowScore>>>,
+
+    // client_mgr: Arc<TikvClientMgr>,
+    inspect_network_interval: Duration,
 }
 
 impl UnifiedSlowScore {
-    pub fn new(cfg: &RaftstoreReporterConfig) -> Self {
-        let mut unified_slow_score = UnifiedSlowScore::default();
+    pub fn new(cfg: &RaftstoreReporterConfig, client_mgr: Arc<Mutex<TikvClientMgr>>) -> Self {
+        let mut unified_slow_score = UnifiedSlowScore {
+            factors: Vec::new(),
+            network_factors: Arc::new(Mutex::new(HashMap::new())),
+            // client_mgr: client_mgr.clone(),
+            inspect_network_interval: cfg.inspect_network_interval,
+        };
         // The first factor is for Raft Disk I/O.
         unified_slow_score.factors.push(SlowScore::new(
             cfg.inspect_interval, // timeout
@@ -80,16 +95,50 @@ impl UnifiedSlowScore {
             DISK_ROUND_TICKS,
             DISK_RECOVERY_INTERVALS,
         ));
-        // The third factor is for PD Network I/O.
-        unified_slow_score.factors.push(SlowScore::new(
-            NETWORK_TIMEOUT_THRESHOLD,
-            cfg.inspect_network_interval,
-            NETWORK_TIMEOUT_RATIO_THRESHOLD,
-            NETWORK_ROUND_TICKS,
-            NETWORK_RECOVERY_INTERVALS,
-        ));
+
+        let network_factors = unified_slow_score.network_factors.clone();
+        let inspect_network_interval = unified_slow_score.inspect_network_interval;
+        std::thread::spawn(move || {
+            loop {
+                let health_clients = client_mgr.lock().unwrap().get_health_clients();
+                for store_id in health_clients.keys() {
+                    let mut network_factors = network_factors.lock().unwrap();
+                    if !network_factors.contains_key(store_id) {
+                        network_factors.insert(*store_id, SlowScore::new(
+                            NETWORK_TIMEOUT_THRESHOLD,
+                            inspect_network_interval,
+                            NETWORK_TIMEOUT_RATIO_THRESHOLD,
+                            NETWORK_ROUND_TICKS,
+                            NETWORK_RECOVERY_INTERVALS,
+                        ));
+                    }
+                }
+                network_factors.lock().unwrap().retain(|store_id, _| health_clients.contains_key(store_id));
+                std::thread::sleep(Duration::from_secs(60));
+            }
+        });
+
+
         unified_slow_score
     }
+
+    // pub fn insert_network_factor(&mut self, store_id: u64) {
+    //     if self.network_factors.contains_key(&store_id) {
+    //         return;
+    //     }
+    //     let slow_score = SlowScore::new(
+    //         NETWORK_TIMEOUT_THRESHOLD,
+    //         self.inspect_network_interval,
+    //         NETWORK_TIMEOUT_RATIO_THRESHOLD,
+    //         NETWORK_ROUND_TICKS,
+    //         NETWORK_RECOVERY_INTERVALS,
+    //     );
+    //     self.network_factors.insert(store_id, slow_score);
+    // }
+
+    // pub fn remove_network_factor(&mut self, store_id: u64) {
+    //     self.network_factors.remove(&store_id);
+    // }
 
     #[inline]
     pub fn record_disk(
@@ -111,12 +160,21 @@ impl UnifiedSlowScore {
         not_busy: bool,
     ) {
         info!(
-            "recording slow score: id: {}, not_busy: {}, input_duration: {:?}",
+            "recording slow score: id: {}, store_id: {}, not_busy: {}, input_duration: {:?}",
             id,
+            duration.store_id,
             not_busy,
             duration.network_duration
         );
-        self.factors[InspectFactor::Network as usize].record_mutil(id, duration.network_duration.clone(), not_busy);
+        self.network_factors.lock().unwrap().entry(duration.store_id).or_insert_with(|| {
+            SlowScore::new(
+                NETWORK_TIMEOUT_THRESHOLD,
+                self.inspect_network_interval,
+                NETWORK_TIMEOUT_RATIO_THRESHOLD,
+                NETWORK_ROUND_TICKS,
+                NETWORK_RECOVERY_INTERVALS,
+            )
+        }).record(id, duration.network_duration.unwrap_or_default(), not_busy);
     }
 
     #[inline]
@@ -143,15 +201,64 @@ impl UnifiedSlowScore {
     }
 
     pub fn get_network_score(&self) -> HashMap<u64, u64> {
-        self.factors[InspectFactor::Network as usize]
-            .get_mutil()
-            .into_iter()
-            .map(|(k, v)| (k, v.into_inner().round() as u64)) 
+        self.network_factors.lock().unwrap()
+            .iter()
+            .map(|(k, v)| (*k, v.get() as u64)) 
             .collect()
     }
 
-    pub fn last_tick_finished(&self) -> bool {
-        self.factors.iter().all(SlowScore::last_tick_finished)
+    pub fn last_tick_finished(&self, factor: InspectFactor) -> bool {
+        if factor == InspectFactor::Network {
+            // For network factor, we need to check all network factors.
+            self.network_factors.lock().unwrap()
+                .values()
+                .all(|f| f.last_tick_finished())
+        } else {
+            // For other factors, we just check the specific factor.
+            self.factors[factor as usize].last_tick_finished()
+        }
+    }
+
+    pub fn record_timeout(&mut self, factor: InspectFactor) {
+        if factor == InspectFactor::Network {
+            // For network factor, we need to tick all network factors.
+            let mut network_factors = self.network_factors.lock().unwrap();
+            for (_, factor) in network_factors.iter_mut() {
+                factor.record_timeout();
+            }
+        } else {
+            // For other factors, we just record the specific factor.
+            self.factors[factor as usize].record_timeout();
+        }
+    }
+
+    pub fn tick(&mut self, factor: InspectFactor) -> SlowScoreTickResult {
+        let mut slow_score_tick_result = SlowScoreTickResult::default();
+        if factor == InspectFactor::Network {
+            // For network factor, we need to tick all network factors and return the avg result.
+            slow_score_tick_result.has_new_record = false;
+            let mut network_factors = self.network_factors.lock().unwrap();
+            let mut total_score = 0.0;
+            let mut total_count = 0;
+            for (_, factor) in network_factors.iter_mut() {
+                let factor_tick_result = factor.tick();
+                if factor_tick_result.updated_score.is_some() {
+                    slow_score_tick_result.has_new_record = true;
+                }
+                slow_score_tick_result.tick_id = factor_tick_result.tick_id.max(slow_score_tick_result.tick_id);
+                total_score += factor_tick_result.updated_score.unwrap_or(0.0);
+                total_count += 1;
+            }
+            if total_count > 0 {
+                slow_score_tick_result.updated_score = Some(total_score / total_count as f64);
+            }
+            slow_score_tick_result.should_force_report_slow_store = network_factors
+                .values()
+                .any(|factor| factor.get().ge(&100.));
+        } else {
+            slow_score_tick_result = self.factors[factor as usize].tick();
+        }
+        slow_score_tick_result
     }
 }
 
@@ -167,10 +274,14 @@ pub struct RaftstoreReporter {
 impl RaftstoreReporter {
     const MODULE_NAME: &'static str = "raftstore";
 
-    pub fn new(health_controller: &HealthController, cfg: RaftstoreReporterConfig) -> Self {
+    pub fn new(
+        health_controller: &HealthController,
+        client_mgr: Arc<Mutex<TikvClientMgr>>,
+        cfg: RaftstoreReporterConfig,
+    ) -> Self {
         Self {
             health_controller_inner: health_controller.inner.clone(),
-            slow_score: UnifiedSlowScore::new(&cfg),
+            slow_score: UnifiedSlowScore::new(&cfg, client_mgr),
             slow_trend: SlowTrendStatistics::new(cfg),
             is_healthy: true,
             disk_score_reached_100: false,
@@ -247,19 +358,17 @@ impl RaftstoreReporter {
         self.slow_trend.slow_cause.record(500_000, Instant::now());
 
         // healthy: The health status of the current store.
-        // all_ticks_finished: The last tick of all factors is finished.
-        // factor_tick_finished: The last tick of the current factor is finished.
-        let (healthy, all_ticks_finished, factor_tick_finished) = (
+        // last_ticks_finished: The last tick of factor is finished.
+        let (healthy, last_ticks_finished) = (
             self.is_healthy(),
-            self.slow_score.last_tick_finished(),
-            self.slow_score.get(factor).last_tick_finished(),
+            self.slow_score.last_tick_finished(factor),
         );
         // The health status is recovered to serving as long as any tick
         // does not timeout.
-        if !healthy && all_ticks_finished {
+        if !healthy && last_ticks_finished {
             self.set_is_healthy(true);
         }
-        if !all_ticks_finished && !factor_tick_finished {
+        if !last_ticks_finished {
             // If the tick is not finished, it means that the current store might
             // be busy on handling requests or delayed on I/O operations. And only when
             // the current store is not busy, it should record the last_tick as a timeout.
@@ -268,11 +377,11 @@ impl RaftstoreReporter {
                     "raftstore reporter tick: factor {:?} not finished, store_maybe_busy: {}",
                     factor, store_maybe_busy
                 );
-                self.slow_score.get_mut(factor).record_timeout();
+                self.slow_score.record_timeout(factor);
             }
         }
 
-        let slow_score_tick_result = self.slow_score.get_mut(factor).tick();
+        let slow_score_tick_result = self.slow_score.tick(factor);
         if slow_score_tick_result.updated_score.is_some() && !slow_score_tick_result.has_new_record
         {
             self.set_is_healthy(false);
@@ -421,5 +530,84 @@ impl TestReporter {
     pub fn set_raftstore_slow_score(&self, slow_score: f64) {
         self.health_controller_inner
             .update_raftstore_slow_score(slow_score);
+    }
+}
+
+#[derive(Clone)]
+pub struct TikvClientMgr {
+    store_id: u64,
+    pd_client: Arc<dyn PdClient>,
+    // store_address -> client
+    channels: Arc<Mutex<HashMap<u64, Channel>>>,
+    env: Arc<Environment>,
+    security_mgr: Arc<SecurityManager>,
+}
+
+impl TikvClientMgr {
+    pub fn new(
+        store_id: u64,
+        pd_client: Arc<dyn PdClient>,
+        env: Arc<Environment>,
+        security_mgr: Arc<SecurityManager>,
+    ) -> Self {
+        let mgr = TikvClientMgr {
+            store_id,
+            pd_client: pd_client.clone(),
+            channels: Arc::new(Mutex::new(HashMap::default())),
+            env: env.clone(),
+            security_mgr: security_mgr.clone(),
+        };
+
+        let mgr_clone = mgr.clone();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            rt.block_on(async move {
+                loop {
+                    mgr_clone.update();
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                }
+            });
+        });
+        mgr
+    }
+
+    fn update(&self) {
+        let stores = match self.pd_client.get_all_stores(true) {
+            Ok(stores) => stores,
+            Err(e) => {
+                warn!("failed to get stores from PD"; "err" => ?e);
+                return;
+            }
+        };
+
+        let mut channels = self.channels.lock().unwrap();
+        let existing_stores: std::collections::HashSet<_> = channels.keys().cloned().collect();
+
+        for store in stores {
+            let addr = store.get_address().to_string();
+            let store_id = store.get_id();
+            if !existing_stores.contains(&store_id) && store_id != self.store_id {
+                let channel = self.security_mgr.connect(
+                    ChannelBuilder::new(self.env.clone()),
+                    &addr,
+                );
+                channels.insert(store_id, channel);
+            }
+        }
+    }
+
+    pub fn get_health_clients(&self) -> HashMap<u64, HealthClient> {
+        let mut health_clients = HashMap::default();
+
+        for (store_id, channel) in self.channels.lock().unwrap().iter() {
+            let client = HealthClient::new(
+                channel.clone(),
+            );
+            health_clients.insert(*store_id, client);
+        }
+        health_clients
     }
 }

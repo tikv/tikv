@@ -34,6 +34,7 @@ use file_system::{IoType, WithIoType};
 use futures::{FutureExt, compat::Future01CompatExt};
 use health_controller::{
     HealthController,
+    reporters::TikvClientMgr,
     types::{InspectFactor, LatencyInspector},
 };
 use itertools::Itertools;
@@ -1675,6 +1676,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         inspector_runner: InspectorRunner,
         grpc_service_mgr: GrpcServiceManager,
         safe_point: Arc<AtomicU64>,
+        tikv_client_mgr: Arc<Mutex<TikvClientMgr>>,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1862,6 +1864,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             snap_generator_pool,
             grpc_service_mgr,
             inspector_runner,
+            tikv_client_mgr,
         )?;
         Ok(())
     }
@@ -1881,6 +1884,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         snap_generator_pool: FuturePool,
         grpc_service_mgr: GrpcServiceManager,
         mut inspector_runner: InspectorRunner,
+        tikv_client_mgr: Arc<Mutex<TikvClientMgr>>,
     ) -> Result<()> {
         let cfg = builder.cfg.value().clone();
         let store = builder.store.clone();
@@ -1980,6 +1984,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             causal_ts_provider,
             grpc_service_mgr,
             inspector_scheduler,
+            tikv_client_mgr,
         );
         assert!(workers.pd_worker.start(pd_runner));
 

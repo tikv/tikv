@@ -22,9 +22,12 @@ use fail::fail_point;
 use futures::{FutureExt, compat::Future01CompatExt};
 use health_controller::{
     HealthController,
-    reporters::{RaftstoreReporter, RaftstoreReporterConfig},
+    reporters::{RaftstoreReporter, RaftstoreReporterConfig, TikvClientMgr},
     types::{InspectFactor, LatencyInspector, UnifiedDuration},
 };
+use security::SecurityManager;
+use security::SecurityConfig;
+use grpcio::{Error as grpcError, RpcStatusCode, Environment, ChannelBuilder, Channel};
 use kvproto::{
     kvrpcpb::DiskFullOpt,
     metapb, pdpb,
@@ -979,6 +982,7 @@ where
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         grpc_service_manager: GrpcServiceManager,
         inspector_scheduler: Scheduler<InspectorTask>,
+        tikv_client_mgr: Arc<Mutex<TikvClientMgr>>,
     ) -> Runner<EK, ER, T> {
         let mut store_stat = StoreStat::default();
         store_stat.set_cpu_quota(SysQuota::cpu_cores_quota(), cfg.inspect_cpu_util_thd);
@@ -1022,7 +1026,11 @@ where
                 .with_label_values(&["L2"]),
         };
 
-        let health_reporter = RaftstoreReporter::new(&health_controller, health_reporter_config);
+        let health_reporter = RaftstoreReporter::new(
+            &health_controller,
+            tikv_client_mgr,
+            health_reporter_config,
+        );
 
         Runner {
             store_id,
@@ -2099,13 +2107,11 @@ where
                 InspectFactor::Network => LatencyInspector::new(
                     id,
                     Box::new(move |id, duration| {
-                        for (store_id, network_duration) in duration.network_duration.iter() {
-                            STORE_INSPECT_NETWORK_DURATION_HISTOGRAM
-                                .with_label_values(&[&store_id.to_string()])
-                                .observe(tikv_util::time::duration_to_sec(
-                                    network_duration.unwrap_or_default(),
-                                ));
-                        }
+                        STORE_INSPECT_NETWORK_DURATION_HISTOGRAM
+                            .with_label_values(&[&duration.store_id.to_string()])
+                            .observe(tikv_util::time::duration_to_sec(
+                                duration.network_duration.unwrap_or_default(),
+                            ));
                         
                         if let Err(e) = scheduler.schedule(Task::UpdateSlowScore {
                             id,

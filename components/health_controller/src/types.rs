@@ -9,8 +9,10 @@ use std::collections::HashMap;
 pub struct UnifiedDuration {
     /// The duration of all stages of raftstore.
     pub raftstore_duration: RaftstoreDuration,
-    /// The duration of inspection to PD.
-    pub network_duration: HashMap<u64, Option<std::time::Duration>>,
+    /// The duration of inspection to tikv.
+    pub network_duration: Option<std::time::Duration>,
+    /// The store id of inspect tikv.
+    pub store_id: u64,
 }
 
 /// Represent the duration of all stages of raftstore recorded by one
@@ -81,7 +83,7 @@ impl InspectFactor {
 
 /// Used to inspect the latency of all stages of raftstore.
 pub struct LatencyInspector {
-    id: u64,
+    pub id: u64,
     duration: UnifiedDuration,
     cb: Box<dyn Fn(u64, UnifiedDuration) + Send>,
 }
@@ -135,7 +137,8 @@ impl LatencyInspector {
             "id" => self.id,
             "duration" => ?duration
         );
-        self.duration.network_duration.insert(store_id, Some(duration));
+        self.duration.store_id = store_id;
+        self.duration.network_duration = Some(duration);
     }
 
     /// Call the callback.

@@ -46,8 +46,8 @@ pub struct SlowScore {
     timeout_requests: usize,
     total_requests: usize,
 
-    mutil_value: HashMap<u64, OrderedFloat<f64>>,
-    mutil_timeout_requests: HashMap<u64, usize>,
+    // mutil_value: HashMap<u64, OrderedFloat<f64>>,
+    // mutil_timeout_requests: HashMap<u64, usize>,
 
     timeout_threshold: Duration,
     // The maximal tolerated timeout ratio.
@@ -84,8 +84,8 @@ impl SlowScore {
             timeout_requests: 0,
             total_requests: 0,
 
-            mutil_value: HashMap::default(),
-            mutil_timeout_requests: HashMap::default(),
+            // mutil_value: HashMap::default(),
+            // mutil_timeout_requests: HashMap::default(),
 
             timeout_threshold,
             ratio_thresh: OrderedFloat(ratio_thresh),
@@ -107,8 +107,8 @@ impl SlowScore {
             timeout_requests: 0,
             total_requests: 0,
 
-            mutil_value: HashMap::default(),
-            mutil_timeout_requests: HashMap::default(),
+            // mutil_value: HashMap::default(),
+            // mutil_timeout_requests: HashMap::default(),
 
             timeout_threshold: inspect_interval,
             ratio_thresh: OrderedFloat(timeout_ratio),
@@ -139,25 +139,25 @@ impl SlowScore {
         }
     }
 
-    pub fn record_mutil(&mut self, id: u64, durations: HashMap<u64, Option<Duration>>, not_busy: bool) {
-        self.last_record_time = Instant::now();
-        if id <= self.last_tick_id.saturating_sub(self.min_timeout_ticks) {
-            return;
-        }
+    // pub fn record_mutil(&mut self, id: u64, durations: HashMap<u64, Option<Duration>>, not_busy: bool) {
+    //     self.last_record_time = Instant::now();
+    //     if id <= self.last_tick_id.saturating_sub(self.min_timeout_ticks) {
+    //         return;
+    //     }
 
-        self.uncompleted_ticks.remove(&id);
-        self.total_requests += 1;
-        if not_busy {
-            for (store_id, duration) in durations {
-                if duration.unwrap_or_default() >= self.timeout_threshold {
-                    self.mutil_timeout_requests
-                        .entry(store_id)
-                        .and_modify(|count| *count += 1)
-                        .or_insert(1);
-                }
-            }
-        }
-    }
+    //     self.uncompleted_ticks.remove(&id);
+    //     self.total_requests += 1;
+    //     if not_busy {
+    //         for (store_id, duration) in durations {
+    //             if duration.unwrap_or_default() >= self.timeout_threshold {
+    //                 self.mutil_timeout_requests
+    //                     .entry(store_id)
+    //                     .and_modify(|count| *count += 1)
+    //                     .or_insert(1);
+    //             }
+    //         }
+    //     }
+    // }
 
     pub fn record_timeout(&mut self) {
         self.last_record_time = Instant::now();
@@ -180,10 +180,6 @@ impl SlowScore {
 
     pub fn get(&self) -> f64 {
         self.value.into()
-    }
-
-    pub fn get_mutil(&self) -> HashMap<u64, OrderedFloat<f64>> {
-        self.mutil_value.clone()
     }
 
     // // Update the score in a AIMD way.
@@ -230,15 +226,6 @@ impl SlowScore {
         };
     
         self.value = update_score(self.timeout_requests, self.total_requests.max(1), self.value);
-    
-
-        for (store_id, value) in self.mutil_value.iter_mut() {
-            let timeout_requests = self.mutil_timeout_requests.get(store_id).cloned().unwrap_or(0);
-            let total_requests = self.total_requests;
-            *value = update_score(timeout_requests, total_requests, *value);
-        }
-    
-        self.mutil_timeout_requests.clear();
     
         self.total_requests = 0;
         self.timeout_requests = 0;
@@ -287,6 +274,7 @@ impl SlowScore {
     }
 }
 
+#[derive(Default)]
 pub struct SlowScoreTickResult {
     pub tick_id: u64,
     // None if skipped in this tick

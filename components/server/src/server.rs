@@ -39,7 +39,7 @@ use engine_traits::{
 use file_system::{BytesFetcher, MetricsManager as IoMetricsManager, get_io_rate_limiter};
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
-use health_controller::HealthController;
+use health_controller::{HealthController, reporters::TikvClientMgr};
 use hybrid_engine::observer::{
     HybridSnapshotObserver, LoadEvictionObserver as HybridEngineLoadEvictionObserver,
     RegionCacheWriteBatchObserver,
@@ -1051,13 +1051,21 @@ where
             .registry
             .register_consistency_check_observer(100, observer);
 
+            
+        let tikv_client_mgr = Arc::new(Mutex::new(TikvClientMgr::new(
+            raft_server.id(),
+            self.pd_client.clone(),
+            self.env.clone(),
+            self.security_mgr.clone(),
+        )));
+
         let inspector_runner =
             InspectorRunner::new(
                 self.core.store_path.clone(),
-                self.pd_client.clone(),
-                self.env.clone(),
-                self.security_mgr.clone(),
+                tikv_client_mgr.clone(),
             );
+
+        
 
         raft_server
             .start(
@@ -1076,6 +1084,7 @@ where
                 inspector_runner,
                 self.grpc_service_mgr.clone(),
                 safe_point.clone(),
+                tikv_client_mgr,
             )
             .unwrap_or_else(|e| fatal!("failed to start raft_server: {}", e));
 
