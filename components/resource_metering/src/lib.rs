@@ -35,6 +35,7 @@ pub use reporter::{
 use tikv_util::{
     memory::HeapSize,
     sys::thread,
+    info,
     warn,
     worker::{Scheduler, Worker},
 };
@@ -317,6 +318,7 @@ impl TagInfos {
         key_ranges: Vec<(Vec<u8>, Vec<u8>)>,
     ) -> Self {
         let peer = context.get_peer();
+        info!("from_rpc_context_with_key_ranges region_id";  "region_id" => context.get_region_id());
         Self {
             store_id: peer.get_store_id(),
             peer_id: peer.get_id(),
