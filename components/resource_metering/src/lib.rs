@@ -301,6 +301,7 @@ pub struct TagInfos {
 impl TagInfos {
     pub fn from_rpc_context(context: &kvproto::kvrpcpb::Context) -> Self {
         let peer = context.get_peer();
+        info!("from_rpc_context region_id";  "region_id" => context.get_region_id());
         Self {
             store_id: peer.get_store_id(),
             peer_id: peer.get_id(),
