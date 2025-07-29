@@ -15,6 +15,7 @@ use collections::HashMap;
 use kvproto::resource_usage_agent::ResourceUsageRecord;
 use tikv_util::{
     time::Duration,
+    info,
     warn,
     worker::{Builder as WorkerBuilder, LazyWorker, Runnable, RunnableWithTimer, Scheduler},
 };
@@ -96,14 +97,18 @@ impl Reporter {
         let ts = records.begin_unix_time_secs;
         if self.config.max_resource_groups >= records.records.len() {
             self.records.append(ts, records.records.iter());
+            info!("handle_records no evicted records";  "ts" => ts);
             return;
         }
         let (top, evicted) = records.top_k(self.config.max_resource_groups);
         self.records.append(ts, top);
         let others = self.records.others.entry(ts).or_default();
+        let mut count = 0;
         evicted.for_each(|(_, v)| {
             others.merge(v);
+            count += 1;
         });
+        info!("handle_records evicted records counter"; "PickedCount" => self.config.max_resource_groups, "count" => count, "ts" => ts);
     }
 
     fn handle_config_change(&mut self, config: Config) {
