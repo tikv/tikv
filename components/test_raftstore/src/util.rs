@@ -1305,8 +1305,13 @@ pub fn kv_pessimistic_lock_with_ttl(
 }
 
 pub fn must_kv_pessimistic_lock(client: &TikvClient, ctx: Context, key: Vec<u8>, ts: u64) {
-    let resp = kv_pessimistic_lock(client, ctx, vec![key], ts, ts, false);
-    assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+    let resp = kv_pessimistic_lock(client, ctx.clone(), vec![key], ts, ts, false);
+    assert!(
+        !resp.has_region_error(),
+        "{:?}, ctx:{:?}",
+        resp.get_region_error(),
+        ctx
+    );
     assert!(resp.errors.is_empty(), "{:?}", resp.get_errors());
 }
 
