@@ -100,10 +100,10 @@ impl UnifiedSlowScore {
         std::thread::spawn(move || {
             loop {
                 let health_clients = client_mgr.lock().unwrap().get_health_clients();
+                let mut guard = network_factors.lock().unwrap();
                 for store_id in health_clients.keys() {
-                    let mut network_factors = network_factors.lock().unwrap();
-                    if !network_factors.contains_key(store_id) {
-                        network_factors.insert(*store_id, SlowScore::new(
+                    if !guard.contains_key(store_id) {
+                        guard.insert(*store_id, SlowScore::new(
                             NETWORK_TIMEOUT_THRESHOLD,
                             inspect_network_interval,
                             NETWORK_TIMEOUT_RATIO_THRESHOLD,
@@ -112,7 +112,7 @@ impl UnifiedSlowScore {
                         ));
                     }
                 }
-                network_factors.lock().unwrap().retain(|store_id, _| health_clients.contains_key(store_id));
+                guard.retain(|store_id, _| health_clients.contains_key(store_id));
                 std::thread::sleep(Duration::from_secs(60));
             }
         });

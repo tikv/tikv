@@ -7,6 +7,7 @@ use std::{
 };
 
 use ordered_float::OrderedFloat;
+use tikv_util::info;
 
 /// Interval for updating the slow score.
 const UPDATE_INTERVALS: Duration = Duration::from_secs(10);
@@ -237,6 +238,13 @@ impl SlowScore {
         let threshold = self.last_tick_id.saturating_sub(self.min_timeout_ticks - 1);
         let exist_uncompleted_tick = self.uncompleted_ticks.iter().any(|&id| id <= threshold);
 
+        info!(
+            "last_tick_finished: last_tick_id: {}, min_timeout_ticks: {}, threshold: {}, exist_uncompleted_tick: {}",
+            self.last_tick_id,
+            self.min_timeout_ticks,
+            threshold,
+            exist_uncompleted_tick
+        );
         !exist_uncompleted_tick
     }
 
