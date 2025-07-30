@@ -25,9 +25,6 @@ use health_controller::{
     reporters::{RaftstoreReporter, RaftstoreReporterConfig, TikvClientMgr},
     types::{InspectFactor, LatencyInspector, UnifiedDuration},
 };
-use security::SecurityManager;
-use security::SecurityConfig;
-use grpcio::{Error as grpcError, RpcStatusCode, Environment, ChannelBuilder, Channel};
 use kvproto::{
     kvrpcpb::DiskFullOpt,
     metapb, pdpb,

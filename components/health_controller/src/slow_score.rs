@@ -2,7 +2,7 @@
 
 use std::{
     cmp,
-    collections::{HashSet, HashMap},
+    collections::HashSet,
     time::{Duration, Instant},
 };
 
@@ -205,27 +205,20 @@ impl SlowScore {
     //     self.value
     // }
     fn update_impl(&mut self, elapsed: Duration) -> OrderedFloat<f64> {
-        let update_score = |timeout_requests: usize,
-                                 total_requests: usize,
-                                 old_value: OrderedFloat<f64>|
-         -> OrderedFloat<f64> {
-            if timeout_requests == 0 {
-                let desc = 100.0 * (elapsed.as_millis() as f64 / self.min_ttr.as_millis() as f64);
-                if OrderedFloat(desc) > old_value - OrderedFloat(1.0) {
-                    1.0.into()
-                } else {
-                    old_value - desc
-                }
+        if self.timeout_requests == 0 {
+            let desc = 100.0 * (elapsed.as_millis() as f64 / self.min_ttr.as_millis() as f64);
+            if OrderedFloat(desc) > self.value - OrderedFloat(1.0) {
+                self.value = 1.0.into();
             } else {
-                let timeout_ratio = timeout_requests as f64 / total_requests.max(1) as f64;
-                let near_thresh =
-                    cmp::min(OrderedFloat(timeout_ratio), self.ratio_thresh) / self.ratio_thresh;
-                let new_value = old_value * (OrderedFloat(1.0) + near_thresh);
-                cmp::min(OrderedFloat(100.0), new_value)
+                self.value -= desc;
             }
-        };
-    
-        self.value = update_score(self.timeout_requests, self.total_requests.max(1), self.value);
+        } else {
+            let timeout_ratio = self.timeout_requests as f64 / self.total_requests as f64;
+            let near_thresh =
+                cmp::min(OrderedFloat(timeout_ratio), self.ratio_thresh) / self.ratio_thresh;
+            let value = self.value * (OrderedFloat(1.0) + near_thresh);
+            self.value = cmp::min(OrderedFloat(100.0), value);
+        }
     
         self.total_requests = 0;
         self.timeout_requests = 0;
@@ -274,7 +267,7 @@ impl SlowScore {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct SlowScoreTickResult {
     pub tick_id: u64,
     // None if skipped in this tick

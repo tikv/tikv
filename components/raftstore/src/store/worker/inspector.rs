@@ -3,14 +3,11 @@
 use std::{
     fmt::{self, Display, Formatter}, io::Write, path::PathBuf, sync::Arc, time::Duration, thread
 };
-use collections::HashMap;
 
-use pd_client::{Config as PdConfig, PdClient, RpcClient};
-use security::SecurityConfig;
 
 use crossbeam::channel::{Receiver, Sender, TrySendError, bounded};
-use grpcio::{Error, RpcStatusCode, Environment, ChannelBuilder};
-use grpcio_health::{proto::{HealthCheckRequest, HealthClient}, ServingStatus::Serving};
+use grpcio::{Error, RpcStatusCode};
+use grpcio_health::proto::HealthCheckRequest;
 use health_controller::{
     reporters::TikvClientMgr,
     types::LatencyInspector
@@ -19,13 +16,10 @@ use tikv_util::{
     time::Instant,
     warn, 
     info,
-    worker::{Runnable, Worker},
+    worker::{Runnable, Worker, Builder as WorkerBuilder},
 };
 
 use std::sync::Mutex;
-
-use security::SecurityManager;
-
 
 fn is_network_error(err: &grpcio::Error) -> bool {
     warn!("[test] checking network error"; "err" => ?err);
@@ -147,7 +141,7 @@ impl Runner {
         )
     }
 
-    #[inline]
+    // #[inline]
     /// Only for test.
     /// Generate a dummy Runner.
     // pub fn dummy() -> Self {
@@ -156,11 +150,13 @@ impl Runner {
     //     )
     // }
 
-    #[inline]
     pub fn bind_background_worker(&mut self, bg_worker: Worker) {
         self.disk_runner.bind_background_worker(bg_worker.clone());
         self.network_runner
-            .bind_background_worker(bg_worker.clone());
+            .bind_background_worker(WorkerBuilder::new("network-inspector")
+            .thread_count(20)
+            .thread_count_limits(1, 20)
+            .create());
     }
 
     fn inspect_disk(&self) -> Option<Duration> {
@@ -206,15 +202,17 @@ impl Runner {
         start: Instant,
         inspector: Arc<Mutex<LatencyInspector>>,
     ) {
-        let mut handles = Vec::new();
+        // let mut handles = Vec::new();
         for (store_id, client) in self.tikv_client_mgr.lock().unwrap().get_health_clients() {
             let inspector = inspector.clone();
             let client = client.clone();
 
-            let handle = thread::spawn(move || {
-                info!("start health check"; "inspect_id" => inspector.lock().unwrap().id, "store_id" => store_id);
-                let result = client.check(&HealthCheckRequest::new());
-                info!("end health check"; "inspect_id" => inspector.lock().unwrap().id, "store_id" => store_id);
+            let _ = thread::spawn(move || {
+                // info!("start health check"; "inspect_id" => inspector.lock().unwrap().id, "store_id" => store_id);
+                let timeout = std::time::Duration::from_secs(2);
+                let call_opt = grpcio::CallOption::default().timeout(timeout);
+                let result = client.check_opt(&HealthCheckRequest::new(), call_opt);
+                // info!("end health check"; "inspect_id" => inspector.lock().unwrap().id, "store_id" => store_id);
                 let dur = match result {
                     Ok(_) => {
                         start.saturating_elapsed()
@@ -233,12 +231,12 @@ impl Runner {
                 guard.record_network_io_duration(store_id, dur);
                 guard.finish();
             });
-            handles.push(handle);
+            // handles.push(handle);
         }
 
-        for handle in handles {
-            let _ = handle.join();
-        }
+        // for handle in handles {
+        //     let _ = handle.join();
+        // }
     }
 
     fn execute_disk(&self) {

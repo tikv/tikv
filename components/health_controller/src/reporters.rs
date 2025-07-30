@@ -11,10 +11,9 @@ use kvproto::pdpb;
 use pdpb::SlowTrend as SlowTrendPb;
 use prometheus::IntGauge;
 use security::SecurityManager;
-use security::SecurityConfig;
-use grpcio::{Error, RpcStatusCode, Environment, ChannelBuilder, Channel};
-use pd_client::{Config as PdConfig, PdClient, RpcClient};
-use grpcio_health::{proto::{HealthCheckRequest, HealthClient}, ServingStatus::Serving};
+use grpcio::{Environment, ChannelBuilder, Channel};
+use pd_client::PdClient;
+use grpcio_health::{proto::HealthClient};
 use tikv_util::warn;
 
 use tikv_util::info;
@@ -157,13 +156,11 @@ impl UnifiedSlowScore {
         &mut self,
         id: u64,
         duration: &UnifiedDuration,
-        not_busy: bool,
     ) {
         info!(
-            "recording slow score: id: {}, store_id: {}, not_busy: {}, input_duration: {:?}",
+            "recording slow score: id: {}, store_id: {}, input_duration: {:?}",
             id,
             duration.store_id,
-            not_busy,
             duration.network_duration
         );
         self.network_factors.lock().unwrap().entry(duration.store_id).or_insert_with(|| {
@@ -174,7 +171,7 @@ impl UnifiedSlowScore {
                 NETWORK_ROUND_TICKS,
                 NETWORK_RECOVERY_INTERVALS,
             )
-        }).record(id, duration.network_duration.unwrap_or_default(), not_busy);
+        }).record(id, duration.network_duration.unwrap_or_default(), true);
     }
 
     #[inline]
@@ -189,15 +186,8 @@ impl UnifiedSlowScore {
 
     // Returns the maximum score of disk factors.
     pub fn get_disk_score(&self) -> f64 {
-        self.factors
-            .iter()
-            .enumerate()
-            // the factor InspectFactor::Network is the final element when 
-            // initializing the factors list, where other factors related to 
-            // disk-io are placed ahead of it.
-            .filter(|(idx, _)| *idx < InspectFactor::Network as usize)
-            .map(|(_, factor)| factor.get())
-            .fold(1.0, f64::max)
+        (self.factors[InspectFactor::RaftDisk as usize].get() + 
+            self.factors[InspectFactor::KvDisk as usize].get()) / 2.0
     }
 
     pub fn get_network_score(&self) -> HashMap<u64, u64> {
@@ -212,7 +202,7 @@ impl UnifiedSlowScore {
             // For network factor, we need to check all network factors.
             self.network_factors.lock().unwrap()
                 .values()
-                .all(|f| f.last_tick_finished())
+                .any(|f| f.last_tick_finished())
         } else {
             // For other factors, we just check the specific factor.
             self.factors[factor as usize].last_tick_finished()
@@ -244,10 +234,10 @@ impl UnifiedSlowScore {
                 let factor_tick_result = factor.tick();
                 if factor_tick_result.updated_score.is_some() {
                     slow_score_tick_result.has_new_record = true;
+                    total_score += factor_tick_result.updated_score.unwrap_or(0.0);
+                    total_count += 1;
                 }
                 slow_score_tick_result.tick_id = factor_tick_result.tick_id.max(slow_score_tick_result.tick_id);
-                total_score += factor_tick_result.updated_score.unwrap_or(0.0);
-                total_count += 1;
             }
             if total_count > 0 {
                 slow_score_tick_result.updated_score = Some(total_score / total_count as f64);
@@ -255,6 +245,12 @@ impl UnifiedSlowScore {
             slow_score_tick_result.should_force_report_slow_store = network_factors
                 .values()
                 .any(|factor| factor.get().ge(&100.));
+            info!(
+                "network slow score tick: {:?}, total_score: {}, total_count: {}",
+                slow_score_tick_result,
+                total_score,
+                total_count
+            );
         } else {
             slow_score_tick_result = self.factors[factor as usize].tick();
         }
@@ -327,7 +323,7 @@ impl RaftstoreReporter {
             }
             InspectFactor::Network => {
                 self.slow_score
-                    .record_network(id, &duration, store_not_busy);
+                    .record_network(id, &duration);
                 // self.health_controller_inner
                 //     .update_network_slow_score(self.slow_score.get_network_score());
             }
