@@ -202,7 +202,7 @@ impl UnifiedSlowScore {
             // For network factor, we need to check all network factors.
             self.network_factors.lock().unwrap()
                 .values()
-                .any(|f| f.last_tick_finished())
+                .all(|f| f.last_tick_finished())
         } else {
             // For other factors, we just check the specific factor.
             self.factors[factor as usize].last_tick_finished()
