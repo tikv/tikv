@@ -380,7 +380,8 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
             }
 
             // Check if we've exceeded the check interval, return to start next round
-            if start_time.elapsed() >= check_interval {
+            let elapsed = start_time.elapsed();
+            if elapsed >= check_interval {
                 debug!("check interval exceeded, returning to start next round");
                 return Some(start_time.elapsed());
             }
