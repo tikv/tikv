@@ -226,7 +226,6 @@ impl UnifiedSlowScore {
         let mut slow_score_tick_result = SlowScoreTickResult::default();
         if factor == InspectFactor::Network {
             // For network factor, we need to tick all network factors and return the avg result.
-            slow_score_tick_result.has_new_record = false;
             let mut network_factors = self.network_factors.lock().unwrap();
             let mut total_score = 0.0;
             let mut total_count = 0;
@@ -239,7 +238,8 @@ impl UnifiedSlowScore {
                 }
                 slow_score_tick_result.tick_id = factor_tick_result.tick_id.max(slow_score_tick_result.tick_id);
             }
-            if total_count > 0 {
+            // To ensure that score can display complete information
+            if total_count == network_factors.len() {
                 slow_score_tick_result.updated_score = Some(total_score / total_count as f64);
             }
             slow_score_tick_result.should_force_report_slow_store = network_factors
