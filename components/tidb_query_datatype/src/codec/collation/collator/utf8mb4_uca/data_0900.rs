@@ -11,7 +11,7 @@ pub struct Unicode0900 {}
 
 impl UnicodeVersion for Unicode0900 {
     #[inline]
-    fn preprocess(s: &str) -> &str {
+    fn preprocess(s: &[u8]) -> &[u8] {
         s
     }
 
