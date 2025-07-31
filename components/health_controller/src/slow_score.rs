@@ -127,6 +127,14 @@ impl SlowScore {
         }
     }
 
+    pub fn set_last_tick_id(&mut self, id: u64) {
+        self.last_tick_id = id;
+    }
+
+    pub fn get_last_tick_id(&mut self) -> u64 {
+        self.last_tick_id
+    }
+
     pub fn record(&mut self, id: u64, duration: Duration, not_busy: bool) {
         self.last_record_time = Instant::now();
         if id <= self.last_tick_id.saturating_sub(self.min_timeout_ticks) {

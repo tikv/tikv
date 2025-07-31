@@ -229,6 +229,20 @@ impl UnifiedSlowScore {
             let mut network_factors = self.network_factors.lock().unwrap();
             let mut total_score = 0.0;
             let mut total_count = 0;
+
+            let mut need_sync = false;
+            let mut last_tick_id = 0;
+            for (_, factor) in network_factors.iter_mut() {
+                if last_tick_id != 0 {
+                    need_sync = need_sync || last_tick_id.eq(&factor.get_last_tick_id());
+                }
+                last_tick_id = factor.get_last_tick_id().max(last_tick_id);
+            }
+            if need_sync {
+                for (_, factor) in network_factors.iter_mut() {
+                    factor.set_last_tick_id(last_tick_id);
+                }
+            }
             for (_, factor) in network_factors.iter_mut() {
                 let factor_tick_result = factor.tick();
                 if factor_tick_result.updated_score.is_some() {
@@ -238,6 +252,7 @@ impl UnifiedSlowScore {
                 }
                 slow_score_tick_result.tick_id = factor_tick_result.tick_id.max(slow_score_tick_result.tick_id);
             }
+
             // To ensure that score can display complete information
             if total_count == network_factors.len() {
                 slow_score_tick_result.updated_score = Some(total_score / total_count as f64);
