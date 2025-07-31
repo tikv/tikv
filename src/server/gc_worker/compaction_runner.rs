@@ -383,7 +383,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
             let elapsed = start_time.elapsed();
             if elapsed >= check_interval {
                 debug!("check interval exceeded, returning to start next round");
-                return Some(start_time.elapsed());
+                return Some(elapsed);
             }
 
             // Update pending candidates gauge (remaining candidates)
