@@ -16,7 +16,7 @@ use pd_client::{
     RESOURCE_CONTROL_CONTROLLER_CONFIG_PATH,
 };
 use serde::{Deserialize, Serialize};
-use tikv_util::{error, info, timer::GLOBAL_TIMER_HANDLE};
+use tikv_util::{error, info, timer::GLOBAL_TIMER_HANDLE, warn};
 
 use crate::{resource_limiter::ResourceType, ResourceGroupManager};
 
@@ -102,7 +102,13 @@ impl ResourceManagerService {
                         }
                     }
                     Err(PdError::DataCompacted(msg)) => {
+<<<<<<< HEAD
                         error!("required revision has been compacted"; "err" => ?msg);
+=======
+                        warn!("required revision has been compacted"; "err" => ?msg);
+                        self.reload_all_resource_groups().await;
+                        cancel.abort();
+>>>>>>> f9d394ca3f (degrade TiKV Error log level for false alarm (#18746))
                         continue 'outer;
                     }
                     Err(err) => {

@@ -3,8 +3,13 @@
 use collections::HashMap;
 use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine};
+<<<<<<< HEAD
 use raftstore::{store::TabletSnapKey, Result};
 use slog::error;
+=======
+use raftstore::{Result, store::TabletSnapKey};
+use slog::warn;
+>>>>>>> f9d394ca3f (degrade TiKV Error log level for false alarm (#18746))
 
 use crate::{
     batch::StoreContext,
@@ -17,7 +22,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
     #[inline]
     pub fn on_snapshot_gc(&mut self) {
         if let Err(e) = self.fsm.store.on_snapshot_gc(self.store_ctx) {
-            error!(self.fsm.store.logger(), "cleanup import sst failed"; "error" => ?e);
+            warn!(self.fsm.store.logger(), "cleanup import sst failed"; "error" => ?e);
         }
         self.schedule_tick(
             StoreTick::SnapGc,
