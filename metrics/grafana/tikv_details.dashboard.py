@@ -3797,6 +3797,18 @@ def Scheduler() -> RowPanel:
                 metric="tikv_yatp_pool_schedule_wait_duration_bucket",
                 label_selectors=['name=~"sched-worker.*"'],
             ),
+            graph_panel(
+                title="Scheduler scan lock rate limit",
+                description="The scan_lock requests rate limit per TiKV instance",
+                yaxes=yaxes(left_format=UNITS.NONE_FORMAT),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_scheduler_scan_lock_rate_limit",
+                        ),
+                    ),
+                ],
+            ),
         ]
     )
     return layout.row_panel
