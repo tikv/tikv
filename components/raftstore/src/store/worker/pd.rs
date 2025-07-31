@@ -1592,7 +1592,7 @@ where
                         .inc();
                 }
                 Err(e) => {
-                    error!("get region failed"; "err" => ?e);
+                    warn!("get region failed"; "err" => ?e);
                 }
             }
         };
@@ -2226,7 +2226,7 @@ where
                                 cb: Callback::None,
                             });
                             if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg)) {
-                                error!("send auto half split request failed";
+                                warn!("send auto half split request failed";
                                     "region_id" => region_id,
                                     "start_key" => log_wrappers::Value::key(&start_key),
                                     "end_key" => log_wrappers::Value::key(&end_key),

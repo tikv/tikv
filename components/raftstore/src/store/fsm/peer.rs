@@ -662,10 +662,10 @@ where
                     if !self.ctx.coprocessor_host.on_raft_message(&msg.msg) {
                         continue;
                     }
-
                     if let Err(e) = self.on_raft_message(msg) {
-                        error!(%e;
+                        warn!(
                             "handle raft message err";
+                            "err" => ?e,
                             "region_id" => self.fsm.region_id(),
                             "peer_id" => self.fsm.peer_id(),
                         );
@@ -2270,7 +2270,7 @@ where
             Some(mb) => mb,
             None => {
                 self.fsm.tick_registry[idx] = false;
-                error!(
+                warn!(
                     "failed to get mailbox";
                     "region_id" => self.fsm.region_id(),
                     "peer_id" => self.fsm.peer_id(),
@@ -3216,7 +3216,7 @@ where
         }
 
         if !msg.has_region_epoch() {
-            error!(
+            warn!(
                 "missing epoch in raft message, ignore it";
                 "region_id" => region_id,
             );
@@ -4156,7 +4156,7 @@ where
         );
         let task = PdTask::DestroyPeer { region_id };
         if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
-            error!(
+            warn!(
                 "failed to notify pd";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
@@ -4529,7 +4529,7 @@ where
                 regions: regions.to_vec(),
             };
             if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
-                error!(
+                warn!(
                     "failed to notify pd";
                     "region_id" => self.fsm.region_id(),
                     "peer_id" => self.fsm.peer_id(),
@@ -6429,7 +6429,7 @@ where
             callback: cb,
         };
         if let Err(ScheduleError::Stopped(t)) = self.ctx.pd_scheduler.schedule(task) {
-            error!(
+            warn!(
                 "failed to notify pd to split: Stopped";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
@@ -6884,7 +6884,7 @@ where
                     region: self.fsm.peer.region().clone(),
                 };
                 if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
-                    error!(
+                    warn!(
                         "failed to notify pd";
                         "region_id" => self.fsm.region_id(),
                         "peer_id" => self.fsm.peer_id(),

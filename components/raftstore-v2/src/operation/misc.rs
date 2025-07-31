@@ -4,7 +4,7 @@ use collections::HashMap;
 use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine};
 use raftstore::{Result, store::TabletSnapKey};
-use slog::error;
+use slog::warn;
 
 use crate::{
     batch::StoreContext,
@@ -17,7 +17,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'_, EK, ER, T> {
     #[inline]
     pub fn on_snapshot_gc(&mut self) {
         if let Err(e) = self.fsm.store.on_snapshot_gc(self.store_ctx) {
-            error!(self.fsm.store.logger(), "cleanup import sst failed"; "error" => ?e);
+            warn!(self.fsm.store.logger(), "cleanup import sst failed"; "error" => ?e);
         }
         self.schedule_tick(
             StoreTick::SnapGc,
