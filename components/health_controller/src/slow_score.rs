@@ -64,6 +64,8 @@ pub struct SlowScore {
     // this tick as timeout.
     min_timeout_ticks: u64,
     uncompleted_ticks: HashSet<u64>,
+
+    reached_100: bool,
 }
 
 impl SlowScore {
@@ -97,6 +99,7 @@ impl SlowScore {
             last_tick_id: 0,
             min_timeout_ticks,
             uncompleted_ticks: HashSet::new(),
+            reached_100: false,
         }
     }
 
@@ -124,6 +127,7 @@ impl SlowScore {
             last_tick_id: 0,
             min_timeout_ticks: 1,
             uncompleted_ticks: HashSet::new(),
+            reached_100: false,
         }
     }
 
@@ -187,7 +191,11 @@ impl SlowScore {
         self.update_impl(elapsed).into()
     }
 
-    pub fn get(&self) -> f64 {
+    pub fn get(&mut self) -> f64 {
+        if self.reached_100 {
+            self.reached_100 = false;
+            return 100.0;
+        }
         self.value.into()
     }
 
@@ -227,6 +235,10 @@ impl SlowScore {
                 cmp::min(OrderedFloat(timeout_ratio), self.ratio_thresh) / self.ratio_thresh;
             let value = self.value * (OrderedFloat(1.0) + near_thresh);
             self.value = cmp::min(OrderedFloat(100.0), value);
+        }
+
+        if self.value >= OrderedFloat(100.0) {
+            self.reached_100 = true;
         }
     
         self.total_requests = 0;
