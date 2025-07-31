@@ -97,9 +97,13 @@ impl RangeLatch {
 
                 // Now acquire the latch after releasing the write guard
                 let mutex_guard = mutex.lock().unwrap();
-                // Safety: `transmute` just change the lifetime, do not change the type.
-                // `_mutex_guard` points to the `Mutex<()>`, we need to make sure it will be dropped before the `Arc<Mutex<()>>` and the `RangeLatch` while `drop`.
-                // Then we can make sure the mutex guard doesn't point to released memory.
+                // Safety: `transmute` just change the lifetime, do not change 
+                // the type.
+                // `_mutex_guard` points to the `Mutex<()>`
+                // We need to make sure it will be dropped before the
+                // `Arc<Mutex<()>>` and the `RangeLatch` while `drop`.
+                // Then we can make sure the mutex guard doesn't point to
+                // released memory.
                 // We use `ManuallyDrop` to promise it.
 
                 #[allow(clippy::missing_transmute_annotations)]
@@ -127,8 +131,9 @@ pub struct RangeLatchGuard<'a> {
     start_key: Vec<u8>,
     /// Hold the mutex guard to prevent concurrent access to the same range.
     ///
-    /// Use `ManuallyDrop` to promise: 
-    /// `_mutex_guard` will be dropped before the `Arc<Mutex<()>>` and the `RangeLatch` while `drop`.
+    /// Use `ManuallyDrop` to promise:
+    /// `_mutex_guard` will be dropped before the `Arc<Mutex<()>>` and the
+    /// `RangeLatch` while `drop`.
     _mutex_guard: ManuallyDrop<std::sync::MutexGuard<'a, ()>>,
     /// Holds a reference to RangeLatch to release the latch when the guard is
     /// dropped.
@@ -137,12 +142,15 @@ pub struct RangeLatchGuard<'a> {
 
 impl Drop for RangeLatchGuard<'_> {
     fn drop(&mut self) {
-        // Safety: we call `ManuallyDrop::drop` to drop the mutex guard once and only once.
-        // So `_mutex_guard` will be released earlier than the `Arc<Mutex<()>>`.
-        // We drop `_mutex_guard` by hand, so dropping order depends on declaration order no longer matters.
+        // Safety: we call `ManuallyDrop::drop` to drop the mutex guard
+        // once and only once.
+        // So `_mutex_guard` will be released earlier than the
+        // `Arc<Mutex<()>>`. We drop `_mutex_guard` by hand, so dropping order
+        // depends on declaration order no longer matters.
         unsafe { ManuallyDrop::drop(&mut self._mutex_guard) };
         let mut range_latches = self.handle.range_latches.lock().unwrap();
-        // `range_latches.remove(&self.start_key);` will cause `Arc<Mutex()>>` dropped.
+        // `range_latches.remove(&self.start_key);` will cause
+        // `Arc<Mutex()>>` dropped.
         range_latches.remove(&self.start_key);
     }
 }
