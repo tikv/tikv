@@ -15,7 +15,7 @@ use pd_client::{
     Error as PdError, PdClient, RpcClient, REGION_LABEL_PATH_PREFIX,
 };
 use serde::{Deserialize, Serialize};
-use tikv_util::{error, info, timer::GLOBAL_TIMER_HANDLE};
+use tikv_util::{error, info, timer::GLOBAL_TIMER_HANDLE, warn};
 
 /// RegionLabel is the label of a region. This struct is partially copied from
 /// https://github.com/tikv/pd/blob/783d060861cef37c38cbdcab9777fe95c17907fe/server/schedule/labeler/rules.go#L31.
@@ -228,7 +228,11 @@ impl RegionLabelService {
                         });
                     }
                     Err(PdError::DataCompacted(msg)) => {
+<<<<<<< HEAD:components/region_cache_memory_engine/src/region_label.rs
                         error!("required revision has been compacted"; "err" => ?msg);
+=======
+                        warn!("ime required revision has been compacted"; "err" => ?msg);
+>>>>>>> f9d394ca3f (degrade TiKV Error log level for false alarm (#18746)):components/in_memory_engine/src/region_label.rs
                         self.reload_all_region_labels().await;
                         cancel.abort();
                         continue 'outer;
