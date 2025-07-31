@@ -5572,6 +5572,7 @@ where
                             &mut self.fsm.peer.transfer_leader_state.cache_warmup_state;
                         let peer_store = self.fsm.peer.raft_group.mut_store();
                         peer_store.set_apply_state(apply_state);
+                        peer_store.compact_term_cache(last_index + 1);
                         peer_store.compact_entry_cache(last_index + 1, cache_warmup_state.as_mut());
                         peer_store.raft_state_mut().mut_hard_state().commit = last_index;
                         peer_store.raft_state_mut().last_index = last_index;
