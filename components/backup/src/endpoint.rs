@@ -398,6 +398,7 @@ impl BackupRange {
             TsSet::vec_from_u64s(bypass_locks),
             TsSet::vec_from_u64s(access_locks),
             false,
+            false,
         );
         let start_key = self.start_key.clone();
         let end_key = self.end_key.clone();
