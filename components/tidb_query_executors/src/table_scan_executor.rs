@@ -8,16 +8,16 @@ use collections::HashMap;
 use kvproto::coprocessor::KeyRange;
 use smallvec::SmallVec;
 use tidb_query_common::{
-    Result,
     storage::{IntervalRange, Storage},
+    Result,
 };
 use tidb_query_datatype::{
-    EvalType, FieldTypeAccessor,
     codec::{
         batch::{LazyBatchColumn, LazyBatchColumnVec},
         row, table,
-    },
-    expr::{EvalConfig, EvalContext},
+    }, expr::{EvalConfig, EvalContext},
+    EvalType,
+    FieldTypeAccessor,
 };
 use tipb::{ColumnInfo, FieldType, TableScan};
 
@@ -109,6 +109,10 @@ impl<S: Storage, F: KvFormat> BatchTableScanExecutor<S, F> {
             is_scanned_range_aware,
         })?;
         Ok(Self(wrapper))
+    }
+
+    pub fn close_storage_scan(&mut self) {
+        self.0.close_storage_scan();
     }
 }
 
@@ -449,9 +453,9 @@ mod tests {
         execute_stats::*, storage::test_fixture::FixtureStorage, util::convert_to_prefix_next,
     };
     use tidb_query_datatype::{
-        Collation, EvalType, FieldTypeAccessor, FieldTypeTp,
-        codec::{Datum, batch::LazyBatchColumnVec, data_type::*, datum, table},
-        expr::EvalConfig,
+        codec::{batch::LazyBatchColumnVec, data_type::*, datum, table, Datum}, expr::EvalConfig, Collation, EvalType,
+        FieldTypeAccessor,
+        FieldTypeTp,
     };
     use tipb::{ColumnInfo, FieldType};
 
@@ -1369,13 +1373,13 @@ mod tests {
         }
 
         let handle = datum::encode_key(&mut EvalContext::default(), &handle).unwrap();
-        let key = table::encode_common_handle_for_test(TABLE_ID, &handle);
+        let key = table::encode_common_handle(TABLE_ID, &handle);
         let value = table::encode_row(&mut EvalContext::default(), row, &column_ids).unwrap();
 
         // Constructs a range that includes the constructed key.
         let mut key_range = KeyRange::default();
-        let begin = table::encode_common_handle_for_test(TABLE_ID - 1, &handle);
-        let end = table::encode_common_handle_for_test(TABLE_ID + 1, &handle);
+        let begin = table::encode_common_handle(TABLE_ID - 1, &handle);
+        let end = table::encode_common_handle(TABLE_ID + 1, &handle);
         key_range.set_start(begin);
         key_range.set_end(end);
 
@@ -1550,13 +1554,13 @@ mod tests {
 
         let handle = datum::encode_key(&mut EvalContext::default(), &handle).unwrap();
 
-        let key = table::encode_common_handle_for_test(TABLE_ID, &handle);
+        let key = table::encode_common_handle(TABLE_ID, &handle);
         let value = table::encode_row(&mut EvalContext::default(), row, &column_ids).unwrap();
 
         // Constructs a range that includes the constructed key.
         let mut key_range = KeyRange::default();
-        let begin = table::encode_common_handle_for_test(TABLE_ID - 1, &handle);
-        let end = table::encode_common_handle_for_test(TABLE_ID + 1, &handle);
+        let begin = table::encode_common_handle(TABLE_ID - 1, &handle);
+        let end = table::encode_common_handle(TABLE_ID + 1, &handle);
         key_range.set_start(begin);
         key_range.set_end(end);
 
