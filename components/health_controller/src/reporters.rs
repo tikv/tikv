@@ -234,7 +234,7 @@ impl UnifiedSlowScore {
             let mut last_tick_id = 0;
             for (_, factor) in network_factors.iter_mut() {
                 if last_tick_id != 0 {
-                    need_sync = need_sync || last_tick_id.eq(&factor.get_last_tick_id());
+                    need_sync = need_sync || !last_tick_id.eq(&factor.get_last_tick_id());
                 }
                 last_tick_id = factor.get_last_tick_id().max(last_tick_id);
             }
