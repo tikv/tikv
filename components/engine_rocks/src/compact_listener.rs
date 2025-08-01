@@ -1,14 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    cmp,
-    collections::{
-        BTreeMap,
-        Bound::{Excluded, Included, Unbounded},
-    },
-    path::Path,
-    sync::Arc,
-};
+use std::{cmp, path::Path, sync::Arc};
 
 use collections::hash_set_with_capacity;
 use engine_traits::{CompactedEvent, CompactionJobInfo};
@@ -137,6 +129,10 @@ impl RocksCompactedEvent {
 }
 
 impl CompactedEvent for RocksCompactedEvent {
+    fn get_key_range(&self) -> (Vec<u8>, Vec<u8>) {
+        (self.start_key.clone(), self.end_key.clone())
+    }
+
     fn total_bytes_declined(&self) -> u64 {
         self.total_input_bytes
             .saturating_sub(self.total_output_bytes)
@@ -152,28 +148,16 @@ impl CompactedEvent for RocksCompactedEvent {
         self.output_level.to_string()
     }
 
-    fn calc_ranges_declined_bytes(
+    fn calc_regions_declined_bytes(
         self,
-        ranges: &BTreeMap<Vec<u8>, u64>,
+        regions: &Vec<(u64, Vec<u8>)>,
         bytes_threshold: u64,
     ) -> Vec<(u64, u64)> {
-        // Calculate influenced regions.
-        let mut influenced_regions = vec![];
-        for (end_key, region_id) in
-            ranges.range((Excluded(self.start_key), Included(self.end_key.clone())))
-        {
-            influenced_regions.push((region_id, end_key.clone()));
-        }
-        if let Some((end_key, region_id)) = ranges.range((Included(self.end_key), Unbounded)).next()
-        {
-            influenced_regions.push((region_id, end_key.clone()));
-        }
-
         // Calculate declined bytes for each region.
         // `end_key` in influenced_regions are in incremental order.
         let mut region_declined_bytes = vec![];
         let mut last_end_key: Vec<u8> = vec![];
-        for (region_id, end_key) in influenced_regions {
+        for (region_id, end_key) in regions {
             let mut old_size = 0;
             for prop in &self.input_props {
                 old_size += prop.get_approximate_size_in_range(&last_end_key, &end_key);
@@ -182,7 +166,7 @@ impl CompactedEvent for RocksCompactedEvent {
             for prop in &self.output_props {
                 new_size += prop.get_approximate_size_in_range(&last_end_key, &end_key);
             }
-            last_end_key = end_key;
+            last_end_key = end_key.clone();
 
             // Filter some trivial declines for better performance.
             if old_size > new_size && old_size - new_size > bytes_threshold {

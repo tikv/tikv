@@ -52,6 +52,10 @@ impl CompactExt for PanicEngine {
 pub struct PanicCompactedEvent;
 
 impl CompactedEvent for PanicCompactedEvent {
+    fn get_key_range(&self) -> (Vec<u8>, Vec<u8>) {
+        panic!()
+    }
+
     fn total_bytes_declined(&self) -> u64 {
         panic!()
     }
@@ -64,9 +68,9 @@ impl CompactedEvent for PanicCompactedEvent {
         panic!()
     }
 
-    fn calc_ranges_declined_bytes(
+    fn calc_regions_declined_bytes(
         self,
-        ranges: &BTreeMap<Vec<u8>, u64>,
+        regions: &Vec<(u64, Vec<u8>)>, // region_id, end_key
         bytes_threshold: u64,
     ) -> Vec<(u64, u64)> {
         panic!()

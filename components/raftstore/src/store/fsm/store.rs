@@ -3435,8 +3435,6 @@ mod tests {
     use engine_rocks::{RangeOffsets, RangeProperties, RocksCompactedEvent};
     use engine_traits::CompactedEvent;
 
-    use super::*;
-
     #[test]
     fn test_calc_region_declined_bytes() {
         let prop = RangeProperties {
@@ -3464,6 +3462,8 @@ mod tests {
                 ),
             ],
         };
+        let (prop_start_key, prop_end_key) =
+            (prop.smallest_key().unwrap(), prop.largest_key().unwrap());
         let event = RocksCompactedEvent {
             cf: "default".to_owned(),
             output_level: 3,
@@ -3474,13 +3474,14 @@ mod tests {
             input_props: vec![prop],
             output_props: vec![],
         };
+        let (start_key, end_key) = event.get_key_range();
+        assert_eq!((start_key, end_key), (prop_start_key, prop_end_key));
 
-        let mut region_ranges = BTreeMap::new();
-        region_ranges.insert(b"a".to_vec(), 1);
-        region_ranges.insert(b"b".to_vec(), 2);
-        region_ranges.insert(b"c".to_vec(), 3);
+        let mut regions = Vec::new();
+        regions.push((2, b"b".to_vec()));
+        regions.push((3, b"c".to_vec()));
 
-        let declined_bytes = event.calc_ranges_declined_bytes(&region_ranges, 1024);
+        let declined_bytes = event.calc_regions_declined_bytes(&regions, 1024);
         let expected_declined_bytes = vec![(2, 8192), (3, 4096)];
         assert_eq!(declined_bytes, expected_declined_bytes);
     }

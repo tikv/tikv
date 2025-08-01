@@ -821,10 +821,10 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         let split_check_scheduler = workers.background.start(
             "split-check",
             SplitCheckRunner::with_registry(
-                None,
                 tablet_registry.clone(),
                 router.clone(),
                 coprocessor_host.clone(),
+                None,
             ),
         );
 

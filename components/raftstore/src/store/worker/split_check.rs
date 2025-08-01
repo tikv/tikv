@@ -5,7 +5,7 @@ use std::{
     collections::BinaryHeap,
     fmt::{self, Display, Formatter},
     mem,
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
 
 use engine_traits::{
@@ -31,12 +31,10 @@ use crate::{
     coprocessor::{
         Config, CoprocessorHost, SplitCheckerHost,
         dispatcher::StoreHandle,
+        region_info_accessor::{RegionInfoAccessor, RegionInfoProvider},
         split_observer::{is_valid_split_key, strip_timestamp_if_exists},
     },
-    store::{
-        fsm::StoreMeta,
-        metrics::{COMPACTION_DECLINED_BYTES, COMPACTION_RELATED_REGION_COUNT},
-    },
+    store::metrics::{COMPACTION_DECLINED_BYTES, COMPACTION_RELATED_REGION_COUNT},
 };
 
 #[derive(PartialEq, Eq)]
@@ -464,40 +462,40 @@ where
 }
 
 pub struct Runner<EK: KvEngine, S> {
-    store_meta: Option<Arc<Mutex<StoreMeta>>>,
     // We can't just use `TabletRegistry` here, otherwise v1 may create many
     // invalid records and cause other problems.
     engine: Either<EK, TabletRegistry<EK>>,
     router: S,
     coprocessor: CoprocessorHost<EK>,
+    region_info_accessor: Option<RegionInfoAccessor>,
 }
 
 impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
     pub fn new(
-        store_meta: Option<Arc<Mutex<StoreMeta>>>,
         engine: EK,
         router: S,
         coprocessor: CoprocessorHost<EK>,
+        region_info_accessor: Option<RegionInfoAccessor>,
     ) -> Runner<EK, S> {
         Runner {
-            store_meta,
             engine: Either::Left(engine),
             router,
             coprocessor,
+            region_info_accessor,
         }
     }
 
     pub fn with_registry(
-        store_meta: Option<Arc<Mutex<StoreMeta>>>,
         registry: TabletRegistry<EK>,
         router: S,
         coprocessor: CoprocessorHost<EK>,
+        region_info_accessor: Option<RegionInfoAccessor>,
     ) -> Runner<EK, S> {
         Runner {
-            store_meta,
             engine: Either::Right(registry),
             router,
             coprocessor,
+            region_info_accessor,
         }
     }
 
@@ -908,7 +906,9 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
     }
 
     fn on_compaction_finished(&self, event: EK::CompactedEvent, region_split_check_diff: u64) {
-        if self.store_meta.is_none() || event.is_size_declining_trivial(region_split_check_diff) {
+        if self.region_info_accessor.is_none()
+            || event.is_size_declining_trivial(region_split_check_diff)
+        {
             return;
         }
 
@@ -919,13 +919,19 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
 
         // region_split_check_diff / 16 is an experienced value.
         let mut region_declined_bytes = {
-            // TODO: Optimize performance for large numbers of regions.
-            // The current implementation locks store_meta for the duration of the
-            // calculation, which could become a bottleneck when there are many
-            // regions.
-            let store_meta = self.store_meta.clone().unwrap();
-            let meta = store_meta.lock().unwrap();
-            event.calc_ranges_declined_bytes(&meta.region_ranges, region_split_check_diff / 16)
+            // Calculate influenced regions.
+            let (start_key, end_key) = event.get_key_range();
+            if let Ok(regions) = self
+                .region_info_accessor
+                .as_ref()
+                .unwrap()
+                .get_regions_in_range(&start_key, &end_key)
+            {
+                let regions = regions.iter().map(|r| (r.id, r.end_key.clone())).collect();
+                event.calc_regions_declined_bytes(&regions, region_split_check_diff / 16)
+            } else {
+                vec![]
+            }
         };
 
         COMPACTION_RELATED_REGION_COUNT
