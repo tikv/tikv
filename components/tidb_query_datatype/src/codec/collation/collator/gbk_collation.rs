@@ -4,12 +4,8 @@ use super::*;
 
 pub trait GbkCollator: 'static + std::marker::Send + std::marker::Sync + std::fmt::Debug {
     const IS_CASE_INSENSITIVE: bool;
-<<<<<<< HEAD
-    const WEIGHT_TABLE: &'static [u8; (0xffff + 1) * 2];
-=======
     const NEED_TRUNCATE_INVALID_UTF8_RUNE: bool;
-    const WEIGHT_TABLE: &'static [u8; TABLE_SIZE_FOR_GBK];
->>>>>>> caa7f29834 (collation: fix process non-utf8 characters (#18611))
+    const WEIGHT_TABLE: &'static [u8; (0xffff + 1) * 2];
 }
 
 impl<T: GbkCollator> Collator for T {
@@ -61,18 +57,9 @@ impl<T: GbkCollator> Collator for T {
     }
 
     #[inline]
-<<<<<<< HEAD
     fn sort_compare(a: &[u8], b: &[u8]) -> Result<Ordering> {
-        let sa = str::from_utf8(a)?.trim_end_matches(PADDING_SPACE);
-        let sb = str::from_utf8(b)?.trim_end_matches(PADDING_SPACE);
-        Ok(sa
-            .chars()
-            .map(Self::char_weight)
-            .cmp(sb.chars().map(Self::char_weight)))
-=======
-    fn sort_compare(a: &[u8], b: &[u8], force_no_pad: bool) -> Result<Ordering> {
-        let sa = if force_no_pad { a } else { trim_end_padding(a) };
-        let sb = if force_no_pad { b } else { trim_end_padding(b) };
+        let sa = trim_end_padding(a);
+        let sb = trim_end_padding(b);
         let mut a_rest = sa;
         let mut b_rest = sb;
 
@@ -109,7 +96,6 @@ impl<T: GbkCollator> Collator for T {
         }
 
         Ok(a_rest.len().cmp(&b_rest.len()))
->>>>>>> caa7f29834 (collation: fix process non-utf8 characters (#18611))
     }
 
     #[inline]
@@ -140,12 +126,8 @@ pub struct CollatorGbkBin;
 
 impl GbkCollator for CollatorGbkBin {
     const IS_CASE_INSENSITIVE: bool = false;
-<<<<<<< HEAD
-    const WEIGHT_TABLE: &'static [u8; (0xffff + 1) * 2] = GBK_BIN_TABLE;
-=======
     const NEED_TRUNCATE_INVALID_UTF8_RUNE: bool = false;
-    const WEIGHT_TABLE: &'static [u8; TABLE_SIZE_FOR_GBK] = GBK_BIN_TABLE;
->>>>>>> caa7f29834 (collation: fix process non-utf8 characters (#18611))
+    const WEIGHT_TABLE: &'static [u8; (0xffff + 1) * 2] = GBK_BIN_TABLE;
 }
 
 /// Collator for `gbk_chinese_ci` collation with padding behavior (trims right
@@ -155,12 +137,8 @@ pub struct CollatorGbkChineseCi;
 
 impl GbkCollator for CollatorGbkChineseCi {
     const IS_CASE_INSENSITIVE: bool = true;
-<<<<<<< HEAD
-    const WEIGHT_TABLE: &'static [u8; (0xffff + 1) * 2] = GBK_CHINESE_CI_TABLE;
-=======
     const NEED_TRUNCATE_INVALID_UTF8_RUNE: bool = true;
-    const WEIGHT_TABLE: &'static [u8; TABLE_SIZE_FOR_GBK] = GBK_CHINESE_CI_TABLE;
->>>>>>> caa7f29834 (collation: fix process non-utf8 characters (#18611))
+    const WEIGHT_TABLE: &'static [u8; (0xffff + 1) * 2] = GBK_CHINESE_CI_TABLE;
 }
 
 // GBK_BIN_TABLE are the encoding tables from Unicode to GBK code, it is totally

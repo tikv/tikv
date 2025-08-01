@@ -60,16 +60,9 @@ impl<T: UnicodeVersion> Collator for CollatorUca<T> {
     }
 
     #[inline]
-<<<<<<< HEAD
     fn sort_compare(a: &[u8], b: &[u8]) -> Result<Ordering> {
-        let mut ca = T::preprocess(str::from_utf8(a)?).chars();
-        let mut cb = T::preprocess(str::from_utf8(b)?).chars();
-=======
-    fn sort_compare(a: &[u8], b: &[u8], force_no_pad: bool) -> Result<Ordering> {
-        let mut sa = if force_no_pad { a } else { T::preprocess(a) };
-        let mut sb = if force_no_pad { b } else { T::preprocess(b) };
-
->>>>>>> caa7f29834 (collation: fix process non-utf8 characters (#18611))
+        let mut sa = T::preprocess(a);
+        let mut sb = T::preprocess(b);
         let mut an = 0;
         let mut bn = 0;
 

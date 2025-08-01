@@ -45,18 +45,9 @@ impl Collator for CollatorUtf8Mb4GeneralCi {
     }
 
     #[inline]
-<<<<<<< HEAD
     fn sort_compare(a: &[u8], b: &[u8]) -> Result<Ordering> {
-        let sa = str::from_utf8(a)?.trim_end_matches(PADDING_SPACE);
-        let sb = str::from_utf8(b)?.trim_end_matches(PADDING_SPACE);
-        Ok(sa
-            .chars()
-            .map(Self::char_weight)
-            .cmp(sb.chars().map(Self::char_weight)))
-=======
-    fn sort_compare(a: &[u8], b: &[u8], force_no_pad: bool) -> Result<Ordering> {
-        let a = if force_no_pad { a } else { trim_end_padding(a) };
-        let b = if force_no_pad { b } else { trim_end_padding(b) };
+        let a = trim_end_padding(a);
+        let b = trim_end_padding(b);
 
         let mut a_rest = a;
         let mut b_rest = b;
@@ -76,7 +67,6 @@ impl Collator for CollatorUtf8Mb4GeneralCi {
         }
 
         Ok(a_rest.len().cmp(&b_rest.len()))
->>>>>>> caa7f29834 (collation: fix process non-utf8 characters (#18611))
     }
 
     #[inline]
