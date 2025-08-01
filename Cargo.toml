@@ -97,10 +97,10 @@ futures-util = { version = "0.3.1", default-features = false, features = [
 ] }
 fxhash = "0.2.1"
 getset = "0.1"
-grpcio-sys = { git = "https://github.com/Dog-Du/grpc-rs.git", branch = "adjust-for-upgrade-grpc-v1.59.0", package = "grpcio-sys" }
 grpcio = { git = "https://github.com/Dog-Du/grpc-rs.git", branch = "adjust-for-upgrade-grpc-v1.59.0" }
-grpcio-health = {  git = "https://github.com/Dog-Du/grpc-rs.git", branch = "adjust-for-upgrade-grpc-v1.59.0", package = "grpcio-health" }
 grpcio-compiler = { git = "https://github.com/Dog-Du/grpc-rs.git", branch = "adjust-for-upgrade-grpc-v1.59.0", package = "grpcio-compiler" }
+grpcio-health = { git = "https://github.com/Dog-Du/grpc-rs.git", branch = "adjust-for-upgrade-grpc-v1.59.0", package = "grpcio-health" }
+grpcio-sys = { git = "https://github.com/Dog-Du/grpc-rs.git", branch = "adjust-for-upgrade-grpc-v1.59.0", package = "grpcio-sys" }
 health_controller = { workspace = true }
 hex = "0.4"
 http = "0"
@@ -190,13 +190,13 @@ walkdir = "2"
 yatp = { workspace = true }
 
 [dev-dependencies]
-grpcio-sys = { git = "https://github.com/Dog-Du/grpc-rs.git", branch = "adjust-for-upgrade-grpc-v1.59.0", package = "grpcio-sys" }
-grpcio = { git = "https://github.com/Dog-Du/grpc-rs.git", branch = "adjust-for-upgrade-grpc-v1.59.0" }
-grpcio-health = {  git = "https://github.com/Dog-Du/grpc-rs.git", branch = "adjust-for-upgrade-grpc-v1.59.0", package = "grpcio-health" }
-grpcio-compiler = { git = "https://github.com/Dog-Du/grpc-rs.git", branch = "adjust-for-upgrade-grpc-v1.59.0", package = "grpcio-compiler" }
 api_version = { workspace = true, features = ["testexport"] }
 engine_test = { workspace = true }
 example_coprocessor_plugin = { workspace = true }                              # must, used for testing coprocessor plugin
+grpcio = { git = "https://github.com/Dog-Du/grpc-rs.git", branch = "adjust-for-upgrade-grpc-v1.59.0" }
+grpcio-compiler = { git = "https://github.com/Dog-Du/grpc-rs.git", branch = "adjust-for-upgrade-grpc-v1.59.0", package = "grpcio-compiler" }
+grpcio-health = { git = "https://github.com/Dog-Du/grpc-rs.git", branch = "adjust-for-upgrade-grpc-v1.59.0", package = "grpcio-health" }
+grpcio-sys = { git = "https://github.com/Dog-Du/grpc-rs.git", branch = "adjust-for-upgrade-grpc-v1.59.0", package = "grpcio-sys" }
 hyper-openssl = "0.9"
 panic_hook = { workspace = true }
 raftstore = { workspace = true, features = ["testexport"] }
@@ -208,7 +208,7 @@ zipf = "6.1.0"
 [patch.crates-io]
 grpcio-sys = { git = "https://github.com/Dog-Du/grpc-rs.git", branch = "adjust-for-upgrade-grpc-v1.59.0", package = "grpcio-sys" }
 grpcio = { git = "https://github.com/Dog-Du/grpc-rs.git", branch = "adjust-for-upgrade-grpc-v1.59.0" }
-grpcio-health = {  git = "https://github.com/Dog-Du/grpc-rs.git", branch = "adjust-for-upgrade-grpc-v1.59.0", package = "grpcio-health" }
+grpcio-health = { git = "https://github.com/Dog-Du/grpc-rs.git", branch = "adjust-for-upgrade-grpc-v1.59.0", package = "grpcio-health" }
 grpcio-compiler = { git = "https://github.com/Dog-Du/grpc-rs.git", branch = "adjust-for-upgrade-grpc-v1.59.0", package = "grpcio-compiler" }
 # TODO: remove this when new raft-rs is published.
 raft = { git = "https://github.com/tikv/raft-rs", branch = "master" }
@@ -378,7 +378,7 @@ raft-engine = { git = "https://github.com/tikv/raft-engine.git", features = [
 raft-engine-ctl = { git = "https://github.com/tikv/raft-engine.git" }
 grpcio-sys = { git = "https://github.com/Dog-Du/grpc-rs.git", branch = "adjust-for-upgrade-grpc-v1.59.0", package = "grpcio-sys" }
 grpcio = { git = "https://github.com/Dog-Du/grpc-rs.git", branch = "adjust-for-upgrade-grpc-v1.59.0" }
-grpcio-health = {  git = "https://github.com/Dog-Du/grpc-rs.git", branch = "adjust-for-upgrade-grpc-v1.59.0", package = "grpcio-health" }
+grpcio-health = { git = "https://github.com/Dog-Du/grpc-rs.git", branch = "adjust-for-upgrade-grpc-v1.59.0", package = "grpcio-health" }
 grpcio-compiler = { git = "https://github.com/Dog-Du/grpc-rs.git", branch = "adjust-for-upgrade-grpc-v1.59.0", package = "grpcio-compiler" }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
