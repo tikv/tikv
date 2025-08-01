@@ -744,6 +744,7 @@ struct Store {
     start_time: Option<Timespec>,
     consistency_check_time: HashMap<u64, Instant>,
     store_reachability: HashMap<u64, StoreReachability>,
+    force_compact_rotation_offset: usize,
 }
 
 struct StoreReachability {
@@ -772,6 +773,7 @@ where
                 start_time: None,
                 consistency_check_time: HashMap::default(),
                 store_reachability: HashMap::default(),
+                force_compact_rotation_offset: 0,
             },
             receiver: rx,
         });
@@ -816,6 +818,7 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             StoreTick::ConsistencyCheck => self.on_consistency_check_tick(),
             StoreTick::CleanupImportSst => self.on_cleanup_import_sst_tick(),
             StoreTick::PdReportMinResolvedTs => self.on_pd_report_min_resolved_ts_tick(),
+            StoreTick::RaftEngineForceGc => self.on_raft_engine_force_gc_tick(),
         }
         let elapsed = timer.saturating_elapsed();
         self.ctx
@@ -960,6 +963,7 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
         self.register_compact_lock_cf_tick();
         self.register_snap_mgr_gc_tick();
         self.register_consistency_check_tick();
+        self.register_raft_engine_force_gc_tick();
     }
 }
 
@@ -1697,19 +1701,19 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         gc_safe_point: Arc<AtomicU64>,
     ) -> Result<()> {
         assert!(self.workers.is_none());
+        let raft_clone_for_purge = engines.raft.clone();
+        let router_clone_for_purge = self.router();
         // TODO: we can get cluster meta regularly too later.
         let purge_worker = if engines.raft.need_manual_purge()
             && !cfg.value().raft_engine_purge_interval.0.is_zero()
         {
             let worker = Worker::new("purge-worker");
-            let raft_clone = engines.raft.clone();
-            let router_clone = self.router();
             worker.spawn_interval_task(cfg.value().raft_engine_purge_interval.0, move || {
                 let _guard = WithIoType::new(IoType::RewriteLog);
-                match raft_clone.manual_purge() {
+                match raft_clone_for_purge.manual_purge() {
                     Ok(regions) => {
                         for region_id in regions {
-                            let _ = router_clone.send(
+                            let _ = router_clone_for_purge.send(
                                 region_id,
                                 PeerMsg::CasualMessage(Box::new(
                                     CasualMessage::ForceCompactRaftLogs,
@@ -1726,6 +1730,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         } else {
             None
         };
+
         let bgworker_remote = background_worker.remote();
         let snap_gen_worker = WorkerBuilder::new("snap-generator")
             .thread_count(cfg.value().snap_generator_pool_size)
@@ -3086,6 +3091,83 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
             StoreTick::CompactLockCf,
             self.ctx.cfg.lock_cf_compact_interval.0,
         )
+    }
+
+    fn register_raft_engine_force_gc_tick(&self) {
+        self.ctx.schedule_store_tick(
+            StoreTick::RaftEngineForceGc,
+            self.ctx.cfg.raft_log_force_gc_interval.0,
+        )
+    }
+
+    fn on_raft_engine_force_gc_tick(&mut self) {
+        self.register_raft_engine_force_gc_tick();
+
+        // Check raft engine memory usage
+        let mem_usage = match self.ctx.engines.raft.get_memory_usage() {
+            Ok(usage) => usage,
+            Err(_) => {
+                return;
+            }
+        };
+
+        let raft_engine_memory_limit = self.ctx.cfg.raft_engine_memory_limit.0;
+        if mem_usage > raft_engine_memory_limit {
+            // Get all regions and calculate send count in one pass
+            self.send_force_compact_batch(mem_usage, raft_engine_memory_limit);
+        }
+    }
+
+    fn send_force_compact_batch(&mut self, mem_usage: u64, memory_limit: u64) {
+        let mut all_regions = Vec::new();
+        let _ = self
+            .ctx
+            .engines
+            .raft
+            .for_each_raft_group::<engine_traits::Error, _>(&mut |region_id| {
+                all_regions.push(region_id);
+                Ok(())
+            });
+
+        let batch_num = 5;
+
+        if all_regions.is_empty() {
+            return;
+        }
+
+        // Calculate send count based on memory pressure and total regions
+        let memory_ratio = mem_usage as f64 / memory_limit as f64;
+        let total_regions = all_regions.len();
+
+        // Base count: proportional to the number of regions
+        let base_count = std::cmp::max(50, total_regions / batch_num);
+
+        let additional_count = if memory_ratio > 1.0 {
+            ((memory_ratio - 1.0) * base_count as f64) as usize
+        } else {
+            0
+        };
+
+        let send_count = std::cmp::min(base_count + additional_count, total_regions);
+
+        // Use rotating pattern to select regions with stored offset
+        let start_offset = self.fsm.store.force_compact_rotation_offset;
+        let end_offset = std::cmp::min(start_offset + send_count, total_regions);
+
+        // Update the offset for next time
+        self.fsm.store.force_compact_rotation_offset = if end_offset >= total_regions {
+            0 // Wrap around to the beginning
+        } else {
+            end_offset
+        };
+
+        for i in start_offset..end_offset {
+            let region_id = all_regions[i];
+            let _ = self.ctx.router.send(
+                region_id,
+                PeerMsg::CasualMessage(Box::new(CasualMessage::ForceCompactRaftLogs)),
+            );
+        }
     }
 }
 
