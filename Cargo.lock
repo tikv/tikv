@@ -302,7 +302,7 @@ dependencies = [
  "fail",
  "futures 0.3.15",
  "futures-util",
- "grpcio",
+ "grpcio 0.13.0 (git+https://github.com/Dog-Du/grpc-rs.git?branch=adjust-for-upgrade-grpc-v1.59.0)",
  "http 0.2.12",
  "hyper",
  "hyper-tls",
@@ -846,7 +846,7 @@ dependencies = [
  "file_system",
  "futures 0.3.15",
  "futures-util",
- "grpcio",
+ "grpcio 0.13.0 (git+https://github.com/Dog-Du/grpc-rs.git?branch=adjust-for-upgrade-grpc-v1.59.0)",
  "hex 0.4.3",
  "keys",
  "kvproto",
@@ -893,7 +893,7 @@ dependencies = [
  "fail",
  "file_system",
  "futures 0.3.15",
- "grpcio",
+ "grpcio 0.13.0 (git+https://github.com/Dog-Du/grpc-rs.git?branch=adjust-for-upgrade-grpc-v1.59.0)",
  "hex 0.4.3",
  "kvproto",
  "lazy_static",
@@ -1045,6 +1045,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "bindgen"
+version = "0.69.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "271383c67ccabffb7381723dea0672a673f292304fcb45c01cc648c7a8d58088"
+dependencies = [
+ "bitflags 2.4.1",
+ "cexpr",
+ "clang-sys",
+ "itertools",
+ "lazy_static",
+ "lazycell",
+ "proc-macro2",
+ "quote",
+ "regex",
+ "rustc-hash",
+ "shlex",
+ "syn 2.0.101",
+]
+
+[[package]]
 name = "bit-set"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1097,6 +1117,15 @@ name = "boolinator"
 version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfa8873f51c92e232f9bac4065cddef41b714152812bfc5f7672ba16d6ef8cd9"
+
+[[package]]
+name = "boringssl-src"
+version = "0.6.0+e46383f"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5edec42197c014d84ea2396589f0da14b2257f63f319442b5e8475a077b90457"
+dependencies = [
+ "cmake",
+]
 
 [[package]]
 name = "bs58"
@@ -1285,7 +1314,7 @@ dependencies = [
  "fail",
  "futures 0.3.15",
  "getset",
- "grpcio",
+ "grpcio 0.13.0 (git+https://github.com/Dog-Du/grpc-rs.git?branch=adjust-for-upgrade-grpc-v1.59.0)",
  "keys",
  "kvproto",
  "lazy_static",
@@ -2941,48 +2970,84 @@ dependencies = [
 
 [[package]]
 name = "grpcio"
-version = "0.10.4"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f2506de56197d01821c2d1d21082d2dcfd6c82d7a1d6e04d33f37aab6130632"
+checksum = "9e398946b5721d72478eb647260a1b7c1d5f70f0de35399846c3913bd369a33e"
 dependencies = [
  "futures-executor",
  "futures-util",
- "grpcio-sys",
+ "grpcio-sys 0.13.0+1.56.2-patched",
  "libc 0.2.151",
  "log",
- "parking_lot 0.11.1",
+ "parking_lot 0.12.1",
+ "protobuf 2.8.0",
+]
+
+[[package]]
+name = "grpcio"
+version = "0.13.0"
+source = "git+https://github.com/Dog-Du/grpc-rs.git?branch=adjust-for-upgrade-grpc-v1.59.0#5f304e0b1f0c63f1c88551d1cb1e8c26b0aa3072"
+dependencies = [
+ "futures-executor",
+ "futures-util",
+ "grpcio-sys 0.13.0+1.59.0-patched",
+ "libc 0.2.151",
+ "log",
+ "parking_lot 0.12.1",
  "protobuf 2.8.0",
 ]
 
 [[package]]
 name = "grpcio-compiler"
-version = "0.10.4"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed97a17310fd00ff4109357584a00244e2a785d05b7ee0ef4d1e8fb1d84266df"
+checksum = "375292b9a9e3f5f9c6ef978d1f28070a6b56ab78f8be0cfbee16c62d5b0fa361"
+dependencies = [
+ "protobuf 2.8.0",
+]
+
+[[package]]
+name = "grpcio-compiler"
+version = "0.13.0"
+source = "git+https://github.com/Dog-Du/grpc-rs.git?branch=adjust-for-upgrade-grpc-v1.59.0#5f304e0b1f0c63f1c88551d1cb1e8c26b0aa3072"
 dependencies = [
  "protobuf 2.8.0",
 ]
 
 [[package]]
 name = "grpcio-health"
-version = "0.10.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a37eae605cd21f144b7c7fd0e64e57af9f73d132756fef5b706db110c3ec7ea0"
+version = "0.13.0"
+source = "git+https://github.com/Dog-Du/grpc-rs.git?branch=adjust-for-upgrade-grpc-v1.59.0#5f304e0b1f0c63f1c88551d1cb1e8c26b0aa3072"
 dependencies = [
  "futures-executor",
  "futures-util",
- "grpcio",
+ "grpcio 0.13.0 (git+https://github.com/Dog-Du/grpc-rs.git?branch=adjust-for-upgrade-grpc-v1.59.0)",
  "log",
  "protobuf 2.8.0",
 ]
 
 [[package]]
 name = "grpcio-sys"
-version = "0.10.3+1.44.0-patched"
+version = "0.13.0+1.56.2-patched"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f23adc509a3c4dea990e0ab8d2add4a65389ee69c288b7851d75dd1df7a6d6c6"
+checksum = "b3dae9132320ae1b03ea55b5ddc88ca72a31fb85fa631a241a40157f5feffe43"
 dependencies = [
  "bindgen 0.59.2",
+ "cc",
+ "cmake",
+ "libc 0.2.151",
+ "libz-sys",
+ "pkg-config",
+ "walkdir",
+]
+
+[[package]]
+name = "grpcio-sys"
+version = "0.13.0+1.59.0-patched"
+source = "git+https://github.com/Dog-Du/grpc-rs.git?branch=adjust-for-upgrade-grpc-v1.59.0#5f304e0b1f0c63f1c88551d1cb1e8c26b0aa3072"
+dependencies = [
+ "bindgen 0.69.5",
+ "boringssl-src",
  "cc",
  "cmake",
  "libc 0.2.151",
@@ -3753,7 +3818,7 @@ version = "0.0.2"
 source = "git+https://github.com/pingcap/kvproto.git#08fddd37b0f5526219ac9730c51d4689cf3b6d33"
 dependencies = [
  "futures 0.3.15",
- "grpcio",
+ "grpcio 0.13.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 2.8.0",
  "protobuf-build",
  "raft-proto",
@@ -4691,7 +4756,7 @@ dependencies = [
  "error_code",
  "fail",
  "futures 0.3.15",
- "grpcio",
+ "grpcio 0.13.0 (git+https://github.com/Dog-Du/grpc-rs.git?branch=adjust-for-upgrade-grpc-v1.59.0)",
  "kvproto",
  "lazy_static",
  "log_wrappers",
@@ -5116,7 +5181,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c852d9625b912c3e50480cdc701f60f49890b5d7ad46198dd583600f15e7c6ec"
 dependencies = [
  "bitflags 1.3.2",
- "grpcio-compiler",
+ "grpcio-compiler 0.13.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 2.8.0",
  "protobuf-codegen 2.8.0",
  "protobuf-src",
@@ -5714,7 +5779,7 @@ dependencies = [
  "engine_traits",
  "fail",
  "futures 0.3.15",
- "grpcio",
+ "grpcio 0.13.0 (git+https://github.com/Dog-Du/grpc-rs.git?branch=adjust-for-upgrade-grpc-v1.59.0)",
  "kvproto",
  "lazy_static",
  "log_wrappers",
@@ -5776,7 +5841,7 @@ dependencies = [
  "collections",
  "crossbeam",
  "futures 0.3.15",
- "grpcio",
+ "grpcio 0.13.0 (git+https://github.com/Dog-Du/grpc-rs.git?branch=adjust-for-upgrade-grpc-v1.59.0)",
  "kvproto",
  "lazy_static",
  "online_config",
@@ -5989,7 +6054,7 @@ version = "0.0.1"
 dependencies = [
  "collections",
  "encryption",
- "grpcio",
+ "grpcio 0.13.0 (git+https://github.com/Dog-Du/grpc-rs.git?branch=adjust-for-upgrade-grpc-v1.59.0)",
  "log_wrappers",
  "online_config",
  "serde",
@@ -6216,7 +6281,7 @@ dependencies = [
  "fail",
  "file_system",
  "futures 0.3.15",
- "grpcio",
+ "grpcio 0.13.0 (git+https://github.com/Dog-Du/grpc-rs.git?branch=adjust-for-upgrade-grpc-v1.59.0)",
  "health_controller",
  "hybrid_engine",
  "in_memory_engine",
@@ -6417,7 +6482,7 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "futures 0.3.15",
- "grpcio",
+ "grpcio 0.13.0 (git+https://github.com/Dog-Du/grpc-rs.git?branch=adjust-for-upgrade-grpc-v1.59.0)",
  "keys",
  "kvproto",
  "lazy_static",
@@ -6502,7 +6567,7 @@ dependencies = [
  "file_system",
  "futures 0.3.15",
  "futures-util",
- "grpcio",
+ "grpcio 0.13.0 (git+https://github.com/Dog-Du/grpc-rs.git?branch=adjust-for-upgrade-grpc-v1.59.0)",
  "keys",
  "kvproto",
  "lazy_static",
@@ -6832,7 +6897,7 @@ dependencies = [
  "futures 0.3.15",
  "futures-executor",
  "futures-util",
- "grpcio",
+ "grpcio 0.13.0 (git+https://github.com/Dog-Du/grpc-rs.git?branch=adjust-for-upgrade-grpc-v1.59.0)",
  "kvproto",
  "protobuf 2.8.0",
  "raftstore",
@@ -6872,7 +6937,7 @@ dependencies = [
  "collections",
  "fail",
  "futures 0.3.15",
- "grpcio",
+ "grpcio 0.13.0 (git+https://github.com/Dog-Du/grpc-rs.git?branch=adjust-for-upgrade-grpc-v1.59.0)",
  "kvproto",
  "log_wrappers",
  "pd_client",
@@ -6891,7 +6956,7 @@ dependencies = [
  "collections",
  "fail",
  "futures 0.3.15",
- "grpcio",
+ "grpcio 0.13.0 (git+https://github.com/Dog-Du/grpc-rs.git?branch=adjust-for-upgrade-grpc-v1.59.0)",
  "keys",
  "kvproto",
  "log_wrappers",
@@ -6921,7 +6986,7 @@ dependencies = [
  "fail",
  "file_system",
  "futures 0.3.15",
- "grpcio",
+ "grpcio 0.13.0 (git+https://github.com/Dog-Du/grpc-rs.git?branch=adjust-for-upgrade-grpc-v1.59.0)",
  "health_controller",
  "hybrid_engine",
  "in_memory_engine",
@@ -6965,7 +7030,7 @@ dependencies = [
  "engine_traits",
  "file_system",
  "futures 0.3.15",
- "grpcio",
+ "grpcio 0.13.0 (git+https://github.com/Dog-Du/grpc-rs.git?branch=adjust-for-upgrade-grpc-v1.59.0)",
  "grpcio-health",
  "health_controller",
  "keys",
@@ -7013,7 +7078,7 @@ dependencies = [
  "engine_traits",
  "external_storage",
  "futures 0.3.15",
- "grpcio",
+ "grpcio 0.13.0 (git+https://github.com/Dog-Du/grpc-rs.git?branch=adjust-for-upgrade-grpc-v1.59.0)",
  "keys",
  "kvproto",
  "tempfile",
@@ -7049,7 +7114,7 @@ dependencies = [
  "collections",
  "encryption_export",
  "fail",
- "grpcio",
+ "grpcio 0.13.0 (git+https://github.com/Dog-Du/grpc-rs.git?branch=adjust-for-upgrade-grpc-v1.59.0)",
  "kvproto",
  "log_wrappers",
  "rand 0.8.5",
@@ -7088,7 +7153,7 @@ dependencies = [
  "fail",
  "file_system",
  "futures 0.3.15",
- "grpcio",
+ "grpcio 0.13.0 (git+https://github.com/Dog-Du/grpc-rs.git?branch=adjust-for-upgrade-grpc-v1.59.0)",
  "grpcio-health",
  "health_controller",
  "hyper",
@@ -7401,8 +7466,10 @@ dependencies = [
  "futures-util",
  "fxhash",
  "getset",
- "grpcio",
+ "grpcio 0.13.0 (git+https://github.com/Dog-Du/grpc-rs.git?branch=adjust-for-upgrade-grpc-v1.59.0)",
+ "grpcio-compiler 0.13.0 (git+https://github.com/Dog-Du/grpc-rs.git?branch=adjust-for-upgrade-grpc-v1.59.0)",
  "grpcio-health",
+ "grpcio-sys 0.13.0+1.59.0-patched",
  "health_controller",
  "hex 0.4.3",
  "http 0.2.12",
@@ -7508,7 +7575,7 @@ dependencies = [
  "file_system",
  "futures 0.3.15",
  "gag",
- "grpcio",
+ "grpcio 0.13.0 (git+https://github.com/Dog-Du/grpc-rs.git?branch=adjust-for-upgrade-grpc-v1.59.0)",
  "hex 0.4.3",
  "keys",
  "kvproto",
@@ -7655,7 +7722,7 @@ dependencies = [
  "futures 0.3.15",
  "futures-util",
  "gag",
- "grpcio",
+ "grpcio 0.13.0 (git+https://github.com/Dog-Du/grpc-rs.git?branch=adjust-for-upgrade-grpc-v1.59.0)",
  "heck 0.3.1",
  "http 0.2.12",
  "kvproto",
@@ -7785,7 +7852,7 @@ version = "0.0.1"
 source = "git+https://github.com/pingcap/tipb.git#cf70966bef25e205cb845c19265301542d1238d1"
 dependencies = [
  "futures 0.3.15",
- "grpcio",
+ "grpcio 0.13.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 2.8.0",
  "protobuf-build",
 ]

@@ -97,8 +97,10 @@ futures-util = { version = "0.3.1", default-features = false, features = [
 ] }
 fxhash = "0.2.1"
 getset = "0.1"
-grpcio = { workspace = true }
-grpcio-health = { workspace = true }
+grpcio-sys = { git = "https://github.com/Dog-Du/grpc-rs.git", branch = "adjust-for-upgrade-grpc-v1.59.0", package = "grpcio-sys" }
+grpcio = { git = "https://github.com/Dog-Du/grpc-rs.git", branch = "adjust-for-upgrade-grpc-v1.59.0" }
+grpcio-health = {  git = "https://github.com/Dog-Du/grpc-rs.git", branch = "adjust-for-upgrade-grpc-v1.59.0", package = "grpcio-health" }
+grpcio-compiler = { git = "https://github.com/Dog-Du/grpc-rs.git", branch = "adjust-for-upgrade-grpc-v1.59.0", package = "grpcio-compiler" }
 health_controller = { workspace = true }
 hex = "0.4"
 http = "0"
@@ -366,14 +368,10 @@ raft-engine = { git = "https://github.com/tikv/raft-engine.git", features = [
   "swap",
 ] }
 raft-engine-ctl = { git = "https://github.com/tikv/raft-engine.git" }
-grpcio = { version = "0.10.4", default-features = false, features = [
-  "openssl",
-  "protobuf-codec",
-  "nightly",
-] }
-grpcio-health = { version = "0.10.4", default-features = false, features = [
-  "protobuf-codec",
-] }
+grpcio-sys = { git = "https://github.com/Dog-Du/grpc-rs.git", branch = "adjust-for-upgrade-grpc-v1.59.0", package = "grpcio-sys" }
+grpcio = { git = "https://github.com/Dog-Du/grpc-rs.git", branch = "adjust-for-upgrade-grpc-v1.59.0" }
+grpcio-health = {  git = "https://github.com/Dog-Du/grpc-rs.git", branch = "adjust-for-upgrade-grpc-v1.59.0", package = "grpcio-health" }
+grpcio-compiler = { git = "https://github.com/Dog-Du/grpc-rs.git", branch = "adjust-for-upgrade-grpc-v1.59.0", package = "grpcio-compiler" }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
@@ -403,24 +401,24 @@ crossbeam-epoch = "0.9"
 futures = { version = "0.3", features = ["executor"] }
 
 [profile.dev.package.grpcio-sys]
-debug = false
-opt-level = 1
+debug = true 
+opt-level = 0
 
 [profile.dev.package.librocksdb_sys]
-debug = false
-opt-level = 1
+debug = true 
+opt-level = 0
 
 [profile.dev.package.libtitan_sys]
-debug = false
-opt-level = 1
+debug = true 
+opt-level = 0
 
 [profile.dev.package.tests]
-debug = 1
-opt-level = 1
+debug = true 
+opt-level = 0
 
 [profile.dev]
 opt-level = 0
-debug = 0
+debug = true
 codegen-units = 4
 lto = false
 incremental = true
@@ -446,7 +444,7 @@ codegen-units = 4
 
 [profile.test]
 opt-level = 0
-debug = 0
+debug = true
 codegen-units = 16
 lto = false
 incremental = true
