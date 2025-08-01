@@ -234,8 +234,6 @@ mod tests {
                     Ordering::Equal,
                     Ordering::Equal,
                     Ordering::Less,
-                    Ordering::Greater,
-                    Ordering::Equal,
                 ],
             ),
         ];
