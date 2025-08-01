@@ -3477,10 +3477,7 @@ mod tests {
         let (start_key, end_key) = event.get_key_range();
         assert_eq!((start_key, end_key), (prop_start_key, prop_end_key));
 
-        let mut regions = Vec::new();
-        regions.push((2, b"b".to_vec()));
-        regions.push((3, b"c".to_vec()));
-
+        let regions = [(2, b"b".to_vec()), (3, b"c".to_vec())];
         let declined_bytes = event.calc_regions_declined_bytes(&regions, 1024);
         let expected_declined_bytes = vec![(2, 8192), (3, 4096)];
         assert_eq!(declined_bytes, expected_declined_bytes);

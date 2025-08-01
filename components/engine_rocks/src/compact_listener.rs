@@ -150,21 +150,23 @@ impl CompactedEvent for RocksCompactedEvent {
 
     fn calc_regions_declined_bytes(
         self,
-        regions: &Vec<(u64, Vec<u8>)>,
+        regions: &[(u64, Vec<u8>)],
         bytes_threshold: u64,
     ) -> Vec<(u64, u64)> {
         // Calculate declined bytes for each region.
         // `end_key` in influenced_regions are in incremental order.
         let mut region_declined_bytes = vec![];
+        let mut old_size;
+        let mut new_size;
         let mut last_end_key: Vec<u8> = vec![];
         for (region_id, end_key) in regions {
-            let mut old_size = 0;
+            old_size = 0;
             for prop in &self.input_props {
-                old_size += prop.get_approximate_size_in_range(&last_end_key, &end_key);
+                old_size += prop.get_approximate_size_in_range(&last_end_key, end_key);
             }
-            let mut new_size = 0;
+            new_size = 0;
             for prop in &self.output_props {
-                new_size += prop.get_approximate_size_in_range(&last_end_key, &end_key);
+                new_size += prop.get_approximate_size_in_range(&last_end_key, end_key);
             }
             last_end_key = end_key.clone();
 

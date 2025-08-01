@@ -70,7 +70,7 @@ impl CompactedEvent for PanicCompactedEvent {
 
     fn calc_regions_declined_bytes(
         self,
-        regions: &Vec<(u64, Vec<u8>)>, // region_id, end_key
+        regions: &[(u64, Vec<u8>)], // region_id, end_key
         bytes_threshold: u64,
     ) -> Vec<(u64, u64)> {
         panic!()

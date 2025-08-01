@@ -106,7 +106,7 @@ pub trait CompactedEvent: Send {
     /// CompactedEvent
     fn calc_regions_declined_bytes(
         self,
-        regions: &Vec<(u64, Vec<u8>)>, // region_id, end_key
+        regions: &[(u64, Vec<u8>)], // region_id, end_key
         bytes_threshold: u64,
     ) -> Vec<(u64, u64)>;
 

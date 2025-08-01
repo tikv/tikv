@@ -927,7 +927,8 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
                 .unwrap()
                 .get_regions_in_range(&start_key, &end_key)
             {
-                let regions = regions.iter().map(|r| (r.id, r.end_key.clone())).collect();
+                let regions: Vec<(u64, Vec<u8>)> =
+                    regions.iter().map(|r| (r.id, r.end_key.clone())).collect();
                 event.calc_regions_declined_bytes(&regions, region_split_check_diff / 16)
             } else {
                 vec![]
