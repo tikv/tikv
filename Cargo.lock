@@ -2971,21 +2971,6 @@ dependencies = [
 [[package]]
 name = "grpcio"
 version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e398946b5721d72478eb647260a1b7c1d5f70f0de35399846c3913bd369a33e"
-dependencies = [
- "futures-executor",
- "futures-util",
- "grpcio-sys 0.13.0+1.56.2-patched",
- "libc 0.2.151",
- "log",
- "parking_lot 0.12.1",
- "protobuf 2.8.0",
-]
-
-[[package]]
-name = "grpcio"
-version = "0.13.0"
 source = "git+https://github.com/Dog-Du/grpc-rs.git?branch=adjust-for-upgrade-grpc-v1.59.0#5f304e0b1f0c63f1c88551d1cb1e8c26b0aa3072"
 dependencies = [
  "futures-executor",
@@ -2994,15 +2979,6 @@ dependencies = [
  "libc 0.2.151",
  "log",
  "parking_lot 0.12.1",
- "protobuf 2.8.0",
-]
-
-[[package]]
-name = "grpcio-compiler"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "375292b9a9e3f5f9c6ef978d1f28070a6b56ab78f8be0cfbee16c62d5b0fa361"
-dependencies = [
  "protobuf 2.8.0",
 ]
 
@@ -3024,21 +3000,6 @@ dependencies = [
  "grpcio 0.13.0 (git+https://github.com/Dog-Du/grpc-rs.git?branch=adjust-for-upgrade-grpc-v1.59.0)",
  "log",
  "protobuf 2.8.0",
-]
-
-[[package]]
-name = "grpcio-sys"
-version = "0.13.0+1.56.2-patched"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b3dae9132320ae1b03ea55b5ddc88ca72a31fb85fa631a241a40157f5feffe43"
-dependencies = [
- "bindgen 0.59.2",
- "cc",
- "cmake",
- "libc 0.2.151",
- "libz-sys",
- "pkg-config",
- "walkdir",
 ]
 
 [[package]]
@@ -3818,7 +3779,7 @@ version = "0.0.2"
 source = "git+https://github.com/pingcap/kvproto.git#08fddd37b0f5526219ac9730c51d4689cf3b6d33"
 dependencies = [
  "futures 0.3.15",
- "grpcio 0.13.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "grpcio 0.13.0 (git+https://github.com/Dog-Du/grpc-rs.git?branch=adjust-for-upgrade-grpc-v1.59.0)",
  "protobuf 2.8.0",
  "protobuf-build",
  "raft-proto",
@@ -5181,7 +5142,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c852d9625b912c3e50480cdc701f60f49890b5d7ad46198dd583600f15e7c6ec"
 dependencies = [
  "bitflags 1.3.2",
- "grpcio-compiler 0.13.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "grpcio-compiler 0.13.0 (git+https://github.com/Dog-Du/grpc-rs.git?branch=adjust-for-upgrade-grpc-v1.59.0)",
  "protobuf 2.8.0",
  "protobuf-codegen 2.8.0",
  "protobuf-src",
@@ -7852,7 +7813,7 @@ version = "0.0.1"
 source = "git+https://github.com/pingcap/tipb.git#cf70966bef25e205cb845c19265301542d1238d1"
 dependencies = [
  "futures 0.3.15",
- "grpcio 0.13.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "grpcio 0.13.0 (git+https://github.com/Dog-Du/grpc-rs.git?branch=adjust-for-upgrade-grpc-v1.59.0)",
  "protobuf 2.8.0",
  "protobuf-build",
 ]
