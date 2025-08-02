@@ -671,7 +671,7 @@ impl ServerCluster {
             engines.kv.clone(),
             router.clone(),
             coprocessor_host.clone(),
-            Some(region_info_accessor.clone()),
+            Some(Arc::new(region_info_accessor.clone())),
         );
         let split_check_scheduler = bg_worker.start("split-check", split_check_runner);
         let split_config_manager =

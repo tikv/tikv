@@ -352,7 +352,7 @@ impl Simulator for NodeCluster {
             engines.kv.clone(),
             router.clone(),
             coprocessor_host.clone(),
-            Some(region_info_accessor),
+            Some(Arc::new(region_info_accessor)),
         );
         let split_scheduler = bg_worker.start("test-split-check", split_check_runner);
         cfg_controller.register(

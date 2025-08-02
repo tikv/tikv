@@ -31,7 +31,7 @@ use crate::{
     coprocessor::{
         Config, CoprocessorHost, SplitCheckerHost,
         dispatcher::StoreHandle,
-        region_info_accessor::{RegionInfoAccessor, RegionInfoProvider},
+        region_info_accessor::RegionInfoProvider,
         split_observer::{is_valid_split_key, strip_timestamp_if_exists},
     },
     store::metrics::{COMPACTION_DECLINED_BYTES, COMPACTION_RELATED_REGION_COUNT},
@@ -467,7 +467,7 @@ pub struct Runner<EK: KvEngine, S> {
     engine: Either<EK, TabletRegistry<EK>>,
     router: S,
     coprocessor: CoprocessorHost<EK>,
-    region_info_accessor: Option<RegionInfoAccessor>,
+    region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
 }
 
 impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
@@ -475,13 +475,13 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         engine: EK,
         router: S,
         coprocessor: CoprocessorHost<EK>,
-        region_info_accessor: Option<RegionInfoAccessor>,
+        region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
     ) -> Runner<EK, S> {
         Runner {
             engine: Either::Left(engine),
             router,
             coprocessor,
-            region_info_accessor,
+            region_info_provider,
         }
     }
 
@@ -489,13 +489,13 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         registry: TabletRegistry<EK>,
         router: S,
         coprocessor: CoprocessorHost<EK>,
-        region_info_accessor: Option<RegionInfoAccessor>,
+        region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
     ) -> Runner<EK, S> {
         Runner {
             engine: Either::Right(registry),
             router,
             coprocessor,
-            region_info_accessor,
+            region_info_provider,
         }
     }
 
@@ -906,7 +906,7 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
     }
 
     fn on_compaction_finished(&self, event: EK::CompactedEvent, region_split_check_diff: u64) {
-        if self.region_info_accessor.is_none()
+        if self.region_info_provider.is_none()
             || event.is_size_declining_trivial(region_split_check_diff)
         {
             return;
@@ -922,7 +922,7 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             // Calculate influenced regions.
             let (start_key, end_key) = event.get_key_range();
             if let Ok(regions) = self
-                .region_info_accessor
+                .region_info_provider
                 .as_ref()
                 .unwrap()
                 .get_regions_in_range(&start_key, &end_key)

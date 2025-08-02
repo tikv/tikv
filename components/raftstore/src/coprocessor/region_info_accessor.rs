@@ -232,9 +232,9 @@ impl RegionChangeObserver for RegionEventListener {
                 RaftStoreEvent::UpdateRegionBuckets { region, buckets }
             }
         };
-        self.scheduler
-            .schedule(RegionInfoQuery::RaftStoreEvent(event))
-            .unwrap();
+        let _ = self
+            .scheduler
+            .schedule(RegionInfoQuery::RaftStoreEvent(event));
     }
 }
 
@@ -247,9 +247,8 @@ impl RoleObserver for RegionEventListener {
             role,
             initialized: role_change.initialized,
         };
-        self.scheduler
+        let _ = self.scheduler
             .schedule(RegionInfoQuery::RaftStoreEvent(event))
-            .unwrap();
     }
 }
 
@@ -266,9 +265,8 @@ impl RegionHeartbeatObserver for RegionEventListener {
             activity: RegionActivity { region_stat },
         };
 
-        self.scheduler
-            .schedule(RegionInfoQuery::RaftStoreEvent(event))
-            .unwrap();
+        let _ = self.scheduler
+            .schedule(RegionInfoQuery::RaftStoreEvent(event));
     }
 }
 

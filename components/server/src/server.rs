@@ -1010,7 +1010,7 @@ where
             engines.engines.kv.clone(),
             self.router.clone(),
             self.coprocessor_host.clone().unwrap(),
-            self.region_info_accessor.clone(),
+            Some(Arc::new(self.region_info_accessor.clone().unwrap())),
         );
         let split_check_scheduler = self
             .core
