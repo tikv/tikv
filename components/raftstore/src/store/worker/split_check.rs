@@ -917,9 +917,9 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             .with_label_values(&[&output_level_str])
             .observe(event.total_bytes_declined() as f64);
 
-        // region_split_check_diff / 16 is an experienced value.
         let mut region_declined_bytes = {
-            // Calculate influenced regions.
+            // Get the target regions and convert the corresponding ranges into
+            // the target format. Then, calculate the influenced ranges.
             let (start_key, end_key) = event.get_key_range();
             if let Ok(regions) = self
                 .region_info_provider
@@ -931,6 +931,7 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
                 regions.iter().for_each(|r| {
                     ranges.insert(keys::enc_end_key(r), r.id);
                 });
+                // region_split_check_diff / 16 is an experienced value.
                 event.calc_ranges_declined_bytes(&ranges, region_split_check_diff / 16)
             } else {
                 vec![]
