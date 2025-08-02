@@ -247,8 +247,9 @@ impl RoleObserver for RegionEventListener {
             role,
             initialized: role_change.initialized,
         };
-        let _ = self.scheduler
-            .schedule(RegionInfoQuery::RaftStoreEvent(event))
+        let _ = self
+            .scheduler
+            .schedule(RegionInfoQuery::RaftStoreEvent(event));
     }
 }
 
@@ -265,7 +266,8 @@ impl RegionHeartbeatObserver for RegionEventListener {
             activity: RegionActivity { region_stat },
         };
 
-        let _ = self.scheduler
+        let _ = self
+            .scheduler
             .schedule(RegionInfoQuery::RaftStoreEvent(event));
     }
 }
