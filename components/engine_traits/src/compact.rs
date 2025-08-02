@@ -2,6 +2,8 @@
 
 //! Functionality related to compaction
 
+use std::collections::BTreeMap;
+
 use crate::{CfNamesExt, errors::Result};
 
 #[derive(Clone, Debug)]
@@ -104,9 +106,9 @@ pub trait CompactedEvent: Send {
 
     /// This takes self by value so that engine_rocks can move keys out of the
     /// CompactedEvent
-    fn calc_regions_declined_bytes(
+    fn calc_ranges_declined_bytes(
         self,
-        regions: &[(u64, Vec<u8>)], // region_id, end_key
+        ranges: &BTreeMap<Vec<u8>, u64>,
         bytes_threshold: u64,
     ) -> Vec<(u64, u64)>;
 

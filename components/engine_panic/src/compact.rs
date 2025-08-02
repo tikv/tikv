@@ -68,9 +68,9 @@ impl CompactedEvent for PanicCompactedEvent {
         panic!()
     }
 
-    fn calc_regions_declined_bytes(
+    fn calc_ranges_declined_bytes(
         self,
-        regions: &[(u64, Vec<u8>)], // region_id, end_key
+        ranges: &BTreeMap<Vec<u8>, u64>,
         bytes_threshold: u64,
     ) -> Vec<(u64, u64)> {
         panic!()

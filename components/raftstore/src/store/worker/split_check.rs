@@ -2,7 +2,7 @@
 
 use std::{
     cmp::Ordering,
-    collections::BinaryHeap,
+    collections::{BTreeMap, BinaryHeap},
     fmt::{self, Display, Formatter},
     mem,
     sync::Arc,
@@ -927,9 +927,11 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
                 .unwrap()
                 .get_regions_in_range(&start_key, &end_key)
             {
-                let regions: Vec<(u64, Vec<u8>)> =
-                    regions.iter().map(|r| (r.id, r.end_key.clone())).collect();
-                event.calc_regions_declined_bytes(&regions, region_split_check_diff / 16)
+                let mut ranges = BTreeMap::<Vec<u8>, u64>::new();
+                regions.iter().for_each(|r| {
+                    ranges.insert(keys::enc_end_key(r), r.id);
+                });
+                event.calc_ranges_declined_bytes(&ranges, region_split_check_diff / 16)
             } else {
                 vec![]
             }
