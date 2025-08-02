@@ -912,6 +912,13 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                                 );
                             }
                         }
+                        InspectFactor::Network => {
+                            // TODO: support network latency inspect.
+                            warn!(
+                                "Network latency inspect is not supported";
+                                "store_id" => self.fsm.store.id
+                            );
+                        }
                     }
                 }
                 StoreMsg::UnsafeRecoveryReport(report) => self.store_heartbeat_pd(Some(report)),
