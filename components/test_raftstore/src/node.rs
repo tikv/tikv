@@ -289,12 +289,6 @@ impl Simulator for NodeCluster {
         self.snap_mgrs.insert(node_id, snap_mgr.clone());
 
         // Create coprocessor.
-        let enable_region_stats_mgr_cb: Arc<dyn Fn() -> bool + Send + Sync> =
-            if cfg.in_memory_engine.enable {
-                Arc::new(|| true)
-            } else {
-                Arc::new(|| false)
-            };
         let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
         let region_info_accessor = raftstore::RegionInfoAccessor::new(&mut coprocessor_host);
 
