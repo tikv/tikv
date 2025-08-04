@@ -6,6 +6,7 @@ use grpcio::{ChannelBuilder, Environment, ServerBuilder};
 use grpcio_health::{HealthClient, ServingStatus, create_health, proto::HealthCheckRequest};
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
+use security::SecurityManager;
 use test_raftstore::*;
 use tikv_util::{HandyRwLock, config::ReadableDuration};
 
@@ -115,10 +116,12 @@ fn test_serving_status() {
     let health_controller = cluster.sim.rl().health_controllers.get(&1).unwrap().clone();
     let builder = ServerBuilder::new(Arc::new(Environment::new(1)))
         .register_service(create_health(health_controller.get_grpc_health_service()));
-    let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
+    let mut server = builder.build().unwrap();
+    let port =
+        SecurityManager::add_listening_port_without_security(&mut server, "127.0.0.1", 0).unwrap();
     server.start();
 
-    let (addr, port) = server.bind_addrs().next().unwrap();
+    let addr = format!("127.0.0.1:{}", port);
     let ch =
         ChannelBuilder::new(Arc::new(Environment::new(1))).connect(&format!("{}:{}", addr, port));
     let client = HealthClient::new(ch);

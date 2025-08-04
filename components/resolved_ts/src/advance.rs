@@ -554,9 +554,9 @@ async fn get_tikv_client(
             CString::new("random id").unwrap(),
             CONN_ID.fetch_add(1, Ordering::SeqCst),
         )
-        .default_compression_algorithm(CompressionAlgorithms::GRPC_COMPRESS_GZIP)
-        .default_gzip_compression_level(DEFAULT_GRPC_GZIP_COMPRESSION_LEVEL)
-        .default_grpc_min_message_size_to_compress(DEFAULT_GRPC_MIN_MESSAGE_SIZE_TO_COMPRESS);
+        .default_compression_algorithm(CompressionAlgorithms::GRPC_COMPRESS_GZIP);
+    // .default_gzip_compression_level(DEFAULT_GRPC_GZIP_COMPRESSION_LEVEL)
+    // .default_grpc_min_message_size_to_compress(DEFAULT_GRPC_MIN_MESSAGE_SIZE_TO_COMPRESS);
 
     let channel = security_mgr.connect(cb, &store.peer_address);
     let cli = TikvClient::new(channel);
@@ -630,9 +630,11 @@ mod tests {
         let (tx, rx) = channel();
         let tikv_service = MockTikv { req_tx: tx };
         let builder = ServerBuilder::new(env.clone()).register_service(create_tikv(tikv_service));
-        let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
+        let mut server = builder.build().unwrap();
+        let port =
+            SecurityManager::add_listening_port_without_security(&mut server, "127.0.0.1", 0)
+                .unwrap();
         server.start();
-        let (_, port) = server.bind_addrs().next().unwrap();
         let addr = format!("127.0.0.1:{}", port);
         let channel = ChannelBuilder::new(env).connect(&addr);
         let client = TikvClient::new(channel);

@@ -25,6 +25,7 @@ use kvproto::{
     raft_cmdpb::RaftCmdResponse,
 };
 use raftstore::store::{Callback, WriteResponse, snapshot_backup::PrepareDiskSnapObserver};
+use security::SecurityManager;
 use test_raftstore::*;
 use tikv_util::{
     HandyRwLock,
@@ -73,9 +74,11 @@ impl Suite {
         let service = backup::Service::new(sched, env);
         let builder = ServerBuilder::new(Arc::clone(&self.grpc_env))
             .register_service(brpb::create_backup(service));
-        let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
+        let mut server = builder.build().unwrap();
+        let port =
+            SecurityManager::add_listening_port_without_security(&mut server, "127.0.0.1", 0)
+                .unwrap();
         server.start();
-        let (_, port) = server.bind_addrs().next().unwrap();
         let addr = format!("127.0.0.1:{}", port);
         let channel = ChannelBuilder::new(self.grpc_env.clone()).connect(&addr);
         println!("connecting channel to {} for store {}", addr, id);

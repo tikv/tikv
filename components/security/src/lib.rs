@@ -15,8 +15,8 @@ use collections::HashSet;
 use encryption::EncryptionConfig;
 use grpcio::{
     CertificateRequestType, Channel, ChannelBuilder, ChannelCredentialsBuilder, CheckResult,
-    RpcContext, RpcStatus, RpcStatusCode, ServerBuilder, ServerChecker, ServerCredentialsBuilder,
-    ServerCredentialsFetcher,
+    Result as GrpcResult, RpcContext, RpcStatus, RpcStatusCode, Server, ServerBuilder,
+    ServerChecker, ServerCredentials, ServerCredentialsBuilder, ServerCredentialsFetcher,
 };
 use log_wrappers::RedactOption;
 use online_config::{ConfigChange, ConfigManager, OnlineConfig, Result as CfgResult};
@@ -185,13 +185,57 @@ impl SecurityManager {
                 .root_cert(ca)
                 .cert(cert, key)
                 .build();
-            cb.secure_connect(addr, cred)
+            cb.set_credentials(cred).connect(addr)
         }
     }
 
-    pub fn bind(&self, mut sb: ServerBuilder, addr: &str, port: u16) -> ServerBuilder {
+    pub fn add_listening_port(
+        &self,
+        server: &mut Server,
+        addr: &str,
+        port: u16,
+    ) -> GrpcResult<u16> {
         if self.cfg.ca_path.is_empty() {
-            sb.bind(addr, port)
+            Self::add_listening_port_without_security(server, addr, port)
+        } else {
+            let fetcher = Box::new(Fetcher {
+                cfg: self.cfg.clone(),
+                last_modified_time: Arc::new(Mutex::new(None)),
+            });
+            let full_addr = format!("{}:{}", addr, port);
+            let creds = ServerCredentials::with_fetcher(
+                fetcher,
+                CertificateRequestType::RequestAndRequireClientCertificateAndVerify,
+            );
+            let listen_port: u16 = server.add_listening_port(full_addr, creds)?;
+            Ok(listen_port)
+        }
+    }
+
+    pub fn add_listening_port_without_security(
+        server: &mut Server,
+        addr: &str,
+        port: u16,
+    ) -> GrpcResult<u16> {
+        let full_addr = format!("{}:{}", addr, port);
+        let listen_port = server.add_listening_port(full_addr, ServerCredentials::insecure())?;
+        Ok(listen_port)
+    }
+
+    pub fn bind_without_security(
+        sb: ServerBuilder,
+        addr: &str,
+        port: u16,
+    ) -> GrpcResult<(u16, Server)> {
+        let mut server = sb.build()?;
+        let listen_port =
+            Self::add_listening_port_without_security(&mut server, addr, port).unwrap();
+        Ok((listen_port, server))
+    }
+
+    pub fn bind(&self, mut sb: ServerBuilder, addr: &str, port: u16) -> GrpcResult<(u16, Server)> {
+        if self.cfg.ca_path.is_empty() {
+            Self::bind_without_security(sb, addr, port)
         } else {
             if !self.cfg.cert_allowed_cn.is_empty() {
                 let cn_checker = CnChecker {
@@ -199,16 +243,9 @@ impl SecurityManager {
                 };
                 sb = sb.add_checker(cn_checker);
             }
-            let fetcher = Box::new(Fetcher {
-                cfg: self.cfg.clone(),
-                last_modified_time: Arc::new(Mutex::new(None)),
-            });
-            sb.bind_with_fetcher(
-                addr,
-                port,
-                fetcher,
-                CertificateRequestType::RequestAndRequireClientCertificateAndVerify,
-            )
+            let mut server = sb.build()?;
+            let listen_port = self.add_listening_port(&mut server, addr, port).unwrap();
+            Ok((listen_port, server))
         }
     }
 

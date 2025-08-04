@@ -55,6 +55,7 @@ prometheus = { version = "0.13", default-features = false, features = ["nightly"
 raft = { workspace = true }
 raftstore = { workspace = true }
 resource_control = { workspace = true }
+security = { workspace = true }
 slog = { workspace = true }
 # better to not use slog-global, but pass in the logger
 slog-global = { workspace = true }

@@ -31,6 +31,5 @@ where
     let mut sb = ServerBuilder::new(Arc::clone(&env))
         .channel_args(channel_args)
         .register_service(create_tikv(kv));
-    sb = security_mgr.bind(sb, ip, port);
-    sb.build()
+    security_mgr.bind(sb, ip, port).map(|x| x.1)
 }

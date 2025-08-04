@@ -958,11 +958,11 @@ where
                     .stream_initial_window_size(self.cfg.grpc_stream_initial_window_size.0 as i32)
                     .keepalive_time(self.cfg.grpc_keepalive_time.0)
                     .keepalive_timeout(self.cfg.grpc_keepalive_timeout.0)
-                    .default_compression_algorithm(self.cfg.grpc_compression_algorithm())
-                    .default_gzip_compression_level(self.cfg.grpc_gzip_compression_level)
-                    .default_grpc_min_message_size_to_compress(
-                        self.cfg.grpc_min_message_size_to_compress,
-                    );
+                    .default_compression_algorithm(self.cfg.grpc_compression_algorithm());
+                // .default_gzip_compression_level(self.cfg.grpc_gzip_compression_level)
+                // .default_grpc_min_message_size_to_compress(
+                //     self.cfg.grpc_min_message_size_to_compress,
+                // );
                 let channel = security_mgr.connect(channel_builder, &addr);
                 let client = TikvClient::new(channel);
 

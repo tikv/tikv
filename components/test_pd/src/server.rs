@@ -30,6 +30,7 @@ use crate::mocker::etcd::EtcdClient;
 pub struct Server<C: PdMocker> {
     server: Option<GrpcServer>,
     mocker: PdMock<C>,
+    addrs: Vec<(String, u16)>,
 }
 
 impl Server<Service> {
@@ -68,6 +69,7 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
         let mut server = Server {
             server: None,
             mocker,
+            addrs: vec![],
         };
         server.start(mgr, eps);
         server
@@ -83,18 +85,26 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
                 .name_prefix(thd_name!("mock-server"))
                 .build(),
         );
-        let mut sb = ServerBuilder::new(env)
+        let mut server_builder = ServerBuilder::new(env)
             .register_service(pd)
             .register_service(meta_store)
             .register_service(resource_manager);
-        for (host, port) in eps {
-            sb = mgr.bind(sb, &host, port);
+
+        let mut iter = eps.into_iter();
+        let (host, port) = iter.next().expect("eps.length() < 1");
+        let (bind_port, server) = mgr.bind(server_builder, &host, port).unwrap();
+        let mut server = server;
+        self.addrs.push((host, bind_port));
+
+        for (host, port) in iter {
+            let listen_port = mgr.add_listening_port(&mut server, &host, port).unwrap();
+            self.addrs.push((host, listen_port));
         }
 
-        let mut server = sb.build().unwrap();
         {
-            let addrs: Vec<String> = server
-                .bind_addrs()
+            let addrs: Vec<String> = self
+                .addrs
+                .iter()
                 .map(|(host, port)| format!("{}:{}", host, port))
                 .collect();
             self.mocker.default_handler.set_endpoints(addrs.clone());
@@ -117,12 +127,7 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
     }
 
     pub fn bind_addrs(&self) -> Vec<(String, u16)> {
-        self.server
-            .as_ref()
-            .unwrap()
-            .bind_addrs()
-            .map(|(host, port)| (host.clone(), port))
-            .collect()
+        self.addrs.clone()
     }
 }
 

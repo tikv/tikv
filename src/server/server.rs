@@ -66,7 +66,6 @@ pub trait GrpcBuilderFactory {
 struct BuilderFactory<S: Tikv + Send + Clone + 'static> {
     kv_service: S,
     cfg: Arc<VersionTrack<Config>>,
-    security_mgr: Arc<SecurityManager>,
     health_service: HealthService,
 }
 
@@ -77,13 +76,11 @@ where
     pub fn new(
         kv_service: S,
         cfg: Arc<VersionTrack<Config>>,
-        security_mgr: Arc<SecurityManager>,
         health_service: HealthService,
     ) -> BuilderFactory<S> {
         BuilderFactory {
             kv_service,
             cfg,
-            security_mgr,
             health_service,
         }
     }
@@ -122,7 +119,7 @@ where
             .http2_max_ping_strikes(i32::MAX) // For pings without data from clients.
             .keepalive_time(self.cfg.value().grpc_keepalive_time.into())
             .keepalive_timeout(self.cfg.value().grpc_keepalive_timeout.into())
-            .default_gzip_compression_level(self.cfg.value().grpc_gzip_compression_level)
+            // .default_gzip_compression_level(self.cfg.value().grpc_gzip_compression_level)
             .default_compression_level(compression_level)
             .build_args();
 
@@ -130,7 +127,7 @@ where
             .channel_args(channel_args)
             .register_service(create_tikv(self.kv_service.clone()))
             .register_service(create_health(self.health_service.clone()));
-        Ok(self.security_mgr.bind(sb, &ip, addr.port()))
+        Ok(sb)
     }
 }
 
@@ -146,6 +143,8 @@ pub struct Server<S: StoreAddrResolver + 'static, E: Engine> {
     builder_or_server: Option<Either<ServerBuilder, GrpcServer>>,
     grpc_mem_quota: ResourceQuota,
     local_addr: SocketAddr,
+    security_mgr: Arc<SecurityManager>,
+
     // Transport.
     trans: ServerTransport<E::RaftExtension, S>,
     raft_router: E::RaftExtension,
@@ -237,7 +236,6 @@ where
         let builder_factory = Box::new(BuilderFactory::new(
             kv_service,
             cfg.clone(),
-            security_mgr.clone(),
             health_controller.get_grpc_health_service(),
         ));
 
@@ -264,6 +262,7 @@ where
             builder_or_server: Some(builder),
             grpc_mem_quota: mem_quota,
             local_addr: addr,
+            security_mgr: security_mgr.clone(),
             trans,
             raft_router: raft_ext,
             snap_mgr,
@@ -320,12 +319,17 @@ where
     /// Build gRPC server and bind to address.
     pub fn build_and_bind(&mut self) -> Result<SocketAddr> {
         let sb = self.builder_or_server.take().unwrap().left().unwrap();
-        let server = sb.build()?;
-        let (host, port) = server.bind_addrs().next().unwrap();
-        let addr = SocketAddr::new(IpAddr::from_str(host)?, port);
-        self.local_addr = addr;
+        let (bind_port, server) = self
+            .security_mgr
+            .bind(
+                sb,
+                &self.local_addr.ip().to_string(),
+                self.local_addr.port(),
+            )
+            .unwrap();
         self.builder_or_server = Some(Either::Right(server));
-        Ok(addr)
+        self.local_addr.set_port(bind_port);
+        Ok(self.local_addr)
     }
 
     fn start_grpc(&mut self) {

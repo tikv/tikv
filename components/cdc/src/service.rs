@@ -16,6 +16,7 @@ use kvproto::{
     },
     kvrpcpb::ApiVersion,
 };
+use security::SecurityManager;
 use tikv_util::{error, info, memory::MemoryQuota, warn, worker::*};
 
 use crate::{
@@ -541,9 +542,11 @@ mod tests {
         let env = Arc::new(EnvBuilder::new().build());
         let builder =
             ServerBuilder::new(env.clone()).register_service(create_change_data(cdc_service));
-        let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
+        let mut server = builder.build().unwrap();
+        let port =
+            SecurityManager::add_listening_port_without_security(&mut server, "127.0.0.1", 0)
+                .unwrap();
         server.start();
-        let (_, port) = server.bind_addrs().next().unwrap();
         let addr = format!("127.0.0.1:{}", port);
         let channel = ChannelBuilder::new(env).connect(&addr);
         let client = ChangeDataClient::new(channel);
