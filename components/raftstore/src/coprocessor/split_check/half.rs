@@ -161,8 +161,17 @@ mod tests {
             region_max_size: Some(ReadableSize(BUCKET_NUMBER_LIMIT as u64)),
             ..Default::default()
         };
+<<<<<<< HEAD
         let mut runnable =
             SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
+=======
+        let mut runnable = SplitCheckRunner::new(
+            engine.clone(),
+            tx.clone(),
+            CoprocessorHost::new(tx, cfg),
+            None,
+        );
+>>>>>>> b1689c684c (raftstore: use lock-free handling of CompactedEvent (#18776))
 
         // so split key will be z0005
         for i in 0..11 {
@@ -206,8 +215,17 @@ mod tests {
             region_max_size: Some(ReadableSize(BUCKET_NUMBER_LIMIT as u64)),
             ..Default::default()
         };
+<<<<<<< HEAD
         let mut runnable =
             SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
+=======
+        let mut runnable = SplitCheckRunner::new(
+            engine.clone(),
+            tx.clone(),
+            CoprocessorHost::new(tx, cfg),
+            None,
+        );
+>>>>>>> b1689c684c (raftstore: use lock-free handling of CompactedEvent (#18776))
 
         for i in 0..11 {
             let k = format!("{:04}", i).into_bytes();
@@ -273,7 +291,11 @@ mod tests {
             ..Default::default()
         };
         let cop_host = CoprocessorHost::new(tx.clone(), cfg);
+<<<<<<< HEAD
         let mut runnable = SplitCheckRunner::new(engine.clone(), tx, cop_host.clone());
+=======
+        let mut runnable = SplitCheckRunner::new(engine.clone(), tx, cop_host.clone(), None);
+>>>>>>> b1689c684c (raftstore: use lock-free handling of CompactedEvent (#18776))
 
         let key_gen = |k: &[u8], i: u64, mvcc: bool| {
             if !mvcc {
@@ -396,8 +418,17 @@ mod tests {
             region_bucket_size: ReadableSize(20_u64), // so that each key below will form a bucket
             ..Default::default()
         };
+<<<<<<< HEAD
         let mut runnable =
             SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
+=======
+        let mut runnable = SplitCheckRunner::new(
+            engine.clone(),
+            tx.clone(),
+            CoprocessorHost::new(tx, cfg),
+            None,
+        );
+>>>>>>> b1689c684c (raftstore: use lock-free handling of CompactedEvent (#18776))
 
         // so bucket key will be all these keys
         let mut exp_bucket_keys = vec![];

@@ -32,6 +32,7 @@ fn setup(cfg: TikvConfig, engine: RocksEngine) -> (ConfigController, LazyWorker<
         engine,
         router.clone(),
         CoprocessorHost::new(router, cfg.coprocessor.clone()),
+        None,
     );
     let share_worker = Worker::new("split-check-config");
     let mut worker = share_worker.lazy_build("split-check-config");

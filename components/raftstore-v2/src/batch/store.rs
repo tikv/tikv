@@ -828,6 +828,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
                 tablet_registry.clone(),
                 router.clone(),
                 coprocessor_host.clone(),
+                None,
             ),
         );
 

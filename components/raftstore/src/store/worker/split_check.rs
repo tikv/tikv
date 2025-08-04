@@ -2,7 +2,7 @@
 
 use std::{
     cmp::Ordering,
-    collections::BinaryHeap,
+    collections::{BTreeMap, BinaryHeap},
     fmt::{self, Display, Formatter},
     mem,
     sync::Arc,
@@ -28,10 +28,15 @@ use super::metrics::*;
 use crate::{
     coprocessor::{
         dispatcher::StoreHandle,
+        region_info_accessor::RegionInfoProvider,
         split_observer::{is_valid_split_key, strip_timestamp_if_exists},
         Config, CoprocessorHost, SplitCheckerHost,
     },
+<<<<<<< HEAD
     Result,
+=======
+    store::metrics::{COMPACTION_DECLINED_BYTES, COMPACTION_RELATED_REGION_COUNT},
+>>>>>>> b1689c684c (raftstore: use lock-free handling of CompactedEvent (#18776))
 };
 
 #[derive(PartialEq, Eq)]
@@ -447,14 +452,25 @@ pub struct Runner<EK: KvEngine, S> {
     engine: Either<EK, TabletRegistry<EK>>,
     router: S,
     coprocessor: CoprocessorHost<EK>,
+    region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
 }
 
 impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
+<<<<<<< HEAD
     pub fn new(engine: EK, router: S, coprocessor: CoprocessorHost<EK>) -> Runner<EK, S> {
+=======
+    pub fn new(
+        engine: EK,
+        router: S,
+        coprocessor: CoprocessorHost<EK>,
+        region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
+    ) -> Runner<EK, S> {
+>>>>>>> b1689c684c (raftstore: use lock-free handling of CompactedEvent (#18776))
         Runner {
             engine: Either::Left(engine),
             router,
             coprocessor,
+            region_info_provider,
         }
     }
 
@@ -462,11 +478,13 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         registry: TabletRegistry<EK>,
         router: S,
         coprocessor: CoprocessorHost<EK>,
+        region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
     ) -> Runner<EK, S> {
         Runner {
             engine: Either::Right(registry),
             router,
             coprocessor,
+            region_info_provider,
         }
     }
 
@@ -876,6 +894,52 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         Ok(split_keys)
     }
 
+<<<<<<< HEAD
+=======
+    fn on_compaction_finished(&self, event: EK::CompactedEvent, region_split_check_diff: u64) {
+        if self.region_info_provider.is_none()
+            || event.is_size_declining_trivial(region_split_check_diff)
+        {
+            return;
+        }
+
+        let output_level_str = event.output_level_label();
+        COMPACTION_DECLINED_BYTES
+            .with_label_values(&[&output_level_str])
+            .observe(event.total_bytes_declined() as f64);
+
+        let mut region_declined_bytes = {
+            // Get the target regions and convert the corresponding ranges into
+            // the target format. Then, calculate the influenced ranges.
+            let (start_key, end_key) = event.get_key_range();
+            if let Ok(regions) = self
+                .region_info_provider
+                .as_ref()
+                .unwrap()
+                .get_regions_in_range(&start_key, &end_key)
+            {
+                let mut ranges = BTreeMap::<Vec<u8>, u64>::new();
+                regions.iter().for_each(|r| {
+                    ranges.insert(keys::enc_end_key(r), r.id);
+                });
+                // region_split_check_diff / 16 is an experienced value.
+                event.calc_ranges_declined_bytes(&ranges, region_split_check_diff / 16)
+            } else {
+                vec![]
+            }
+        };
+
+        COMPACTION_RELATED_REGION_COUNT
+            .with_label_values(&[&output_level_str])
+            .observe(region_declined_bytes.len() as f64);
+
+        for (region_id, declined_bytes) in region_declined_bytes.drain(..) {
+            self.router
+                .update_compaction_declined_bytes(region_id, declined_bytes);
+        }
+    }
+
+>>>>>>> b1689c684c (raftstore: use lock-free handling of CompactedEvent (#18776))
     fn change_cfg(&mut self, change: ConfigChange) {
         if let Err(e) = self.coprocessor.cfg.update(change.clone()) {
             error!("update split check config failed"; "err" => ?e);
