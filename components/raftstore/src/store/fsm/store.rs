@@ -554,7 +554,7 @@ where
     pub store: metapb::Store,
     pub pd_scheduler: Scheduler<PdTask<EK>>,
     pub consistency_check_scheduler: Scheduler<ConsistencyCheckTask<EK::Snapshot>>,
-    pub split_check_scheduler: Scheduler<SplitCheckTask>,
+    pub split_check_scheduler: Scheduler<SplitCheckTask<EK>>,
     // handle Compact, CleanupSst task
     pub cleanup_scheduler: Scheduler<CleanupTask>,
     pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
@@ -1264,7 +1264,7 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     pub store: metapb::Store,
     pd_scheduler: Scheduler<PdTask<EK>>,
     consistency_check_scheduler: Scheduler<ConsistencyCheckTask<EK::Snapshot>>,
-    split_check_scheduler: Scheduler<SplitCheckTask>,
+    split_check_scheduler: Scheduler<SplitCheckTask<EK>>,
     cleanup_scheduler: Scheduler<CleanupTask>,
     raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
     raftlog_fetch_scheduler: Scheduler<ReadTask<EK>>,
@@ -1665,7 +1665,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<EK>,
         importer: Arc<SstImporter<EK>>,
-        split_check_scheduler: Scheduler<SplitCheckTask>,
+        split_check_scheduler: Scheduler<SplitCheckTask<EK>>,
         background_worker: Worker,
         auto_split_controller: AutoSplitController,
         global_replication_state: Arc<Mutex<GlobalReplicationState>>,
@@ -3426,6 +3426,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use engine_rocks::{RangeOffsets, RangeProperties, RocksCompactedEvent};
+    use engine_traits::CompactedEvent;
 
     #[test]
     fn test_calc_region_declined_bytes() {

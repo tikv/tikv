@@ -9,7 +9,8 @@ use std::{
 };
 
 use engine_traits::{
-    CfName, IterOptions, Iterable, Iterator, KvEngine, TabletRegistry, CF_WRITE, LARGE_CFS,
+    CfName, CompactedEvent, IterOptions, Iterable, Iterator, KvEngine, TabletRegistry, CF_WRITE,
+    LARGE_CFS,
 };
 use file_system::{IoType, WithIoType};
 use itertools::Itertools;
@@ -367,7 +368,10 @@ impl BucketStatsInfo {
     }
 }
 
-pub enum Task {
+pub enum Task<EK>
+where
+    EK: KvEngine,
+{
     SplitCheckTask {
         region: Region,
         start_key: Option<Vec<u8>>,
@@ -378,17 +382,25 @@ pub enum Task {
     },
     ApproximateBuckets(Region),
     ChangeConfig(ConfigChange),
+    // Compaction finished event
+    CompactedEvent {
+        event: EK::CompactedEvent,
+        region_split_check_diff: u64,
+    },
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&Config) + Send>),
 }
 
-impl Task {
+impl<EK> Task<EK>
+where
+    EK: KvEngine,
+{
     pub fn split_check(
         region: Region,
         auto_split: bool,
         policy: CheckPolicy,
         bucket_ranges: Option<Vec<BucketRange>>,
-    ) -> Task {
+    ) -> Self {
         Task::SplitCheckTask {
             region,
             start_key: None,
@@ -406,7 +418,7 @@ impl Task {
         auto_split: bool,
         policy: CheckPolicy,
         bucket_ranges: Option<Vec<BucketRange>>,
-    ) -> Task {
+    ) -> Self {
         Task::SplitCheckTask {
             region,
             start_key,
@@ -418,7 +430,10 @@ impl Task {
     }
 }
 
-impl Display for Task {
+impl<EK> Display for Task<EK>
+where
+    EK: KvEngine,
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Task::SplitCheckTask {
@@ -436,6 +451,9 @@ impl Display for Task {
                 auto_split
             ),
             Task::ChangeConfig(_) => write!(f, "[split check worker] Change Config Task"),
+            Task::CompactedEvent { .. } => {
+                write!(f, "[split check worker] Compaction finished Event")
+            }
             #[cfg(any(test, feature = "testexport"))]
             Task::Validate(_) => write!(f, "[split check worker] Validate config"),
             Task::ApproximateBuckets(_) => write!(f, "[split check worker] Approximate buckets"),
@@ -947,8 +965,8 @@ where
     EK: KvEngine,
     S: StoreHandle,
 {
-    type Task = Task;
-    fn run(&mut self, task: Task) {
+    type Task = Task<EK>;
+    fn run(&mut self, task: Task<EK>) {
         let _io_type_guard = WithIoType::new(IoType::LoadBalance);
         match task {
             Task::SplitCheckTask {
