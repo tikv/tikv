@@ -2506,34 +2506,17 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
     }
 
     fn on_compaction_finished(&mut self, event: EK::CompactedEvent) {
-        if event.is_size_declining_trivial(self.ctx.cfg.region_split_check_diff().0) {
-            return;
-        }
-
-        let output_level_str = event.output_level_label();
-        COMPACTION_DECLINED_BYTES
-            .with_label_values(&[&output_level_str])
-            .observe(event.total_bytes_declined() as f64);
-
-        // self.cfg.region_split_check_diff.0 / 16 is an experienced value.
-        let mut region_declined_bytes = {
-            let meta = self.ctx.store_meta.lock().unwrap();
-            event.calc_ranges_declined_bytes(
-                &meta.region_ranges,
-                self.ctx.cfg.region_split_check_diff().0 / 16,
-            )
-        };
-
-        COMPACTION_RELATED_REGION_COUNT
-            .with_label_values(&[&output_level_str])
-            .observe(region_declined_bytes.len() as f64);
-
-        for (region_id, declined_bytes) in region_declined_bytes.drain(..) {
-            let _ = self.ctx.router.send(
-                region_id,
-                PeerMsg::CasualMessage(CasualMessage::CompactionDeclinedBytes {
-                    bytes: declined_bytes,
-                }),
+        if let Err(e) = self
+            .ctx
+            .split_check_scheduler
+            .schedule(SplitCheckTask::CompactedEvent {
+                event,
+                region_split_check_diff: self.ctx.cfg.region_split_check_diff().0,
+            })
+        {
+            error!(
+                "failed to schedule split check for compaction finished event";
+                "err" => %e,
             );
         }
     }

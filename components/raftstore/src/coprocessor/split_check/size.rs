@@ -454,17 +454,12 @@ pub mod tests {
             ..Default::default()
         };
 
-<<<<<<< HEAD
-        let mut runnable =
-            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
-=======
         let mut runnable = SplitCheckRunner::new(
             engine.clone(),
             tx.clone(),
             CoprocessorHost::new(tx, cfg),
             None,
         );
->>>>>>> b1689c684c (raftstore: use lock-free handling of CompactedEvent (#18776))
 
         // so split key will be [z0006]
         for i in 0..7 {
@@ -599,11 +594,7 @@ pub mod tests {
             }
         };
         let cop_host = CoprocessorHost::new(tx.clone(), cfg);
-<<<<<<< HEAD
-        let mut runnable = SplitCheckRunner::new(engine.clone(), tx, cop_host.clone());
-=======
         let mut runnable = SplitCheckRunner::new(engine.clone(), tx, cop_host.clone(), None);
->>>>>>> b1689c684c (raftstore: use lock-free handling of CompactedEvent (#18776))
         for i in 0..1000 {
             // if not mvcc, kv size is (6+1)*2 = 14, given bucket size is 3000, expect each
             // bucket has about 210 keys if mvcc, kv size is about 18*2 = 36, expect each
@@ -824,17 +815,12 @@ pub mod tests {
         let engine =
             engine_test::kv::new_engine_opt(path_str, DbOptions::default(), cfs_opts).unwrap();
 
-<<<<<<< HEAD
-        let mut runnable =
-            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
-=======
         let mut runnable = SplitCheckRunner::new(
             engine.clone(),
             tx.clone(),
             CoprocessorHost::new(tx, cfg),
             None,
         );
->>>>>>> b1689c684c (raftstore: use lock-free handling of CompactedEvent (#18776))
 
         // Flush a sst of CF_LOCK with range properties.
         for i in 7..15 {

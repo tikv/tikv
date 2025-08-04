@@ -32,11 +32,7 @@ use crate::{
         split_observer::{is_valid_split_key, strip_timestamp_if_exists},
         Config, CoprocessorHost, SplitCheckerHost,
     },
-<<<<<<< HEAD
-    Result,
-=======
     store::metrics::{COMPACTION_DECLINED_BYTES, COMPACTION_RELATED_REGION_COUNT},
->>>>>>> b1689c684c (raftstore: use lock-free handling of CompactedEvent (#18776))
 };
 
 #[derive(PartialEq, Eq)]
@@ -456,16 +452,12 @@ pub struct Runner<EK: KvEngine, S> {
 }
 
 impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
-<<<<<<< HEAD
-    pub fn new(engine: EK, router: S, coprocessor: CoprocessorHost<EK>) -> Runner<EK, S> {
-=======
     pub fn new(
         engine: EK,
         router: S,
         coprocessor: CoprocessorHost<EK>,
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
     ) -> Runner<EK, S> {
->>>>>>> b1689c684c (raftstore: use lock-free handling of CompactedEvent (#18776))
         Runner {
             engine: Either::Left(engine),
             router,
@@ -894,8 +886,6 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         Ok(split_keys)
     }
 
-<<<<<<< HEAD
-=======
     fn on_compaction_finished(&self, event: EK::CompactedEvent, region_split_check_diff: u64) {
         if self.region_info_provider.is_none()
             || event.is_size_declining_trivial(region_split_check_diff)
@@ -939,7 +929,6 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         }
     }
 
->>>>>>> b1689c684c (raftstore: use lock-free handling of CompactedEvent (#18776))
     fn change_cfg(&mut self, change: ConfigChange) {
         if let Err(e) = self.coprocessor.cfg.update(change.clone()) {
             error!("update split check config failed"; "err" => ?e);
@@ -1008,6 +997,10 @@ where
                     }
                 }
             }
+            Task::CompactedEvent {
+                event,
+                region_split_check_diff,
+            } => self.on_compaction_finished(event, region_split_check_diff),
             #[cfg(any(test, feature = "testexport"))]
             Task::Validate(f) => f(&self.coprocessor.cfg),
         }

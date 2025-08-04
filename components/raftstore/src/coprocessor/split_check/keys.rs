@@ -289,17 +289,12 @@ mod tests {
             ..Default::default()
         };
 
-<<<<<<< HEAD
-        let mut runnable =
-            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
-=======
         let mut runnable = SplitCheckRunner::new(
             engine.clone(),
             tx.clone(),
             CoprocessorHost::new(tx, cfg),
             None,
         );
->>>>>>> b1689c684c (raftstore: use lock-free handling of CompactedEvent (#18776))
 
         // so split key will be z0080
         put_data(&engine, 0, 90, false);
@@ -419,17 +414,12 @@ mod tests {
             ..Default::default()
         };
 
-<<<<<<< HEAD
-        let mut runnable =
-            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
-=======
         let mut runnable = SplitCheckRunner::new(
             engine.clone(),
             tx.clone(),
             CoprocessorHost::new(tx, cfg),
             None,
         );
->>>>>>> b1689c684c (raftstore: use lock-free handling of CompactedEvent (#18776))
 
         put_data(&engine, 0, 90, false);
         runnable.run(SplitCheckTask::split_check(
@@ -644,11 +634,7 @@ mod tests {
         // exists, it will result in split by keys failed.
         cfg.region_max_size = Some(ReadableSize(region_size * 6 / 5));
         cfg.region_split_size = Some(ReadableSize(region_size * 4 / 5));
-<<<<<<< HEAD
-        runnable = SplitCheckRunner::new(engine, tx.clone(), CoprocessorHost::new(tx, cfg));
-=======
         runnable = SplitCheckRunner::new(engine, tx.clone(), CoprocessorHost::new(tx, cfg), None);
->>>>>>> b1689c684c (raftstore: use lock-free handling of CompactedEvent (#18776))
         runnable.run(SplitCheckTask::split_check(
             region.clone(),
             true,
