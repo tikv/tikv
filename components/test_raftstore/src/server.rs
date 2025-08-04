@@ -668,10 +668,10 @@ impl ServerCluster {
         let pessimistic_txn_cfg = cfg.tikv.pessimistic_txn;
 
         let split_check_runner = SplitCheckRunner::new(
-            Some(store_meta.clone()),
             engines.kv.clone(),
             router.clone(),
             coprocessor_host.clone(),
+            Some(Arc::new(region_info_accessor.clone())),
         );
         let split_check_scheduler = bg_worker.start("split-check", split_check_runner);
         let split_config_manager =

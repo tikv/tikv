@@ -3435,10 +3435,10 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use engine_rocks::{RangeOffsets, RangeProperties, RocksCompactedEvent};
     use engine_traits::CompactedEvent;
-
-    use super::*;
 
     #[test]
     fn test_calc_region_declined_bytes() {
@@ -3467,6 +3467,8 @@ mod tests {
                 ),
             ],
         };
+        let (prop_start_key, prop_end_key) =
+            (prop.smallest_key().unwrap(), prop.largest_key().unwrap());
         let event = RocksCompactedEvent {
             cf: "default".to_owned(),
             output_level: 3,
@@ -3477,6 +3479,8 @@ mod tests {
             input_props: vec![prop],
             output_props: vec![],
         };
+        let (start_key, end_key) = event.get_key_range();
+        assert_eq!((start_key, end_key), (prop_start_key, prop_end_key));
 
         let mut region_ranges = BTreeMap::new();
         region_ranges.insert(b"a".to_vec(), 1);
