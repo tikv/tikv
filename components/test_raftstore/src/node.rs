@@ -296,22 +296,7 @@ impl Simulator for NodeCluster {
                 Arc::new(|| false)
             };
         let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
-
-        // In-memory engine
-        let mut in_memory_engine_config = cfg.in_memory_engine.clone();
-        in_memory_engine_config.expected_region_size = cfg.coprocessor.region_split_size();
-        let in_memory_engine_config = Arc::new(VersionTrack::new(in_memory_engine_config));
-        let in_memory_engine_config_clone = in_memory_engine_config.clone();
-
-        let region_info_accessor = raftstore::RegionInfoAccessor::new(
-            &mut coprocessor_host,
-            enable_region_stats_mgr_cb,
-            Box::new(move || {
-                in_memory_engine_config_clone
-                    .value()
-                    .mvcc_amplification_threshold
-            }),
-        );
+        let region_info_accessor = raftstore::RegionInfoAccessor::new(&mut coprocessor_host);
 
         if let Some(f) = self.post_create_coprocessor_host.as_ref() {
             f(node_id, &mut coprocessor_host);

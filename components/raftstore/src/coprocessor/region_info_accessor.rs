@@ -217,28 +217,6 @@ impl RoleObserver for RegionEventListener {
     }
 }
 
-<<<<<<< HEAD
-=======
-impl RegionHeartbeatObserver for RegionEventListener {
-    fn on_region_heartbeat(&self, context: &mut ObserverContext<'_>, region_stat: &RegionStat) {
-        if !(self.region_stats_manager_enabled_cb)() {
-            // Region stats manager is disabled, return early.
-            return;
-        }
-        let region = context.region().clone();
-        let region_stat = region_stat.clone();
-        let event = RaftStoreEvent::UpdateRegionActivity {
-            region,
-            activity: RegionActivity { region_stat },
-        };
-
-        let _ = self
-            .scheduler
-            .schedule(RegionInfoQuery::RaftStoreEvent(event));
-    }
-}
-
->>>>>>> b1689c684c (raftstore: use lock-free handling of CompactedEvent (#18776))
 /// Creates an `RegionEventListener` and register it to given coprocessor host.
 fn register_region_event_listener(
     host: &mut CoprocessorHost<impl KvEngine>,
