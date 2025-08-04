@@ -956,7 +956,7 @@ where
             engines.engines.kv.clone(),
             self.router.clone(),
             self.coprocessor_host.clone().unwrap(),
-            Some(Arc::new(self.region_info_accessor.clone().unwrap())),
+            Some(Arc::new(self.region_info_accessor.clone())),
         );
         let split_check_scheduler = self
             .core
