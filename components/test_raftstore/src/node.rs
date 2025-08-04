@@ -300,7 +300,29 @@ impl Simulator for NodeCluster {
         self.snap_mgrs.insert(node_id, snap_mgr.clone());
 
         // Create coprocessor.
+        let enable_region_stats_mgr_cb: Arc<dyn Fn() -> bool + Send + Sync> =
+            if cfg.in_memory_engine.enable {
+                Arc::new(|| true)
+            } else {
+                Arc::new(|| false)
+            };
         let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
+
+        // In-memory engine
+        let mut in_memory_engine_config = cfg.in_memory_engine.clone();
+        in_memory_engine_config.expected_region_size = cfg.coprocessor.region_split_size();
+        let in_memory_engine_config = Arc::new(VersionTrack::new(in_memory_engine_config));
+        let in_memory_engine_config_clone = in_memory_engine_config.clone();
+
+        let region_info_accessor = raftstore::RegionInfoAccessor::new(
+            &mut coprocessor_host,
+            enable_region_stats_mgr_cb,
+            Box::new(move || {
+                in_memory_engine_config_clone
+                    .value()
+                    .mvcc_amplification_threshold
+            }),
+        );
 
         if let Some(f) = self.post_create_coprocessor_host.as_ref() {
             f(node_id, &mut coprocessor_host);
@@ -327,10 +349,10 @@ impl Simulator for NodeCluster {
         let cfg_controller = ConfigController::new(cfg.tikv.clone());
 
         let split_check_runner = SplitCheckRunner::new(
-            Some(store_meta.clone()),
             engines.kv.clone(),
             router.clone(),
             coprocessor_host.clone(),
+            Some(Arc::new(region_info_accessor)),
         );
         let split_scheduler = bg_worker.start("test-split-check", split_check_runner);
         cfg_controller.register(
