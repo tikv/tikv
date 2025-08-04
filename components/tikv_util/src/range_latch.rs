@@ -97,7 +97,7 @@ impl RangeLatch {
 
                 // Now acquire the latch after releasing the write guard
                 let mutex_guard = mutex.lock().unwrap();
-                // Safety: `transmute` just change the lifetime, do not change 
+                // Safety: `transmute` just change the lifetime, do not change
                 // the type.
                 // `_mutex_guard` points to the `Mutex<()>`
                 // We need to make sure it will be dropped before the
