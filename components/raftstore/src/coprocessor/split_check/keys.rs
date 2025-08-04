@@ -289,10 +289,10 @@ mod tests {
         };
 
         let mut runnable = SplitCheckRunner::new(
-            None,
             engine.clone(),
             tx.clone(),
             CoprocessorHost::new(tx, cfg),
+            None,
         );
 
         // so split key will be z0080
@@ -414,10 +414,10 @@ mod tests {
         };
 
         let mut runnable = SplitCheckRunner::new(
-            None,
             engine.clone(),
             tx.clone(),
             CoprocessorHost::new(tx, cfg),
+            None,
         );
 
         put_data(&engine, 0, 90, false);
@@ -603,10 +603,10 @@ mod tests {
         };
 
         let mut runnable = SplitCheckRunner::new(
-            None,
             engine.clone(),
             tx.clone(),
             CoprocessorHost::new(tx.clone(), cfg.clone()),
+            None,
         );
 
         put_data(&engine, 0, 90, false);
@@ -633,7 +633,7 @@ mod tests {
         // exists, it will result in split by keys failed.
         cfg.region_max_size = Some(ReadableSize(region_size * 6 / 5));
         cfg.region_split_size = Some(ReadableSize(region_size * 4 / 5));
-        runnable = SplitCheckRunner::new(None, engine, tx.clone(), CoprocessorHost::new(tx, cfg));
+        runnable = SplitCheckRunner::new(engine, tx.clone(), CoprocessorHost::new(tx, cfg), None);
         runnable.run(SplitCheckTask::split_check(
             region.clone(),
             true,
