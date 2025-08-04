@@ -33,6 +33,7 @@ use crate::{
         Config, CoprocessorHost, SplitCheckerHost,
     },
     store::metrics::{COMPACTION_DECLINED_BYTES, COMPACTION_RELATED_REGION_COUNT},
+    Result,
 };
 
 #[derive(PartialEq, Eq)]
