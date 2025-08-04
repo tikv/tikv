@@ -451,22 +451,56 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
                     if let Some(before) = cf_checker.pending_bytes_before_unsafe_destroy_range {
                         let soft =
                             (current_cfg.soft_pending_compaction_bytes_limit.0 as f64).log2();
-                        let after = (self.engine.pending_compaction_bytes(self.region_id, cf)
-                            as f64)
-                            .log2();
+                        let current_pending_bytes =
+                            (self.engine.pending_compaction_bytes(self.region_id, cf) as f64)
+                                .log2();
+
+                        let avg_pending_bytes = if let Some(long_term_pending_bytes) =
+                                cf_checker.long_term_pending_bytes.as_ref()
+                        {
+                            long_term_pending_bytes.get_avg()
+                        } else {
+                            current_pending_bytes
+                        };
 
                         assert!(before < soft);
-                        if after >= soft {
+                        if current_pending_bytes >= soft {
                             // there is a pending bytes jump
                             SCHED_THROTTLE_ACTION_COUNTER
                                 .with_label_values(&[cf, "pending_bytes_jump"])
                                 .inc();
+                        } else {
+                            // If both the current pending bytes and long term
+                            // pending bytes are below soft limit, we can
+                            // re-enable compaction bytes based rate limiting.
+                            if avg_pending_bytes < soft {
+                                cf_checker.pending_bytes_before_unsafe_destroy_range = None;
+                                info!(
+                                    "re-enabled compaction pending bytes flow control";
+                                    "cf" => cf,
+                                );
+                                println!(
+                                    "re-enabled compaction pending bytes flow control"
+                                );
+                            }
                         }
+
+                        println!(
+                            "after unsafe destroy range: cf={}, before={}, current_pending_bytes={}, avg_pending_bytes={}, soft_limit={}",
+                            cf,
+                            before,
+                            current_pending_bytes,
+                            avg_pending_bytes,
+                            soft,
+                        );
+
                         info!(
                             "after unsafe destroy range";
                             "cf" => cf,
                             "before" => before,
-                            "after" => after
+                            "current_pending_bytes" => current_pending_bytes,
+                            "avg_pending_bytes" => avg_pending_bytes,
+                            "soft_limit" => soft,
                         );
                     }
                 }
@@ -500,7 +534,9 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
                         let (rate, cf_throttle_flags) = checker.update_statistics();
                         for (cf, val) in cf_throttle_flags {
                             SCHED_THROTTLE_CF_GAUGE.with_label_values(&[cf]).set(val);
+                            println!("SCHED_THROTTLE_CF_GAUGE cf {} set to {}", cf, val);
                         }
+                        println!("SCHED_WRITE_FLOW_GAUGE set to {}", rate);
                         SCHED_WRITE_FLOW_GAUGE.set(rate as i64);
                         deadline = std::time::Instant::now() + TICK_DURATION;
                     } else {
@@ -589,7 +625,8 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
             num = 0.0;
         }
         let checker = self.cf_checkers.get_mut(&cf).unwrap();
-
+        println!("on_pending_compaction_bytes_change_cf => cf: {}, pending_compaction_bytes: {}, checker.on_start_pending_bytes: {}, num: {}", 
+            cf, pending_compaction_bytes, checker.on_start_pending_bytes, num);
         // only be called by v1
         if let Some(long_term_pending_bytes) = checker.long_term_pending_bytes.as_mut() {
             long_term_pending_bytes.observe(num);
@@ -629,6 +666,7 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
                 false
             };
 
+            println!("on_pending_compaction_bytes_change_cf => ignore: {}", ignore);
             for checker in self.cf_checkers.values() {
                 if let Some(long_term_pending_bytes) = checker.long_term_pending_bytes.as_ref()
                     && num < long_term_pending_bytes.get_recent()
@@ -658,6 +696,8 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
             if ratio > RATIO_SCALE_FACTOR {
                 ratio = RATIO_SCALE_FACTOR;
             }
+
+            println!("ratio updated to {}, pending_compaction_bytes is {}", ratio, pending_compaction_bytes);
             self.discard_ratio.store(ratio, Ordering::Relaxed);
         }
     }
@@ -1270,6 +1310,50 @@ pub(super) mod tests {
         stub.0
             .pending_compaction_bytes
             .store(10000000000 * 1024 * 1024 * 1024, Ordering::Relaxed);
+        send_flow_info(&tx, region_id);
+        assert!(flow_controller.discard_ratio(region_id) > f64::EPSILON);
+    }
+
+    #[test]
+    fn test_flow_controller_pending_compaction_bytes_no_jump_control() {
+        let region_id = 0;
+        let stub = EngineStub::new();
+        let (tx, rx) = mpsc::sync_channel(0);
+        let flow_controller =
+            EngineFlowController::new(&FlowControlConfig::default(), stub.clone(), rx);
+        let flow_controller = FlowController::Singleton(flow_controller);
+
+        // should handle zero pending compaction bytes properly
+        stub.0.pending_compaction_bytes.store(0, Ordering::Relaxed);
+        send_flow_info(&tx, region_id);
+        assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
+
+        // pending compaction bytes did not jump after unsafe destroy range
+        tx.send(FlowInfo::BeforeUnsafeDestroyRange(region_id))
+            .unwrap();
+        assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
+
+        // after unsafe destroy range, pending compaction bytes only increase by a little bit.
+        stub.0
+            .pending_compaction_bytes
+            .store(1024 * 1024 * 1024, Ordering::Relaxed);
+        send_flow_info(&tx, region_id);
+
+        // pending compaction bytes jump after unsafe destroy range
+        tx.send(FlowInfo::AfterUnsafeDestroyRange(region_id))
+            .unwrap();
+        assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
+        
+        // You sent a message above but it may not have been processed yet.
+        // Add some check here? 
+
+        std::thread::sleep(Duration::from_millis(100));
+        // exceeds the threshold, should perform throttle
+        stub.0
+            .pending_compaction_bytes
+            .store(1000000000 * 1024 * 1024 * 1024, Ordering::Relaxed);
+        send_flow_info(&tx, region_id);
+        send_flow_info(&tx, region_id);
         send_flow_info(&tx, region_id);
         assert!(flow_controller.discard_ratio(region_id) > f64::EPSILON);
     }
