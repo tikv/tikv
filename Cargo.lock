@@ -3003,7 +3003,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/Connor1996/rust-rocksdb.git?branch=opt-mutex#e03327c44b47f2029daf84f6c81efb2724cf8ea7"
+source = "git+https://github.com/Connor1996/rust-rocksdb.git?branch=opt-mutex#1385cca0d9aca8119ba765ddc18b27deb46075c5"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -3022,7 +3022,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/Connor1996/rust-rocksdb.git?branch=opt-mutex#e03327c44b47f2029daf84f6c81efb2724cf8ea7"
+source = "git+https://github.com/Connor1996/rust-rocksdb.git?branch=opt-mutex#1385cca0d9aca8119ba765ddc18b27deb46075c5"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4931,7 +4931,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/Connor1996/rust-rocksdb.git?branch=opt-mutex#e03327c44b47f2029daf84f6c81efb2724cf8ea7"
+source = "git+https://github.com/Connor1996/rust-rocksdb.git?branch=opt-mutex#1385cca0d9aca8119ba765ddc18b27deb46075c5"
 dependencies = [
  "libc 0.2.146",
  "librocksdb_sys",
