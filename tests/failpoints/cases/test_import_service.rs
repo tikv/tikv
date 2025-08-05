@@ -341,3 +341,4 @@ fn test_duplicate_detect_with_client_stop() {
     req.set_mode(SwitchMode::Normal);
     import.switch_mode(&req).unwrap();
 }
+
