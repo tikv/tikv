@@ -6,7 +6,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant as StdInstant, SystemTime, UNIX_EPOCH},
 };
 
 use futures::{
@@ -26,6 +26,7 @@ use tikv_util::{
     impl_display_as_debug, info,
     memory::{MemoryQuota, MemoryQuotaExceeded},
     time::Instant,
+    timer::GLOBAL_TIMER_HANDLE,
     warn,
 };
 
@@ -387,8 +388,13 @@ impl<'a> Drain {
         })
     }
 
-    // Forwards contents to the sink, simulates StreamExt::forward.
-    pub async fn forward<S, E>(&'a mut self, sink: &mut S) -> Result<(), E>
+    // Forwards contents to the sink with time tracking, simulates
+    // StreamExt::forward.
+    pub async fn forward<S, E>(
+        &'a mut self,
+        sink: &mut S,
+        last_flush_time: Option<&std::sync::atomic::AtomicU64>,
+    ) -> Result<(), E>
     where
         S: futures::Sink<(ChangeDataEvent, WriteFlags), Error = E> + Unpin,
     {
@@ -416,11 +422,34 @@ impl<'a> Drain {
                 sink.feed((e, write_flags)).await?;
             }
             sink.flush().await?;
+            #[cfg(feature = "failpoints")]
+            sleep_after_sink_flush().await;
+            // Update last flush time if provided
+            if let Some(time_tracker) = last_flush_time {
+                if let Ok(now) = SystemTime::now().duration_since(UNIX_EPOCH) {
+                    time_tracker.store(now.as_secs(), std::sync::atomic::Ordering::Relaxed);
+                }
+            }
             total_event_bytes.inc_by(event_bytes as u64);
             total_resolved_ts_bytes.inc_by(resolved_ts_bytes as u64);
         }
         Ok(())
     }
+}
+
+#[cfg(feature = "failpoints")]
+async fn sleep_after_sink_flush() {
+    let should_sleep = || {
+        fail::fail_point!("cdc_sleep_after_sink_flush", |_| true);
+        false
+    };
+    if !should_sleep() {
+        return;
+    }
+    info!("inside sleep_after_sink_flush failpoint, sleep 30 seconds!");
+    let dur = Duration::from_secs(30);
+    let timer = GLOBAL_TIMER_HANDLE.delay(StdInstant::now() + dur);
+    let _ = futures::compat::Compat01As03::new(timer).await;
 }
 
 impl Drop for Drain {
@@ -568,7 +597,7 @@ mod tests {
             let (mut tx, mut rx) = unbounded();
             let runtime = tokio::runtime::Runtime::new().unwrap();
             runtime.spawn(async move {
-                drain.forward(&mut tx).await.unwrap();
+                drain.forward(&mut tx, None).await.unwrap();
             });
             let timeout = Duration::from_millis(100);
             assert!(recv_timeout(&mut rx, timeout).unwrap().is_some());
