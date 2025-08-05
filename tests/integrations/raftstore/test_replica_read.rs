@@ -574,6 +574,7 @@ fn test_malformed_read_index() {
         request: None,
         locked: None,
         read_index_safe_ts: None,
+        region_error: None,
     };
     let mut e = raft::eraftpb::Entry::default();
     e.set_data(rctx.to_bytes().into());

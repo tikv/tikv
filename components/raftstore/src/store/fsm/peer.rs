@@ -6980,6 +6980,7 @@ where
             request: None,
             locked: None,
             read_index_safe_ts: None,
+            region_error: None,
         };
         self.fsm.peer.raft_group.read_index(rctx.to_bytes());
         debug!(

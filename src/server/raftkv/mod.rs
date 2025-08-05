@@ -21,7 +21,7 @@ use std::{
 };
 
 use collections::{HashMap, HashSet};
-use concurrency_manager::ConcurrencyManager;
+use concurrency_manager::{ConcurrencyManager, InvalidMaxTsUpdate};
 use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot};
 use futures::{Future, Stream, StreamExt, TryFutureExt, future::BoxFuture, task::AtomicWaker};
 use hybrid_engine::HybridEngineSnapshot;
@@ -90,6 +90,9 @@ pub enum Error {
 
     #[error("timeout after {0:?}")]
     Timeout(Duration),
+
+    #[error("invalid max-ts update: {0}")]
+    InvalidMaxTsUpdate(#[from] InvalidMaxTsUpdate),
 }
 
 pub fn get_status_kind_from_engine_error(e: &kv::Error) -> RequestStatusKind {
@@ -827,11 +830,19 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
             let begin_instant = Instant::now();
 
             let start_ts = request.get_start_ts().into();
+            
             if let Err(e) = self
                 .concurrency_manager
-                .update_max_ts(start_ts, || format!("read_index-{}", start_ts))
+                .update_max_ts(start_ts, || format!("read_index-{start_ts}"))
             {
-                error!("failed to update max_ts in concurrency manager"; "err" => ?e);
+                let mut reg_err = errorpb::Error::default();
+                let mut invalid_max_ts_err = errorpb::InvalidMaxTsUpdate::default();
+                invalid_max_ts_err.set_attempted_ts(e.attempted_ts.into_inner());
+                invalid_max_ts_err.set_limit_ts(e.limit.into_inner());
+                reg_err.set_invalid_max_ts_update(invalid_max_ts_err);
+                rctx.region_error = Some(reg_err);          
+                msg.mut_entries()[0].set_data(rctx.to_bytes().into());
+                return;                                    
             }
             let key_bound = |key: Vec<u8>| {
                 if key.is_empty() {
@@ -940,6 +951,7 @@ mod tests {
             request: Some(request),
             locked: None,
             read_index_safe_ts: None,
+            region_error: None,
         };
         let mut e = eraftpb::Entry::default();
         e.set_data(rctx.to_bytes().into());
