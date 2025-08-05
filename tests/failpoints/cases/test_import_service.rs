@@ -6,7 +6,7 @@ use std::{
 };
 
 use file_system::calc_crc32;
-use futures::{executor::block_on, stream, SinkExt};
+use futures::{executor::block_on, stream, stream::StreamExt, SinkExt};
 use grpcio::{Result, WriteFlags};
 use kvproto::import_sstpb::*;
 use tempfile::Builder;
@@ -341,4 +341,3 @@ fn test_duplicate_detect_with_client_stop() {
     req.set_mode(SwitchMode::Normal);
     import.switch_mode(&req).unwrap();
 }
-
