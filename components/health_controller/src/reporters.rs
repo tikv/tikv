@@ -66,7 +66,6 @@ pub struct UnifiedSlowScore {
     factors: Vec<SlowScore>,
     network_factors: Arc<Mutex<HashMap<u64, SlowScore>>>,
 
-    // client_mgr: Arc<TikvClientMgr>,
     inspect_network_interval: Duration,
 }
 
@@ -75,7 +74,6 @@ impl UnifiedSlowScore {
         let mut unified_slow_score = UnifiedSlowScore {
             factors: Vec::new(),
             network_factors: Arc::new(Mutex::new(HashMap::new())),
-            // client_mgr: client_mgr.clone(),
             inspect_network_interval: cfg.inspect_network_interval,
         };
         // The first factor is for Raft Disk I/O.
@@ -120,24 +118,6 @@ impl UnifiedSlowScore {
 
         unified_slow_score
     }
-
-    // pub fn insert_network_factor(&mut self, store_id: u64) {
-    //     if self.network_factors.contains_key(&store_id) {
-    //         return;
-    //     }
-    //     let slow_score = SlowScore::new(
-    //         NETWORK_TIMEOUT_THRESHOLD,
-    //         self.inspect_network_interval,
-    //         NETWORK_TIMEOUT_RATIO_THRESHOLD,
-    //         NETWORK_ROUND_TICKS,
-    //         NETWORK_RECOVERY_INTERVALS,
-    //     );
-    //     self.network_factors.insert(store_id, slow_score);
-    // }
-
-    // pub fn remove_network_factor(&mut self, store_id: u64) {
-    //     self.network_factors.remove(&store_id);
-    // }
 
     #[inline]
     pub fn record_disk(

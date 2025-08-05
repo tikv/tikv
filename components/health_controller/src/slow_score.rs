@@ -87,9 +87,6 @@ impl SlowScore {
             timeout_requests: 0,
             total_requests: 0,
 
-            // mutil_value: HashMap::default(),
-            // mutil_timeout_requests: HashMap::default(),
-
             timeout_threshold,
             ratio_thresh: OrderedFloat(ratio_thresh),
             min_ttr: recovery_interval,
@@ -110,9 +107,6 @@ impl SlowScore {
 
             timeout_requests: 0,
             total_requests: 0,
-
-            // mutil_value: HashMap::default(),
-            // mutil_timeout_requests: HashMap::default(),
 
             timeout_threshold: inspect_interval,
             ratio_thresh: OrderedFloat(timeout_ratio),
@@ -152,26 +146,6 @@ impl SlowScore {
         }
     }
 
-    // pub fn record_mutil(&mut self, id: u64, durations: HashMap<u64, Option<Duration>>, not_busy: bool) {
-    //     self.last_record_time = Instant::now();
-    //     if id <= self.last_tick_id.saturating_sub(self.min_timeout_ticks) {
-    //         return;
-    //     }
-
-    //     self.uncompleted_ticks.remove(&id);
-    //     self.total_requests += 1;
-    //     if not_busy {
-    //         for (store_id, duration) in durations {
-    //             if duration.unwrap_or_default() >= self.timeout_threshold {
-    //                 self.mutil_timeout_requests
-    //                     .entry(store_id)
-    //                     .and_modify(|count| *count += 1)
-    //                     .or_insert(1);
-    //             }
-    //         }
-    //     }
-    // }
-
     pub fn record_timeout(&mut self) {
         self.last_record_time = Instant::now();
         let threshold = self.last_tick_id.saturating_sub(self.min_timeout_ticks - 1);
@@ -199,28 +173,6 @@ impl SlowScore {
         self.value.into()
     }
 
-    // // Update the score in a AIMD way.
-    // fn update_impl(&mut self, elapsed: Duration) -> OrderedFloat<f64> {
-    //     if self.timeout_requests == 0 {
-    //         let desc = 100.0 * (elapsed.as_millis() as f64 / self.min_ttr.as_millis() as f64);
-    //         if OrderedFloat(desc) > self.value - OrderedFloat(1.0) {
-    //             self.value = 1.0.into();
-    //         } else {
-    //             self.value -= desc;
-    //         }
-    //     } else {
-    //         let timeout_ratio = self.timeout_requests as f64 / self.total_requests as f64;
-    //         let near_thresh =
-    //             cmp::min(OrderedFloat(timeout_ratio), self.ratio_thresh) / self.ratio_thresh;
-    //         let value = self.value * (OrderedFloat(1.0) + near_thresh);
-    //         self.value = cmp::min(OrderedFloat(100.0), value);
-    //     }
-
-    //     self.total_requests = 0;
-    //     self.timeout_requests = 0;
-    //     self.last_update_time = Instant::now();
-    //     self.value
-    // }
     fn update_impl(&mut self, elapsed: Duration) -> OrderedFloat<f64> {
         if self.timeout_requests == 0 {
             let desc = 100.0 * (elapsed.as_millis() as f64 / self.min_ttr.as_millis() as f64);

@@ -101,21 +101,6 @@ impl Runner {
     const NETWORK_NOT_TIMEOUT: Duration = Duration::from_millis(500);
 
     #[inline]
-    // fn build(target: PathBuf, pd_client: Arc<RpcClient, Global>) -> Self {
-    //     // The disk check mechanism only cares about the latency of the most
-    //     // recent request; older requests become stale and irrelevant. To avoid
-    //     // unnecessary accumulation of multiple requests, we set a small
-    //     // `capacity` for the disk check worker.
-    //     let disk_runner = InnerRunner::build(3);
-    //     let network_runner = InnerRunner::build(100);
-    //     Self {
-    //         disk_runner,
-    //         network_runner,
-    //         target,
-    //         pd_client,
-    //         health_clients: None,
-    //     }
-    // }
     fn build(
         target: PathBuf,
         tikv_client_mgr: Arc<Mutex<TikvClientMgr>>,
@@ -175,28 +160,6 @@ impl Runner {
         Some(start.saturating_elapsed())
     }
 
-    // fn inspect_network(&self, start: Instant) -> Option<Duration> {
-    //     let clients = self.health_clients.lock().unwrap();
-    //     for (store_id, client) in clients.iter() {
-    //         match client.check(&HealthCheckRequest::new()) {
-    //             Ok(resp) => {
-    //                 if resp.status != Serving {
-    //                     warn!("store is not serving"; "store" => store_id);
-    //                     return Some(Self::NETWORK_NOT_TIMEOUT);
-    //                 }
-    //             }
-    //             Err(e) => {
-    //                 if is_network_error(&e) {
-    //                     warn!("network error from"; "store" => store_id);
-    //                     return Some(Self::NETWORK_TIMEOUT);
-    //                 }
-    //                 warn!("non-network error from"; "store" => store_id, "err" => ?e);
-    //                 return Some(Self::NETWORK_NOT_TIMEOUT);
-    //             }
-    //         }
-    //     }
-    //     Some(start.saturating_elapsed())
-    // }
     async fn inspect_network(
         &self,
         start: Instant,
@@ -231,12 +194,7 @@ impl Runner {
                 guard.record_network_io_duration(store_id, dur);
                 guard.finish();
             });
-            // handles.push(handle);
         }
-
-        // for handle in handles {
-        //     let _ = handle.join();
-        // }
     }
 
     fn execute_disk(&self) {
@@ -329,44 +287,6 @@ impl Runnable for Runner {
                     }
                 }
             }
-            // Task::NetworkLatency { .. } => {
-            //     let mut retry_task = Some(task);
-            
-            //     // take task out of Option for first try
-            //     let first_try = retry_task.take().unwrap();
-            //     match self.network_runner.notifier.try_send(first_try) {
-            //         Ok(_) => {
-            //             info!("successfully sent task to inspector network_runner");
-            //             if let Some(bg_worker) = self.network_runner.bg_worker.as_ref() {
-            //                 info!("spawning network inspector task");
-            //                 let runner = self.clone();
-            //                 bg_worker.spawn_async_task(async move {
-            //                     runner.execute_network();
-            //                 });
-            //             } else {
-            //                 warn!("network_runner.bg_worker is None!");
-            //             }
-            //         }
-            //         Err(TrySendError::Full(_)) => {
-            //             // make room and retry
-            //             let _ = self.network_runner.receiver.try_recv();
-            
-            //             if let Some(task) = retry_task {
-            //                 if let Err(e) = self.network_runner.notifier.try_send(task) {
-            //                     warn!("failed to resend task to inspector bg_worker: {:?}", e);
-            //                 } else if let Some(bg_worker) = self.network_runner.bg_worker.as_ref() {
-            //                     let runner = self.clone();
-            //                     bg_worker.spawn_async_task(async move {
-            //                         runner.execute_network().await;
-            //                     });
-            //                 }
-            //             }
-            //         }
-            //         Err(e) => {
-            //             warn!("failed to send task to inspector bg_worker: {:?}", e);
-            //         }
-            //     }
-            // }
         };
     }
 }
