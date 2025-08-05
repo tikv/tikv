@@ -33,15 +33,8 @@ use crate::{
         split_observer::{is_valid_split_key, strip_timestamp_if_exists},
         Config, CoprocessorHost, SplitCheckerHost,
     },
-<<<<<<< HEAD
-    store::{
-        fsm::StoreMeta,
-        metrics::{COMPACTION_DECLINED_BYTES, COMPACTION_RELATED_REGION_COUNT},
-    },
-    Result,
-=======
     store::metrics::{COMPACTION_DECLINED_BYTES, COMPACTION_RELATED_REGION_COUNT},
->>>>>>> b1689c684c (raftstore: use lock-free handling of CompactedEvent (#18776))
+    Result,
 };
 
 #[derive(PartialEq, Eq)]
