@@ -245,14 +245,14 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Greater,
                     Ordering::Greater,
+                    Ordering::Less, // `ʩ` is invalid character in GBK.
+                    Ordering::Less, // `ʩ` is invalid character in GBK.
                     Ordering::Greater,
                     Ordering::Greater,
                     Ordering::Greater,
                     Ordering::Greater,
-                    Ordering::Greater,
-                    Ordering::Greater,
-                ]
-            )
+                ],
+            ),
         ];
 
         for (sa, sb, expected) in cases {
