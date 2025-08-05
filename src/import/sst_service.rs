@@ -127,6 +127,7 @@ pub struct ImportSstService<E: Engine> {
     importer: Arc<SstImporter<E::Local>>,
     limiter: Limiter,
     ingest_latch: Arc<IngestLatch>,
+    ingest_admission_guard: Arc<Mutex<()>>,
     raft_entry_max_size: ReadableSize,
     region_info_accessor: Arc<RegionInfoAccessor>,
 
@@ -383,6 +384,7 @@ impl<E: Engine> ImportSstService<E> {
             importer,
             limiter: Limiter::new(f64::INFINITY),
             ingest_latch: Arc::default(),
+            ingest_admission_guard: Arc::default(),
             raft_entry_max_size,
             region_info_accessor,
             writer,
@@ -974,6 +976,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let tablets = self.tablets.clone();
         let store_meta = self.store_meta.clone();
         let ingest_latch = self.ingest_latch.clone();
+        let ingest_admission_guard = self.ingest_admission_guard.clone();
 
         let handle_task = async move {
             defer! { IMPORT_RPC_COUNT.with_label_values(&[label]).dec() }
@@ -988,6 +991,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 &store_meta,
                 &import,
                 &ingest_latch,
+                &ingest_admission_guard,
                 label,
             )
             .await;
@@ -1012,6 +1016,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let tablets = self.tablets.clone();
         let store_meta = self.store_meta.clone();
         let ingest_latch = self.ingest_latch.clone();
+        let ingest_admission_guard = self.ingest_admission_guard.clone();
 
         let handle_task = async move {
             defer! { IMPORT_RPC_COUNT.with_label_values(&[label]).dec() }
@@ -1023,6 +1028,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 &store_meta,
                 &import,
                 &ingest_latch,
+                &ingest_admission_guard,
                 label,
             )
             .await;

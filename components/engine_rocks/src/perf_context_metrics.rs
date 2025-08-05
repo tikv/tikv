@@ -52,4 +52,11 @@ lazy_static! {
         auto_flush_from!(APPLY_PERF_CONTEXT_TIME_HISTOGRAM, PerfContextTimeDuration);
     pub static ref STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC: PerfContextTimeDuration =
         auto_flush_from!(STORE_PERF_CONTEXT_TIME_HISTOGRAM, PerfContextTimeDuration);
+    pub static ref INGEST_EXTERNAL_FILE_ALLOW_WRITE_COUNTER: IntCounterVec =
+        register_int_counter_vec!(
+            "tikv_storage_ingest_external_file_allow_write_counter",
+            "Total number of RocksDB ingest SST operations for both allow_write enabled and disabled",
+            &["type"]
+        )
+        .unwrap();
 }

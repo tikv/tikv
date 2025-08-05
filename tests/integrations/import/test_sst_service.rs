@@ -663,3 +663,50 @@ fn test_suspend_import() {
     let ssts = write(sst_range).unwrap();
     multi_ingest(ssts.get_metas()).unwrap();
 }
+
+#[test]
+fn test_concurrent_ingest_admission_control() {
+    let (_cluster, ctx, _tikv, import) = new_cluster_and_tikv_import_client();
+    let temp_dir = Builder::new().prefix("test_ingest_sst").tempdir().unwrap();
+    let sst_path = temp_dir.path().join("test.sst");
+    let mut metas = Vec::new();
+
+    // Upload multiple SST files targeting the write CF
+    for i in 0..10 {
+        let sst_range = (i * 10, (i + 1) * 10);
+        let (mut meta, data) = gen_sst_file(sst_path.clone(), sst_range);
+        meta.set_region_id(ctx.get_region_id());
+        meta.set_region_epoch(ctx.get_region_epoch().clone());
+        meta.set_cf_name("write".to_string());
+        send_upload_sst(&import, &meta, &data).unwrap();
+        metas.push(meta);
+    }
+
+    // Ingest in parallel. The admission control should limit the number of
+    // ingests that are allowed to proceed.
+    let handles: Vec<_> = metas
+        .into_iter()
+        .map(|meta| {
+            let import = import.clone();
+            let ctx = ctx.clone();
+            std::thread::spawn(move || ingest_sst(&import, ctx, meta))
+        })
+        .collect();
+
+    let mut success = 0;
+    let mut errors = Vec::new();
+    for handle in handles {
+        match handle.join().unwrap() {
+            ref resp if !resp.has_error() => success += 1,
+            resp => errors.push(resp.get_error().get_message().to_string()),
+        }
+    }
+    // With the test config (slowdown_trigger: 4, compaction_trigger: 4), we
+    // expect 4 ingests to succeed.
+    assert_eq!(success, 4);
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("too many sst files are ingesting"))
+    );
+}
