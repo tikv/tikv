@@ -385,6 +385,11 @@ where
         if header.has_error() {
             return Err(header.take_error());
         }
+        fail::fail_point!("failed_to_async_snapshot", |_| {
+            let mut e = errorpb::Error::default();
+            e.set_message("faild to get snapshot".to_string());
+            Err(e)
+        });
         Ok(SnapshotResult {
             snapshot: res.snapshot.unwrap(),
             term: header.get_current_term(),
