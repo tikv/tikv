@@ -5,6 +5,10 @@ pub mod ranges_iter;
 pub mod scanner;
 pub mod test_fixture;
 
+use async_trait::async_trait;
+use kvproto::{coprocessor::KeyRange, metapb::Region};
+use raft::StateRole;
+
 pub use self::range::*;
 
 pub type Result<T> = std::result::Result<T, crate::error::StorageError>;
@@ -62,5 +66,77 @@ impl<T: Storage + ?Sized> Storage for Box<T> {
 
     fn collect_statistics(&mut self, dest: &mut Self::Statistics) {
         (**self).collect_statistics(dest);
+    }
+}
+
+/// The result of find_region_by_key
+#[derive(Debug, Clone, PartialEq)]
+pub enum FindRegionResult {
+    /// A region that contains the specified key is found.
+    Found { region: Region, role: StateRole },
+    /// No region that contains the specified key is found.
+    /// The field `next_region_start` indicates the start key of the next region
+    /// for the specified key.
+    NotFound { next_region_start: Option<Vec<u8>> },
+}
+
+impl FindRegionResult {
+    /// Creates a `FindRegionResult` with the found region and its role.
+    pub fn with_found(region: Region, role: StateRole) -> Self {
+        FindRegionResult::Found { region, role }
+    }
+
+    /// Creates a `FindRegionResult` with no region found; the next region start
+    /// key is attached.
+    pub fn with_not_found(next_region_start: Option<Vec<u8>>) -> Self {
+        FindRegionResult::NotFound { next_region_start }
+    }
+
+    pub fn is_found(&self) -> bool {
+        matches!(self, FindRegionResult::Found { .. })
+    }
+}
+
+/// The abstract interface for accessing more region storages inside a
+/// cop-executor.
+#[async_trait]
+pub trait RegionStorageAccessor: Sync {
+    type Storage;
+
+    async fn find_region_by_key(&self, key: &[u8]) -> Result<FindRegionResult>;
+    async fn get_local_region_storage(
+        &self,
+        region: &Region,
+        _key_ranges: &[KeyRange],
+    ) -> Result<Self::Storage>;
+}
+
+/// StubAccessor is only a placeholder that does not provide any real
+/// functionality.
+/// It should not be instantiated.
+pub struct StubAccessor<S> {
+    _phantom: std::marker::PhantomData<fn() -> S>,
+}
+
+impl<S> StubAccessor<S> {
+    pub fn none() -> Option<Self> {
+        None
+    }
+}
+
+#[async_trait]
+impl<S> RegionStorageAccessor for StubAccessor<S> {
+    type Storage = S;
+
+    async fn find_region_by_key(&self, _key: &[u8]) -> Result<FindRegionResult> {
+        unimplemented!()
+    }
+
+    async fn get_local_region_storage(
+        &self,
+        _region: &Region,
+        _key_ranges: &[KeyRange],
+    ) -> Result<Self::Storage> {
+        unimplemented!()
     }
 }

@@ -1,13 +1,14 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    borrow::Cow, future::Future, iter::FromIterator, marker::PhantomData, mem, sync::Arc,
-    time::Duration,
+    borrow::Cow, fmt::Display, future::Future, iter::FromIterator, marker::PhantomData, mem,
+    sync::Arc, time::Duration,
 };
 
 use ::tracker::{
     GLOBAL_TRACKERS, RequestInfo, RequestType, set_tls_tracker_token, track, with_tls_tracker,
 };
+use anyhow::anyhow;
 use api_version::{KvFormat, dispatch_api_version};
 use async_stream::try_stream;
 use concurrency_manager::ConcurrencyManager;
@@ -17,18 +18,23 @@ use futures::{
     future::Either,
     prelude::*,
 };
-use kvproto::{coprocessor as coppb, errorpb, kvrpcpb, kvrpcpb::CommandPri};
+use kvproto::{coprocessor as coppb, errorpb, kvrpcpb, kvrpcpb::CommandPri, metapb};
 use online_config::ConfigManager;
 use protobuf::{CodedInputStream, Message};
 use resource_control::{ResourceGroupManager, ResourceLimiter, TaskMetadata};
 use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
-use tidb_query_common::execute_stats::ExecSummary;
+use tidb_query_common::{
+    error::StorageError,
+    execute_stats::ExecSummary,
+    storage::{FindRegionResult, RegionStorageAccessor, Result as StorageResult},
+};
 use tikv_alloc::trace::MemoryTraceGuard;
-use tikv_kv::SnapshotExt;
+use tikv_kv::{SecondaryRegionOverride, SnapshotExt};
 use tikv_util::{
     deadline::set_deadline_exceeded_busy_error,
     memory::{MemoryQuota, OwnedAllocated},
     quota_limiter::QuotaLimiter,
+    store::find_peer,
     time::Instant,
 };
 use tipb::{AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, DagRequest, ExecType};
@@ -274,10 +280,11 @@ impl<E: Engine> Endpoint<E> {
                         0 => None,
                         i => Some(i),
                     };
-                    dag::DagHandlerBuilder::<_, F>::new(
+                    dag::DagHandlerBuilder::<_, _, F>::new(
                         dag,
                         req_ctx.ranges.clone(),
                         store,
+                        SecondarySnapStoreAccessor::<E>::new(req_ctx),
                         req_ctx.deadline,
                         batch_row_limit,
                         is_streaming,
@@ -978,16 +985,175 @@ fn make_error_response(e: Error) -> coppb::Response {
     resp
 }
 
+/// SecondarySnapStoreAccessor is used to get the snapshot stores for the
+/// secondary regions.
+/// The "secondary region" means the regions that are not the source region in a
+/// request.
+/// For example, if a cop-task contains a `IndexLookUp` executor which needs to
+/// access look up the primary rows, it will use this accessor to locate and get
+/// the snapshot of the regions which these primary rows located.
+pub struct SecondarySnapStoreAccessor<E> {
+    store_id: u64,
+    pb_ctx: Arc<kvrpcpb::Context>,
+    start_ts: TimeStamp,
+    by_pass_locks: TsSet,
+    access_locks: TsSet,
+    _phantom: PhantomData<fn() -> E>,
+}
+
+impl<E: Engine> SecondarySnapStoreAccessor<E> {
+    /// new creates an Optional EngineSnapshotStoreAccessor.
+    /// Please note that not all scenes are supported.
+    /// If the current request is not supported, a `None` value will be
+    /// returned to force the request to access the source region only.
+    pub fn new(req_ctx: &ReqContext) -> Option<Self> {
+        let pb_ctx = req_ctx.context.as_ref();
+        let store_id = match pb_ctx.peer.as_ref() {
+            // Though it is possible that the request carries a wrong store_id, we can still use
+            // it to find the peer in the region because it will be validated in get snapshot phase.
+            Some(peer) => peer.get_store_id(),
+            None => return None,
+        };
+
+        if pb_ctx.get_isolation_level() != kvrpcpb::IsolationLevel::Si
+            || pb_ctx.get_stale_read()
+            || pb_ctx.get_replica_read()
+        {
+            // Some scenes are not supported before an effective argument, including:
+            // - stale-read & replica-read, TODO: support it later
+            // - non-SI isolation level, TODO: support it later
+            return None;
+        }
+
+        Some(Self {
+            store_id,
+            pb_ctx: req_ctx.context.clone(),
+            start_ts: req_ctx.txn_start_ts,
+            by_pass_locks: req_ctx.bypass_locks.clone(),
+            access_locks: req_ctx.access_locks.clone(),
+            _phantom: PhantomData,
+        })
+    }
+
+    #[inline]
+    fn err<S: Display>(s: S) -> StorageError {
+        StorageError::from(anyhow!("{}", s))
+    }
+}
+
+#[async_trait]
+impl<E: Engine> RegionStorageAccessor for SecondarySnapStoreAccessor<E> {
+    type Storage = SnapshotStore<E::IMSnap>;
+
+    async fn find_region_by_key(&self, key: &[u8]) -> StorageResult<FindRegionResult> {
+        let key_in_vec = key.to_vec();
+        let (tx, rx) = oneshot::channel();
+        unsafe {
+            with_tls_engine(|engine: &mut E| -> StorageResult<()> {
+                engine
+                    .seek_region(
+                        key,
+                        Box::new(move |iter| {
+                            let result = match iter.next() {
+                                Some(info)
+                                    if info.region.get_start_key() <= key_in_vec.as_slice() =>
+                                {
+                                    FindRegionResult::with_found(info.region.clone(), info.role)
+                                }
+                                Some(info) => FindRegionResult::with_not_found(Some(
+                                    info.region.start_key.clone(),
+                                )),
+                                None => FindRegionResult::with_not_found(None),
+                            };
+
+                            if tx.send(result).is_err() {
+                                warn!("failed to send find_region_by_key result");
+                            }
+                        }),
+                    )
+                    .map_err(Self::err)
+            })?;
+        }
+        rx.map_err(Self::err).await
+    }
+
+    async fn get_local_region_storage(
+        &self,
+        region: &metapb::Region,
+        _key_range: &[coppb::KeyRange],
+    ) -> StorageResult<Self::Storage> {
+        let peer = match find_peer(region, self.store_id) {
+            Some(peer) => peer.clone(),
+            None => {
+                return Err(Self::err(format!(
+                    "cannot find peer in region, region_id: {}, request store_id: {}",
+                    self.store_id,
+                    region.get_id()
+                )));
+            }
+        };
+
+        let pb_ctx = self.pb_ctx.as_ref();
+        let snap_ctx = SnapContext {
+            pb_ctx,
+            // read_id is used by batch_get to cache the snapshot.
+            // We set it as None here to disable this optimization for simple.
+            read_id: None,
+            start_ts: Some(self.start_ts),
+            // does not support in-flashback execution currently to avoid some potential
+            // issues for simple.
+            allowed_in_flashback: false,
+            // key_ranges is always empty because replica-read is not supported.
+            // TODO: check the locks for the input key_ranges for replica-read if
+            // it is supported in the future.
+            key_ranges: Vec::default(),
+            secondary_region_override: Some(SecondaryRegionOverride {
+                region_id: region.get_id(),
+                region_epoch: region.get_region_epoch().clone(),
+                peer,
+                // Do not need to check the term because only readonly requests are
+                // supported currently.
+                check_term: None,
+            }),
+        };
+
+        let snap = unsafe {
+            with_tls_engine(move |engine: &mut E| kv::in_memory_snapshot(engine, snap_ctx))
+        }
+        .await
+        .map_err(Self::err)?;
+
+        Ok(SnapshotStore::new(
+            snap,
+            self.start_ts,
+            pb_ctx.get_isolation_level(),
+            !pb_ctx.get_not_fill_cache(),
+            self.by_pass_locks.clone(),
+            self.access_locks.clone(),
+            // If `check_has_newer_ts_data` is enabled, the internal scanner will check if there is
+            // newer data in the region to tell the TiDB whether to cache the cop response or not.
+            // However, the current cop-cache implementation only supports the source region.
+            // So here we force to set it to `false` to avoid caching the cop response when
+            // any other region snapshot is accessed in a request.
+            false,
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
-        sync::{atomic, mpsc},
+        sync::{Mutex, atomic, atomic::AtomicBool, mpsc},
         thread, vec,
     };
 
     use futures::executor::{block_on, block_on_stream};
     use kvproto::kvrpcpb::IsolationLevel;
     use protobuf::Message;
+    use raft::StateRole;
+    use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
+    use tidb_query_common::storage::Storage;
+    use tikv_kv::{MockEngine, MockEngineBuilder, destroy_tls_engine, set_tls_engine};
     use tipb::{Executor, Expr};
     use txn_types::{Key, LockType};
 
@@ -996,7 +1162,7 @@ mod tests {
         config::CoprReadPoolConfig,
         coprocessor::readpool_impl::build_read_pool_for_test,
         read_pool::ReadPool,
-        storage::{TestEngineBuilder, kv::RocksEngine},
+        storage::{Store, TestEngineBuilder, kv::RocksEngine},
     };
 
     /// A unary `RequestHandler` that always produces a fixture.
@@ -1297,12 +1463,12 @@ mod tests {
             .map(|config| {
                 let engine = Arc::new(Mutex::new(engine.clone()));
                 YatpPoolBuilder::new(DefaultTicker::default())
-                    .config(config)
-                    .name_prefix("coprocessor_endpoint_test_full")
-                    .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
-                    // Safety: we call `set_` and `destroy_` with the same engine type.
-                    .before_stop(|| unsafe { destroy_tls_engine::<RocksEngine>() })
-                    .build_future_pool()
+                        .config(config)
+                        .name_prefix("coprocessor_endpoint_test_full")
+                        .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
+                        // Safety: we call `set_` and `destroy_` with the same engine type.
+                        .before_stop(|| unsafe { destroy_tls_engine::<RocksEngine>() })
+                        .build_future_pool()
             })
             .collect::<Vec<_>>(),
         );
@@ -1652,8 +1818,9 @@ mod tests {
 
         // A request that requests execution details.
         let mut req_with_exec_detail = ReqContext::default_for_test();
-        req_with_exec_detail.context.set_record_time_stat(true);
-
+        let mut pb_ctx = req_with_exec_detail.context.as_ref().clone();
+        pb_ctx.set_record_time_stat(true);
+        req_with_exec_detail.context = Arc::new(pb_ctx);
         {
             let mut wait_time: Duration = Duration::default();
 
@@ -2185,5 +2352,425 @@ mod tests {
                 region_err.get_server_is_busy().reason
             );
         }
+    }
+
+    // A default ReqContext that support to access another snapshot in a
+    // request. It can be used to create an not None value of
+    // Option<EngineSnapshotStoreAccessor>
+    fn default_req_ctx_support_snap_accessor() -> ReqContext {
+        let mut pb_ctx = kvrpcpb::Context::default();
+        pb_ctx.set_isolation_level(IsolationLevel::Si);
+        pb_ctx.set_stale_read(false);
+        pb_ctx.set_replica_read(false);
+        pb_ctx.set_peer(metapb::Peer {
+            id: 12,
+            store_id: 100,
+            ..Default::default()
+        });
+        pb_ctx.set_region_id(23);
+        let mut req_ctx = ReqContext::default_for_test();
+        req_ctx.context = Arc::new(pb_ctx);
+        req_ctx.txn_start_ts = TimeStamp::new(1234567);
+        req_ctx.tag = ReqTag::select;
+        req_ctx.is_desc_scan = Some(true);
+        req_ctx.ranges = vec![
+            coppb::KeyRange {
+                start: b"a1".to_vec(),
+                end: b"b1".to_vec(),
+                ..Default::default()
+            },
+            coppb::KeyRange {
+                start: b"b3".to_vec(),
+                end: b"b4".to_vec(),
+                ..Default::default()
+            },
+        ];
+        req_ctx
+    }
+
+    fn update_pb_ctx<F>(ctx: &kvrpcpb::Context, f: F) -> kvrpcpb::Context
+    where
+        F: FnOnce(&mut kvrpcpb::Context),
+    {
+        let mut new_ctx = ctx.clone();
+        f(&mut new_ctx);
+        new_ctx
+    }
+
+    #[test]
+    fn test_secondary_snap_store_accessor_new() {
+        type StoreAccessor = SecondarySnapStoreAccessor<RocksEngine>;
+        // construct a ReqContext that support to access another snapshot in a request
+        let mut req_ctx = default_req_ctx_support_snap_accessor();
+
+        // accessor support case
+        assert!(StoreAccessor::new(&req_ctx).is_some());
+
+        // does not support Rc / RcCheckTs
+        req_ctx.context = Arc::new(update_pb_ctx(&req_ctx.context, |ctx| {
+            ctx.set_isolation_level(IsolationLevel::Rc);
+        }));
+        assert!(StoreAccessor::new(&req_ctx).is_none());
+        req_ctx.context = Arc::new(update_pb_ctx(&req_ctx.context, |ctx| {
+            ctx.set_isolation_level(IsolationLevel::RcCheckTs);
+        }));
+        assert!(StoreAccessor::new(&req_ctx).is_none());
+
+        // does not support stale read
+        req_ctx.context = Arc::new(update_pb_ctx(&req_ctx.context, |ctx| {
+            ctx.set_stale_read(true);
+        }));
+        assert!(StoreAccessor::new(&req_ctx).is_none());
+
+        // does not support replica read
+        req_ctx.context = Arc::new(update_pb_ctx(&req_ctx.context, |ctx| {
+            ctx.set_replica_read(true);
+        }));
+        assert!(StoreAccessor::new(&req_ctx).is_none());
+    }
+
+    #[test]
+    fn test_secondary_snap_store_accessor_locate_region_by_key() {
+        set_tls_engine(TestEngineBuilder::new().build().unwrap());
+        defer! {
+            unsafe {destroy_tls_engine::<RocksEngine>()}
+        }
+
+        let (r1, r2, r3) = (
+            metapb::Region {
+                id: 1,
+                start_key: b"b".to_vec(),
+                end_key: b"d".to_vec(),
+                ..Default::default()
+            },
+            metapb::Region {
+                id: 2,
+                start_key: b"e".to_vec(),
+                end_key: b"g".to_vec(),
+                ..Default::default()
+            },
+            metapb::Region {
+                id: 3,
+                start_key: b"g".to_vec(),
+                end_key: b"h".to_vec(),
+                ..Default::default()
+            },
+        );
+
+        unsafe {
+            let provider = MockRegionInfoProvider::new(vec![r1.clone(), r2.clone(), r3.clone()]);
+            provider.set_role(2, StateRole::Follower);
+            with_tls_engine(|e: &mut RocksEngine| e.set_region_info_provider(provider))
+        }
+
+        type StoreAccessor = SecondarySnapStoreAccessor<RocksEngine>;
+        let accessor = StoreAccessor::new(&default_req_ctx_support_snap_accessor()).unwrap();
+
+        // key is before any region, not found
+        assert_eq!(
+            block_on(accessor.find_region_by_key(b"a")).unwrap(),
+            FindRegionResult::with_not_found(Some(b"b".to_vec())),
+        );
+        // key is region start, found
+        assert_eq!(
+            block_on(accessor.find_region_by_key(b"b")).unwrap(),
+            FindRegionResult::with_found(r1.clone(), StateRole::Leader),
+        );
+        // key is in a region range, found
+        assert_eq!(
+            block_on(accessor.find_region_by_key(b"b1")).unwrap(),
+            FindRegionResult::with_found(r1.clone(), StateRole::Leader),
+        );
+        assert_eq!(
+            block_on(accessor.find_region_by_key(b"c")).unwrap(),
+            FindRegionResult::with_found(r1.clone(), StateRole::Leader),
+        );
+        assert_eq!(
+            block_on(accessor.find_region_by_key(b"c1")).unwrap(),
+            FindRegionResult::with_found(r1.clone(), StateRole::Leader),
+        );
+        // key is a region's end, but not any region's end, not found
+        assert_eq!(
+            block_on(accessor.find_region_by_key(b"d")).unwrap(),
+            FindRegionResult::with_not_found(Some(b"e".to_vec())),
+        );
+        // key is between a region's end and another region's start, not found
+        assert_eq!(
+            block_on(accessor.find_region_by_key(b"d1")).unwrap(),
+            FindRegionResult::with_not_found(Some(b"e".to_vec())),
+        );
+        // key is in a region, but the region is not a leader
+        assert_eq!(
+            block_on(accessor.find_region_by_key(b"e")).unwrap(),
+            FindRegionResult::with_found(r2.clone(), StateRole::Follower),
+        );
+        assert_eq!(
+            block_on(accessor.find_region_by_key(b"f")).unwrap(),
+            FindRegionResult::with_found(r2.clone(), StateRole::Follower),
+        );
+        // key is a region's end, and another region's start found
+        assert_eq!(
+            block_on(accessor.find_region_by_key(b"g")).unwrap(),
+            FindRegionResult::with_found(r3.clone(), StateRole::Leader),
+        );
+        // key is after all regions, not found without next_region_start
+        assert_eq!(
+            block_on(accessor.find_region_by_key(b"h")).unwrap(),
+            FindRegionResult::with_not_found(None),
+        );
+        assert_eq!(
+            block_on(accessor.find_region_by_key(b"i")).unwrap(),
+            FindRegionResult::with_not_found(None),
+        );
+
+        // clear_region_info_provider makes RocksEngine::seek_region returns error
+        unsafe { with_tls_engine(|e: &mut RocksEngine| e.clear_region_info_provider()) }
+        let err = block_on(accessor.find_region_by_key(b"a")).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("region_info_accessor is not available"),
+        );
+    }
+
+    #[test]
+    fn test_secondary_snap_store_accessor_get_local_region_storage() {
+        type StoreAccessor = SecondarySnapStoreAccessor<MockEngine>;
+        #[derive(Clone)]
+        struct TestCtx {
+            store_id: u64,
+            req_ctx: Arc<Mutex<ReqContext>>,
+            req_region: Arc<Mutex<metapb::Region>>,
+            req_ranges: Arc<Mutex<Vec<coppb::KeyRange>>>,
+            called: Arc<AtomicBool>,
+        }
+
+        impl TestCtx {
+            fn new_accessor(&self) -> StoreAccessor {
+                StoreAccessor::new(&self.get_req_ctx()).unwrap()
+            }
+
+            fn get_req_ctx(&self) -> ReqContext {
+                self.req_ctx.lock().unwrap().clone()
+            }
+
+            fn get_req_region(&self) -> metapb::Region {
+                self.req_region.lock().unwrap().clone()
+            }
+
+            fn get_req_ranges(&self) -> Vec<coppb::KeyRange> {
+                self.req_ranges.lock().unwrap().clone()
+            }
+
+            fn get_local_region_storage_with_check(
+                &self,
+            ) -> StorageResult<SnapshotStore<<MockEngine as Engine>::Snap>> {
+                let accessor = &self.new_accessor();
+                assert!(!self.called.load(atomic::Ordering::SeqCst));
+                let result = block_on(
+                    accessor
+                        .get_local_region_storage(&self.get_req_region(), &self.get_req_ranges()),
+                );
+                let called = self.called.swap(false, atomic::Ordering::SeqCst);
+
+                if let Ok(ref store) = result {
+                    assert!(called);
+                    let req_ctx = self.get_req_ctx();
+                    let pb_ctx = req_ctx.context.as_ref();
+                    assert_eq!(store.get_start_ts(), req_ctx.txn_start_ts);
+                    assert_eq!(store.get_isolation_level(), pb_ctx.isolation_level);
+                    assert_eq!(store.is_fill_cache(), !pb_ctx.get_not_fill_cache());
+                    assert_eq!(store.get_by_pass_locks(), req_ctx.bypass_locks);
+                    assert_eq!(store.get_access_locks(), req_ctx.access_locks);
+                    // check_has_newer_ts_data should always be false to avoid caching the cop
+                    // response
+                    assert!(!store.is_check_has_newer_ts_data());
+                }
+
+                result
+            }
+        }
+
+        let test_ctx = {
+            let req_ctx = Arc::new(Mutex::new(default_req_ctx_support_snap_accessor()));
+            let store_id = req_ctx.lock().unwrap().context.get_peer().get_store_id();
+            assert!(store_id > 0);
+            TestCtx {
+                store_id,
+                req_ctx,
+                req_region: Arc::new(Mutex::new(metapb::Region {
+                    id: 123,
+                    start_key: b"a".to_vec(),
+                    end_key: b"z".to_vec(),
+                    peers: vec![
+                        metapb::Peer {
+                            id: 1,
+                            store_id: store_id - 1,
+                            ..Default::default()
+                        },
+                        metapb::Peer {
+                            id: 2,
+                            store_id,
+                            ..Default::default()
+                        },
+                        metapb::Peer {
+                            id: 3,
+                            store_id: store_id + 1,
+                            ..Default::default()
+                        },
+                    ]
+                    .into(),
+                    ..Default::default()
+                })),
+                req_ranges: Arc::new(Mutex::new(vec![coppb::KeyRange {
+                    start: b"a".to_vec(),
+                    end: b"b".to_vec(),
+                    ..Default::default()
+                }])),
+                called: Arc::new(AtomicBool::new(false)),
+            }
+        };
+
+        let test_ctx_for_engine = test_ctx.clone();
+        set_tls_engine(
+            MockEngineBuilder::from_rocks_engine(TestEngineBuilder::new().build().unwrap())
+                // set the hook to check the snap_ctx as the argument of Engine::async_snapshot
+                .set_pre_async_snapshot(move |snap_ctx| {
+                    let test_ctx = test_ctx_for_engine.clone();
+                    assert!(!test_ctx.called.swap(
+                        true,
+                        atomic::Ordering::SeqCst,
+                    ));
+
+                    let check_ctx = test_ctx.get_req_ctx();
+                    let check_region = test_ctx.get_req_region();
+                    // Currently, only leader read is supported in this test.
+                    assert!(!check_ctx.context.get_replica_read() && !check_ctx.context.get_stale_read());
+                    assert!(!check_ctx.ranges.is_empty());
+                    // snap_ctx.pb_ctx should be the same as ReqContext.context
+                    assert_eq!(snap_ctx.pb_ctx.clone(), check_ctx.context.as_ref().clone());
+                    // snap_ctx.extra_snap_override should be present with the correct region info
+                    assert_eq!(
+                        snap_ctx.secondary_region_override,
+                        Some(SecondaryRegionOverride {
+                            region_id: check_region.id,
+                            region_epoch: check_region.get_region_epoch().clone(),
+                            peer: check_region.get_peers()[1].clone(),
+                            check_term: None,
+                        })
+                    );
+                    // should select a peer with the right store_id.
+                    assert_eq!(
+                        snap_ctx.secondary_region_override.as_ref().unwrap().peer.store_id,
+                        test_ctx.store_id
+                    );
+                    // snapshot cache is not supported currently, so snap_ctx.read_id is always None.
+                    assert!(snap_ctx.read_id.is_none());
+                    // snap_ctx.start_ts should be the same as req_ctx.txn_start_ts
+                    assert!(check_ctx.txn_start_ts > TimeStamp::zero());
+                    assert_eq!(snap_ctx.start_ts, Some(check_ctx.txn_start_ts));
+                    // Even if req_ctx.ranges is not empty, snap_ctx.key_ranges should be empty in
+                    // leader read because leader read does not need to check keys locks.
+                    assert!(!test_ctx.get_req_ranges().is_empty());
+                    assert_eq!(snap_ctx.key_ranges.len(), 0);
+                    // not allowed in flashback
+                    assert!(!snap_ctx.allowed_in_flashback);
+                })
+                .build(),
+        );
+        defer! {
+            unsafe {destroy_tls_engine::<MockEngine>()}
+        }
+
+        // normal case
+        test_ctx
+            .get_local_region_storage_with_check()
+            .expect("should succeed");
+
+        // if set_not_fill_cache, it should work
+        {
+            let mut req_ctx = test_ctx.req_ctx.lock().unwrap();
+            // in previous test, get_not_fill_cache should return false.
+            assert!(!req_ctx.context.get_not_fill_cache());
+            req_ctx.context = Arc::new(update_pb_ctx(req_ctx.context.as_ref(), |ctx| {
+                ctx.set_not_fill_cache(true)
+            }));
+        }
+        let store = test_ctx
+            .get_local_region_storage_with_check()
+            .expect("should succeed");
+        assert!(!store.is_fill_cache());
+
+        // cannot find peer
+        {
+            test_ctx.req_region.lock().unwrap().peers[1].store_id = 99999999;
+        }
+        let err = test_ctx
+            .get_local_region_storage_with_check()
+            .err()
+            .unwrap();
+        println!("error: {}", err);
+        assert!(err.to_string().contains("cannot find peer in region"));
+        {
+            test_ctx.req_region.lock().unwrap().peers[1].store_id = test_ctx.store_id;
+        }
+
+        // always not allow in flashback
+        {
+            test_ctx.req_ctx.lock().unwrap().allowed_in_flashback = true;
+        }
+        test_ctx
+            // snap_ctx.allowed_in_flashback will be validated in pre_async_snapshot func
+            .get_local_region_storage_with_check()
+            .expect("should succeed");
+
+        // should return error when engine returns error
+        unsafe {
+            with_tls_engine(|e: &mut MockEngine| e.rocks_engine().trigger_not_leader());
+        }
+        let err = test_ctx
+            .get_local_region_storage_with_check()
+            .err()
+            .unwrap();
+        assert!(err.to_string().contains("not_leader"));
+    }
+
+    #[test]
+    fn test_secondary_tikv_storage_accessor() {
+        set_tls_engine(TestEngineBuilder::new().build().unwrap());
+        defer! {
+            unsafe {destroy_tls_engine::<RocksEngine>()}
+        }
+        let def_req = default_req_ctx_support_snap_accessor();
+        let store_id = def_req.context.get_peer().get_store_id();
+        let store_accessor = SecondarySnapStoreAccessor::<RocksEngine>::new(&def_req).unwrap();
+        let storage_accessor = dag::SecondaryTiKVStorageAccessor::<
+            SecondarySnapStoreAccessor<RocksEngine>,
+        >::from_store_accessor(store_accessor);
+
+        let storage = block_on(
+            storage_accessor.get_local_region_storage(
+                &metapb::Region {
+                    id: 123,
+                    start_key: b"a".to_vec(),
+                    end_key: b"z".to_vec(),
+                    peers: vec![metapb::Peer {
+                        id: 1,
+                        store_id,
+                        ..Default::default()
+                    }]
+                    .into(),
+                    ..Default::default()
+                },
+                &[coppb::KeyRange {
+                    start: b"a".to_vec(),
+                    end: b"b".to_vec(),
+                    ..Default::default()
+                }],
+            ),
+        )
+        .unwrap();
+
+        // should always disable check_can_be_cached
+        assert!(storage.met_uncacheable_data().is_none());
     }
 }

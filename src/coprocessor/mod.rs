@@ -104,7 +104,7 @@ pub struct ReqContext {
     pub tag: ReqTag,
 
     /// The rpc context carried in the request
-    pub context: kvrpcpb::Context,
+    pub context: Arc<kvrpcpb::Context>,
 
     /// Scan ranges of this request
     pub ranges: Vec<coppb::KeyRange>,
@@ -189,7 +189,7 @@ impl ReqContext {
         };
         Self {
             tag,
-            context,
+            context: Arc::new(context),
             deadline,
             peer,
             is_desc_scan,
@@ -273,11 +273,14 @@ mod tests {
     fn test_build_task_id() {
         let mut ctx = ReqContext::default_for_test();
         let start_ts: u64 = 0x05C6_1BFA_2648_324A;
-        ctx.txn_start_ts = start_ts.into();
-        ctx.context.set_task_id(1);
+
+        let mut pb_ctx = ctx.context.as_ref().clone();
+        pb_ctx.set_task_id(1);
+        ctx.context = Arc::new(pb_ctx.clone());
         assert_eq!(ctx.build_task_id(), 0x0001_1BFA_2648_324A);
 
-        ctx.context.set_task_id(0);
+        pb_ctx.set_task_id(0);
+        ctx.context = Arc::new(pb_ctx.clone());
         assert_eq!(ctx.build_task_id(), start_ts);
     }
 
