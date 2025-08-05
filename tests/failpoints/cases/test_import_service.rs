@@ -19,6 +19,7 @@ use tikv_util::HandyRwLock;
 mod util;
 use self::util::{
     check_ingested_kvs, new_cluster_and_tikv_import_client, new_cluster_and_tikv_import_client_tde,
+    new_sst_meta, send_write_sst,
 };
 
 // Opening sst writer involves IO operation, it may block threads for a while.
