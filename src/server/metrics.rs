@@ -310,7 +310,7 @@ lazy_static! {
         exponential_buckets(0.001, 2.0, 15).unwrap()
     )
     .unwrap();
-    
+
     pub static ref HEALTH_CHECK_STATUS_COUNTER: IntCounterVec = register_int_counter_vec!(
         "tikv_health_check_status_total",
         "Health check status counter",

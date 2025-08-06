@@ -255,10 +255,14 @@ where
             lazy_worker.scheduler(),
             grpc_thread_load.clone(),
         );
-        let raft_client = RaftClient::new(store_id, conn_builder, cfg.value().inspect_network_interval.0);
+        let raft_client = RaftClient::new(
+            store_id,
+            conn_builder,
+            cfg.value().inspect_network_interval.0,
+        );
 
         raft_client.start_network_inspection();
-        
+
         let trans = ServerTransport::new(raft_client);
 
         let svr = Server {

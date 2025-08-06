@@ -55,7 +55,7 @@ where
         worker.scheduler(),
         loads,
     );
-    RaftClient::new(0, builder)
+    RaftClient::new(0, builder, Duration::from_millis(10))
 }
 
 fn get_raft_client_by_port(port: u16) -> RaftClient<resolve::MockStoreAddrResolver, FakeExtension> {
@@ -428,4 +428,225 @@ fn test_store_allowlist() {
     raft_client.flush();
     check_msg_count(500, &msg_count1, 10);
     check_msg_count(500, &msg_count2, 5);
+}
+
+#[tokio::test]
+async fn test_inspector_store_lifecycle() {
+    fail::cfg("network_inspection_interval", "return").unwrap();
+    let msg_count = Arc::new(AtomicUsize::new(0));
+    let batch_msg_count = Arc::new(AtomicUsize::new(0));
+    let service = MockKvForRaft::new(Arc::clone(&msg_count), Arc::clone(&batch_msg_count), true);
+    let (mock_server, port) = create_mock_server(service, 60600, 60700).unwrap();
+
+    let mut raft_client = get_raft_client_by_port(port);
+
+    // Set a short inspection interval for faster testing
+    raft_client.set_inspect_network_interval(Duration::from_millis(50));
+
+    // Initially, there should be no stores with delay data
+    let initial_delays = raft_client.get_all_max_delays();
+    assert!(
+        initial_delays.is_empty(),
+        "Initially no stores should have delay data"
+    );
+
+    // Step 1: Send messages to establish connections for stores 1, 2, 3
+    println!("Establishing connections to stores 1, 2, 3");
+    for store_id in 1..=3 {
+        let mut raft_m = RaftMessage::default();
+        raft_m.mut_to_peer().set_store_id(store_id);
+        raft_m.set_region_id(store_id);
+        let _ = raft_client.send(raft_m);
+    }
+    raft_client.flush();
+
+    // Start network inspection before establishing any connections
+    raft_client.start_network_inspection();
+
+    // Wait for inspector to detect new stores and start inspection tasks
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Check that delays are being tracked for the connected stores
+    for store_id in 1..=3 {
+        assert!(raft_client.get_max_delay(store_id).is_some())
+    }
+    // Verify that stores 4 and 5 do not have delay data yet
+    for store_id in 4..=5 {
+        assert!(raft_client.get_max_delay(store_id).is_none());
+    }
+
+    // Step 2: Add more stores (4, 5) to test dynamic store detection
+    println!("Adding connections to stores 4, 5");
+    for store_id in 4..=5 {
+        let mut raft_m = RaftMessage::default();
+        raft_m.mut_to_peer().set_store_id(store_id);
+        raft_m.set_region_id(store_id);
+        let _ = raft_client.send(raft_m);
+    }
+    raft_client.flush();
+
+    // Wait for inspector to detect the new stores
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Verify that stores 4 and 5 might also have delay data
+    for store_id in 4..=5 {
+        assert!(raft_client.get_max_delay(store_id).is_some());
+    }
+
+    // Step 3: Test dynamic interval change
+    raft_client.set_inspect_network_interval(Duration::from_millis(1000));
+    // Wait for the new interval to take effect
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let _ = raft_client.get_and_reset_all_max_delays();
+    for store_id in 1..=2 {
+        assert!(raft_client.get_max_delay(store_id).is_none());
+        assert!(raft_client.get_and_reset_max_delay(store_id).is_none());
+    }
+
+    // Test the delays do not change after previous interval change
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    // Reset delays for specific stores to test individual reset
+    for store_id in 1..=2 {
+        assert!(raft_client.get_max_delay(store_id).is_none());
+        assert!(raft_client.get_and_reset_max_delay(store_id).is_none());
+    }
+
+    drop(mock_server);
+    fail::remove("network_inspection_interval")
+}
+
+#[tokio::test]
+async fn test_inspector_interval_change() {
+    let msg_count = Arc::new(AtomicUsize::new(0));
+    let batch_msg_count = Arc::new(AtomicUsize::new(0));
+    let service = MockKvForRaft::new(Arc::clone(&msg_count), Arc::clone(&batch_msg_count), true);
+    let (mock_server, port) = create_mock_server(service, 60700, 60800).unwrap();
+
+    let mut raft_client = get_raft_client_by_port(port);
+
+    // Test different inspection intervals
+    let intervals = vec![
+        Duration::from_millis(50),
+        Duration::from_millis(200),
+        Duration::from_millis(500),
+        Duration::from_secs(1),
+    ];
+
+    for interval in intervals {
+        raft_client.set_inspect_network_interval(interval);
+
+        // Start network inspection
+        raft_client.start_network_inspection();
+
+        // Send a message to establish connection
+        let mut raft_m = RaftMessage::default();
+        raft_m.mut_to_peer().set_store_id(1);
+        raft_m.set_region_id(1);
+        let _ = raft_client.send(raft_m); // May fail, which is expected
+        raft_client.flush();
+
+        // Wait briefly
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    drop(mock_server);
+}
+
+#[tokio::test]
+async fn test_network_inspection_with_real_delay() {
+    let msg_count = Arc::new(AtomicUsize::new(0));
+    let batch_msg_count = Arc::new(AtomicUsize::new(0));
+    let service = MockKvForRaft::new(Arc::clone(&msg_count), Arc::clone(&batch_msg_count), true);
+    let (mock_server, port) = create_mock_server(service, 61100, 61200).unwrap();
+
+    let mut raft_client = get_raft_client_by_port(port);
+
+    // Set a very short inspection interval for testing
+    let inspection_interval = Duration::from_millis(50);
+    raft_client.set_inspect_network_interval(inspection_interval);
+
+    // Send messages to establish connections for multiple stores
+    for store_id in 1..=3 {
+        let mut raft_m = RaftMessage::default();
+        raft_m.mut_to_peer().set_store_id(store_id);
+        raft_m.set_region_id(store_id);
+        let _ = raft_client.send(raft_m); // Some may fail, which is expected
+    }
+    raft_client.flush();
+
+    // Start network inspection
+    raft_client.start_network_inspection();
+
+    // Wait for inspection to potentially run several cycles
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let check_delay_not_empty = |store_id| {
+        let delay = raft_client.get_max_delay(store_id);
+        assert!(
+            delay.is_some(),
+            "Delay for store {} should not be None",
+            store_id
+        );
+        assert_ne!(
+            delay.unwrap(),
+            0.0,
+            "Delay for store {} should be greater than 0",
+            store_id
+        );
+    };
+    check_delay_not_empty(1);
+    check_delay_not_empty(2);
+    check_delay_not_empty(3);
+    assert_eq!(raft_client.get_max_delay(99), None);
+
+    drop(mock_server);
+}
+
+#[tokio::test]
+async fn test_network_inspection_with_connection_failures() {
+    fail::cfg("network_inspection_interval", "return").unwrap();
+    let msg_count = Arc::new(AtomicUsize::new(0));
+    let batch_msg_count = Arc::new(AtomicUsize::new(0));
+    let service = MockKvForRaft::new(Arc::clone(&msg_count), Arc::clone(&batch_msg_count), true);
+    let (mut mock_server, port) = create_mock_server(service, 61300, 61400).unwrap();
+
+    let mut raft_client = get_raft_client_by_port(port);
+
+    // Set inspection interval
+    raft_client.set_inspect_network_interval(Duration::from_millis(40));
+
+    // Send messages to establish connections
+    for store_id in 1..=2 {
+        let mut raft_m = RaftMessage::default();
+        raft_m.mut_to_peer().set_store_id(store_id);
+        raft_m.set_region_id(store_id);
+        let _ = raft_client.send(raft_m);
+    }
+    raft_client.flush();
+
+    // Start network inspection
+    raft_client.start_network_inspection();
+
+    // Wait for initial inspection cycles
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Test that delay tracking API works initially
+    assert!(raft_client.get_max_delay(1).is_some());
+    assert!(raft_client.get_max_delay(2).is_some());
+
+    // Shutdown the mock server to simulate connection failure
+    mock_server.shutdown();
+    drop(mock_server);
+
+    // Wait for inspection to potentially detect the failure
+    // TODO: mock pool remove connection
+
+    // // The delay API should still work even after connection failure
+    // assert!(raft_client.get_max_delay(1).is_none());
+    // assert!(raft_client.get_max_delay(2).is_none());
+
+    // // Test that reset operations work correctly even with empty data
+    // let _ = raft_client.get_and_reset_all_max_delays();
+    // assert!(raft_client.get_all_max_delays().is_empty());
+    fail::remove("network_inspection_interval")
 }
