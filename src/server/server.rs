@@ -215,6 +215,14 @@ where
             Some(cfg.value().health_feedback_interval.0)
         };
 
+        let kv_executor =       Arc::new(
+            RuntimeBuilder::new_multi_thread()
+                .thread_name("kv-server")
+                .worker_threads(cfg.value().grpc_concurrency)
+                .build()
+                .unwrap(),
+        );
+
         let proxy = Proxy::new(security_mgr.clone(), &env, Arc::new(cfg.value().clone()));
         let kv_service = KvService::new(
             cfg.value().cluster_id,
@@ -233,6 +241,7 @@ where
             health_controller.clone(),
             health_feedback_interval,
             raft_message_filter,
+            kv_executor,
         );
         let builder_factory = Box::new(BuilderFactory::new(
             kv_service,
