@@ -243,6 +243,7 @@ make_static_metric! {
         raft_engine_memory_limit,
         log_force_gc_count_limit,
         log_force_gc_size_limit,
+        cache_evict,
     }
 
     pub label_enum LoadBaseSplitEventType {

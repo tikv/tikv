@@ -67,6 +67,7 @@ use tikv_util::{
         self as sys_util,
         cpu_time::ProcessStat,
         disk::{DiskUsage, get_disk_status},
+        needs_force_compact,
     },
     time::{Instant as TiInstant, SlowTimer, duration_to_sec, monotonic_raw_now},
     timer::SteadyTimer,
@@ -726,8 +727,9 @@ where
             gc_msg.set_is_tombstone(true);
         }
         if let Err(e) = self.trans.send(gc_msg) {
-            error!(?e;
+            warn!(
                 "send gc message failed";
+                "err" => ?e,
                 "region_id" => region_id,
                 "to_peer_id" => ?from_peer.get_id(),
                 "to_peer_store_id" => ?from_peer.get_store_id(),
@@ -743,7 +745,8 @@ struct Store {
     start_time: Option<Timespec>,
     consistency_check_time: HashMap<u64, Instant>,
     store_reachability: HashMap<u64, StoreReachability>,
-    force_compact_rotation_offset: usize,
+    // Track last_index for each region to calculate growth rate
+    region_last_indexes: HashMap<u64, u64>,
 }
 
 struct StoreReachability {
@@ -772,7 +775,7 @@ where
                 start_time: None,
                 consistency_check_time: HashMap::default(),
                 store_reachability: HashMap::default(),
-                force_compact_rotation_offset: 0,
+                region_last_indexes: HashMap::default(),
             },
             receiver: rx,
         });
@@ -1701,7 +1704,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
     ) -> Result<()> {
         assert!(self.workers.is_none());
         let raft_clone_for_purge = engines.raft.clone();
-        let router_clone_for_purge = self.router();
+        // let router_clone_for_purge = self.router();
         // TODO: we can get cluster meta regularly too later.
         let purge_worker = if engines.raft.need_manual_purge()
             && !cfg.value().raft_engine_purge_interval.0.is_zero()
@@ -1710,15 +1713,15 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             worker.spawn_interval_task(cfg.value().raft_engine_purge_interval.0, move || {
                 let _guard = WithIoType::new(IoType::RewriteLog);
                 match raft_clone_for_purge.manual_purge() {
-                    Ok(regions) => {
-                        for region_id in regions {
-                            let _ = router_clone_for_purge.send(
-                                region_id,
-                                PeerMsg::CasualMessage(Box::new(
-                                    CasualMessage::ForceCompactRaftLogs,
-                                )),
-                            );
-                        }
+                    Ok(_) => {
+                        // for region_id in regions {
+                        //     let _ = router_clone_for_purge.send(
+                        //         region_id,
+                        //         PeerMsg::CasualMessage(Box::new(
+                        //             CasualMessage::ForceCompactRaftLogs,
+                        //         )),
+                        //     );
+                        // }
                     }
                     Err(e) => {
                         warn!("purge expired files"; "err" => %e);
@@ -2201,8 +2204,9 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
                     extra_msg.set_type(ExtraMessageType::MsgCheckStalePeerResponse);
                     extra_msg.set_check_peers(region.get_peers().into());
                     if let Err(e) = self.ctx.trans.send(send_msg) {
-                        error!(?e;
+                        warn!(
                             "send check stale peer response message failed";
+                            "err" => ?e,
                             "region_id" => region_id,
                         );
                     }
@@ -2283,7 +2287,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         }
 
         if !msg.has_region_epoch() {
-            error!(
+            warn!(
                 "missing epoch in raft message, ignore it";
                 "region_id" => region_id,
             );
@@ -3101,68 +3105,73 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
     fn on_raft_engine_force_gc_tick(&mut self) {
         self.register_raft_engine_force_gc_tick();
 
-        // Check raft engine memory usage
-        let mem_usage = match self.ctx.engines.raft.get_memory_usage() {
-            Ok(usage) => usage,
-            Err(_) => {
-                return;
-            }
-        };
-
-        let raft_engine_memory_limit = self.ctx.cfg.raft_engine_memory_limit.0;
-        if mem_usage > raft_engine_memory_limit {
+        let mut over_ratio = 0.0;
+        if needs_force_compact(&mut over_ratio, self.ctx.cfg.evict_cache_on_memory_ratio) {
             // Get all regions and calculate send count in one pass
-            self.send_force_compact_batch(mem_usage, raft_engine_memory_limit);
+            self.send_force_compact_batch(over_ratio);
         }
     }
 
-    fn send_force_compact_batch(&mut self, mem_usage: u64, memory_limit: u64) {
-        let mut all_regions = Vec::new();
+    fn send_force_compact_batch(&mut self, over_ratio: f64) {
+        let mut regions_with_growth = Vec::new();
+
         let _ = self
             .ctx
             .engines
             .raft
             .for_each_raft_group::<engine_traits::Error, _>(&mut |region_id| {
-                all_regions.push(region_id);
+                if let Ok(Some(raft_state)) = self.ctx.engines.raft.get_raft_state(region_id) {
+                    let current_last_index = raft_state.get_last_index();
+
+                    // Get previous last_index to calculate growth rate
+                    let previous_last_index = self
+                        .fsm
+                        .store
+                        .region_last_indexes
+                        .get(&region_id)
+                        .unwrap_or(&0);
+
+                    // Calculate growth amount
+                    let growth = current_last_index.saturating_sub(*previous_last_index);
+
+                    // Update tracked last_index
+                    self.fsm
+                        .store
+                        .region_last_indexes
+                        .insert(region_id, current_last_index);
+
+                    // Add all regions to the list for sorting
+                    regions_with_growth.push((region_id, growth));
+                }
                 Ok(())
             });
 
-        let batch_num = 5;
-
-        if all_regions.is_empty() {
+        if regions_with_growth.is_empty() {
             return;
         }
 
-        // Calculate send count based on memory pressure and total regions
-        let memory_ratio = mem_usage as f64 / memory_limit as f64;
-        let total_regions = all_regions.len();
+        let total_regions = regions_with_growth.len();
 
-        // Base count: proportional to the number of regions
-        let base_count = std::cmp::max(50, total_regions / batch_num);
+        // Sort by growth rate: regions with faster growth come first
+        regions_with_growth.sort_by(|a, b| b.1.cmp(&a.1));
 
-        let additional_count = if memory_ratio > 1.0 {
-            ((memory_ratio - 1.0) * base_count as f64) as usize
-        } else {
-            0
-        };
+        // Calculate how many fastest growing regions to GC
+        let exclude_count = (regions_with_growth.len() as f64 * over_ratio / 4.0) as usize;
 
-        let send_count = std::cmp::min(base_count + additional_count, total_regions);
+        let send_count = std::cmp::min(total_regions / 4, exclude_count);
+        info!(
+            "force compact regions";
+            "send_count" => send_count,
+            "exclude_count" => exclude_count,
+            "total_regions" => total_regions,
+            "over_ratio" => over_ratio,
+        );
 
-        // Use rotating pattern to select regions with stored offset
-        let start_offset = self.fsm.store.force_compact_rotation_offset;
-        let end_offset = std::cmp::min(start_offset + send_count, total_regions);
-
-        // Update the offset for next time
-        self.fsm.store.force_compact_rotation_offset = if end_offset >= total_regions {
-            0 // Wrap around to the beginning
-        } else {
-            end_offset
-        };
-
-        for i in start_offset..end_offset {
-            let region_id = all_regions[i];
+        // GC the fastest growing regions first (most active regions)
+        for (region_id, _) in regions_with_growth.iter().take(send_count) {
+            // Send force compact message directly
             let _ = self.ctx.router.send(
-                region_id,
+                *region_id,
                 PeerMsg::CasualMessage(Box::new(CasualMessage::ForceCompactRaftLogs)),
             );
         }
@@ -3294,9 +3303,10 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
 
     fn on_cleanup_import_sst_tick(&mut self) {
         if let Err(e) = self.on_cleanup_import_sst() {
-            error!(?e;
+            warn!(
                 "cleanup import sst failed";
                 "store_id" => self.fsm.store.id,
+                "err" => ?e,
             );
         }
         self.register_cleanup_import_sst_tick();
@@ -3514,10 +3524,10 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use engine_rocks::{RangeOffsets, RangeProperties, RocksCompactedEvent};
     use engine_traits::CompactedEvent;
-
-    use super::*;
 
     #[test]
     fn test_calc_region_declined_bytes() {
@@ -3546,6 +3556,8 @@ mod tests {
                 ),
             ],
         };
+        let (prop_start_key, prop_end_key) =
+            (prop.smallest_key().unwrap(), prop.largest_key().unwrap());
         let event = RocksCompactedEvent {
             cf: "default".to_owned(),
             output_level: 3,
@@ -3556,6 +3568,8 @@ mod tests {
             input_props: vec![prop],
             output_props: vec![],
         };
+        let (start_key, end_key) = event.get_key_range();
+        assert_eq!((start_key, end_key), (prop_start_key, prop_end_key));
 
         let mut region_ranges = BTreeMap::new();
         region_ranges.insert(b"a".to_vec(), 1);

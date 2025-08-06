@@ -333,7 +333,7 @@ pub struct Config {
     pub perf_level: PerfLevel,
 
     #[doc(hidden)]
-    #[online_config(skip)]
+    // #[online_config(skip)]
     /// Disable this feature by set to 0, logic will be removed in other pr.
     /// When TiKV memory usage is near `memory_usage_high_water` it will try to
     /// limit memory increasing. For raftstore layer entries will be evicted
@@ -603,7 +603,7 @@ impl Default for Config {
             apply_yield_duration: ReadableDuration::millis(500),
             apply_yield_write_size: ReadableSize::kb(32),
             perf_level: PerfLevel::Uninitialized,
-            evict_cache_on_memory_ratio: 0.1,
+            evict_cache_on_memory_ratio: 0.6,
             cmd_batch: true,
             cmd_batch_concurrent_ready_max_count: 1,
             raft_write_size_limit: ReadableSize::mb(1),
@@ -1119,7 +1119,10 @@ impl Config {
             .set(self.raft_engine_memory_limit.0 as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_engine_memory_high_water_limit_duration"])
-            .set(self.raft_engine_memory_high_water_limit_duration.as_secs_f64());
+            .set(
+                self.raft_engine_memory_high_water_limit_duration
+                    .as_secs_f64(),
+            );
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_log_gc_size_limit"])
             .set(self.raft_log_gc_size_limit.unwrap_or_default().0 as f64);
@@ -1299,6 +1302,9 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["perf_level"])
             .set(self.perf_level as u64 as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["evict_cache_on_memory_ratio"])
+            .set(self.evict_cache_on_memory_ratio as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["cmd_batch"])
             .set((self.cmd_batch as i32).into());

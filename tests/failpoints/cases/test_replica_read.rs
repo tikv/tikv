@@ -1,21 +1,28 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{Arc, Mutex, atomic::AtomicBool},
-    thread,
+    sync::{Arc, Mutex, atomic::AtomicBool, mpsc},
+    thread::{self, spawn},
     time::Duration,
 };
 
 use crossbeam::channel;
-use engine_traits::RaftEngineReadOnly;
+use engine_traits::{Peekable, RaftEngineReadOnly};
 use futures::executor::block_on;
-use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
+use kvproto::{
+    kvrpcpb::{Context, KeyRange},
+    pdpb,
+    raft_cmdpb::CmdType,
+    raft_serverpb::{PeerState, RaftMessage, RegionLocalState},
+};
+use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
-use tikv::storage::config::EngineType;
+use tikv::storage::{config::EngineType, kv::SnapContext};
+use tikv_kv::{Engine, ErrorInner, Result, Snapshot};
 use tikv_util::{HandyRwLock, config::ReadableDuration, future::block_on_timeout};
-use txn_types::{Key, Lock, LockType};
+use txn_types::{Key, Lock, LockType, TimeStamp};
 
 #[test_case(test_raftstore::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
@@ -837,6 +844,14 @@ fn test_read_index_cache() {
     let leader_id = 1;
     let r1 = cluster.get_region(b"k1");
 
+    for store_id in 1..=5 {
+        assert_eq!(
+            get_region_read_index_safe_ts(&cluster, store_id, rid),
+            0,
+            "initial state should be zero"
+        );
+    }
+
     // k1 has a memory lock on the new leader
     let leader_cm = cluster.sim.rl().get_concurrency_manager(leader_id);
     let lock = Lock::new(
@@ -859,8 +874,8 @@ fn test_read_index_cache() {
         // peer 1. But the lease of peer 1 has expired and it cannot get majority of
         // heartbeat. So, we cannot get the result here.
         fail::cfg(
-            "reading_from_cache",
-            "panic(reading_from_cache_not_allowed)",
+            "reading_from_follower_read_cache",
+            "panic(reading_from_follower_read_cache_not_allowed)",
         )
         .unwrap();
 
@@ -882,9 +897,10 @@ fn test_read_index_cache() {
         Some(2),
         Duration::from_millis(2000),
     );
+    assert_eq!(get_region_read_index_safe_ts(&cluster, 2, rid), 2);
 
     // this read should be from cache
-    fail::remove("reading_from_cache");
+    fail::remove("reading_from_follower_read_cache");
     fail::cfg(
         "reading_from_leader",
         "panic(reading_from_leader_not_allowed)",
@@ -902,16 +918,491 @@ fn test_read_index_cache() {
     // this read should be from leader
     fail::remove("reading_from_leader");
     fail::cfg(
-        "reading_from_cache",
-        "panic(reading_from_cache_not_allowed)",
+        "reading_from_follower_read_cache",
+        "panic(reading_from_follower_read_cache_not_allowed)",
     )
     .unwrap();
     let _ = get_snapshot(
         &mut cluster,
-        new_peer(2, 2),
+        new_peer(1, 1),
         r1.clone(),
         b"k1",
         Some(2),
         Duration::from_millis(2000),
     );
+}
+
+#[test_case(test_raftstore::new_server_cluster)]
+fn test_read_index_cache_in_destroyed_peer() {
+    let cluster = Arc::new(Mutex::new(new_cluster(0, 4)));
+    let pd_client = cluster.lock().unwrap().pd_client.clone();
+
+    fn async_snapshot(
+        cluster: Arc<Mutex<Cluster<ServerCluster>>>,
+        start_ts: TimeStamp,
+        store_id: u64,
+        region_id: u64,
+    ) -> mpsc::Receiver<Result<impl Snapshot + Peekable>> {
+        let cluster = cluster.clone();
+        let pd_client = cluster.lock().unwrap().pd_client.clone();
+        let mut cluster_guard = cluster.lock().unwrap();
+        let region = block_on(pd_client.get_region_by_id(region_id))
+            .unwrap()
+            .unwrap();
+        let epoch = region.get_region_epoch().clone();
+        let peer = region
+            .get_peers()
+            .iter()
+            .find(|p| p.get_store_id() == store_id)
+            .unwrap()
+            .clone();
+        let leader = cluster_guard.leader_of_region(region_id).unwrap();
+        let peer_is_leader = leader.get_id() == peer.get_id();
+        let mut ctx = Context::default();
+        ctx.set_region_id(region_id);
+        ctx.set_peer(peer);
+        ctx.set_region_epoch(epoch);
+        ctx.set_replica_read(!peer_is_leader);
+
+        let mut storage = cluster_guard
+            .sim
+            .rl()
+            .storages
+            .get(&store_id)
+            .unwrap()
+            .clone();
+
+        let (tx, rx) = mpsc::sync_channel(0);
+        spawn(move || {
+            let mut snap_ctx = SnapContext {
+                pb_ctx: &ctx,
+                ..Default::default()
+            };
+            if !peer_is_leader {
+                snap_ctx.key_ranges.push(KeyRange {
+                    start_key: region.get_start_key().to_vec(),
+                    end_key: region.get_end_key().to_vec(),
+                    ..Default::default()
+                });
+            }
+            snap_ctx.start_ts = Some(start_ts);
+            tx.send(block_on(storage.async_snapshot(snap_ctx))).unwrap();
+        });
+        rx
+    }
+
+    let mut cluster_guard = cluster.lock().unwrap();
+    pd_client.disable_default_operator();
+    let region_id = cluster_guard.run_conf_change();
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+    pd_client.region_leader_must_be(region_id, new_peer(1, 1));
+    cluster_guard.must_put(b"k1", b"v1");
+    drop(cluster_guard);
+
+    pd_client.must_add_peer(region_id, new_peer(4, 4));
+
+    let ts1 = block_on(pd_client.get_tso()).unwrap();
+    let ts2 = block_on(pd_client.get_tso()).unwrap();
+    assert!(ts2 > ts1);
+
+    // push read_index_safe_ts to ts2, after that, ts1 can hit local replica read
+    // safely.
+    let rx2 = async_snapshot(cluster.clone(), ts2, 2, region_id);
+    let snap2 = rx2.recv().unwrap().unwrap();
+    let read_opt = engine_traits::ReadOptions::default();
+    assert!(
+        snap2
+            .get_value_opt(&read_opt, b"k1")
+            .unwrap()
+            .unwrap()
+            .eq(&b"v1".as_ref())
+    );
+    // release the snapshot sequence, so it's safe to cleanup the data when peer is
+    // destroied
+    drop(snap2);
+
+    // pause the verification of replica read in the FIRST check.
+    fail::cfg("skip_check_stale_read_safe", "pause").unwrap();
+    let rx1 = async_snapshot(cluster.clone(), ts1, 2, region_id);
+
+    // remove peer 2 and wait for peer destroy is finished.
+    let (tx, rx) = mpsc::sync_channel(0);
+    fail::cfg_callback("after_region_worker_destroy", move || {
+        tx.send(()).unwrap();
+    })
+    .unwrap();
+    pd_client.must_remove_peer(region_id, new_peer(2, 2));
+    rx.recv().unwrap();
+    fail::remove("after_region_worker_destroy");
+
+    // resume the verification of replica read.
+    fail::remove("skip_check_stale_read_safe");
+    match rx1.recv().unwrap() {
+        Ok(snap1) => {
+            // The test is already failed because we receive a snapshot in a destroyed peer.
+            // Go further check the read result from this INVALID snapshot.
+            assert!(
+                snap1
+                    .get_value_opt(&read_opt, b"k1")
+                    .unwrap()
+                    .unwrap()
+                    .eq(&b"v1".as_ref())
+            );
+            unreachable!("should not get a snapshot from a destroyed peer");
+        }
+        Err(err) => match err.0.as_ref() {
+            ErrorInner::Request(req_err) => {
+                assert!(req_err.has_region_not_found());
+                assert_eq!(req_err.get_region_not_found().get_region_id(), 1);
+            }
+            _ => {
+                unreachable!("unexpected error type: {:?}", err.0);
+            }
+        },
+    }
+}
+
+#[test_case(test_raftstore::new_node_cluster)]
+fn test_read_index_cache_region_split() {
+    let mut cluster = new_cluster(0, 5);
+    // Use long election timeout and short lease.
+    configure_for_lease_read(&mut cluster.cfg, Some(50), Some(200));
+    cluster.cfg.raft_store.raft_store_max_leader_lease =
+        ReadableDuration(Duration::from_millis(100));
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let rid = cluster.run_conf_change();
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+    for i in 2..=5 {
+        pd_client.must_add_peer(rid, new_peer(i, i));
+        must_get_equal(&cluster.get_engine(i), b"k1", b"v1");
+        must_get_equal(&cluster.get_engine(i), b"k3", b"v3");
+    }
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    let region = cluster.get_region(b"k1");
+    let follower_peer = find_peer(&region, 2).unwrap().clone();
+    for k in [b"k1", b"k3"] {
+        let snap = get_snapshot(
+            &mut cluster,
+            follower_peer.clone(),
+            region.clone(),
+            k,
+            Some(10),
+            Duration::from_millis(2000),
+        );
+        assert_eq!(snap.get_responses()[0].get_cmd_type(), CmdType::Snap);
+    }
+
+    let leader_cm = cluster.sim.rl().get_concurrency_manager(1);
+    assert_eq!(leader_cm.max_ts(), 10.into());
+
+    pd_client.must_split_region(region, pdpb::CheckPolicy::Usekey, vec![b"k2".to_vec()]);
+    let left_region = pd_client.get_region(b"k1").unwrap();
+    let right_region = pd_client.get_region(b"k3").unwrap();
+
+    let mut guards = vec![];
+    for key in [b"k1", b"k3"] {
+        let lock = Lock::new(
+            LockType::Put,
+            key.to_vec(),
+            11.into(),
+            20000,
+            None,
+            11.into(),
+            1,
+            11.into(),
+            false,
+        )
+        .use_async_commit(vec![]);
+        let guard = block_on(leader_cm.lock_key(&Key::from_raw(key)));
+        guard.with_lock(|l: &mut Option<Lock>| *l = Some(lock.clone()));
+        guards.push(guard);
+    }
+
+    let all_peers = [
+        left_region
+            .get_peers()
+            .iter()
+            .map(|p| (b"k1", left_region.clone(), p.clone()))
+            .collect::<Vec<_>>(),
+        right_region
+            .get_peers()
+            .iter()
+            .map(|p| (b"k3", right_region.clone(), p.clone()))
+            .collect::<Vec<_>>(),
+    ]
+    .concat();
+    for (key, region, peer) in all_peers {
+        if peer.get_store_id() == 1 {
+            continue;
+        }
+        let snap = get_snapshot(
+            &mut cluster,
+            peer.clone(),
+            region.clone(),
+            key,
+            Some(10),
+            Duration::from_millis(2000),
+        );
+        assert_eq!(
+            snap.get_responses()[0].get_cmd_type(),
+            CmdType::Snap,
+            "snap: {:?}",
+            snap
+        );
+        let snap = get_snapshot(
+            &mut cluster,
+            peer.clone(),
+            region.clone(),
+            key,
+            Some(11),
+            Duration::from_millis(2000),
+        );
+        assert_eq!(
+            snap.get_responses()[0].get_cmd_type(),
+            CmdType::Invalid,
+            "snap: {:?}",
+            snap
+        );
+        assert_eq!(
+            snap.get_responses()[0]
+                .get_read_index()
+                .get_locked()
+                .get_key(),
+            key
+        );
+    }
+}
+
+#[test_case(test_raftstore::new_node_cluster)]
+fn test_read_index_cache_region_merge() {
+    let mut cluster = new_cluster(0, 5);
+    // Use long election timeout and short lease.
+    configure_for_lease_read(&mut cluster.cfg, Some(50), Some(200));
+    cluster.cfg.raft_store.raft_store_max_leader_lease =
+        ReadableDuration(Duration::from_millis(100));
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let rid = cluster.run_conf_change();
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+    for i in 2..=5 {
+        pd_client.must_add_peer(rid, new_peer(i, i));
+        must_get_equal(&cluster.get_engine(i), b"k1", b"v1");
+        must_get_equal(&cluster.get_engine(i), b"k3", b"v3");
+    }
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    pd_client.must_split_region(region, pdpb::CheckPolicy::Usekey, vec![b"k2".to_vec()]);
+
+    let left_region = pd_client.get_region(b"k1").unwrap();
+    let left_leader = left_region.get_peers()[0].clone();
+    assert_eq!(left_leader.get_store_id(), 1);
+    let left_follower = left_region.get_peers()[1].clone();
+    let right_region = pd_client.get_region(b"k3").unwrap();
+    let right_leader = right_region.get_peers()[0].clone();
+    let right_follower = right_region.get_peers()[1].clone();
+    assert_eq!(right_leader.get_store_id(), 1);
+    cluster.must_transfer_leader(left_region.get_id(), left_leader);
+    cluster.must_transfer_leader(right_region.get_id(), right_leader);
+
+    // lock k1 on left leader.
+    let leader_cm = cluster.sim.rl().get_concurrency_manager(1);
+
+    // push left region's read_index_safe_ts to 20.
+    let snap = get_snapshot(
+        &mut cluster,
+        left_follower.clone(),
+        left_region.clone(),
+        b"k1",
+        Some(20),
+        Duration::from_millis(2000),
+    );
+    assert_eq!(snap.get_responses()[0].get_cmd_type(), CmdType::Snap);
+    assert_eq!(leader_cm.max_ts(), 20.into());
+
+    // push right region's read_index_safe_ts to 30.
+    let snap = get_snapshot(
+        &mut cluster,
+        right_follower.clone(),
+        right_region.clone(),
+        b"k3",
+        Some(30),
+        Duration::from_millis(2000),
+    );
+    assert_eq!(snap.get_responses()[0].get_cmd_type(), CmdType::Snap);
+    assert_eq!(leader_cm.max_ts(), 30.into());
+
+    let lock = Lock::new(
+        LockType::Put,
+        b"k1".to_vec(),
+        25.into(),
+        20000,
+        None,
+        25.into(),
+        1,
+        25.into(),
+        false,
+    )
+    .use_async_commit(vec![]);
+    let guard = block_on(leader_cm.lock_key(&Key::from_raw(b"k1")));
+    guard.with_lock(|l| *l = Some(lock.clone()));
+
+    let snap = get_snapshot(
+        &mut cluster,
+        left_follower.clone(),
+        left_region.clone(),
+        b"k1",
+        Some(30),
+        Duration::from_millis(2000),
+    );
+    assert_eq!(
+        snap.get_responses()[0].get_cmd_type(),
+        CmdType::Invalid,
+        "snap: {:?}",
+        snap
+    );
+
+    cluster.must_try_merge(left_region.get_id(), right_region.get_id());
+    for i in 1..=5 {
+        cluster.must_region_not_exist(left_region.get_id(), i);
+    }
+    let merged_region = pd_client.get_region(b"k3").unwrap();
+    let merged_follower = merged_region.get_peers()[1].clone();
+    assert_eq!(leader_cm.max_ts(), 30.into());
+    for store_id in 1..=5 {
+        assert_eq!(
+            get_region_read_index_safe_ts(&cluster, store_id, merged_region.get_id()),
+            0,
+            "should reset merged region's read_index_safe_ts"
+        );
+    }
+
+    let snap = get_snapshot(
+        &mut cluster,
+        merged_follower.clone(),
+        merged_region.clone(),
+        b"k1",
+        Some(30),
+        Duration::from_millis(2000),
+    );
+    assert_eq!(
+        snap.get_responses()[0].get_cmd_type(),
+        CmdType::Invalid,
+        "snap: {:?}",
+        snap
+    );
+
+    drop(guard);
+
+    let lock = Lock::new(
+        LockType::Put,
+        b"k1".to_vec(),
+        31.into(),
+        20000,
+        None,
+        31.into(),
+        1,
+        31.into(),
+        false,
+    )
+    .use_async_commit(vec![]);
+    let guard = block_on(leader_cm.lock_key(&Key::from_raw(b"k1")));
+    guard.with_lock(|l| *l = Some(lock.clone()));
+
+    let snap = get_snapshot(
+        &mut cluster,
+        merged_follower.clone(),
+        merged_region.clone(),
+        b"k1",
+        Some(30),
+        Duration::from_millis(2000),
+    );
+    assert_eq!(
+        snap.get_responses()[0].get_cmd_type(),
+        CmdType::Snap,
+        "snap: {:?}",
+        snap
+    );
+
+    // safe_ts > 30 will see the lock.
+    let snap = get_snapshot(
+        &mut cluster,
+        merged_follower.clone(),
+        merged_region.clone(),
+        b"k1",
+        Some(31),
+        Duration::from_millis(2000),
+    );
+    assert_eq!(
+        snap.get_responses()[0].get_cmd_type(),
+        CmdType::Invalid,
+        "snap: {:?}",
+        snap
+    );
+}
+
+#[test_case(test_raftstore::new_node_cluster)]
+fn test_read_index_cache_region_transfer_leader() {
+    // During leader transfer, the new leader's store will update its max_ts from
+    // PD, which is guaranteed to be greater than the old leader's max_ts. Since
+    // the read-index-safe-ts is less than or equal to the old leader's max_ts, the
+    // cache remains correct on the new leader as well.
+    let mut cluster = new_cluster(0, 5);
+    // Use long election timeout and short lease.
+    configure_for_lease_read(&mut cluster.cfg, Some(50), Some(200));
+    cluster.cfg.raft_store.raft_store_max_leader_lease =
+        ReadableDuration(Duration::from_millis(100));
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let rid = cluster.run_conf_change();
+    cluster.must_put(b"k1", b"v1");
+    for i in 2..=5 {
+        pd_client.must_add_peer(rid, new_peer(i, i));
+        must_get_equal(&cluster.get_engine(i), b"k1", b"v1");
+    }
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    let ts1 = block_on(pd_client.get_tso()).unwrap();
+
+    let region = cluster.get_region(b"k1");
+    let peers = region.get_peers();
+    for i in 2..=5 {
+        let peer = peers[i - 1].clone();
+        let snap = get_snapshot(
+            &mut cluster,
+            peer.clone(),
+            region.clone(),
+            b"k1",
+            Some(ts1.into_inner()),
+            Duration::from_millis(2000),
+        );
+        assert_eq!(snap.get_responses()[0].get_cmd_type(), CmdType::Snap);
+    }
+
+    let leader_cm = cluster.sim.rl().get_concurrency_manager(1);
+    assert_eq!(leader_cm.max_ts(), ts1);
+    let ts2 = block_on(pd_client.get_tso()).unwrap();
+    cluster.must_transfer_leader(1, peers.last().unwrap().clone());
+    let leader_cm = cluster.sim.rl().get_concurrency_manager(5);
+    // new leader's max_ts > ts2 > ts1 >= read-index-safe-ts
+    assert!(leader_cm.max_ts() > ts2);
+    assert_eq!(
+        get_region_read_index_safe_ts(&cluster, 1, region.get_id()),
+        0,
+        "when leader becomes follower, it's read_index_safe_ts should be 0"
+    );
+    for i in 2..=5 {
+        assert!(get_region_read_index_safe_ts(&cluster, i, region.get_id()) <= ts1.into_inner());
+    }
 }

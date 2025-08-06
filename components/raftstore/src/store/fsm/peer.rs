@@ -58,7 +58,7 @@ use tikv_util::{
     mpsc::{self, LooseBoundedSender, Receiver},
     slow_log,
     store::{find_peer, find_peer_by_id, is_learner, region_on_same_stores},
-    sys::{disk::DiskUsage, memory_usage_reaches_near_high_water},
+    sys::disk::DiskUsage,
     time::{Instant as TiInstant, SlowTimer, monotonic_raw_now},
     trace, warn,
     worker::{ScheduleError, Scheduler},
@@ -667,10 +667,10 @@ where
                     if !self.ctx.coprocessor_host.on_raft_message(&msg.msg) {
                         continue;
                     }
-
                     if let Err(e) = self.on_raft_message(msg) {
-                        error!(%e;
+                        warn!(
                             "handle raft message err";
+                            "err" => ?e,
                             "region_id" => self.fsm.region_id(),
                             "peer_id" => self.fsm.peer_id(),
                         );
@@ -2275,7 +2275,7 @@ where
             Some(mb) => mb,
             None => {
                 self.fsm.tick_registry[idx] = false;
-                error!(
+                warn!(
                     "failed to get mailbox";
                     "region_id" => self.fsm.region_id(),
                     "peer_id" => self.fsm.peer_id(),
@@ -3221,7 +3221,7 @@ where
         }
 
         if !msg.has_region_epoch() {
-            error!(
+            warn!(
                 "missing epoch in raft message, ignore it";
                 "region_id" => region_id,
             );
@@ -4161,7 +4161,7 @@ where
         );
         let task = PdTask::DestroyPeer { region_id };
         if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
-            error!(
+            warn!(
                 "failed to notify pd";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
@@ -4534,7 +4534,7 @@ where
                 regions: regions.to_vec(),
             };
             if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
-                error!(
+                warn!(
                     "failed to notify pd";
                     "region_id" => self.fsm.region_id(),
                     "peer_id" => self.fsm.peer_id(),
@@ -5577,6 +5577,7 @@ where
                             &mut self.fsm.peer.transfer_leader_state.cache_warmup_state;
                         let peer_store = self.fsm.peer.raft_group.mut_store();
                         peer_store.set_apply_state(apply_state);
+                        peer_store.compact_term_cache(last_index + 1);
                         peer_store.compact_entry_cache(last_index + 1, cache_warmup_state.as_mut());
                         peer_store.raft_state_mut().mut_hard_state().commit = last_index;
                         peer_store.raft_state_mut().last_index = last_index;
@@ -6127,39 +6128,21 @@ where
         );
         if needs_evict_entry_cache(self.ctx.cfg.evict_cache_on_memory_ratio) {
             self.fsm.peer.mut_store().evict_entry_cache(true);
+            self.ctx.raft_metrics.raft_log_gc.cache_evict.inc();
             if !self.fsm.peer.get_store().is_entry_cache_empty() {
                 self.register_entry_cache_evict_tick();
             }
         }
 
-        let mut usage = 0;
-        let is_near = memory_usage_reaches_near_high_water(&mut usage);
         let applied_count = applied_idx - first_idx;
 
-        if applied_count > self.ctx.cfg.raft_log_gc_count_limit() / 3 {
-            self.fsm.raft_engine_memory_high_water_duration +=
-                self.ctx.cfg.raft_log_gc_tick_interval.0;
-        } else {
-            self.fsm.raft_engine_memory_high_water_duration = Duration::from_secs(0);
-        }
         let ratio = if log_lag > 0.0 {
             log_lag / (last_idx - first_idx) as f64
         } else {
             1.0
         };
-        let raft_engine_memory_high_water_limit_duration = self
-            .ctx
-            .cfg
-            .raft_engine_memory_high_water_limit_duration
-            .0
-            .as_secs_f64()
-            * ratio;
 
-        let should_force_compact = self
-            .fsm
-            .raft_engine_memory_high_water_duration
-            .as_secs_f64()
-            >= raft_engine_memory_high_water_limit_duration;
+        let should_force_compact = applied_count > self.ctx.cfg.raft_log_gc_count_limit() / 4;
 
         let mut compact_idx = if force_compact {
             if should_force_compact {
@@ -6177,11 +6160,7 @@ where
                 }
                 replicated_idx
             }
-        } else if is_near && should_force_compact {
-            self.ctx.raft_metrics.raft_log_gc.memory_high_water.inc();
-            self.fsm.raft_engine_memory_high_water_duration = Duration::from_secs(0);
-            std::cmp::min(applied_idx, quorum_replicated_idx)
-        } else if should_force_compact && applied_count >= self.ctx.cfg.raft_log_gc_count_limit() {
+        } else if applied_count >= (self.ctx.cfg.raft_log_gc_count_limit() as f64 * ratio) as u64 {
             self.ctx
                 .raft_metrics
                 .raft_log_gc
@@ -6189,9 +6168,8 @@ where
                 .inc();
             self.fsm.raft_engine_memory_high_water_duration = Duration::from_secs(0);
             std::cmp::min(applied_idx, quorum_replicated_idx)
-        } else if should_force_compact
-            && applied_count > 0
-            && self.fsm.peer.raft_log_size_hint >= self.ctx.cfg.raft_log_gc_size_limit().0
+        } else if applied_count > 0
+            && self.fsm.peer.raft_log_size_hint >= (self.ctx.cfg.raft_log_gc_size_limit().0 as f64 * ratio) as u64
         {
             self.ctx
                 .raft_metrics
@@ -6268,6 +6246,7 @@ where
         fail_point!("on_entry_cache_evict_tick", |_| {});
         if needs_evict_entry_cache(self.ctx.cfg.evict_cache_on_memory_ratio) {
             self.fsm.peer.mut_store().evict_entry_cache(true);
+            self.ctx.raft_metrics.raft_log_gc.cache_evict.inc();
             if !self.fsm.peer.get_store().is_entry_cache_empty() {
                 self.register_entry_cache_evict_tick();
             }
@@ -6505,7 +6484,7 @@ where
             callback: cb,
         };
         if let Err(ScheduleError::Stopped(t)) = self.ctx.pd_scheduler.schedule(task) {
-            error!(
+            warn!(
                 "failed to notify pd to split: Stopped";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
@@ -6960,7 +6939,7 @@ where
                     region: self.fsm.peer.region().clone(),
                 };
                 if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
-                    error!(
+                    warn!(
                         "failed to notify pd";
                         "region_id" => self.fsm.region_id(),
                         "peer_id" => self.fsm.peer_id(),
