@@ -534,7 +534,7 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
             key_error.set_primary_mismatch(primary_mismatch);
         }
         _ => {
-            error!(?*err; "txn aborts");
+            warn!(?*err; "txn aborts");
             key_error.set_abort(format!("{:?}", err));
         }
     }
