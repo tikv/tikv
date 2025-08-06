@@ -10,6 +10,7 @@ fn test_bucket_stats() {
         cluster.cfg.coprocessor.enable_region_bucket = Some(true);
         cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::days(1);
         cluster.cfg.raft_store.report_region_buckets_tick_interval = ReadableDuration::millis(100);
+        cluster.cfg.raft_store.hibernate_regions = false;
     });
 
     let fp = "mock_tick_interval";
