@@ -27,6 +27,7 @@ use grpcio::{
     CallOption, Channel, ChannelBuilder, ClientCStreamReceiver, ClientCStreamSender, Environment,
     MetadataBuilder, RpcStatusCode, WriteFlags,
 };
+use grpcio_health::proto::HealthClient;
 use kvproto::{
     raft_serverpb::{Done, RaftMessage, RaftSnapshotData},
     tikvpb::{BatchRaftMessage, TikvClient},
@@ -853,8 +854,9 @@ async fn start<S, R>(
                 error_unknown!(?e; "resolve store address failed"; "store_id" => back_end.store_id,);
                 if let ResolveError::StoreTombstone(_) = e {
                     let mut pool = pool.lock().unwrap();
-                    if let Some(s) = pool.connections.remove(&(back_end.store_id, conn_id)) {
-                        s.set_conn_state(ConnState::Disconnected);
+                    if let Some(conn_info) = pool.connections.remove(&(back_end.store_id, conn_id)) {
+                        let conn_guard = conn_info.lock().unwrap();
+                        conn_guard.queue.set_conn_state(ConnState::Disconnected);
                     }
                     pool.tombstone_stores.insert(back_end.store_id);
                     return;
@@ -899,6 +901,15 @@ async fn start<S, R>(
                 .observe(duration_to_sec(wait_conn_duration));
             begin = None;
             try_count = 0;
+            
+            // Update the channel in ConnectionPool for health check
+            {
+                let pool_guard = pool.lock().unwrap();
+                if let Some(conn_info) = pool_guard.connections.get(&(back_end.store_id, conn_id)) {
+                    let mut conn_guard = conn_info.lock().unwrap();
+                    conn_guard.channel = Some(channel.clone());
+                }
+            }
         }
 
         let client = TikvClient::new(channel);
@@ -927,9 +938,23 @@ async fn start<S, R>(
                     .router
                     .report_store_unreachable(back_end.store_id);
                 addr_channel = None;
+                
+                // Clear the channel when connection is lost
+                {
+                    let pool_guard = pool.lock().unwrap();
+                    if let Some(conn_info) = pool_guard.connections.get(&(back_end.store_id, conn_id)) {
+                        let mut conn_guard = conn_info.lock().unwrap();
+                        conn_guard.channel = None;
+                    }
+                }
             }
         }
     }
+}
+
+struct ConnectionInfo {
+    queue: Arc<Queue>,
+    channel: Option<Channel>,
 }
 
 /// A global connection pool.
@@ -938,7 +963,7 @@ async fn start<S, R>(
 /// from the struct, all cache clone should also remove it at some time.
 #[derive(Default)]
 struct ConnectionPool {
-    connections: HashMap<(u64, usize), Arc<Queue>>,
+    connections: HashMap<(u64, usize), Arc<Mutex<ConnectionInfo>>>,
     tombstone_stores: HashSet<u64>,
     store_allowlist: Vec<u64>,
 }
@@ -946,12 +971,13 @@ struct ConnectionPool {
 impl ConnectionPool {
     fn set_store_allowlist(&mut self, stores: Vec<u64>) {
         self.store_allowlist = stores;
-        for (&(store_id, _), q) in self.connections.iter() {
+        for (&(store_id, _), conn_info) in self.connections.iter() {
             let mut state = ConnState::Established;
             if self.need_pause(store_id) {
                 state = ConnState::Paused;
             }
-            q.set_conn_state(state);
+            let conn_guard = conn_info.lock().unwrap();
+            conn_guard.queue.set_conn_state(state);
         }
     }
 
@@ -992,6 +1018,8 @@ pub struct RaftClient<S, R> {
     future_pool: Arc<ThreadPool<TaskCell>>,
     builder: ConnectionBuilder<S, R>,
     last_hash: (u64, u64),
+
+    inspector: Inspector,
 }
 
 impl<S, R> RaftClient<S, R>
@@ -999,22 +1027,42 @@ where
     S: StoreAddrResolver + Send + 'static,
     R: RaftExtension + Unpin + Send + 'static,
 {
-    pub fn new(self_store_id: u64, builder: ConnectionBuilder<S, R>) -> Self {
+    pub fn new(self_store_id: u64, builder: ConnectionBuilder<S, R>, inspect_network_interval: Duration) -> Self {
         let future_pool = Arc::new(
             yatp::Builder::new(thd_name!("raft-stream"))
                 .max_thread_count(1)
                 .build_future_pool(),
         );
+        let pool: Arc<Mutex<ConnectionPool>> = Arc::default();
+        let inspector = Inspector::new(
+            self_store_id,
+            pool.clone(),
+            Arc::new(Mutex::new(inspect_network_interval)),
+        );
         RaftClient {
             self_store_id,
-            pool: Arc::default(),
+            pool,
             cache: LruCache::with_capacity_and_sample(0, 7),
             need_flush: vec![],
             full_stores: vec![],
             future_pool,
             builder,
             last_hash: (0, 0),
+            inspector,
         }
+    }
+
+    // Helper method to set the inspection interval
+    pub fn set_inspect_network_interval(&self, interval: Duration) {
+        self.inspector.set_inspect_network_interval(interval);
+    }
+
+    // Start the network inspection
+    pub fn start_network_inspection(&self) {
+        let inspector = self.inspector.clone();
+        self.future_pool.spawn(async move {
+            inspector.run().await;
+        });
     }
 
     /// Loads connection from pool.
@@ -1031,7 +1079,7 @@ where
                 return false;
             }
             let need_pause = pool.need_pause(store_id);
-            let conn = pool
+            let conn_info = pool
                 .connections
                 .entry((store_id, conn_id))
                 .or_insert_with(|| {
@@ -1049,10 +1097,17 @@ where
                     };
                     self.future_pool
                         .spawn(start(back_end, conn_id, self.pool.clone()));
-                    queue
+                    Arc::new(Mutex::new(ConnectionInfo {
+                        queue: queue.clone(),
+                        channel: None,
+                    }))
                 })
                 .clone();
-            (conn, pool.connections.len())
+            let queue = {
+                let guard = conn_info.lock().unwrap();
+                guard.queue.clone()
+            };
+            (queue, pool.connections.len())
         };
         self.cache.resize(pool_len);
         self.cache.insert(
@@ -1180,9 +1235,10 @@ where
                 continue;
             }
             let l = self.pool.lock().unwrap();
-            if let Some(q) = l.connections.get(id) {
+            if let Some(conn_info) = l.connections.get(id) {
                 counter += 1;
-                q.notify();
+                let conn_guard = conn_info.lock().unwrap();
+                conn_guard.queue.notify();
             }
         }
         self.need_flush.clear();
@@ -1213,7 +1269,251 @@ where
             future_pool: self.future_pool.clone(),
             builder: self.builder.clone(),
             last_hash: (0, 0),
+            inspector: self.inspector.clone(),
         }
+    }
+}
+
+#[derive(Clone)]
+pub struct Inspector {
+    self_store_id: u64,
+    pool: Arc<Mutex<ConnectionPool>>,
+    inspect_network_interval: Arc<Mutex<Duration>>,
+    // Store shutdown senders for each store inspection task
+    task_handles: Arc<Mutex<HashMap<u64, oneshot::Sender<()>>>>,
+    future_pool: Arc<ThreadPool<TaskCell>>,
+}
+
+impl Inspector {
+    pub fn new(
+        self_store_id: u64,
+        pool: Arc<Mutex<ConnectionPool>>, 
+        inspect_network_interval: Arc<Mutex<Duration>>,
+    ) -> Self {
+        let future_pool = Arc::new(
+            yatp::Builder::new(thd_name!("network-inspector"))
+                .max_thread_count(1)
+                .build_future_pool(),
+        );
+        Inspector {
+            self_store_id,
+            pool,
+            inspect_network_interval,
+            task_handles: Arc::new(Mutex::new(HashMap::default())),
+            future_pool,
+        }
+    }
+
+    /// Main control loop that manages inspection tasks for all stores
+    pub async fn run(&self) {
+        let mut known_stores = HashSet::default();
+        
+        loop {
+            // Check current stores in the pool
+            let current_stores: HashSet<u64> = {
+                let pool_guard = self.pool.lock().unwrap();
+                pool_guard.connections.keys().map(|(store_id, _)| *store_id).collect()
+            };
+            
+            // Find stores that need to be added
+            for store_id in current_stores.difference(&known_stores) {
+                self.start_store_inspection(*store_id).await;
+            }
+            
+            // Find stores that need to be removed
+            for store_id in known_stores.difference(&current_stores) {
+                self.stop_store_inspection(*store_id).await;
+            }
+            
+            known_stores = current_stores;
+            
+            // Wait before next check (use a shorter interval for store management)
+            let check_interval = Duration::from_secs(30);
+            if let Err(e) = GLOBAL_TIMER_HANDLE.delay(Instant::now() + check_interval).compat().await {
+                error!("failed to delay in store inspection management"; "error" => ?e);
+            }
+        }
+    }
+    
+    /// Start inspection task for a specific store
+    async fn start_store_inspection(&self, store_id: u64) {
+        info!("Starting health check inspection for store"; "store_id" => store_id);
+        
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        
+        // Store the shutdown sender
+        {
+            let mut handles = self.task_handles.lock().unwrap();
+            handles.insert(store_id, shutdown_tx);
+        }
+        
+        // Spawn the inspection task using the future pool
+        let pool = self.pool.clone();
+        let inspect_network_interval = self.inspect_network_interval.clone();
+        let self_store_id = self.self_store_id;
+        
+        self.future_pool.spawn(async move {
+            Self::store_inspection_loop(self_store_id, store_id, pool, inspect_network_interval, shutdown_rx).await;
+        });
+    }
+    
+    /// Stop inspection task for a specific store
+    async fn stop_store_inspection(&self, store_id: u64) {
+        info!("Stopping health check inspection for store"; "store_id" => store_id);
+        
+        let shutdown_tx = {
+            let mut handles = self.task_handles.lock().unwrap();
+            handles.remove(&store_id)
+        };
+        
+        if let Some(tx) = shutdown_tx {
+            let _ = tx.send(());
+        }
+    }
+    
+    /// Main inspection loop for a single store
+    async fn store_inspection_loop(
+        self_store_id: u64,
+        store_id: u64,
+        pool: Arc<Mutex<ConnectionPool>>,
+        inspect_network_interval: Arc<Mutex<Duration>>,
+        mut shutdown_rx: oneshot::Receiver<()>,
+    ) {
+        let mut last_check_time = Instant::now();
+        
+        loop {
+            // Check if we should shutdown
+            if let Ok(Some(())) = shutdown_rx.try_recv() {
+                info!("Shutting down health check inspection for store"; "store_id" => store_id);
+                break;
+            }
+            
+            // Read the current interval
+            let interval = {
+                let guard = inspect_network_interval.lock().unwrap();
+                *guard
+            };
+            
+            // Wait for the specified interval
+            if let Err(e) = GLOBAL_TIMER_HANDLE.delay(last_check_time + interval).compat().await {
+                error!("failed to delay in network inspection"; "store_id" => store_id, "error" => ?e);
+                continue;
+            }
+            
+            last_check_time = Instant::now();
+            
+            // Get connections for this specific store
+            let store_connections: Vec<(usize, Arc<Mutex<ConnectionInfo>>)> = {
+                let pool_guard = pool.lock().unwrap();
+                pool_guard.connections
+                    .iter()
+                    .filter_map(|((sid, conn_id), conn_info)| {
+                        if *sid == store_id {
+                            Some((*conn_id, conn_info.clone()))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            };
+            
+            // If no connections for this store, continue
+            if store_connections.is_empty() {
+                continue;
+            }
+            
+            // Perform health check for each connection of this store
+            for (conn_id, conn_info) in store_connections {
+                // Extract channel without holding the lock across await
+                let channel_opt = {
+                    let conn_guard = conn_info.lock().unwrap();
+                    
+                    // Skip if the connection is not established
+                    if conn_guard.queue.conn_state.load(Ordering::SeqCst) != ConnState::Established as u8 {
+                        continue;
+                    }
+                    
+                    // Get the channel if available
+                    conn_guard.channel.clone()
+                };
+                
+                if let Some(channel) = channel_opt {
+                    Self::perform_health_check(self_store_id, store_id, conn_id, channel).await;
+                }
+            }
+        }
+    }
+    
+    async fn perform_health_check(self_store_id: u64, store_id: u64, conn_id: usize, channel: Channel) {
+        let start_time = Instant::now();
+        
+        let health_client = HealthClient::new(channel);
+        
+        // Create health check request
+        let mut req = grpcio_health::proto::HealthCheckRequest::new();
+        req.set_service("".to_string()); // Empty service name for overall health
+        
+        match health_client.check_async(&req) {
+            Ok(resp_future) => {
+                match resp_future.await {
+                    Ok(response) => {
+                        let elapsed = start_time.elapsed();
+                        let status = response.get_status();
+                        
+                        HEALTH_CHECK_DURATION_HISTOGRAM
+                            .with_label_values(&[&self_store_id.to_string(), &store_id.to_string()])
+                            .observe(duration_to_sec(elapsed));
+                        
+                        HEALTH_CHECK_STATUS_COUNTER
+                            .with_label_values(&[&self_store_id.to_string(), &store_id.to_string(), &format!("{:?}", status)])
+                            .inc();
+                        
+                        debug!(
+                            "Health check completed"; 
+                            "self_store_id" => self_store_id,
+                            "store_id" => store_id,
+                            "conn_id" => conn_id,
+                            "status" => ?status,
+                            "duration" => ?elapsed
+                        );
+                    }
+                    Err(e) => {
+                        let elapsed = start_time.elapsed();
+                        warn!(
+                            "Health check failed"; 
+                            "self_store_id" => self_store_id,
+                            "store_id" => store_id,
+                            "conn_id" => conn_id,
+                            "error" => ?e,
+                            "duration" => ?elapsed
+                        );
+                        
+                        HEALTH_CHECK_DURATION_HISTOGRAM
+                            .with_label_values(&[&self_store_id.to_string(), &store_id.to_string()])
+                            .observe(duration_to_sec(elapsed));
+                        
+                        HEALTH_CHECK_STATUS_COUNTER
+                            .with_label_values(&[&self_store_id.to_string(), &store_id.to_string(), "error"])
+                            .inc();
+                    }
+                }
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to create health check request"; 
+                    "self_store_id" => self_store_id,
+                    "store_id" => store_id,
+                    "conn_id" => conn_id,
+                    "error" => ?e
+                );
+            }
+        }
+    }
+    
+    // Helper method to set the inspection interval
+    pub fn set_inspect_network_interval(&self, interval: Duration) {
+        let mut guard = self.inspect_network_interval.lock().unwrap();
+        *guard = interval;
     }
 }
 
