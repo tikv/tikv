@@ -726,8 +726,9 @@ where
             gc_msg.set_is_tombstone(true);
         }
         if let Err(e) = self.trans.send(gc_msg) {
-            error!(?e;
+            warn!(
                 "send gc message failed";
+                "err" => ?e,
                 "region_id" => region_id,
                 "to_peer_id" => ?from_peer.get_id(),
                 "to_peer_store_id" => ?from_peer.get_store_id(),
@@ -743,7 +744,8 @@ struct Store {
     start_time: Option<Timespec>,
     consistency_check_time: HashMap<u64, Instant>,
     store_reachability: HashMap<u64, StoreReachability>,
-    force_compact_rotation_offset: usize,
+    // Track last_index for each region to calculate growth rate
+    region_last_indexes: HashMap<u64, u64>,
 }
 
 struct StoreReachability {
@@ -772,7 +774,7 @@ where
                 start_time: None,
                 consistency_check_time: HashMap::default(),
                 store_reachability: HashMap::default(),
-                force_compact_rotation_offset: 0,
+                region_last_indexes: HashMap::default(),
             },
             receiver: rx,
         });
@@ -1701,7 +1703,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
     ) -> Result<()> {
         assert!(self.workers.is_none());
         let raft_clone_for_purge = engines.raft.clone();
-        let router_clone_for_purge = self.router();
+        // let router_clone_for_purge = self.router();
         // TODO: we can get cluster meta regularly too later.
         let purge_worker = if engines.raft.need_manual_purge()
             && !cfg.value().raft_engine_purge_interval.0.is_zero()
@@ -1710,15 +1712,15 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             worker.spawn_interval_task(cfg.value().raft_engine_purge_interval.0, move || {
                 let _guard = WithIoType::new(IoType::RewriteLog);
                 match raft_clone_for_purge.manual_purge() {
-                    Ok(regions) => {
-                        for region_id in regions {
-                            let _ = router_clone_for_purge.send(
-                                region_id,
-                                PeerMsg::CasualMessage(Box::new(
-                                    CasualMessage::ForceCompactRaftLogs,
-                                )),
-                            );
-                        }
+                    Ok(_) => {
+                        // for region_id in regions {
+                        //     let _ = router_clone_for_purge.send(
+                        //         region_id,
+                        //         PeerMsg::CasualMessage(Box::new(
+                        //             CasualMessage::ForceCompactRaftLogs,
+                        //         )),
+                        //     );
+                        // }
                     }
                     Err(e) => {
                         warn!("purge expired files"; "err" => %e);
@@ -2201,8 +2203,9 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
                     extra_msg.set_type(ExtraMessageType::MsgCheckStalePeerResponse);
                     extra_msg.set_check_peers(region.get_peers().into());
                     if let Err(e) = self.ctx.trans.send(send_msg) {
-                        error!(?e;
+                        warn!(
                             "send check stale peer response message failed";
+                            "err" => ?e,
                             "region_id" => region_id,
                         );
                     }
@@ -2283,7 +2286,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         }
 
         if !msg.has_region_epoch() {
-            error!(
+            warn!(
                 "missing epoch in raft message, ignore it";
                 "region_id" => region_id,
             );
@@ -3146,21 +3149,45 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
             0
         };
 
-        let send_count = std::cmp::min(base_count + additional_count, total_regions);
+        let send_count = std::cmp::min(base_count + additional_count, total_regions / 4);
 
-        // Use rotating pattern to select regions with stored offset
-        let start_offset = self.fsm.store.force_compact_rotation_offset;
-        let end_offset = std::cmp::min(start_offset + send_count, total_regions);
+        // Calculate last_index growth for each region to identify hot regions
+        let mut regions_with_growth = Vec::new();
 
-        // Update the offset for next time
-        self.fsm.store.force_compact_rotation_offset = if end_offset >= total_regions {
-            0 // Wrap around to the beginning
-        } else {
-            end_offset
-        };
+        for &region_id in &all_regions {
+            // Get current last_index from raft engine
+            let current_last_index = match self.ctx.engines.raft.get_raft_state(region_id) {
+                Ok(Some(raft_state)) => raft_state.get_last_index(),
+                Ok(None) => 0, // Region doesn't exist in raft engine
+                Err(_) => 0,   // Error getting raft state
+            };
 
-        for i in start_offset..end_offset {
-            let region_id = all_regions[i];
+            // Get the previous last_index from our tracking
+            let previous_last_index = self
+                .fsm
+                .store
+                .region_last_indexes
+                .get(&region_id)
+                .unwrap_or(&0);
+
+            // Calculate growth
+            let growth = current_last_index.saturating_sub(*previous_last_index);
+
+            // Update our tracking
+            self.fsm
+                .store
+                .region_last_indexes
+                .insert(region_id, current_last_index);
+
+            regions_with_growth.push((region_id, growth));
+        }
+
+        // Sort regions by growth score in descending order (hottest first)
+        regions_with_growth.sort_by(|a, b| b.1.cmp(&a.1));
+
+        // Send force compact to the hottest regions
+        for i in 0..send_count {
+            let region_id = regions_with_growth[i].0;
             let _ = self.ctx.router.send(
                 region_id,
                 PeerMsg::CasualMessage(Box::new(CasualMessage::ForceCompactRaftLogs)),
@@ -3294,9 +3321,10 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
 
     fn on_cleanup_import_sst_tick(&mut self) {
         if let Err(e) = self.on_cleanup_import_sst() {
-            error!(?e;
+            warn!(
                 "cleanup import sst failed";
                 "store_id" => self.fsm.store.id,
+                "err" => ?e,
             );
         }
         self.register_cleanup_import_sst_tick();
@@ -3514,10 +3542,10 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use engine_rocks::{RangeOffsets, RangeProperties, RocksCompactedEvent};
     use engine_traits::CompactedEvent;
-
-    use super::*;
 
     #[test]
     fn test_calc_region_declined_bytes() {
@@ -3546,6 +3574,8 @@ mod tests {
                 ),
             ],
         };
+        let (prop_start_key, prop_end_key) =
+            (prop.smallest_key().unwrap(), prop.largest_key().unwrap());
         let event = RocksCompactedEvent {
             cf: "default".to_owned(),
             output_level: 3,
@@ -3556,6 +3586,8 @@ mod tests {
             input_props: vec![prop],
             output_props: vec![],
         };
+        let (start_key, end_key) = event.get_key_range();
+        assert_eq!((start_key, end_key), (prop_start_key, prop_end_key));
 
         let mut region_ranges = BTreeMap::new();
         region_ranges.insert(b"a".to_vec(), 1);

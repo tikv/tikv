@@ -1208,6 +1208,7 @@ where
                             &mut snap_updated,
                             last_valid_ts,
                         ) {
+                            fail_point!("reading_from_follower_read_cache");
                             TLS_LOCAL_READ_METRICS.with(|m| {
                                 m.borrow_mut().local_executed_follower_read_requests.inc()
                             });

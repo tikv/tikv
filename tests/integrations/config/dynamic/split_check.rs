@@ -32,10 +32,10 @@ fn setup(
 ) -> (ConfigController, LazyWorker<Task<RocksEngine>>) {
     let (router, _) = sync_channel(1);
     let runner = Runner::new(
-        None,
         engine,
         router.clone(),
         CoprocessorHost::new(router, cfg.coprocessor.clone()),
+        None,
     );
     let share_worker = Worker::new("split-check-config");
     let mut worker = share_worker.lazy_build("split-check-config");

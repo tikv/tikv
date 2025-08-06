@@ -371,11 +371,19 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
         let start_time = Instant::now();
         let mut processed_count = 0;
         let total_candidates = candidates.len();
+        let check_interval = config.auto_compaction.check_interval.0;
         fail_point!("gc_worker_auto_compaction_start_compacting");
 
         for (index, candidate) in candidates.into_iter().enumerate() {
             if self.check_stopped() {
                 return None; // Stopped
+            }
+
+            // Check if we've exceeded the check interval, return to start next round
+            let elapsed = start_time.elapsed();
+            if elapsed >= check_interval {
+                debug!("check interval exceeded, returning to start next round");
+                return Some(elapsed);
             }
 
             // Update pending candidates gauge (remaining candidates)

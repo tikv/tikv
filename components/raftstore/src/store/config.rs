@@ -1119,7 +1119,10 @@ impl Config {
             .set(self.raft_engine_memory_limit.0 as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_engine_memory_high_water_limit_duration"])
-            .set(self.raft_engine_memory_high_water_limit_duration.as_secs_f64());
+            .set(
+                self.raft_engine_memory_high_water_limit_duration
+                    .as_secs_f64(),
+            );
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_log_gc_size_limit"])
             .set(self.raft_log_gc_size_limit.unwrap_or_default().0 as f64);

@@ -137,6 +137,10 @@ impl RocksCompactedEvent {
 }
 
 impl CompactedEvent for RocksCompactedEvent {
+    fn get_key_range(&self) -> (Vec<u8>, Vec<u8>) {
+        (self.start_key.clone(), self.end_key.clone())
+    }
+
     fn total_bytes_declined(&self) -> u64 {
         self.total_input_bytes
             .saturating_sub(self.total_output_bytes)

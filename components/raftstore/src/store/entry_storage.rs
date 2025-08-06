@@ -7,6 +7,7 @@
 use std::{
     cell::{Cell, RefCell},
     cmp,
+    cmp::Ordering::*,
     collections::VecDeque,
     mem,
     ops::Range,
@@ -399,6 +400,130 @@ impl Drop for EntryCache {
     }
 }
 
+/// A cache that maintains term information for recently updated Raft log
+/// entries.
+///
+/// This cache optimizes term lookups by storing term-to-index mappings for
+/// recent entries. Each cache entry contains:
+/// - term: The term number of a sequence of entries
+/// - start_index: The start raft log index that shares this term
+///
+/// The cache maintains entries in monotonically increasing order by term,
+/// allowing quick lookups of terms for any given log index. The small fixed
+/// capacity helps keep memory overhead minimal while caching the most relevant
+/// term information.
+struct TermCache {
+    cache: VecDeque<(u64, u64)>, // (term, start_index)
+    capacity: usize,
+}
+
+impl Default for TermCache {
+    fn default() -> Self {
+        TermCache {
+            cache: Default::default(),
+            capacity: 8, /* 8 is enough for the recent updated terms.
+                          * Small capacity will make the extra memory
+                          * cost negligible. */
+        }
+    }
+}
+
+impl TermCache {
+    fn append(&mut self, index: u64, term: u64) {
+        // Check if we can update an existing entry or insert into the cache
+        if let Some(first_term) = self.cache.front().map(|(first_term, _)| *first_term) {
+            match first_term.cmp(&(term + 1)) {
+                Greater => {
+                    // Skip terms with gaps, as they represent stale/unfresh information.
+                    return;
+                }
+                Equal => {
+                    // Insert older term at the front if there's available space.
+                    if self.cache.len() < self.capacity {
+                        self.cache.push_front((term, index));
+                    }
+                    return;
+                }
+                Less => {
+                    // Calculate position of the term in the cache (terms are stored sequentially)
+                    let pos = (term - first_term) as usize;
+                    if pos < self.cache.len() {
+                        let (cached_term, cached_start_idx) = self.cache[pos];
+                        assert_eq!(cached_term, term);
+
+                        // Update start index only if the new index is smaller (extends the term
+                        // range)
+                        if cached_start_idx > index {
+                            self.cache[pos].1 = index;
+                        }
+                        return;
+                    } else if self.cache.back().unwrap().0 + 1 < term {
+                        // Detected a term jump indicating potential network partition.
+                        // Clear the cache to prevent serving stale term information.
+                        self.cache.clear();
+                    }
+                }
+            }
+        }
+        // New term.
+        self.cache.push_back((term, index));
+        if self.cache.len() > self.capacity {
+            self.cache.pop_front();
+        }
+    }
+
+    /// Push entries to the left of the cache.
+    #[cfg(test)]
+    fn prepend(&mut self, entries: &[Entry]) {
+        for e in entries.iter().rev() {
+            self.append(e.get_index(), e.get_term());
+            if self.cache.len() == self.capacity {
+                // NOTE: no need to check the previous term as the cached
+                // terms are fresh and the term is not allowed to decrease.
+                break;
+            }
+        }
+    }
+
+    /// Compact all terms whose start_index are less than the given index.
+    fn compact_to(&mut self, index: u64) {
+        // This operation has low cost.
+        // Since consistency and safety have been assured, compaction of the
+        // `TermCache` is only called when `UnsafeForceCompact` is triggered.
+        // Meanwhile, the capacity of `TermCache` is limited to 8, so the
+        // traversal cost is low.
+        self.cache.retain(|(_, start_idx)| *start_idx >= index);
+    }
+
+    /// Return the term of the given index.
+    ///
+    /// If the term is not found in the cache, return None.
+    fn entry(&self, idx: u64) -> Option<u64> {
+        if self.cache.is_empty() {
+            return None;
+        }
+        let (_, start_idx) = self.cache.front().unwrap();
+        if idx < *start_idx {
+            return None;
+        }
+        let (end_term, end_idx) = self.cache.back().unwrap();
+        if idx >= *end_idx {
+            return Some(*end_term);
+        }
+        // Traverse the cache in reverse order.
+        // The cost is low since the cache is small and the term is likely to be
+        // found in the recent terms.
+        let mut candidate = None;
+        for (term, start_index) in self.cache.iter().rev() {
+            candidate = Some(*term);
+            if idx >= *start_index {
+                break;
+            }
+        }
+        candidate
+    }
+}
+
 #[derive(Debug)]
 pub enum RaftlogFetchState {
     // The Instant records the start time of the fetching.
@@ -648,6 +773,7 @@ pub struct EntryStorage<EK: KvEngine, ER> {
     region_id: u64,
     peer_id: u64,
     raft_engine: ER,
+    term_cache: TermCache,
     cache: EntryCache,
     raft_state: RaftLocalState,
     apply_state: RaftApplyState,
@@ -685,6 +811,7 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
             region_id: region.id,
             peer_id,
             raft_engine,
+            term_cache: TermCache::default(),
             cache: EntryCache::default(),
             raft_state,
             apply_state,
@@ -979,6 +1106,10 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
         if let Some(e) = self.cache.entry(idx) {
             Ok(e.get_term())
         } else {
+            // Try to fetch it from caching terms.
+            if let Some(term) = self.term_cache.entry(idx) {
+                return Ok(term);
+            }
             let _timer = self.io_read_raft_term.start_timer();
             Ok(self
                 .raft_engine
@@ -1140,7 +1271,7 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
             Ok(_) => {
                 // This should not happen, but it's OK :)
                 debug_assert!(false, "entries should not have been fetched");
-                error!("entries are fetched unexpectedly during warming up");
+                warn!("entries are fetched unexpectedly during warming up");
                 None
             }
             Err(raft::Error::Store(raft::StorageError::LogTemporarilyUnavailable)) => {
@@ -1187,7 +1318,7 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
                         // FIXME: the assertion below doesn't hold.
                         // assert!(is_valid, "the warmup range should still be valid");
                         if !is_valid {
-                            error!(
+                            warn!(
                                 "unexpected warmup state";
                                 "region_id" => self.region_id,
                                 "peer_id" => self.peer_id,
@@ -1280,8 +1411,19 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
         self.cache.trace_cached_entries(entries);
     }
 
+    #[inline]
+    pub fn compact_term_cache(&mut self, index: u64) {
+        self.term_cache.compact_to(index);
+    }
+
+    #[inline]
+    pub fn update_term_cache(&mut self, index: u64, term: u64) {
+        self.term_cache.append(index, term);
+    }
+
     pub fn clear(&mut self) {
         self.cache = EntryCache::default();
+        self.term_cache = TermCache::default();
     }
 
     pub fn read_scheduler(&self) -> Scheduler<ReadTask<EK>> {
@@ -1425,6 +1567,137 @@ pub mod tests {
         }
         let res = panic_hook::recover_safe(|| cache.entry(7));
         res.unwrap_err();
+    }
+
+    #[test]
+    fn test_storage_term_cache() {
+        // Normal
+        {
+            let mut cache = TermCache::default();
+            assert_eq!(cache.entry(0), None);
+            assert_eq!(cache.entry(123), None);
+            // Append entries
+            cache.append(1, 1);
+            cache.append(2, 1);
+            cache.append(3, 2);
+            cache.append(4, 2);
+            cache.append(5, 2);
+            cache.append(4, 2); // skip as rewrite with old idx
+            cache.append(3, 2); // skip as rewrite with old idx
+            for i in (1..=10).rev() {
+                cache.append(i + 5, 3);
+            }
+            for i in 1..=5 {
+                cache.append(i + 15, 3 + i);
+            }
+            assert_eq!(cache.entry(0), None);
+            assert_eq!(cache.entry(20), Some(8));
+            assert_eq!(cache.entry(21), Some(8));
+            // index [1..2] => term 1
+            assert_eq!(cache.entry(1), Some(1));
+            assert_eq!(cache.entry(2), Some(1));
+            // index [3..5] => term 2
+            assert_eq!(cache.entry(3), Some(2));
+            assert_eq!(cache.entry(4), Some(2));
+            assert_eq!(cache.entry(5), Some(2));
+            // index [6..15] => term 3
+            assert_eq!(cache.entry(6), Some(3));
+            assert_eq!(cache.entry(15), Some(3));
+            // index [16..20] => term 4..8
+            for i in 16..=20 {
+                assert_eq!(cache.entry(i), Some(i - 12));
+            }
+        }
+        // Prepend sequentail entries & Compact
+        {
+            let mut cache = TermCache::default();
+            cache.append(20, 6);
+            for i in 1..=5 {
+                cache.append(20 + i * 5, i + 6);
+            }
+            let ents = vec![
+                new_entry(2, 2),
+                new_entry(3, 3),
+                new_entry(4, 4),
+                new_entry(5, 5),
+                new_entry(6, 6),
+            ];
+            cache.prepend(&ents);
+            assert_eq!(cache.entry(46), Some(11));
+            assert_eq!(cache.entry(3), None);
+            assert_eq!(cache.entry(4), Some(4));
+            assert_eq!(cache.entry(5), Some(5));
+            assert_eq!(cache.entry(15), Some(6));
+            assert_eq!(cache.entry(39), Some(9));
+            assert_eq!(cache.entry(44), Some(10));
+            // compact to (index = 40, term = 10)
+            cache.compact_to(40);
+            assert_eq!(cache.cache.len(), 2);
+            assert_eq!(cache.entry(39), None);
+            assert_eq!(cache.entry(40), Some(10));
+            // compact to (index = 45, term = 11)
+            cache.compact_to(45);
+            assert_eq!(cache.cache.len(), 1);
+            cache.append(48, 12);
+            assert_eq!(cache.cache.len(), 2);
+            assert_eq!(cache.entry(45), Some(11));
+            cache.compact_to(46);
+            assert_eq!(cache.entry(45), None);
+            // Append reversely, the first term should be cleared.
+            for i in (12..20).rev() {
+                cache.append(48 + i - 11, i);
+            }
+            assert_eq!(cache.entry(48), None);
+            assert_eq!(cache.entry(49), Some(12));
+            assert_eq!(cache.entry(56), Some(19));
+            assert_eq!(cache.entry(57), Some(19));
+        }
+        // Abnormal cases: index hopping
+        {
+            let mut cache = TermCache::default();
+            cache.append(5, 5);
+            cache.append(6, 6);
+            cache.append(7, 6);
+            cache.append(8, 6);
+            assert_eq!(cache.cache.len(), 2);
+            assert_eq!(cache.entry(8), Some(6));
+            cache.append(6, 8);
+            assert_eq!(cache.cache.len(), 1);
+            assert_eq!(cache.entry(8), Some(8));
+            drop(cache);
+
+            let mut cache = TermCache::default();
+            cache.append(6, 3);
+            cache.append(7, 5); // index hopping, clear the cache
+            assert_eq!(cache.cache.len(), 1);
+            assert_eq!(cache.entry(6), None);
+            assert_eq!(cache.entry(7), Some(5));
+            cache.append(5, 4);
+            cache.append(10, 6);
+            assert_eq!(cache.cache.len(), 3);
+        }
+        // Abnormal cases: prepend hopping index
+        {
+            let mut cache = TermCache::default();
+            let ents = vec![
+                new_entry(10, 5),
+                new_entry(15, 6),
+                new_entry(18, 7),
+                // multi election timeout
+                new_entry(20, 10),
+                new_entry(25, 11),
+            ];
+            cache.prepend(&ents);
+            assert_eq!(cache.cache.len(), 2);
+            assert_eq!(cache.entry(18), None);
+            assert_eq!(cache.entry(20), Some(10));
+            cache.append(30, 12);
+            assert_eq!(cache.cache.len(), 3);
+            cache.append(19, 9);
+            assert_eq!(cache.cache.len(), 4);
+            assert_eq!(cache.entry(18), None);
+            assert_eq!(cache.entry(19), Some(9));
+        }
     }
 
     #[test]
