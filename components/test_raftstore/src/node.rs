@@ -290,6 +290,7 @@ impl Simulator for NodeCluster {
 
         // Create coprocessor.
         let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
+        let region_info_accessor = raftstore::RegionInfoAccessor::new(&mut coprocessor_host);
 
         if let Some(f) = self.post_create_coprocessor_host.as_ref() {
             f(node_id, &mut coprocessor_host);
@@ -314,10 +315,10 @@ impl Simulator for NodeCluster {
         let cfg_controller = ConfigController::new(cfg.tikv.clone());
 
         let split_check_runner = SplitCheckRunner::new(
-            Some(store_meta.clone()),
             engines.kv.clone(),
             router.clone(),
             coprocessor_host.clone(),
+            Some(Arc::new(region_info_accessor)),
         );
         let split_scheduler = bg_worker.start("test-split-check", split_check_runner);
         cfg_controller.register(
