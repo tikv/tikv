@@ -10277,7 +10277,7 @@ def SlowTrendStatistics() -> RowPanel:
             graph_panel(
                 title="Network Latency between Stores",
                 description="The network latency between stores.",
-                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS),
+                yaxes=yaxes(left_format=UNITS.SECONDS),
                 targets=[
                     target(
                         expr=expr_histogram_quantile(

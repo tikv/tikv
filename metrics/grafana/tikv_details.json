@@ -63601,7 +63601,7 @@
           "yaxes": [
             {
               "decimals": null,
-              "format": "\u00b5s",
+              "format": "s",
               "label": null,
               "logBase": 1,
               "max": null,
