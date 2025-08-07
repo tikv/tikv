@@ -4163,6 +4163,8 @@ where
                 "err" => %e,
             );
         }
+        // TODO: construct a ClearTask::Destroy {...}, and send it to a background
+        // worker.
         if let Err(e) = self.fsm.peer.destroy(
             &self.ctx.engines,
             &mut self.ctx.raft_perf_context,

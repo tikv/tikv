@@ -15,7 +15,8 @@ use std::{
 };
 
 use engine_traits::{
-    CF_LOCK, CF_RAFT, DeleteStrategy, KvEngine, Mutable, Range, WriteBatch, WriteOptions,
+    CF_LOCK, CF_RAFT, DeleteStrategy, Engines, KvEngine, Mutable, RaftEngine, Range, WriteBatch,
+    WriteOptions,
 };
 use fail::fail_point;
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
@@ -216,9 +217,10 @@ impl PendingDeleteRanges {
     }
 }
 
-pub struct Runner<EK, R>
+pub struct Runner<EK, ER, R>
 where
     EK: KvEngine,
+    ER: RaftEngine,
 {
     batch_size: usize,
     use_delete_range: bool,
@@ -240,24 +242,25 @@ where
     // whenever we can. Errors while processing them can be ignored.
     pending_delete_ranges: PendingDeleteRanges,
 
-    engine: EK,
+    engines: Engines<EK, ER>,
     mgr: SnapManager,
     coprocessor_host: CoprocessorHost<EK>,
     router: R,
 }
 
-impl<EK, R> Runner<EK, R>
+impl<EK, ER, R> Runner<EK, ER, R>
 where
     EK: KvEngine,
+    ER: RaftEngine,
     R: CasualRouter<EK>,
 {
     pub fn new(
-        engine: EK,
+        engines: Engines<EK, ER>,
         mgr: SnapManager,
         cfg: Arc<VersionTrack<Config>>,
         coprocessor_host: CoprocessorHost<EK>,
         router: R,
-    ) -> Runner<EK, R> {
+    ) -> Runner<EK, ER, R> {
         Runner {
             batch_size: cfg.value().snap_apply_batch_size.0 as usize,
             use_delete_range: cfg.value().use_delete_range,
@@ -269,7 +272,7 @@ where
             clean_stale_ranges_tick: cfg.value().clean_stale_ranges_tick,
             pending_applies: VecDeque::new(),
             pending_delete_ranges: PendingDeleteRanges::default(),
-            engine,
+            engines,
             mgr,
             coprocessor_host,
             router,
@@ -279,7 +282,7 @@ where
     fn region_state(&self, region_id: u64) -> Result<RegionLocalState> {
         let region_key = keys::region_state_key(region_id);
         let region_state: RegionLocalState =
-            match box_try!(self.engine.get_msg_cf(CF_RAFT, &region_key)) {
+            match box_try!(self.engines.kv.get_msg_cf(CF_RAFT, &region_key)) {
                 Some(state) => state,
                 None => {
                     return Err(box_err!(
@@ -294,7 +297,7 @@ where
     fn apply_state(&self, region_id: u64) -> Result<RaftApplyState> {
         let state_key = keys::apply_state_key(region_id);
         let apply_state: RaftApplyState =
-            match box_try!(self.engine.get_msg_cf(CF_RAFT, &state_key)) {
+            match box_try!(self.engines.kv.get_msg_cf(CF_RAFT, &state_key)) {
                 Some(state) => state,
                 None => {
                     return Err(box_err!(
@@ -341,7 +344,7 @@ where
         check_abort(&abort)?;
         let timer = Instant::now();
         let options = ApplyOptions {
-            db: self.engine.clone(),
+            db: self.engines.kv.clone(),
             region: region.clone(),
             abort: Arc::clone(&abort),
             write_batch_size: self.batch_size,
@@ -356,7 +359,7 @@ where
         // Delete snapshot state and assure the relative region state and snapshot state
         // is updated and flushed into kvdb.
         region_state.set_state(PeerState::Normal);
-        let mut wb = self.engine.write_batch();
+        let mut wb = self.engines.kv.write_batch();
         box_try!(wb.put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &region_state));
         box_try!(wb.delete_cf(CF_RAFT, &keys::snapshot_raft_state_key(region_id)));
         let mut wopts = WriteOptions::default();
@@ -446,7 +449,8 @@ where
         }
         CLEAN_COUNTER_VEC.with_label_values(&["overlap"]).inc();
         let oldest_sequence = self
-            .engine
+            .engines
+            .kv
             .get_oldest_snapshot_sequence_number()
             .unwrap_or(u64::MAX);
         let df_ranges: Vec<_> = overlap_ranges
@@ -473,7 +477,8 @@ where
                 }
             })
             .collect();
-        self.engine
+        self.engines
+            .kv
             .delete_ranges_cfs(
                 &WriteOptions::default(),
                 DeleteStrategy::DeleteFiles,
@@ -516,7 +521,7 @@ where
             "start_key" => log_wrappers::Value::key(&start_key),
             "end_key" => log_wrappers::Value::key(&end_key),
         );
-        let seq = self.engine.get_latest_sequence_number();
+        let seq = self.engines.kv.get_latest_sequence_number();
         self.pending_delete_ranges
             .insert(region_id, start_key, end_key, seq);
     }
@@ -533,7 +538,8 @@ where
             return;
         }
         let oldest_sequence = self
-            .engine
+            .engines
+            .kv
             .get_oldest_snapshot_sequence_number()
             .unwrap_or(u64::MAX);
         let mut region_ranges: Vec<(u64, Vec<u8>, Vec<u8>)> = self
@@ -557,7 +563,8 @@ where
             })
             .collect();
         // Clear sst files belonging to the given range directly.
-        self.engine
+        self.engines
+            .kv
             .delete_ranges_cfs(
                 &WriteOptions::default(),
                 DeleteStrategy::DeleteFiles,
@@ -575,7 +582,8 @@ where
         }
         // Clear related blob files belonging to the given range directly after clearing
         // all stale keys in sst files.
-        self.engine
+        self.engines
+            .kv
             .delete_ranges_cfs(
                 &WriteOptions::default(),
                 DeleteStrategy::DeleteBlobs,
@@ -603,7 +611,12 @@ where
             if plain_file_used(cf) {
                 continue;
             }
-            if self.engine.ingest_maybe_slowdown_writes(cf, 0).expect("cf") {
+            if self
+                .engines
+                .kv
+                .ingest_maybe_slowdown_writes(cf, 0)
+                .expect("cf")
+            {
                 return true;
             }
         }
@@ -617,7 +630,7 @@ where
         allow_write_during_ingestion: bool,
     ) -> Result<()> {
         let wopts = WriteOptions::default();
-        for cf in self.engine.cf_names() {
+        for cf in self.engines.kv.cf_names() {
             // CF_LOCK usually contains fewer keys than other CFs, so we delete them by key.
             let (strategy, observer) = if cf == CF_LOCK {
                 (
@@ -650,7 +663,11 @@ where
                 )
             };
             let start = Instant::now();
-            box_try!(self.engine.delete_ranges_cf(&wopts, cf, strategy, ranges));
+            box_try!(
+                self.engines
+                    .kv
+                    .delete_ranges_cf(&wopts, cf, strategy, ranges)
+            );
             observer.observe(start.saturating_elapsed_secs());
         }
 
@@ -712,7 +729,7 @@ where
             }
             if let Some(Task::Apply { region_id, .. }) = self.pending_applies.front() {
                 fail_point!("handle_new_pending_applies", |_| {});
-                if !self.engine.can_apply_snapshot(
+                if !self.engines.kv.can_apply_snapshot(
                     is_timeout,
                     new_batch,
                     *region_id,
@@ -741,9 +758,10 @@ where
     }
 }
 
-impl<EK, R> Runnable for Runner<EK, R>
+impl<EK, ER, R> Runnable for Runner<EK, ER, R>
 where
     EK: KvEngine,
+    ER: RaftEngine,
     R: CasualRouter<EK> + Send + Clone + 'static,
 {
     type Task = Task;
@@ -781,9 +799,10 @@ where
     }
 }
 
-impl<EK, R> RunnableWithTimer for Runner<EK, R>
+impl<EK, ER, R> RunnableWithTimer for Runner<EK, ER, R>
 where
     EK: KvEngine,
+    ER: RaftEngine,
     R: CasualRouter<EK> + Send + Clone + 'static,
 {
     fn on_timeout(&mut self) {
@@ -952,7 +971,7 @@ pub(crate) mod tests {
         let (router, _) = mpsc::sync_channel(11);
         let cfg = make_raftstore_cfg(false);
         let mut runner = RegionRunner::new(
-            engine.kv.clone(),
+            engine.clone(),
             mgr,
             cfg,
             CoprocessorHost::<KvTestEngine>::default(),
@@ -1059,7 +1078,7 @@ pub(crate) mod tests {
         let (router, receiver) = mpsc::sync_channel(1);
         let cfg = make_raftstore_cfg(true);
         let runner = RegionRunner::new(
-            engine.kv.clone(),
+            engine.clone(),
             mgr.clone(),
             cfg.clone(),
             host,

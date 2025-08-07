@@ -1766,7 +1766,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         );
 
         let region_runner = RegionRunner::new(
-            engines.kv.clone(),
+            engines.clone(),
             mgr.clone(),
             cfg.clone(),
             workers.coprocessor_host.clone(),
