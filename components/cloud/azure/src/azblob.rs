@@ -179,6 +179,46 @@ impl Config {
         })
     }
 
+    /// Determine the cloud location based on the configured endpoint.
+    pub fn get_location(
+        &self,
+        account_name: impl Into<String>,
+        credentials: impl Into<StorageCredentials>,
+    ) -> azure_storage::CloudLocation {
+        let account = account_name.into();
+        let creds = credentials.into();
+
+        match &self.bucket.endpoint {
+            None => {
+                // Default to public region
+                azure_storage::CloudLocation::Public {
+                    account,
+                    credentials: creds,
+                }
+            }
+            Some(endpoint) => {
+                let endpoint = endpoint.to_lowercase();
+                if endpoint.contains("chinacloudapi") || endpoint.contains(".core.chinacloud") {
+                    azure_storage::CloudLocation::China {
+                        account,
+                        credentials: creds,
+                    }
+                } else if endpoint.contains("blob.windows.net") {
+                    azure_storage::CloudLocation::Public {
+                        account,
+                        credentials: creds,
+                    }
+                } else {
+                    // Can this custome endpoint handle gov cloud?
+                    azure_storage::CloudLocation::Custom {
+                        uri: endpoint,
+                        credentials: creds,
+                    }
+                }
+            }
+        }
+    }
+
     pub fn get_account_name(&self) -> io::Result<String> {
         if let Some(account_name) = self.account_name.as_ref() {
             Ok(account_name.to_string())
@@ -419,11 +459,10 @@ impl ContainerBuilder for DefaultContainerBuilder {
             })?
             .token;
 
-        let client = BlobServiceClient::new(
-            account_name,
-            StorageCredentials::bearer_token(token.secret()),
-        )
-        .container_client(bucket);
+        let creds = StorageCredentials::bearer_token(token.secret());
+        let client = BlobServiceClient::builder(account_name.clone(), creds.clone())
+            .cloud_location(self.config.get_location(account_name, creds))
+            .container_client(bucket);
         Ok(Arc::new(client))
     }
 }
@@ -442,6 +481,7 @@ impl ContainerBuilder for SharedKeyContainerBuilder {
 type TokenCacheType = Arc<RwLock<Option<(TokenResponse, Arc<ContainerClient>)>>>;
 struct TokenCredContainerBuilder {
     account_name: String,
+    cloud_location: azure_storage::CloudLocation,
     container_name: String,
     token_resource: String,
     token_cred: Arc<ClientSecretCredential>,
@@ -453,12 +493,14 @@ struct TokenCredContainerBuilder {
 impl TokenCredContainerBuilder {
     fn new(
         account_name: String,
+        cloud_location: azure_storage::CloudLocation,
         container_name: String,
         token_resource: String,
         token_cred: Arc<ClientSecretCredential>,
     ) -> Self {
         Self {
             account_name,
+            cloud_location,
             container_name,
             token_resource,
             token_cred,
@@ -530,10 +572,9 @@ impl ContainerBuilder for TokenCredContainerBuilder {
                 .get_token(&self.token_resource)
                 .await
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{:?}", &e)))?;
-            let blob_service = BlobServiceClient::new(
-                self.account_name.clone(),
-                StorageCredentials::BearerToken(token.token.secret().into()),
-            );
+            let creds = StorageCredentials::BearerToken(token.token.secret().into());
+            let blob_service = BlobServiceClient::builder(self.account_name.clone(), creds.clone())
+                .cloud_location(self.cloud_location.clone());
             let storage_client =
                 Arc::new(blob_service.container_client(self.container_name.clone()));
 
@@ -602,7 +643,9 @@ impl AzureStorage {
                 )
             })?;
             let container_client = Arc::new(
-                BlobServiceClient::new(account_name, storage_credentials).container_client(bucket),
+                BlobServiceClient::builder(account_name.clone(), storage_credentials.clone())
+                    .cloud_location(config.get_location(account_name, storage_credentials))
+                    .container_client(bucket),
             );
 
             let client_builder = Arc::new(SharedKeyContainerBuilder { container_client });
@@ -626,7 +669,9 @@ impl AzureStorage {
                     )
                 })?;
             let container_client = Arc::new(
-                BlobServiceClient::new(account_name, storage_credentials).container_client(bucket),
+                BlobServiceClient::builder(account_name.clone(), storage_credentials.clone())
+                    .cloud_location(config.get_location(account_name, storage_credentials))
+                    .container_client(bucket),
             );
 
             let client_builder = Arc::new(SharedKeyContainerBuilder { container_client });
@@ -635,20 +680,34 @@ impl AzureStorage {
                 client_builder,
             })
         } else if let Some(credential_info) = config.credential_info.as_ref() {
-            let token_resource = format!("https://{}.blob.core.windows.net", &account_name);
-            let cred = ClientSecretCredential::new(
+            let cred = Arc::new(ClientSecretCredential::new(
                 new_http_client(),
                 credential_info.tenant_id.clone(),
                 credential_info.client_id.to_string(),
                 credential_info.client_secret.secret().clone(),
                 TokenCredentialOptions::default(),
+            ));
+            let location = config.get_location(
+                account_name.clone(),
+                StorageCredentials::TokenCredential(cred.clone()),
             );
+            let token_resource = match location {
+                azure_storage::CloudLocation::China { ref account, .. } => {
+                    format!("https://{}.blob.core.chinacloudapi.cn", account)
+                }
+                azure_storage::CloudLocation::Custom { ref uri, .. } => {
+                    // Use the custom domain directly
+                    format!("https://{}", uri)
+                }
+                _ => format!("https://{}.blob.core.windows.net", &account_name),
+            };
 
             let client_builder = Arc::new(TokenCredContainerBuilder::new(
-                account_name,
+                account_name.clone(),
+                location,
                 bucket,
                 token_resource,
-                Arc::new(cred),
+                cred,
             ));
             // get token later
             Ok(AzureStorage {
@@ -671,7 +730,9 @@ impl AzureStorage {
                     )
                 })?;
             let container_client = Arc::new(
-                BlobServiceClient::new(account_name, storage_credentials).container_client(bucket),
+                BlobServiceClient::builder(account_name.clone(), storage_credentials.clone())
+                    .cloud_location(config.get_location(account_name, storage_credentials))
+                    .container_client(bucket),
             );
 
             let client_builder = Arc::new(SharedKeyContainerBuilder { container_client });
