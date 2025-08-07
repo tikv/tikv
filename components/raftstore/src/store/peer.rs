@@ -1101,7 +1101,6 @@ where
 
         let persisted_index = peer.raft_group.raft.raft_log.persisted;
         peer.mut_store().update_cache_persisted(persisted_index);
-
         Ok(peer)
     }
 
@@ -3134,6 +3133,13 @@ where
         for entry in committed_entries.iter().rev() {
             // raft meta is very small, can be ignored.
             self.raft_log_size_hint += entry.get_data().len() as u64;
+            // Using per committed entry to update the term cache may slightly reduce
+            // `raft::Storage::term()` query performance for recently appended
+            // indices, but it ensures that the term cache maintains the
+            // integrity and continuity of each term's lifecycle, making it safe
+            // and efficient for access and compaction.
+            self.mut_store()
+                .update_term_cache(entry.get_index(), entry.get_term());
             if lease_to_be_updated {
                 let propose_time = self
                     .proposals
@@ -4259,7 +4265,7 @@ where
                     region_id: self.region_id,
                 };
                 if let Err(e) = poll_ctx.pd_scheduler.schedule(task) {
-                    error!(
+                    warn!(
                         "failed to notify pd";
                         "region_id" => self.region_id,
                         "peer_id" => self.peer_id(),
@@ -5782,7 +5788,7 @@ where
             wait_data_peers: self.wait_data_peers.clone(),
         });
         if let Err(e) = ctx.pd_scheduler.schedule(task) {
-            error!(
+            warn!(
                 "failed to notify pd";
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
@@ -5819,8 +5825,9 @@ where
         send_msg.set_extra_msg(msg);
         send_msg.set_to_peer(to.clone());
         if let Err(e) = trans.send(send_msg) {
-            error!(?e;
+            warn!(
                 "failed to send extra message";
+                "err" => ?e,
                 "type" => ?ty,
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),

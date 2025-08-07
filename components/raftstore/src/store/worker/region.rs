@@ -570,7 +570,7 @@ where
         fail_point!("after_delete_files_in_range", |_| {});
         // Remove all overlapped ranges directly without ingesting.
         if let Err(e) = self.delete_all_in_range(&ranges, true, false) {
-            error!("failed to cleanup stale range"; "err" => %e);
+            warn!("failed to cleanup stale range"; "err" => %e);
             return;
         }
         // Clear related blob files belonging to the given range directly after clearing

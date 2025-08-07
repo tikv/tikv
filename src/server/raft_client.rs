@@ -593,7 +593,13 @@ where
         }
 
         let (sink_err, recv_err) = (res.0.err(), res.1.err());
-        error!("connection aborted"; "store_id" => self.store_id, "sink_error" => ?sink_err, "receiver_err" => ?recv_err, "addr" => %self.sender.addr);
+        warn!(
+            "connection aborted";
+            "store_id" => self.store_id,
+            "sink_error" => ?sink_err,
+            "receiver_err" => ?recv_err,
+            "addr" => %self.sender.addr,
+        );
         if let Some(tx) = self.lifetime.take() {
             let should_fallback = [sink_err, recv_err]
                 .iter()
@@ -868,7 +874,7 @@ async fn start<S, R>(
 
         debug!("connecting to store"; "store_id" => back_end.store_id, "addr" => %addr);
         if !channel.wait_for_connected(backoff_duration).await {
-            error!("wait connect timeout"; "store_id" => back_end.store_id, "addr" => addr);
+            warn!("wait connect timeout"; "store_id" => back_end.store_id, "addr" => addr);
 
             // Clears pending messages to avoid consuming high memory when one node is
             // shutdown.
@@ -912,7 +918,7 @@ async fn start<S, R>(
             }
             // Err(_) should be tx is dropped
             Ok(RaftCallRes::Disconnected) | Err(_) => {
-                error!("connection abort"; "store_id" => back_end.store_id, "addr" => addr);
+                warn!("connection abort"; "store_id" => back_end.store_id, "addr" => addr);
                 REPORT_FAILURE_MSG_COUNTER
                     .with_label_values(&["unreachable", &back_end.store_id.to_string()])
                     .inc_by(1);

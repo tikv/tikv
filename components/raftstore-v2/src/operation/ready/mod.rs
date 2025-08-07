@@ -689,6 +689,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             for entry in committed_entries.iter().rev() {
                 self.compact_log_context_mut()
                     .add_log_size(entry.get_data().len() as u64);
+                // Using per committed entry to update the term cache may slightly reduce
+                // `raft::Storage::term()` query performance for recently appended
+                // indices, but it ensures that the term cache maintains the
+                // integrity and continuity of each term's lifecycle, making it safe
+                // and efficient for access and compaction.
+                self.entry_storage_mut()
+                    .update_term_cache(entry.get_index(), entry.get_term());
                 if update_lease {
                     let propose_time = self
                         .proposals()
