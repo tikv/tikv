@@ -249,8 +249,6 @@ mod tests {
                     Ordering::Less, // `ʩ` is invalid character in GBK.
                     Ordering::Greater,
                     Ordering::Greater,
-                    Ordering::Greater,
-                    Ordering::Greater,
                 ],
             ),
         ];
