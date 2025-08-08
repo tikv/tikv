@@ -26,9 +26,13 @@ fn tmp_engine<P: AsRef<Path>>(path: P) -> RocksEngine {
     .unwrap()
 }
 
-fn setup(cfg: TikvConfig, engine: RocksEngine) -> (ConfigController, LazyWorker<Task>) {
+fn setup(
+    cfg: TikvConfig,
+    engine: RocksEngine,
+) -> (ConfigController, LazyWorker<Task<RocksEngine>>) {
     let (router, _) = sync_channel(1);
     let runner = Runner::new(
+        None,
         engine,
         router.clone(),
         CoprocessorHost::new(router, cfg.coprocessor.clone()),
@@ -46,7 +50,7 @@ fn setup(cfg: TikvConfig, engine: RocksEngine) -> (ConfigController, LazyWorker<
     (cfg_controller, worker)
 }
 
-fn validate<F>(scheduler: &Scheduler<Task>, f: F)
+fn validate<F>(scheduler: &Scheduler<Task<RocksEngine>>, f: F)
 where
     F: FnOnce(&Config) + Send + 'static,
 {
