@@ -1478,7 +1478,7 @@ fn test_force_leader_forward_commit_idx_ignoring_learners() {
     // Make peer on node 4 a learner.
     let peer_on_store4 = find_peer(&region, nodes[3]).unwrap().to_owned();
     // Remove the peer on node 4.
-    pd_client.must_remove_peer(region.get_id(), peer_on_store4.clone());
+    pd_client.must_remove_peer(region.get_id(), peer_on_store4);
     // Add the peer on node 4 as a learner.
     let mut learner_on_store4 = new_peer(nodes[3], pd_client.alloc_id().unwrap());
     learner_on_store4.set_role(metapb::PeerRole::Learner);
