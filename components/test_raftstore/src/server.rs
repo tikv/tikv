@@ -601,8 +601,12 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
         let max_unified_read_pool_thread_count = cfg.readpool.unified.max_thread_count;
         let pessimistic_txn_cfg = cfg.tikv.pessimistic_txn;
 
-        let split_check_runner =
-            SplitCheckRunner::new(engines.kv.clone(), router.clone(), coprocessor_host.clone());
+        let split_check_runner = SplitCheckRunner::new(
+            engines.kv.clone(),
+            router.clone(),
+            coprocessor_host.clone(),
+            Some(Arc::new(region_info_accessor.clone())),
+        );
         let split_check_scheduler = bg_worker.start("split-check", split_check_runner);
         let split_config_manager =
             SplitConfigManager::new(Arc::new(VersionTrack::new(cfg.tikv.split)));

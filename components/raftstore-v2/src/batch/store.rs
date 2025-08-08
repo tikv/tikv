@@ -595,7 +595,7 @@ pub struct Schedulers<EK: KvEngine, ER: RaftEngine> {
     pub refresh_config: Scheduler<RefreshConfigTask>,
 
     // Following is not maintained by raftstore itself.
-    pub split_check: Scheduler<SplitCheckTask>,
+    pub split_check: Scheduler<SplitCheckTask<EK>>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Schedulers<EK, ER> {
@@ -828,6 +828,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
                 tablet_registry.clone(),
                 router.clone(),
                 coprocessor_host.clone(),
+                None,
             ),
         );
 
