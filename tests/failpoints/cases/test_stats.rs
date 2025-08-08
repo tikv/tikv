@@ -6,10 +6,13 @@ use tikv_util::config::*;
 
 #[test]
 fn test_bucket_stats() {
+    // set hibernate_regions to false to prevent region from becoming idle
+    // before bucket information is reported to pd
     let (mut cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
         cluster.cfg.coprocessor.enable_region_bucket = Some(true);
         cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::days(1);
         cluster.cfg.raft_store.report_region_buckets_tick_interval = ReadableDuration::millis(100);
+        cluster.cfg.raft_store.hibernate_regions = false;
     });
 
     let fp = "mock_tick_interval";
