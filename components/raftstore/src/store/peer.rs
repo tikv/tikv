@@ -21,9 +21,7 @@ use codec::{
 };
 use collections::{HashMap, HashSet};
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
-use engine_traits::{
-    CF_LOCK, Engines, KvEngine, PerfContext, RaftEngine, Snapshot, WriteBatch, WriteOptions,
-};
+use engine_traits::{CF_LOCK, Engines, KvEngine, RaftEngine, Snapshot};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use getset::{Getters, MutGetters};
@@ -36,9 +34,7 @@ use kvproto::{
         self, AdminCmdType, AdminResponse, CmdType, CommitMergeRequest, PutRequest, RaftCmdRequest,
         RaftCmdResponse, Request, TransferLeaderRequest, TransferLeaderResponse,
     },
-    raft_serverpb::{
-        ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
-    },
+    raft_serverpb::{ExtraMessage, ExtraMessageType, MergeState, RaftApplyState, RaftMessage},
     replication_modepb::{
         DrAutoSyncState, RegionReplicationState, RegionReplicationStatus, ReplicationMode,
     },
@@ -73,10 +69,7 @@ use super::{
     DestroyPeerJob, LocalReadContext, cmd_resp,
     local_metrics::{IoType, RaftMetrics},
     metrics::*,
-    peer_storage::{
-        CheckApplyingSnapStatus, HandleReadyResult, PeerStorage, RAFT_INIT_LOG_TERM,
-        write_peer_state,
-    },
+    peer_storage::{CheckApplyingSnapStatus, HandleReadyResult, PeerStorage, RAFT_INIT_LOG_TERM},
     read_queue::{ReadIndexQueue, ReadIndexRequest},
     transport::Transport,
     util::{
