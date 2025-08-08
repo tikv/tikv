@@ -339,7 +339,7 @@ pub fn create_local_engine_service(
 
     // init rocksdb / kv db
     let factory =
-        KvEngineFactoryBuilder::new(env.clone(), config, block_cache, key_manager.clone())
+        KvEngineFactoryBuilder::new(env.clone(), config, block_cache, key_manager.clone(), Default::default())
             .lite(true)
             .build();
     let kv_db = match factory.create_shared_db(&config.storage.data_dir) {

@@ -178,6 +178,12 @@ impl RocksEngine {
         self.support_multi_batch_write
     }
 
+    pub fn flush(&self, wait: bool) -> std::result::Result<(), String> {
+        let mut opts = rocksdb::FlushOptions::default();
+        opts.set_wait(wait);
+        self.db.flush(&opts)
+    }
+
     #[cfg(feature = "trace-lifetime")]
     pub fn trace(region_id: u64) -> Vec<String> {
         trace::list(region_id)

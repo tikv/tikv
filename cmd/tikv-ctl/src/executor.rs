@@ -108,7 +108,7 @@ pub fn new_debug_executor(
         .build_shared_rocks_env(key_manager.clone(), None /* io_rate_limiter */)
         .unwrap();
 
-    let factory = KvEngineFactoryBuilder::new(env.clone(), cfg, cache, key_manager.clone())
+    let factory = KvEngineFactoryBuilder::new(env.clone(), cfg, cache, key_manager.clone(), Default::default())
         .lite(true)
         .build();
 

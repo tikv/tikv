@@ -35,17 +35,9 @@ use kvproto::{
 };
 use pd_client::PdClient;
 use raftstore::{
-    Result,
-    coprocessor::{CoprocessorHost, RegionInfoAccessor},
-    errors::Error as RaftError,
-    router::{CdcRaftRouter, LocalReadRouter, RaftStoreRouter, ReadContext, ServerRaftStoreRouter},
-    store::{
-        AutoSplitController, Callback, CheckLeaderRunner, DiskCheckRunner, LocalReader,
-        RegionSnapshot, SnapManager, SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
-        StoreMetaDelegate,
-        fsm::{ApplyRouter, RaftBatchSystem, RaftRouter, store::StoreMeta},
-        msg::RaftCmdExtraOpts,
-    },
+    coprocessor::{CoprocessorHost, RegionInfoAccessor}, errors::Error as RaftError, router::{CdcRaftRouter, LocalReadRouter, RaftStoreRouter, ReadContext, ServerRaftStoreRouter}, store::{
+        fsm::{store::StoreMeta, ApplyRouter, RaftBatchSystem, RaftRouter}, msg::RaftCmdExtraOpts, AutoSplitController, Callback, CheckLeaderRunner, DiskCheckRunner, ForcePartitionRangeManager, LocalReader, RegionSnapshot, SnapManager, SnapManagerBuilder, SplitCheckRunner, SplitConfigManager, StoreMetaDelegate
+    }, Result
 };
 use resource_control::ResourceGroupManager;
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
@@ -283,6 +275,7 @@ impl ServerCluster {
         router: RaftRouter<RocksEngine, RaftTestEngine>,
         system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
         resource_manager: &Option<Arc<ResourceGroupManager>>,
+        force_partition_mgr: &ForcePartitionRangeManager,
     ) -> ServerResult<u64> {
         self.encryption = key_manager.clone();
 
@@ -522,6 +515,7 @@ impl ServerCluster {
             None,
             resource_manager.clone(),
             Arc::new(region_info_accessor.clone()),
+            force_partition_mgr.clone(),
         );
 
         // Create deadlock service.
@@ -777,6 +771,7 @@ impl Simulator for ServerCluster {
         router: RaftRouter<RocksEngine, RaftTestEngine>,
         system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
         resource_manager: &Option<Arc<ResourceGroupManager>>,
+        force_partition_mgr: &ForcePartitionRangeManager,
     ) -> ServerResult<u64> {
         dispatch_api_version!(
             cfg.storage.api_version(),
@@ -789,6 +784,7 @@ impl Simulator for ServerCluster {
                 router,
                 system,
                 resource_manager,
+                force_partition_mgr,
             )
         )
     }

@@ -196,6 +196,7 @@ pub fn set_redact_info_log(config: RedactOption) {
     proto_set_redact_level(level);
 }
 
+#[derive(Clone, Copy)]
 pub struct Value<'a>(pub &'a [u8]);
 
 impl<'a> Value<'a> {
