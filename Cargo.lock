@@ -2937,7 +2937,7 @@ dependencies = [
 [[package]]
 name = "grpcio"
 version = "0.13.0"
-source = "git+https://github.com/Dog-Du/grpc-rs.git?branch=adjust-for-upgrade-grpc-v1.59.0#5f304e0b1f0c63f1c88551d1cb1e8c26b0aa3072"
+source = "git+https://github.com/Dog-Du/grpc-rs.git?rev=cb3360c0e14bf417f570f8f54d2f130697fefbb4#cb3360c0e14bf417f570f8f54d2f130697fefbb4"
 dependencies = [
  "futures-executor",
  "futures-util",
@@ -2951,7 +2951,7 @@ dependencies = [
 [[package]]
 name = "grpcio-compiler"
 version = "0.13.0"
-source = "git+https://github.com/Dog-Du/grpc-rs.git?branch=adjust-for-upgrade-grpc-v1.59.0#5f304e0b1f0c63f1c88551d1cb1e8c26b0aa3072"
+source = "git+https://github.com/Dog-Du/grpc-rs.git?rev=cb3360c0e14bf417f570f8f54d2f130697fefbb4#cb3360c0e14bf417f570f8f54d2f130697fefbb4"
 dependencies = [
  "protobuf 2.8.0",
 ]
@@ -2959,7 +2959,7 @@ dependencies = [
 [[package]]
 name = "grpcio-health"
 version = "0.13.0"
-source = "git+https://github.com/Dog-Du/grpc-rs.git?branch=adjust-for-upgrade-grpc-v1.59.0#5f304e0b1f0c63f1c88551d1cb1e8c26b0aa3072"
+source = "git+https://github.com/Dog-Du/grpc-rs.git?rev=cb3360c0e14bf417f570f8f54d2f130697fefbb4#cb3360c0e14bf417f570f8f54d2f130697fefbb4"
 dependencies = [
  "futures-executor",
  "futures-util",
@@ -2971,7 +2971,7 @@ dependencies = [
 [[package]]
 name = "grpcio-sys"
 version = "0.13.0+1.59.0-patched"
-source = "git+https://github.com/Dog-Du/grpc-rs.git?branch=adjust-for-upgrade-grpc-v1.59.0#5f304e0b1f0c63f1c88551d1cb1e8c26b0aa3072"
+source = "git+https://github.com/Dog-Du/grpc-rs.git?rev=cb3360c0e14bf417f570f8f54d2f130697fefbb4#cb3360c0e14bf417f570f8f54d2f130697fefbb4"
 dependencies = [
  "bindgen 0.69.5",
  "boringssl-src",
