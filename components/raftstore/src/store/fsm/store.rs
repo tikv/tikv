@@ -98,6 +98,7 @@ use crate::{
                 PeerFsm, PeerFsmDelegate, SenderFsmPair, maybe_destroy_source, new_admin_request,
             },
         },
+        hibernate_state::GroupState,
         local_metrics::{IoType as InspectIoType, RaftMetrics},
         memory::*,
         metrics::*,
@@ -3151,43 +3152,53 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
 
         let send_count = std::cmp::min(base_count + additional_count, total_regions / 4);
 
-        // Calculate last_index growth for each region to identify hot regions
-        let mut regions_with_growth = Vec::new();
+        // Use HibernateState to identify active regions instead of calculating growth
+        // rate
+        let mut active_regions = Vec::new();
 
+        // Use AccessPeer to get hibernate state for each region
         for &region_id in &all_regions {
-            // Get current last_index from raft engine
-            let current_last_index = match self.ctx.engines.raft.get_raft_state(region_id) {
-                Ok(Some(raft_state)) => raft_state.get_last_index(),
-                Ok(None) => 0, // Region doesn't exist in raft engine
-                Err(_) => 0,   // Error getting raft state
-            };
+            // Stop if we have enough active regions
+            if active_regions.len() >= send_count {
+                break;
+            }
 
-            // Get the previous last_index from our tracking
-            let previous_last_index = self
-                .fsm
-                .store
-                .region_last_indexes
-                .get(&region_id)
-                .unwrap_or(&0);
+            let (tx, rx) = std::sync::mpsc::channel();
 
-            // Calculate growth
-            let growth = current_last_index.saturating_sub(*previous_last_index);
-
-            // Update our tracking
-            self.fsm
-                .store
-                .region_last_indexes
-                .insert(region_id, current_last_index);
-
-            regions_with_growth.push((region_id, growth));
+            // Send AccessPeer message to get region's hibernate state
+            if let Ok(()) = self.ctx.router.send(
+                region_id,
+                PeerMsg::CasualMessage(Box::new(CasualMessage::AccessPeer(Box::new(
+                    move |meta| {
+                        let _ = tx.send(meta.group_state);
+                    },
+                )))),
+            ) {
+                // Try to receive the response with a timeout
+                match rx.recv_timeout(std::time::Duration::from_millis(10)) {
+                    Ok(group_state) => {
+                        // Only collect active regions
+                        match group_state {
+                            GroupState::Ordered | GroupState::Chaos | GroupState::PreChaos => {
+                                // These states indicate the region is active
+                                active_regions.push(region_id);
+                            }
+                            GroupState::Idle => {
+                                // Skip hibernated regions
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        // Timeout or error, skip this region
+                    }
+                }
+            } else {
+                // Failed to send message, skip this region
+            }
         }
 
-        // Sort regions by growth score in descending order (hottest first)
-        regions_with_growth.sort_by(|a, b| b.1.cmp(&a.1));
-
-        // Send force compact to the hottest regions
-        for i in 0..send_count {
-            let region_id = regions_with_growth[i].0;
+        // Send force compact to the active regions
+        for region_id in active_regions {
             let _ = self.ctx.router.send(
                 region_id,
                 PeerMsg::CasualMessage(Box::new(CasualMessage::ForceCompactRaftLogs)),
