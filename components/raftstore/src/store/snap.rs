@@ -1174,7 +1174,13 @@ impl Snapshot {
                     )?;
                 } else {
                     // Apply the snapshot by ingest.
-                    snap_io::apply_sst_cf_files_by_ingest(clone_files.as_slice(), &options.db, cf)?;
+                    snap_io::apply_sst_cf_files_by_ingest(
+                        clone_files.as_slice(),
+                        &options.db,
+                        cf,
+                        enc_start_key(&region),
+                        enc_end_key(&region),
+                    )?;
                     coprocessor_host.post_apply_sst_from_snapshot(&region, cf, path);
                 }
             }
@@ -1449,16 +1455,17 @@ struct SnapManagerCore {
     max_per_file_size: Arc<AtomicU64>,
     enable_multi_snapshot_files: Arc<AtomicBool>,
     stats: Arc<Mutex<Vec<SnapshotStat>>>,
+    max_total_size: Arc<AtomicU64>,
     // Minimal column family size & kv counts for applying by ingest.
     min_ingest_cf_size: u64,
     min_ingest_cf_kvs: u64,
+    // Marker to represent the relative store is marked with Offline.
+    offlined: Arc<AtomicBool>,
 }
 
 /// `SnapManagerCore` trace all current processing snapshots.
 pub struct SnapManager {
     core: SnapManagerCore,
-    max_total_size: Arc<AtomicU64>,
-
     // only used to receive snapshot from v2
     tablet_snap_manager: Option<TabletSnapManager>,
 }
@@ -1467,7 +1474,6 @@ impl Clone for SnapManager {
     fn clone(&self) -> Self {
         SnapManager {
             core: self.core.clone(),
-            max_total_size: self.max_total_size.clone(),
             tablet_snap_manager: self.tablet_snap_manager.clone(),
         }
     }
@@ -1752,11 +1758,13 @@ impl SnapManager {
     }
 
     pub fn max_total_snap_size(&self) -> u64 {
-        self.max_total_size.load(Ordering::Acquire)
+        self.core.max_total_size.load(Ordering::Acquire)
     }
 
     pub fn set_max_total_snap_size(&self, max_total_size: u64) {
-        self.max_total_size.store(max_total_size, Ordering::Release);
+        self.core
+            .max_total_size
+            .store(max_total_size, Ordering::Release);
     }
 
     pub fn set_max_per_file_size(&mut self, max_per_file_size: u64) {
@@ -1896,6 +1904,14 @@ impl SnapManager {
     pub fn limiter(&self) -> &Limiter {
         &self.core.limiter
     }
+
+    pub fn set_offline(&mut self, state: bool) {
+        self.core.offlined.store(state, Ordering::Release);
+    }
+
+    pub fn is_offlined(&self) -> bool {
+        self.core.offlined.load(Ordering::Acquire)
+    }
 }
 
 impl SnapManagerCore {
@@ -1993,6 +2009,7 @@ impl SnapManagerCore {
     }
 
     pub fn can_apply_cf_without_ingest(&self, cf_size: u64, cf_kvs: u64) -> bool {
+        fail_point!("apply_cf_without_ingest_false", |_| { false });
         if self.min_ingest_cf_size == 0 {
             return false;
         }
@@ -2082,11 +2099,12 @@ impl SnapManagerBuilder {
                 enable_multi_snapshot_files: Arc::new(AtomicBool::new(
                     self.enable_multi_snapshot_files,
                 )),
+                max_total_size: Arc::new(AtomicU64::new(max_total_size)),
                 stats: Default::default(),
                 min_ingest_cf_size: self.min_ingest_snapshot_size,
                 min_ingest_cf_kvs: self.min_ingest_snapshot_kvs,
+                offlined: Arc::new(AtomicBool::new(false)),
             },
-            max_total_size: Arc::new(AtomicU64::new(max_total_size)),
             tablet_snap_manager,
         };
         snapshot.set_max_per_file_size(self.max_per_file_size); // set actual max_per_file_size
@@ -2567,9 +2585,11 @@ pub mod tests {
             encryption_key_manager: None,
             max_per_file_size: Arc::new(AtomicU64::new(max_per_file_size)),
             enable_multi_snapshot_files: Arc::new(AtomicBool::new(true)),
+            max_total_size: Arc::new(AtomicU64::new(u64::MAX)),
             stats: Default::default(),
             min_ingest_cf_size: 0,
             min_ingest_cf_kvs: 0,
+            offlined: Arc::new(AtomicBool::new(false)),
         }
     }
 
