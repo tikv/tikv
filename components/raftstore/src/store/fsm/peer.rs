@@ -4035,7 +4035,6 @@ where
         self.destroy_peer(delay.merged_by_target);
     }
 
-    // [PerformanceCriticalPath] TODO: spin off the I/O code (self.fsm.peer.destroy)
     fn destroy_peer(&mut self, merged_by_target: bool) -> bool {
         self.ctx.coprocessor_host.on_destroy_peer(self.region());
         fail_point!("destroy_peer");
