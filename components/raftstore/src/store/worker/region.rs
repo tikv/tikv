@@ -806,7 +806,9 @@ where
             "region_id" => region.get_id(),
         );
 
-        // Lock the store_meta to make the accessing of pending_create_peers safety.
+        // Lock the store_meta to ensure safe access to pending_create_peers.
+        // TODO: Find a way to make destroying operations not hold the
+        // store_meta lock in the future.
         let _meta = self.store_meta.lock().unwrap();
 
         let (pending_create_peers, clean) = if local_first_replicate {
