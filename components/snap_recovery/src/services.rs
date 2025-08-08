@@ -228,9 +228,9 @@ where
     pub fn wait_apply_last(router: RaftRouter<EK, ER>, sender: Sender<SyncReport>) {
         let wait_apply = SnapshotBrWaitApplySyncer::new(0, sender);
         router.broadcast_normal(|| {
-            PeerMsg::SignificantMsg(SignificantMsg::SnapshotBrWaitApply(
+            PeerMsg::SignificantMsg(Box::new(SignificantMsg::SnapshotBrWaitApply(
                 SnapshotBrWaitApplyRequest::relaxed(wait_apply.clone()),
-            ))
+            )))
         });
     }
 }
