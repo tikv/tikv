@@ -8,18 +8,22 @@ use std::{
     },
     fmt::{self, Display, Formatter},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
 };
 
+use collections::HashMap;
 use engine_traits::{
     CF_LOCK, CF_RAFT, DeleteStrategy, Engines, KvEngine, Mutable, RaftEngine, Range, WriteBatch,
     WriteOptions,
 };
 use fail::fail_point;
-use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
+use kvproto::{
+    metapb::{Peer, Region},
+    raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftLocalState, RegionLocalState},
+};
 use tikv_util::{
     box_err, box_try,
     config::VersionTrack,
@@ -32,11 +36,13 @@ use tikv_util::{
 use super::metrics::*;
 use crate::{
     coprocessor::CoprocessorHost,
+    errors::Result as RaftstoreResult,
     store::{
         ApplyOptions, CasualMessage, Config, SnapEntry, SnapKey, SnapManager, check_abort,
+        fsm::StoreMeta,
         peer_storage::{
             JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING, JOB_STATUS_FAILED, JOB_STATUS_FINISHED,
-            JOB_STATUS_PENDING, JOB_STATUS_RUNNING,
+            JOB_STATUS_PENDING, JOB_STATUS_RUNNING, clear_meta, write_peer_state,
         },
         snap::{Error, Result, SNAPSHOT_CFS, plain_file_used},
         transport::CasualRouter,
@@ -63,10 +69,22 @@ pub enum Task {
         start_key: Vec<u8>,
         end_key: Vec<u8>,
     },
+    DestroyPeer {
+        peer: Peer,
+        region: Region,
+        raft_state: RaftLocalState,
+        merge_state: Option<MergeState>,
+        keep_data: bool,
+        initialized: bool,
+        local_first_replicate: bool,
+        first_index: u64,
+        // Holding lock to avoid apply worker applies split.
+        pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
+    },
 }
 
 impl Task {
-    pub fn destroy(region_id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Task {
+    pub fn destroy(region_id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Self {
         Task::Destroy {
             region_id,
             start_key,
@@ -90,6 +108,13 @@ impl Display for Task {
                 log_wrappers::Value::key(start_key),
                 log_wrappers::Value::key(end_key)
             ),
+            Task::DestroyPeer {
+                ref peer,
+                ref region,
+                ..
+            } => {
+                write!(f, "Destroy peer {} for {}", peer.get_id(), region.get_id())
+            }
         }
     }
 }
@@ -243,6 +268,7 @@ where
     pending_delete_ranges: PendingDeleteRanges,
 
     engines: Engines<EK, ER>,
+    store_meta: Arc<Mutex<StoreMeta>>,
     mgr: SnapManager,
     coprocessor_host: CoprocessorHost<EK>,
     router: R,
@@ -256,6 +282,7 @@ where
 {
     pub fn new(
         engines: Engines<EK, ER>,
+        store_meta: Arc<Mutex<StoreMeta>>,
         mgr: SnapManager,
         cfg: Arc<VersionTrack<Config>>,
         coprocessor_host: CoprocessorHost<EK>,
@@ -273,6 +300,7 @@ where
             pending_applies: VecDeque::new(),
             pending_delete_ranges: PendingDeleteRanges::default(),
             engines,
+            store_meta,
             mgr,
             coprocessor_host,
             router,
@@ -756,6 +784,116 @@ where
         }
         SNAP_PENDING_APPLIES_GAUGE.set(self.pending_applies.len() as i64);
     }
+
+    fn handle_destroy_peer(
+        &mut self,
+        peer: Peer,
+        region: Region,
+        raft_state: RaftLocalState,
+        merge_state: Option<MergeState>,
+        initialized: bool,
+        local_first_replicate: bool,
+        first_index: u64,
+        // Holding lock to avoid apply worker applies split.
+        pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
+    ) -> RaftstoreResult<(Duration, Duration) /* (destroy_raft duration, destroy_kv duration) */>
+    {
+        let peer_id = peer.get_id();
+        let mut region = region.clone();
+        info!(
+            "handle destroy peer";
+            "peer_id" => peer.get_id(),
+            "region_id" => region.get_id(),
+        );
+
+        // Lock the store_meta to make the accessing of pending_create_peers safety.
+        let _meta = self.store_meta.lock().unwrap();
+
+        let (pending_create_peers, clean) = if local_first_replicate {
+            let mut pending = pending_create_peers.lock().unwrap();
+            if initialized {
+                assert_eq!(pending.get(&region.get_id()), None);
+                (None, true)
+            } else if let Some(status) = pending.get(&region.get_id()) {
+                if *status == (peer_id, false) {
+                    pending.remove(&region.get_id());
+                    // Hold the lock to avoid apply worker applies split.
+                    (Some(pending), true)
+                } else if *status == (peer_id, true) {
+                    // It's already marked to split by apply worker, skip delete.
+                    (None, false)
+                } else {
+                    // Peer id can't be different as router should exist all the time, their is no
+                    // chance for store to insert a different peer id. And apply worker should skip
+                    // split when meeting a different id.
+                    let status = *status;
+                    // Avoid panic with lock.
+                    drop(pending);
+                    panic!(
+                        "[peer = {}] region {:?} unexpected pending states {:?}",
+                        peer_id, region, status
+                    );
+                }
+            } else {
+                // The status is inserted when it's created. It will be removed in following
+                // cases:
+                // - By apply worker as it fails to split due to region state key. This is
+                //   impossible to reach this code path because the delete write batch is not
+                //   persisted yet.
+                // - By store fsm as it fails to create peer, which is also invalid obviously.
+                // - By peer fsm after persisting snapshot, then it should be initialized.
+                // - By peer fsm after split.
+                // - By peer fsm when destroy, which should go the above branch instead.
+                (None, false)
+            }
+        } else {
+            (None, true)
+        };
+        let (raft_duration, kv_duration) = if clean {
+            // Set Tombstone state explicitly
+            let mut kv_wb = self.engines.kv.write_batch();
+            let mut raft_wb = self.engines.raft.log_batch(1024);
+            // Raft log gc should be flushed before being destroyed, so last_compacted_idx
+            // has to be the minimal index that may still have logs.
+            clear_meta(
+                &self.engines,
+                &mut kv_wb,
+                &mut raft_wb,
+                region.get_id(),
+                first_index,
+                &raft_state,
+            )?;
+
+            // StoreFsmDelegate::check_msg use both epoch and region peer list to check
+            // whether a message is targeting a staled peer. But for an uninitialized peer,
+            // both epoch and peer list are empty, so a removed peer will be created again.
+            // Saving current peer into the peer list of region will fix this problem.
+            if !initialized {
+                region.mut_peers().push(peer.clone());
+            }
+
+            // Persist the Tomstone state of this peer to kvdb.
+            write_peer_state(&mut kv_wb, &region, PeerState::Tombstone, merge_state)?;
+
+            // Write kv rocksdb first in case of restart happen between two write
+            let start = Instant::now();
+            let mut write_opts = WriteOptions::new();
+            write_opts.set_sync(true);
+            kv_wb.write_opt(&write_opts)?;
+            let kv_duration = start.saturating_elapsed();
+
+            drop(pending_create_peers);
+
+            let start = Instant::now();
+            self.engines.raft.consume(&mut raft_wb, true)?;
+            let raft_duration = start.saturating_elapsed();
+            (raft_duration, kv_duration)
+        } else {
+            (Duration::ZERO, Duration::ZERO)
+        };
+
+        Ok((raft_duration, kv_duration))
+    }
 }
 
 impl<EK, ER, R> Runnable for Runner<EK, ER, R>
@@ -794,6 +932,47 @@ where
                 self.insert_pending_delete_range(region_id, start_key, end_key);
                 self.clean_stale_ranges();
                 fail_point!("after_region_worker_destroy");
+            }
+            Task::DestroyPeer {
+                peer,
+                region,
+                raft_state,
+                merge_state,
+                keep_data,
+                initialized,
+                local_first_replicate,
+                first_index,
+                pending_create_peers,
+            } => {
+                let peer_id = peer.get_id();
+                let region_id = region.get_id();
+                match self.handle_destroy_peer(
+                    peer,
+                    region,
+                    raft_state,
+                    merge_state,
+                    initialized,
+                    local_first_replicate,
+                    first_index,
+                    pending_create_peers,
+                ) {
+                    Err(e) => {
+                        warn!("failed to destroy peer";
+                            "peer_id" => peer_id,
+                            "region_id" => region_id,
+                            "keep_data" => keep_data,
+                            "error" => ?e);
+                    }
+                    Ok(duration) => {
+                        let _ = self.router.send(
+                            region_id,
+                            CasualMessage::DestroyPeer {
+                                merged_by_target: keep_data,
+                                duration,
+                            },
+                        );
+                    }
+                }
             }
         }
     }
@@ -972,6 +1151,7 @@ pub(crate) mod tests {
         let cfg = make_raftstore_cfg(false);
         let mut runner = RegionRunner::new(
             engine.clone(),
+            Arc::new(Mutex::new(StoreMeta::new(1))),
             mgr,
             cfg,
             CoprocessorHost::<KvTestEngine>::default(),
@@ -1079,6 +1259,7 @@ pub(crate) mod tests {
         let cfg = make_raftstore_cfg(true);
         let runner = RegionRunner::new(
             engine.clone(),
+            Arc::new(Mutex::new(StoreMeta::new(1))),
             mgr.clone(),
             cfg.clone(),
             host,

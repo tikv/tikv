@@ -6,12 +6,13 @@ use std::{
     error,
     ops::{Deref, DerefMut},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         mpsc::{self, Receiver, TryRecvError},
     },
 };
 
+use collections::HashMap;
 use engine_traits::{CF_RAFT, Engines, KvEngine, Mutable, Peekable, RaftEngine, RaftLogBatch};
 use fail::fail_point;
 use into_other::into_other;
@@ -751,6 +752,31 @@ where
         );
 
         Ok((region, for_witness))
+    }
+
+    pub fn mark_peer_destroyed(
+        &mut self,
+        peer: metapb::Peer,
+        region: metapb::Region,
+        keep_data: bool,
+        local_first_replicate: bool,
+        first_index: u64,
+        merge_state: Option<MergeState>,
+        pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
+    ) -> Result<()> {
+        self.entry_storage.clear();
+        box_try!(self.region_scheduler.schedule(RegionTask::DestroyPeer {
+            peer,
+            region,
+            raft_state: self.raft_state().clone(),
+            initialized: self.is_initialized(),
+            keep_data,
+            merge_state,
+            local_first_replicate,
+            first_index,
+            pending_create_peers,
+        }));
+        Ok(())
     }
 
     /// Delete all meta belong to the region. Results are stored in `wb`.

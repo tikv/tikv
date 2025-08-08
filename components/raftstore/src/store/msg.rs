@@ -3,7 +3,7 @@
 // #[PerformanceCriticalPath]
 #[cfg(any(test, feature = "testexport"))]
 use std::sync::Arc;
-use std::{borrow::Cow, fmt};
+use std::{borrow::Cow, fmt, time::Duration};
 
 use collections::HashSet;
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
@@ -631,6 +631,15 @@ pub enum CasualMessage<EK: KvEngine> {
     /// A message to access peer's internal state.
     AccessPeer(Box<dyn FnOnce(RegionMeta) + Send + 'static>),
 
+    /// A message to destroy the corresponding peer.
+    ///
+    /// Durations record the consuming durations when clear raft state and
+    /// data in kvdb.
+    DestroyPeer {
+        merged_by_target: bool,
+        duration: (Duration, Duration),
+    },
+
     /// Region info from PD
     QueryRegionLeaderResp {
         region: metapb::Region,
@@ -725,6 +734,7 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
             CasualMessage::SnapshotGenerated => write!(fmt, "SnapshotGenerated"),
             CasualMessage::ForceCompactRaftLogs => write!(fmt, "ForceCompactRaftLogs"),
             CasualMessage::AccessPeer(_) => write!(fmt, "AccessPeer"),
+            CasualMessage::DestroyPeer { .. } => write!(fmt, "DestroyPeer"),
             CasualMessage::QueryRegionLeaderResp { .. } => write!(fmt, "QueryRegionLeaderResp"),
             CasualMessage::RejectRaftAppend { peer_id } => {
                 write!(fmt, "RejectRaftAppend(peer_id={})", peer_id)

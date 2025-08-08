@@ -1258,6 +1258,13 @@ where
                     peer.raft_group.raft.raft_log.persisted,
                 ))
             }
+            CasualMessage::DestroyPeer {
+                merged_by_target,
+                duration,
+            } => {
+                assert!(self.fsm.peer.pending_remove);
+                self.on_ready_destroy_peer(merged_by_target, duration);
+            }
             CasualMessage::QueryRegionLeaderResp { region, leader } => {
                 // the leader already updated
                 if self.fsm.peer.raft_group.raft.leader_id != raft::INVALID_ID
@@ -4163,22 +4170,36 @@ where
                 "err" => %e,
             );
         }
-        // TODO: construct a ClearTask::Destroy {...}, and send it to a background
-        // worker.
-        if let Err(e) = self.fsm.peer.destroy(
-            &self.ctx.engines,
-            &mut self.ctx.raft_perf_context,
-            merged_by_target,
-            &self.ctx.pending_create_peers,
-            &self.ctx.raft_metrics,
-        ) {
+        // Asynchronously destroy the peer by triggering a task to background worker,
+        // and the corresponding worker will finish the preparations for destroying.
+        if let Err(e) = self
+            .fsm
+            .peer
+            .prepare_for_destroy(merged_by_target, self.ctx.pending_create_peers.clone())
+        {
             // If not panic here, the peer will be recreated in the next restart,
             // then it will be gc again. But if some overlap region is created
             // before restarting, the gc action will delete the overlap region's
             // data too.
-            panic!("{} destroy err {:?}", self.fsm.peer.tag, e);
+            panic!("{} prepare to destroy err {:?}", self.fsm.peer.tag, e);
         }
 
+        true
+    }
+
+    fn on_ready_destroy_peer(
+        &mut self,
+        merged_by_target: bool,
+        clean_duration: (Duration, Duration),
+    ) -> bool {
+        // Clean remains if needs and notify all pending requests to exit.
+        self.fsm
+            .peer
+            .ready_to_destroy(merged_by_target, clean_duration, &self.ctx.raft_metrics);
+
+        let region_id = self.region_id();
+        let is_peer_initialized = self.fsm.peer.is_initialized();
+        let mut meta = self.ctx.store_meta.lock().unwrap();
         // Some places use `force_send().unwrap()` if the StoreMeta lock is held.
         // So in here, it's necessary to held the StoreMeta lock when closing the
         // router.

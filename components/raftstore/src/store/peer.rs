@@ -1381,115 +1381,65 @@ where
         })
     }
 
-    /// Does the real destroy task which includes:
-    /// 1. Set the region to tombstone;
-    /// 2. Clear data;
-    /// 3. Notify all pending requests.
-    pub fn destroy(
+    /// Do the preparations before destroying peer by scheduling
+    /// an asychronous task to the region worker.
+    pub fn prepare_for_destroy(
         &mut self,
-        engines: &Engines<EK, ER>,
-        perf_context: &mut ER::PerfContext,
         keep_data: bool,
-        pending_create_peers: &Mutex<HashMap<u64, (u64, bool)>>,
-        raft_metrics: &RaftMetrics,
+        pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
     ) -> Result<()> {
         fail_point!("raft_store_skip_destroy_peer", |_| Ok(()));
-        let t = TiInstant::now();
 
-        let mut region = self.region().clone();
+        let peer = self.peer.clone();
+        let region = self.region().clone();
+        // Raft log gc should be flushed before being destroyed, so last_compacted_idx
+        // has to be the minimal index that may still have logs.
+        let last_compacted_idx = self.last_compacted_idx;
+        let local_first_replicate = self.local_first_replicate;
+        let merge_state = if keep_data {
+            self.pending_merge_state.clone()
+        } else {
+            None
+        };
+        // Asynchronously mark the peer destroyed.
+        self.mut_store().mark_peer_destroyed(
+            peer,
+            region,
+            keep_data,
+            local_first_replicate,
+            last_compacted_idx,
+            merge_state,
+            pending_create_peers,
+        )?;
         info!(
-            "begin to destroy";
+            "schedule async destroy peer task";
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
         );
+        Ok(())
+    }
 
-        let (pending_create_peers, clean) = if self.local_first_replicate {
-            let mut pending = pending_create_peers.lock().unwrap();
-            if self.get_store().is_initialized() {
-                assert_eq!(pending.get(&region.get_id()), None);
-                (None, true)
-            } else if let Some(status) = pending.get(&region.get_id()) {
-                if *status == (self.peer.get_id(), false) {
-                    pending.remove(&region.get_id());
-                    // Hold the lock to avoid apply worker applies split.
-                    (Some(pending), true)
-                } else if *status == (self.peer.get_id(), true) {
-                    // It's already marked to split by apply worker, skip delete.
-                    (None, false)
-                } else {
-                    // Peer id can't be different as router should exist all the time, their is no
-                    // chance for store to insert a different peer id. And apply worker should skip
-                    // split when meeting a different id.
-                    let status = *status;
-                    // Avoid panic with lock.
-                    drop(pending);
-                    panic!("{} unexpected pending states {:?}", self.tag, status);
-                }
-            } else {
-                // The status is inserted when it's created. It will be removed in following
-                // cases:
-                // - By apply worker as it fails to split due to region state key. This is
-                //   impossible to reach this code path because the delete write batch is not
-                //   persisted yet.
-                // - By store fsm as it fails to create peer, which is also invalid obviously.
-                // - By peer fsm after persisting snapshot, then it should be initialized.
-                // - By peer fsm after split.
-                // - By peer fsm when destroy, which should go the above branch instead.
-                (None, false)
-            }
-        } else {
-            (None, true)
-        };
+    /// Does the final destroy task which includes:
+    /// 1. Clear data if needs (async mode).
+    /// 2. Notify all pending requests.
+    pub fn ready_to_destroy(
+        &mut self,
+        keep_data: bool,
+        clean_duration: (Duration, Duration),
+        raft_metrics: &RaftMetrics,
+    ) {
+        let t = TiInstant::now();
+        let region_id = self.region_id;
+        let (raft_duration, kvdb_duration) = clean_duration;
+        let clean = !raft_duration.is_zero() || !kvdb_duration.is_zero();
+
         if clean {
-            // Set Tombstone state explicitly
-            let mut kv_wb = engines.kv.write_batch();
-            let mut raft_wb = engines.raft.log_batch(1024);
-            // Raft log gc should be flushed before being destroyed, so last_compacted_idx
-            // has to be the minimal index that may still have logs.
-            let last_compacted_idx = self.last_compacted_idx;
-            self.mut_store()
-                .clear_meta(last_compacted_idx, &mut kv_wb, &mut raft_wb)?;
-
-            // StoreFsmDelegate::check_msg use both epoch and region peer list to check
-            // whether a message is targeting a staled peer. But for an uninitialized peer,
-            // both epoch and peer list are empty, so a removed peer will be created again.
-            // Saving current peer into the peer list of region will fix this problem.
-            if !self.get_store().is_initialized() {
-                region.mut_peers().push(self.peer.clone());
-            }
-
-            write_peer_state(
-                &mut kv_wb,
-                &region,
-                PeerState::Tombstone,
-                // Only persist the `merge_state` if the merge is known to be succeeded
-                // which is determined by the `keep_data` flag
-                if keep_data {
-                    self.pending_merge_state.clone()
-                } else {
-                    None
-                },
-            )?;
-
-            let start = Instant::now();
-            // write kv rocksdb first in case of restart happen between two write
-            let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(true);
-            kv_wb.write_opt(&write_opts)?;
-            raft_metrics
-                .io_write_peer_destroy_kv
-                .observe(start.saturating_elapsed().as_secs_f64());
-
-            drop(pending_create_peers);
-
-            let start = Instant::now();
-            perf_context.start_observe();
-            engines.raft.consume(&mut raft_wb, true)?;
-            perf_context.report_metrics(&[]);
             raft_metrics
                 .io_write_peer_destroy_raft
-                .observe(start.saturating_elapsed().as_secs_f64());
-
+                .observe(raft_duration.as_secs_f64());
+            raft_metrics
+                .io_write_peer_destroy_kv
+                .observe(kvdb_duration.as_secs_f64());
             if self.get_store().is_initialized() && !keep_data {
                 // If we meet panic when deleting data and raft log, the dirty data
                 // will be cleared by a newer snapshot applying or restart.
@@ -1503,24 +1453,22 @@ where
             }
         }
 
-        self.pending_reads.clear_all(Some(region.get_id()));
+        self.pending_reads.clear_all(Some(region_id));
 
         for Proposal { cb, .. } in self.proposals.queue.drain(..) {
-            apply::notify_req_region_removed(region.get_id(), cb);
+            apply::notify_req_region_removed(region_id, cb);
         }
 
         info!(
             "peer destroy itself";
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
-            "takes" => ?t.saturating_elapsed(),
+            "takes" => ?(t.saturating_elapsed() + raft_duration + kvdb_duration),
             "clean" => clean,
             "keep_data" => keep_data,
         );
 
         fail_point!("raft_store_after_destroy_peer");
-
-        Ok(())
     }
 
     #[inline]
