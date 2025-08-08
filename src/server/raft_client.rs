@@ -856,8 +856,7 @@ async fn start<S, R>(
                     let mut pool = pool.lock().unwrap();
                     if let Some(conn_info) = pool.connections.remove(&(back_end.store_id, conn_id))
                     {
-                        let conn_guard = conn_info.lock().unwrap();
-                        conn_guard.queue.set_conn_state(ConnState::Disconnected);
+                        conn_info.queue.set_conn_state(ConnState::Disconnected);
                     }
                     pool.tombstone_stores.insert(back_end.store_id);
                     return;
@@ -905,10 +904,12 @@ async fn start<S, R>(
 
             // Update the channel in ConnectionPool for health check
             {
-                let pool_guard = pool.lock().unwrap();
-                if let Some(conn_info) = pool_guard.connections.get(&(back_end.store_id, conn_id)) {
-                    let mut conn_guard = conn_info.lock().unwrap();
-                    conn_guard.channel = Some(channel.clone());
+                let mut pool_guard = pool.lock().unwrap();
+                if let Some(conn_info) = pool_guard
+                    .connections
+                    .get_mut(&(back_end.store_id, conn_id))
+                {
+                    conn_info.channel = Some(channel.clone());
                 }
             }
         }
@@ -942,12 +943,12 @@ async fn start<S, R>(
 
                 // Clear the channel when connection is lost
                 {
-                    let pool_guard = pool.lock().unwrap();
-                    if let Some(conn_info) =
-                        pool_guard.connections.get(&(back_end.store_id, conn_id))
+                    let mut pool_guard = pool.lock().unwrap();
+                    if let Some(conn_info) = pool_guard
+                        .connections
+                        .get_mut(&(back_end.store_id, conn_id))
                     {
-                        let mut conn_guard = conn_info.lock().unwrap();
-                        conn_guard.channel = None;
+                        conn_info.channel = None;
                     }
                 }
             }
@@ -966,7 +967,7 @@ struct ConnectionInfo {
 /// from the struct, all cache clone should also remove it at some time.
 #[derive(Default)]
 struct ConnectionPool {
-    connections: HashMap<(u64, usize), Arc<Mutex<ConnectionInfo>>>,
+    connections: HashMap<(u64, usize), ConnectionInfo>,
     tombstone_stores: HashSet<u64>,
     store_allowlist: Vec<u64>,
 }
@@ -974,13 +975,15 @@ struct ConnectionPool {
 impl ConnectionPool {
     fn set_store_allowlist(&mut self, stores: Vec<u64>) {
         self.store_allowlist = stores;
-        for (&(store_id, _), conn_info) in self.connections.iter() {
+        let need_pause_check = !self.store_allowlist.is_empty();
+        let allowlist = &self.store_allowlist;
+
+        for (&(store_id, _), conn_info) in self.connections.iter_mut() {
             let mut state = ConnState::Established;
-            if self.need_pause(store_id) {
+            if need_pause_check && !allowlist.contains(&store_id) {
                 state = ConnState::Paused;
             }
-            let conn_guard = conn_info.lock().unwrap();
-            conn_guard.queue.set_conn_state(state);
+            conn_info.queue.set_conn_state(state);
         }
     }
 
@@ -1130,16 +1133,12 @@ where
                     };
                     self.future_pool
                         .spawn(start(back_end, conn_id, self.pool.clone()));
-                    Arc::new(Mutex::new(ConnectionInfo {
+                    ConnectionInfo {
                         queue: queue.clone(),
                         channel: None,
-                    }))
-                })
-                .clone();
-            let queue = {
-                let guard = conn_info.lock().unwrap();
-                guard.queue.clone()
-            };
+                    }
+                });
+            let queue = conn_info.queue.clone();
             (queue, pool.connections.len())
         };
         self.cache.resize(pool_len);
@@ -1270,8 +1269,7 @@ where
             let l = self.pool.lock().unwrap();
             if let Some(conn_info) = l.connections.get(id) {
                 counter += 1;
-                let conn_guard = conn_info.lock().unwrap();
-                conn_guard.queue.notify();
+                conn_info.queue.notify();
             }
         }
         self.need_flush.clear();
@@ -1470,14 +1468,14 @@ impl Inspector {
             last_check_time = Instant::now();
 
             // Get connections for this specific store
-            let store_connections: Vec<(usize, Arc<Mutex<ConnectionInfo>>)> = {
+            let store_connections: Vec<(usize, Arc<Queue>, Option<Channel>)> = {
                 let pool_guard = pool.lock().unwrap();
                 pool_guard
                     .connections
                     .iter()
                     .filter_map(|((sid, conn_id), conn_info)| {
                         if *sid == store_id {
-                            Some((*conn_id, conn_info.clone()))
+                            Some((*conn_id, conn_info.queue.clone(), conn_info.channel.clone()))
                         } else {
                             None
                         }
@@ -1491,22 +1489,13 @@ impl Inspector {
             }
 
             // Perform health check for each connection of this store
-            for (conn_id, conn_info) in store_connections {
-                // Extract channel without holding the lock across await
-                let channel_opt = {
-                    let conn_guard = conn_info.lock().unwrap();
+            for (conn_id, queue, channel_opt) in store_connections {
+                // Skip if the connection is not established
+                if queue.conn_state.load(Ordering::SeqCst) != ConnState::Established as u8 {
+                    continue;
+                }
 
-                    // Skip if the connection is not established
-                    if conn_guard.queue.conn_state.load(Ordering::SeqCst)
-                        != ConnState::Established as u8
-                    {
-                        continue;
-                    }
-
-                    // Get the channel if available
-                    conn_guard.channel.clone()
-                };
-
+                // Get the channel if available
                 if let Some(channel) = channel_opt {
                     Self::perform_health_check(
                         self_store_id,
