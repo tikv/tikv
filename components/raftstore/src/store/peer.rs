@@ -1415,7 +1415,7 @@ where
         } else {
             // Sync mode, directly make preparations for destroy.
             do_perparations_for_destroy(
-                &engines,
+                engines,
                 peer,
                 region,
                 self.get_store().raft_state().clone(),

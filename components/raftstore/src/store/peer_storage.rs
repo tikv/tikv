@@ -1231,7 +1231,7 @@ where
         // Raft log gc should be flushed before being destroyed, so last_compacted_idx
         // has to be the minimal index that may still have logs.
         clear_meta(
-            &engines,
+            engines,
             &mut kv_wb,
             &mut raft_wb,
             region.get_id(),
