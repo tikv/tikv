@@ -858,6 +858,7 @@ dependencies = [
  "raftstore",
  "rand 0.8.5",
  "resource_control",
+ "security",
  "slog",
  "slog-global",
  "tempfile",
@@ -909,6 +910,7 @@ dependencies = [
  "raftstore",
  "rand 0.8.5",
  "resolved_ts",
+ "security",
  "serde",
  "serde_json",
  "slog",
@@ -1002,29 +1004,6 @@ checksum = "42d3c07869b846ba3306739375e9ed2f8055a8759fcf7f72ab7bf3bc4df38b9b"
 
 [[package]]
 name = "bindgen"
-version = "0.59.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2bd2a9a458e8f4304c52c43ebb0cfbd520289f8379a52e329a38afda99bf8eb8"
-dependencies = [
- "bitflags 1.3.2",
- "cexpr",
- "clang-sys",
- "clap 2.33.0",
- "env_logger 0.9.0",
- "lazy_static",
- "lazycell",
- "log",
- "peeking_take_while",
- "proc-macro2",
- "quote",
- "regex",
- "rustc-hash",
- "shlex",
- "which",
-]
-
-[[package]]
-name = "bindgen"
 version = "0.65.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfdf7b466f9a4903edc73f95d6d2bcd5baf8ae620638762244d3f60143643cc5"
@@ -1036,6 +1015,26 @@ dependencies = [
  "lazycell",
  "peeking_take_while",
  "prettyplease",
+ "proc-macro2",
+ "quote",
+ "regex",
+ "rustc-hash",
+ "shlex",
+ "syn 2.0.101",
+]
+
+[[package]]
+name = "bindgen"
+version = "0.69.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "271383c67ccabffb7381723dea0672a673f292304fcb45c01cc648c7a8d58088"
+dependencies = [
+ "bitflags 2.4.1",
+ "cexpr",
+ "clang-sys",
+ "itertools",
+ "lazy_static",
+ "lazycell",
  "proc-macro2",
  "quote",
  "regex",
@@ -1097,6 +1096,15 @@ name = "boolinator"
 version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfa8873f51c92e232f9bac4065cddef41b714152812bfc5f7672ba16d6ef8cd9"
+
+[[package]]
+name = "boringssl-src"
+version = "0.6.0+e46383f"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5edec42197c014d84ea2396589f0da14b2257f63f319442b5e8475a077b90457"
+dependencies = [
+ "cmake",
+]
 
 [[package]]
 name = "bs58"
@@ -2273,19 +2281,6 @@ dependencies = [
 
 [[package]]
 name = "env_logger"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b2cf0344971ee6c64c31be0d530793fba457d322dfec2810c453d0ef228f9c3"
-dependencies = [
- "atty",
- "humantime",
- "log",
- "regex",
- "termcolor",
-]
-
-[[package]]
-name = "env_logger"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85cdab6a89accf66733ad5a1693a4dcced6aeff64602b634530dd73c1f3ee9f0"
@@ -2941,33 +2936,30 @@ dependencies = [
 
 [[package]]
 name = "grpcio"
-version = "0.10.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f2506de56197d01821c2d1d21082d2dcfd6c82d7a1d6e04d33f37aab6130632"
+version = "0.13.0"
+source = "git+https://github.com/Dog-Du/grpc-rs.git?rev=cb3360c0e14bf417f570f8f54d2f130697fefbb4#cb3360c0e14bf417f570f8f54d2f130697fefbb4"
 dependencies = [
  "futures-executor",
  "futures-util",
  "grpcio-sys",
  "libc 0.2.151",
  "log",
- "parking_lot 0.11.1",
+ "parking_lot 0.12.1",
  "protobuf 2.8.0",
 ]
 
 [[package]]
 name = "grpcio-compiler"
-version = "0.10.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed97a17310fd00ff4109357584a00244e2a785d05b7ee0ef4d1e8fb1d84266df"
+version = "0.13.0"
+source = "git+https://github.com/Dog-Du/grpc-rs.git?rev=cb3360c0e14bf417f570f8f54d2f130697fefbb4#cb3360c0e14bf417f570f8f54d2f130697fefbb4"
 dependencies = [
  "protobuf 2.8.0",
 ]
 
 [[package]]
 name = "grpcio-health"
-version = "0.10.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a37eae605cd21f144b7c7fd0e64e57af9f73d132756fef5b706db110c3ec7ea0"
+version = "0.13.0"
+source = "git+https://github.com/Dog-Du/grpc-rs.git?rev=cb3360c0e14bf417f570f8f54d2f130697fefbb4#cb3360c0e14bf417f570f8f54d2f130697fefbb4"
 dependencies = [
  "futures-executor",
  "futures-util",
@@ -2978,11 +2970,11 @@ dependencies = [
 
 [[package]]
 name = "grpcio-sys"
-version = "0.10.3+1.44.0-patched"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f23adc509a3c4dea990e0ab8d2add4a65389ee69c288b7851d75dd1df7a6d6c6"
+version = "0.13.0+1.59.0-patched"
+source = "git+https://github.com/Dog-Du/grpc-rs.git?rev=cb3360c0e14bf417f570f8f54d2f130697fefbb4#cb3360c0e14bf417f570f8f54d2f130697fefbb4"
 dependencies = [
- "bindgen 0.59.2",
+ "bindgen 0.69.5",
+ "boringssl-src",
  "cc",
  "cmake",
  "libc 0.2.151",
@@ -5270,7 +5262,7 @@ version = "0.4.2"
 source = "git+https://github.com/tikv/raft-engine.git#03f77d90c09793a6f79411ff5f88233715eb23da"
 dependencies = [
  "clap 3.1.6",
- "env_logger 0.10.0",
+ "env_logger",
  "raft-engine",
 ]
 
@@ -6837,6 +6829,7 @@ dependencies = [
  "protobuf 2.8.0",
  "raftstore",
  "rand 0.8.5",
+ "security",
  "test_raftstore",
  "tidb_query_common",
  "tikv",
@@ -7098,6 +7091,7 @@ dependencies = [
  "log_wrappers",
  "more-asserts",
  "online_config",
+ "openssl",
  "paste",
  "pd_client",
  "perfcnt",
@@ -7402,7 +7396,9 @@ dependencies = [
  "fxhash",
  "getset",
  "grpcio",
+ "grpcio-compiler",
  "grpcio-health",
+ "grpcio-sys",
  "health_controller",
  "hex 0.4.3",
  "http 0.2.12",

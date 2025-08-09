@@ -7,6 +7,7 @@ use futures_util::stream::AbortHandle;
 use grpcio::{self, *};
 use kvproto::brpb::*;
 use raftstore::store::snapshot_backup::SnapshotBrHandle;
+use security::SecurityManager;
 use tikv_util::{error, info, warn, worker::*};
 
 use super::Task;
@@ -220,9 +221,11 @@ mod tests {
             super::Service::new(scheduler, Env::new(PanicHandle, Default::default(), None));
         let builder =
             ServerBuilder::new(env.clone()).register_service(create_backup(backup_service));
-        let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
+        let mut server = builder.build().unwrap();
+        let port =
+            SecurityManager::add_listening_port_without_security(&mut server, "127.0.0.1", 0)
+                .unwrap();
         server.start();
-        let (_, port) = server.bind_addrs().next().unwrap();
         let addr = format!("127.0.0.1:{}", port);
         let channel = ChannelBuilder::new(env).connect(&addr);
         let client = BackupClient::new(channel);

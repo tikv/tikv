@@ -46,10 +46,14 @@ harness = false
 path = "benches/memory/mod.rs"
 
 [features]
-default = ["failpoints", "testexport", "test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
-failpoints = ["fail/failpoints", "tikv/failpoints", "pd_client/failpoints"]
-testexport = ["raftstore/testexport", "tikv/testexport", "pd_client/testexport"]
-profiling = ["profiler/profiling"]
+default = ["failpoints", "testexport", "test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "openssl-vendored"]
+failpoints = ["fail/failpoints", "tikv/failpoints", "pd_client/failpoints", "openssl-vendored"]
+testexport = ["raftstore/testexport", "tikv/testexport", "pd_client/testexport", "openssl-vendored"]
+profiling = ["profiler/profiling", "openssl-vendored"]
+openssl-vendored = [
+  "openssl/vendored",
+  "grpcio/openssl-vendored",
+]
 
 test-engine-kv-rocksdb = [
   "raftstore/test-engine-kv-rocksdb"
@@ -92,6 +96,7 @@ kvproto = { workspace = true }
 log_wrappers = { workspace = true }
 more-asserts = "0.2"
 online_config = { workspace = true }
+openssl = { workspace = true }
 paste = "1.0"
 pd_client = { workspace = true }
 protobuf = { version = "2.8", features = ["bytes"] }
@@ -101,6 +106,7 @@ raftstore = { workspace = true }
 raftstore-v2 = { workspace = true }
 rand = "0.8.3"
 resource_control = { workspace = true }
+security = { workspace = true }
 server = { workspace = true }
 service = { workspace = true }
 slog = { workspace = true }

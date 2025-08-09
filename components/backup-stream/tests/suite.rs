@@ -36,6 +36,7 @@ use kvproto::{
 use pd_client::PdClient;
 use raftstore::{RegionInfoAccessor, router::CdcRaftRouter};
 use resolved_ts::LeadershipResolver;
+use security::SecurityManager;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{Cluster, Config, ServerCluster, new_server_cluster};
@@ -365,9 +366,11 @@ impl Suite {
         let serv = BackupStreamGrpcService::new(endpoint.scheduler());
         let builder =
             ServerBuilder::new(self.env.clone()).register_service(create_log_backup(serv));
-        let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
+        let mut server = builder.build().unwrap();
+        let port =
+            SecurityManager::add_listening_port_without_security(&mut server, "127.0.0.1", 0)
+                .unwrap();
         server.start();
-        let (_, port) = server.bind_addrs().next().unwrap();
         let addr = format!("127.0.0.1:{}", port);
         let channel = ChannelBuilder::new(self.env.clone()).connect(&addr);
         let client = LogBackupClient::new(channel);
