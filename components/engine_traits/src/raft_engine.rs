@@ -143,6 +143,7 @@ pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send 
 
     fn get_engine_size(&self) -> Result<u64>;
 
+    fn get_memory_usage(&self) -> Result<u64>;
     /// The path to the directory on the filesystem where the raft log is stored
     fn get_engine_path(&self) -> &str;
 

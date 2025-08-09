@@ -87,6 +87,10 @@ pub struct Config {
     // When the approximate size of raft log entries exceed this value,
     // gc will be forced trigger.
     pub raft_log_gc_size_limit: Option<ReadableSize>,
+    // The maximum memory limit of raft engine.
+    pub raft_engine_memory_limit: ReadableSize,
+
+    pub raft_engine_memory_high_water_limit_duration: ReadableDuration,
     /// The maximum raft log numbers that applied_index can be ahead of
     /// persisted_index.
     pub max_apply_unpersisted_log_limit: u64,
@@ -102,6 +106,10 @@ pub struct Config {
     pub raft_log_reserve_max_ticks: usize,
     // Old logs in Raft engine needs to be purged peridically.
     pub raft_engine_purge_interval: ReadableDuration,
+    // Logs in Raft Engine memory needs to be purged peridically.
+    #[doc(hidden)]
+    #[online_config(hidden)]
+    pub raft_log_force_gc_interval: ReadableDuration,
     #[doc(hidden)]
     #[online_config(hidden)]
     pub max_manual_flush_rate: f64,
@@ -525,10 +533,13 @@ impl Default for Config {
             raft_log_gc_threshold: 50,
             raft_log_gc_count_limit: None,
             raft_log_gc_size_limit: None,
+            raft_engine_memory_limit: ReadableSize::mb(512),
+            raft_engine_memory_high_water_limit_duration: ReadableDuration::secs(300),
             max_apply_unpersisted_log_limit: 1024,
             follower_read_max_log_gap: 100,
             raft_log_reserve_max_ticks: 6,
             raft_engine_purge_interval: ReadableDuration::secs(10),
+            raft_log_force_gc_interval: ReadableDuration::secs(300),
             max_manual_flush_rate: 3.0,
             raft_entry_cache_life_time: ReadableDuration::secs(30),
             raft_reject_transfer_leader_duration: ReadableDuration::secs(3),
@@ -1047,6 +1058,11 @@ impl Config {
             ));
         }
 
+        if self.raft_engine_memory_high_water_limit_duration.as_secs() == 0 {
+            return Err(box_err!(
+                "raft_engine_memory_high_water_limit_duration must be greater than 0 seconds"
+            ));
+        }
         Ok(())
     }
 
@@ -1099,6 +1115,15 @@ impl Config {
             .with_label_values(&["raft_log_gc_count_limit"])
             .set(self.raft_log_gc_count_limit.unwrap_or_default() as f64);
         CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["raft_engine_memory_limit"])
+            .set(self.raft_engine_memory_limit.0 as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["raft_engine_memory_high_water_limit_duration"])
+            .set(
+                self.raft_engine_memory_high_water_limit_duration
+                    .as_secs_f64(),
+            );
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_log_gc_size_limit"])
             .set(self.raft_log_gc_size_limit.unwrap_or_default().0 as f64);
         CONFIG_RAFTSTORE_GAUGE
@@ -1110,6 +1135,9 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_engine_purge_interval"])
             .set(self.raft_engine_purge_interval.as_secs_f64());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["raft_log_force_gc_interval"])
+            .set(self.raft_log_force_gc_interval.as_secs_f64());
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["max_manual_flush_rate"])
             .set(self.max_manual_flush_rate);
