@@ -103,6 +103,11 @@ lazy_static! {
     )
     .unwrap();
 
+    pub static ref CDC_CONNECTION_COUNT: IntGauge = register_int_gauge!(
+        "tikv_cdc_connection_count",
+        "Total number of CDC connections"
+    ).unwrap();
+
     pub static ref CDC_DROP_TXN_EXTRA_TASKS_COUNT:IntCounter = register_int_counter!(
         "tikv_cdc_drop_txn_extra_task_count",
         "Total count of dropped txn extra tasks"
