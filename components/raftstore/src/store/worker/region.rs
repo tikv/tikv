@@ -42,7 +42,7 @@ use crate::{
         fsm::StoreMeta,
         peer_storage::{
             JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING, JOB_STATUS_FAILED, JOB_STATUS_FINISHED,
-            JOB_STATUS_PENDING, JOB_STATUS_RUNNING, clear_meta, write_peer_state,
+            JOB_STATUS_PENDING, JOB_STATUS_RUNNING, do_perparations_for_destroy,
         },
         snap::{Error, Result, SNAPSHOT_CFS, plain_file_used},
         transport::CasualRouter,
@@ -798,103 +798,23 @@ where
         pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
     ) -> RaftstoreResult<(Duration, Duration) /* (destroy_raft duration, destroy_kv duration) */>
     {
-        let peer_id = peer.get_id();
-        let mut region = region.clone();
         info!(
-            "handle destroy peer";
+            "handle destroy peer in async mode";
             "peer_id" => peer.get_id(),
             "region_id" => region.get_id(),
         );
-
-        // Lock the store_meta to ensure safe access to pending_create_peers.
-        // TODO: Find a way to make destroying operations not hold the
-        // store_meta lock in the future.
-        let _meta = self.store_meta.lock().unwrap();
-
-        let (pending_create_peers, clean) = if local_first_replicate {
-            let mut pending = pending_create_peers.lock().unwrap();
-            if initialized {
-                assert_eq!(pending.get(&region.get_id()), None);
-                (None, true)
-            } else if let Some(status) = pending.get(&region.get_id()) {
-                if *status == (peer_id, false) {
-                    pending.remove(&region.get_id());
-                    // Hold the lock to avoid apply worker applies split.
-                    (Some(pending), true)
-                } else if *status == (peer_id, true) {
-                    // It's already marked to split by apply worker, skip delete.
-                    (None, false)
-                } else {
-                    // Peer id can't be different as router should exist all the time, their is no
-                    // chance for store to insert a different peer id. And apply worker should skip
-                    // split when meeting a different id.
-                    let status = *status;
-                    // Avoid panic with lock.
-                    drop(pending);
-                    panic!(
-                        "[peer = {}] region {:?} unexpected pending states {:?}",
-                        peer_id, region, status
-                    );
-                }
-            } else {
-                // The status is inserted when it's created. It will be removed in following
-                // cases:
-                // - By apply worker as it fails to split due to region state key. This is
-                //   impossible to reach this code path because the delete write batch is not
-                //   persisted yet.
-                // - By store fsm as it fails to create peer, which is also invalid obviously.
-                // - By peer fsm after persisting snapshot, then it should be initialized.
-                // - By peer fsm after split.
-                // - By peer fsm when destroy, which should go the above branch instead.
-                (None, false)
-            }
-        } else {
-            (None, true)
-        };
-        let (raft_duration, kv_duration) = if clean {
-            // Set Tombstone state explicitly
-            let mut kv_wb = self.engines.kv.write_batch();
-            let mut raft_wb = self.engines.raft.log_batch(1024);
-            // Raft log gc should be flushed before being destroyed, so last_compacted_idx
-            // has to be the minimal index that may still have logs.
-            clear_meta(
-                &self.engines,
-                &mut kv_wb,
-                &mut raft_wb,
-                region.get_id(),
-                first_index,
-                &raft_state,
-            )?;
-
-            // StoreFsmDelegate::check_msg use both epoch and region peer list to check
-            // whether a message is targeting a staled peer. But for an uninitialized peer,
-            // both epoch and peer list are empty, so a removed peer will be created again.
-            // Saving current peer into the peer list of region will fix this problem.
-            if !initialized {
-                region.mut_peers().push(peer.clone());
-            }
-
-            // Persist the Tomstone state of this peer to kvdb.
-            write_peer_state(&mut kv_wb, &region, PeerState::Tombstone, merge_state)?;
-
-            // Write kv rocksdb first in case of restart happen between two write
-            let start = Instant::now();
-            let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(true);
-            kv_wb.write_opt(&write_opts)?;
-            let kv_duration = start.saturating_elapsed();
-
-            drop(pending_create_peers);
-
-            let start = Instant::now();
-            self.engines.raft.consume(&mut raft_wb, true)?;
-            let raft_duration = start.saturating_elapsed();
-            (raft_duration, kv_duration)
-        } else {
-            (Duration::ZERO, Duration::ZERO)
-        };
-
-        Ok((raft_duration, kv_duration))
+        do_perparations_for_destroy(
+            &self.engines,
+            peer,
+            region,
+            raft_state,
+            merge_state,
+            initialized,
+            local_first_replicate,
+            first_index,
+            self.store_meta.clone(),
+            pending_create_peers,
+        )
     }
 }
 
@@ -959,11 +879,14 @@ where
                     pending_create_peers,
                 ) {
                     Err(e) => {
-                        warn!("failed to destroy peer";
-                            "peer_id" => peer_id,
-                            "region_id" => region_id,
-                            "keep_data" => keep_data,
-                            "error" => ?e);
+                        // If not panic here, the peer will be recreated in the next restart,
+                        // then it will be gc again. But if some overlap region is created
+                        // before restarting, the gc action will delete the overlap region's
+                        // data too.
+                        panic!(
+                            "peer_id: {}, region_id: {} failed to destroy err {:?}",
+                            peer_id, region_id, e
+                        );
                     }
                     Ok(duration) => {
                         let _ = self.router.send(

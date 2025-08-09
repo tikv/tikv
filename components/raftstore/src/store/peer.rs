@@ -92,14 +92,14 @@ use crate::{
         async_io::{read::ReadTask, write::WriteMsg, write_router::WriteRouter},
         entry_storage::CacheWarmupState,
         fsm::{
-            Apply, ApplyMetrics, ApplyTask, Proposal,
+            Apply, ApplyMetrics, ApplyTask, Proposal, StoreMeta,
             apply::{self, CatchUpLogs},
             store::PollContext,
         },
         hibernate_state::GroupState,
         memory::{MEMTRACE_RAFT_ENTRIES, needs_evict_entry_cache},
         msg::{CampaignType, CasualMessage, ErrorCallback, RaftCommand},
-        peer_storage::HandleSnapshotResult,
+        peer_storage::{HandleSnapshotResult, do_perparations_for_destroy},
         snapshot_backup::{AbortReason, SnapshotBrState},
         txn_ext::LocksStatus,
         unsafe_recovery::{ForceLeaderState, UnsafeRecoveryState},
@@ -1378,10 +1378,16 @@ where
     /// an asychronous task to the region worker.
     pub fn prepare_for_destroy(
         &mut self,
+        engines: &Engines<EK, ER>,
         keep_data: bool,
+        store_meta: Arc<Mutex<StoreMeta>>,
         pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
-    ) -> Result<()> {
-        fail_point!("raft_store_skip_destroy_peer", |_| Ok(()));
+        async_mode: bool,
+    ) -> Result<(Duration, Duration)> {
+        fail_point!("raft_store_skip_destroy_peer", |_| Ok((
+            Duration::ZERO,
+            Duration::ZERO
+        )));
 
         let peer = self.peer.clone();
         let region = self.region().clone();
@@ -1394,22 +1400,41 @@ where
         } else {
             None
         };
-        // Asynchronously mark the peer destroyed.
-        self.mut_store().mark_peer_destroyed(
-            peer,
-            region,
-            keep_data,
-            local_first_replicate,
-            last_compacted_idx,
-            merge_state,
-            pending_create_peers,
-        )?;
+        let (raft_duration, kv_duration) = if async_mode {
+            // Asynchronously mark the peer destroyed.
+            self.mut_store().mark_peer_destroyed(
+                peer,
+                region,
+                keep_data,
+                local_first_replicate,
+                last_compacted_idx,
+                merge_state,
+                pending_create_peers,
+            )?;
+            (Duration::ZERO, Duration::ZERO)
+        } else {
+            // Sync mode, directly make preparations for destroy.
+            do_perparations_for_destroy(
+                &engines,
+                peer,
+                region,
+                self.get_store().raft_state().clone(),
+                merge_state,
+                self.get_store().is_initialized(),
+                local_first_replicate,
+                last_compacted_idx,
+                store_meta.clone(),
+                pending_create_peers,
+            )?
+        };
+
         info!(
-            "schedule async destroy peer task";
+            "trigger destroy peer task";
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
+            "async" => async_mode,
         );
-        Ok(())
+        Ok((raft_duration, kv_duration))
     }
 
     /// Does the final destroy task which includes:

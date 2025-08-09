@@ -4169,18 +4169,45 @@ where
                 "err" => %e,
             );
         }
+
+        // Here, drop the lock of `StoreMeta` to make the preparations for destroy
+        // safety to be executed.
+        drop(meta);
+
         // Asynchronously destroy the peer by triggering a task to background worker,
         // and the corresponding worker will finish the preparations for destroying.
-        if let Err(e) = self
+        let async_failed = self
             .fsm
             .peer
-            .prepare_for_destroy(merged_by_target, self.ctx.pending_create_peers.clone())
-        {
-            // If not panic here, the peer will be recreated in the next restart,
-            // then it will be gc again. But if some overlap region is created
-            // before restarting, the gc action will delete the overlap region's
-            // data too.
-            panic!("{} prepare to destroy err {:?}", self.fsm.peer.tag, e);
+            .prepare_for_destroy(
+                &self.ctx.engines,
+                merged_by_target,
+                self.ctx.store_meta.clone(),
+                self.ctx.pending_create_peers.clone(),
+                true,
+            )
+            .is_err();
+        // Failed to synchronously destroy the peer (channel is closed),
+        // redirecting to synchronously destroy the peer.
+        if async_failed {
+            match self.fsm.peer.prepare_for_destroy(
+                &self.ctx.engines,
+                merged_by_target,
+                self.ctx.store_meta.clone(),
+                self.ctx.pending_create_peers.clone(),
+                false,
+            ) {
+                Err(e) => {
+                    // If not panic here, the peer will be recreated in the next restart,
+                    // then it will be gc again. But if some overlap region is created
+                    // before restarting, the gc action will delete the overlap region's
+                    // data too.
+                    panic!("{} prepare to destroy err {:?}", self.fsm.peer.tag, e);
+                }
+                Ok(duration) => {
+                    self.on_ready_destroy_peer(merged_by_target, duration);
+                }
+            }
         }
 
         true
