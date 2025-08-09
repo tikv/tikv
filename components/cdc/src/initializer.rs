@@ -348,6 +348,7 @@ impl<E: KvEngine> Initializer<E> {
             CDC_SCAN_LONG_DURATION_REGIONS.dec();
         });
 
+        let mut total_scanned_entries = 0;
         while !done {
             // Add metrics to observe long time incremental scan region count
             if !scan_long_time.load(Ordering::SeqCst)
@@ -356,24 +357,31 @@ impl<E: KvEngine> Initializer<E> {
                 CDC_SCAN_LONG_DURATION_REGIONS.inc();
                 scan_long_time.store(true, Ordering::SeqCst);
                 warn!(
-                    "cdc incremental scan takes too long"; "region_id" => region_id, "conn_id" => ?self.conn_id,
-                    "downstream_id" => ?self.downstream_id, "takes" => ?start.saturating_elapsed()
+                    "cdc incremental scan takes too long";
+                    "scanned_entries" => total_scanned_entries,
+                    "takes" => ?start.saturating_elapsed(),
+                    "downstream_id" => ?self.downstream_id,
+                    "region_id" => region_id, "conn_id" => ?self.conn_id,
                 );
             }
+
             // When downstream_state is Stopped, it means the corresponding
             // delegate is stopped. The initialization can be safely canceled.
             if self.downstream_state.load() == DownstreamState::Stopped {
                 return on_cancel();
             }
+
             let cursors = old_value_cursors.as_mut();
             let entries = self
                 .scan_batch(&mut scanner, cursors, &mut scan_stat)
                 .await?;
+
             if let Some(None) = entries.last() {
                 // If the last element is None, it means scanning is finished.
                 done = true;
             }
-            debug!("cdc scan entries"; "len" => entries.len(), "region_id" => region_id);
+            total_scanned_entries += entries.len();
+
             fail_point!("before_schedule_incremental_scan");
             let start_sink = Instant::now_coarse();
             self.sink_scan_events(entries, done).await?;
@@ -386,11 +394,12 @@ impl<E: KvEngine> Initializer<E> {
         }
         let takes = start.saturating_elapsed();
         info!("cdc async incremental scan finished";
+            "scanned_entries" => total_scanned_entries,
+            "takes" => ?takes,
+            "observe_id" => ?observe_id,
             "region_id" => region_id,
             "downstream_id" => ?downstream_id,
-            "observe_id" => ?observe_id,
             "conn_id" => ?conn_id,
-            "takes" => ?takes,
         );
 
         CDC_SCAN_DURATION_HISTOGRAM.observe(takes.as_secs_f64());
@@ -523,7 +532,8 @@ impl<E: KvEngine> Initializer<E> {
             .send_all(events, self.scan_truncated.clone())
             .await
         {
-            warn!("cdc send scan event failed"; "err" => ?e, "req_id" => ?self.request_id);
+            warn!("cdc send scan event failed"; "err" => ?e, "req_id" => ?self.request_id,
+                "downstream_id" => ?self.downstream_id, "region_id" => self.region_id, "conn_id" => ?self.conn_id);
             return Err(Error::Sink(e));
         }
 

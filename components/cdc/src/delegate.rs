@@ -419,7 +419,11 @@ impl Delegate {
         false
     }
 
-    fn finish_prepare_lock_tracker(&mut self, region: Region, mut locks: BTreeMap<Key, MiniLock>) {
+    fn finish_prepare_lock_tracker(
+        &mut self,
+        region: Region,
+        mut locks: BTreeMap<Key, MiniLock>,
+    ) -> Result<()> {
         let delta_locks = match std::mem::replace(&mut self.lock_tracker, LockTracker::Pending) {
             LockTracker::Preparing(locks) => locks,
             _ => unreachable!(),
@@ -458,6 +462,7 @@ impl Delegate {
         CDC_PENDING_BYTES_GAUGE.add(alloc_bytes as _);
 
         self.lock_tracker = LockTracker::Prepared { region, locks };
+        Ok(())
     }
 
     pub(crate) fn finish_scan_locks(
@@ -469,7 +474,7 @@ impl Delegate {
             Error::MemoryQuotaExceeded(tikv_util::memory::MemoryQuotaExceeded)
         ));
 
-        self.finish_prepare_lock_tracker(region, locks);
+        self.finish_prepare_lock_tracker(region, locks)?;
         info!("cdc region is ready"; "region_id" => self.region_id);
 
         let region = match &self.lock_tracker {
@@ -1241,6 +1246,7 @@ fn decode_write(
     false
 }
 
+// decode the lock and return true that the caller should skip the record
 fn decode_lock(key: Vec<u8>, mut lock: Lock, row: &mut EventRow, has_value: &mut bool) -> bool {
     let key = Key::from_encoded(key);
     let op_type = match lock.lock_type {
