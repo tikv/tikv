@@ -1,11 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::{BTreeMap, btree_map},
+    collections::{btree_map, BTreeMap},
     sync::Arc,
 };
 
-use super::{Result, range::*};
+use super::{range::*, Result};
 
 type ErrorBuilder = Box<dyn Send + Sync + Fn() -> crate::error::StorageError>;
 
@@ -70,6 +70,10 @@ impl super::Storage for FixtureStorage {
         self.is_backward_scan = is_backward_scan;
         self.is_key_only = is_key_only;
         Ok(())
+    }
+
+    fn close_scan(&mut self) {
+        self.data_view_unsafe = None;
     }
 
     fn scan_next(&mut self) -> Result<Option<super::OwnedKvPair>> {
