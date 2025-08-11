@@ -269,7 +269,7 @@ lazy_static! {
         exponential_buckets(5e-5, 2.0, 22).unwrap() // 50us ~ 104s
     )
     .unwrap();
-    pub static ref GRPC_WAIT_HISTOGRAM: Histogram = register_histogram!(
+    pub static ref GRPC_BATCH_COMMANDS_WAIT_HISTOGRAM: Histogram = register_histogram!(
         "tikv_grpc_wait_duration_seconds",
         "Bucketed histogram of grpc server messages waiting duration",
         exponential_buckets(5e-5, 2.0, 22).unwrap() // 50us ~ 104s
