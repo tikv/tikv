@@ -269,6 +269,12 @@ lazy_static! {
         exponential_buckets(5e-5, 2.0, 22).unwrap() // 50us ~ 104s
     )
     .unwrap();
+    pub static ref GRPC_BATCH_COMMANDS_WAIT_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_grpc_batch_commands_wait_duration_seconds",
+        "Bucketed histogram of grpc server batch commands waiting duration",
+        exponential_buckets(5e-5, 2.0, 22).unwrap() // 50us ~ 104s
+    )
+    .unwrap();
     pub static ref SERVER_INFO_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
         "tikv_server_info",
         "Indicate the tikv server info, and the value is the server startup timestamp(s).",
