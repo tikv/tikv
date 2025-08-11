@@ -331,7 +331,6 @@ impl Sink {
         truncated: Arc<AtomicBool>,
     ) -> Result<(), SendError> {
         // Allocate quota in advance.
-        let event_count = scaned_events.len();
         let mut total_bytes = 0;
         for event in &scaned_events {
             let bytes = event.size();
