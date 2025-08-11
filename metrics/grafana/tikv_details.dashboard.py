@@ -1075,6 +1075,22 @@ def gRPC() -> RowPanel:
                     ),
                 ],
             ),
+            graph_panel(
+                title=r"gRPC mesage wait duration",
+                description=r"The max wait time of gRPC message",
+                yaxes=yaxes(left_format=UNITS.SECONDS, log_base=2),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            1.0,
+                            "tikv_grpc_wait_duration_seconds",
+                            is_optional_quantile=True,
+                        ),
+                        legend_format="max-wait",
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
         ]
     )
     layout.row(
