@@ -97,10 +97,10 @@ futures-util = { version = "0.3.1", default-features = false, features = [
 ] }
 fxhash = "0.2.1"
 getset = "0.1"
-grpcio = { git = "https://github.com/Dog-Du/grpc-rs.git", rev = "cb3360c0e14bf417f570f8f54d2f130697fefbb4" }
-grpcio-compiler = { git = "https://github.com/Dog-Du/grpc-rs.git",  package = "grpcio-compiler", rev = "cb3360c0e14bf417f570f8f54d2f130697fefbb4" }
-grpcio-health = { git = "https://github.com/Dog-Du/grpc-rs.git",  package = "grpcio-health", rev = "cb3360c0e14bf417f570f8f54d2f130697fefbb4" }
-grpcio-sys = { git = "https://github.com/Dog-Du/grpc-rs.git", package = "grpcio-sys", rev = "cb3360c0e14bf417f570f8f54d2f130697fefbb4" }
+grpcio = { git = "https://github.com/Dog-Du/grpc-rs.git", rev = "0a8e459f16e2035f8e6542d92b6d85ea8e445851" }
+grpcio-compiler = { git = "https://github.com/Dog-Du/grpc-rs.git",  package = "grpcio-compiler", rev = "0a8e459f16e2035f8e6542d92b6d85ea8e445851" }
+grpcio-health = { git = "https://github.com/Dog-Du/grpc-rs.git",  package = "grpcio-health", rev = "0a8e459f16e2035f8e6542d92b6d85ea8e445851" }
+grpcio-sys = { git = "https://github.com/Dog-Du/grpc-rs.git", package = "grpcio-sys", rev = "0a8e459f16e2035f8e6542d92b6d85ea8e445851" }
 health_controller = { workspace = true }
 hex = "0.4"
 http = "0"
@@ -193,10 +193,10 @@ yatp = { workspace = true }
 api_version = { workspace = true, features = ["testexport"] }
 engine_test = { workspace = true }
 example_coprocessor_plugin = { workspace = true }                              # must, used for testing coprocessor plugin
-grpcio = { git = "https://github.com/Dog-Du/grpc-rs.git", rev = "cb3360c0e14bf417f570f8f54d2f130697fefbb4" }
-grpcio-compiler = { git = "https://github.com/Dog-Du/grpc-rs.git", package = "grpcio-compiler", rev = "cb3360c0e14bf417f570f8f54d2f130697fefbb4" }
-grpcio-health = { git = "https://github.com/Dog-Du/grpc-rs.git", package = "grpcio-health", rev = "cb3360c0e14bf417f570f8f54d2f130697fefbb4" }
-grpcio-sys = { git = "https://github.com/Dog-Du/grpc-rs.git", package = "grpcio-sys", rev = "cb3360c0e14bf417f570f8f54d2f130697fefbb4" }
+grpcio = { git = "https://github.com/Dog-Du/grpc-rs.git", rev = "0a8e459f16e2035f8e6542d92b6d85ea8e445851" }
+grpcio-compiler = { git = "https://github.com/Dog-Du/grpc-rs.git", package = "grpcio-compiler", rev = "0a8e459f16e2035f8e6542d92b6d85ea8e445851" }
+grpcio-health = { git = "https://github.com/Dog-Du/grpc-rs.git", package = "grpcio-health", rev = "0a8e459f16e2035f8e6542d92b6d85ea8e445851" }
+grpcio-sys = { git = "https://github.com/Dog-Du/grpc-rs.git", package = "grpcio-sys", rev = "0a8e459f16e2035f8e6542d92b6d85ea8e445851" }
 hyper-openssl = "0.9"
 panic_hook = { workspace = true }
 raftstore = { workspace = true, features = ["testexport"] }
@@ -206,10 +206,10 @@ tokio = { version = "1.17", features = ["macros", "rt-multi-thread", "time"] }
 zipf = "6.1.0"
 
 [patch.crates-io]
-grpcio-sys = { git = "https://github.com/Dog-Du/grpc-rs.git", package = "grpcio-sys", rev = "cb3360c0e14bf417f570f8f54d2f130697fefbb4" }
-grpcio = { git = "https://github.com/Dog-Du/grpc-rs.git", rev = "cb3360c0e14bf417f570f8f54d2f130697fefbb4" }
-grpcio-health = { git = "https://github.com/Dog-Du/grpc-rs.git", package = "grpcio-health", rev = "cb3360c0e14bf417f570f8f54d2f130697fefbb4" }
-grpcio-compiler = { git = "https://github.com/Dog-Du/grpc-rs.git", package = "grpcio-compiler", rev = "cb3360c0e14bf417f570f8f54d2f130697fefbb4" }
+grpcio-sys = { git = "https://github.com/Dog-Du/grpc-rs.git", package = "grpcio-sys", rev = "0a8e459f16e2035f8e6542d92b6d85ea8e445851" }
+grpcio = { git = "https://github.com/Dog-Du/grpc-rs.git", rev = "0a8e459f16e2035f8e6542d92b6d85ea8e445851" }
+grpcio-health = { git = "https://github.com/Dog-Du/grpc-rs.git", package = "grpcio-health", rev = "0a8e459f16e2035f8e6542d92b6d85ea8e445851" }
+grpcio-compiler = { git = "https://github.com/Dog-Du/grpc-rs.git", package = "grpcio-compiler", rev = "0a8e459f16e2035f8e6542d92b6d85ea8e445851" }
 # TODO: remove this when new raft-rs is published.
 raft = { git = "https://github.com/tikv/raft-rs", branch = "master" }
 raft-proto = { git = "https://github.com/tikv/raft-rs", branch = "master" }
@@ -376,10 +376,10 @@ raft-engine = { git = "https://github.com/tikv/raft-engine.git", features = [
   "swap",
 ] }
 raft-engine-ctl = { git = "https://github.com/tikv/raft-engine.git" }
-grpcio-sys = { git = "https://github.com/Dog-Du/grpc-rs.git", package = "grpcio-sys", rev = "cb3360c0e14bf417f570f8f54d2f130697fefbb4" }
-grpcio = { git = "https://github.com/Dog-Du/grpc-rs.git",  rev = "cb3360c0e14bf417f570f8f54d2f130697fefbb4" }
-grpcio-health = { git = "https://github.com/Dog-Du/grpc-rs.git",  package = "grpcio-health", rev = "cb3360c0e14bf417f570f8f54d2f130697fefbb4" }
-grpcio-compiler = { git = "https://github.com/Dog-Du/grpc-rs.git",  package = "grpcio-compiler", rev = "cb3360c0e14bf417f570f8f54d2f130697fefbb4" }
+grpcio-sys = { git = "https://github.com/Dog-Du/grpc-rs.git", package = "grpcio-sys", rev = "0a8e459f16e2035f8e6542d92b6d85ea8e445851" }
+grpcio = { git = "https://github.com/Dog-Du/grpc-rs.git",  rev = "0a8e459f16e2035f8e6542d92b6d85ea8e445851" }
+grpcio-health = { git = "https://github.com/Dog-Du/grpc-rs.git",  package = "grpcio-health", rev = "0a8e459f16e2035f8e6542d92b6d85ea8e445851" }
+grpcio-compiler = { git = "https://github.com/Dog-Du/grpc-rs.git",  package = "grpcio-compiler", rev = "0a8e459f16e2035f8e6542d92b6d85ea8e445851" }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
