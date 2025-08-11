@@ -1082,7 +1082,7 @@ def gRPC() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_histogram_quantile(
-                            1.0,
+                            0.9999,
                             "tikv_grpc_wait_duration_seconds",
                             is_optional_quantile=False,
                         ),
