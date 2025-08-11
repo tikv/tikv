@@ -268,22 +268,9 @@ lazy_static! {
         &["type","priority"],
         exponential_buckets(5e-5, 2.0, 22).unwrap() // 50us ~ 104s
     ).unwrap();
-    pub static ref GRPC_WAIT_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
+    pub static ref GRPC_WAIT_HISTOGRAM: Histogram = register_histogram!(
         "tikv_grpc_wait_duration_seconds",
-        "Bucketed histogram of grpc server messages",
-        &["type"],
-        exponential_buckets(5e-5, 2.0, 22).unwrap() // 50us ~ 104s
-    ).unwrap();
-    pub static ref GRPC_TOTAL_RPC_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
-        "tikv_grpc_total_rpc_duration_seconds",
-        "Bucketed histogram of grpc server messages",
-        &["type"],
-        exponential_buckets(5e-5, 2.0, 22).unwrap() // 50us ~ 104s
-    ).unwrap();
-    pub static ref GRPC_PROCESS_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
-        "tikv_grpc_process_duration_seconds",
-        "Bucketed histogram of grpc server messages",
-        &["type"],
+        "Bucketed histogram of grpc server messages waiting duration",
         exponential_buckets(5e-5, 2.0, 22).unwrap() // 50us ~ 104s
     ).unwrap();
     pub static ref SERVER_INFO_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(

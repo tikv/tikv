@@ -329,10 +329,6 @@ macro_rules! set_total_time {
             .mut_exec_details_v2()
             .mut_time_detail_v2()
             .set_total_rpc_wall_time_ns($duration.as_nanos() as u64);
-        $resp
-            .mut_exec_details_v2()
-            .mut_time_detail_v2()
-            .set_kv_grpc_wait_time_ns(888888888 as u64);
     };
 }
 
@@ -1578,13 +1574,8 @@ fn handle_measures_for_batch_commands(measures: &mut MeasuredBatchResponse) {
             CheckSecondaryLocks(resp) => Some(resp.mut_exec_details_v2()),
             _ => None,
         });
-        GRPC_WAIT_HISTOGRAM_VEC.with_label_values(&[label.get_str()]).observe(wait.as_secs_f64());
-        GRPC_TOTAL_RPC_HISTOGRAM_VEC.with_label_values(&[label.get_str()]).observe(elapsed.as_secs_f64());
+        GRPC_WAIT_HISTOGRAM.observe(wait.as_secs_f64());
         if let Some(exec_details) = exec_details {
-            if exec_details.has_time_detail_v2() {
-                GRPC_PROCESS_HISTOGRAM_VEC.with_label_values(&[label.get_str()])
-                    .observe((exec_details.get_time_detail_v2().get_kv_grpc_process_time_ns() / 1000000000) as f64);
-            }
             exec_details
                 .mut_time_detail()
                 .set_total_rpc_wall_time_ns(elapsed.as_nanos() as u64);
