@@ -1077,7 +1077,7 @@ def gRPC() -> RowPanel:
             ),
             graph_panel(
                 title=r"gRPC mesage wait duration",
-                description=r"The max wait time of gRPC message",
+                description=r"The 0.9999 wait time of gRPC message",
                 yaxes=yaxes(left_format=UNITS.SECONDS, log_base=2),
                 targets=[
                     target(
