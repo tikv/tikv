@@ -1084,7 +1084,7 @@ def gRPC() -> RowPanel:
                         expr=expr_histogram_quantile(
                             1.0,
                             "tikv_grpc_wait_duration_seconds",
-                            is_optional_quantile=True,
+                            is_optional_quantile=False,
                         ),
                         legend_format="max-wait",
                         additional_groupby=True,
