@@ -69,6 +69,7 @@ pub enum Task {
         start_key: Vec<u8>,
         end_key: Vec<u8>,
     },
+    /// Destroys and clears data belonging to the corresponding peer.
     DestroyPeer {
         peer: Peer,
         region: Region,
@@ -78,7 +79,8 @@ pub enum Task {
         initialized: bool,
         local_first_replicate: bool,
         first_index: u64,
-        // Holding lock to avoid apply worker applies split.
+        /// Holds a lock to prevent the apply worker from processing split
+        /// operations during peer destruction to maintain consistency.
         pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
     },
 }
