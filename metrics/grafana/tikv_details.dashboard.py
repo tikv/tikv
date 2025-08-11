@@ -1086,7 +1086,7 @@ def gRPC() -> RowPanel:
                             "tikv_grpc_batch_commands_wait_duration_seconds",
                             is_optional_quantile=False,
                         ),
-                        legend_format="max-wait",
+                        legend_format="P9999",
                         additional_groupby=True,
                     ),
                 ],
