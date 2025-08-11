@@ -1,15 +1,12 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-<<<<<<< HEAD
-use std::{cmp, i32, isize, sync::Arc, time::Duration};
-=======
 use std::{
     cmp,
+    i32, isize,
     ops::{Div, Mul},
     sync::Arc,
     time::Duration,
 };
->>>>>>> c15204877e (config: make default settings for gRPC adaptive to CPU quota. (#18735))
 
 use collections::HashMap;
 use engine_traits::{perf_level_serde, PerfLevel};
