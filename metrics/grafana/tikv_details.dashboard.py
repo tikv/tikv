@@ -1076,14 +1076,14 @@ def gRPC() -> RowPanel:
                 ],
             ),
             graph_panel(
-                title=r"gRPC message wait duration",
-                description=r"The 99.99% wait time of gRPC message",
+                title=r"gRPC batch commands wait duration",
+                description=r"The 99.99% wait time of gRPC batch commands",
                 yaxes=yaxes(left_format=UNITS.SECONDS, log_base=2),
                 targets=[
                     target(
                         expr=expr_histogram_quantile(
                             0.9999,
-                            "tikv_grpc_wait_duration_seconds",
+                            "tikv_grpc_batch_commands_wait_duration_seconds",
                             is_optional_quantile=False,
                         ),
                         legend_format="max-wait",

@@ -7165,7 +7165,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The 99.99% wait time of gRPC message",
+          "description": "The 99.99% wait time of gRPC batch commands",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -7235,7 +7235,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_grpc_wait_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le, $additional_groupby) \n    \n    \n))  ",
+              "expr": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_grpc_batch_commands_wait_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le, $additional_groupby) \n    \n    \n))  ",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -7243,7 +7243,7 @@
               "intervalFactor": 1,
               "legendFormat": "max-wait {{$additional_groupby}}",
               "metric": "",
-              "query": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_grpc_wait_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le, $additional_groupby) \n    \n    \n))  ",
+              "query": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_grpc_batch_commands_wait_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le, $additional_groupby) \n    \n    \n))  ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -7252,7 +7252,7 @@
           "thresholds": [],
           "timeFrom": null,
           "timeShift": null,
-          "title": "gRPC message wait duration",
+          "title": "gRPC batch commands wait duration",
           "tooltip": {
             "msResolution": true,
             "shared": true,
