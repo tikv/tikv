@@ -7165,7 +7165,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The 0.9999 wait time of gRPC message",
+          "description": "The 99.99% wait time of gRPC message",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -7252,7 +7252,7 @@
           "thresholds": [],
           "timeFrom": null,
           "timeShift": null,
-          "title": "gRPC mesage wait duration",
+          "title": "gRPC message wait duration",
           "tooltip": {
             "msResolution": true,
             "shared": true,
