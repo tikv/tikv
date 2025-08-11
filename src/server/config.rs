@@ -1,6 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp, sync::Arc, time::Duration};
+use std::{
+    cmp,
+    ops::{Div, Mul},
+    sync::Arc,
+    time::Duration,
+};
 
 use collections::HashMap;
 use engine_traits::{PerfLevel, perf_level_serde};
@@ -23,9 +28,39 @@ pub const DEFAULT_CLUSTER_ID: u64 = 0;
 pub const DEFAULT_LISTENING_ADDR: &str = "127.0.0.1:20160";
 const DEFAULT_ADVERTISE_LISTENING_ADDR: &str = "";
 const DEFAULT_STATUS_ADDR: &str = "127.0.0.1:20180";
-const DEFAULT_GRPC_CONCURRENCY: usize = 5;
+
+fn calculate_cpu_quota_base_num() -> usize {
+    // Use 8c as the default quota unit for the limit calculations
+    const DEFAULT_CPU_QUOTA_UNIT: f64 = 8.0;
+
+    SysQuota::cpu_cores_quota()
+        .div(DEFAULT_CPU_QUOTA_UNIT)
+        .floor() as usize
+}
+
+fn calculate_grpc_concurrency() -> usize {
+    // Multiplier applied to the number of raft connections to determine base
+    // concurrency.
+    const GRPC_RAFT_CONN_MULTIPLIER: usize = 3;
+
+    // Additional offset added to the calculated concurrency to ensure sufficient
+    // threads for handling gRPC requests and system overhead.
+    const GRPC_CONCURRENCY_OFFSET: usize = 2;
+
+    DEFAULT_GRPC_RAFT_CONN_NUM.mul(GRPC_RAFT_CONN_MULTIPLIER) + GRPC_CONCURRENCY_OFFSET
+}
+
+// Default settings related to gRPC
+lazy_static! {
+     static ref DEFAULT_GRPC_RAFT_CONN_NUM: usize = {
+        // Max count for the default setting of raft connection num is limited
+        // to 4.
+        calculate_cpu_quota_base_num().clamp(1, 4)
+    };
+
+    static ref DEFAULT_GRPC_CONCURRENCY: usize = calculate_grpc_concurrency();
+}
 const DEFAULT_GRPC_CONCURRENT_STREAM: i32 = 1024;
-const DEFAULT_GRPC_RAFT_CONN_NUM: usize = 1;
 const DEFAULT_GRPC_MEMORY_POOL_QUOTA: u64 = isize::MAX as u64;
 const DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE: u64 = 2 * 1024 * 1024;
 const DEFAULT_GRPC_GZIP_COMPRESSION_LEVEL: usize = 2;
@@ -268,9 +303,9 @@ impl Default for Config {
             grpc_compression_type: GrpcCompressionType::None,
             grpc_gzip_compression_level: DEFAULT_GRPC_GZIP_COMPRESSION_LEVEL,
             grpc_min_message_size_to_compress: DEFAULT_GRPC_MIN_MESSAGE_SIZE_TO_COMPRESS,
-            grpc_concurrency: DEFAULT_GRPC_CONCURRENCY,
+            grpc_concurrency: *DEFAULT_GRPC_CONCURRENCY,
             grpc_concurrent_stream: DEFAULT_GRPC_CONCURRENT_STREAM,
-            grpc_raft_conn_num: DEFAULT_GRPC_RAFT_CONN_NUM,
+            grpc_raft_conn_num: *DEFAULT_GRPC_RAFT_CONN_NUM,
             grpc_stream_initial_window_size: ReadableSize(DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE),
             grpc_memory_pool_quota: ReadableSize(DEFAULT_GRPC_MEMORY_POOL_QUOTA),
             // There will be a heartbeat every secs, it's weird a connection will be idle for more
@@ -576,6 +611,9 @@ mod tests {
         cfg.validate().unwrap();
         assert_eq!(cfg.addr, cfg.advertise_addr);
         assert_eq!(cfg.status_addr, cfg.advertise_status_addr);
+        let base_num = calculate_cpu_quota_base_num().clamp(1, 4);
+        assert_eq!(cfg.grpc_raft_conn_num, base_num);
+        assert_eq!(cfg.grpc_concurrency, base_num * 3 + 2);
 
         let mut invalid_cfg = cfg.clone();
         invalid_cfg.concurrent_send_snap_limit = 0;
