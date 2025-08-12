@@ -75,8 +75,18 @@ pub enum FindRegionResult {
     /// A region that contains the specified key is found.
     Found { region: Region, role: StateRole },
     /// No region that contains the specified key is found.
-    /// The field `next_region_start` indicates the start key of the next region
-    /// for the specified key.
+    /// The field `next_region_start` indicates the start key of the nearest
+    /// region in the local store after the specified key.
+    /// For example, if the regions are distributed in the local store as
+    /// follows: | ------------- [a, b) ------- c ------ [d, e) ------------- |
+    ///                            |            |          |
+    ///                         region1        key       region2
+    /// Because the region of the key is found in the local store,
+    /// NotFound { next_region_start: "d" } will be returned.
+    /// It is useful to get the "hole" after the specified key in the local
+    /// store, and the caller can use it to determine whether the following keys
+    /// can be located in the local store or not without accessing the
+    /// storage.
     NotFound { next_region_start: Option<Vec<u8>> },
 }
 
