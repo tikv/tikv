@@ -1047,7 +1047,7 @@ where
         let inspector = Inspector::new(
             self_store_id,
             pool.clone(),
-            Arc::new(Mutex::new(inspect_network_interval)),
+            inspect_network_interval,
         );
         RaftClient {
             self_store_id,
@@ -1060,11 +1060,6 @@ where
             last_hash: (0, 0),
             inspector,
         }
-    }
-
-    // Helper method to set the inspection interval
-    pub fn set_inspect_network_interval(&self, interval: Duration) {
-        self.inspector.set_inspect_network_interval(interval);
     }
 
     // Start the network inspection
@@ -1309,7 +1304,7 @@ where
 pub struct Inspector {
     self_store_id: u64,
     pool: Arc<Mutex<ConnectionPool>>,
-    inspect_network_interval: Arc<Mutex<Duration>>,
+    inspect_network_interval: Duration,
     // Store shutdown senders for each store inspection task
     task_handles: Arc<Mutex<HashMap<u64, oneshot::Sender<()>>>>,
     future_pool: Arc<ThreadPool<TaskCell>>,
@@ -1321,7 +1316,7 @@ impl Inspector {
     fn new(
         self_store_id: u64,
         pool: Arc<Mutex<ConnectionPool>>,
-        inspect_network_interval: Arc<Mutex<Duration>>,
+        inspect_network_interval: Duration,
     ) -> Self {
         let future_pool = Arc::new(
             yatp::Builder::new(thd_name!("network-inspector"))
@@ -1395,7 +1390,7 @@ impl Inspector {
 
         // Spawn the inspection task using the future pool
         let pool = self.pool.clone();
-        let inspect_network_interval = self.inspect_network_interval.clone();
+        let inspect_network_interval = self.inspect_network_interval;
         let max_delays = self.max_delays.clone();
         let self_store_id = self.self_store_id;
 
@@ -1431,7 +1426,7 @@ impl Inspector {
         self_store_id: u64,
         store_id: u64,
         pool: Arc<Mutex<ConnectionPool>>,
-        inspect_network_interval: Arc<Mutex<Duration>>,
+        inspect_network_interval: Duration,
         max_delays: Arc<Mutex<HashMap<u64, f64>>>,
         mut shutdown_rx: oneshot::Receiver<()>,
     ) {
@@ -1449,15 +1444,9 @@ impl Inspector {
                 break;
             }
 
-            // Read the current interval
-            let interval = {
-                let guard = inspect_network_interval.lock().unwrap();
-                *guard
-            };
-
             // Wait for the specified interval
             if let Err(e) = GLOBAL_TIMER_HANDLE
-                .delay(last_check_time + interval)
+                .delay(last_check_time + inspect_network_interval)
                 .compat()
                 .await
             {
@@ -1551,11 +1540,6 @@ impl Inspector {
                 );
             }
         }
-    }
-
-    pub fn set_inspect_network_interval(&self, interval: Duration) {
-        let mut guard = self.inspect_network_interval.lock().unwrap();
-        *guard = interval;
     }
 
     /// Get the maximum delay for a specific store and reset it to 0
@@ -1727,35 +1711,14 @@ mod tests {
         let self_store_id = 1;
         let pool: Arc<Mutex<ConnectionPool>> = Arc::default();
         let interval = Duration::from_millis(100);
-        let interval_arc = Arc::new(Mutex::new(interval));
 
-        let inspector = Inspector::new(self_store_id, pool.clone(), interval_arc.clone());
+        let inspector = Inspector::new(self_store_id, pool.clone(), interval.clone());
 
         assert_eq!(inspector.self_store_id, self_store_id);
         assert!(Arc::ptr_eq(&inspector.pool, &pool));
-        assert!(Arc::ptr_eq(
-            &inspector.inspect_network_interval,
-            &interval_arc
-        ));
+        assert_eq!(inspector.inspect_network_interval, interval);
         assert!(inspector.task_handles.lock().unwrap().is_empty());
         assert!(inspector.max_delays.lock().unwrap().is_empty());
-    }
-
-    #[test]
-    fn test_inspector_set_interval() {
-        let self_store_id = 1;
-        let pool: Arc<Mutex<ConnectionPool>> = Arc::default();
-        let initial_interval = Duration::from_millis(100);
-        let interval_arc = Arc::new(Mutex::new(initial_interval));
-
-        let inspector = Inspector::new(self_store_id, pool, interval_arc.clone());
-
-        // Test setting new interval
-        let new_interval = Duration::from_millis(500);
-        inspector.set_inspect_network_interval(new_interval);
-
-        let current_interval = *interval_arc.lock().unwrap();
-        assert_eq!(current_interval, new_interval);
     }
 
     #[test]
@@ -1763,9 +1726,8 @@ mod tests {
         let self_store_id = 1;
         let pool: Arc<Mutex<ConnectionPool>> = Arc::default();
         let interval = Duration::from_millis(100);
-        let interval_arc = Arc::new(Mutex::new(interval));
 
-        let inspector = Inspector::new(self_store_id, pool, interval_arc);
+        let inspector = Inspector::new(self_store_id, pool, interval);
 
         // Manually add some delays for testing
         {
@@ -1811,9 +1773,8 @@ mod tests {
         let self_store_id = 1;
         let pool: Arc<Mutex<ConnectionPool>> = Arc::default();
         let interval = Duration::from_millis(50);
-        let interval_arc = Arc::new(Mutex::new(interval));
 
-        let inspector = Inspector::new(self_store_id, pool, interval_arc);
+        let inspector = Inspector::new(self_store_id, pool, interval);
         let store_id = 2;
 
         // Start inspection for a store
