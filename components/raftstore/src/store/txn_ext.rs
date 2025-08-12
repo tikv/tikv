@@ -12,7 +12,11 @@ use parking_lot::RwLock;
 use prometheus::{register_int_gauge, IntGauge};
 use txn_types::{Key, PessimisticLock};
 
-const MAP_SHRINK_THRESHOLD: usize = 16;
+// Default shrinking parameters to prevent memory leaks while avoiding thrashing
+const DEFAULT_SHRINK_THRESHOLD: usize = 16; // Minimum capacity to consider shrinking
+const DEFAULT_SHRINK_FACTOR: usize = 4; // Shrink when len * factor < capacity
+const DEFAULT_DEFER_OPS: u32 = 10; // Operations to stay underutilized before shrinking
+const DEFAULT_MIN_OPS_BETWEEN_SHRINK: u32 = 20; // Minimum operations between shrinks
 
 /// Transaction extensions related to a peer.
 #[derive(Default)]
@@ -119,6 +123,10 @@ pub struct PeerPessimisticLocks {
     pub version: u64,
     /// Estimated memory used by the pessimistic locks.
     pub memory_size: usize,
+    /// Shrinking configuration
+    shrink_config: ShrinkConfig,
+    /// Current shrinking state
+    shrink_state: ShrinkState,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -142,6 +150,31 @@ impl fmt::Debug for PeerPessimisticLocks {
     }
 }
 
+#[derive(Clone, Copy, PartialEq)]
+struct ShrinkConfig {
+    threshold: usize,     // Minimum capacity to consider shrinking
+    factor: usize,        // Shrink when len * factor < capacity
+    defer_ops: u32,       // Operations to stay underutilized before shrinking
+    min_ops_between: u32, // Minimum operations between shrinks
+}
+
+#[derive(PartialEq, Default)]
+struct ShrinkState {
+    underutilized_ops: u32, // Count of operations while underutilized
+    ops_since_shrink: u32,  // Operations since last shrink
+}
+
+impl Default for ShrinkConfig {
+    fn default() -> Self {
+        Self {
+            threshold: DEFAULT_SHRINK_THRESHOLD,
+            factor: DEFAULT_SHRINK_FACTOR,
+            defer_ops: DEFAULT_DEFER_OPS,
+            min_ops_between: DEFAULT_MIN_OPS_BETWEEN_SHRINK,
+        }
+    }
+}
+
 impl Default for PeerPessimisticLocks {
     fn default() -> Self {
         PeerPessimisticLocks {
@@ -150,11 +183,35 @@ impl Default for PeerPessimisticLocks {
             term: 0,
             version: 0,
             memory_size: 0,
+            shrink_config: ShrinkConfig::default(),
+            shrink_state: ShrinkState::default(),
         }
     }
 }
 
 impl PeerPessimisticLocks {
+    pub fn with_shrink_config(
+        threshold: usize,
+        factor: usize,
+        defer_ops: u32,
+        min_ops_between: u32,
+    ) -> Self {
+        Self {
+            map: HashMap::default(),
+            status: LocksStatus::Normal,
+            term: 0,
+            version: 0,
+            memory_size: 0,
+            shrink_config: ShrinkConfig {
+                threshold,
+                factor,
+                defer_ops,
+                min_ops_between,
+            },
+            shrink_state: ShrinkState::default(),
+        }
+    }
+
     /// Inserts pessimistic locks into the map.
     ///
     /// Returns whether the operation succeeds.
@@ -191,15 +248,7 @@ impl PeerPessimisticLocks {
             self.memory_size -= desc;
             GLOBAL_MEM_SIZE.sub(desc as i64);
 
-            // Shrink HashMap if it's significantly under-utilized to prevent
-            // memory leaks
-            // Only shrink if capacity is reasonably large to avoid thrashing
-            // on small maps
-            let len = self.map.len();
-            let capacity = self.map.capacity();
-            if capacity >= MAP_SHRINK_THRESHOLD && len * 4 < capacity {
-                self.map.shrink_to_fit();
-            }
+            self.maybe_shrink_map();
         }
     }
 
@@ -215,6 +264,39 @@ impl PeerPessimisticLocks {
 
     pub fn len(&self) -> usize {
         self.map.len()
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.map.capacity()
+    }
+
+    /// Check if the map should be shrunk to prevent memory leaks,
+    /// while avoiding thrashing through deferred shrinking
+    fn maybe_shrink_map(&mut self) {
+        let len = self.map.len();
+        let capacity = self.map.capacity();
+        let config = &self.shrink_config;
+
+        let is_underutilized = capacity >= config.threshold && len * config.factor < capacity;
+
+        if is_underutilized {
+            self.shrink_state.underutilized_ops += 1;
+            self.shrink_state.ops_since_shrink += 1;
+
+            let should_shrink = self.shrink_state.underutilized_ops >= config.defer_ops
+                && self.shrink_state.ops_since_shrink >= config.min_ops_between;
+
+            if should_shrink {
+                // Smart shrinking: target capacity is len * 1.5 + 8 for future growth
+                let target_capacity = len * 3 / 2 + 8;
+                self.map.shrink_to(target_capacity);
+                self.shrink_state = ShrinkState::default();
+            }
+        } else {
+            // Reset underutilized counter when utilization is good
+            self.shrink_state.underutilized_ops = 0;
+            self.shrink_state.ops_since_shrink += 1;
+        }
     }
 
     pub fn is_writable(&self) -> bool {

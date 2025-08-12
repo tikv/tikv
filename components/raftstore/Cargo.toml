@@ -39,7 +39,7 @@ crc32fast = "1.2"
 crossbeam = "0.8"
 derivative = "2"
 encryption = { workspace = true }
-engine_rocks = { workspace = true, optional = true } 
+engine_rocks = { workspace = true, optional = true }
 
 # Should be [dev-dependencies] but we need to control the features
 # https://github.com/rust-lang/cargo/issues/6915
@@ -97,8 +97,14 @@ uuid = { version = "0.8.1", features = ["serde", "v4"] }
 yatp = { workspace = true }
 
 [dev-dependencies]
+criterion = "0.3"
 encryption_export = { workspace = true }
 engine_panic = { workspace = true }
 engine_rocks = { workspace = true }
 panic_hook = { workspace = true }
 test_sst_importer = { workspace = true }
+
+[[bench]]
+name = "pessimistic_locks_shrink"
+path = "benches/pessimistic_locks_shrink.rs"
+harness = false
