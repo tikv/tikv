@@ -12,6 +12,8 @@ use parking_lot::RwLock;
 use prometheus::{register_int_gauge, IntGauge};
 use txn_types::{Key, PessimisticLock};
 
+const MAP_SHRINK_THRESHOLD: usize = 16;
+
 /// Transaction extensions related to a peer.
 #[derive(Default)]
 pub struct TxnExt {
@@ -84,7 +86,7 @@ pub struct PeerPessimisticLocks {
     ///   likely to be proposed successfully, while the leader will need at
     ///   least another round to receive the transfer leader message from the
     ///   transferee.
-    ///  
+    ///
     /// - Split region The lock with the deleted mark SHOULD be moved to new
     ///   regions on region split. Considering the following cases with
     ///   different orders: 1. Propose write -> propose split -> apply write ->
@@ -188,6 +190,15 @@ impl PeerPessimisticLocks {
             let desc = key.len() + lock.memory_size();
             self.memory_size -= desc;
             GLOBAL_MEM_SIZE.sub(desc as i64);
+
+            // Shrink HashMap if it's significantly under-utilized to prevent
+            // memory leaks Only shrink if capacity is reasonably
+            // large to avoid thrashing on small maps
+            let len = self.map.len();
+            let capacity = self.map.capacity();
+            if capacity >= MAP_SHRINK_THRESHOLD && len * 4 < capacity {
+                self.map.shrink_to_fit();
+            }
         }
     }
 
@@ -474,6 +485,47 @@ mod tests {
         assert_eq!(
             original,
             PeerPessimisticLocks::from_locks(vec![lock(b"i", false)])
+        );
+    }
+
+    #[test]
+    fn test_hashmap_capacity_memory_leak() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        defer!(GLOBAL_MEM_SIZE.set(0));
+
+        let mut locks = PeerPessimisticLocks::default();
+
+        // Insert many locks to force HashMap capacity growth
+        let mut keys = Vec::new();
+        let n = 1000;
+        for i in 0..n {
+            let key = Key::from_raw(format!("key_{:03}", i).as_bytes());
+            keys.push(key.clone());
+            locks.insert(vec![(key, lock(b"primary"))]).unwrap();
+        }
+
+        // Verify HashMap has grown in capacity
+        let capacity_after_insert = locks.map.capacity();
+        assert!(
+            capacity_after_insert >= n,
+            "HashMap should have grown to accommodate 100 entries"
+        );
+
+        // Remove all but one lock
+        for key in keys.iter().take(n - 1) {
+            locks.remove(key);
+        }
+
+        // This test FAILS with current implementation - capacity doesn't shrink
+        let capacity_after_remove = locks.map.capacity();
+
+        // The HashMap should shrink when significantly under-utilized
+        // Currently this assertion will FAIL, demonstrating the memory leak
+        assert!(
+            capacity_after_remove <= capacity_after_insert / 4,
+            "HashMap capacity should shrink significantly after removing 99% of entries. Before: {}, After: {}",
+            capacity_after_insert,
+            capacity_after_remove
         );
     }
 }
