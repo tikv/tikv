@@ -302,21 +302,6 @@ lazy_static! {
             &["source"]
         )
         .unwrap();
-
-    pub static ref HEALTH_CHECK_DURATION_HISTOGRAM: HistogramVec = register_histogram_vec!(
-        "tikv_health_check_duration_seconds",
-        "Health check duration in seconds",
-        &["source", "target"],
-        exponential_buckets(0.001, 2.0, 15).unwrap()
-    )
-    .unwrap();
-
-    pub static ref HEALTH_CHECK_STATUS_COUNTER: IntCounterVec = register_int_counter_vec!(
-        "tikv_health_check_status_total",
-        "Health check status counter",
-        &["source", "target", "status"]
-    )
-    .unwrap();
 }
 
 lazy_static! {

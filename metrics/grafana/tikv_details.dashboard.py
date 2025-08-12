@@ -10272,26 +10272,6 @@ def SlowTrendStatistics() -> RowPanel:
             ),
         ]
     )
-    layout.row(
-        [
-            graph_panel(
-                title="Network Latency between Stores",
-                description="The network latency between stores.",
-                yaxes=yaxes(left_format=UNITS.SECONDS),
-                targets=[
-                    target(
-                        expr=expr_histogram_quantile(
-                            0.99,
-                            "tikv_health_check_duration_seconds",
-                            by_labels=["source", "target"],
-                            is_optional_quantile=True,
-                        ),
-                        legend_format="store{{source}}-store{{target}}",
-                    ),
-                ],
-            ),
-        ]
-    )
     return layout.row_panel
 
 

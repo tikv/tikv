@@ -1529,77 +1529,15 @@ impl Inspector {
 
         match health_client.check_async(&req) {
             Ok(resp_future) => {
-                match resp_future.await {
-                    Ok(response) => {
-                        let elapsed = start_time.elapsed();
-                        let status = response.get_status();
+                let _ = resp_future.await;
+                let elapsed = start_time.elapsed();
 
-                        // Record the delay and update max delay if needed
-                        let delay_ms = elapsed.as_secs_f64() * 1000.0;
-                        {
-                            let mut delays = max_delays.lock().unwrap();
-                            let current_max = delays.entry(store_id).or_insert(0.0);
-                            if delay_ms > *current_max {
-                                *current_max = delay_ms;
-                            }
-                        }
-
-                        HEALTH_CHECK_DURATION_HISTOGRAM
-                            .with_label_values(&[&self_store_id.to_string(), &store_id.to_string()])
-                            .observe(duration_to_sec(elapsed));
-
-                        HEALTH_CHECK_STATUS_COUNTER
-                            .with_label_values(&[
-                                &self_store_id.to_string(),
-                                &store_id.to_string(),
-                                &format!("{:?}", status),
-                            ])
-                            .inc();
-
-                        debug!(
-                            "Health check completed";
-                            "self_store_id" => self_store_id,
-                            "store_id" => store_id,
-                            "conn_id" => conn_id,
-                            "status" => ?status,
-                            "duration" => ?elapsed,
-                            "delay_ms" => delay_ms
-                        );
-                    }
-                    Err(e) => {
-                        let elapsed = start_time.elapsed();
-
-                        // Record the delay even for failed requests
-                        let delay_ms = elapsed.as_secs_f64() * 1000.0;
-                        {
-                            let mut delays = max_delays.lock().unwrap();
-                            let current_max = delays.entry(store_id).or_insert(0.0);
-                            if delay_ms > *current_max {
-                                *current_max = delay_ms;
-                            }
-                        }
-
-                        warn!(
-                            "Health check failed";
-                            "self_store_id" => self_store_id,
-                            "store_id" => store_id,
-                            "conn_id" => conn_id,
-                            "error" => ?e,
-                            "duration" => ?elapsed,
-                            "delay_ms" => delay_ms
-                        );
-
-                        HEALTH_CHECK_DURATION_HISTOGRAM
-                            .with_label_values(&[&self_store_id.to_string(), &store_id.to_string()])
-                            .observe(duration_to_sec(elapsed));
-
-                        HEALTH_CHECK_STATUS_COUNTER
-                            .with_label_values(&[
-                                &self_store_id.to_string(),
-                                &store_id.to_string(),
-                                "error",
-                            ])
-                            .inc();
+                let delay_ms = elapsed.as_secs_f64() * 1000.0;
+                {
+                    let mut delays = max_delays.lock().unwrap();
+                    let current_max = delays.entry(store_id).or_insert(0.0);
+                    if delay_ms > *current_max {
+                        *current_max = delay_ms;
                     }
                 }
             }
