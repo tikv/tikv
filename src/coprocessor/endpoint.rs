@@ -99,6 +99,24 @@ pub struct Endpoint<E: Engine> {
     _phantom: PhantomData<E>,
 }
 
+/// The result of parsing a Coprocessor request.
+pub struct ParseCopRequestResult<Snap> {
+    req_tag: ReqTag,
+    req_ctx: ReqContext,
+    handler_builder: RequestHandlerBuilder<Snap>,
+}
+
+impl<Snap> ParseCopRequestResult<Snap> {
+    #[cfg(test)]
+    pub fn default_for_test(handler_builder: RequestHandlerBuilder<Snap>) -> Self {
+        Self {
+            req_tag: ReqTag::test,
+            req_ctx: ReqContext::default_for_test(),
+            handler_builder,
+        }
+    }
+}
+
 impl<E: Engine> tikv_util::AssertSend for Endpoint<E> {}
 
 impl<E: Engine> Endpoint<E> {
@@ -185,7 +203,7 @@ impl<E: Engine> Endpoint<E> {
         req: coppb::Request,
         peer: Option<String>,
         is_streaming: bool,
-    ) -> Result<(RequestHandlerBuilder<E::IMSnap>, ReqContext)> {
+    ) -> Result<ParseCopRequestResult<E::IMSnap>> {
         dispatch_api_version!(req.get_context().get_api_version(), {
             self.parse_request_and_check_memory_locks_impl::<API>(req, peer, is_streaming)
         })
@@ -200,7 +218,7 @@ impl<E: Engine> Endpoint<E> {
         mut req: coppb::Request,
         peer: Option<String>,
         is_streaming: bool,
-    ) -> Result<(RequestHandlerBuilder<E::IMSnap>, ReqContext)> {
+    ) -> Result<ParseCopRequestResult<E::IMSnap>> {
         fail_point!("coprocessor_parse_request", |_| Err(box_err!(
             "unsupported tp (failpoint)"
         )));
@@ -220,8 +238,9 @@ impl<E: Engine> Endpoint<E> {
         let mut input = CodedInputStream::from_bytes(&data);
         input.set_recursion_limit(self.recursion_limit);
 
-        let mut req_ctx: ReqContext;
-        let builder: RequestHandlerBuilder<E::IMSnap>;
+        let req_ctx: ReqContext;
+        let handler_builder: RequestHandlerBuilder<E::IMSnap>;
+        let req_tag: ReqTag;
         match req.get_tp() {
             REQ_TYPE_DAG => {
                 let mut dag = DagRequest::default();
@@ -239,14 +258,13 @@ impl<E: Engine> Endpoint<E> {
                 if start_ts == 0 {
                     start_ts = dag.get_start_ts_fallback();
                 }
-                let tag = if table_scan {
+                req_tag = if table_scan {
                     ReqTag::select
                 } else {
                     ReqTag::index
                 };
 
                 req_ctx = ReqContext::new(
-                    tag,
                     context,
                     ranges,
                     self.max_handle_duration,
@@ -255,6 +273,7 @@ impl<E: Engine> Endpoint<E> {
                     start_ts.into(),
                     cache_match_version,
                     self.perf_level,
+                    false,
                 );
                 with_tls_tracker(|tracker| {
                     tracker.req_info.request_type = RequestType::CoprocessorDag;
@@ -265,7 +284,7 @@ impl<E: Engine> Endpoint<E> {
 
                 let batch_row_limit = self.get_batch_row_limit(is_streaming);
                 let quota_limiter = self.quota_limiter.clone();
-                builder = Box::new(move |snap, req_ctx| {
+                handler_builder = Box::new(move |snap, req_ctx| {
                     let data_version = snap.ext().get_data_version();
                     let store = SnapshotStore::new(
                         snap,
@@ -284,7 +303,7 @@ impl<E: Engine> Endpoint<E> {
                         dag,
                         req_ctx.ranges.clone(),
                         store,
-                        SecondarySnapStoreAccessor::<E>::new(req_ctx),
+                        SecondarySnapStoreAccessor::<E>::new(req_ctx.clone()),
                         req_ctx.deadline,
                         batch_row_limit,
                         is_streaming,
@@ -303,14 +322,13 @@ impl<E: Engine> Endpoint<E> {
                     start_ts = analyze.get_start_ts_fallback();
                 }
 
-                let tag = match analyze.get_tp() {
+                req_tag = match analyze.get_tp() {
                     AnalyzeType::TypeIndex | AnalyzeType::TypeCommonHandle => ReqTag::analyze_index,
                     AnalyzeType::TypeColumn | AnalyzeType::TypeMixed => ReqTag::analyze_table,
                     AnalyzeType::TypeFullSampling => ReqTag::analyze_full_sampling,
                     AnalyzeType::TypeSampleIndex => unimplemented!(),
                 };
                 req_ctx = ReqContext::new(
-                    tag,
                     context,
                     ranges,
                     self.max_handle_duration,
@@ -319,6 +337,7 @@ impl<E: Engine> Endpoint<E> {
                     start_ts.into(),
                     cache_match_version,
                     self.perf_level,
+                    false,
                 );
                 with_tls_tracker(|tracker| {
                     tracker.req_info.request_type = RequestType::CoprocessorAnalyze;
@@ -329,7 +348,7 @@ impl<E: Engine> Endpoint<E> {
 
                 let quota_limiter = self.quota_limiter.clone();
 
-                builder = Box::new(move |snap, req_ctx| {
+                handler_builder = Box::new(move |snap, req_ctx| {
                     AnalyzeContext::<_, F>::new(
                         analyze,
                         req_ctx.ranges.clone(),
@@ -349,13 +368,12 @@ impl<E: Engine> Endpoint<E> {
                     start_ts = checksum.get_start_ts_fallback();
                 }
 
-                let tag = if table_scan {
+                req_tag = if table_scan {
                     ReqTag::checksum_table
                 } else {
                     ReqTag::checksum_index
                 };
                 req_ctx = ReqContext::new(
-                    tag,
                     context,
                     ranges,
                     self.max_handle_duration,
@@ -364,10 +382,11 @@ impl<E: Engine> Endpoint<E> {
                     start_ts.into(),
                     cache_match_version,
                     self.perf_level,
+                    // Checksum is allowed during the flashback period to make sure the tool such
+                    // like BR can work.
+                    true,
                 );
-                // Checksum is allowed during the flashback period to make sure the tool such
-                // like BR can work.
-                req_ctx.allowed_in_flashback = true;
+
                 with_tls_tracker(|tracker| {
                     tracker.req_info.request_type = RequestType::CoprocessorChecksum;
                     tracker.req_info.start_ts = start_ts;
@@ -375,7 +394,7 @@ impl<E: Engine> Endpoint<E> {
 
                 self.check_memory_locks(&req_ctx)?;
 
-                builder = Box::new(move |snap, req_ctx| {
+                handler_builder = Box::new(move |snap, req_ctx| {
                     checksum::ChecksumContext::new(
                         checksum,
                         req_ctx.ranges.clone(),
@@ -389,7 +408,11 @@ impl<E: Engine> Endpoint<E> {
             tp => return Err(box_err!("unsupported tp {}", tp)),
         };
 
-        Ok((builder, req_ctx))
+        Ok(ParseCopRequestResult {
+            req_tag,
+            req_ctx,
+            handler_builder,
+        })
     }
 
     /// Get the batch row limit configuration.
@@ -533,9 +556,9 @@ impl<E: Engine> Endpoint<E> {
     /// other cases. The future inside may be an error however.
     fn handle_unary_request(
         &self,
-        req_ctx: ReqContext,
-        handler_builder: RequestHandlerBuilder<E::IMSnap>,
+        r: ParseCopRequestResult<E::IMSnap>,
     ) -> impl Future<Output = Result<MemoryTraceGuard<coppb::Response>>> {
+        let req_ctx = r.req_ctx;
         let priority = req_ctx.context.get_priority();
         let task_id = req_ctx.build_task_id();
         let key_ranges: Vec<_> = req_ctx
@@ -563,12 +586,12 @@ impl<E: Engine> Endpoint<E> {
             )
         });
         // box the tracker so that moving it is cheap.
-        let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
+        let tracker = Box::new(Tracker::new(req_ctx, r.req_tag, self.slow_log_threshold));
         allocated_bytes += tracker.approximate_mem_size();
 
         let (tx, rx) = oneshot::channel();
         let future =
-            Self::handle_unary_request_impl(self.semaphore.clone(), tracker, handler_builder)
+            Self::handle_unary_request_impl(self.semaphore.clone(), tracker, r.handler_builder)
                 .in_resource_metering_tag(resource_tag)
                 .map(|res| {
                     let _ = tx.send(res);
@@ -616,7 +639,7 @@ impl<E: Engine> Endpoint<E> {
         set_tls_tracker_token(tracker);
         let result_of_future = self
             .parse_request_and_check_memory_locks(req, peer, false)
-            .map(|(handler_builder, req_ctx)| self.handle_unary_request(req_ctx, handler_builder));
+            .map(|r| self.handle_unary_request(r));
         with_tls_tracker(|tracker| {
             tracker.metrics.grpc_process_nanos =
                 tracker.req_info.begin.saturating_elapsed().as_nanos() as u64;
@@ -682,10 +705,10 @@ impl<E: Engine> Endpoint<E> {
             let mut response = coppb::StoreBatchTaskResponse::new();
             response.set_task_id(task_id);
             match self.parse_request_and_check_memory_locks(cur_req, peer.clone(), false) {
-                Ok((handler_builder, req_ctx)) => {
+                Ok(r) => {
                     let cur_tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(request_info));
                     set_tls_tracker_token(cur_tracker);
-                    let fut = self.handle_unary_request(req_ctx, handler_builder);
+                    let fut = self.handle_unary_request(r);
                     let fut = async move {
                         let res = fut.await;
                         match res {
@@ -807,9 +830,9 @@ impl<E: Engine> Endpoint<E> {
     /// other cases. The stream inside may produce errors however.
     fn handle_stream_request(
         &self,
-        req_ctx: ReqContext,
-        handler_builder: RequestHandlerBuilder<E::IMSnap>,
+        r: ParseCopRequestResult<E::IMSnap>,
     ) -> Result<impl futures::stream::Stream<Item = Result<coppb::Response>>> {
+        let req_ctx = r.req_ctx;
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let priority = req_ctx.context.get_priority();
         let metadata = TaskMetadata::from_ctx(req_ctx.context.get_resource_control_context());
@@ -837,11 +860,11 @@ impl<E: Engine> Endpoint<E> {
         let mut allocated_bytes = resource_tag.approximate_heap_size();
 
         let task_id = req_ctx.build_task_id();
-        let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
+        let tracker = Box::new(Tracker::new(req_ctx, r.req_tag, self.slow_log_threshold));
         allocated_bytes += tracker.approximate_mem_size();
 
         let future =
-            Self::handle_stream_request_impl(self.semaphore.clone(), tracker, handler_builder)
+            Self::handle_stream_request_impl(self.semaphore.clone(), tracker, r.handler_builder)
                 .in_resource_metering_tag(resource_tag)
                 .then(futures::future::ok::<_, mpsc::SendError>)
                 .forward(tx)
@@ -872,9 +895,7 @@ impl<E: Engine> Endpoint<E> {
     ) -> impl futures::stream::Stream<Item = coppb::Response> {
         let result_of_stream = self
             .parse_request_and_check_memory_locks(req, peer, true)
-            .and_then(|(handler_builder, req_ctx)| {
-                self.handle_stream_request(req_ctx, handler_builder)
-            }); // Result<Stream<Resp, Error>, Error>
+            .and_then(|r| self.handle_stream_request(r)); // Result<Stream<Resp, Error>, Error>
 
         futures::stream::once(futures::future::ready(result_of_stream)) // Stream<Stream<Resp, Error>, Error>
             .try_flatten() // Stream<Resp, Error>
@@ -994,10 +1015,7 @@ fn make_error_response(e: Error) -> coppb::Response {
 /// the snapshot of the regions which these primary rows located.
 pub struct SecondarySnapStoreAccessor<E> {
     store_id: u64,
-    pb_ctx: Arc<kvrpcpb::Context>,
-    start_ts: TimeStamp,
-    by_pass_locks: TsSet,
-    access_locks: TsSet,
+    req_ctx: ReqContext,
     _phantom: PhantomData<fn() -> E>,
 }
 
@@ -1006,8 +1024,8 @@ impl<E: Engine> SecondarySnapStoreAccessor<E> {
     /// Please note that not all scenes are supported.
     /// If the current request is not supported, a `None` value will be
     /// returned to force the request to access the source region only.
-    pub fn new(req_ctx: &ReqContext) -> Option<Self> {
-        let pb_ctx = req_ctx.context.as_ref();
+    pub fn new(req_ctx: ReqContext) -> Option<Self> {
+        let pb_ctx = &req_ctx.context;
         let store_id = match pb_ctx.peer.as_ref() {
             // Though it is possible that the request carries a wrong store_id, we can still use
             // it to find the peer in the region because it will be validated in get snapshot phase.
@@ -1027,10 +1045,7 @@ impl<E: Engine> SecondarySnapStoreAccessor<E> {
 
         Some(Self {
             store_id,
-            pb_ctx: req_ctx.context.clone(),
-            start_ts: req_ctx.txn_start_ts,
-            by_pass_locks: req_ctx.bypass_locks.clone(),
-            access_locks: req_ctx.access_locks.clone(),
+            req_ctx,
             _phantom: PhantomData,
         })
     }
@@ -1093,13 +1108,14 @@ impl<E: Engine> RegionStorageAccessor for SecondarySnapStoreAccessor<E> {
             }
         };
 
-        let pb_ctx = self.pb_ctx.as_ref();
+        let pb_ctx = &self.req_ctx.context;
+        let start_ts = self.req_ctx.txn_start_ts;
         let snap_ctx = SnapContext {
             pb_ctx,
             // read_id is used by batch_get to cache the snapshot.
             // We set it as None here to disable this optimization for simple.
             read_id: None,
-            start_ts: Some(self.start_ts),
+            start_ts: Some(start_ts),
             // does not support in-flashback execution currently to avoid some potential
             // issues for simple.
             allowed_in_flashback: false,
@@ -1125,11 +1141,11 @@ impl<E: Engine> RegionStorageAccessor for SecondarySnapStoreAccessor<E> {
 
         Ok(SnapshotStore::new(
             snap,
-            self.start_ts,
+            start_ts,
             pb_ctx.get_isolation_level(),
             !pb_ctx.get_not_fill_cache(),
-            self.by_pass_locks.clone(),
-            self.access_locks.clone(),
+            self.req_ctx.bypass_locks.clone(),
+            self.req_ctx.access_locks.clone(),
             // If `check_has_newer_ts_data` is enabled, the internal scanner will check if there is
             // newer data in the region to tell the TiDB whether to cache the cop response or not.
             // However, the current cop-cache implementation only supports the source region.
@@ -1143,7 +1159,7 @@ impl<E: Engine> RegionStorageAccessor for SecondarySnapStoreAccessor<E> {
 #[cfg(test)]
 mod tests {
     use std::{
-        sync::{Mutex, atomic, atomic::AtomicBool, mpsc},
+        sync::{Mutex, atomic, mpsc},
         thread, vec,
     };
 
@@ -1332,16 +1348,16 @@ mod tests {
         // a normal request
         let handler_builder =
             Box::new(|_, _: &_| Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed()));
-        let resp =
-            block_on(copr.handle_unary_request(ReqContext::default_for_test(), handler_builder))
-                .unwrap();
+        let resp = block_on(
+            copr.handle_unary_request(ParseCopRequestResult::default_for_test(handler_builder)),
+        )
+        .unwrap();
         assert!(resp.get_other_error().is_empty());
 
         // an outdated request
         let handler_builder =
             Box::new(|_, _: &_| Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed()));
         let outdated_req_ctx = ReqContext::new(
-            ReqTag::test,
             Default::default(),
             Vec::new(),
             Duration::from_secs(0),
@@ -1350,8 +1366,14 @@ mod tests {
             TimeStamp::max(),
             None,
             PerfLevel::EnableCount,
+            false,
         );
-        block_on(copr.handle_unary_request(outdated_req_ctx, handler_builder)).unwrap_err();
+        block_on(copr.handle_unary_request(ParseCopRequestResult {
+            req_ctx: outdated_req_ctx,
+            req_tag: ReqTag::test,
+            handler_builder,
+        }))
+        .unwrap_err();
     }
 
     #[test]
@@ -1499,7 +1521,8 @@ mod tests {
                         .into_boxed(),
                 )
             });
-            let future = copr.handle_unary_request(ReqContext::default_for_test(), handler_builder);
+            let future =
+                copr.handle_unary_request(ParseCopRequestResult::default_for_test(handler_builder));
             let tx = tx.clone();
             thread::spawn(move || {
                 tx.send(block_on(future)).unwrap();
@@ -1537,9 +1560,10 @@ mod tests {
 
         let handler_builder =
             Box::new(|_, _: &_| Ok(UnaryFixture::new(Err(box_err!("foo"))).into_boxed()));
-        let resp =
-            block_on(copr.handle_unary_request(ReqContext::default_for_test(), handler_builder))
-                .unwrap();
+        let resp = block_on(
+            copr.handle_unary_request(ParseCopRequestResult::default_for_test(handler_builder)),
+        )
+        .unwrap();
         assert_eq!(resp.get_data().len(), 0);
         assert!(!resp.get_other_error().is_empty());
     }
@@ -1565,7 +1589,7 @@ mod tests {
         let handler_builder =
             Box::new(|_, _: &_| Ok(StreamFixture::new(vec![Err(box_err!("foo"))]).into_boxed()));
         let resp_vec = block_on_stream(
-            copr.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+            copr.handle_stream_request(ParseCopRequestResult::default_for_test(handler_builder))
                 .unwrap(),
         )
         .collect::<Result<Vec<_>>>()
@@ -1585,7 +1609,7 @@ mod tests {
 
         let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(responses).into_boxed()));
         let resp_vec = block_on_stream(
-            copr.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+            copr.handle_stream_request(ParseCopRequestResult::default_for_test(handler_builder))
                 .unwrap(),
         )
         .collect::<Result<Vec<_>>>()
@@ -1617,7 +1641,7 @@ mod tests {
 
         let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(vec![]).into_boxed()));
         let resp_vec = block_on_stream(
-            copr.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+            copr.handle_stream_request(ParseCopRequestResult::default_for_test(handler_builder))
                 .unwrap(),
         )
         .collect::<Result<Vec<_>>>()
@@ -1661,7 +1685,7 @@ mod tests {
         });
         let handler_builder = Box::new(move |_, _: &_| Ok(handler.into_boxed()));
         let resp_vec = block_on_stream(
-            copr.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+            copr.handle_stream_request(ParseCopRequestResult::default_for_test(handler_builder))
                 .unwrap(),
         )
         .collect::<Result<Vec<_>>>()
@@ -1687,7 +1711,7 @@ mod tests {
         });
         let handler_builder = Box::new(move |_, _: &_| Ok(handler.into_boxed()));
         let resp_vec = block_on_stream(
-            copr.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+            copr.handle_stream_request(ParseCopRequestResult::default_for_test(handler_builder))
                 .unwrap(),
         )
         .collect::<Result<Vec<_>>>()
@@ -1713,7 +1737,7 @@ mod tests {
         });
         let handler_builder = Box::new(move |_, _: &_| Ok(handler.into_boxed()));
         let resp_vec = block_on_stream(
-            copr.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+            copr.handle_stream_request(ParseCopRequestResult::default_for_test(handler_builder))
                 .unwrap(),
         )
         .collect::<Result<Vec<_>>>()
@@ -1755,7 +1779,7 @@ mod tests {
         });
         let handler_builder = Box::new(move |_, _: &_| Ok(handler.into_boxed()));
         let resp_vec = block_on_stream(
-            copr.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+            copr.handle_stream_request(ParseCopRequestResult::default_for_test(handler_builder))
                 .unwrap(),
         )
         .take(7)
@@ -1817,10 +1841,11 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
 
         // A request that requests execution details.
-        let mut req_with_exec_detail = ReqContext::default_for_test();
-        let mut pb_ctx = req_with_exec_detail.context.as_ref().clone();
-        pb_ctx.set_record_time_stat(true);
-        req_with_exec_detail.context = Arc::new(pb_ctx);
+        let req_with_exec_detail: ReqContext = {
+            let mut inner = ReqContextInner::default_for_test();
+            inner.context.set_record_time_stat(true);
+            inner.into()
+        };
         {
             let mut wait_time: Duration = Duration::default();
 
@@ -1831,8 +1856,11 @@ mod tests {
                         .into_boxed(),
                 )
             });
-            let resp_future_1 =
-                copr.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
+            let resp_future_1 = copr.handle_unary_request(ParseCopRequestResult {
+                req_tag: ReqTag::test,
+                req_ctx: req_with_exec_detail.clone(),
+                handler_builder,
+            });
             let sender = tx.clone();
             thread::spawn(move || sender.send(vec![block_on(resp_future_1).unwrap()]).unwrap());
             // Sleep a while to make sure that thread is spawn and snapshot is taken.
@@ -1845,8 +1873,11 @@ mod tests {
                         .into_boxed(),
                 )
             });
-            let resp_future_2 =
-                copr.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
+            let resp_future_2 = copr.handle_unary_request(ParseCopRequestResult {
+                req_tag: ReqTag::test,
+                req_ctx: req_with_exec_detail.clone(),
+                handler_builder,
+            });
             let sender = tx.clone();
             thread::spawn(move || sender.send(vec![block_on(resp_future_2).unwrap()]).unwrap());
             thread::sleep(SNAPSHOT_DURATION);
@@ -1951,8 +1982,11 @@ mod tests {
                 )
                 .into_boxed())
             });
-            let resp_future_1 =
-                copr.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
+            let resp_future_1 = copr.handle_unary_request(ParseCopRequestResult {
+                req_tag: ReqTag::test,
+                req_ctx: req_with_exec_detail.clone(),
+                handler_builder,
+            });
             let sender = tx.clone();
             thread::spawn(move || sender.send(vec![block_on(resp_future_1).unwrap()]).unwrap());
             // Sleep a while to make sure that thread is spawn and snapshot is taken.
@@ -1965,8 +1999,11 @@ mod tests {
                         .into_boxed(),
                 )
             });
-            let resp_future_2 =
-                copr.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
+            let resp_future_2 = copr.handle_unary_request(ParseCopRequestResult {
+                req_tag: ReqTag::test,
+                req_ctx: req_with_exec_detail.clone(),
+                handler_builder,
+            });
             let sender = tx.clone();
             thread::spawn(move || sender.send(vec![block_on(resp_future_2).unwrap()]).unwrap());
             thread::sleep(SNAPSHOT_DURATION);
@@ -2028,8 +2065,11 @@ mod tests {
                         .into_boxed(),
                 )
             });
-            let resp_future_1 =
-                copr.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
+            let resp_future_1 = copr.handle_unary_request(ParseCopRequestResult {
+                req_tag: ReqTag::test,
+                req_ctx: req_with_exec_detail.clone(),
+                handler_builder,
+            });
             let sender = tx.clone();
             thread::spawn(move || sender.send(vec![block_on(resp_future_1).unwrap()]).unwrap());
             // Sleep a while to make sure that thread is spawn and snapshot is taken.
@@ -2048,7 +2088,11 @@ mod tests {
                 .into_boxed())
             });
             let resp_future_3 = copr
-                .handle_stream_request(req_with_exec_detail, handler_builder)
+                .handle_stream_request(ParseCopRequestResult {
+                    req_tag: ReqTag::test,
+                    req_ctx: req_with_exec_detail.clone(),
+                    handler_builder,
+                })
                 .unwrap()
                 .map(|x| x.map(|x| x.into()));
             thread::spawn(move || {
@@ -2201,10 +2245,16 @@ mod tests {
                 Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed())
             });
 
-            let mut config = ReqContext::default_for_test();
-            config.deadline = Deadline::from_now(Duration::from_millis(500));
+            let mut inner = ReqContextInner::default_for_test();
+            inner.deadline = Deadline::from_now(Duration::from_millis(500));
+            let config: ReqContext = inner.into();
 
-            let resp = block_on(copr.handle_unary_request(config, handler_builder)).unwrap();
+            let resp = block_on(copr.handle_unary_request(ParseCopRequestResult {
+                req_tag: ReqTag::test,
+                req_ctx: config,
+                handler_builder,
+            }))
+            .unwrap();
             assert_eq!(resp.get_data().len(), 0);
             let region_err = resp.get_region_error();
             assert_eq!(
@@ -2222,10 +2272,16 @@ mod tests {
                 .into_boxed())
             });
 
-            let mut config = ReqContext::default_for_test();
-            config.deadline = Deadline::from_now(Duration::from_millis(500));
+            let mut inner = ReqContextInner::default_for_test();
+            inner.deadline = Deadline::from_now(Duration::from_millis(500));
+            let config: ReqContext = inner.into();
 
-            let resp = block_on(copr.handle_unary_request(config, handler_builder)).unwrap();
+            let resp = block_on(copr.handle_unary_request(ParseCopRequestResult {
+                req_tag: ReqTag::test,
+                req_ctx: config,
+                handler_builder,
+            }))
+            .unwrap();
             assert_eq!(resp.get_data().len(), 0);
             let region_err = resp.get_region_error();
             assert_eq!(
@@ -2321,10 +2377,16 @@ mod tests {
                 Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed())
             });
 
-            let mut config = ReqContext::default_for_test();
-            config.deadline = Deadline::from_now(Duration::from_millis(500));
+            let mut inner = ReqContextInner::default_for_test();
+            inner.deadline = Deadline::from_now(Duration::from_millis(500));
+            let config: ReqContext = inner.into();
 
-            let resp = block_on(copr.handle_unary_request(config, handler_builder)).unwrap();
+            let resp = block_on(copr.handle_unary_request(ParseCopRequestResult {
+                req_tag: ReqTag::test,
+                req_ctx: config,
+                handler_builder,
+            }))
+            .unwrap();
             assert!(!resp.has_region_error(), "{:?}", resp);
         }
 
@@ -2335,10 +2397,15 @@ mod tests {
                 Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed())
             });
 
-            let mut config = ReqContext::default_for_test();
-            config.deadline = Deadline::from_now(Duration::from_millis(500));
+            let mut inner = ReqContextInner::default_for_test();
+            inner.deadline = Deadline::from_now(Duration::from_millis(500));
+            let config: ReqContext = inner.into();
 
-            let res = block_on(copr.handle_unary_request(config, handler_builder));
+            let res = block_on(copr.handle_unary_request(ParseCopRequestResult {
+                req_tag: ReqTag::test,
+                req_ctx: config,
+                handler_builder,
+            }));
             assert!(res.is_err(), "{:?}", res);
             let resp = make_error_response(res.unwrap_err());
             assert_eq!(resp.get_data().len(), 0);
@@ -2357,7 +2424,7 @@ mod tests {
     // A default ReqContext that support to access another snapshot in a
     // request. It can be used to create an not None value of
     // Option<EngineSnapshotStoreAccessor>
-    fn default_req_ctx_support_snap_accessor() -> ReqContext {
+    fn default_req_ctx_support_snap_accessor() -> ReqContextInner {
         let mut pb_ctx = kvrpcpb::Context::default();
         pb_ctx.set_isolation_level(IsolationLevel::Si);
         pb_ctx.set_stale_read(false);
@@ -2368,10 +2435,9 @@ mod tests {
             ..Default::default()
         });
         pb_ctx.set_region_id(23);
-        let mut req_ctx = ReqContext::default_for_test();
-        req_ctx.context = Arc::new(pb_ctx);
+        let mut req_ctx = ReqContextInner::default_for_test();
+        req_ctx.context = pb_ctx;
         req_ctx.txn_start_ts = TimeStamp::new(1234567);
-        req_ctx.tag = ReqTag::select;
         req_ctx.is_desc_scan = Some(true);
         req_ctx.ranges = vec![
             coppb::KeyRange {
@@ -2388,45 +2454,33 @@ mod tests {
         req_ctx
     }
 
-    fn update_pb_ctx<F>(ctx: &kvrpcpb::Context, f: F) -> kvrpcpb::Context
-    where
-        F: FnOnce(&mut kvrpcpb::Context),
-    {
-        let mut new_ctx = ctx.clone();
-        f(&mut new_ctx);
-        new_ctx
-    }
-
     #[test]
     fn test_secondary_snap_store_accessor_new() {
         type StoreAccessor = SecondarySnapStoreAccessor<RocksEngine>;
         // construct a ReqContext that support to access another snapshot in a request
-        let mut req_ctx = default_req_ctx_support_snap_accessor();
+        let req_ctx = default_req_ctx_support_snap_accessor();
 
         // accessor support case
-        assert!(StoreAccessor::new(&req_ctx).is_some());
+        let mut ctx = req_ctx.clone();
+        assert!(StoreAccessor::new(ctx.into()).is_some());
 
         // does not support Rc / RcCheckTs
-        req_ctx.context = Arc::new(update_pb_ctx(&req_ctx.context, |ctx| {
-            ctx.set_isolation_level(IsolationLevel::Rc);
-        }));
-        assert!(StoreAccessor::new(&req_ctx).is_none());
-        req_ctx.context = Arc::new(update_pb_ctx(&req_ctx.context, |ctx| {
-            ctx.set_isolation_level(IsolationLevel::RcCheckTs);
-        }));
-        assert!(StoreAccessor::new(&req_ctx).is_none());
+        ctx = req_ctx.clone();
+        ctx.context.set_isolation_level(IsolationLevel::Rc);
+        assert!(StoreAccessor::new(ctx.into()).is_none());
+        ctx = req_ctx.clone();
+        ctx.context.set_isolation_level(IsolationLevel::RcCheckTs);
+        assert!(StoreAccessor::new(ctx.into()).is_none());
 
         // does not support stale read
-        req_ctx.context = Arc::new(update_pb_ctx(&req_ctx.context, |ctx| {
-            ctx.set_stale_read(true);
-        }));
-        assert!(StoreAccessor::new(&req_ctx).is_none());
+        ctx = req_ctx.clone();
+        ctx.context.set_stale_read(true);
+        assert!(StoreAccessor::new(ctx.into()).is_none());
 
         // does not support replica read
-        req_ctx.context = Arc::new(update_pb_ctx(&req_ctx.context, |ctx| {
-            ctx.set_replica_read(true);
-        }));
-        assert!(StoreAccessor::new(&req_ctx).is_none());
+        ctx = req_ctx.clone();
+        ctx.context.set_replica_read(true);
+        assert!(StoreAccessor::new(ctx.into()).is_none());
     }
 
     #[test]
@@ -2464,7 +2518,7 @@ mod tests {
         }
 
         type StoreAccessor = SecondarySnapStoreAccessor<RocksEngine>;
-        let accessor = StoreAccessor::new(&default_req_ctx_support_snap_accessor()).unwrap();
+        let accessor = StoreAccessor::new(default_req_ctx_support_snap_accessor().into()).unwrap();
 
         // key is before any region, not found
         assert_eq!(
@@ -2538,19 +2592,19 @@ mod tests {
         #[derive(Clone)]
         struct TestCtx {
             store_id: u64,
-            req_ctx: Arc<Mutex<ReqContext>>,
+            req_ctx: Arc<Mutex<ReqContextInner>>,
             req_region: Arc<Mutex<metapb::Region>>,
             req_ranges: Arc<Mutex<Vec<coppb::KeyRange>>>,
-            called: Arc<AtomicBool>,
+            called: Arc<atomic::AtomicBool>,
         }
 
         impl TestCtx {
             fn new_accessor(&self) -> StoreAccessor {
-                StoreAccessor::new(&self.get_req_ctx()).unwrap()
+                StoreAccessor::new(self.get_req_ctx()).unwrap()
             }
 
             fn get_req_ctx(&self) -> ReqContext {
-                self.req_ctx.lock().unwrap().clone()
+                ReqContext(Arc::new(self.req_ctx.lock().unwrap().clone()))
             }
 
             fn get_req_region(&self) -> metapb::Region {
@@ -2575,7 +2629,7 @@ mod tests {
                 if let Ok(ref store) = result {
                     assert!(called);
                     let req_ctx = self.get_req_ctx();
-                    let pb_ctx = req_ctx.context.as_ref();
+                    let pb_ctx = &req_ctx.context;
                     assert_eq!(store.get_start_ts(), req_ctx.txn_start_ts);
                     assert_eq!(store.get_isolation_level(), pb_ctx.isolation_level);
                     assert_eq!(store.is_fill_cache(), !pb_ctx.get_not_fill_cache());
@@ -2626,7 +2680,7 @@ mod tests {
                     end: b"b".to_vec(),
                     ..Default::default()
                 }])),
-                called: Arc::new(AtomicBool::new(false)),
+                called: Arc::new(atomic::AtomicBool::new(false)),
             }
         };
 
@@ -2647,7 +2701,7 @@ mod tests {
                     assert!(!check_ctx.context.get_replica_read() && !check_ctx.context.get_stale_read());
                     assert!(!check_ctx.ranges.is_empty());
                     // snap_ctx.pb_ctx should be the same as ReqContext.context
-                    assert_eq!(snap_ctx.pb_ctx.clone(), check_ctx.context.as_ref().clone());
+                    assert_eq!(snap_ctx.pb_ctx.clone(), check_ctx.context.clone());
                     // snap_ctx.extra_snap_override should be present with the correct region info
                     assert_eq!(
                         snap_ctx.secondary_region_override,
@@ -2691,9 +2745,7 @@ mod tests {
             let mut req_ctx = test_ctx.req_ctx.lock().unwrap();
             // in previous test, get_not_fill_cache should return false.
             assert!(!req_ctx.context.get_not_fill_cache());
-            req_ctx.context = Arc::new(update_pb_ctx(req_ctx.context.as_ref(), |ctx| {
-                ctx.set_not_fill_cache(true)
-            }));
+            req_ctx.context.set_not_fill_cache(true);
         }
         let store = test_ctx
             .get_local_region_storage_with_check()
@@ -2742,7 +2794,8 @@ mod tests {
         }
         let def_req = default_req_ctx_support_snap_accessor();
         let store_id = def_req.context.get_peer().get_store_id();
-        let store_accessor = SecondarySnapStoreAccessor::<RocksEngine>::new(&def_req).unwrap();
+        let store_accessor =
+            SecondarySnapStoreAccessor::<RocksEngine>::new(def_req.into()).unwrap();
         let storage_accessor = dag::SecondaryTiKVStorageAccessor::<
             SecondarySnapStoreAccessor<RocksEngine>,
         >::from_store_accessor(store_accessor);
