@@ -1505,6 +1505,8 @@ impl Inspector {
                         max_delays.clone(),
                     )
                     .await;
+
+                    break;
                 }
             }
         }
