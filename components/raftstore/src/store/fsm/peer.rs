@@ -3249,7 +3249,7 @@ where
         //  applying the ConfChange log.
         // - 2 is isolated, 1 removes 2. When 2 rejoins the cluster, 2 will
         //  send stale MsgRequestVote to 1 and 3, at this time, we should tell 2 to gc
-        // itself.
+        //  itself.
         // - 2 is isolated but can communicate with 3. 1 removes 3.
         //  2 will send stale MsgRequestVote to 3, 3 should ignore this message.
         // - 2 is isolated but can communicate with 3. 1 removes 2, then adds 4, remove
@@ -4587,7 +4587,7 @@ where
 
             // Insert new regions and validation
             let mut is_uninitialized_peer_exist = false;
-            let self_store_id = self.ctx.store.get_id();
+            let self_store_id = self.ctx.store_id();
             if let Some(r) = meta.regions.get(&new_region_id) {
                 // Suppose a new node is added by conf change and the snapshot comes slowly.
                 // Then, the region splits and the first vote message comes to the new node
@@ -6135,14 +6135,15 @@ where
         }
 
         let applied_count = applied_idx - first_idx;
+        let log_count = (last_idx - first_idx + 1) as f64;
 
-        let ratio = if log_lag > 0.0 {
-            log_lag / (last_idx - first_idx) as f64
-        } else {
-            1.0
-        };
+        let ratio = (log_count / log_lag).max(1.0);
 
-        let should_force_compact = applied_count > self.ctx.cfg.raft_log_gc_count_limit() / 3;
+        // let should_force_compact = applied_count
+        //     > std::cmp::min( (self.ctx.cfg.raft_log_gc_count_limit() as f64 / 3.0 *
+        //     > ratio) as u64, self.ctx.cfg.raft_log_gc_count_limit(),
+        //     );
+        let should_force_compact = applied_count > 0;
 
         let mut compact_idx = if force_compact {
             if should_force_compact {
@@ -6160,7 +6161,8 @@ where
                 }
                 replicated_idx
             }
-        } else if applied_count >= (self.ctx.cfg.raft_log_gc_count_limit() as f64 * ratio) as u64 {
+        } else if applied_count >= ((self.ctx.cfg.raft_log_gc_count_limit() as f64) * ratio) as u64
+        {
             self.ctx
                 .raft_metrics
                 .raft_log_gc
@@ -6169,7 +6171,8 @@ where
             self.fsm.raft_engine_memory_high_water_duration = Duration::from_secs(0);
             std::cmp::min(applied_idx, quorum_replicated_idx)
         } else if applied_count > 0
-            && self.fsm.peer.raft_log_size_hint >= (self.ctx.cfg.raft_log_gc_size_limit().0 as f64 * ratio) as u64
+            && self.fsm.peer.raft_log_size_hint
+                >= ((self.ctx.cfg.raft_log_gc_size_limit().0 as f64) * ratio) as u64
         {
             self.ctx
                 .raft_metrics

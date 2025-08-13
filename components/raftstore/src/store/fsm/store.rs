@@ -3106,9 +3106,15 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         self.register_raft_engine_force_gc_tick();
 
         let mut over_ratio = 0.0;
+        let raft_engine_memory_usage = self.ctx.engines.raft.get_memory_usage().unwrap_or(0);
         if needs_force_compact(&mut over_ratio, self.ctx.cfg.evict_cache_on_memory_ratio) {
-            // Get all regions and calculate send count in one pass
-            self.send_force_compact_batch(over_ratio);
+            if raft_engine_memory_usage > self.ctx.cfg.raft_engine_memory_limit.0 {
+                over_ratio = over_ratio.max(
+                    raft_engine_memory_usage as f64
+                        / self.ctx.cfg.raft_engine_memory_limit.0 as f64,
+                );
+                self.send_force_compact_batch(over_ratio);
+            }
         }
     }
 
@@ -3155,20 +3161,18 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         // Sort by growth rate: regions with faster growth come first
         regions_with_growth.sort_by(|a, b| b.1.cmp(&a.1));
 
-        // Calculate how many fastest growing regions to GC
-        let exclude_count = (total_regions as f64 * over_ratio / 5.0) as usize;
+        // Calculate how many fastest growing regions to exclude from GC
+        let exclude_count = (total_regions as f64 / (4.0 * over_ratio)) as usize;
 
-        let send_count = std::cmp::max(50, exclude_count);
         info!(
             "force compact regions";
-            "send_count" => send_count,
             "exclude_count" => exclude_count,
             "total_regions" => total_regions,
             "over_ratio" => over_ratio,
         );
 
-        // GC the fastest growing regions first (most active regions)
-        for (region_id, _) in regions_with_growth.iter().take(send_count) {
+        // GC regions except the fastest growing ones (exclude the most active regions)
+        for (region_id, _) in regions_with_growth.iter().skip(exclude_count) {
             // Send force compact message directly
             let _ = self.ctx.router.send(
                 *region_id,

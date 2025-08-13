@@ -533,7 +533,7 @@ impl Default for Config {
             raft_log_gc_threshold: 50,
             raft_log_gc_count_limit: None,
             raft_log_gc_size_limit: None,
-            raft_engine_memory_limit: ReadableSize::mb(512),
+            raft_engine_memory_limit: ReadableSize::mb(800),
             raft_engine_memory_high_water_limit_duration: ReadableDuration::secs(300),
             max_apply_unpersisted_log_limit: 1024,
             follower_read_max_log_gap: 100,

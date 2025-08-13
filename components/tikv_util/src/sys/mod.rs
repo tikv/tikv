@@ -190,12 +190,6 @@ pub fn needs_force_compact(over_ratio: &mut f64, high_water_ratio: f64) -> bool 
     let usage = get_global_memory_usage() as f64;
     let memry_limit = get_memory_usage_high_water() as f64 * high_water_ratio;
     *over_ratio = usage / memry_limit;
-    if usage >= memry_limit {
-        info!(
-            "over memory limit, usage: {}, limit: {}",
-            usage, memry_limit
-        );
-    }
     usage >= memry_limit
 }
 
