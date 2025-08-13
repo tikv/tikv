@@ -18,7 +18,7 @@ pub use gc_manager::AutoGcConfig;
 #[cfg(any(test, feature = "testexport"))]
 pub use gc_worker::test_gc_worker::{MockSafePointProvider, PrefixedEngine};
 pub use gc_worker::{
-    GcSafePointProvider, GcTask, GcWorker, STAT_RAW_KEYMODE, STAT_TXN_KEYMODE, sync_gc,
+    GcStatesProvider, GcTask, GcWorker, STAT_RAW_KEYMODE, STAT_TXN_KEYMODE, sync_gc,
 };
 pub use rawkv_compaction_filter::RawCompactionFilterFactory;
 use txn_types::TimeStamp;
