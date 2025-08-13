@@ -1526,11 +1526,16 @@ impl HealthChecker {
 
         let health_client = HealthClient::new(channel);
 
-        // Create health check request
         let mut req = grpcio_health::proto::HealthCheckRequest::new();
         req.set_service("".to_string()); // Empty service name for overall health
 
-        match health_client.check_async(&req) {
+        // A 5s timeout means that if we obtain the latency every 100ms, we'll get
+        // 40 delays exceeding 1s. If we calculate the score every 3 times, we get
+        // 2^(40/3) > 100. Therefore, when the 5s timeout expires, the score has
+        // reached its maximum, and we can exit the probe.
+        let call_opt = CallOption::default().timeout(Duration::from_secs(5));
+
+        match health_client.check_async_opt(&req, call_opt) {
             Ok(resp_future) => {
                 let _ = resp_future.await;
                 let elapsed = start_time.elapsed();
@@ -1586,6 +1591,25 @@ impl HealthChecker {
     pub fn get_all_max_delays(&self) -> HashMap<u64, f64> {
         let delays = self.max_delays.lock().unwrap();
         delays.clone()
+    }
+}
+
+impl Drop for HealthChecker {
+    fn drop(&mut self) {
+        info!(
+            "Shutting down HealthChecker, sending shutdown signals to all running inspection tasks"
+        );
+
+        // Send shutdown signals to all running inspection tasks
+        let mut handles = self.task_handles.lock().unwrap();
+        for (store_id, shutdown_tx) in handles.drain() {
+            info!("Sending shutdown signal to inspection task for store"; "store_id" => store_id);
+            if let Err(_) = shutdown_tx.send(()) {
+                warn!("Failed to send shutdown signal to inspection task for store"; "store_id" => store_id);
+            }
+        }
+
+        info!("HealthChecker shutdown complete, all inspection tasks signaled to stop");
     }
 }
 
