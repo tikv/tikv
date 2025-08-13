@@ -1604,7 +1604,7 @@ impl Drop for HealthChecker {
         let mut handles = self.task_handles.lock().unwrap();
         for (store_id, shutdown_tx) in handles.drain() {
             info!("Sending shutdown signal to inspection task for store"; "store_id" => store_id);
-            if let Err(_) = shutdown_tx.send(()) {
+            if shutdown_tx.send(()).is_err() {
                 warn!("Failed to send shutdown signal to inspection task for store"; "store_id" => store_id);
             }
         }
@@ -1750,7 +1750,7 @@ mod tests {
         let pool: Arc<Mutex<ConnectionPool>> = Arc::default();
         let interval = Duration::from_millis(100);
 
-        let health_checker = HealthChecker::new(self_store_id, pool.clone(), interval.clone());
+        let health_checker = HealthChecker::new(self_store_id, pool.clone(), interval);
 
         assert_eq!(health_checker.self_store_id, self_store_id);
         assert!(Arc::ptr_eq(&health_checker.pool, &pool));
