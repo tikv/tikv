@@ -10,7 +10,7 @@ use api_version::api_v2::TIDB_RANGES_COMPLEMENT;
 use causal_ts::CausalTsProviderImpl;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{DATA_CFS, DATA_KEY_PREFIX_LEN, Engines, Iterable, KvEngine, RaftEngine};
-use health_controller::{HealthController, reporters::TikvClientMgr};
+use health_controller::HealthController;
 use kvproto::{
     kvrpcpb::ApiVersion, metapb, raft_serverpb::StoreIdent, replication_modepb::ReplicationStatus,
 };
@@ -18,7 +18,7 @@ use pd_client::{Error as PdError, INVALID_ID, PdClient};
 use raftstore::{
     coprocessor::dispatcher::CoprocessorHost,
     store::{
-        self, AutoSplitController, Config as StoreConfig, GlobalReplicationState, InspectorRunner,
+        self, AutoSplitController, Config as StoreConfig, DiskCheckRunner, GlobalReplicationState,
         PdTask, RefreshConfigTask, SnapManager, SplitCheckTask, Transport,
         fsm::{ApplyRouter, RaftBatchSystem, RaftRouter, store::StoreMeta},
         initial_region,
@@ -172,10 +172,9 @@ where
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
-        inspector_runner: InspectorRunner,
+        disk_check_runner: DiskCheckRunner,
         grpc_service_mgr: GrpcServiceManager,
         safe_point: Arc<AtomicU64>,
-        tikv_client_mgr: Arc<Mutex<TikvClientMgr>>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -213,10 +212,9 @@ where
             concurrency_manager,
             collector_reg_handle,
             causal_ts_provider,
-            inspector_runner,
+            disk_check_runner,
             grpc_service_mgr,
             safe_point,
-            tikv_client_mgr,
         )?;
 
         Ok(())
@@ -464,10 +462,9 @@ where
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
-        inspector_runner: InspectorRunner,
+        disk_check_runner: DiskCheckRunner,
         grpc_service_mgr: GrpcServiceManager,
         safe_point: Arc<AtomicU64>,
-        tikv_client_mgr: Arc<Mutex<TikvClientMgr>>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -501,10 +498,9 @@ where
             collector_reg_handle,
             self.health_controller.clone(),
             causal_ts_provider,
-            inspector_runner,
+            disk_check_runner,
             grpc_service_mgr,
             safe_point,
-            tikv_client_mgr,
         )?;
         Ok(())
     }

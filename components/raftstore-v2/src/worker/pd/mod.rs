@@ -15,7 +15,7 @@ use pd_client::{BucketStat, PdClient};
 use raftstore::store::{
     AutoSplitController, Config, FlowStatsReporter, NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
     PdStatsMonitor, ReadStats, SplitInfo, StoreStatsReporter, TabletSnapManager, TxnExt,
-    WriteStats, metrics::{STORE_INSPECT_DURATION_HISTOGRAM},
+    WriteStats,
     util::KeysInfoFormatter,
 };
 use resource_metering::{Collector, CollectorRegHandle, RawRecords};

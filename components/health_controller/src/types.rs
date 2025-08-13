@@ -131,11 +131,6 @@ impl LatencyInspector {
     }
 
     pub fn record_network_io_duration(&mut self, store_id: u64, duration: std::time::Duration) {
-        // info!(
-        //     "record network io duration";
-        //     "id" => self.id,
-        //     "duration" => ?duration
-        // );
         self.duration.store_id = store_id;
         self.duration.network_duration = Some(duration);
     }

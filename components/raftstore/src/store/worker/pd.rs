@@ -22,7 +22,7 @@ use fail::fail_point;
 use futures::{FutureExt, compat::Future01CompatExt};
 use health_controller::{
     HealthController,
-    reporters::{RaftstoreReporter, RaftstoreReporterConfig, TikvClientMgr},
+    reporters::{RaftstoreReporter, RaftstoreReporterConfig},
     types::{InspectFactor, LatencyInspector, UnifiedDuration},
 };
 use kvproto::{
@@ -68,7 +68,7 @@ use crate::{
         },
         util::{KeysInfoFormatter, is_epoch_stale},
         worker::{
-            AutoSplitController, InspectorTask, ReadStats, SplitConfigChange, WriteStats,
+            AutoSplitController, ReadStats, SplitConfigChange, WriteStats,
             split_controller::{SplitInfo, TOP_N},
         },
     },
@@ -953,8 +953,6 @@ where
 
     // Service manager for grpc service.
     grpc_service_manager: GrpcServiceManager,
-
-    inspector_scheduler: Scheduler<InspectorTask>,
 }
 
 impl<EK, ER, T> Runner<EK, ER, T>
@@ -978,8 +976,6 @@ where
         coprocessor_host: CoprocessorHost<EK>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         grpc_service_manager: GrpcServiceManager,
-        inspector_scheduler: Scheduler<InspectorTask>,
-        tikv_client_mgr: Arc<Mutex<TikvClientMgr>>,
     ) -> Runner<EK, ER, T> {
         let mut store_stat = StoreStat::default();
         store_stat.set_cpu_quota(SysQuota::cpu_cores_quota(), cfg.inspect_cpu_util_thd);
@@ -1023,11 +1019,7 @@ where
                 .with_label_values(&["L2"]),
         };
 
-        let health_reporter = RaftstoreReporter::new(
-            &health_controller,
-            tikv_client_mgr,
-            health_reporter_config,
-        );
+        let health_reporter = RaftstoreReporter::new(&health_controller, health_reporter_config);
 
         Runner {
             store_id,
@@ -1050,7 +1042,6 @@ where
             coprocessor_host,
             causal_ts_provider,
             grpc_service_manager,
-            inspector_scheduler,
         }
     }
 
