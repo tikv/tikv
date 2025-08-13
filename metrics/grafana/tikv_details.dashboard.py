@@ -1075,6 +1075,22 @@ def gRPC() -> RowPanel:
                     ),
                 ],
             ),
+            graph_panel(
+                title=r"gRPC batch commands wait duration",
+                description=r"The 99.99% wait time of gRPC batch commands",
+                yaxes=yaxes(left_format=UNITS.SECONDS, log_base=2),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.9999,
+                            "tikv_grpc_batch_commands_wait_duration_seconds",
+                            is_optional_quantile=False,
+                        ),
+                        legend_format="P9999",
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
         ]
     )
     layout.row(
@@ -10181,7 +10197,7 @@ def BackupLog() -> RowPanel:
                         legend_format="{{ instance }}",
                     )
                 ],
-            )
+            ),
         ]
     )
     layout.row(
@@ -10191,8 +10207,10 @@ def BackupLog() -> RowPanel:
                 description="The region with minimal checkpoint of each store.",
                 targets=[
                     target(
-                        expr=expr_simple("tikv_log_backup_store_last_checkpoint_region_id"),
-                        legend_format="{{ instance }}"
+                        expr=expr_simple(
+                            "tikv_log_backup_store_last_checkpoint_region_id"
+                        ),
+                        legend_format="{{ instance }}",
                     )
                 ],
             ),
@@ -10203,7 +10221,7 @@ def BackupLog() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_simple("tikv_log_backup_store_last_checkpoint_ts"),
-                        legend_format="{{ instance }}"
+                        legend_format="{{ instance }}",
                     )
                 ],
             ),
@@ -10213,10 +10231,10 @@ def BackupLog() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_simple("tikv_log_backup_active_subscription_number"),
-                        legend_format="{{instance}}"
+                        legend_format="{{instance}}",
                     )
-                ]
-            )
+                ],
+            ),
         ]
     )
     layout.row(
