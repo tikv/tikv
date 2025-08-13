@@ -835,7 +835,7 @@ fn test_cdc_watchdog_idle_timeout() {
     // Wait for the connection to be established and initialized
     thread::sleep(Duration::from_millis(1000));
 
-    eprintln!("Starting watchdog test - waiting for connection to be cancelled");
+    debug!("Starting watchdog test - waiting for connection to be cancelled");
 
     // Wait for the watchdog to trigger and cancel the connection
     // The watchdog should trigger after 20 seconds due to
@@ -843,7 +843,7 @@ fn test_cdc_watchdog_idle_timeout() {
     // failpoint will make the sink sleep for 30 seconds
     thread::sleep(Duration::from_secs(30));
 
-    eprintln!("Finished waiting, now checking if connection was cancelled");
+    debug!("Finished waiting, now checking if connection was cancelled");
 
     // Try to detect if the connection was cancelled by watchdog
     // We can do this by trying to receive from the underlying receiver
@@ -861,25 +861,25 @@ fn test_cdc_watchdog_idle_timeout() {
         match recv_timeout(&mut rx, Duration::from_millis(100)) {
             Ok(Some(Ok(_))) => {
                 // Still receiving data, connection is alive
-                eprintln!("Connection still alive, received data");
+                debug!("Connection still alive, received data");
                 // Put the receiver back
                 event_feed.replace(Some(rx));
             }
             Ok(Some(Err(_))) => {
                 // Received an error, connection was cancelled
-                eprintln!("Connection cancelled with error");
+                debug!("Connection cancelled with error");
                 connection_cancelled = true;
                 break;
             }
             Ok(None) => {
                 // No data available, but connection might still be alive
-                eprintln!("No data available, connection might still be alive");
+                debug!("No data available, connection might still be alive");
                 // Put the receiver back
                 event_feed.replace(Some(rx));
             }
             Err(_) => {
                 // Connection is closed
-                eprintln!("Connection closed");
+                debug!("Connection closed");
                 connection_cancelled = true;
                 break;
             }

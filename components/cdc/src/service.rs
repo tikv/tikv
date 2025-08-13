@@ -3,9 +3,9 @@
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicUsize, Ordering},
     },
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
 use collections::{HashMap, HashMapEntry};
@@ -448,7 +448,8 @@ impl Service {
             };
             explicit_features = headers.features;
         }
-        info!("cdc connection created"; "downstream" => ctx.peer(), "features" => ?explicit_features, "conn_id" => ?conn_id);
+        info!("cdc connection created"; "downstream" => ctx.peer(),
+         "features" => ?explicit_features, "conn_id" => ?conn_id);
 
         if let Err(e) = self.scheduler.schedule(Task::OpenConn { conn }) {
             let peer = ctx.peer();
@@ -494,12 +495,7 @@ impl Service {
         });
 
         // Create atomic variable to track last flush time
-        let current_time = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-        {
-            Ok(duration) => duration.as_secs(),
-            Err(_) => 0,
-        };
-        let last_flush_time = Arc::new(AtomicU64::new(current_time));
+        let last_flush_time = Arc::new(AtomicCell::new(Instant::now()));
         let last_flush_time_for_forward = last_flush_time.clone();
         let last_flush_time_for_watchdog = last_flush_time.clone();
         let peer_for_watchdog = ctx.peer().to_string();
@@ -527,7 +523,6 @@ impl Service {
                     } else {
                         info!("cdc send closed"; "downstream" => peer, "conn_id" => ?conn_id);
                     }
-                    last_flush_time_for_forward.store(0, Ordering::Relaxed);
                     // Send signal when eventDrain.forward exits
                     let _ = forward_exit_tx_for_forward.send(());
                 }
@@ -553,27 +548,17 @@ impl Service {
                     }
                 }
 
-                let current_time = match SystemTime::now().duration_since(UNIX_EPOCH) {
-                    Ok(duration) => duration.as_secs(),
-                    Err(_) => continue,
-                };
-
-                let last_flush = last_flush_time_for_watchdog.load(Ordering::Relaxed);
-                let time_since_last_flush = current_time.saturating_sub(last_flush);
-
-                if last_flush == 0 {
-                    info!("cdc connection is closed, exiting watchdog loop"; "downstream" => peer_for_watchdog.clone(), "conn_id" => ?conn_id);
-                }
+                let elapsed = last_flush_time_for_watchdog.load().elapsed();
 
                 // Check if last flush was more than the warning threshold
-                if time_since_last_flush > CDC_IDLE_WARNING_THRESHOLD_SECS {
+                if elapsed > Duration::from_secs(CDC_IDLE_WARNING_THRESHOLD_SECS) {
                     warn!("cdc connection idle too long";
                           "downstream" => peer_for_watchdog.clone(),
                           "conn_id" => ?conn_id,
-                          "seconds_since_last_flush" => time_since_last_flush);
+                          "seconds_since_last_flush" => elapsed.as_secs());
                 }
 
-                let mut idle_threshold = CDC_IDLE_DEREGISTER_THRESHOLD_SECS;
+                let idle_threshold = CDC_IDLE_DEREGISTER_THRESHOLD_SECS;
 
                 #[cfg(feature = "failpoints")]
                 {
@@ -588,11 +573,11 @@ impl Service {
                 }
 
                 // Check if last flush was more than the deregister threshold
-                if time_since_last_flush > idle_threshold {
+                if elapsed > Duration::from_secs(idle_threshold) {
                     error!("cdc connection idle for too long, aborting connection";
                            "downstream" => peer_for_watchdog.clone(),
                            "conn_id" => ?conn_id,
-                           "seconds_since_last_flush" => time_since_last_flush);
+                           "seconds_since_last_flush" => elapsed.as_secs());
                     // Cancel the gRPC connection
                     let _ = cancel_tx_for_watchdog.send(());
                     // Break the loop since we've aborted the connection

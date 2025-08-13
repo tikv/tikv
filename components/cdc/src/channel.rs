@@ -6,7 +6,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::{Duration, Instant as StdInstant, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 use futures::{
@@ -26,7 +26,6 @@ use tikv_util::{
     impl_display_as_debug, info,
     memory::{MemoryQuota, MemoryQuotaExceeded},
     time::Instant,
-    timer::GLOBAL_TIMER_HANDLE,
     warn,
 };
 
@@ -393,7 +392,7 @@ impl<'a> Drain {
     pub async fn forward<S, E>(
         &'a mut self,
         sink: &mut S,
-        last_flush_time: Option<&std::sync::atomic::AtomicU64>,
+        last_flush_time: Option<&crossbeam::atomic::AtomicCell<std::time::Instant>>,
     ) -> Result<(), E>
     where
         S: futures::Sink<(ChangeDataEvent, WriteFlags), Error = E> + Unpin,
@@ -426,9 +425,7 @@ impl<'a> Drain {
             sleep_after_sink_flush().await;
             // Update last flush time if provided
             if let Some(time_tracker) = last_flush_time {
-                if let Ok(now) = SystemTime::now().duration_since(UNIX_EPOCH) {
-                    time_tracker.store(now.as_secs(), std::sync::atomic::Ordering::Relaxed);
-                }
+                time_tracker.store(std::time::Instant::now());
             }
             total_event_bytes.inc_by(event_bytes as u64);
             total_resolved_ts_bytes.inc_by(resolved_ts_bytes as u64);
@@ -448,7 +445,7 @@ async fn sleep_after_sink_flush() {
     }
     info!("inside sleep_after_sink_flush failpoint, sleep 30 seconds!");
     let dur = Duration::from_secs(30);
-    let timer = GLOBAL_TIMER_HANDLE.delay(StdInstant::now() + dur);
+    let timer = tikv_util::timer::GLOBAL_TIMER_HANDLE.delay(tikv_util::time::Instant::now() + dur);
     let _ = futures::compat::Compat01As03::new(timer).await;
 }
 

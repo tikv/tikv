@@ -732,7 +732,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                         self.deregister_downstream(region_id, downstream, err);
                     }
                 } else {
-                    info!("cdc connection already deregistered for request deregister"; "conn_id" => ?conn_id, "request_id" => ?request_id);
+                    info!("cdc connection already deregistered for request deregister"; 
+                    "conn_id" => ?conn_id, "request_id" => ?request_id);
                 }
             }
             Deregister::Region {
@@ -746,7 +747,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                         self.deregister_downstream(region_id, downstream, err);
                     }
                 } else {
-                    info!("cdc connection already deregistered for region deregister"; "conn_id" => ?conn_id, "request_id" => ?request_id, "region_id" => region_id);
+                    info!("cdc connection already deregistered for region deregister";
+                     "conn_id" => ?conn_id, "request_id" => ?request_id, "region_id" => region_id);
                 }
             }
             Deregister::Downstream {
