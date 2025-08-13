@@ -10,7 +10,10 @@ use std::{
 
 use collections::{HashMap, HashMapEntry};
 use crossbeam::atomic::AtomicCell;
-use futures::{stream::{TryStreamExt, StreamExt}, compat::Stream01CompatExt};
+use futures::{
+    compat::Stream01CompatExt,
+    stream::{StreamExt, TryStreamExt},
+};
 use grpcio::{DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode};
 use kvproto::{
     cdcpb::{
@@ -24,7 +27,7 @@ use tikv_util::{
     memory::MemoryQuota,
     timer::GLOBAL_TIMER_HANDLE,
     warn,
-    worker::{Builder as WorkerBuilder, Scheduler, Worker},
+    worker::{*},
 };
 
 use crate::{
@@ -270,7 +273,7 @@ impl Service {
     ///
     /// It requires a scheduler of an `Endpoint` in order to schedule tasks.
     pub fn new(scheduler: Scheduler<Task>, memory_quota: Arc<MemoryQuota>) -> Service {
-        let pool = Arc::new(WorkerBuilder::new("cdc-watchdog").thread_count(1).create());
+        let pool = Arc::new(Builder::new("cdc-watchdog").thread_count(1).create());
 
         Service {
             scheduler,
@@ -556,9 +559,12 @@ impl Service {
         // Create a custom interval task that can be stopped
         let _ = pool.pool().spawn(async move {
             let mut interval = GLOBAL_TIMER_HANDLE
-                .interval(std::time::Instant::now(), Duration::from_secs(CDC_WATCHDOG_CHECK_INTERVAL_SECS))
+                .interval(
+                    std::time::Instant::now(),
+                    Duration::from_secs(CDC_WATCHDOG_CHECK_INTERVAL_SECS),
+                )
                 .compat();
-            
+
             loop {
                 tokio::select! {
                     _ = &mut forward_exit_rx => {
