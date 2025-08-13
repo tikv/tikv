@@ -2018,6 +2018,25 @@ where
         }
         let id = slow_score_tick_result.tick_id;
         let scheduler = self.scheduler.clone();
+
+        if factor == InspectFactor::Network {
+            // TODO: get duration from health check
+            let duration = UnifiedDuration::default();
+            STORE_INSPECT_NETWORK_DURATION_HISTOGRAM
+                .with_label_values(&[&duration.store_id.to_string()])
+                .observe(tikv_util::time::duration_to_sec(
+                    duration.network_duration.unwrap_or_default(),
+                ));
+            
+            if let Err(e) = scheduler.schedule(Task::UpdateSlowScore {
+                id,
+                factor,
+                duration,
+            }) {
+                warn!("schedule pd task failed"; "err" => ?e);
+            }
+            return;
+        }
         let inspector = {
             match factor {
                 InspectFactor::RaftDisk => {
@@ -2092,55 +2111,19 @@ where
                         }
                     }),
                 ),
-                InspectFactor::Network => LatencyInspector::new(
-                    id,
-                    Box::new(move |id, duration| {
-                        STORE_INSPECT_NETWORK_DURATION_HISTOGRAM
-                            .with_label_values(&[&duration.store_id.to_string()])
-                            .observe(tikv_util::time::duration_to_sec(
-                                duration.network_duration.unwrap_or_default(),
-                            ));
-                        
-                        if let Err(e) = scheduler.schedule(Task::UpdateSlowScore {
-                            id,
-                            factor,
-                            duration,
-                        }) {
-                            warn!("schedule pd task failed"; "err" => ?e);
-                        }
-                    }),
-                ),
+                other => {
+                    warn!("unknown inspect factor"; "factor" => ?other);
+                    return;
+                },
             }
         };
-        match factor {
-            InspectFactor::RaftDisk => {
-                let msg = StoreMsg::LatencyInspect {
-                    factor,
-                    send_time: TiInstant::now(),
-                    inspector,
-                };
-                if let Err(e) = self.router.send_control(msg) {
-                    warn!("pd worker send latency inspector failed"; "err" => ?e, "factor" => ?factor);
-                }
-            }
-            InspectFactor::KvDisk => {
-                if let Err(e) = self
-                    .inspector_scheduler
-                    .schedule(InspectorTask::DiskLatency { inspector })
-                {
-                    warn!("pd worker send latency inspector failed"; "err" => ?e, "factor" => ?factor);
-                }
-            }
-            InspectFactor::Network => {
-                let start = TiInstant::now();
-
-                if let Err(e) = self
-                    .inspector_scheduler
-                    .schedule(InspectorTask::NetworkLatency { inspector, start })
-                {
-                    warn!("pd worker send latency inspector failed"; "err" => ?e, "factor" => ?factor);
-                }
-            }
+        let msg = StoreMsg::LatencyInspect {
+            factor,
+            send_time: TiInstant::now(),
+            inspector,
+        };
+        if let Err(e) = self.router.send_control(msg) {
+            warn!("pd worker send latency inspector failed"; "err" => ?e);
         }
     }
 }

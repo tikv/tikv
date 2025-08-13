@@ -10,11 +10,6 @@ use std::sync::Mutex;
 use kvproto::pdpb;
 use pdpb::SlowTrend as SlowTrendPb;
 use prometheus::IntGauge;
-use security::SecurityManager;
-use grpcio::{Environment, ChannelBuilder, Channel};
-use pd_client::PdClient;
-use grpcio_health::{proto::HealthClient};
-use tikv_util::warn;
 
 use tikv_util::info;
 
@@ -70,7 +65,7 @@ pub struct UnifiedSlowScore {
 }
 
 impl UnifiedSlowScore {
-    pub fn new(cfg: &RaftstoreReporterConfig, client_mgr: Arc<Mutex<TikvClientMgr>>) -> Self {
+    pub fn new(cfg: &RaftstoreReporterConfig) -> Self {
         let mut unified_slow_score = UnifiedSlowScore {
             factors: Vec::new(),
             network_factors: Arc::new(Mutex::new(HashMap::new())),
@@ -92,29 +87,6 @@ impl UnifiedSlowScore {
             DISK_ROUND_TICKS,
             DISK_RECOVERY_INTERVALS,
         ));
-
-        let network_factors = unified_slow_score.network_factors.clone();
-        let inspect_network_interval = unified_slow_score.inspect_network_interval;
-        std::thread::spawn(move || {
-            loop {
-                let health_clients = client_mgr.lock().unwrap().get_health_clients();
-                for store_id in health_clients.keys() {
-                    let mut network_factors = network_factors.lock().unwrap();
-                    if !network_factors.contains_key(store_id) {
-                        network_factors.insert(*store_id, SlowScore::new(
-                            NETWORK_TIMEOUT_THRESHOLD,
-                            inspect_network_interval,
-                            NETWORK_TIMEOUT_RATIO_THRESHOLD,
-                            NETWORK_ROUND_TICKS,
-                            NETWORK_RECOVERY_INTERVALS,
-                        ));
-                    }
-                }
-                network_factors.lock().unwrap().retain(|store_id, _| health_clients.contains_key(store_id));
-                std::thread::sleep(Duration::from_secs(60));
-            }
-        });
-
 
         unified_slow_score
     }
@@ -262,12 +234,11 @@ impl RaftstoreReporter {
 
     pub fn new(
         health_controller: &HealthController,
-        client_mgr: Arc<Mutex<TikvClientMgr>>,
         cfg: RaftstoreReporterConfig,
     ) -> Self {
         Self {
             health_controller_inner: health_controller.inner.clone(),
-            slow_score: UnifiedSlowScore::new(&cfg, client_mgr),
+            slow_score: UnifiedSlowScore::new(&cfg),
             slow_trend: SlowTrendStatistics::new(cfg),
             is_healthy: true,
         }
@@ -500,84 +471,5 @@ impl TestReporter {
     pub fn set_raftstore_slow_score(&self, slow_score: f64) {
         self.health_controller_inner
             .update_raftstore_slow_score(slow_score);
-    }
-}
-
-#[derive(Clone)]
-pub struct TikvClientMgr {
-    store_id: u64,
-    pd_client: Arc<dyn PdClient>,
-    // store_address -> client
-    channels: Arc<Mutex<HashMap<u64, Channel>>>,
-    env: Arc<Environment>,
-    security_mgr: Arc<SecurityManager>,
-}
-
-impl TikvClientMgr {
-    pub fn new(
-        store_id: u64,
-        pd_client: Arc<dyn PdClient>,
-        env: Arc<Environment>,
-        security_mgr: Arc<SecurityManager>,
-    ) -> Self {
-        let mgr = TikvClientMgr {
-            store_id,
-            pd_client: pd_client.clone(),
-            channels: Arc::new(Mutex::new(HashMap::default())),
-            env: env.clone(),
-            security_mgr: security_mgr.clone(),
-        };
-
-        let mgr_clone = mgr.clone();
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
-            rt.block_on(async move {
-                loop {
-                    mgr_clone.update();
-                    tokio::time::sleep(Duration::from_secs(60)).await;
-                }
-            });
-        });
-        mgr
-    }
-
-    fn update(&self) {
-        let stores = match self.pd_client.get_all_stores(true) {
-            Ok(stores) => stores,
-            Err(e) => {
-                warn!("failed to get stores from PD"; "err" => ?e);
-                return;
-            }
-        };
-
-        let mut channels = self.channels.lock().unwrap();
-        let existing_stores: std::collections::HashSet<_> = channels.keys().cloned().collect();
-
-        for store in stores {
-            let addr = store.get_address().to_string();
-            let store_id = store.get_id();
-            if !existing_stores.contains(&store_id) && store_id != self.store_id {
-                let channel = self.security_mgr.connect(
-                    ChannelBuilder::new(self.env.clone()),
-                    &addr,
-                );
-                channels.insert(store_id, channel);
-            }
-        }
-    }
-
-    pub fn get_health_clients(&self) -> HashMap<u64, HealthClient> {
-        let mut health_clients = HashMap::default();
-
-        for (store_id, channel) in self.channels.lock().unwrap().iter() {
-            let client = HealthClient::new(
-                channel.clone(),
-            );
-            health_clients.insert(*store_id, client);
-        }
-        health_clients
     }
 }

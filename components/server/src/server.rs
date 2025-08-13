@@ -39,7 +39,7 @@ use engine_traits::{
 use file_system::{BytesFetcher, MetricsManager as IoMetricsManager, get_io_rate_limiter};
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
-use health_controller::{HealthController, reporters::TikvClientMgr};
+use health_controller::HealthController;
 use hybrid_engine::observer::{
     HybridSnapshotObserver, LoadEvictionObserver as HybridEngineLoadEvictionObserver,
     RegionCacheWriteBatchObserver,
@@ -68,9 +68,9 @@ use raftstore::{
     },
     router::{CdcRaftRouter, ServerRaftStoreRouter},
     store::{
-        AutoSplitController, CheckLeaderRunner, InspectorRunner, LocalReader, SnapManager,
+        AutoSplitController, CheckLeaderRunner, LocalReader, SnapManager,
         SnapManagerBuilder, SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
-        config::RaftstoreConfigManager,
+        config::RaftstoreConfigManager, DiskCheckRunner,
         fsm,
         fsm::store::{
             MULTI_FILES_SNAPSHOT_FEATURE, PENDING_MSG_CAP, RaftBatchSystem, RaftRouter, StoreMeta,
@@ -1051,21 +1051,7 @@ where
             .registry
             .register_consistency_check_observer(100, observer);
 
-            
-        let tikv_client_mgr = Arc::new(Mutex::new(TikvClientMgr::new(
-            raft_server.id(),
-            self.pd_client.clone(),
-            self.env.clone(),
-            self.security_mgr.clone(),
-        )));
-
-        let inspector_runner =
-            InspectorRunner::new(
-                self.core.store_path.clone(),
-                tikv_client_mgr.clone(),
-            );
-
-        
+        let disk_check_runner = DiskCheckRunner::new(self.core.store_path.clone());
 
         raft_server
             .start(
@@ -1081,10 +1067,9 @@ where
                 self.concurrency_manager.clone(),
                 collector_reg_handle,
                 self.causal_ts_provider.clone(),
-                inspector_runner,
+                disk_check_runner,
                 self.grpc_service_mgr.clone(),
                 safe_point.clone(),
-                tikv_client_mgr,
             )
             .unwrap_or_else(|e| fatal!("failed to start raft_server: {}", e));
 
