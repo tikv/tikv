@@ -12,15 +12,14 @@ use std::{
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::{errorpb, kvrpcpb, kvrpcpb::ApiVersion};
 use thiserror::Error;
-use tikv_util::deadline::{DeadlineError, set_deadline_exceeded_busy_error};
+use tikv_util::deadline::{set_deadline_exceeded_busy_error, DeadlineError};
 use txn_types::{KvPair, TimeStamp};
 
 use crate::storage::{
-    CommandKind, Result,
     kv::{self, Error as KvError, ErrorInner as KvErrorInner},
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
     txn::{self, Error as TxnError, ErrorInner as TxnErrorInner},
-    types,
+    types, CommandKind, Result,
 };
 
 #[derive(Debug, Error)]
@@ -534,7 +533,7 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
             key_error.set_primary_mismatch(primary_mismatch);
         }
         _ => {
-            warn!(?*err; "txn aborts");
+            warn!("txn aborts"; "err" => ?err);
             key_error.set_abort(format!("{:?}", err));
         }
     }
@@ -592,7 +591,7 @@ pub struct SharedError(pub Arc<Error>);
 
 impl SharedError {
     pub fn inner(&self) -> &ErrorInner {
-        &self.0.0
+        &self.0 .0
     }
 }
 
