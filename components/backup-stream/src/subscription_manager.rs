@@ -447,6 +447,10 @@ where
                     // If there isn't any region observed, the `min_ts` can be used as resolved ts
                     // safely.
                     let rts = min_region.map(|rs| rs.checkpoint).unwrap_or(min_ts);
+                    if let Some(mr) = min_region.as_ref() {
+                        metrics::STORE_SMALLEST_CHECKPOINT_REGION_ID.set(mr.region.id as _);
+                        metrics::STORE_SMALLEST_CHECKPOINT_TS.set(rts.into_inner() as _);
+                    }
                     if min_region
                         .map(|mr| mr.checkpoint_type != CheckpointType::MinTs)
                         .unwrap_or(false)
