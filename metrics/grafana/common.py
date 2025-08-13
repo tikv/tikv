@@ -1226,7 +1226,6 @@ def table_panel(
     columns=None,
     filterable=False,
     show_header=True,
-    time_from="1s",
     transformations=DEFAULT_TABLE_TRANSFORMATIONS,
 ) -> Panel:
     """
@@ -1244,12 +1243,14 @@ def table_panel(
         show_header: Whether to show table header
         time_from: Time from parameter for the panel
         transformations: Grafana transformations for the panel
+        instant: Whether to use instant query mode (default: True for config data)
 
     Returns:
         Table panel instance
     """
     for target in targets:
         target.format = "table"
+        target.instant = True
 
     table_args = {
         "title": title,
@@ -1259,7 +1260,6 @@ def table_panel(
         "columns": columns,
         "filterable": filterable,
         "showHeader": show_header,
-        "timeFrom": time_from,
         "transformations": transformations,
         "description": description,
     }
