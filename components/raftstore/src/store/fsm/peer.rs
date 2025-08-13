@@ -6142,7 +6142,7 @@ where
             1.0
         };
 
-        let should_force_compact = applied_count > self.ctx.cfg.raft_log_gc_count_limit() / 4;
+        let should_force_compact = applied_count > self.ctx.cfg.raft_log_gc_count_limit() / 3;
 
         let mut compact_idx = if force_compact {
             if should_force_compact {

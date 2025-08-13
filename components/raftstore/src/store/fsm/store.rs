@@ -3156,9 +3156,9 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         regions_with_growth.sort_by(|a, b| b.1.cmp(&a.1));
 
         // Calculate how many fastest growing regions to GC
-        let exclude_count = (regions_with_growth.len() as f64 * over_ratio / 4.0) as usize;
+        let exclude_count = (total_regions as f64 * over_ratio / 5.0) as usize;
 
-        let send_count = std::cmp::min(total_regions / 4, exclude_count);
+        let send_count = std::cmp::max(50, exclude_count);
         info!(
             "force compact regions";
             "send_count" => send_count,
