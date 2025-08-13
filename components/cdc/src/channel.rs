@@ -445,7 +445,7 @@ async fn sleep_after_sink_flush() {
     }
     info!("inside sleep_after_sink_flush failpoint, sleep 30 seconds!");
     let dur = Duration::from_secs(30);
-    let timer = tikv_util::timer::GLOBAL_TIMER_HANDLE.delay(tikv_util::time::Instant::now() + dur);
+    let timer = tikv_util::timer::GLOBAL_TIMER_HANDLE.delay(std::time::Instant::now() + dur);
     let _ = futures::compat::Compat01As03::new(timer).await;
 }
 

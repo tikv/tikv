@@ -10,7 +10,7 @@ use std::{
 
 use collections::{HashMap, HashMapEntry};
 use crossbeam::atomic::AtomicCell;
-use futures::stream::TryStreamExt;
+use futures::{stream::{TryStreamExt, StreamExt}, compat::Stream01CompatExt};
 use grpcio::{DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode};
 use kvproto::{
     cdcpb::{
@@ -19,8 +19,13 @@ use kvproto::{
     },
     kvrpcpb::ApiVersion,
 };
-use tikv_util::{error, info, memory::MemoryQuota, warn, worker::*};
-use tokio::{runtime::Runtime, time::interval};
+use tikv_util::{
+    error, info,
+    memory::MemoryQuota,
+    timer::GLOBAL_TIMER_HANDLE,
+    warn,
+    worker::{Builder as WorkerBuilder, Scheduler, Worker},
+};
 
 use crate::{
     channel::{CDC_CHANNLE_CAPACITY, Sink, channel},
@@ -257,7 +262,7 @@ impl EventFeedHeaders {
 pub struct Service {
     scheduler: Scheduler<Task>,
     memory_quota: Arc<MemoryQuota>,
-    pool: Arc<Runtime>,
+    pool: Arc<Worker>,
 }
 
 impl Service {
@@ -265,14 +270,7 @@ impl Service {
     ///
     /// It requires a scheduler of an `Endpoint` in order to schedule tasks.
     pub fn new(scheduler: Scheduler<Task>, memory_quota: Arc<MemoryQuota>) -> Service {
-        let pool = Arc::new(
-            tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(1)
-                .thread_name("cdc-watchdog")
-                .enable_all()
-                .build()
-                .unwrap(),
-        );
+        let pool = Arc::new(WorkerBuilder::new("cdc-watchdog").thread_count(1).create());
 
         Service {
             scheduler,
@@ -502,10 +500,9 @@ impl Service {
 
         let peer = ctx.peer();
         let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
-        let cancel_tx_for_watchdog = cancel_tx;
 
         // Create cancelCh for eventDrain.forward exit signal
-        let (forward_exit_tx, mut forward_exit_rx) = tokio::sync::oneshot::channel::<()>();
+        let (forward_exit_tx, forward_exit_rx) = tokio::sync::oneshot::channel::<()>();
         let forward_exit_tx_for_forward = forward_exit_tx;
 
         ctx.spawn(async move {
@@ -529,59 +526,82 @@ impl Service {
             }
         });
 
-        // Add watchdog loop to monitor connection activity using tokio runtime
-        let pool = self.pool.clone();
-        pool.spawn(async move {
-            // Create an interval that ticks every CDC_WATCHDOG_CHECK_INTERVAL_SECS
-            let mut interval = interval(Duration::from_secs(CDC_WATCHDOG_CHECK_INTERVAL_SECS));
+        // Start watchdog to monitor connection activity
+        Self::start_connection_watchdog(
+            self.pool.clone(),
+            last_flush_time_for_watchdog.clone(),
+            peer_for_watchdog.clone(),
+            conn_id,
+            cancel_tx,
+            forward_exit_rx,
+        );
+    }
 
+    /// Start a watchdog to monitor CDC connection activity.
+    ///
+    /// This function creates a background task that periodically checks if the
+    /// connection has been idle for too long and takes appropriate action
+    /// (warning or aborting).
+    fn start_connection_watchdog(
+        pool: Arc<Worker>,
+        last_flush_time: Arc<AtomicCell<Instant>>,
+        peer: String,
+        conn_id: ConnId,
+        cancel_tx: tokio::sync::oneshot::Sender<()>,
+        mut forward_exit_rx: tokio::sync::oneshot::Receiver<()>,
+    ) {
+        let last_flush_time_clone = last_flush_time.clone();
+        let peer_clone = peer.clone();
+
+        // Create a custom interval task that can be stopped
+        let _ = pool.pool().spawn(async move {
+            let mut interval = GLOBAL_TIMER_HANDLE
+                .interval(std::time::Instant::now(), Duration::from_secs(CDC_WATCHDOG_CHECK_INTERVAL_SECS))
+                .compat();
+            
             loop {
                 tokio::select! {
-                    _ = interval.tick() => {
-                        // Normal watchdog interval tick
-                    }
                     _ = &mut forward_exit_rx => {
-                        info!("cdc eventDrain.forward exited, watchdog loop will exit";
-                              "downstream" => peer_for_watchdog.clone(),
-                              "conn_id" => ?conn_id);
+                        info!("cdc connection forward exit signal received, stopping watchdog");
                         break;
                     }
-                }
+                    _ = interval.next() => {
+                        let elapsed = last_flush_time_clone.load().elapsed();
 
-                let elapsed = last_flush_time_for_watchdog.load().elapsed();
+                        // Check if last flush was more than the warning threshold
+                        if elapsed > Duration::from_secs(CDC_IDLE_WARNING_THRESHOLD_SECS) {
+                            warn!("cdc connection idle too long";
+                                  "downstream" => peer_clone.clone(),
+                                  "conn_id" => ?conn_id,
+                                  "seconds_since_last_flush" => elapsed.as_secs());
+                        }
 
-                // Check if last flush was more than the warning threshold
-                if elapsed > Duration::from_secs(CDC_IDLE_WARNING_THRESHOLD_SECS) {
-                    warn!("cdc connection idle too long";
-                          "downstream" => peer_for_watchdog.clone(),
-                          "conn_id" => ?conn_id,
-                          "seconds_since_last_flush" => elapsed.as_secs());
-                }
+                        let _idle_threshold = CDC_IDLE_DEREGISTER_THRESHOLD_SECS;
 
-                let idle_threshold = CDC_IDLE_DEREGISTER_THRESHOLD_SECS;
+                        #[cfg(feature = "failpoints")]
+                        let _idle_threshold = {
+                            let should_adjust = || {
+                                fail::fail_point!("cdc_idle_deregister_threshold", |_| true);
+                                false
+                            };
+                            if should_adjust() {
+                                20
+                            } else {
+                                CDC_IDLE_DEREGISTER_THRESHOLD_SECS
+                            }
+                        };
 
-                #[cfg(feature = "failpoints")]
-                {
-                    let should_adjust = || {
-                        fail::fail_point!("cdc_idle_deregister_threshold", |_| true);
-                        false
-                    };
-                    if should_adjust() {
-                        idle_threshold = 20;
-                        info!("cdc_idle_deregister_threshold is enabled"; "idle_threshold" => idle_threshold);
+                        // Check if last flush was more than the deregister threshold
+                        if elapsed > Duration::from_secs(_idle_threshold) {
+                            error!("cdc connection idle for too long, aborting connection";
+                                   "downstream" => peer_clone.clone(),
+                                   "conn_id" => ?conn_id,
+                                   "seconds_since_last_flush" => elapsed.as_secs());
+                            // Cancel the gRPC connection
+                            let _ = cancel_tx.send(());
+                            break;
+                        }
                     }
-                }
-
-                // Check if last flush was more than the deregister threshold
-                if elapsed > Duration::from_secs(idle_threshold) {
-                    error!("cdc connection idle for too long, aborting connection";
-                           "downstream" => peer_for_watchdog.clone(),
-                           "conn_id" => ?conn_id,
-                           "seconds_since_last_flush" => elapsed.as_secs());
-                    // Cancel the gRPC connection
-                    let _ = cancel_tx_for_watchdog.send(());
-                    // Break the loop since we've aborted the connection
-                    break;
                 }
             }
         });
