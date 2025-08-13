@@ -10176,12 +10176,47 @@ def BackupLog() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_simple(
-                            "tidb_log_backup_current_last_region_leader_store_id"
-                        ),
+                            "tikv_log_backup_store_last_checkpoint_ts"
+                        ).extra("/ 262144"),
                         legend_format="{{ instance }}",
                     )
                 ],
+            )
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Current Last Region ID per Store",
+                description="The region with minimal checkpoint of each store.",
+                targets=[
+                    target(
+                        expr=expr_simple("tikv_log_backup_store_last_checkpoint_region_id"),
+                        legend_format="{{ instance }}"
+                    )
+                ],
             ),
+            graph_panel(
+                title="Current Last Checkpoint TS per Store",
+                yaxes=yaxes(left_format=UNITS.MILLI_SECONDS),
+                description="The minimal checkpoint TS of each store.",
+                targets=[
+                    target(
+                        expr=expr_simple("tikv_log_backup_store_last_checkpoint_ts"),
+                        legend_format="{{ instance }}"
+                    )
+                ],
+            ),
+            graph_panel(
+                title="Active Progress Subscrption Per Store",
+                description="The active progress subscription from each store",
+                targets=[
+                    target(
+                        expr=expr_simple("tikv_log_backup_active_subscription_number"),
+                        legend_format="{{instance}}"
+                    )
+                ]
+            )
         ]
     )
     layout.row(
