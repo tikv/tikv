@@ -1,11 +1,11 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    collections::BTreeMap,
     fmt,
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use collections::HashMap;
 use kvproto::metapb;
 use lazy_static::lazy_static;
 use parking_lot::RwLock;
@@ -84,7 +84,7 @@ pub struct PeerPessimisticLocks {
     ///   likely to be proposed successfully, while the leader will need at
     ///   least another round to receive the transfer leader message from the
     ///   transferee.
-    ///  
+    ///
     /// - Split region The lock with the deleted mark SHOULD be moved to new
     ///   regions on region split. Considering the following cases with
     ///   different orders: 1. Propose write -> propose split -> apply write ->
@@ -106,7 +106,7 @@ pub struct PeerPessimisticLocks {
     ///   skipped because of version mismatch. So, no lock should be deleted.
     ///   It's correct that we include the locks that are marked deleted in the
     ///   commit merge request.
-    map: HashMap<Key, (PessimisticLock, bool)>,
+    map: BTreeMap<Key, (PessimisticLock, bool)>,
     /// Status of the pessimistic lock map.
     /// The map is writable only in the Normal state.
     pub status: LocksStatus,
@@ -143,7 +143,7 @@ impl fmt::Debug for PeerPessimisticLocks {
 impl Default for PeerPessimisticLocks {
     fn default() -> Self {
         PeerPessimisticLocks {
-            map: HashMap::default(),
+            map: BTreeMap::default(),
             status: LocksStatus::Normal,
             term: 0,
             version: 0,
@@ -192,7 +192,7 @@ impl PeerPessimisticLocks {
     }
 
     pub fn clear(&mut self) {
-        self.map = HashMap::default();
+        self.map = BTreeMap::default();
         GLOBAL_MEM_SIZE.sub(self.memory_size as i64);
         self.memory_size = 0;
     }
@@ -244,12 +244,20 @@ impl PeerPessimisticLocks {
         // Locks that are marked deleted still need to be moved to the new regions,
         // and the deleted mark should also be cleared.
         // Refer to the comment in `PeerPessimisticLocks` for details.
-        let removed_locks = self.map.drain_filter(|key, _| {
-            let key = &**key.as_encoded();
+        // There is no drain_filter for BtreeMap, so extra clone are needed.
+        let mut removed_locks = Vec::new();
+        self.map.retain(|key, value| {
+            let key_ref = key.as_encoded().as_slice();
             let (start_key, end_key) = (derived.get_start_key(), derived.get_end_key());
-            key < start_key || (!end_key.is_empty() && key >= end_key)
+            if key_ref < start_key || (!end_key.is_empty() && key_ref >= end_key) {
+                removed_locks.push((key.clone(), value.clone()));
+                false
+            } else {
+                true
+            }
         });
-        for (key, (lock, _)) in removed_locks {
+
+        for (key, (lock, _)) in removed_locks.into_iter() {
             let idx = match regions
                 .binary_search_by_key(&&**key.as_encoded(), |region| region.get_start_key())
             {
@@ -277,7 +285,7 @@ impl PeerPessimisticLocks {
 
 impl<'a> IntoIterator for &'a PeerPessimisticLocks {
     type Item = (&'a Key, &'a (PessimisticLock, bool));
-    type IntoIter = std::collections::hash_map::Iter<'a, Key, (PessimisticLock, bool)>;
+    type IntoIter = std::collections::btree_map::Iter<'a, Key, (PessimisticLock, bool)>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.map.iter()
