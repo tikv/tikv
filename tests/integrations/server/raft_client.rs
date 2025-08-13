@@ -431,7 +431,7 @@ fn test_store_allowlist() {
 }
 
 #[tokio::test]
-async fn test_inspector_store_lifecycle() {
+async fn test_health_checker_lifecycle() {
     fail::cfg("network_inspection_interval", "return").unwrap();
     let msg_count = Arc::new(AtomicUsize::new(0));
     let batch_msg_count = Arc::new(AtomicUsize::new(0));
@@ -460,7 +460,7 @@ async fn test_inspector_store_lifecycle() {
     // Start network inspection before establishing any connections
     raft_client.start_network_inspection();
 
-    // Wait for inspector to detect new stores and start inspection tasks
+    // Wait for health checker to detect new stores and start inspection tasks
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Check that delays are being tracked for the connected stores
@@ -482,7 +482,7 @@ async fn test_inspector_store_lifecycle() {
     }
     raft_client.flush();
 
-    // Wait for inspector to detect the new stores
+    // Wait for health checker to detect the new stores
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Verify that stores 4 and 5 might also have delay data

@@ -956,8 +956,27 @@ async fn start<S, R>(
     }
 }
 
+/// Connection information for a specific store connection.
+///
+/// This struct contains the essential components needed to manage a connection
+/// to a remote TiKV store, including message queuing and gRPC channel
+/// management.
 struct ConnectionInfo {
+    /// Message queue for buffering raft messages before sending.
+    ///
+    /// The queue is shared between the sender (RaftClient) and the background
+    /// connection task. It handles connection states
+    /// (established/paused/disconnected) and provides backpressure when
+    /// full.
     queue: Arc<Queue>,
+
+    /// Optional gRPC channel for the connection.
+    ///
+    /// This is `None` when the connection is not established or has been lost.
+    /// When `Some`, it contains an active gRPC channel that can be used for
+    /// health checks and other communication with the remote store.
+    /// The channel is updated by the background connection task when the
+    /// connection state changes.
     channel: Option<Channel>,
 }
 
@@ -1025,7 +1044,7 @@ pub struct RaftClient<S, R> {
     builder: ConnectionBuilder<S, R>,
     last_hash: (u64, u64),
 
-    inspector: Inspector,
+    health_checker: HealthChecker,
 }
 
 impl<S, R> RaftClient<S, R>
@@ -1036,7 +1055,7 @@ where
     pub fn new(
         self_store_id: u64,
         builder: ConnectionBuilder<S, R>,
-        inspect_network_interval: Duration,
+        inspect_interval: Duration,
     ) -> Self {
         let future_pool = Arc::new(
             yatp::Builder::new(thd_name!("raft-stream"))
@@ -1044,11 +1063,7 @@ where
                 .build_future_pool(),
         );
         let pool: Arc<Mutex<ConnectionPool>> = Arc::default();
-        let inspector = Inspector::new(
-            self_store_id,
-            pool.clone(),
-            inspect_network_interval,
-        );
+        let health_checker = HealthChecker::new(self_store_id, pool.clone(), inspect_interval);
         RaftClient {
             self_store_id,
             pool,
@@ -1058,15 +1073,15 @@ where
             future_pool,
             builder,
             last_hash: (0, 0),
-            inspector,
+            health_checker,
         }
     }
 
     // Start the network inspection
     pub fn start_network_inspection(&self) {
-        let inspector = self.inspector.clone();
+        let health_checker = self.health_checker.clone();
         self.future_pool.spawn(async move {
-            inspector.run().await;
+            health_checker.run().await;
         });
     }
 
@@ -1074,26 +1089,26 @@ where
     /// Returns the delay in milliseconds, or None if no delay recorded for this
     /// store
     pub fn get_and_reset_max_delay(&self, store_id: u64) -> Option<f64> {
-        self.inspector.get_and_reset_max_delay(store_id)
+        self.health_checker.get_and_reset_max_delay(store_id)
     }
 
     /// Get all maximum delays and reset them
     /// Returns a HashMap of store_id -> max_delay_ms
     pub fn get_and_reset_all_max_delays(&self) -> HashMap<u64, f64> {
-        self.inspector.get_and_reset_all_max_delays()
+        self.health_checker.get_and_reset_all_max_delays()
     }
 
     /// Get the maximum delay for a specific store without resetting
     /// Returns the delay in milliseconds, or None if no delay recorded for this
     /// store
     pub fn get_max_delay(&self, store_id: u64) -> Option<f64> {
-        self.inspector.get_max_delay(store_id)
+        self.health_checker.get_max_delay(store_id)
     }
 
     /// Get all maximum delays without resetting
     /// Returns a HashMap of store_id -> max_delay_ms
     pub fn get_all_max_delays(&self) -> HashMap<u64, f64> {
-        self.inspector.get_all_max_delays()
+        self.health_checker.get_all_max_delays()
     }
 
     /// Loads connection from pool.
@@ -1295,16 +1310,16 @@ where
             future_pool: self.future_pool.clone(),
             builder: self.builder.clone(),
             last_hash: (0, 0),
-            inspector: self.inspector.clone(),
+            health_checker: self.health_checker.clone(),
         }
     }
 }
 
 #[derive(Clone)]
-pub struct Inspector {
+pub struct HealthChecker {
     self_store_id: u64,
     pool: Arc<Mutex<ConnectionPool>>,
-    inspect_network_interval: Duration,
+    inspect_interval: Duration,
     // Store shutdown senders for each store inspection task
     task_handles: Arc<Mutex<HashMap<u64, oneshot::Sender<()>>>>,
     future_pool: Arc<ThreadPool<TaskCell>>,
@@ -1312,21 +1327,21 @@ pub struct Inspector {
     max_delays: Arc<Mutex<HashMap<u64, f64>>>,
 }
 
-impl Inspector {
+impl HealthChecker {
     fn new(
         self_store_id: u64,
         pool: Arc<Mutex<ConnectionPool>>,
-        inspect_network_interval: Duration,
+        inspect_interval: Duration,
     ) -> Self {
         let future_pool = Arc::new(
-            yatp::Builder::new(thd_name!("network-inspector"))
+            yatp::Builder::new(thd_name!("network-health-checker"))
                 .max_thread_count(1)
                 .build_future_pool(),
         );
-        Inspector {
+        HealthChecker {
             self_store_id,
             pool,
-            inspect_network_interval,
+            inspect_interval,
             task_handles: Arc::new(Mutex::new(HashMap::default())),
             future_pool,
             max_delays: Arc::new(Mutex::new(HashMap::default())),
@@ -1335,7 +1350,13 @@ impl Inspector {
 
     /// Main control loop that manages inspection tasks for all stores
     pub async fn run(&self) {
-        let mut known_stores = HashSet::default();
+        let mut watched_stores = HashSet::default();
+        let check_interval = (|| {
+            fail_point!("network_inspection_interval", |_| {
+                Duration::from_millis(10)
+            });
+            Duration::from_secs(30)
+        })();
 
         loop {
             // Check current stores in the pool
@@ -1349,23 +1370,16 @@ impl Inspector {
             };
 
             // Find stores that need to be added
-            for store_id in current_stores.difference(&known_stores) {
+            for store_id in current_stores.difference(&watched_stores) {
                 self.start_store_inspection(*store_id);
             }
 
             // Find stores that need to be removed
-            for store_id in known_stores.difference(&current_stores) {
+            for store_id in watched_stores.difference(&current_stores) {
                 self.stop_store_inspection(*store_id);
             }
 
-            known_stores = current_stores;
-
-            let check_interval = (|| {
-                fail_point!("network_inspection_interval", |_| {
-                    Duration::from_millis(10)
-                });
-                Duration::from_secs(30)
-            })();
+            watched_stores = current_stores;
             if let Err(e) = GLOBAL_TIMER_HANDLE
                 .delay(Instant::now() + check_interval)
                 .compat()
@@ -1390,7 +1404,7 @@ impl Inspector {
 
         // Spawn the inspection task using the future pool
         let pool = self.pool.clone();
-        let inspect_network_interval = self.inspect_network_interval;
+        let inspect_interval = self.inspect_interval;
         let max_delays = self.max_delays.clone();
         let self_store_id = self.self_store_id;
 
@@ -1399,7 +1413,7 @@ impl Inspector {
                 self_store_id,
                 store_id,
                 pool,
-                inspect_network_interval,
+                inspect_interval,
                 max_delays,
                 shutdown_rx,
             )
@@ -1426,7 +1440,7 @@ impl Inspector {
         self_store_id: u64,
         store_id: u64,
         pool: Arc<Mutex<ConnectionPool>>,
-        inspect_network_interval: Duration,
+        inspect_interval: Duration,
         max_delays: Arc<Mutex<HashMap<u64, f64>>>,
         mut shutdown_rx: oneshot::Receiver<()>,
     ) {
@@ -1446,7 +1460,7 @@ impl Inspector {
 
             // Wait for the specified interval
             if let Err(e) = GLOBAL_TIMER_HANDLE
-                .delay(last_check_time + inspect_network_interval)
+                .delay(last_check_time + inspect_interval)
                 .compat()
                 .await
             {
@@ -1707,91 +1721,91 @@ mod tests {
     }
 
     #[test]
-    fn test_inspector_creation() {
+    fn test_health_checker_creation() {
         let self_store_id = 1;
         let pool: Arc<Mutex<ConnectionPool>> = Arc::default();
         let interval = Duration::from_millis(100);
 
-        let inspector = Inspector::new(self_store_id, pool.clone(), interval.clone());
+        let health_checker = HealthChecker::new(self_store_id, pool.clone(), interval.clone());
 
-        assert_eq!(inspector.self_store_id, self_store_id);
-        assert!(Arc::ptr_eq(&inspector.pool, &pool));
-        assert_eq!(inspector.inspect_network_interval, interval);
-        assert!(inspector.task_handles.lock().unwrap().is_empty());
-        assert!(inspector.max_delays.lock().unwrap().is_empty());
+        assert_eq!(health_checker.self_store_id, self_store_id);
+        assert!(Arc::ptr_eq(&health_checker.pool, &pool));
+        assert_eq!(health_checker.inspect_interval, interval);
+        assert!(health_checker.task_handles.lock().unwrap().is_empty());
+        assert!(health_checker.max_delays.lock().unwrap().is_empty());
     }
 
     #[test]
-    fn test_inspector_delay_management() {
+    fn test_health_checker_delay_management() {
         let self_store_id = 1;
         let pool: Arc<Mutex<ConnectionPool>> = Arc::default();
         let interval = Duration::from_millis(100);
 
-        let inspector = Inspector::new(self_store_id, pool, interval);
+        let health_checker = HealthChecker::new(self_store_id, pool, interval);
 
         // Manually add some delays for testing
         {
-            let mut delays = inspector.max_delays.lock().unwrap();
+            let mut delays = health_checker.max_delays.lock().unwrap();
             delays.insert(1, 100.5);
             delays.insert(2, 200.8);
             delays.insert(3, 50.2);
         }
 
         // Test get without reset
-        assert_eq!(inspector.get_max_delay(1), Some(100.5));
-        assert_eq!(inspector.get_max_delay(2), Some(200.8));
-        assert_eq!(inspector.get_max_delay(4), None);
+        assert_eq!(health_checker.get_max_delay(1), Some(100.5));
+        assert_eq!(health_checker.get_max_delay(2), Some(200.8));
+        assert_eq!(health_checker.get_max_delay(4), None);
 
-        let all_delays = inspector.get_all_max_delays();
+        let all_delays = health_checker.get_all_max_delays();
         assert_eq!(all_delays.len(), 3);
         assert_eq!(all_delays[&1], 100.5);
         assert_eq!(all_delays[&2], 200.8);
         assert_eq!(all_delays[&3], 50.2);
 
         // Delays should still be there after get_max_delay
-        assert_eq!(inspector.get_max_delay(1), Some(100.5));
+        assert_eq!(health_checker.get_max_delay(1), Some(100.5));
 
         // Test get and reset single store
-        assert_eq!(inspector.get_and_reset_max_delay(1), Some(100.5));
-        assert_eq!(inspector.get_max_delay(1), None); // Should be reset now
-        assert_eq!(inspector.get_max_delay(2), Some(200.8)); // Should still be there
+        assert_eq!(health_checker.get_and_reset_max_delay(1), Some(100.5));
+        assert_eq!(health_checker.get_max_delay(1), None); // Should be reset now
+        assert_eq!(health_checker.get_max_delay(2), Some(200.8)); // Should still be there
 
         // Test get and reset all
-        let remaining_delays = inspector.get_and_reset_all_max_delays();
+        let remaining_delays = health_checker.get_and_reset_all_max_delays();
         assert_eq!(remaining_delays.len(), 2);
         assert_eq!(remaining_delays[&2], 200.8);
         assert_eq!(remaining_delays[&3], 50.2);
 
         // All delays should be reset now
-        assert_eq!(inspector.get_max_delay(2), None);
-        assert_eq!(inspector.get_max_delay(3), None);
-        assert!(inspector.get_all_max_delays().is_empty());
+        assert_eq!(health_checker.get_max_delay(2), None);
+        assert_eq!(health_checker.get_max_delay(3), None);
+        assert!(health_checker.get_all_max_delays().is_empty());
     }
 
     #[tokio::test]
-    async fn test_inspector_start_stop_store_inspection() {
+    async fn test_health_checker_start_stop_store_inspection() {
         let self_store_id = 1;
         let pool: Arc<Mutex<ConnectionPool>> = Arc::default();
         let interval = Duration::from_millis(50);
 
-        let inspector = Inspector::new(self_store_id, pool, interval);
+        let health_checker = HealthChecker::new(self_store_id, pool, interval);
         let store_id = 2;
 
         // Start inspection for a store
-        inspector.start_store_inspection(store_id);
+        health_checker.start_store_inspection(store_id);
 
         // Verify the task handle was added
         {
-            let handles = inspector.task_handles.lock().unwrap();
+            let handles = health_checker.task_handles.lock().unwrap();
             assert!(handles.contains_key(&store_id));
         }
 
         // Stop inspection for the store
-        inspector.stop_store_inspection(store_id);
+        health_checker.stop_store_inspection(store_id);
 
         // Verify the task handle was removed
         {
-            let handles = inspector.task_handles.lock().unwrap();
+            let handles = health_checker.task_handles.lock().unwrap();
             assert!(!handles.contains_key(&store_id));
         }
     }
