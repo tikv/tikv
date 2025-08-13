@@ -4,7 +4,7 @@
 use std::{
     num::NonZeroU64,
     ops::Deref,
-    sync::{Arc, Mutex, atomic},
+    sync::{atomic, Arc, Mutex},
 };
 
 use batch_system::Router;
@@ -12,28 +12,28 @@ use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine};
 use futures::Future;
 use kvproto::{
-    errorpb,
+    errorpb, metapb,
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse},
 };
 use raftstore::{
-    Result,
     errors::RAFTSTORE_IS_BUSY,
     store::{
-        LocalReaderCore, ReadDelegate, ReadExecutorProvider, RegionSnapshot, cmd_resp,
-        util::LeaseState,
-        worker_metrics::{self, TLS_LOCAL_READ_METRICS},
+        cmd_resp, util::LeaseState, worker_metrics::{self, TLS_LOCAL_READ_METRICS}, LocalReaderCore, ReadDelegate,
+        ReadExecutorProvider,
+        RegionSnapshot,
     },
+    Result,
 };
-use slog::{Logger, debug};
-use tikv_util::{Either, box_err, codec::number::decode_u64, time::monotonic_raw_now};
+use slog::{debug, Logger};
+use tikv_util::{box_err, codec::number::decode_u64, time::monotonic_raw_now, Either};
 use time::Timespec;
-use tracker::{GLOBAL_TRACKERS, get_tls_tracker_token};
+use tracker::{get_tls_tracker_token, GLOBAL_TRACKERS};
 use txn_types::WriteBatchFlags;
 
 use crate::{
-    StoreRouter,
     fsm::StoreMeta,
     router::{PeerMsg, QueryResult},
+    StoreRouter,
 };
 
 pub trait MsgRouter: Clone + Send + 'static {
@@ -568,6 +568,10 @@ where
         }
         (meta.readers.len(), None)
     }
+
+    fn locate_key(&self, _key: &[u8]) -> Option<(Arc<metapb::Region>, u64, u64)> {
+        None
+    }
 }
 
 enum ReadRequestPolicy {
@@ -666,13 +670,13 @@ mod tests {
         ctor::{CfOptions, DbOptions},
         kv::{KvTestEngine, TestTabletFactory},
     };
-    use engine_traits::{DATA_CFS, MiscExt, SyncMutable, TabletContext, TabletRegistry};
+    use engine_traits::{MiscExt, SyncMutable, TabletContext, TabletRegistry, DATA_CFS};
     use futures::executor::block_on;
     use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb, raft_cmdpb::*};
     use pd_client::BucketMeta;
     use raftstore::store::{
-        ReadCallback, ReadProgress, RegionReadProgress, TrackVer, TxnExt, util::Lease,
-        worker_metrics::TLS_LOCAL_READ_METRICS,
+        util::Lease, worker_metrics::TLS_LOCAL_READ_METRICS, ReadCallback, ReadProgress, RegionReadProgress, TrackVer,
+        TxnExt,
     };
     use slog::o;
     use tempfile::Builder;

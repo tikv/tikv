@@ -3,17 +3,19 @@
 // #[PerformanceCriticalPath]
 use std::{
     cell::Cell,
+    collections::Bound::{Excluded, Unbounded},
     fmt::{self, Display, Formatter},
     ops::Deref,
     sync::{
-        Arc, Mutex,
-        atomic::{self, AtomicU64, Ordering},
+        atomic::{self, AtomicU64, Ordering}, Arc,
+        Mutex,
     },
 };
 
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
 use engine_traits::{KvEngine, Peekable, RaftEngine, SnapshotMiscExt};
 use fail::fail_point;
+use keys::data_key;
 use kvproto::{
     errorpb,
     kvrpcpb::ExtraOp as TxnExtraOp,
@@ -23,10 +25,11 @@ use kvproto::{
 use pd_client::BucketMeta;
 use tikv_util::{
     codec::number::decode_u64,
-    debug, error,
+    debug, error, info,
     lru::LruCache,
     store::find_peer_by_id,
-    time::{ThreadReadId, monotonic_raw_now},
+    time::{monotonic_raw_now, ThreadReadId},
+    warn,
 };
 use time::Timespec;
 use tracker::GLOBAL_TRACKERS;
@@ -34,16 +37,16 @@ use txn_types::{TimeStamp, WriteBatchFlags};
 
 use super::metrics::*;
 use crate::{
-    Error, Result,
-    coprocessor::CoprocessorHost,
-    errors::RAFTSTORE_IS_BUSY,
+    coprocessor::CoprocessorHost, errors::RAFTSTORE_IS_BUSY,
     router::ReadContext,
     store::{
-        Callback, CasualMessage, CasualRouter, Peer, ProposalRouter, RaftCommand, ReadCallback,
-        ReadResponse, RegionSnapshot, RequestInspector, RequestPolicy, TxnExt, cmd_resp,
-        fsm::store::StoreMeta,
-        util::{self, LeaseState, RegionReadProgress, RemoteLease},
+        cmd_resp, fsm::store::StoreMeta, util::{self, LeaseState, RegionReadProgress, RemoteLease}, Callback, CasualMessage, CasualRouter, Peer,
+        ProposalRouter, RaftCommand, ReadCallback, ReadResponse, RegionSnapshot, RequestInspector,
+        RequestPolicy,
+        TxnExt,
     },
+    Error,
+    Result,
 };
 
 /// #[RaftstoreCommon]
@@ -310,6 +313,8 @@ pub trait ReadExecutorProvider: Send + Clone + 'static {
     /// get the ReadDelegate with region_id and the number of delegates in the
     /// StoreMeta
     fn get_executor_and_len(&self, region_id: u64) -> (usize, Option<Self::Executor>);
+
+    fn locate_key(&self, key: &[u8]) -> Option<(Arc<metapb::Region>, u64, u64)>;
 }
 
 #[derive(Clone)]
@@ -359,6 +364,74 @@ where
             );
         }
         (meta.readers.len(), None)
+    }
+
+    // locate_key returns region_id which contains the key.
+    fn locate_key(&self, key: &[u8]) -> Option<(Arc<metapb::Region>, u64, u64)> {
+        match self.store_meta.lock() {
+            Ok(meta) => {
+                let start = Excluded(data_key(key));
+                let end = Unbounded::<Vec<u8>>;
+                for (_end_key, id) in meta.region_ranges.range((start, end)) {
+                    if let Some(reader) = meta.readers.get(id) {
+                        match &reader.leader_lease {
+                            Some(lease) => {
+                                if lease.expired_time.load(Ordering::Acquire) == 0 {
+                                    // warn!(
+                                    //     "[ILP] leader lease is 0 for region: {}, term: {}",
+                                    //     reader.region.id, reader.term
+                                    // );
+                                    return None;
+                                }
+                                // let now = monotonic_raw_now();
+                                // warn!(
+                                //     "[ILP] lease in leader: {}, now: {:?} for
+                                // region: {}, term: {}, lease: {:?}",
+                                //     reader.is_in_leader_lease(now),
+                                //     now,
+                                //     reader.region.id,
+                                //     reader.term,
+                                //     lease,
+                                // );
+                            }
+                            _ => {
+                                // warn!(
+                                //     "[ILP] no leader lease for region: {}, term: {}",
+                                //     reader.region.id, reader.term
+                                // );
+                                return None;
+                            }
+                        }
+
+                        if util::check_key_in_region(key, &reader.region).is_ok() {
+                            //     info!("locate key exist and valid";
+                            // "key" => ?key,
+                            // "end_key" => ?_end_key,
+                            // "region_start_key" => ?reader.region.start_key,
+                            // "region_end_key" => ?reader.region.end_key,
+                            // "region_id" => reader.region.id,
+                            // "term" => reader.term);
+                            return Some((reader.region.clone(), reader.peer_id, reader.term));
+                        } else {
+                            info!("locate key exist, but not valid";
+                            "key" => ?key,
+                            "end_key" => ?_end_key,
+                            "region_start_key" => ?reader.region.start_key,
+                            "region_end_key" => ?reader.region.end_key,
+                            "contain" => util::check_key_in_region(key,
+                            &reader.region).is_ok(),
+                            "region_id" => reader.region.id,
+                            "term" => reader.term);
+                        }
+                    } else {
+                        info!("locate key not exist"; "key" => ?key);
+                    }
+                    return None;
+                }
+            }
+            _ => {}
+        };
+        return None;
     }
 }
 
@@ -1276,6 +1349,10 @@ where
     pub fn release_snapshot_cache(&mut self) {
         self.snap_cache.clear();
     }
+
+    pub fn locate_key(&self, key: &[u8]) -> Option<(Arc<Region>, u64, u64)> {
+        self.local_reader.store_meta().locate_key(key)
+    }
 }
 
 impl<E, C> Clone for LocalReader<E, C>
@@ -1351,7 +1428,7 @@ mod tests {
 
     use crossbeam::channel::TrySendError;
     use engine_test::kv::{KvTestEngine, KvTestSnapshot};
-    use engine_traits::{ALL_CFS, MiscExt, Peekable, SyncMutable};
+    use engine_traits::{MiscExt, Peekable, SyncMutable, ALL_CFS};
     use kvproto::{metapb::RegionEpoch, raft_cmdpb::*};
     use tempfile::{Builder, TempDir};
     use tikv_util::{codec::number::NumberEncoder, time::monotonic_raw_now};
@@ -1359,7 +1436,7 @@ mod tests {
     use txn_types::WriteBatchFlags;
 
     use super::*;
-    use crate::store::{Callback, util::Lease};
+    use crate::store::{util::Lease, Callback};
 
     struct MockRouter {
         p_router: SyncSender<RaftCommand<KvTestSnapshot>>,
