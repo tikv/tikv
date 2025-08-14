@@ -15,7 +15,8 @@ use pd_client::{BucketStat, PdClient};
 use raftstore::store::{
     AutoSplitController, Config, FlowStatsReporter, NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
     PdStatsMonitor, ReadStats, SplitInfo, StoreStatsReporter, TabletSnapManager, TxnExt,
-    WriteStats, metrics::STORE_INSPECT_DURATION_HISTOGRAM, util::KeysInfoFormatter,
+    WriteStats,  metrics::STORE_INSPECT_DURATION_HISTOGRAM,
+    util::KeysInfoFormatter,
 };
 use resource_metering::{Collector, CollectorRegHandle, RawRecords};
 use service::service_manager::GrpcServiceManager;
@@ -258,6 +259,7 @@ where
             store_heartbeat_interval / NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
             cfg.value().inspect_interval.0,
             std::time::Duration::default(),
+            cfg.value().inspect_network_interval.0,
             PdReporter::new(pd_scheduler, logger.clone()),
         );
         stats_monitor.start(auto_split_controller, collector_reg_handle)?;
@@ -472,9 +474,10 @@ impl StoreStatsReporter for PdReporter {
                     STORE_INSPECT_DURATION_HISTOGRAM
                         .with_label_values(&["all"])
                         .observe(tikv_util::time::duration_to_sec(dur));
-                    if let Err(e) =
-                        scheduler.schedule(Task::UpdateSlownessStats { tick_id, duration })
-                    {
+                    if let Err(e) = scheduler.schedule(Task::UpdateSlownessStats {
+                        tick_id,
+                        duration: duration,
+                    }) {
                         warn!(logger, "schedule pd UpdateSlownessStats task failed"; "err" => ?e);
                     }
                 }),

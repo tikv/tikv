@@ -4,7 +4,7 @@ use std::fmt::Debug;
 
 /// Represent the duration of all stages of raftstore recorded by one
 /// inspecting.
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct RaftstoreDuration {
     pub store_wait_duration: Option<std::time::Duration>,
     pub store_process_duration: Option<std::time::Duration>,
@@ -54,6 +54,7 @@ impl RaftstoreDuration {
 pub enum InspectFactor {
     RaftDisk = 0,
     KvDisk,
+    Network,
     // TODO: Add more factors, like network io.
 }
 
@@ -62,15 +63,16 @@ impl InspectFactor {
         match *self {
             InspectFactor::RaftDisk => "raft",
             InspectFactor::KvDisk => "kvdb",
+            InspectFactor::Network => "Network",
         }
     }
 }
 
 /// Used to inspect the latency of all stages of raftstore.
 pub struct LatencyInspector {
-    id: u64,
+    pub id: u64,
     duration: RaftstoreDuration,
-    cb: Box<dyn FnOnce(u64, RaftstoreDuration) + Send>,
+    cb: Box<dyn Fn(u64, RaftstoreDuration) + Send>,
 }
 
 impl Debug for LatencyInspector {
@@ -84,7 +86,7 @@ impl Debug for LatencyInspector {
 }
 
 impl LatencyInspector {
-    pub fn new(id: u64, cb: Box<dyn FnOnce(u64, RaftstoreDuration) + Send>) -> Self {
+    pub fn new(id: u64, cb: Box<dyn Fn(u64, RaftstoreDuration) + Send>) -> Self {
         Self {
             id,
             cb,
@@ -117,7 +119,7 @@ impl LatencyInspector {
     }
 
     /// Call the callback.
-    pub fn finish(self) {
-        (self.cb)(self.id, self.duration);
+    pub fn finish(&self) {
+        (self.cb)(self.id, self.duration.clone());
     }
 }

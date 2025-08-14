@@ -255,6 +255,11 @@ pub struct Config {
     /// `BatchCommands` gRPC stream. 0 to disable sending health feedback.
     pub health_feedback_interval: ReadableDuration,
 
+    #[doc(hidden)]
+    #[online_config(skip)]
+    // Interval to inspect the network latency between tikv and tikv for slow store detection.
+    pub inspect_network_interval: ReadableDuration,
+
     // Server labels to specify some attributes about this server.
     #[online_config(skip)]
     pub labels: HashMap<String, String>,
@@ -342,6 +347,7 @@ impl Default for Config {
             forward_max_connections_per_address: 4,
             simplify_metrics: false,
             health_feedback_interval: ReadableDuration::secs(1),
+            inspect_network_interval: ReadableDuration::millis(100),
         }
     }
 }

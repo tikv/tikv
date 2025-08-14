@@ -2753,6 +2753,7 @@ impl HealthFeedbackAttacher {
         feedback.set_store_id(self.store_id);
         feedback.set_feedback_seq_no(self.seq.fetch_add(1, Ordering::Relaxed));
         feedback.set_slow_score(self.health_controller.get_raftstore_slow_score() as i32);
+        // TODO: set network slow score?
         feedback
     }
 }
