@@ -7,6 +7,7 @@ pub mod pubsub;
 pub mod single_target;
 
 use std::{
+    cell::Cell,
     fmt::{self, Display, Formatter},
     sync::Arc,
 };
@@ -20,13 +21,17 @@ use tikv_util::{
 };
 
 use crate::{
-    Config, DataSink, RawRecords, Records,
     recorder::{CollectorGuard, CollectorRegHandle},
     reporter::{
         collector_impl::CollectorImpl,
         data_sink_reg::{DataSinkId, DataSinkReg, DataSinkRegHandle},
     },
+    Config, DataSink, RawRecords, Records,
 };
+
+thread_local! {
+    static STATIC_BUF: Cell<Vec<u32>> = const {Cell::new(vec![])};
+}
 
 /// A structure for reporting statistics through [Client].
 ///
@@ -94,14 +99,26 @@ impl Reporter {
 
     fn handle_records(&mut self, records: Arc<RawRecords>) {
         let ts = records.begin_unix_time_secs;
-        if self.config.max_resource_groups >= records.records.len() {
-            self.records.append(ts, records.records.iter());
+        let agg_map = records.aggregate();
+        if self.config.max_resource_groups >= agg_map.len() {
+            self.records.new_append(ts, agg_map.iter());
             return;
         }
-        let (top, evicted) = records.top_k(self.config.max_resource_groups);
-        self.records.append(ts, top);
+
+        // Pick topN
+        let k = self.config.max_resource_groups;
+        let mut buf = STATIC_BUF.with(|b| b.take());
+        buf.clear();
+        for record in agg_map.values() {
+            buf.push(record.cpu_time);
+        }
+        pdqselect::select_by(&mut buf, k, |a, b| b.cmp(a));
+        let kth = buf[k];
+        STATIC_BUF.with(move |b| b.set(buf));
+
+        self.records.new_append(ts, agg_map.iter().filter(move |(_, v)| v.cpu_time > kth));
         let others = self.records.others.entry(ts).or_default();
-        evicted.for_each(|(_, v)| {
+        agg_map.iter().filter(move |(_, v)| v.cpu_time <= kth).for_each(|(_, v)| {
             others.merge(v);
         });
     }
@@ -244,7 +261,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::{RawRecord, TagInfos, error::Result};
+    use crate::{error::Result, RawRecord, TagInfos};
 
     #[derive(Default, Clone)]
     struct MockDataSink {

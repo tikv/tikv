@@ -1,15 +1,11 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cell::Cell,
-    sync::{
-        Arc,
-        atomic::{AtomicU32, Ordering::Relaxed},
-    },
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    cell::Cell, collections::HashMap, sync::{
+        atomic::{AtomicU32, Ordering::Relaxed}, Arc
+    }, time::{Duration, SystemTime, UNIX_EPOCH}
 };
 
-use collections::HashMap;
 use kvproto::resource_usage_agent::{GroupTagRecord, GroupTagRecordItem, ResourceUsageRecord};
 use tikv_util::warn;
 
@@ -94,6 +90,29 @@ impl RawRecords {
         }
         STATIC_BUF.with(move |b| b.set(buf));
         others
+    }
+
+    /// Returns RawRecord aggregated by tidb passed tag.
+    pub fn aggregate(&self)  -> HashMap<Vec<u8>, RawRecord>
+    {
+        let mut raw_map : HashMap<Vec<u8>, RawRecord> = HashMap::default();
+        // Aggregate
+        for (tag_info, record) in self.records.iter() {
+            let tag = &tag_info.extra_attachment;
+            if tag.is_empty() {
+                continue;
+            }       
+            let value = raw_map.get_mut(tag);
+            if value.is_none() {
+                raw_map.insert(
+                    tag.clone(),
+                    record.clone(),
+                );
+                continue;
+            }
+            value.unwrap().merge(&record);
+        }
+        raw_map
     }
 
     /// Returns (TopK, Evicted).
@@ -279,6 +298,68 @@ impl Records {
             }
         }
     }
+
+    pub fn new_append<'a>(
+        &mut self,
+        ts: u64,
+        iter: impl Iterator<Item = (&'a Vec<u8>, &'a RawRecord)>,
+    ) {
+        // # Before
+        //
+        // ts: 1630464417
+        // records: | tag | cpu time |
+        //          | --- | -------- |
+        //          | t1  |  500     |
+        //          | t2  |  600     |
+        //          | t3  |  200     |
+        //          | t2  |  100     |
+
+        // # After
+        //
+        // t1: | ts       | ... | 1630464417 |
+        //     | cpu time | ... |    500     |
+        //     | total    | $total + 500     |
+        //
+        // t2: | ts       | ... | 1630464417 |
+        //     | cpu time | ... |    700     |
+        //     | total    | $total + 700     |
+        //
+        // t3: | ts       | ... | 1630464417 |
+        //     | cpu time | ... |    200     |
+        //     | total    | $total + 200     |
+
+        for (tag, raw_record) in iter {
+            if tag.is_empty() {
+                continue;
+            }
+            let record_value = self.records.get_mut(tag);
+            if record_value.is_none() {
+                self.records.insert(
+                    tag.clone(),
+                    Record {
+                        timestamps: vec![ts],
+                        cpu_time_list: vec![raw_record.cpu_time],
+                        read_keys_list: vec![raw_record.read_keys],
+                        write_keys_list: vec![raw_record.write_keys],
+                        total_cpu_time: raw_record.cpu_time,
+                    },
+                );
+                continue;
+            }
+            let record = record_value.unwrap();
+            record.total_cpu_time += raw_record.cpu_time;
+            if *record.timestamps.last().unwrap() == ts {
+                *record.cpu_time_list.last_mut().unwrap() += raw_record.cpu_time;
+                *record.read_keys_list.last_mut().unwrap() += raw_record.read_keys;
+                *record.write_keys_list.last_mut().unwrap() += raw_record.write_keys;
+            } else {
+                record.timestamps.push(ts);
+                record.cpu_time_list.push(raw_record.cpu_time);
+                record.read_keys_list.push(raw_record.read_keys);
+                record.write_keys_list.push(raw_record.write_keys);
+            }
+        }
+    }    
 
     /// Clear all internal data.
     pub fn clear(&mut self) {
