@@ -87,10 +87,7 @@ pub struct Config {
     // When the approximate size of raft log entries exceed this value,
     // gc will be forced trigger.
     pub raft_log_gc_size_limit: Option<ReadableSize>,
-    // The maximum memory limit of raft engine.
-    pub raft_engine_memory_limit: ReadableSize,
 
-    pub raft_engine_memory_high_water_limit_duration: ReadableDuration,
     /// The maximum raft log numbers that applied_index can be ahead of
     /// persisted_index.
     pub max_apply_unpersisted_log_limit: u64,
@@ -110,6 +107,9 @@ pub struct Config {
     #[doc(hidden)]
     #[online_config(hidden)]
     pub raft_log_force_gc_interval: ReadableDuration,
+    #[doc(hidden)]
+    #[online_config(hidden)]
+    pub region_sampling_interval: ReadableDuration,
     #[doc(hidden)]
     #[online_config(hidden)]
     pub max_manual_flush_rate: f64,
@@ -347,6 +347,8 @@ pub struct Config {
     // * system=32G, memory_usage_limit=24G, evict=2.4G
     pub evict_cache_on_memory_ratio: f64,
 
+    pub pin_compact_region_ratio: f64,
+
     pub cmd_batch: bool,
 
     /// When the count of concurrent ready exceeds this value, command will not
@@ -533,13 +535,12 @@ impl Default for Config {
             raft_log_gc_threshold: 50,
             raft_log_gc_count_limit: None,
             raft_log_gc_size_limit: None,
-            raft_engine_memory_limit: ReadableSize::mb(800),
-            raft_engine_memory_high_water_limit_duration: ReadableDuration::secs(300),
             max_apply_unpersisted_log_limit: 1024,
             follower_read_max_log_gap: 100,
             raft_log_reserve_max_ticks: 6,
             raft_engine_purge_interval: ReadableDuration::secs(10),
-            raft_log_force_gc_interval: ReadableDuration::secs(300),
+            raft_log_force_gc_interval: ReadableDuration::secs(60),
+            region_sampling_interval: ReadableDuration::secs(10),
             max_manual_flush_rate: 3.0,
             raft_entry_cache_life_time: ReadableDuration::secs(30),
             raft_reject_transfer_leader_duration: ReadableDuration::secs(3),
@@ -604,6 +605,7 @@ impl Default for Config {
             apply_yield_write_size: ReadableSize::kb(32),
             perf_level: PerfLevel::Uninitialized,
             evict_cache_on_memory_ratio: 0.6,
+            pin_compact_region_ratio: 0.2,
             cmd_batch: true,
             cmd_batch_concurrent_ready_max_count: 1,
             raft_write_size_limit: ReadableSize::mb(1),
@@ -1057,12 +1059,6 @@ impl Config {
                 "min_pending_apply_region_count must be greater than 0"
             ));
         }
-
-        if self.raft_engine_memory_high_water_limit_duration.as_secs() == 0 {
-            return Err(box_err!(
-                "raft_engine_memory_high_water_limit_duration must be greater than 0 seconds"
-            ));
-        }
         Ok(())
     }
 
@@ -1114,15 +1110,6 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_log_gc_count_limit"])
             .set(self.raft_log_gc_count_limit.unwrap_or_default() as f64);
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["raft_engine_memory_limit"])
-            .set(self.raft_engine_memory_limit.0 as f64);
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["raft_engine_memory_high_water_limit_duration"])
-            .set(
-                self.raft_engine_memory_high_water_limit_duration
-                    .as_secs_f64(),
-            );
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_log_gc_size_limit"])
             .set(self.raft_log_gc_size_limit.unwrap_or_default().0 as f64);
@@ -1305,6 +1292,9 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["evict_cache_on_memory_ratio"])
             .set(self.evict_cache_on_memory_ratio as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["pin_compact_region_ratio"])
+            .set(self.pin_compact_region_ratio as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["cmd_batch"])
             .set((self.cmd_batch as i32).into());

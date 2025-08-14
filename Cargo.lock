@@ -5233,7 +5233,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.4.2"
-source = "git+https://github.com/exit-code-1/raft-engine.git?branch=add-memory-usage#03eec9bb6a2e4fe7034d6345d825c4db67482c5a"
+source = "git+https://github.com/tikv/raft-engine.git#03f77d90c09793a6f79411ff5f88233715eb23da"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -5267,7 +5267,7 @@ dependencies = [
 [[package]]
 name = "raft-engine-ctl"
 version = "0.4.2"
-source = "git+https://github.com/exit-code-1/raft-engine.git?branch=add-memory-usage#03eec9bb6a2e4fe7034d6345d825c4db67482c5a"
+source = "git+https://github.com/tikv/raft-engine.git#03f77d90c09793a6f79411ff5f88233715eb23da"
 dependencies = [
  "clap 3.1.6",
  "env_logger 0.10.0",

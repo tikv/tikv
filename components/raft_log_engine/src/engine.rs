@@ -780,10 +780,6 @@ impl RaftEngine for RaftLogEngine {
         Ok(self.0.get_used_size() as u64)
     }
 
-    fn get_memory_usage(&self) -> Result<u64> {
-        Ok(self.0.get_memory_usage() as u64)
-    }
-
     fn get_engine_path(&self) -> &str {
         self.0.path()
     }

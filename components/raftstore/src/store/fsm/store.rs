@@ -3180,8 +3180,9 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         // Sort by growth rate: regions with faster growth come first
         regions_with_growth.sort_by(|a, b| b.1.cmp(&a.1));
 
-        // Calculate how many regions to ignore (1/4 * over_ratio)
-        let ignore_count = (total_regions as f64 / (4.0 * over_ratio)) as usize;
+        // Calculate how many regions to ignore (1/5 * over_ratio)
+        let ignore_count =
+            (total_regions as f64 * (self.ctx.cfg.pin_compact_region_ratio / over_ratio)) as usize;
         let ignore_count = std::cmp::max(50, ignore_count); // Ensure at least 50 regions are ignored
 
         // Add regions that need force compact (skip the first ignore_count regions)

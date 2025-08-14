@@ -313,10 +313,6 @@ impl RaftEngine for RocksEngine {
         Ok(used_size)
     }
 
-    fn get_memory_usage(&self) -> Result<u64> {
-        panic!()
-    }
-
     fn get_engine_path(&self) -> &str {
         self.as_inner().path()
     }
