@@ -1013,6 +1013,7 @@ fn make_error_response(e: Error) -> coppb::Response {
 /// For example, if a cop-task contains a `IndexLookUp` executor which needs to
 /// access look up the primary rows, it will use this accessor to locate and get
 /// the snapshot of the regions which these primary rows located.
+#[derive(Clone, Debug)]
 pub struct SecondarySnapStoreAccessor<E> {
     store_id: u64,
     req_ctx: ReqContext,

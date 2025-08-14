@@ -7,9 +7,9 @@ use std::{
 
 use super::{Result, range::*};
 
-type ErrorBuilder = Box<dyn Send + Sync + Fn() -> crate::error::StorageError>;
+pub type ErrorBuilder = Box<dyn Send + Sync + Fn() -> crate::error::StorageError>;
 
-type FixtureValue = std::result::Result<Vec<u8>, ErrorBuilder>;
+pub type FixtureValue = std::result::Result<Vec<u8>, ErrorBuilder>;
 
 /// A `Storage` implementation that returns fixed source data (i.e. fixture).
 /// Useful in tests.
