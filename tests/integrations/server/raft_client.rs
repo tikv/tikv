@@ -434,17 +434,17 @@ fn test_store_allowlist() {
 async fn test_health_checker_lifecycle() {
     fail::cfg("network_inspection_interval", "return").unwrap();
     let msg_count = Arc::new(AtomicUsize::new(0));
-    let batch_msg_count = Arc::new(AtomicUsize::new(0));
+    let batch_msg_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
     let service = MockKvForRaft::new(Arc::clone(&msg_count), Arc::clone(&batch_msg_count), true);
     let (mock_server, port) = create_mock_server(service, 60600, 60700).unwrap();
 
     let mut raft_client = get_raft_client_by_port(port);
 
-    // Initially, there should be no stores with delay data
-    let initial_delays = raft_client.get_all_max_delays();
+    // Initially, there should be no stores with latency data
+    let initial_latencies = raft_client.get_all_max_latencies();
     assert!(
-        initial_delays.is_empty(),
-        "Initially no stores should have delay data"
+        initial_latencies.is_empty(),
+        "Initially no stores should have latency data"
     );
 
     // Step 1: Send messages to establish connections for stores 1, 2, 3
@@ -463,13 +463,13 @@ async fn test_health_checker_lifecycle() {
     // Wait for health checker to detect new stores and start inspection tasks
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    // Check that delays are being tracked for the connected stores
+    // Check that latencies are being tracked for the connected stores
     for store_id in 1..=3 {
-        assert!(raft_client.get_max_delay(store_id).is_some())
+        assert!(raft_client.get_max_latency(store_id).is_some())
     }
-    // Verify that stores 4 and 5 do not have delay data yet
+    // Verify that stores 4 and 5 do not have latency data yet
     for store_id in 4..=5 {
-        assert!(raft_client.get_max_delay(store_id).is_none());
+        assert!(raft_client.get_max_latency(store_id).is_none());
     }
 
     // Step 2: Add more stores (4, 5) to test dynamic store detection
@@ -485,9 +485,9 @@ async fn test_health_checker_lifecycle() {
     // Wait for health checker to detect the new stores
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    // Verify that stores 4 and 5 might also have delay data
+    // Verify that stores 4 and 5 might also have latency data
     for store_id in 4..=5 {
-        assert!(raft_client.get_max_delay(store_id).is_some());
+        assert!(raft_client.get_max_latency(store_id).is_some());
     }
 
     drop(mock_server);
@@ -495,7 +495,7 @@ async fn test_health_checker_lifecycle() {
 }
 
 #[tokio::test]
-async fn test_network_inspection_with_real_delay() {
+async fn test_network_inspection_with_real_latency() {
     let msg_count = Arc::new(AtomicUsize::new(0));
     let batch_msg_count = Arc::new(AtomicUsize::new(0));
     let service = MockKvForRaft::new(Arc::clone(&msg_count), Arc::clone(&batch_msg_count), true);
@@ -518,24 +518,24 @@ async fn test_network_inspection_with_real_delay() {
     // Wait for inspection to potentially run several cycles
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let check_delay_not_empty = |store_id| {
-        let delay = raft_client.get_max_delay(store_id);
+    let check_latency_not_empty = |store_id| {
+        let latency = raft_client.get_max_latency(store_id);
         assert!(
-            delay.is_some(),
-            "Delay for store {} should not be None",
+            latency.is_some(),
+            "latency for store {} should not be None",
             store_id
         );
         assert_ne!(
-            delay.unwrap(),
+            latency.unwrap(),
             0.0,
-            "Delay for store {} should be greater than 0",
+            "latency for store {} should be greater than 0",
             store_id
         );
     };
-    check_delay_not_empty(1);
-    check_delay_not_empty(2);
-    check_delay_not_empty(3);
-    assert_eq!(raft_client.get_max_delay(99), None);
+    check_latency_not_empty(1);
+    check_latency_not_empty(2);
+    check_latency_not_empty(3);
+    assert_eq!(raft_client.get_max_latency(99), None);
 
     drop(mock_server);
 }
@@ -544,7 +544,7 @@ async fn test_network_inspection_with_real_delay() {
 async fn test_network_inspection_with_connection_failures() {
     fail::cfg("network_inspection_interval", "return").unwrap();
     let msg_count = Arc::new(AtomicUsize::new(0));
-    let batch_msg_count = Arc::new(AtomicUsize::new(0));
+    let batch_msg_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
     let service = MockKvForRaft::new(Arc::clone(&msg_count), Arc::clone(&batch_msg_count), true);
     let (mut mock_server, port) = create_mock_server(service, 61300, 61400).unwrap();
 
@@ -565,9 +565,9 @@ async fn test_network_inspection_with_connection_failures() {
     // Wait for initial inspection cycles
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    // Test that delay tracking API works initially
-    assert!(raft_client.get_max_delay(1).is_some());
-    assert!(raft_client.get_max_delay(2).is_some());
+    // Test that latency tracking API works initially
+    assert!(raft_client.get_max_latency(1).is_some());
+    assert!(raft_client.get_max_latency(2).is_some());
 
     // Shutdown the mock server to simulate connection failure
     mock_server.shutdown();
@@ -576,12 +576,12 @@ async fn test_network_inspection_with_connection_failures() {
     // Wait for inspection to potentially detect the failure
     // TODO: mock pool remove connection
 
-    // // The delay API should still work even after connection failure
-    // assert!(raft_client.get_max_delay(1).is_none());
-    // assert!(raft_client.get_max_delay(2).is_none());
+    // // The latency API should still work even after connection failure
+    // assert!(raft_client.get_max_latency(1).is_none());
+    // assert!(raft_client.get_max_latency(2).is_none());
 
     // // Test that reset operations work correctly even with empty data
-    // let _ = raft_client.get_and_reset_all_max_delays();
-    // assert!(raft_client.get_all_max_delays().is_empty());
+    // let _ = raft_client.get_and_reset_all_max_latencies();
+    // assert!(raft_client.get_all_max_latencies().is_empty());
     fail::remove("network_inspection_interval")
 }
