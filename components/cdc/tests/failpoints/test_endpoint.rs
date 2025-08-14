@@ -14,7 +14,7 @@ use grpcio::{ChannelBuilder, Environment, WriteFlags};
 use kvproto::{cdcpb::*, kvrpcpb::*, tikvpb_grpc::TikvClient};
 use pd_client::PdClient;
 use test_raftstore::*;
-use tikv_util::{HandyRwLock, debug, worker::Scheduler};
+use tikv_util::{HandyRwLock, debug,worker::Scheduler};
 use txn_types::{Key, TimeStamp};
 
 use crate::{ClientReceiver, TestSuite, TestSuiteBuilder, new_event_feed, new_event_feed_v2};
@@ -838,10 +838,10 @@ fn test_cdc_watchdog_idle_timeout() {
     debug!("Starting watchdog test - waiting for connection to be cancelled");
 
     // Wait for the watchdog to trigger and cancel the connection
-    // The watchdog should trigger after 20 seconds due to
+    // The watchdog should trigger after 5 seconds due to
     // cdc_idle_deregister_threshold failpoint and cdc_sleep_after_sink_flush
-    // failpoint will make the sink sleep for 30 seconds
-    thread::sleep(Duration::from_secs(30));
+    // failpoint will make the sink sleep for 6 seconds
+    thread::sleep(Duration::from_secs(6));
 
     debug!("Finished waiting, now checking if connection was cancelled");
 

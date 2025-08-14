@@ -28,6 +28,7 @@ use crate::{
     channel::{CDC_CHANNLE_CAPACITY, Sink, channel},
     delegate::{Downstream, DownstreamId, DownstreamState, ObservedRange},
     endpoint::{Deregister, Task},
+    metrics::CDC_ABORTED_CONNECTIONS,
 };
 
 static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
@@ -585,7 +586,7 @@ impl Service {
                                 false
                             };
                             if should_adjust() {
-                                20
+                                5
                             } else {
                                 CDC_IDLE_DEREGISTER_THRESHOLD_SECS
                             }
@@ -599,6 +600,7 @@ impl Service {
                                    "seconds_since_last_flush" => elapsed.as_secs());
                             // Cancel the gRPC connection
                             let _ = cancel_tx.send(());
+                            CDC_ABORTED_CONNECTIONS.inc();
                             break;
                         }
                     }
