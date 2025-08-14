@@ -23,7 +23,7 @@ use futures::{FutureExt, compat::Future01CompatExt};
 use health_controller::{
     HealthController,
     reporters::{RaftstoreReporter, RaftstoreReporterConfig},
-    types::{InspectFactor, LatencyInspector, UnifiedDuration},
+    types::{InspectFactor, LatencyInspector, RaftstoreDuration},
 };
 use kvproto::{
     kvrpcpb::DiskFullOpt,
@@ -198,7 +198,7 @@ where
     UpdateSlowScore {
         id: u64,
         factor: InspectFactor,
-        duration: UnifiedDuration,
+        duration: RaftstoreDuration,
     },
     RegionCpuRecords(Arc<RawRecords>),
     ReportMinResolvedTs {
@@ -2020,21 +2020,16 @@ where
         let scheduler = self.scheduler.clone();
 
         if factor == InspectFactor::Network {
-            // TODO: get duration from health check
-            let duration = UnifiedDuration::default();
-            STORE_INSPECT_NETWORK_DURATION_HISTOGRAM
-                .with_label_values(&[&duration.store_id.to_string()])
-                .observe(tikv_util::time::duration_to_sec(
-                    duration.network_duration.unwrap_or_default(),
-                ));
+            let duration = std::collections::HashMap::<u64, Duration>::new();
             
-            if let Err(e) = scheduler.schedule(Task::UpdateSlowScore {
-                id,
-                factor,
-                duration,
-            }) {
-                warn!("schedule pd task failed"; "err" => ?e);
+            for (store_id, network_duration) in &duration {
+                STORE_INSPECT_NETWORK_DURATION_HISTOGRAM
+                    .with_label_values(&[&store_id.to_string()])
+                    .observe(tikv_util::time::duration_to_sec(*network_duration));
             }
+
+            self.health_reporter.record_network_duration(id, duration);
+
             return;
         }
         let inspector = {
@@ -2055,7 +2050,6 @@ where
                                 .with_label_values(&["store_wait"])
                                 .observe(tikv_util::time::duration_to_sec(
                                     duration
-                                        .raftstore_duration
                                         .store_wait_duration
                                         .unwrap_or_default(),
                                 ));
@@ -2063,7 +2057,6 @@ where
                                 .with_label_values(&["store_commit"])
                                 .observe(tikv_util::time::duration_to_sec(
                                     duration
-                                        .raftstore_duration
                                         .store_commit_duration
                                         .unwrap_or_default(),
                                 ));
@@ -2071,7 +2064,7 @@ where
                             STORE_INSPECT_DURATION_HISTOGRAM
                                 .with_label_values(&["all"])
                                 .observe(tikv_util::time::duration_to_sec(
-                                    duration.raftstore_duration.sum(),
+                                    duration.sum(),
                                 ));
                             if let Err(e) = scheduler.schedule(Task::UpdateSlowScore {
                                 id,
@@ -2090,7 +2083,6 @@ where
                             .with_label_values(&["apply_wait"])
                             .observe(tikv_util::time::duration_to_sec(
                                 duration
-                                    .raftstore_duration
                                     .apply_wait_duration
                                     .unwrap_or_default(),
                             ));
@@ -2098,7 +2090,6 @@ where
                             .with_label_values(&["apply_process"])
                             .observe(tikv_util::time::duration_to_sec(
                                 duration
-                                    .raftstore_duration
                                     .apply_process_duration
                                     .unwrap_or_default(),
                             ));

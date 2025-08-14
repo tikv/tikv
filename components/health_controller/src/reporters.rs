@@ -14,7 +14,7 @@ use prometheus::IntGauge;
 use tikv_util::info;
 
 use crate::{
-    HealthController, HealthControllerInner, RaftstoreDuration, UnifiedDuration,
+    HealthController, HealthControllerInner, RaftstoreDuration,
     slow_score::*,
     trend::{RequestPerSecRecorder, Trend},
     types::InspectFactor,
@@ -96,34 +96,30 @@ impl UnifiedSlowScore {
         &mut self,
         id: u64,
         factor: InspectFactor,
-        duration: &UnifiedDuration,
+        duration: &RaftstoreDuration,
         not_busy: bool,
     ) {
         // For disk factors, we care about the raftstore duration.
-        let dur = duration.raftstore_duration.delays_on_disk_io(false);   
+        let dur = duration.delays_on_disk_io(false);   
         self.factors[factor as usize].record(id, dur, not_busy);
     }
 
     pub fn record_network(
         &mut self,
         id: u64,
-        duration: &UnifiedDuration,
+        durations: HashMap<u64, Duration>, // store_id -> duration
     ) {
-        info!(
-            "recording slow score: id: {}, store_id: {}, input_duration: {:?}",
-            id,
-            duration.store_id,
-            duration.network_duration
-        );
-        self.network_factors.lock().unwrap().entry(duration.store_id).or_insert_with(|| {
-            SlowScore::new(
-                NETWORK_TIMEOUT_THRESHOLD,
-                self.inspect_network_interval,
-                NETWORK_TIMEOUT_RATIO_THRESHOLD,
-                NETWORK_ROUND_TICKS,
-                NETWORK_RECOVERY_INTERVALS,
-            )
-        }).record(id, duration.network_duration.unwrap_or_default(), true);
+        for (store_id, duration) in durations.iter() {
+            self.network_factors.lock().unwrap().entry(*store_id).or_insert_with(|| {
+                SlowScore::new(
+                    NETWORK_TIMEOUT_THRESHOLD,
+                    self.inspect_network_interval,
+                    NETWORK_TIMEOUT_RATIO_THRESHOLD,
+                    NETWORK_ROUND_TICKS,
+                    NETWORK_RECOVERY_INTERVALS,
+                )
+            }).record(id, *duration, true);
+        }
     }
 
     #[inline]
@@ -260,28 +256,28 @@ impl RaftstoreReporter {
         &mut self,
         id: u64,
         factor: InspectFactor,
-        duration: UnifiedDuration,
+        duration: RaftstoreDuration,
         store_not_busy: bool,
     ) {
         // Fine-tuned, `SlowScore` only takes the I/O jitters on the disk into account.
         
-        self.slow_trend.record(&duration.raftstore_duration);
+        self.slow_trend.record(&duration);
 
-        match factor {
-            InspectFactor::RaftDisk | InspectFactor::KvDisk => {
-                self.slow_score
-                    .record_disk(id, factor, &duration, store_not_busy);
-                // Publish slow score to health controller
-                self.health_controller_inner
-                    .update_raftstore_slow_score(self.slow_score.get_disk_score());
-            }
-            InspectFactor::Network => {
-                self.slow_score
-                    .record_network(id, &duration);
-                // self.health_controller_inner
-                //     .update_network_slow_score(self.slow_score.get_network_score());
-            }
+        if factor == InspectFactor::RaftDisk || factor == InspectFactor::KvDisk {
+            self.slow_score
+                .record_disk(id, factor, &duration, store_not_busy);
+            // Publish slow score to health controller
+            self.health_controller_inner
+                .update_raftstore_slow_score(self.slow_score.get_disk_score());
         }
+    }
+
+    pub fn record_network_duration(
+        &mut self,
+        id: u64,
+        duration: HashMap<u64, Duration>,
+    ) {
+        self.slow_score.record_network(id, duration);
     }
 
     fn is_healthy(&self) -> bool {
