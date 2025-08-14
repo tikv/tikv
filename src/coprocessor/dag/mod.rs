@@ -107,6 +107,7 @@ where
 
 /// Wraps the internal accessor to provide the accessor for the secondary
 /// TikvStorage.
+#[derive(Clone, Debug)]
 pub struct SecondaryTiKVStorageAccessor<R> {
     store_accessor: R,
 }
