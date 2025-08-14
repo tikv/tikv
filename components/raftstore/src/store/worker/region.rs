@@ -37,15 +37,16 @@ use super::metrics::*;
 use crate::{
     coprocessor::CoprocessorHost,
     errors::Result as RaftstoreResult,
+    router::RaftStoreRouter,
     store::{
-        ApplyOptions, CasualMessage, Config, SnapEntry, SnapKey, SnapManager, check_abort,
+        ApplyOptions, CasualMessage, Config, SignificantMsg, SnapEntry, SnapKey, SnapManager,
+        check_abort,
         fsm::StoreMeta,
         peer_storage::{
             JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING, JOB_STATUS_FAILED, JOB_STATUS_FINISHED,
             JOB_STATUS_PENDING, JOB_STATUS_RUNNING, do_perparations_for_destroy,
         },
         snap::{Error, Result, SNAPSHOT_CFS, plain_file_used},
-        transport::CasualRouter,
     },
 };
 
@@ -280,7 +281,7 @@ impl<EK, ER, R> Runner<EK, ER, R>
 where
     EK: KvEngine,
     ER: RaftEngine,
-    R: CasualRouter<EK>,
+    R: RaftStoreRouter<EK>,
 {
     pub fn new(
         engines: Engines<EK, ER>,
@@ -456,7 +457,7 @@ where
         SNAP_HISTOGRAM
             .apply
             .observe(start.saturating_elapsed_secs());
-        let _ = self.router.send(
+        let _ = self.router.send_casual_msg(
             region_id,
             CasualMessage::SnapshotApplied { peer_id, tombstone },
         );
@@ -824,7 +825,7 @@ impl<EK, ER, R> Runnable for Runner<EK, ER, R>
 where
     EK: KvEngine,
     ER: RaftEngine,
-    R: CasualRouter<EK> + Send + Clone + 'static,
+    R: RaftStoreRouter<EK> + 'static,
 {
     type Task = Task;
 
@@ -891,9 +892,9 @@ where
                         );
                     }
                     Ok(duration) => {
-                        let _ = self.router.send(
+                        let _ = self.router.significant_send(
                             region_id,
-                            CasualMessage::DestroyPeer {
+                            SignificantMsg::DestroyPeer {
                                 merged_by_target: keep_data,
                                 duration,
                             },
@@ -909,7 +910,7 @@ impl<EK, ER, R> RunnableWithTimer for Runner<EK, ER, R>
 where
     EK: KvEngine,
     ER: RaftEngine,
-    R: CasualRouter<EK> + Send + Clone + 'static,
+    R: RaftStoreRouter<EK> + 'static,
 {
     fn on_timeout(&mut self) {
         self.handle_pending_applies(true);
@@ -932,19 +933,23 @@ pub(crate) mod tests {
         sync::{
             Arc,
             atomic::{AtomicBool, AtomicUsize},
-            mpsc,
+            mpsc::{self, SyncSender},
         },
         thread,
         time::Duration,
     };
 
+    use crossbeam::channel::TrySendError;
+    use engine_rocks::RocksSnapshot;
     use engine_test::{ctor::CfOptions, kv::KvTestEngine};
     use engine_traits::{
         CF_DEFAULT, CF_WRITE, CompactExt, FlowControlFactorsExt, KvEngine, MiscExt, Mutable,
         Peekable, RaftEngineReadOnly, SyncMutable, WriteBatch, WriteBatchExt,
     };
     use keys::data_key;
-    use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftSnapshotData, RegionLocalState};
+    use kvproto::raft_serverpb::{
+        PeerState, RaftApplyState, RaftMessage, RaftSnapshotData, RegionLocalState,
+    };
     use pd_client::RpcClient;
     use protobuf::Message;
     use tempfile::Builder;
@@ -960,12 +965,72 @@ pub(crate) mod tests {
             ObserverContext,
         },
         store::{
-            CasualMessage, SnapKey, SnapManager,
+            CasualMessage, CasualRouter, PeerMsg, ProposalRouter, RaftCommand, SignificantRouter,
+            SnapKey, SnapManager, StoreMsg, StoreRouter,
             peer_storage::JOB_STATUS_PENDING,
             snap::tests::get_test_db_for_regions,
             worker::{RegionRunner, SnapGenRunner, SnapGenTask},
         },
     };
+
+    #[derive(Clone)]
+    pub struct TestRaftStoreRouter {
+        casual_msg_sender: SyncSender<(u64, CasualMessage<KvTestEngine>)>,
+        significant_msg_sender: SyncSender<SignificantMsg<RocksSnapshot>>,
+    }
+
+    impl TestRaftStoreRouter {
+        pub fn new(
+            casual_msg_sender: SyncSender<(u64, CasualMessage<KvTestEngine>)>,
+            significant_msg_sender: SyncSender<SignificantMsg<RocksSnapshot>>,
+        ) -> TestRaftStoreRouter {
+            TestRaftStoreRouter {
+                casual_msg_sender,
+                significant_msg_sender,
+            }
+        }
+    }
+
+    impl CasualRouter<KvTestEngine> for TestRaftStoreRouter {
+        fn send(&self, id: u64, msg: CasualMessage<KvTestEngine>) -> RaftstoreResult<()> {
+            let _ = self.casual_msg_sender.send((id, msg));
+            Ok(())
+        }
+    }
+
+    impl SignificantRouter<KvTestEngine> for TestRaftStoreRouter {
+        fn significant_send(
+            &self,
+            _: u64,
+            msg: SignificantMsg<RocksSnapshot>,
+        ) -> RaftstoreResult<()> {
+            let _ = self.significant_msg_sender.send(msg);
+            Ok(())
+        }
+    }
+
+    impl ProposalRouter<RocksSnapshot> for TestRaftStoreRouter {
+        fn send(
+            &self,
+            _: RaftCommand<RocksSnapshot>,
+        ) -> std::result::Result<(), TrySendError<RaftCommand<RocksSnapshot>>> {
+            Ok(())
+        }
+    }
+
+    impl StoreRouter<KvTestEngine> for TestRaftStoreRouter {
+        fn send(&self, _: StoreMsg<KvTestEngine>) -> RaftstoreResult<()> {
+            Ok(())
+        }
+    }
+
+    impl RaftStoreRouter<KvTestEngine> for TestRaftStoreRouter {
+        fn send_raft_msg(&self, _: RaftMessage) -> RaftstoreResult<()> {
+            Ok(())
+        }
+
+        fn broadcast_normal(&self, _: impl FnMut() -> PeerMsg<KvTestEngine>) {}
+    }
 
     const PENDING_APPLY_CHECK_INTERVAL: Duration = Duration::from_millis(200);
     const STALE_PEER_CHECK_TICK: usize = 1;
@@ -1074,7 +1139,9 @@ pub(crate) mod tests {
         let bg_worker = Worker::new("region-worker");
         let mut worker: LazyWorker<Task> = bg_worker.lazy_build("region-worker");
         let sched = worker.scheduler();
-        let (router, _) = mpsc::sync_channel(11);
+        let (casual_tx, _) = mpsc::sync_channel(11);
+        let (significant_tx, _) = mpsc::sync_channel(11);
+        let router = TestRaftStoreRouter::new(casual_tx, significant_tx);
         let cfg = make_raftstore_cfg(false);
         let mut runner = RegionRunner::new(
             engine.clone(),
@@ -1182,7 +1249,9 @@ pub(crate) mod tests {
         let bg_worker = Worker::new("snap-manager");
         let mut worker = bg_worker.lazy_build("snap-manager");
         let sched = worker.scheduler();
-        let (router, receiver) = mpsc::sync_channel(1);
+        let (casual_sender, casual_receiver) = mpsc::sync_channel(1);
+        let (significant_tx, _) = mpsc::sync_channel(1);
+        let router = TestRaftStoreRouter::new(casual_sender, significant_tx);
         let cfg = make_raftstore_cfg(true);
         let runner = RegionRunner::new(
             engine.clone(),
@@ -1228,7 +1297,7 @@ pub(crate) mod tests {
                 })
                 .unwrap();
             let s1 = rx.recv().unwrap();
-            match receiver.recv() {
+            match casual_receiver.recv() {
                 Ok((region_id, CasualMessage::SnapshotGenerated)) => {
                     assert_eq!(region_id, id);
                 }
@@ -1289,7 +1358,7 @@ pub(crate) mod tests {
 
         let wait_apply_finish = |ids: &[u64]| {
             for id in ids {
-                match receiver.recv_timeout(Duration::from_secs(5)) {
+                match casual_receiver.recv_timeout(Duration::from_secs(5)) {
                     Ok((region_id, CasualMessage::SnapshotApplied { .. })) => {
                         assert_eq!(region_id, *id);
                     }

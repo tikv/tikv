@@ -552,6 +552,14 @@ where
     UnsafeRecoveryFillOutReport(UnsafeRecoveryFillOutReportSyncer),
     SnapshotBrWaitApply(SnapshotBrWaitApplyRequest),
     CheckPendingAdmin(UnboundedSender<CheckAdminResponse>),
+    /// A message to destroy the corresponding peer.
+    ///
+    /// Durations record the consuming durations when clear raft state and
+    /// data in kvdb.
+    DestroyPeer {
+        merged_by_target: bool,
+        duration: (Duration, Duration),
+    },
 }
 
 /// Campaign type for triggering a Raft campaign.
@@ -630,15 +638,6 @@ pub enum CasualMessage<EK: KvEngine> {
 
     /// A message to access peer's internal state.
     AccessPeer(Box<dyn FnOnce(RegionMeta) + Send + 'static>),
-
-    /// A message to destroy the corresponding peer.
-    ///
-    /// Durations record the consuming durations when clear raft state and
-    /// data in kvdb.
-    DestroyPeer {
-        merged_by_target: bool,
-        duration: (Duration, Duration),
-    },
 
     /// Region info from PD
     QueryRegionLeaderResp {
@@ -734,7 +733,6 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
             CasualMessage::SnapshotGenerated => write!(fmt, "SnapshotGenerated"),
             CasualMessage::ForceCompactRaftLogs => write!(fmt, "ForceCompactRaftLogs"),
             CasualMessage::AccessPeer(_) => write!(fmt, "AccessPeer"),
-            CasualMessage::DestroyPeer { .. } => write!(fmt, "DestroyPeer"),
             CasualMessage::QueryRegionLeaderResp { .. } => write!(fmt, "QueryRegionLeaderResp"),
             CasualMessage::RejectRaftAppend { peer_id } => {
                 write!(fmt, "RejectRaftAppend(peer_id={})", peer_id)

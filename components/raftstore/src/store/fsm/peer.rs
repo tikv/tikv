@@ -1258,13 +1258,6 @@ where
                     peer.raft_group.raft.raft_log.persisted,
                 ))
             }
-            CasualMessage::DestroyPeer {
-                merged_by_target,
-                duration,
-            } => {
-                assert!(self.fsm.peer.pending_remove);
-                self.on_ready_destroy_peer(merged_by_target, duration);
-            }
             CasualMessage::QueryRegionLeaderResp { region, leader } => {
                 // the leader already updated
                 if self.fsm.peer.raft_group.raft.leader_id != raft::INVALID_ID
@@ -1637,6 +1630,13 @@ where
             // for snapshot recovery (safe recovery)
             SignificantMsg::SnapshotBrWaitApply(syncer) => self.on_snapshot_br_wait_apply(syncer),
             SignificantMsg::CheckPendingAdmin(ch) => self.on_check_pending_admin(ch),
+            SignificantMsg::DestroyPeer {
+                merged_by_target,
+                duration,
+            } => {
+                assert!(self.fsm.peer.pending_remove);
+                self.on_ready_destroy_peer(merged_by_target, duration);
+            }
         }
     }
 
