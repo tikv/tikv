@@ -1326,7 +1326,7 @@ where
         self.store_stat.region_keys_read.flush();
 
         stats.set_slow_score(self.health_reporter.get_disk_slow_score() as u64);
-        stats.set_network_slow_score(self.health_reporter.get_network_slow_score());
+        stats.set_network_slow_scores(self.health_reporter.get_network_slow_score());
 
         let (rps, slow_trend_pb) = self
             .health_reporter
