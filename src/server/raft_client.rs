@@ -1086,8 +1086,8 @@ where
     }
 
     /// Get the maximum latency for a specific store and reset it to 0
-    /// Returns the latency in milliseconds, or None if no latency recorded for this
-    /// store
+    /// Returns the latency in milliseconds, or None if no latency recorded for
+    /// this store
     pub fn get_and_reset_max_latency(&self, store_id: u64) -> Option<f64> {
         self.health_checker.get_and_reset_max_latency(store_id)
     }
@@ -1099,8 +1099,8 @@ where
     }
 
     /// Get the maximum latency for a specific store without resetting
-    /// Returns the latency in milliseconds, or None if no latency recorded for this
-    /// store
+    /// Returns the latency in milliseconds, or None if no latency recorded for
+    /// this store
     pub fn get_max_latency(&self, store_id: u64) -> Option<f64> {
         self.health_checker.get_max_latency(store_id)
     }
@@ -1533,14 +1533,15 @@ impl HealthChecker {
         let mut req = grpcio_health::proto::HealthCheckRequest::new();
         req.set_service("".to_string()); // Empty service name for overall health
 
-        // Slow score calculation algorithm  
+        // Slow score calculation algorithm
         //   1. By default, the latency is sampled every 100ms, and latencies exceeding
-        //      1s are considered timeouts.  
-        //   2. A slow score is calculated every 3 samples. If there are n timeouts 
-        //      in the 3 samples, the slow score is multiplied by 2^(n/3).  
+        //      1s are considered timeouts.
+        //   2. A slow score is calculated every 3 samples. If there are n timeouts in
+        //      the 3 samples, the slow score is multiplied by 2^(n/3).
         // If a request does not return within 5s, it will resulting in 40(4s) timeout
-        // samples. Thus, the slow score will reach 2^(40/3) > 100. Since the upper limit
-        // of the slow score (100) has already been reached, the probing can be stopped.
+        // samples. Thus, the slow score will reach 2^(40/3) > 100. Since the upper
+        // limit of the slow score (100) has already been reached, the probing
+        // can be stopped.
         let call_opt = CallOption::default().timeout(Duration::from_secs(5));
 
         match health_client.check_async_opt(&req, call_opt) {
@@ -1570,8 +1571,8 @@ impl HealthChecker {
     }
 
     /// Get the maximum latency for a specific store and reset it to 0
-    /// Returns the latency in milliseconds, or None if no latency recorded for this
-    /// store
+    /// Returns the latency in milliseconds, or None if no latency recorded for
+    /// this store
     pub fn get_and_reset_max_latency(&self, store_id: u64) -> Option<f64> {
         let mut latencies = self.max_latencies.lock().unwrap();
         latencies.remove(&store_id)
@@ -1587,8 +1588,8 @@ impl HealthChecker {
     }
 
     /// Get the maximum latency for a specific store without resetting
-    /// Returns the latency in milliseconds, or None if no latency recorded for this
-    /// store
+    /// Returns the latency in milliseconds, or None if no latency recorded for
+    /// this store
     pub fn get_max_latency(&self, store_id: u64) -> Option<f64> {
         let latencies = self.max_latencies.lock().unwrap();
         latencies.get(&store_id).copied()
