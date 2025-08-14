@@ -1033,21 +1033,20 @@ impl<E: Engine> SecondarySnapStoreAccessor<E> {
             None => return None,
         };
 
-        if pb_ctx.get_isolation_level() != kvrpcpb::IsolationLevel::Si
-            || pb_ctx.get_stale_read()
-            || pb_ctx.get_replica_read()
+        if pb_ctx.get_isolation_level() == kvrpcpb::IsolationLevel::Si
+            && !pb_ctx.get_stale_read()
+            && !pb_ctx.get_replica_read()
         {
             // Some scenes are not supported before an effective argument, including:
             // - stale-read & replica-read, TODO: support it later
             // - non-SI isolation level, TODO: support it later
-            return None;
+            return Some(Self {
+                store_id,
+                req_ctx,
+                _phantom: PhantomData,
+            });
         }
-
-        Some(Self {
-            store_id,
-            req_ctx,
-            _phantom: PhantomData,
-        })
+        None
     }
 
     #[inline]

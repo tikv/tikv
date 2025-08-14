@@ -1283,13 +1283,10 @@ fn test_extra_snapshot_override() {
     let r0 = pd_client.get_region_info(b"a").unwrap();
     let r0_leader = r0.leader.as_ref().unwrap();
     let mut r2 = pd_client.get_region_info(b"c").unwrap();
-    let mut r2_leader = r2.leader.as_ref().unwrap();
-    if r0_leader.get_store_id() != r2_leader.get_store_id() {
-        r2.leader = Some(find_peer(&r2, r0_leader.get_store_id()).unwrap().clone());
-        r2_leader = r2.leader.as_ref().unwrap();
-        pd_client.transfer_leader(r2.get_id(), r2_leader.clone(), vec![]);
-        pd_client.region_leader_must_be(r2.get_id(), r2_leader.clone());
-    }
+    r2.leader = Some(find_peer(&r2, r0_leader.get_store_id()).unwrap().clone());
+    let r2_leader = r2.leader.as_ref().unwrap();
+    pd_client.transfer_leader(r2.get_id(), r2_leader.clone(), vec![]);
+    pd_client.region_leader_must_be(r2.get_id(), r2_leader.clone());
 
     // constructs a snap_ctx with the base info region 0.
     let pb_ctx = {

@@ -107,17 +107,25 @@ impl FindRegionResult {
     }
 }
 
-/// The abstract interface for accessing more region storages inside a
-/// cop-executor.
+/// The abstract interface for accessing some secondary region storages in the
+/// cop-task.
+/// For example, in the `IndexLookUp` executor can use it to find the regions
+/// and storages where the primary keys are located.
 #[async_trait]
 pub trait RegionStorageAccessor: Sync {
     type Storage;
 
+    /// Find the region that contains the specified key.
+    /// If found, `FindRegionResult::Found`, which contains the region and its
+    /// role will be returned.
+    /// Otherwise, `FindRegionResult::NotFound` will be returned.
     async fn find_region_by_key(&self, key: &[u8]) -> Result<FindRegionResult>;
+    /// Get the local storage for the specified region.
+    /// It receives a region and a list of key ranges which need to be scanned.
     async fn get_local_region_storage(
         &self,
         region: &Region,
-        _key_ranges: &[KeyRange],
+        key_ranges: &[KeyRange],
     ) -> Result<Self::Storage>;
 }
 
