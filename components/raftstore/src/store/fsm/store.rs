@@ -747,6 +747,8 @@ struct Store {
     store_reachability: HashMap<u64, StoreReachability>,
     // Track last_index for each region to calculate growth rate
     region_last_indexes: HashMap<u64, u64>,
+    // Track the next position to start sending force compact messages
+    force_compact_next_position: usize,
 }
 
 struct StoreReachability {
@@ -776,6 +778,7 @@ where
                 consistency_check_time: HashMap::default(),
                 store_reachability: HashMap::default(),
                 region_last_indexes: HashMap::default(),
+                force_compact_next_position: 0,
             },
             receiver: rx,
         });
@@ -3158,26 +3161,48 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
 
         let total_regions = regions_with_growth.len();
 
-        // Sort by growth rate: regions with faster growth come first
-        regions_with_growth.sort_by(|a, b| b.1.cmp(&a.1));
+        // // Sort by growth rate: regions with faster growth come first
+        // regions_with_growth.sort_by(|a, b| b.1.cmp(&a.1));
 
-        // Calculate how many fastest growing regions to exclude from GC
-        let exclude_count = (total_regions as f64 / (4.0 * over_ratio)) as usize;
+        // Calculate how many regions to send in this batch (1/5 * over_ratio)
+        let batch_size = (total_regions as f64 / (5.0 * over_ratio)) as usize;
+        let batch_size = std::cmp::max(50, batch_size); // Ensure at least 50 regions per batch
+
+        // Calculate the end position for this batch
+        let end_position = std::cmp::min(
+            self.fsm.store.force_compact_next_position + batch_size,
+            total_regions,
+        );
 
         info!(
-            "force compact regions";
-            "exclude_count" => exclude_count,
+            "force compact regions batch";
+            "batch_size" => batch_size,
+            "start_position" => self.fsm.store.force_compact_next_position,
+            "end_position" => end_position,
             "total_regions" => total_regions,
             "over_ratio" => over_ratio,
         );
 
-        // GC regions except the fastest growing ones (exclude the most active regions)
-        for (region_id, _) in regions_with_growth.iter().skip(exclude_count) {
+        // Send force compact messages for the current batch
+        for (region_id, _) in regions_with_growth
+            .iter()
+            .skip(self.fsm.store.force_compact_next_position)
+            .take(batch_size)
+        {
             // Send force compact message directly
             let _ = self.ctx.router.send(
                 *region_id,
                 PeerMsg::CasualMessage(Box::new(CasualMessage::ForceCompactRaftLogs)),
             );
+        }
+
+        // Update the next position for the next batch
+        if end_position >= total_regions {
+            // Reset to beginning for next cycle
+            self.fsm.store.force_compact_next_position = 0;
+        } else {
+            // Move to next batch position
+            self.fsm.store.force_compact_next_position = end_position;
         }
     }
 }
