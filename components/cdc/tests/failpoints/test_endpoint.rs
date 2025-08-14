@@ -14,7 +14,7 @@ use grpcio::{ChannelBuilder, Environment, WriteFlags};
 use kvproto::{cdcpb::*, kvrpcpb::*, tikvpb_grpc::TikvClient};
 use pd_client::PdClient;
 use test_raftstore::*;
-use tikv_util::{HandyRwLock, debug,worker::Scheduler};
+use tikv_util::{HandyRwLock, debug, worker::Scheduler};
 use txn_types::{Key, TimeStamp};
 
 use crate::{ClientReceiver, TestSuite, TestSuiteBuilder, new_event_feed, new_event_feed_v2};
