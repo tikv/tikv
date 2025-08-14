@@ -747,6 +747,8 @@ struct Store {
     store_reachability: HashMap<u64, StoreReachability>,
     // Track last_index for each region to calculate growth rate
     region_last_indexes: HashMap<u64, u64>,
+    // HashSet to store regions that need force compact
+    force_compact_regions: HashSet<u64>,
     // Track the next position to start sending force compact messages
     force_compact_next_position: usize,
 }
@@ -778,6 +780,7 @@ where
                 consistency_check_time: HashMap::default(),
                 store_reachability: HashMap::default(),
                 region_last_indexes: HashMap::default(),
+                force_compact_regions: HashSet::default(),
                 force_compact_next_position: 0,
             },
             receiver: rx,
@@ -3109,19 +3112,32 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         self.register_raft_engine_force_gc_tick();
 
         let mut over_ratio = 0.0;
-        let raft_engine_memory_usage = self.ctx.engines.raft.get_memory_usage().unwrap_or(0);
         if needs_force_compact(&mut over_ratio, self.ctx.cfg.evict_cache_on_memory_ratio) {
-            if raft_engine_memory_usage > self.ctx.cfg.raft_engine_memory_limit.0 {
-                over_ratio = over_ratio.max(
-                    raft_engine_memory_usage as f64
-                        / self.ctx.cfg.raft_engine_memory_limit.0 as f64,
-                );
-                self.send_force_compact_batch(over_ratio);
-            }
+            self.send_force_compact_batch(over_ratio);
         }
     }
 
     fn send_force_compact_batch(&mut self, over_ratio: f64) {
+        if !self.fsm.store.force_compact_regions.is_empty() {
+            let total_force_compact = self.fsm.store.force_compact_regions.len();
+
+            info!(
+                "force compact regions from existing set";
+                "force_compact_count" => total_force_compact,
+                "over_ratio" => over_ratio,
+            );
+
+            // Send force compact messages for all regions in the existing set
+            for region_id in &self.fsm.store.force_compact_regions {
+                // Send force compact message directly
+                let _ = self.ctx.router.send(
+                    *region_id,
+                    PeerMsg::CasualMessage(Box::new(CasualMessage::ForceCompactRaftLogs)),
+                );
+            }
+            return;
+        }
+
         let mut regions_with_growth = Vec::new();
 
         let _ = self
@@ -3161,48 +3177,35 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
 
         let total_regions = regions_with_growth.len();
 
-        // // Sort by growth rate: regions with faster growth come first
-        // regions_with_growth.sort_by(|a, b| b.1.cmp(&a.1));
+        // Sort by growth rate: regions with faster growth come first
+        regions_with_growth.sort_by(|a, b| b.1.cmp(&a.1));
 
-        // Calculate how many regions to send in this batch (1/5 * over_ratio)
-        let batch_size = (total_regions as f64 / (5.0 * over_ratio)) as usize;
-        let batch_size = std::cmp::max(50, batch_size); // Ensure at least 50 regions per batch
+        // Calculate how many regions to ignore (1/4 * over_ratio)
+        let ignore_count = (total_regions as f64 / (4.0 * over_ratio)) as usize;
+        let ignore_count = std::cmp::max(50, ignore_count); // Ensure at least 50 regions are ignored
 
-        // Calculate the end position for this batch
-        let end_position = std::cmp::min(
-            self.fsm.store.force_compact_next_position + batch_size,
-            total_regions,
-        );
+        // Add regions that need force compact (skip the first ignore_count regions)
+        for (region_id, _) in regions_with_growth.iter().skip(ignore_count) {
+            self.fsm.store.force_compact_regions.insert(*region_id);
+        }
+
+        let total_force_compact = self.fsm.store.force_compact_regions.len();
 
         info!(
-            "force compact regions batch";
-            "batch_size" => batch_size,
-            "start_position" => self.fsm.store.force_compact_next_position,
-            "end_position" => end_position,
+            "force compact regions initial setup";
+            "ignore_count" => ignore_count,
+            "force_compact_count" => total_force_compact,
             "total_regions" => total_regions,
             "over_ratio" => over_ratio,
         );
 
-        // Send force compact messages for the current batch
-        for (region_id, _) in regions_with_growth
-            .iter()
-            .skip(self.fsm.store.force_compact_next_position)
-            .take(batch_size)
-        {
+        // Send force compact messages for all regions in the force compact set
+        for region_id in &self.fsm.store.force_compact_regions {
             // Send force compact message directly
             let _ = self.ctx.router.send(
                 *region_id,
                 PeerMsg::CasualMessage(Box::new(CasualMessage::ForceCompactRaftLogs)),
             );
-        }
-
-        // Update the next position for the next batch
-        if end_position >= total_regions {
-            // Reset to beginning for next cycle
-            self.fsm.store.force_compact_next_position = 0;
-        } else {
-            // Move to next batch position
-            self.fsm.store.force_compact_next_position = end_position;
         }
     }
 }

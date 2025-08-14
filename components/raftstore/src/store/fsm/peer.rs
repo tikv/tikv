@@ -6161,15 +6161,17 @@ where
                 }
                 replicated_idx
             }
-        } else if applied_count >= ((self.ctx.cfg.raft_log_gc_count_limit() as f64) * ratio) as u64
-        {
-            self.ctx
-                .raft_metrics
-                .raft_log_gc
-                .log_force_gc_count_limit
-                .inc();
-            self.fsm.raft_engine_memory_high_water_duration = Duration::from_secs(0);
-            std::cmp::min(applied_idx, quorum_replicated_idx)
+        // } else if applied_count >= ((self.ctx.cfg.raft_log_gc_count_limit()
+        // as f64) * ratio) as u64 {
+        //     self.ctx
+        //         .raft_metrics
+        //         .raft_log_gc
+        //         .log_force_gc_count_limit
+        //         .inc();
+        //     self.fsm.raft_engine_memory_high_water_duration =
+        // Duration::from_secs(0);     std::cmp::min(applied_idx,
+        // quorum_replicated_idx)
+        //
         } else if applied_count > 0
             && self.fsm.peer.raft_log_size_hint
                 >= ((self.ctx.cfg.raft_log_gc_size_limit().0 as f64) * ratio) as u64
