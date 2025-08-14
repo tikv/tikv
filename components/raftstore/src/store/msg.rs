@@ -3,7 +3,7 @@
 // #[PerformanceCriticalPath]
 #[cfg(any(test, feature = "testexport"))]
 use std::sync::Arc;
-use std::{borrow::Cow, fmt};
+use std::{borrow::Cow, fmt, time::Duration};
 
 use collections::HashSet;
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
@@ -552,6 +552,14 @@ where
     UnsafeRecoveryFillOutReport(UnsafeRecoveryFillOutReportSyncer),
     SnapshotBrWaitApply(SnapshotBrWaitApplyRequest),
     CheckPendingAdmin(UnboundedSender<CheckAdminResponse>),
+    /// A message to destroy the corresponding peer.
+    ///
+    /// Durations record the consuming durations when clear raft state and
+    /// data in kvdb.
+    DestroyPeer {
+        merged_by_target: bool,
+        duration: (Duration, Duration),
+    },
 }
 
 /// Campaign type for triggering a Raft campaign.

@@ -1630,6 +1630,13 @@ where
             // for snapshot recovery (safe recovery)
             SignificantMsg::SnapshotBrWaitApply(syncer) => self.on_snapshot_br_wait_apply(syncer),
             SignificantMsg::CheckPendingAdmin(ch) => self.on_check_pending_admin(ch),
+            SignificantMsg::DestroyPeer {
+                merged_by_target,
+                duration,
+            } => {
+                assert!(self.fsm.peer.pending_remove);
+                self.on_ready_destroy_peer(merged_by_target, duration);
+            }
         }
     }
 
@@ -4028,7 +4035,6 @@ where
         self.destroy_peer(delay.merged_by_target);
     }
 
-    // [PerformanceCriticalPath] TODO: spin off the I/O code (self.fsm.peer.destroy)
     fn destroy_peer(&mut self, merged_by_target: bool) -> bool {
         self.ctx.coprocessor_host.on_destroy_peer(self.region());
         fail_point!("destroy_peer");
@@ -4163,20 +4169,63 @@ where
                 "err" => %e,
             );
         }
-        if let Err(e) = self.fsm.peer.destroy(
-            &self.ctx.engines,
-            &mut self.ctx.raft_perf_context,
-            merged_by_target,
-            &self.ctx.pending_create_peers,
-            &self.ctx.raft_metrics,
-        ) {
-            // If not panic here, the peer will be recreated in the next restart,
-            // then it will be gc again. But if some overlap region is created
-            // before restarting, the gc action will delete the overlap region's
-            // data too.
-            panic!("{} destroy err {:?}", self.fsm.peer.tag, e);
+
+        // Here, drop the lock of `StoreMeta` to make the preparations for destroy
+        // safety to be executed.
+        drop(meta);
+
+        // Asynchronously destroy the peer by triggering a task to background worker,
+        // and the corresponding worker will finish the preparations for destroying.
+        let async_failed = self
+            .fsm
+            .peer
+            .prepare_for_destroy(
+                &self.ctx.engines,
+                merged_by_target,
+                self.ctx.store_meta.clone(),
+                self.ctx.pending_create_peers.clone(),
+                true,
+            )
+            .is_err();
+        // Failed to synchronously destroy the peer (channel is closed),
+        // redirecting to synchronously destroy the peer.
+        if async_failed {
+            match self.fsm.peer.prepare_for_destroy(
+                &self.ctx.engines,
+                merged_by_target,
+                self.ctx.store_meta.clone(),
+                self.ctx.pending_create_peers.clone(),
+                false,
+            ) {
+                Err(e) => {
+                    // If not panic here, the peer will be recreated in the next restart,
+                    // then it will be gc again. But if some overlap region is created
+                    // before restarting, the gc action will delete the overlap region's
+                    // data too.
+                    panic!("{} prepare to destroy err {:?}", self.fsm.peer.tag, e);
+                }
+                Ok(duration) => {
+                    self.on_ready_destroy_peer(merged_by_target, duration);
+                }
+            }
         }
 
+        true
+    }
+
+    fn on_ready_destroy_peer(
+        &mut self,
+        merged_by_target: bool,
+        clean_duration: (Duration, Duration),
+    ) -> bool {
+        // Clean remains if needs and notify all pending requests to exit.
+        self.fsm
+            .peer
+            .ready_to_destroy(merged_by_target, clean_duration, &self.ctx.raft_metrics);
+
+        let region_id = self.region_id();
+        let is_peer_initialized = self.fsm.peer.is_initialized();
+        let mut meta = self.ctx.store_meta.lock().unwrap();
         // Some places use `force_send().unwrap()` if the StoreMeta lock is held.
         // So in here, it's necessary to held the StoreMeta lock when closing the
         // router.
