@@ -267,7 +267,11 @@ impl Service {
     /// Create a ChangeData service.
     ///
     /// It requires a scheduler of an `Endpoint` in order to schedule tasks.
-    pub fn new(scheduler: Scheduler<Task>, memory_quota: Arc<MemoryQuota>, pool: Arc<Worker>) -> Service {
+    pub fn new(
+        scheduler: Scheduler<Task>,
+        memory_quota: Arc<MemoryQuota>,
+        pool: Arc<Worker>,
+    ) -> Service {
         Service {
             scheduler,
             memory_quota,

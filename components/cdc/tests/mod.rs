@@ -190,7 +190,11 @@ impl TestSuiteBuilder {
                 .entry(id)
                 .or_default()
                 .push(Box::new(move || {
-                    create_change_data(cdc::Service::new(scheduler.clone(), memory_quota_.clone(), pool.clone()))
+                    create_change_data(cdc::Service::new(
+                        scheduler.clone(),
+                        memory_quota_.clone(),
+                        pool.clone(),
+                    ))
                 }));
             sim.txn_extra_schedulers.insert(
                 id,
