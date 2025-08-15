@@ -445,7 +445,7 @@ impl Service {
             explicit_features = headers.features;
         }
         info!("cdc connection created"; "downstream" => ctx.peer(),
-         "features" => ?explicit_features, "conn_id" => ?conn_id);
+         "conn_id" => ?conn_id,"features" => ?explicit_features);
 
         if let Err(e) = self.scheduler.schedule(Task::OpenConn { conn }) {
             let peer = ctx.peer();
@@ -490,7 +490,6 @@ impl Service {
             }
         });
 
-        // Create atomic variable to track last flush time
         let last_flush_time = Arc::new(AtomicCell::new(Instant::now()));
         let last_flush_time_for_forward = last_flush_time.clone();
         let last_flush_time_for_watchdog = last_flush_time.clone();
@@ -501,7 +500,6 @@ impl Service {
 
         // Create cancelCh for eventDrain.forward exit signal
         let (forward_exit_tx, forward_exit_rx) = tokio::sync::oneshot::channel::<()>();
-        let forward_exit_tx_for_forward = forward_exit_tx;
 
         ctx.spawn(async move {
             #[cfg(feature = "failpoints")]
@@ -519,7 +517,7 @@ impl Service {
                         info!("cdc send closed"; "downstream" => peer, "conn_id" => ?conn_id);
                     }
                     // Send signal when eventDrain.forward exits
-                    let _ = forward_exit_tx_for_forward.send(());
+                    let _ = forward_exit_tx.send(());
                 }
             }
         });
@@ -555,7 +553,7 @@ impl Service {
         let _ = pool.pool().spawn(async move {
             let mut interval = GLOBAL_TIMER_HANDLE
                 .interval(
-                    std::time::Instant::now(),
+                    Instant::now(),
                     Duration::from_secs(CDC_WATCHDOG_CHECK_INTERVAL_SECS),
                 )
                 .compat();
@@ -600,7 +598,6 @@ impl Service {
                                    "seconds_since_last_flush" => elapsed.as_secs());
                             // Cancel the gRPC connection
                             let _ = cancel_tx.send(());
-                            CDC_ABORTED_CONNECTIONS.inc();
                             break;
                         }
                     }
