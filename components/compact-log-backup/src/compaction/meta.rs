@@ -340,9 +340,10 @@ impl CompactionRunInfoBuilder {
                 }
                 all_full_covers = false;
 
-                // if exist one data file not coverd
-                // consider this MetaFile not finished compacted.
-                if p.files.iter().any(|f| !f.is_meta ) {
+                // meta kv file and data kv file belong to different physical files.
+                // so only if this physical file not have is_meta,
+                // consider all_data_files_full_covers to false.
+                if p.files.iter().any(|f| !f.is_meta) {
                     all_data_files_full_covers = false;
                 }
             }
@@ -425,6 +426,15 @@ mod test {
                 |v| v.region_id = region as u64,
             )
         };
+        let of_region_meta = |region, is_meta| {
+            LogFileBuilder::from_iter(
+                KvGen::new(gen_min_max(region, 1, 2, 10, 20), const_val),
+                |v| {
+                    v.region_id = region as u64;
+                    v.is_meta = is_meta;
+                },
+            )
+        };
         let f1 = st
             .build_flush(
                 "1.log",
@@ -433,10 +443,11 @@ mod test {
             )
             .await;
         let f2 = st
-            .build_flush(
+            .build_flush_with_meta(
                 "2.log",
                 "v1/backupmeta/2.meta",
                 [of_region(1), of_region(2), of_region(3)],
+                Some([of_region_meta(4, true)]),
             )
             .await;
 
@@ -459,11 +470,13 @@ mod test {
         let check = |me: &brpb::MetaEdit| match me.get_path() {
             "v1/backupmeta/1.meta" => {
                 assert!(!me.destruct_self);
+                assert!(me.all_data_files_compacted);
                 assert_eq!(me.delete_logical_files.len(), 1);
                 assert_eq!(me.delete_logical_files[0].spans.len(), 2);
             }
             "v1/backupmeta/2.meta" => {
-                assert!(me.destruct_self);
+                assert!(!me.destruct_self);
+                assert!(me.all_data_files_compacted);
                 assert_eq!(me.delete_physical_files.len(), 1, "{:?}", me);
                 assert_eq!(me.delete_logical_files.len(), 0, "{:?}", me);
             }

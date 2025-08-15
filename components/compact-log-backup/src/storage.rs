@@ -591,7 +591,10 @@ impl MetaEditFilters {
     }
 
     fn should_fully_skip(&self, meta: &str) -> bool {
-        self.0.get(meta).map(|v| v.all_data_files_compacted || v.destructed_self).unwrap_or(false)
+        self.0
+            .get(meta)
+            .map(|v| v.all_data_files_compacted || v.destructed_self)
+            .unwrap_or(false)
     }
 
     /// Apply the meta edition to a meta file and returns how many log files are
