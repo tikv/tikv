@@ -6510,6 +6510,7 @@ dependencies = [
  "online_config",
  "openssl",
  "prometheus",
+ "prometheus-static-metric",
  "protobuf 2.8.0",
  "rand 0.8.5",
  "serde",
