@@ -85,7 +85,7 @@ use crate::{
         SignificantMsg, SnapManager, StoreMsg, StoreTick,
         async_io::{
             read::{ReadRunner, ReadTask},
-            write::{StoreWriters, StoreWritersContext, Worker as WriteWorker},
+            write::{StoreWriters, StoreWritersContext, Worker as WriteWorker, WriteMsg},
             write_router::WriteSenders,
         },
         config::Config,
@@ -893,9 +893,6 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                                     .health_stats
                                     .avg(InspectIoType::Network),
                             );
-                            inspector.record_store_write(
-                                self.ctx.raft_metrics.health_stats.avg(InspectIoType::Disk),
-                            );
                             // Reset the health_stats and wait it to be refreshed in the next tick.
                             self.ctx.raft_metrics.health_stats.reset();
                             self.ctx.pending_latency_inspect.push(inspector);
@@ -1169,18 +1166,41 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         for inspector in &mut latency_inspect {
             inspector.record_store_process(dur);
         }
+        let write_begin = TiInstant::now();
         if let Some(write_worker) = &mut self.poll_ctx.sync_write_worker {
             if self.poll_ctx.has_ready {
                 write_worker.write_to_db(false);
 
+                for mut inspector in latency_inspect {
+                    inspector.record_store_write(write_begin.saturating_elapsed());
+                    inspector.finish();
+                }
+
                 for peer in peers.iter_mut().flatten() {
                     PeerFsmDelegate::new(peer, &mut self.poll_ctx).post_raft_ready_append();
                 }
+            } else {
+                for inspector in latency_inspect {
+                    inspector.finish();
+                }
             }
-        }
-        // Finishes the inspector and returns the inspected statistics to the observer.
-        for inspector in latency_inspect {
-            inspector.finish();
+        } else {
+            // Use the valid size of async-ios for generating `writer_id` when the local
+            // senders haven't been updated by `poller.begin().
+            let writer_id = rand::random::<usize>()
+                % std::cmp::min(
+                    self.poll_ctx.cfg.store_io_pool_size,
+                    self.poll_ctx.write_senders.size(),
+                );
+            if let Err(err) = self.poll_ctx.write_senders[writer_id].try_send(
+                WriteMsg::LatencyInspect {
+                    send_time: write_begin,
+                    inspector: latency_inspect,
+                },
+                None,
+            ) {
+                warn!("send latency inspecting to write workers failed"; "err" => ?err);
+            }
         }
         dur = self.timer.saturating_elapsed();
         if self.poll_ctx.has_ready {

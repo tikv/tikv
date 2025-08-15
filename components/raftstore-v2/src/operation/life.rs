@@ -583,7 +583,6 @@ impl Store {
     {
         // Record the last statistics of commit-log-duration and store-write-duration.
         inspector.record_store_wait(start_ts.saturating_elapsed());
-        inspector.record_store_write(ctx.raft_metrics.health_stats.avg(InspectIoType::Disk));
         inspector.record_store_commit(ctx.raft_metrics.health_stats.avg(InspectIoType::Network));
         // Reset the health_stats and wait it to be refreshed in the next tick.
         ctx.raft_metrics.health_stats.reset();

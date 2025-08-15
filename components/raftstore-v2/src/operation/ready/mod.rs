@@ -964,16 +964,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
         let now = Instant::now();
-        let health_stats = &mut ctx.raft_metrics.health_stats;
         for i in old_index + 1..=new_index {
             if let Some((term, trackers)) = self.proposals().find_trackers(i) {
                 if self.entry_storage().term(i) == Ok(term) {
                     for tracker in trackers {
-                        let duration =
-                            tracker.observe(now, &ctx.raft_metrics.wf_persist_log, |t| {
-                                &mut t.metrics.wf_persist_log_nanos
-                            });
-                        health_stats.observe(Duration::from_nanos(duration), IoType::Disk);
+                        tracker.observe(now, &ctx.raft_metrics.wf_persist_log, |t| {
+                            &mut t.metrics.wf_persist_log_nanos
+                        });
                     }
                 }
             }
