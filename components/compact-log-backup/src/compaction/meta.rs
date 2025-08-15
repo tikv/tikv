@@ -188,6 +188,10 @@ pub struct ExpiringFilesOfMeta {
     /// When we are going to delete every log files recoreded in a log file, the
     /// logfile itself can also be removed.
     destruct_self: bool,
+
+    // Whether the data kv files has been compcated before. so we can skip it quickly.
+    // Since we are not handle meta kv files. the destruct_self may not work here.
+    all_data_files_compacted: bool,
     /// The logical log files that can be removed.
     spans_of_file: HashMap<Arc<str>, (Vec<brpb::Span>, /* physical file size */ u64)>,
 }
@@ -199,6 +203,7 @@ impl ExpiringFilesOfMeta {
             meta_path: Arc::clone(path),
             logs: vec![],
             destruct_self: false,
+            all_data_files_compacted: false,
             spans_of_file: Default::default(),
         }
     }
@@ -268,6 +273,7 @@ impl CompactionRunInfoBuilder {
                 medit.delete_logical_files.push(span)
             }
             medit.destruct_self = files.destruct_self;
+            medit.all_data_files_compacted = files.all_data_files_compacted;
             migration.edit_meta.push(medit);
         }
         migration.mut_compactions().push(self.compaction.clone());
@@ -317,6 +323,7 @@ impl CompactionRunInfoBuilder {
     fn expiring(&self, file: &MetaFile) -> ExpiringFilesOfMeta {
         let mut result = ExpiringFilesOfMeta::of(&file.name);
         let mut all_full_covers = true;
+        let mut all_data_files_full_covers = true;
         for p in &file.physical_files {
             let full_covers = self.full_covers(p);
             if full_covers {
@@ -332,11 +339,17 @@ impl CompactionRunInfoBuilder {
                     }
                 }
                 all_full_covers = false;
+
+                // if exist one data file not coverd
+                // consider this MetaFile not finished compacted.
+                if p.files.iter().any(|f| !f.is_meta ) {
+                    all_data_files_full_covers = false;
+                }
             }
         }
-        if all_full_covers {
-            result.destruct_self = true;
-        }
+        result.destruct_self = all_full_covers;
+        result.all_data_files_compacted = all_data_files_full_covers;
+
         result
     }
 }
