@@ -470,12 +470,15 @@ mod test {
         let check = |me: &brpb::MetaEdit| match me.get_path() {
             "v1/backupmeta/1.meta" => {
                 assert!(!me.destruct_self);
-                assert!(me.all_data_files_compacted);
+                // file 3 not compacted
+                assert!(!me.all_data_files_compacted);
                 assert_eq!(me.delete_logical_files.len(), 1);
                 assert_eq!(me.delete_logical_files[0].spans.len(), 2);
             }
             "v1/backupmeta/2.meta" => {
+                // file 4 not compacted
                 assert!(!me.destruct_self);
+                // but file 4 is meta kv file
                 assert!(me.all_data_files_compacted);
                 assert_eq!(me.delete_physical_files.len(), 1, "{:?}", me);
                 assert_eq!(me.delete_logical_files.len(), 0, "{:?}", me);

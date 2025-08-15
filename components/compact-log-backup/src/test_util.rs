@@ -525,7 +525,8 @@ impl TmpStorage {
             meta_path,
             data_kv_file_builders,
             None::<std::iter::Empty<LogFileBuilder>>,
-        ).await
+        )
+        .await
     }
 
     pub async fn build_flush_with_meta(
