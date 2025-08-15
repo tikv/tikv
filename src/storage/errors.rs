@@ -308,14 +308,20 @@ pub fn extract_region_error_from_error(e: &Error) -> Option<errorpb::Error> {
             invalid_max_ts_update,
         )))) => {
             let mut err = errorpb::Error::default();
-            err.set_message(invalid_max_ts_update.to_string());
+            let mut invalid_max_ts_err = errorpb::InvalidMaxTsUpdate::default();
+            invalid_max_ts_err.set_attempted_ts(invalid_max_ts_update.attempted_ts.into_inner());
+            invalid_max_ts_err.set_limit_ts(invalid_max_ts_update.limit.into_inner());
+            err.set_invalid_max_ts_update(invalid_max_ts_err);
             Some(err)
         }
         Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
             box MvccErrorInner::InvalidMaxTsUpdate(invalid_max_ts_update),
         ))))) => {
             let mut err = errorpb::Error::default();
-            err.set_message(invalid_max_ts_update.to_string());
+            let mut invalid_max_ts_err = errorpb::InvalidMaxTsUpdate::default();
+            invalid_max_ts_err.set_attempted_ts(invalid_max_ts_update.attempted_ts.into_inner());
+            invalid_max_ts_err.set_limit_ts(invalid_max_ts_update.limit.into_inner());
+            err.set_invalid_max_ts_update(invalid_max_ts_err);
             Some(err)
         }
         Error(box ErrorInner::SchedTooBusy) => {
@@ -621,6 +627,7 @@ impl TryFrom<SharedError> for Error {
 #[cfg(test)]
 mod test {
     use kvproto::kvrpcpb::WriteConflictReason;
+    use concurrency_manager::InvalidMaxTsUpdate;
     use txn_types::{Lock, LockType, Write, WriteType};
 
     use super::*;
@@ -772,5 +779,43 @@ mod test {
             mvcc.clone().unwrap(),
         ));
         assert_eq!(mock_commit_ts_expired_err(true), expect);
+    }
+
+    #[test]
+    fn test_extract_region_error_invalid_max_ts_update_txn() {
+        let attempted = TimeStamp::new(200);
+        let limit     = TimeStamp::new(100);
+        let cm_err = InvalidMaxTsUpdate { attempted_ts: attempted, limit };
+
+        let case = Error::from(TxnError::from(
+            TxnErrorInner::InvalidMaxTsUpdate(cm_err.clone())
+        ));
+
+        let reg_err = extract_region_error_from_error(&case).expect("region error");
+        assert!(reg_err.has_invalid_max_ts_update());
+
+        let detail = reg_err.get_invalid_max_ts_update();
+        assert_eq!(detail.get_attempted_ts(), attempted.into_inner());
+        assert_eq!(detail.get_limit_ts(),     limit.into_inner());
+    }
+
+    #[test]
+    fn test_extract_region_error_invalid_max_ts_update_mvcc() {
+        let attempted = TimeStamp::new(300);
+        let limit     = TimeStamp::new(150);
+        let cm_err = InvalidMaxTsUpdate { attempted_ts: attempted, limit };
+
+        let case = Error::from(TxnError::from(
+            TxnErrorInner::Mvcc(MvccError(Box::new(
+                MvccErrorInner::InvalidMaxTsUpdate(cm_err.clone()),
+            )))
+        ));
+
+        let reg_err = extract_region_error_from_error(&case).expect("region error");
+        assert!(reg_err.has_invalid_max_ts_update());
+
+        let detail = reg_err.get_invalid_max_ts_update();
+        assert_eq!(detail.get_attempted_ts(), attempted.into_inner());
+        assert_eq!(detail.get_limit_ts(),     limit.into_inner());
     }
 }
