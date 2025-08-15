@@ -474,8 +474,8 @@ impl Delegate {
             Error::MemoryQuotaExceeded(tikv_util::memory::MemoryQuotaExceeded)
         ));
 
-        info!("cdc region is ready"; "region_id" => self.region_id);
         self.finish_prepare_lock_tracker(region, locks)?;
+        info!("cdc region is ready"; "region_id" => self.region_id);
 
         let region = match &self.lock_tracker {
             LockTracker::Prepared { region, .. } => region,
@@ -1246,6 +1246,7 @@ fn decode_write(
     false
 }
 
+// decode the lock and return true that the caller should skip the record
 fn decode_lock(key: Vec<u8>, mut lock: Lock, row: &mut EventRow, has_value: &mut bool) -> bool {
     let key = Key::from_encoded(key);
     let op_type = match lock.lock_type {
@@ -1923,9 +1924,7 @@ mod tests {
         scaned_locks.insert(Key::from_raw(b"key1"), MiniLock::from_ts(100));
         scaned_locks.insert(Key::from_raw(b"key2"), MiniLock::from_ts(100));
         scaned_locks.insert(Key::from_raw(b"key3"), MiniLock::from_ts(100));
-        delegate
-            .finish_prepare_lock_tracker(Default::default(), scaned_locks)
-            .unwrap();
+        delegate.finish_prepare_lock_tracker(Default::default(), scaned_locks);
         assert_eq!(quota.in_use(), 34);
 
         delegate
@@ -1960,8 +1959,6 @@ mod tests {
             .unwrap();
         let mut scaned_locks = BTreeMap::default();
         scaned_locks.insert(Key::from_raw(b"key2"), MiniLock::from_ts(100));
-        delegate
-            .finish_prepare_lock_tracker(Default::default(), scaned_locks)
-            .unwrap();
+        delegate.finish_prepare_lock_tracker(Default::default(), scaned_locks);
     }
 }
