@@ -80,9 +80,22 @@ use crate::{
     Error, Result, bytes_capacity,
     coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason},
     store::{
-        Callback, CasualMessage, FullCompactController, GlobalReplicationState,
-        InspectedRaftMessage, MergeResultKind, PdTask, PeerMsg, PeerTick, RaftCommand,
-        SignificantMsg, SnapManager, StoreMsg, StoreTick,
+        Callback,
+        CasualMessage,
+        FullCompactController,
+        GlobalReplicationState,
+        InspectedRaftMessage,
+        MergeResultKind,
+        PdTask,
+        PeerMsg,
+        PeerTick,
+        RaftCommand,
+        SignificantMsg,
+        SnapManager,
+        StoreMsg,
+        StoreTick,
+        // worker::raftlog_compact::{Task as RaftLogCompactTask, RegionClassification,
+        // ForceGcResult}, // No longer needed
         async_io::{
             read::{ReadRunner, ReadTask},
             write::{StoreWriters, StoreWritersContext, Worker as WriteWorker, WriteMsg},
@@ -109,9 +122,9 @@ use crate::{
             AutoSplitController, CleanupRunner, CleanupSstRunner, CleanupSstTask, CleanupTask,
             CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
             DiskCheckRunner, DiskCheckTask, GcSnapshotRunner, GcSnapshotTask, PdRunner,
-            RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RefreshConfigRunner, RefreshConfigTask,
-            RegionRunner, RegionTask, SNAP_GENERATOR_MAX_POOL_SIZE, SnapGenRunner, SnapGenTask,
-            SplitCheckTask,
+            RaftlogCompactCheckerRunner, RaftlogGcRunner, RaftlogGcTask, ReadDelegate,
+            RefreshConfigRunner, RefreshConfigTask, RegionRunner, RegionTask,
+            SNAP_GENERATOR_MAX_POOL_SIZE, SnapGenRunner, SnapGenTask, SplitCheckTask,
         },
         worker_metrics::PROCESS_STAT_CPU_USAGE,
     },
@@ -198,6 +211,8 @@ pub struct StoreMeta {
     /// If None, it means the store is start from empty, no need to check and
     /// update it anymore.
     pub completed_apply_peers_count: Option<u64>,
+    /// Pinned regions for dynamic GC decision
+    pub pinned_regions: Vec<(u64, u64)>,
 }
 
 impl StoreRegionMeta for StoreMeta {
@@ -251,6 +266,7 @@ impl StoreMeta {
             damaged_regions: HashSet::default(),
             busy_apply_peers: HashSet::default(),
             completed_apply_peers_count: Some(0),
+            pinned_regions: Vec::new(),
         }
     }
 
@@ -744,6 +760,19 @@ struct Store {
     start_time: Option<Timespec>,
     consistency_check_time: HashMap<u64, Instant>,
     store_reachability: HashMap<u64, StoreReachability>,
+    // Force GC and sampling are now handled by RaftLogCompactWorker
+    // These fields are no longer needed
+    // region_last_indexes: HashMap<u64, u64>,
+    // gc_candidate_regions: HashMap<u64, u64>, // region_id -> growth
+    // pinned_regions: HashMap<u64, u64>, // region_id -> growth
+    // gc_candidates_sum: u64,
+    // pinned_regions_sum: u64,
+    // Force GC and sampling are now handled by RaftLogCompactWorker
+    // These fields are no longer needed
+    // sampling_in_progress: bool,
+    // last_sampling_time: Option<Instant>,
+    // sampling_start_time: Option<Instant>,
+    // raftlog_compact_worker_scheduler: Option<Scheduler<RaftLogCompactTask>>, // No longer needed
 }
 
 struct StoreReachability {
@@ -772,6 +801,17 @@ where
                 start_time: None,
                 consistency_check_time: HashMap::default(),
                 store_reachability: HashMap::default(),
+                // Force GC and sampling are now handled by RaftLogCompactWorker
+                // region_last_indexes: HashMap::default(),
+                // gc_candidate_regions: HashMap::default(),
+                // pinned_regions: HashMap::default(),
+                // gc_candidates_sum: 0,
+                // pinned_regions_sum: 0,
+                // Force GC and sampling are now handled by RaftLogCompactWorker
+                // sampling_in_progress: false,
+                // last_sampling_time: None,
+                // sampling_start_time: None,
+                // raftlog_compact_worker_scheduler: None,
             },
             receiver: rx,
         });
@@ -816,6 +856,9 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             StoreTick::ConsistencyCheck => self.on_consistency_check_tick(),
             StoreTick::CleanupImportSst => self.on_cleanup_import_sst_tick(),
             StoreTick::PdReportMinResolvedTs => self.on_pd_report_min_resolved_ts_tick(),
+            // StoreTick::RaftEngineForceGc => self.on_raft_engine_force_gc_tick(), // Removed:
+            // handled by RaftLogCompactWorker StoreTick::RegionSampling =>
+            // self.on_region_sampling_tick(), // Removed: handled by RaftLogCompactWorker
         }
         let elapsed = timer.saturating_elapsed();
         self.ctx
@@ -960,6 +1003,8 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
         self.register_compact_lock_cf_tick();
         self.register_snap_mgr_gc_tick();
         self.register_consistency_check_tick();
+        // self.register_raft_engine_force_gc_tick();
+        // self.register_region_sampling_tick();
     }
 }
 
@@ -1635,6 +1680,7 @@ struct Workers<EK: KvEngine> {
     purge_worker: Option<Worker>,
 
     raftlog_fetch_worker: Worker,
+    raftlog_compact_worker: Worker,
 
     coprocessor_host: CoprocessorHost<EK>,
 
@@ -1711,9 +1757,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                         for region_id in regions {
                             let _ = router_clone.send(
                                 region_id,
-                                PeerMsg::CasualMessage(Box::new(
-                                    CasualMessage::ForceCompactRaftLogs,
-                                )),
+                                PeerMsg::CasualMessage(Box::new(CasualMessage::RaftEnginePurge)),
                             );
                         }
                     }
@@ -1726,6 +1770,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         } else {
             None
         };
+
         let bgworker_remote = background_worker.remote();
         let snap_gen_worker = WorkerBuilder::new("snap-generator")
             .thread_count(cfg.value().snap_generator_pool_size)
@@ -1739,6 +1784,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             region_worker: Worker::new("region-worker"),
             purge_worker,
             raftlog_fetch_worker: Worker::new("raftlog-fetch-worker"),
+            raftlog_compact_worker: Worker::new("raftlog-compact-worker"),
             coprocessor_host: coprocessor_host.clone(),
             refresh_config_worker: LazyWorker::new("refreash-config-worker"),
             on_stop_hooks: vec![],
@@ -1934,7 +1980,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
 
         let tag = format!("raftstore-{}", store.get_id());
         let coprocessor_host = builder.coprocessor_host.clone();
-        self.system.spawn(tag, builder);
+        self.system.spawn(tag, builder.clone());
         let mut mailboxes = Vec::with_capacity(region_peers.len());
         let mut address = Vec::with_capacity(region_peers.len());
         for (tx, fsm) in region_peers {
@@ -1995,6 +2041,24 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         );
         assert!(workers.pd_worker.start(pd_runner));
 
+        // Start the raftlog compact checker worker
+        let mut raftlog_compact_checker_runner = RaftlogCompactCheckerRunner::new(
+            cfg.pin_compact_region_ratio,
+            cfg.evict_cache_on_memory_ratio,
+            cfg.raft_log_force_gc_interval.0,
+        );
+
+        // Set up the worker with engines and router
+        raftlog_compact_checker_runner
+            .setup(builder.engines.clone(), Box::new(builder.router.clone()));
+
+        let _raftlog_compact_checker_scheduler = workers.raftlog_compact_worker.start_with_timer(
+            "raftlog-compact-checker-worker",
+            raftlog_compact_checker_runner,
+        );
+
+        info!("raftlog compact worker started successfully");
+
         if let Err(e) = sys_util::thread::set_priority(sys_util::HIGH_PRI) {
             warn!("set thread priority for raftstore failed"; "error" => ?e);
         }
@@ -2027,6 +2091,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         workers.coprocessor_host.shutdown();
         workers.cleanup_worker.stop();
         workers.region_worker.stop();
+        workers.raftlog_compact_worker.stop();
         workers.background_worker.stop();
         if let Some(w) = workers.purge_worker {
             w.stop();
@@ -3087,6 +3152,30 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
             self.ctx.cfg.lock_cf_compact_interval.0,
         )
     }
+
+    // Force GC tick registration is no longer needed
+    // fn register_raft_engine_force_gc_tick(&self) {
+    //     // Removed: force GC tick moved to RaftLogCompactWorker
+    // }
+
+    // Force GC is now handled by RaftLogCompactWorker, no need for this tick
+    // anymore fn on_raft_engine_force_gc_tick(&mut self) {
+    //     // Removed: force GC logic moved to RaftLogCompactWorker
+    // }
+
+    // Force compact messages are now handled by RaftLogCompactWorker
+    // fn send_force_compact_messages(&self, over_ratio: f64) {
+    //     // Removed: handled by RaftLogCompactWorker
+    // }
+
+    // Region sampling is now handled by RaftLogCompactWorker
+    // fn on_region_sampling_tick(&mut self) {
+    //     // Removed: handled by RaftLogCompactWorker
+    // }
+
+    // fn register_region_sampling_tick(&self) {
+    //     // Removed: handled by RaftLogCompactWorker
+    // }
 }
 
 // we will remove 1-week old version 1 SST files.
