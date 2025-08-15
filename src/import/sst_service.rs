@@ -1554,7 +1554,7 @@ mod test {
     fn convert_write_batch_to_request_raftkv1(ctx: &Context, batch: WriteData) -> RaftCmdRequest {
         let reqs: Vec<Request> = batch.modifies.into_iter().map(Into::into).collect();
         let txn_extra = batch.extra;
-        let mut header = raftkv::new_request_header(ctx);
+        let mut header = raftkv::new_request_header(ctx, None);
         if batch.avoid_batch {
             header.set_uuid(uuid::Uuid::new_v4().as_bytes().to_vec());
         }

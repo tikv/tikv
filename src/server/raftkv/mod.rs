@@ -40,8 +40,10 @@ use raft::{
 };
 pub use raft_extension::RaftRouterWrap;
 use raftstore::{
+    RegionInfoAccessor, SeekRegionCallback,
     coprocessor::{
-        Coprocessor, CoprocessorHost, ReadIndexObserver, dispatcher::BoxReadIndexObserver,
+        Coprocessor, CoprocessorHost, ReadIndexObserver, RegionInfoProvider,
+        dispatcher::BoxReadIndexObserver,
     },
     errors::Error as RaftServerError,
     router::{LocalReadRouter, RaftStoreRouter, ReadContext},
@@ -51,7 +53,7 @@ use raftstore::{
     },
 };
 use thiserror::Error;
-use tikv_kv::{OnAppliedCb, WriteEvent, write_modifies};
+use tikv_kv::{OnAppliedCb, SecondaryRegionOverride, WriteEvent, write_modifies};
 use tikv_util::{
     callback::must_call,
     future::{paired_future_callback, paired_must_called_future_callback},
@@ -165,13 +167,33 @@ where
 }
 
 #[inline]
-pub fn new_request_header(ctx: &Context) -> RaftRequestHeader {
+pub fn new_request_header(
+    ctx: &Context,
+    extra_snap_override: Option<&SecondaryRegionOverride>,
+) -> RaftRequestHeader {
     let mut header = RaftRequestHeader::default();
-    header.set_region_id(ctx.get_region_id());
-    header.set_peer(ctx.get_peer().clone());
-    header.set_region_epoch(ctx.get_region_epoch().clone());
-    if ctx.get_term() != 0 {
-        header.set_term(ctx.get_term());
+    match extra_snap_override {
+        Some(&SecondaryRegionOverride {
+            region_id,
+            ref region_epoch,
+            ref peer,
+            check_term,
+        }) => {
+            header.set_region_id(region_id);
+            header.set_peer(peer.clone());
+            header.set_region_epoch(region_epoch.clone());
+            if let Some(term) = check_term {
+                header.set_term(term);
+            }
+        }
+        _ => {
+            header.set_region_id(ctx.get_region_id());
+            header.set_peer(ctx.get_peer().clone());
+            header.set_region_epoch(ctx.get_region_epoch().clone());
+            if ctx.get_term() != 0 {
+                header.set_term(ctx.get_term());
+            }
+        }
     }
     header.set_sync_log(ctx.get_sync_log());
     header.set_replica_read(ctx.get_replica_read());
@@ -185,7 +207,7 @@ pub fn new_request_header(ctx: &Context) -> RaftRequestHeader {
 
 #[inline]
 pub fn new_flashback_req(ctx: &Context, ty: AdminCmdType) -> RaftCmdRequest {
-    let header = new_request_header(ctx);
+    let header = new_request_header(ctx, None);
     let mut req = RaftCmdRequest::default();
     req.set_header(header);
     req.mut_header()
@@ -356,6 +378,7 @@ where
     router: RaftRouterWrap<S, E>,
     engine: E,
     txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
+    region_info_accessor: Option<RegionInfoAccessor>,
     region_leaders: Arc<RwLock<HashSet<u64>>>,
 }
 
@@ -365,11 +388,17 @@ where
     S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
 {
     /// Create a RaftKv using specified configuration.
-    pub fn new(router: S, engine: E, region_leaders: Arc<RwLock<HashSet<u64>>>) -> RaftKv<E, S> {
+    pub fn new(
+        router: S,
+        engine: E,
+        region_info_accessor: Option<RegionInfoAccessor>,
+        region_leaders: Arc<RwLock<HashSet<u64>>>,
+    ) -> RaftKv<E, S> {
         RaftKv {
             router: RaftRouterWrap::new(router),
             engine,
             txn_extra_scheduler: None,
+            region_info_accessor,
             region_leaders,
         }
     }
@@ -507,7 +536,7 @@ where
 
         let reqs: Vec<Request> = batch.modifies.into_iter().map(Into::into).collect();
         let txn_extra = batch.extra;
-        let mut header = new_request_header(ctx);
+        let mut header = new_request_header(ctx, None);
         if batch.avoid_batch {
             header.set_uuid(uuid::Uuid::new_v4().as_bytes().to_vec());
         }
@@ -668,6 +697,15 @@ where
                 warn!("unsafe destroy range: failed sending ClearRegionSizeInRange"; "err" => ?e);
             });
     }
+
+    fn seek_region(&self, from: &[u8], callback: SeekRegionCallback) -> kv::Result<()> {
+        match self.region_info_accessor {
+            Some(ref accessor) => accessor
+                .seek_region(from, callback)
+                .map_err(|e| box_err!(e)),
+            None => Err(box_err!("region_info_accessor is not available")),
+        }
+    }
 }
 
 fn async_snapshot<E, S>(
@@ -697,7 +735,7 @@ where
     let begin_instant = Instant::now();
     let (cb, f) = paired_must_called_future_callback(drop_snapshot_callback);
 
-    let mut header = new_request_header(ctx.pb_ctx);
+    let mut header = new_request_header(ctx.pb_ctx, ctx.secondary_region_override.as_ref());
     let mut flags = 0;
     let need_encoded_start_ts = ctx.start_ts.is_none_or(|ts| !ts.is_zero());
     if ctx.pb_ctx.get_stale_read() && need_encoded_start_ts {
