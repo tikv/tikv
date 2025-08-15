@@ -88,7 +88,7 @@ use crate::{
         local_metrics::{RaftMetrics, TimeTracker},
         memory::*,
         metrics::*,
-        msg::{Callback, CampaignType, ExtCallback, InspectedRaftMessage},
+        msg::{Callback, CampaignType, ExtCallback, InspectedRaftMessage, RaftLogGcAction},
         peer::{ConsistencyState, Peer, PersistSnapshotResult, StaleState, TransferLeaderContext},
         region_meta::RegionMeta,
         snapshot_backup::{AbortReason, SnapshotBrState, SnapshotBrWaitApplyRequest},
@@ -1241,7 +1241,10 @@ where
                 self.fsm.has_ready = true;
             }
             CasualMessage::ForceCompactRaftLogs => {
-                self.on_raft_gc_log_tick(true);
+                self.on_raft_gc_log_tick(RaftLogGcAction::ForceCompact);
+            }
+            CasualMessage::RaftEnginePurge => {
+                self.on_raft_gc_log_tick(RaftLogGcAction::RaftEnginePurge);
             }
             CasualMessage::AccessPeer(cb) => {
                 let peer = &self.fsm.peer;
@@ -1354,7 +1357,7 @@ where
         self.fsm.peer.adjust_cfg_if_changed(self.ctx);
         match tick {
             PeerTick::Raft => self.on_raft_base_tick(),
-            PeerTick::RaftLogGc => self.on_raft_gc_log_tick(false),
+            PeerTick::RaftLogGc => self.on_raft_gc_log_tick(RaftLogGcAction::Normal),
             PeerTick::PdHeartbeat => self.on_pd_heartbeat_tick(),
             PeerTick::SplitRegionCheck => self.on_split_region_check_tick(),
             PeerTick::CheckMerge => self.on_check_merge(),
@@ -1381,10 +1384,9 @@ where
             self.on_request_snapshot_tick();
         }
         // Apply committed entries more quickly.
-        // Or if it's a leader. This implicitly means it's a singleton
-        // because it becomes leader in `Peer::new` when it's a
-        // singleton. It has a no-op entry that need to be persisted,
-        // committed, and then it should apply it.
+        // Or if it's a leader. This implicitly means it's a singleton because it
+        // becomes leader in `Peer::new` when it's a singleton. It has a no-op
+        // entry that need to be persisted, committed, and then it should apply it.
         if self.fsm.peer.raft_group.store().commit_index()
             > self.fsm.peer.raft_group.store().applied_index()
             || self.fsm.peer.is_leader()
@@ -6035,7 +6037,7 @@ where
     }
 
     #[allow(clippy::if_same_then_else)]
-    fn on_raft_gc_log_tick(&mut self, force_compact: bool) {
+    fn on_raft_gc_log_tick(&mut self, action: RaftLogGcAction) {
         if !self.fsm.peer.is_leader() {
             // `compact_cache_to` is called when apply, there is no need to call
             // `compact_to` here, snapshot generating has already been cancelled
@@ -6100,13 +6102,6 @@ where
                 }
             }
         }
-        let quorum_replicated_idx = if voter_matched_indices.len() > 0 {
-            voter_matched_indices.sort_unstable();
-            let quorum_index = (voter_matched_indices.len() + 1) / 2 - 1;
-            voter_matched_indices[quorum_index]
-        } else {
-            applied_idx
-        };
         // When an election happened or a new peer is added, replicated_idx can be 0.
         let log_lag = (last_idx - replicated_idx) as f64;
         if replicated_idx > 0 {
@@ -6135,80 +6130,63 @@ where
         }
 
         let applied_count = applied_idx - first_idx;
-        let log_count = (last_idx - first_idx + 1) as f64;
 
-        let ratio = (log_count / log_lag).max(1.0);
-
-        // let should_force_compact = applied_count
-        //     > std::cmp::min( (self.ctx.cfg.raft_log_gc_count_limit() as f64 / 3.0 *
-        //     > ratio) as u64, self.ctx.cfg.raft_log_gc_count_limit(),
-        //     );
-        let should_force_compact = applied_count > 0;
-
-        let mut compact_idx = if force_compact {
-            if should_force_compact {
-                self.ctx
-                    .raft_metrics
-                    .raft_log_gc
-                    .raft_engine_memory_limit
-                    .inc();
-                self.fsm.raft_engine_memory_high_water_duration = Duration::from_secs(0);
-                std::cmp::min(applied_idx, quorum_replicated_idx)
-            } else {
-                if replicated_idx < first_idx {
+        let mut compact_idx = match action {
+            RaftLogGcAction::ForceCompact => {
+                let should_force_compact =
+                    applied_count > self.ctx.cfg.raft_log_gc_count_limit() / 10;
+                if should_force_compact {
+                    let quorum_replicated_idx = if voter_matched_indices.len() > 0 {
+                        voter_matched_indices.sort_unstable();
+                        let quorum_index = (voter_matched_indices.len() + 1) / 2 - 1;
+                        voter_matched_indices[quorum_index]
+                    } else {
+                        applied_idx
+                    };
+                    self.ctx
+                        .raft_metrics
+                        .raft_log_gc
+                        .raft_engine_memory_limit
+                        .inc();
+                    self.fsm.raft_engine_memory_high_water_duration = Duration::from_secs(0);
+                    quorum_replicated_idx
+                } else {
+                    if replicated_idx < first_idx {
+                        self.ctx.raft_metrics.raft_log_gc_skipped.reserve_log.inc();
+                        return;
+                    }
+                    replicated_idx
+                }
+            }
+            RaftLogGcAction::Normal => {
+                if replicated_idx < first_idx || last_idx - first_idx < 3 {
+                    // In the current implementation one compaction can't delete all stale Raft
+                    // logs. There will be at least 3 entries left after one compaction:
+                    // ```
+                    // |------------- entries needs to be compacted ----------|
+                    // [entries...][the entry at `compact_idx`][the last entry][new compaction entry]
+                    //             |-------------------- entries will be left ----------------------|
+                    // ```
                     self.ctx.raft_metrics.raft_log_gc_skipped.reserve_log.inc();
                     return;
+                } else if replicated_idx - first_idx < self.ctx.cfg.raft_log_gc_threshold
+                    && self.fsm.skip_gc_raft_log_ticks < self.ctx.cfg.raft_log_reserve_max_ticks
+                {
+                    self.ctx
+                        .raft_metrics
+                        .raft_log_gc_skipped
+                        .threshold_limit
+                        .inc();
+                    // Logs will only be kept `max_ticks` * `raft_log_gc_tick_interval`.
+                    self.fsm.skip_gc_raft_log_ticks += 1;
+                    self.register_raft_gc_log_tick();
+                    return;
+                } else {
+                    self.ctx.raft_metrics.raft_log_gc.max_ticks.inc();
+                    replicated_idx
                 }
-                replicated_idx
             }
-        // } else if applied_count >= ((self.ctx.cfg.raft_log_gc_count_limit()
-        // as f64) * ratio) as u64 {
-        //     self.ctx
-        //         .raft_metrics
-        //         .raft_log_gc
-        //         .log_force_gc_count_limit
-        //         .inc();
-        //     self.fsm.raft_engine_memory_high_water_duration =
-        // Duration::from_secs(0);     std::cmp::min(applied_idx,
-        // quorum_replicated_idx)
-        //
-        // } else if applied_count > 0
-        //     && self.fsm.peer.raft_log_size_hint
-        //         >= ((self.ctx.cfg.raft_log_gc_size_limit().0 as f64) * ratio)
-        // as u64 {
-        //     self.ctx
-        //         .raft_metrics
-        //         .raft_log_gc
-        //         .log_force_gc_size_limit
-        //         .inc();
-        //     self.fsm.raft_engine_memory_high_water_duration =
-        // Duration::from_secs(0);     std::cmp::min(applied_idx,
-        // quorum_replicated_idx)
-        } else if replicated_idx < first_idx || last_idx - first_idx < 3 {
-            // In the current implementation one compaction can't delete all stale Raft
-            // logs. There will be at least 3 entries left after one compaction:
-            // ```
-            // |------------- entries needs to be compacted ----------|
-            // [entries...][the entry at `compact_idx`][the last entry][new compaction entry]
-            //             |-------------------- entries will be left ----------------------|
-            // ```
-            self.ctx.raft_metrics.raft_log_gc_skipped.reserve_log.inc();
-            return;
-        } else if replicated_idx - first_idx < self.ctx.cfg.raft_log_gc_threshold
-            && self.fsm.skip_gc_raft_log_ticks < self.ctx.cfg.raft_log_reserve_max_ticks
-        {
-            self.ctx
-                .raft_metrics
-                .raft_log_gc_skipped
-                .threshold_limit
-                .inc();
-            // Logs will only be kept `max_ticks` * `raft_log_gc_tick_interval`.
-            self.fsm.skip_gc_raft_log_ticks += 1;
-            self.register_raft_gc_log_tick();
-            return;
-        } else {
-            self.ctx.raft_metrics.raft_log_gc.max_ticks.inc();
-            replicated_idx
+            RaftLogGcAction::RaftEnginePurge => std::cmp::max(replicated_idx, first_idx),
         };
         // Avoid compacting unpersisted raft logs when persist is far behind apply.
         if compact_idx > self.fsm.peer.raft_group.raft.raft_log.persisted {

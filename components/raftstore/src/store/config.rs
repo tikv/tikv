@@ -105,10 +105,8 @@ pub struct Config {
     pub raft_engine_purge_interval: ReadableDuration,
     // Logs in Raft Engine memory needs to be purged peridically.
     #[doc(hidden)]
-    #[online_config(hidden)]
     pub raft_log_force_gc_interval: ReadableDuration,
     #[doc(hidden)]
-    #[online_config(hidden)]
     pub region_sampling_interval: ReadableDuration,
     #[doc(hidden)]
     #[online_config(hidden)]
@@ -540,7 +538,7 @@ impl Default for Config {
             raft_log_reserve_max_ticks: 6,
             raft_engine_purge_interval: ReadableDuration::secs(10),
             raft_log_force_gc_interval: ReadableDuration::secs(60),
-            region_sampling_interval: ReadableDuration::secs(10),
+            region_sampling_interval: ReadableDuration::secs(300),
             max_manual_flush_rate: 3.0,
             raft_entry_cache_life_time: ReadableDuration::secs(30),
             raft_reject_transfer_leader_duration: ReadableDuration::secs(3),
@@ -1125,6 +1123,9 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_log_force_gc_interval"])
             .set(self.raft_log_force_gc_interval.as_secs_f64());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["region_sampling_interval"])
+            .set(self.region_sampling_interval.as_secs_f64());
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["max_manual_flush_rate"])
             .set(self.max_manual_flush_rate);

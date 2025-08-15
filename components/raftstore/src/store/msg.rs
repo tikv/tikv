@@ -459,7 +459,6 @@ pub enum StoreTick {
     ConsistencyCheck,
     CleanupImportSst,
     PdReportMinResolvedTs,
-    RaftEngineForceGc,
 }
 
 impl StoreTick {
@@ -475,7 +474,9 @@ impl StoreTick {
             StoreTick::CleanupImportSst => RaftEventDurationType::cleanup_import_sst,
             StoreTick::LoadMetricsWindow => RaftEventDurationType::load_metrics_window,
             StoreTick::PdReportMinResolvedTs => RaftEventDurationType::pd_report_min_resolved_ts,
-            StoreTick::RaftEngineForceGc => RaftEventDurationType::raft_engine_force_gc,
+            // StoreTick::RaftEngineForceGc => RaftEventDurationType::raft_engine_force_gc,
+            // StoreTick::RegionSampling => RaftEventDurationType::compact_check, /* Use
+            // compact_check for now */
         }
     }
 }
@@ -567,6 +568,17 @@ pub enum CampaignType {
     UnsafeSplitCampaign,
 }
 
+/// Action type for raft log GC operations
+#[derive(Debug, Clone, Copy)]
+pub enum RaftLogGcAction {
+    /// Normal GC operation
+    Normal,
+    /// Force compact raft logs
+    ForceCompact,
+    /// Purge need to gc logs
+    RaftEnginePurge,
+}
+
 /// Message that will be sent to a peer.
 ///
 /// These messages are not significant and can be dropped occasionally.
@@ -625,10 +637,10 @@ pub enum CasualMessage<EK: KvEngine> {
     RegionOverlapped,
     /// Notifies that a new snapshot has been generated.
     SnapshotGenerated,
-
-    /// Generally Raft leader keeps as more as possible logs for followers,
-    /// however `ForceCompactRaftLogs` only cares the leader itself.
+    /// Force compact raft logs
     ForceCompactRaftLogs,
+    /// Purge need to gc logs
+    RaftEnginePurge,
 
     /// A message to access peer's internal state.
     AccessPeer(Box<dyn FnOnce(RegionMeta) + Send + 'static>),
@@ -726,6 +738,7 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
             CasualMessage::RegionOverlapped => write!(fmt, "RegionOverlapped"),
             CasualMessage::SnapshotGenerated => write!(fmt, "SnapshotGenerated"),
             CasualMessage::ForceCompactRaftLogs => write!(fmt, "ForceCompactRaftLogs"),
+            CasualMessage::RaftEnginePurge => write!(fmt, "RaftEnginePurge"),
             CasualMessage::AccessPeer(_) => write!(fmt, "AccessPeer"),
             CasualMessage::QueryRegionLeaderResp { .. } => write!(fmt, "QueryRegionLeaderResp"),
             CasualMessage::RejectRaftAppend { peer_id } => {
