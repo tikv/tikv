@@ -30,7 +30,7 @@ use raftstore::{
     store::{
         AutoSplitController, Config, ReadRunner, ReadTask, RefreshConfigTask, SplitCheckRunner,
         SplitCheckTask, StoreWriters, StoreWritersContext, TabletSnapManager, Transport,
-        WriteRouterContext, WriteSenders, WriterContoller,
+        WriteSenders, WriterContoller,
         fsm::{
             GlobalStoreStat, LocalStoreStat,
             store::{ENTRY_CACHE_EVICT_TICK_DURATION, PeerTickBatch},
@@ -309,25 +309,9 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport + 'static> PollHandler<PeerFsm<E
     fn end(&mut self, _batch: &mut [Option<impl DerefMut<Target = PeerFsm<EK, ER>>>]) {
         let dur = self.timer.saturating_elapsed();
 
-        let mut latency_inspect = std::mem::take(&mut self.poll_ctx.pending_latency_inspect);
-        for inspector in &mut latency_inspect {
+        for mut inspector in std::mem::take(&mut self.poll_ctx.pending_latency_inspect) {
             inspector.record_store_process(dur);
-        }
-        // Use the valid size of async-ios for generating `writer_id` when the local
-        // senders haven't been updated by `poller.begin().
-        let writer_id = rand::random::<usize>()
-            % std::cmp::min(
-                self.poll_ctx.cfg.store_io_pool_size,
-                self.poll_ctx.write_senders().size(),
-            );
-        if let Err(err) = self.poll_ctx.write_senders()[writer_id].try_send(
-            raftstore::store::WriteMsg::LatencyInspect {
-                send_time: TiInstant::now(),
-                inspector: latency_inspect,
-            },
-            None,
-        ) {
-            warn!(self.poll_ctx.logger, "send latency inspecting to write workers failed"; "err" => ?err);
+            inspector.finish();
         }
         self.poll_ctx
             .raft_metrics

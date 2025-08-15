@@ -2022,9 +2022,17 @@ where
                     .unwrap_or(false)
                 {
                     for tracker in trackers {
-                        tracker.observe(now, &metrics.wf_persist_log, |t| {
+                        let duration = tracker.observe(now, &metrics.wf_persist_log, |t| {
                             &mut t.metrics.wf_persist_log_nanos
                         });
+                        // The health_stats monitor uses the recorded persist_log_duration
+                        // to detect potential disk I/O jitters and performance issues.
+                        // By updating latency metrics here instead of in async-io threads,
+                        // we avoid scenarios where busy async-io threads with pending write
+                        // tasks in the queue might delay or timeout latency inspector updates.
+                        metrics
+                            .health_stats
+                            .observe(Duration::from_nanos(duration), IoType::Disk);
                     }
                 }
             }

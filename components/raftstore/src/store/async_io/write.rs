@@ -22,7 +22,6 @@ use engine_traits::{
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use file_system::{IoType, set_io_type};
-use health_controller::types::LatencyInspector;
 use kvproto::{
     metapb::RegionEpoch,
     raft_serverpb::{RaftLocalState, RaftMessage},
@@ -279,10 +278,6 @@ where
     ER: RaftEngine,
 {
     WriteTask(WriteTask<EK, ER>),
-    LatencyInspect {
-        send_time: Instant,
-        inspector: Vec<LatencyInspector>,
-    },
     Shutdown,
     #[cfg(test)]
     Pause(std::sync::mpsc::Receiver<()>),
@@ -334,7 +329,6 @@ where
                 t.region_id, t.peer_id, t.ready_number
             ),
             WriteMsg::Shutdown => write!(fmt, "WriteMsg::Shutdown"),
-            WriteMsg::LatencyInspect { .. } => write!(fmt, "WriteMsg::LatencyInspect"),
             #[cfg(test)]
             WriteMsg::Pause(_) => write!(fmt, "WriteMsg::Pause"),
         }
@@ -711,7 +705,6 @@ where
     metrics: StoreWriteMetrics,
     message_metrics: RaftSendMessageMetrics,
     perf_context: ER::PerfContext,
-    pending_latency_inspect: Vec<(Instant, Vec<LatencyInspector>)>,
 }
 
 impl<EK, ER, N, T> Worker<EK, ER, N, T>
@@ -753,7 +746,6 @@ where
             metrics: StoreWriteMetrics::new(cfg.value().waterfall_metrics),
             message_metrics: RaftSendMessageMetrics::default(),
             perf_context,
-            pending_latency_inspect: vec![],
         }
     }
 
@@ -793,8 +785,7 @@ where
             }
 
             if self.batch.is_empty() {
-                // No-ops, using default duration to update latency inspectors.
-                self.clear_latency_inspect(None);
+                // No-ops.
                 continue;
             }
 
@@ -830,12 +821,6 @@ where
                     .task_wait
                     .observe(duration_to_sec(task.send_time.saturating_elapsed()));
                 self.handle_write_task(task);
-            }
-            WriteMsg::LatencyInspect {
-                send_time,
-                inspector,
-            } => {
-                self.pending_latency_inspect.push((send_time, inspector));
             }
             #[cfg(test)]
             WriteMsg::Pause(rx) => {
@@ -895,7 +880,7 @@ where
         }
         fail_point!("raft_between_save");
 
-        let (mut write_raft_dur, mut write_raft_time) = (Duration::default(), 0f64);
+        let mut write_raft_time = 0f64;
         if !self.batch.raft_wbs[0].is_empty() {
             fail_point!("raft_before_save_on_store_1", self.store_id == 1, |_| {});
 
@@ -924,8 +909,7 @@ where
                 .flat_map(|task| task.trackers.iter().flat_map(|t| t.as_tracker_token()))
                 .collect();
             self.perf_context.report_metrics(&trackers);
-            write_raft_dur = now.saturating_elapsed();
-            write_raft_time = duration_to_sec(write_raft_dur);
+            write_raft_time = duration_to_sec(now.saturating_elapsed());
             STORE_WRITE_RAFTDB_DURATION_HISTOGRAM.observe(write_raft_time);
             debug!("raft log is persisted";
                 "req_info" => TrackerTokenArray::new(trackers.as_slice()));
@@ -1029,31 +1013,10 @@ where
                 incoming.raft_write_wait_duration.0,
             );
         }
-
-        // Update latency inspectors with the actual Raft write duration.
-        // Using the precise write duration is crucial for accurate SlowScore
-        // calculations and helps minimize false positives in performance
-        // monitoring.
-        self.clear_latency_inspect(Some(write_raft_dur));
     }
 
     pub fn is_empty(&self) -> bool {
         self.batch.is_empty()
-    }
-
-    fn clear_latency_inspect(&mut self, write_duration: Option<Duration>) {
-        if self.pending_latency_inspect.is_empty() {
-            return;
-        }
-        let now = Instant::now();
-        for (time, inspectors) in std::mem::take(&mut self.pending_latency_inspect) {
-            for mut inspector in inspectors {
-                inspector.record_store_write(
-                    write_duration.unwrap_or(now.saturating_duration_since(time)),
-                );
-                inspector.finish();
-            }
-        }
     }
 }
 
