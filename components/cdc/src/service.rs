@@ -267,9 +267,7 @@ impl Service {
     /// Create a ChangeData service.
     ///
     /// It requires a scheduler of an `Endpoint` in order to schedule tasks.
-    pub fn new(scheduler: Scheduler<Task>, memory_quota: Arc<MemoryQuota>) -> Service {
-        let pool = Arc::new(Builder::new("cdc-watchdog").thread_count(1).create());
-
+    pub fn new(scheduler: Scheduler<Task>, memory_quota: Arc<MemoryQuota>, pool: Arc<Worker>) -> Service {
         Service {
             scheduler,
             memory_quota,
@@ -509,6 +507,7 @@ impl Service {
                     warn!("cdc send cancelled"; "downstream" => peer, "conn_id" => ?conn_id);
                     let status = RpcStatus::with_message(RpcStatusCode::UNKNOWN, "connection cancelled".to_string());
                     let _ = sink.fail(status).await;
+                    CDC_ABORTED_CONNECTIONS.inc();
                 }
                 result = event_drain.forward(&mut sink, Some(&last_flush_time_for_forward)) => {
                     if let Err(e) = result {
@@ -657,8 +656,9 @@ mod tests {
 
     fn new_rpc_suite(capacity: usize) -> (Server, ChangeDataClient, ReceiverWrapper<Task>) {
         let memory_quota = Arc::new(MemoryQuota::new(capacity));
+        let pool = Arc::new(Builder::new("cdc-watchdog-test").thread_count(1).create());
         let (scheduler, rx) = dummy_scheduler();
-        let cdc_service = Service::new(scheduler, memory_quota);
+        let cdc_service = Service::new(scheduler, memory_quota, pool);
         let env = Arc::new(EnvBuilder::new().build());
         let builder =
             ServerBuilder::new(env.clone()).register_service(create_change_data(cdc_service));
