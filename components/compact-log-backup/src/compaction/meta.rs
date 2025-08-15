@@ -340,9 +340,9 @@ impl CompactionRunInfoBuilder {
                 }
                 all_full_covers = false;
 
-                // meta kv file and data kv file belong to different physical files.
-                // so only if this physical file not have is_meta,
-                // consider all_data_files_full_covers to false.
+                // Meta KV files and data KV files belong to different physical files.
+                // Therefore, only if this physical file contains no `is_meta` entries
+                // should `all_data_files_full_covers` be set to false.
                 if p.files.iter().any(|f| !f.is_meta) {
                     all_data_files_full_covers = false;
                 }
