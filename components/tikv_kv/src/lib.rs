@@ -486,6 +486,9 @@ pub trait Engine: Send + Clone + 'static {
     /// engine may update its statistics.
     fn hint_change_in_range(&self, _start_key: Vec<u8>, _end_key: Vec<u8>) {}
 
+    /// seek the regions from the specified key
+    /// The argument `from` should be the comparable format, you should use
+    /// `Key::from_raw` encode the raw key.
     fn seek_region(&self, _from: &[u8], _callback: SeekRegionCallback) -> Result<()> {
         Err(box_err!("not supported"))
     }

@@ -119,6 +119,8 @@ pub trait RegionStorageAccessor: Sync {
     /// If found, `FindRegionResult::Found`, which contains the region and its
     /// role will be returned.
     /// Otherwise, `FindRegionResult::NotFound` will be returned.
+    /// The argument `key` should be the comparable format, you should use
+    /// `Key::from_raw` encode the raw key.
     async fn find_region_by_key(&self, key: &[u8]) -> Result<FindRegionResult>;
     /// Get the local storage for the specified region.
     /// It receives a region and a list of key ranges which need to be scanned.

@@ -124,6 +124,9 @@ where
 {
     type Storage = TikvStorage<R::Storage>;
 
+    /// find the region by the specified key.
+    /// The argument `key` should be the comparable format, you should use
+    /// `Key::from_raw` encode the raw key.
     async fn find_region_by_key(&self, key: &[u8]) -> storage::Result<FindRegionResult> {
         self.store_accessor.find_region_by_key(key).await
     }

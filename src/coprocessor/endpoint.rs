@@ -1059,6 +1059,9 @@ impl<E: Engine> SecondarySnapStoreAccessor<E> {
 impl<E: Engine> RegionStorageAccessor for SecondarySnapStoreAccessor<E> {
     type Storage = SnapshotStore<E::IMSnap>;
 
+    /// find the region by the specified key.
+    /// The argument `key` should be the comparable format, you should use
+    /// `Key::from_raw` encode the raw key.
     async fn find_region_by_key(&self, key: &[u8]) -> StorageResult<FindRegionResult> {
         let key_in_vec = key.to_vec();
         let (tx, rx) = oneshot::channel();
