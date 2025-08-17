@@ -1,6 +1,13 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
+
+/// Region classification for force GC and sampling
+#[derive(Debug, Clone)]
+struct RegionClassification {
+    pinned_regions: Vec<(u64, u64)>,       // (region_id, growth)
+    gc_candidate_regions: Vec<(u64, u64)>, // (region_id, growth)
+}
 use std::{
     cell::Cell,
     cmp::{Ord, Ordering as CmpOrdering},
@@ -67,6 +74,7 @@ use tikv_util::{
         self as sys_util,
         cpu_time::ProcessStat,
         disk::{DiskUsage, get_disk_status},
+        needs_force_compact,
     },
     time::{Instant as TiInstant, SlowTimer, duration_to_sec, monotonic_raw_now},
     timer::SteadyTimer,
@@ -122,9 +130,9 @@ use crate::{
             AutoSplitController, CleanupRunner, CleanupSstRunner, CleanupSstTask, CleanupTask,
             CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
             DiskCheckRunner, DiskCheckTask, GcSnapshotRunner, GcSnapshotTask, PdRunner,
-            RaftlogCompactCheckerRunner, RaftlogGcRunner, RaftlogGcTask, ReadDelegate,
-            RefreshConfigRunner, RefreshConfigTask, RegionRunner, RegionTask,
-            SNAP_GENERATOR_MAX_POOL_SIZE, SnapGenRunner, SnapGenTask, SplitCheckTask,
+            RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RefreshConfigRunner, RefreshConfigTask,
+            RegionRunner, RegionTask, SNAP_GENERATOR_MAX_POOL_SIZE, SnapGenRunner, SnapGenTask,
+            SplitCheckTask,
         },
         worker_metrics::PROCESS_STAT_CPU_USAGE,
     },
@@ -211,8 +219,6 @@ pub struct StoreMeta {
     /// If None, it means the store is start from empty, no need to check and
     /// update it anymore.
     pub completed_apply_peers_count: Option<u64>,
-    /// Pinned regions for dynamic GC decision
-    pub pinned_regions: Vec<(u64, u64)>,
 }
 
 impl StoreRegionMeta for StoreMeta {
@@ -266,7 +272,6 @@ impl StoreMeta {
             damaged_regions: HashSet::default(),
             busy_apply_peers: HashSet::default(),
             completed_apply_peers_count: Some(0),
-            pinned_regions: Vec::new(),
         }
     }
 
@@ -760,19 +765,9 @@ struct Store {
     start_time: Option<Timespec>,
     consistency_check_time: HashMap<u64, Instant>,
     store_reachability: HashMap<u64, StoreReachability>,
-    // Force GC and sampling are now handled by RaftLogCompactWorker
-    // These fields are no longer needed
-    // region_last_indexes: HashMap<u64, u64>,
-    // gc_candidate_regions: HashMap<u64, u64>, // region_id -> growth
-    // pinned_regions: HashMap<u64, u64>, // region_id -> growth
-    // gc_candidates_sum: u64,
-    // pinned_regions_sum: u64,
-    // Force GC and sampling are now handled by RaftLogCompactWorker
-    // These fields are no longer needed
-    // sampling_in_progress: bool,
-    // last_sampling_time: Option<Instant>,
-    // sampling_start_time: Option<Instant>,
-    // raftlog_compact_worker_scheduler: Option<Scheduler<RaftLogCompactTask>>, // No longer needed
+    // Region leader growth rate information for GC decision
+    region_leader_growth: HashMap<u64, (u64, Instant)>, /* region_id -> (growth_rate,
+                                                         * last_update_time) */
 }
 
 struct StoreReachability {
@@ -801,17 +796,7 @@ where
                 start_time: None,
                 consistency_check_time: HashMap::default(),
                 store_reachability: HashMap::default(),
-                // Force GC and sampling are now handled by RaftLogCompactWorker
-                // region_last_indexes: HashMap::default(),
-                // gc_candidate_regions: HashMap::default(),
-                // pinned_regions: HashMap::default(),
-                // gc_candidates_sum: 0,
-                // pinned_regions_sum: 0,
-                // Force GC and sampling are now handled by RaftLogCompactWorker
-                // sampling_in_progress: false,
-                // last_sampling_time: None,
-                // sampling_start_time: None,
-                // raftlog_compact_worker_scheduler: None,
+                region_leader_growth: HashMap::default(),
             },
             receiver: rx,
         });
@@ -856,9 +841,8 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             StoreTick::ConsistencyCheck => self.on_consistency_check_tick(),
             StoreTick::CleanupImportSst => self.on_cleanup_import_sst_tick(),
             StoreTick::PdReportMinResolvedTs => self.on_pd_report_min_resolved_ts_tick(),
-            // StoreTick::RaftEngineForceGc => self.on_raft_engine_force_gc_tick(), // Removed:
-            // handled by RaftLogCompactWorker StoreTick::RegionSampling =>
-            // self.on_region_sampling_tick(), // Removed: handled by RaftLogCompactWorker
+            StoreTick::RaftEngineForceGc => self.on_raft_engine_force_gc_tick(),
+            StoreTick::RegionSampling => self.on_region_sampling_tick(),
         }
         let elapsed = timer.saturating_elapsed();
         self.ctx
@@ -969,6 +953,12 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 } => {
                     self.on_wake_up_regions(abnormal_stores, region_ids);
                 }
+                StoreMsg::RegionLeaderGrowth {
+                    region_id,
+                    log_lag,
+                } => {
+                    self.on_region_leader_growth(region_id, log_lag);
+                }
             }
         }
         slow_log!(
@@ -1003,8 +993,8 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
         self.register_compact_lock_cf_tick();
         self.register_snap_mgr_gc_tick();
         self.register_consistency_check_tick();
-        // self.register_raft_engine_force_gc_tick();
-        // self.register_region_sampling_tick();
+        self.register_raft_engine_force_gc_tick();
+        self.register_region_sampling_tick();
     }
 }
 
@@ -1680,7 +1670,6 @@ struct Workers<EK: KvEngine> {
     purge_worker: Option<Worker>,
 
     raftlog_fetch_worker: Worker,
-    raftlog_compact_worker: Worker,
 
     coprocessor_host: CoprocessorHost<EK>,
 
@@ -1784,7 +1773,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             region_worker: Worker::new("region-worker"),
             purge_worker,
             raftlog_fetch_worker: Worker::new("raftlog-fetch-worker"),
-            raftlog_compact_worker: Worker::new("raftlog-compact-worker"),
             coprocessor_host: coprocessor_host.clone(),
             refresh_config_worker: LazyWorker::new("refreash-config-worker"),
             on_stop_hooks: vec![],
@@ -2041,24 +2029,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         );
         assert!(workers.pd_worker.start(pd_runner));
 
-        // Start the raftlog compact checker worker
-        let mut raftlog_compact_checker_runner = RaftlogCompactCheckerRunner::new(
-            cfg.pin_compact_region_ratio,
-            cfg.evict_cache_on_memory_ratio,
-            cfg.raft_log_force_gc_interval.0,
-        );
-
-        // Set up the worker with engines and router
-        raftlog_compact_checker_runner
-            .setup(builder.engines.clone(), Box::new(builder.router.clone()));
-
-        let _raftlog_compact_checker_scheduler = workers.raftlog_compact_worker.start_with_timer(
-            "raftlog-compact-checker-worker",
-            raftlog_compact_checker_runner,
-        );
-
-        info!("raftlog compact worker started successfully");
-
         if let Err(e) = sys_util::thread::set_priority(sys_util::HIGH_PRI) {
             warn!("set thread priority for raftstore failed"; "error" => ?e);
         }
@@ -2091,7 +2061,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         workers.coprocessor_host.shutdown();
         workers.cleanup_worker.stop();
         workers.region_worker.stop();
-        workers.raftlog_compact_worker.stop();
+        // workers.raftlog_compact_worker.stop(); // No longer needed
         workers.background_worker.stop();
         if let Some(w) = workers.purge_worker {
             w.stop();
@@ -3127,6 +3097,18 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         }
     }
 
+    fn on_region_leader_growth(&mut self, region_id: u64, log_lag: u64) {
+        info!(
+            "received region leader growth update";
+            "region_id" => region_id,
+            "log_lag" => log_lag
+        );
+        self.fsm
+            .store
+            .region_leader_growth
+            .insert(region_id, (log_lag, Instant::now()));
+    }
+
     fn register_pd_store_heartbeat_tick(&self) {
         self.ctx.schedule_store_tick(
             StoreTick::PdStoreHeartbeat,
@@ -3154,28 +3136,229 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
     }
 
     // Force GC tick registration is no longer needed
-    // fn register_raft_engine_force_gc_tick(&self) {
-    //     // Removed: force GC tick moved to RaftLogCompactWorker
-    // }
+    fn register_raft_engine_force_gc_tick(&self) {
+        self.ctx.schedule_store_tick(
+            StoreTick::RaftEngineForceGc,
+            self.ctx.cfg.raft_log_force_gc_interval.0,
+        );
+    }
 
-    // Force GC is now handled by RaftLogCompactWorker, no need for this tick
-    // anymore fn on_raft_engine_force_gc_tick(&mut self) {
-    //     // Removed: force GC logic moved to RaftLogCompactWorker
-    // }
+    fn on_raft_engine_force_gc_tick(&mut self) {
+        self.register_raft_engine_force_gc_tick();
 
-    // Force compact messages are now handled by RaftLogCompactWorker
-    // fn send_force_compact_messages(&self, over_ratio: f64) {
-    //     // Removed: handled by RaftLogCompactWorker
-    // }
+        // Check if force GC is needed and execute it
+        if let Some(over_ratio) = self.check_force_gc_needed() {
+            info!(
+                "force GC needed based on memory pressure, over_ratio: {}",
+                over_ratio
+            );
+            self.send_force_compact_messages(over_ratio);
+        }
+    }
 
-    // Region sampling is now handled by RaftLogCompactWorker
-    // fn on_region_sampling_tick(&mut self) {
-    //     // Removed: handled by RaftLogCompactWorker
-    // }
+    fn send_force_compact_messages(&mut self, over_ratio: f64) {
+        // Create region classification on-demand when force compact is needed
+        let classification = self.create_region_classification();
 
-    // fn register_region_sampling_tick(&self) {
-    //     // Removed: handled by RaftLogCompactWorker
-    // }
+        let mut pinned_regions_compacted = 0;
+        let mut gc_candidates_compacted = 0;
+
+        // Get configuration values first to avoid borrow conflicts
+        let pin_ratio = self.ctx.cfg.pin_compact_region_ratio;
+
+        // Send force compact messages to GC candidate regions
+        for (region_id, _) in &classification.gc_candidate_regions {
+            let _ = self.ctx.router.send(
+                *region_id,
+                PeerMsg::CasualMessage(Box::new(CasualMessage::ForceCompactRaftLogs)),
+            );
+            gc_candidates_compacted += 1;
+        }
+
+        // If memory pressure is high, also send to some pinned regions
+        if over_ratio > 1.0 {
+            // Calculate dynamic pin ratio: shrink based on memory pressure
+            let dynamic_pin_ratio = pin_ratio / over_ratio;
+            let total_regions =
+                classification.pinned_regions.len() + classification.gc_candidate_regions.len();
+            let dynamic_pin_count =
+                std::cmp::max(1, (total_regions as f64 * dynamic_pin_ratio) as usize);
+
+            // Convert pinned regions to sorted vector for selection
+            let mut sorted_pinned: Vec<(u64, u64)> = classification
+                .pinned_regions
+                .iter()
+                .map(|(k, v)| (*k, *v))
+                .collect();
+            sorted_pinned.sort_by(|a, b| b.1.cmp(&a.1)); // Sort by growth rate (descending: fastest first)
+
+            // Send to pinned regions that exceed the dynamic pin count
+            // Choose the slowest growth pinned regions to minimize impact
+            for i in dynamic_pin_count..sorted_pinned.len() {
+                let (region_id, _) = sorted_pinned[i];
+                let _ = self.ctx.router.send(
+                    region_id,
+                    PeerMsg::CasualMessage(Box::new(CasualMessage::ForceCompactRaftLogs)),
+                );
+                pinned_regions_compacted += 1;
+                info!(
+                    "sending force compact to pinned region {} due to high memory pressure (over_ratio: {})",
+                    region_id, over_ratio
+                );
+            }
+        }
+
+        let regions_compacted = gc_candidates_compacted + pinned_regions_compacted;
+
+        // Log pinned regions details with their IDs and log lag values
+        if !classification.pinned_regions.is_empty() {
+            let pinned_details: Vec<String> = classification
+                .pinned_regions
+                .iter()
+                .map(|(region_id, growth)| format!("{}:{}", region_id, growth))
+                .collect();
+            info!(
+                "pinned regions details: [{}]",
+                pinned_details.join(", ")
+            );
+        }
+
+        info!(
+            "force GC completed: {} total regions, {} GC candidates, {} pinned regions",
+            regions_compacted, gc_candidates_compacted, pinned_regions_compacted
+        );
+    }
+
+    fn register_region_sampling_tick(&self) {
+        self.ctx.schedule_store_tick(
+            StoreTick::RegionSampling,
+            self.ctx.cfg.region_sampling_interval.0,
+        );
+    }
+
+    fn on_region_sampling_tick(&mut self) {
+        self.register_region_sampling_tick();
+        // Only clean up stale regions, classification will be done when needed
+        self.cleanup_stale_region_data();
+        info!("region sampling completed, stale data cleaned up");
+    }
+
+    fn cleanup_stale_region_data(&mut self) {
+        // Clean up stale regions based on timeout
+        let timeout_duration = self.ctx.cfg.region_sampling_interval.0 * 2; // 2x sampling interval
+        let now = Instant::now();
+
+        // Use retain to remove stale regions in one pass
+        self.fsm.store.region_leader_growth.retain(|region_id, (_, last_update_time)| {
+            if now.duration_since(*last_update_time) > timeout_duration {
+                info!("removing stale region from growth tracking due to timeout"; "region_id" => region_id);
+                false // remove this entry
+            } else {
+                true // keep this entry
+            }
+        });
+    }
+
+    fn create_region_classification(&self) -> RegionClassification {
+        // Collect all (region_id, growth) into a vector
+        let mut all_growth = Vec::new();
+        for (region_id, (growth_rate, _)) in &self.fsm.store.region_leader_growth {
+            all_growth.push((*region_id, *growth_rate));
+        }
+
+        if all_growth.is_empty() {
+            return RegionClassification {
+                pinned_regions: Vec::new(),
+                gc_candidate_regions: Vec::new(),
+            };
+        }
+
+        let len = all_growth.len();
+        // At least pin 1 region to avoid the corner case of pin_count = 0
+        let pin_count = std::cmp::max(
+            1,
+            (len as f64 * self.ctx.cfg.pin_compact_region_ratio) as usize,
+        );
+
+        if len > pin_count {
+            // Partition by growth rate (tuple.1), ascending order
+            let k = len - pin_count; // Right side will have pin_count elements with the largest growth rate
+
+            info!(
+                "partitioning {} regions: pin_count={}, k={}, will select {} largest elements",
+                len, pin_count, k, pin_count
+            );
+
+            // Log some sample data before partitioning
+            if !all_growth.is_empty() {
+                let sample_size = std::cmp::min(5, all_growth.len());
+                let sample: Vec<_> = all_growth.iter().take(sample_size).collect();
+                info!("sample data before partitioning: {:?}", sample);
+            }
+
+            all_growth.select_nth_unstable_by(k, |a, b| a.1.cmp(&b.1));
+
+            // Move the largest pin_count elements into a new Vec (no copy, just move)
+            let pinned_regions = all_growth.split_off(k);
+            // The left part is the GC candidate regions
+            let gc_candidate_regions = all_growth;
+
+            // Log some sample data after partitioning
+            if !pinned_regions.is_empty() {
+                let sample_size = std::cmp::min(3, pinned_regions.len());
+                let sample: Vec<_> = pinned_regions.iter().take(sample_size).collect();
+                info!("sample pinned regions (largest growth): {:?}", sample);
+            }
+
+            if !gc_candidate_regions.is_empty() {
+                let sample_size = std::cmp::min(3, gc_candidate_regions.len());
+                let sample: Vec<_> = gc_candidate_regions.iter().take(sample_size).collect();
+                info!(
+                    "sample GC candidate regions (smallest growth): {:?}",
+                    sample
+                );
+            }
+
+            info!(
+                "region classification created: {} pinned regions, {} GC candidate regions",
+                pinned_regions.len(),
+                gc_candidate_regions.len()
+            );
+
+            RegionClassification {
+                pinned_regions,
+                gc_candidate_regions,
+            }
+        } else {
+            // pin_count >= len: all regions go into pinned, no GC candidates
+            info!(
+                "region classification created: {} pinned regions, {} GC candidate regions",
+                all_growth.len(),
+                0
+            );
+            RegionClassification {
+                pinned_regions: all_growth,
+                gc_candidate_regions: Vec::new(),
+            }
+        }
+    }
+
+    fn check_force_gc_needed(&self) -> Option<f64> {
+        let mut over_ratio = 0.0;
+        let mut usage: f64 = 0.0;
+        let raft_memory_usage = self.ctx.engines.raft.get_memory_usage().unwrap() as f64;
+
+        if needs_force_compact(
+            &mut over_ratio,
+            &mut usage,
+            self.ctx.cfg.evict_cache_on_memory_ratio,
+        ) {
+            if raft_memory_usage > usage * 0.04 {
+                return Some(over_ratio);
+            }
+        }
+        None
+    }
 }
 
 // we will remove 1-week old version 1 SST files.

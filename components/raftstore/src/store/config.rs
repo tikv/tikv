@@ -537,7 +537,7 @@ impl Default for Config {
             follower_read_max_log_gap: 100,
             raft_log_reserve_max_ticks: 6,
             raft_engine_purge_interval: ReadableDuration::secs(10),
-            raft_log_force_gc_interval: ReadableDuration::secs(60),
+            raft_log_force_gc_interval: ReadableDuration::secs(300),
             region_sampling_interval: ReadableDuration::secs(300),
             max_manual_flush_rate: 3.0,
             raft_entry_cache_life_time: ReadableDuration::secs(30),

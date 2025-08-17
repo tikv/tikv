@@ -170,7 +170,11 @@ where
     /// deleted if the skip time reaches this `skip_gc_raft_log_ticks`.
     skip_gc_raft_log_ticks: usize,
 
-    raft_engine_memory_high_water_duration: Duration,
+    /// Previous last_index for calculating growth rate in GC tick
+    previous_last_index: u64,
+
+    /// Accumulated interval time for region growth sampling
+    sampling_interval: u64,
 
     reactivate_memory_lock_ticks: usize,
 
@@ -303,7 +307,8 @@ where
                 receiver: rx,
                 skip_split_count: 0,
                 skip_gc_raft_log_ticks: 0,
-                raft_engine_memory_high_water_duration: Duration::from_secs(0),
+                previous_last_index: 0,
+                sampling_interval: 0,
                 reactivate_memory_lock_ticks: 0,
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(),
                 trace: PeerMemoryTrace::default(),
@@ -366,7 +371,8 @@ where
                 receiver: rx,
                 skip_split_count: 0,
                 skip_gc_raft_log_ticks: 0,
-                raft_engine_memory_high_water_duration: Duration::from_secs(0),
+                previous_last_index: 0,
+                sampling_interval: 0,
                 reactivate_memory_lock_ticks: 0,
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(),
                 trace: PeerMemoryTrace::default(),
@@ -6044,6 +6050,7 @@ where
             // when the role becomes follower.
             return;
         }
+
         if !self.fsm.peer.get_store().is_entry_cache_empty() || !self.ctx.cfg.hibernate_regions {
             self.register_raft_gc_log_tick();
         }
@@ -6114,6 +6121,28 @@ where
             REGION_MAX_LOG_LAG.observe(log_lag);
         }
 
+        // Accumulate interval time
+        self.fsm.sampling_interval += self.ctx.cfg.raft_log_gc_tick_interval.0.as_millis() as u64;
+
+        if self.fsm.sampling_interval >= self.ctx.cfg.region_sampling_interval.0.as_millis() as u64
+        {
+            // send growth rate to store
+            let store_msg = StoreMsg::RegionLeaderGrowth {
+                region_id: self.fsm.region_id(),
+                log_lag: log_lag as u64,
+            };
+
+            if let Err(e) = self.ctx.router.send_control(store_msg) {
+                info!("failed to send region leader growth info to store: {}", e);
+            }
+
+            // Update previous_last_index for next growth calculation
+            self.fsm.previous_last_index = last_idx;
+
+            // Reset interval accumulator
+            self.fsm.sampling_interval = 0;
+        }
+
         // leader may call `get_term()` on the latest replicated index, so compact
         // entries before `alive_cache_idx` instead of `alive_cache_idx + 1`.
         let transfer_leader_state = &mut self.fsm.peer.transfer_leader_state;
@@ -6148,7 +6177,6 @@ where
                         .raft_log_gc
                         .raft_engine_memory_limit
                         .inc();
-                    self.fsm.raft_engine_memory_high_water_duration = Duration::from_secs(0);
                     quorum_replicated_idx
                 } else {
                     if replicated_idx < first_idx {

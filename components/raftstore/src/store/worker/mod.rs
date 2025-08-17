@@ -32,7 +32,6 @@ pub use self::{
         Runner as PdRunner, StatsMonitor as PdStatsMonitor, StoreStatsReporter, Task as PdTask,
         new_change_peer_v2_request,
     },
-    raftlog_compact_checker::Runner as RaftlogCompactCheckerRunner,
     raftlog_gc::{Runner as RaftlogGcRunner, Task as RaftlogGcTask},
     read::{
         CachedReadDelegate, LocalReadContext, LocalReader, LocalReaderCore,

@@ -459,6 +459,8 @@ pub enum StoreTick {
     ConsistencyCheck,
     CleanupImportSst,
     PdReportMinResolvedTs,
+    RaftEngineForceGc,
+    RegionSampling,
 }
 
 impl StoreTick {
@@ -474,9 +476,8 @@ impl StoreTick {
             StoreTick::CleanupImportSst => RaftEventDurationType::cleanup_import_sst,
             StoreTick::LoadMetricsWindow => RaftEventDurationType::load_metrics_window,
             StoreTick::PdReportMinResolvedTs => RaftEventDurationType::pd_report_min_resolved_ts,
-            // StoreTick::RaftEngineForceGc => RaftEventDurationType::raft_engine_force_gc,
-            // StoreTick::RegionSampling => RaftEventDurationType::compact_check, /* Use
-            // compact_check for now */
+            StoreTick::RaftEngineForceGc => RaftEventDurationType::compact_check,
+            StoreTick::RegionSampling => RaftEventDurationType::compact_check,
         }
     }
 }
@@ -996,6 +997,12 @@ where
         region_ids: Vec<u64>,
     },
 
+    /// Region leader growth rate update (only sent by leaders)
+    RegionLeaderGrowth {
+        region_id: u64,
+        log_lag: u64,
+    },
+
     /// Message only used for test.
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&crate::store::Config) + Send>),
@@ -1031,6 +1038,7 @@ where
             }
             StoreMsg::GcSnapshotFinish => write!(fmt, "GcSnapshotFinish"),
             StoreMsg::AwakenRegions { .. } => write!(fmt, "AwakenRegions"),
+            StoreMsg::RegionLeaderGrowth { .. } => write!(fmt, "RegionLeaderGrowth"),
             #[cfg(any(test, feature = "testexport"))]
             StoreMsg::Validate(_) => write!(fmt, "Validate config"),
         }
@@ -1052,8 +1060,9 @@ impl<EK: KvEngine> StoreMsg<EK> {
             StoreMsg::UnsafeRecoveryCreatePeer { .. } => 9,
             StoreMsg::GcSnapshotFinish => 10,
             StoreMsg::AwakenRegions { .. } => 11,
+            StoreMsg::RegionLeaderGrowth { .. } => 12,
             #[cfg(any(test, feature = "testexport"))]
-            StoreMsg::Validate(_) => 12, // Please keep this always be the last one.
+            StoreMsg::Validate(_) => 13, // Please keep this always be the last one.
         }
     }
 }
