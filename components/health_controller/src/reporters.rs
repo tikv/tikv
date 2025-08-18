@@ -60,8 +60,6 @@ pub struct RaftstoreReporterConfig {
 pub struct UnifiedSlowScore {
     factors: Vec<SlowScore>,
     network_factors: Arc<Mutex<HashMap<u64, SlowScore>>>,
-
-    inspect_network_interval: Duration,
 }
 
 impl UnifiedSlowScore {
@@ -69,12 +67,10 @@ impl UnifiedSlowScore {
         let mut unified_slow_score = UnifiedSlowScore {
             factors: Vec::new(),
             network_factors: Arc::new(Mutex::new(HashMap::new())),
-            inspect_network_interval: cfg.inspect_network_interval,
         };
         // The first factor is for Raft Disk I/O.
         unified_slow_score.factors.push(SlowScore::new(
             cfg.inspect_interval, // timeout
-            cfg.inspect_interval, // inspect interval
             DISK_TIMEOUT_RATIO_THRESHOLD,
             DISK_ROUND_TICKS,
             DISK_RECOVERY_INTERVALS,
@@ -82,7 +78,6 @@ impl UnifiedSlowScore {
         // The second factor is for KvDB Disk I/O.
         unified_slow_score.factors.push(SlowScore::new(
             cfg.inspect_kvdb_interval, // timeout
-            cfg.inspect_kvdb_interval, // inspect interval
             DISK_TIMEOUT_RATIO_THRESHOLD,
             DISK_ROUND_TICKS,
             DISK_RECOVERY_INTERVALS,
@@ -113,7 +108,6 @@ impl UnifiedSlowScore {
             self.network_factors.lock().unwrap().entry(*store_id).or_insert_with(|| {
                 SlowScore::new(
                     NETWORK_TIMEOUT_THRESHOLD,
-                    self.inspect_network_interval,
                     NETWORK_TIMEOUT_RATIO_THRESHOLD,
                     NETWORK_ROUND_TICKS,
                     NETWORK_RECOVERY_INTERVALS,
@@ -145,29 +139,16 @@ impl UnifiedSlowScore {
             .collect()
     }
 
-    pub fn last_tick_finished(&self, factor: InspectFactor) -> bool {
-        if factor == InspectFactor::Network {
-            // For network factor, we need to check all network factors.
-            self.network_factors.lock().unwrap()
-                .values()
-                .all(|f| f.last_tick_finished())
-        } else {
-            // For other factors, we just check the specific factor.
-            self.factors[factor as usize].last_tick_finished()
-        }
+    pub fn last_tick_finished(&self) -> bool {
+        self.factors.iter().all(SlowScore::last_tick_finished)
     }
 
     pub fn record_timeout(&mut self, factor: InspectFactor) {
         if factor == InspectFactor::Network {
-            // For network factor, we need to tick all network factors.
-            let mut network_factors = self.network_factors.lock().unwrap();
-            for (_, factor) in network_factors.iter_mut() {
-                factor.record_timeout();
-            }
-        } else {
-            // For other factors, we just record the specific factor.
-            self.factors[factor as usize].record_timeout();
+            return;
         }
+
+        self.factors[factor as usize].record_timeout();
     }
 
     pub fn tick(&mut self, factor: InspectFactor) -> SlowScoreTickResult {
@@ -304,26 +285,24 @@ impl RaftstoreReporter {
         self.slow_trend.slow_cause.record(500_000, Instant::now());
 
         // healthy: The health status of the current store.
-        // last_ticks_finished: The last tick of factor is finished.
-        let (healthy, last_ticks_finished) = (
+        // all_ticks_finished: The last tick of all factors is finished.
+        // factor_tick_finished: The last tick of the current factor is finished.
+        let (healthy, all_ticks_finished, factor_tick_finished) = (
             self.is_healthy(),
-            self.slow_score.last_tick_finished(factor),
+            self.slow_score.last_tick_finished(),
+            self.slow_score.get(factor).last_tick_finished(),
         );
         // The health status is recovered to serving as long as any tick
         // does not timeout.
-        if !healthy && last_ticks_finished {
+        if !healthy && all_ticks_finished {
             self.set_is_healthy(true);
         }
-        if !last_ticks_finished {
-            // If the tick is not finished, it means that the current store might
+        if !all_ticks_finished && factor != InspectFactor::Network {
+            // If the last tick is not finished, it means that the current store might
             // be busy on handling requests or delayed on I/O operations. And only when
             // the current store is not busy, it should record the last_tick as a timeout.
-            if factor == InspectFactor::Network || !store_maybe_busy {
-                info!(
-                    "raftstore reporter tick: factor {:?} not finished, store_maybe_busy: {}",
-                    factor, store_maybe_busy
-                );
-                self.slow_score.record_timeout(factor);
+            if !store_maybe_busy && !factor_tick_finished {
+                self.slow_score.get_mut(factor).record_timeout();
             }
         }
 

@@ -70,7 +70,7 @@ impl InspectFactor {
 
 /// Used to inspect the latency of all stages of raftstore.
 pub struct LatencyInspector {
-    pub id: u64,
+    id: u64,
     duration: RaftstoreDuration,
     cb: Box<dyn FnOnce(u64, RaftstoreDuration) + Send>,
 }

@@ -2,12 +2,10 @@
 
 use std::{
     cmp,
-    collections::HashSet,
     time::{Duration, Instant},
 };
 
 use ordered_float::OrderedFloat;
-use tikv_util::info;
 
 /// Interval for updating the slow score.
 const UPDATE_INTERVALS: Duration = Duration::from_secs(10);
@@ -60,27 +58,17 @@ pub struct SlowScore {
     round_ticks: u64,
     // Identify every ticks.
     last_tick_id: u64,
-    // If the tick_id is less than `last_tick_id`-`min_timeout_ticks`, we view
-    // this tick as timeout.
-    min_timeout_ticks: u64,
-    uncompleted_ticks: HashSet<u64>,
-
-    reached_100: bool,
+    // If the last tick does not finished, it would be recorded as a timeout.
+    last_tick_finished: bool,
 }
 
 impl SlowScore {
     pub fn new(
         timeout_threshold: Duration,
-        inspect_interval: Duration,
         ratio_thresh: f64,
         round_ticks: u64,
         recovery_interval: Duration,
     ) -> SlowScore {
-        let min_timeout_ticks = if inspect_interval.is_zero() {
-            1
-        } else {
-            timeout_threshold.div_duration_f64(inspect_interval).ceil() as u64
-        };
         SlowScore {
             value: OrderedFloat(1.0),
 
@@ -94,9 +82,7 @@ impl SlowScore {
             last_update_time: Instant::now(),
             round_ticks,
             last_tick_id: 0,
-            min_timeout_ticks,
-            uncompleted_ticks: HashSet::new(),
-            reached_100: false,
+            last_tick_finished: true,
         }
     }
 
@@ -119,9 +105,7 @@ impl SlowScore {
                 1_u64,
             ),
             last_tick_id: 0,
-            min_timeout_ticks: 1,
-            uncompleted_ticks: HashSet::new(),
-            reached_100: false,
+            last_tick_finished: true,
         }
     }
 
@@ -135,11 +119,10 @@ impl SlowScore {
 
     pub fn record(&mut self, id: u64, duration: Duration, not_busy: bool) {
         self.last_record_time = Instant::now();
-        if id <= self.last_tick_id.saturating_sub(self.min_timeout_ticks) {
+        if id != self.last_tick_id {
             return;
         }
-
-        self.uncompleted_ticks.remove(&id);
+        self.last_tick_finished = true;
         self.total_requests += 1;
         if not_busy && duration >= self.timeout_threshold {
             self.timeout_requests += 1;
@@ -147,17 +130,9 @@ impl SlowScore {
     }
 
     pub fn record_timeout(&mut self) {
-        self.last_record_time = Instant::now();
-        let threshold = self.last_tick_id.saturating_sub(self.min_timeout_ticks - 1);
-        let timeout_requests = self
-            .uncompleted_ticks
-            .iter()
-            .filter(|&&id| id <= threshold)
-            .count();
-        self.total_requests += timeout_requests;
-        self.timeout_requests += timeout_requests;
-        // After recording the timeout requests, we do not need to keep them.
-        self.uncompleted_ticks.retain(|&id| id > threshold);
+        self.last_tick_finished = true;
+        self.total_requests += 1;
+        self.timeout_requests += 1;
     }
 
     pub fn update(&mut self) -> f64 {
@@ -165,14 +140,11 @@ impl SlowScore {
         self.update_impl(elapsed).into()
     }
 
-    pub fn get(&mut self) -> f64 {
-        if self.reached_100 {
-            self.reached_100 = false;
-            return 100.0;
-        }
+    pub fn get(&self) -> f64 {
         self.value.into()
     }
 
+    // Update the score in a AIMD way.
     fn update_impl(&mut self, elapsed: Duration) -> OrderedFloat<f64> {
         if self.timeout_requests == 0 {
             let desc = 100.0 * (elapsed.as_millis() as f64 / self.min_ttr.as_millis() as f64);
@@ -188,10 +160,6 @@ impl SlowScore {
             let value = self.value * (OrderedFloat(1.0) + near_thresh);
             self.value = cmp::min(OrderedFloat(100.0), value);
         }
-
-        if self.value >= OrderedFloat(100.0) {
-            self.reached_100 = true;
-        }
     
         self.total_requests = 0;
         self.timeout_requests = 0;
@@ -203,21 +171,8 @@ impl SlowScore {
         self.value >= OrderedFloat(100.0) && (self.last_tick_id % self.round_ticks == 0)
     }
 
-    // Check if the last timeout tick is finished. If a tick id is less than or
-    // equal to `last_tick_id` - `min_timeout_ticks` + 1, we view this tick as
-    // timeout.
     pub fn last_tick_finished(&self) -> bool {
-        let threshold = self.last_tick_id.saturating_sub(self.min_timeout_ticks - 1);
-        let exist_uncompleted_tick = self.uncompleted_ticks.iter().any(|&id| id <= threshold);
-
-        info!(
-            "last_tick_finished: last_tick_id: {}, min_timeout_ticks: {}, threshold: {}, exist_uncompleted_tick: {}",
-            self.last_tick_id,
-            self.min_timeout_ticks,
-            threshold,
-            exist_uncompleted_tick
-        );
-        !exist_uncompleted_tick
+        self.last_tick_finished
     }
 
     pub fn tick(&mut self) -> SlowScoreTickResult {
@@ -225,7 +180,7 @@ impl SlowScore {
 
         let id = self.last_tick_id + 1;
         self.last_tick_id += 1;
-        self.uncompleted_ticks.insert(self.last_tick_id);
+        self.last_tick_finished = false;
 
         let (updated_score, has_new_record) = if self.last_tick_id % self.round_ticks == 0 {
             // `last_update_time` is refreshed every round. If no update happens in a whole
@@ -263,7 +218,6 @@ mod tests {
     #[test]
     fn test_slow_score() {
         let mut slow_score = SlowScore::new(
-            Duration::from_millis(500),
             Duration::from_millis(500),
             DISK_TIMEOUT_RATIO_THRESHOLD,
             DISK_ROUND_TICKS,
@@ -365,54 +319,5 @@ mod tests {
         // Test too large inspect interval.
         let slow_score = SlowScore::new_with_extra_config(Duration::from_secs(11), 0.1);
         assert_eq!(slow_score.round_ticks, 1);
-    }
-
-    #[test]
-    fn test_slow_score_uncompleted_ticks() {
-        let mut slow_score = SlowScore::new(
-            Duration::from_millis(500),
-            Duration::from_millis(100),
-            DISK_TIMEOUT_RATIO_THRESHOLD,
-            6,
-            DISK_RECOVERY_INTERVALS,
-        );
-
-        assert_eq!(5, slow_score.min_timeout_ticks);
-
-        // Record some uncompleted ticks.
-        for i in 0..=slow_score.min_timeout_ticks {
-            slow_score.uncompleted_ticks.insert(i);
-        }
-        assert_eq!(6, slow_score.uncompleted_ticks.len());
-        assert!(slow_score.uncompleted_ticks.contains(&5));
-        slow_score.last_tick_id = 5;
-
-        // Record a timeout and completed tick.
-        slow_score.record(3, Duration::from_millis(600), true);
-        assert!(!slow_score.uncompleted_ticks.contains(&3));
-        assert_eq!(1, slow_score.timeout_requests);
-        assert_eq!(1, slow_score.total_requests);
-        assert!(!slow_score.last_tick_finished());
-
-        // Record a non-timeout and completed tick.
-        slow_score.record(2, Duration::from_millis(400), true);
-        assert!(!slow_score.uncompleted_ticks.contains(&2));
-        assert_eq!(1, slow_score.timeout_requests);
-        assert_eq!(2, slow_score.total_requests);
-        assert!(!slow_score.last_tick_finished());
-
-        // A new tick is coming, the last_tick_id is false. So we should record
-        // the timeout requests.
-        slow_score.record_timeout();
-        assert_eq!(3, slow_score.timeout_requests);
-        assert_eq!(4, slow_score.total_requests);
-        assert!(slow_score.last_tick_finished());
-        assert!(!slow_score.uncompleted_ticks.contains(&0)); // The uncompleted ticks should be removed.
-        assert!(!slow_score.uncompleted_ticks.contains(&1));
-
-        let result = slow_score.tick();
-        assert_eq!(6, result.tick_id);
-        assert!(result.has_new_record);
-        assert!(result.updated_score.is_some());
     }
 }
