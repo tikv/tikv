@@ -30,7 +30,7 @@ use pd_client::PdClient;
 use raft::eraftpb;
 use raftstore::{
     coprocessor::CoprocessorHost,
-    store::{AutoSplitController, InpectorRunner, SnapManager, fsm::store::StoreMeta},
+    store::{AutoSplitController, DiskCheckRunner, SnapManager, fsm::store::StoreMeta},
 };
 use resource_metering::CollectorRegHandle;
 use service::service_manager::GrpcServiceManager;
@@ -1411,7 +1411,7 @@ fn test_double_run_node() {
             ConcurrencyManager::new_for_test(1.into()),
             CollectorRegHandle::new_for_test(),
             None,
-            InpectorRunner::dummy(),
+            DiskCheckRunner::dummy(),
             GrpcServiceManager::dummy(),
             Arc::new(AtomicU64::new(0)),
         )

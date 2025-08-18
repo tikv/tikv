@@ -44,8 +44,6 @@ futures-util = { version = "0.3.1", default-features = false, features = [
 ] }
 getset = "0.1"
 health_controller = { workspace = true }
-grpcio-health = { workspace = true }
-grpcio = { workspace = true }
 into_other = { workspace = true }
 itertools = "0.10"
 keys = { workspace = true }

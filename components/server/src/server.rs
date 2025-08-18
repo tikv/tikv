@@ -68,9 +68,9 @@ use raftstore::{
     },
     router::{CdcRaftRouter, ServerRaftStoreRouter},
     store::{
-        AutoSplitController, CheckLeaderRunner, InpectorRunner, LocalReader, SnapManager,
+        AutoSplitController, CheckLeaderRunner, LocalReader, SnapManager,
         SnapManagerBuilder, SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
-        config::RaftstoreConfigManager,
+        config::RaftstoreConfigManager, DiskCheckRunner,
         fsm,
         fsm::store::{
             MULTI_FILES_SNAPSHOT_FEATURE, PENDING_MSG_CAP, RaftBatchSystem, RaftRouter, StoreMeta,
@@ -842,6 +842,7 @@ where
                 self.core.config.coprocessor.region_split_size(),
                 self.core.config.coprocessor.enable_region_bucket(),
                 self.core.config.coprocessor.region_bucket_size,
+                self.core.config.server.inspect_network_interval,
                 false,
             )
             .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));
@@ -1051,7 +1052,7 @@ where
             .registry
             .register_consistency_check_observer(100, observer);
 
-        let inspector_runner = InpectorRunner::new(self.core.store_path.clone(), self.pd_client.clone());
+        let disk_check_runner = DiskCheckRunner::new(self.core.store_path.clone());
 
         raft_server
             .start(
@@ -1067,7 +1068,7 @@ where
                 self.concurrency_manager.clone(),
                 collector_reg_handle,
                 self.causal_ts_provider.clone(),
-                inspector_runner,
+                disk_check_runner,
                 self.grpc_service_mgr.clone(),
                 safe_point.clone(),
             )

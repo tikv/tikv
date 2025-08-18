@@ -40,7 +40,7 @@ use raftstore::{
     errors::Error as RaftError,
     router::{CdcRaftRouter, LocalReadRouter, RaftStoreRouter, ReadContext, ServerRaftStoreRouter},
     store::{
-        AutoSplitController, Callback, CheckLeaderRunner, InpectorRunner, LocalReader,
+        AutoSplitController, Callback, CheckLeaderRunner, DiskCheckRunner, LocalReader,
         RegionSnapshot, SnapManager, SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
         StoreMetaDelegate,
         fsm::{ApplyRouter, RaftBatchSystem, RaftRouter, store::StoreMeta},
@@ -580,6 +580,7 @@ impl ServerCluster {
                 cfg.coprocessor.region_split_size(),
                 cfg.coprocessor.enable_region_bucket(),
                 cfg.coprocessor.region_bucket_size,
+                cfg.server.inspect_network_interval,
                 false,
             )
             .unwrap();
@@ -683,7 +684,7 @@ impl ServerCluster {
             concurrency_manager.clone(),
             collector_reg_handle,
             causal_ts_provider,
-            InpectorRunner::dummy(),
+            DiskCheckRunner::dummy(),
             GrpcServiceManager::dummy(),
             Arc::new(AtomicU64::new(0)),
         )?;

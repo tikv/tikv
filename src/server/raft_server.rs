@@ -18,7 +18,7 @@ use pd_client::{Error as PdError, INVALID_ID, PdClient};
 use raftstore::{
     coprocessor::dispatcher::CoprocessorHost,
     store::{
-        self, AutoSplitController, Config as StoreConfig, InpectorRunner, GlobalReplicationState,
+        self, AutoSplitController, Config as StoreConfig, DiskCheckRunner, GlobalReplicationState,
         PdTask, RefreshConfigTask, SnapManager, SplitCheckTask, Transport,
         fsm::{ApplyRouter, RaftBatchSystem, RaftRouter, store::StoreMeta},
         initial_region,
@@ -172,7 +172,7 @@ where
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
-        inspector_runner: InpectorRunner,
+        disk_check_runner: DiskCheckRunner,
         grpc_service_mgr: GrpcServiceManager,
         safe_point: Arc<AtomicU64>,
     ) -> Result<()>
@@ -212,7 +212,7 @@ where
             concurrency_manager,
             collector_reg_handle,
             causal_ts_provider,
-            inspector_runner,
+            disk_check_runner,
             grpc_service_mgr,
             safe_point,
         )?;
@@ -462,7 +462,7 @@ where
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
-        inspector_runner: InpectorRunner,
+        disk_check_runner: DiskCheckRunner,
         grpc_service_mgr: GrpcServiceManager,
         safe_point: Arc<AtomicU64>,
     ) -> Result<()>
@@ -498,7 +498,7 @@ where
             collector_reg_handle,
             self.health_controller.clone(),
             causal_ts_provider,
-            inspector_runner,
+            disk_check_runner,
             grpc_service_mgr,
             safe_point,
         )?;

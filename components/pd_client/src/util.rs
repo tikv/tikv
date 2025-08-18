@@ -22,7 +22,6 @@ use grpcio::{
     CallOption, ChannelBuilder, ClientCStreamReceiver, ClientDuplexReceiver, ClientDuplexSender,
     Environment, Error::RpcFailure, MetadataBuilder, Result as GrpcResult, RpcStatusCode,
 };
-use grpcio_health::HealthClient;
 use kvproto::{
     meta_storagepb::MetaStorageClient as MetaStorageStub,
     metapb::BucketStats,
@@ -111,7 +110,6 @@ pub struct Inner {
     pub pending_buckets: Arc<AtomicU64>,
     pub tso: TimestampOracle,
     pub meta_storage: MetaStorageStub,
-    pub health: HealthClient,
 
     pub rg_sender: Either<
         Option<ClientDuplexSender<TokenBucketsRequest>>,
@@ -202,8 +200,6 @@ impl Client {
         let resource_manager = kvproto::resource_manager::ResourceManagerClient::new(
             client_stub.client.channel().clone(),
         );
-        let health = HealthClient::new(client_stub.client.channel().clone());
-
         let (rg_sender, rg_rx) = resource_manager
             .acquire_token_buckets_opt(target.call_option())
             .unwrap_or_else(|e| {
@@ -228,7 +224,6 @@ impl Client {
                 bo: ExponentialBackoff::new(retry_interval),
                 tso,
                 meta_storage,
-                health,
                 rg_sender: Either::Left(Some(rg_sender)),
                 rg_resp: Some(rg_rx),
             }),
@@ -272,7 +267,6 @@ impl Client {
         inner.buckets_resp = Some(buckets_resp);
 
         inner.meta_storage = MetaStorageStub::new(client_stub.client.channel().clone());
-        inner.health = HealthClient::new(client_stub.client.channel().clone());
         let resource_manager = ResourceManagerStub::new(client_stub.client.channel().clone());
         inner.client_stub = client_stub;
         inner.members = members;

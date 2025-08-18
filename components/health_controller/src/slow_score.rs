@@ -6,18 +6,23 @@ use std::{
     time::{Duration, Instant},
 };
 
-use ordered_float::{Float, OrderedFloat};
+use ordered_float::OrderedFloat;
+use tikv_util::info;
 
 /// Interval for updating the slow score.
 const UPDATE_INTERVALS: Duration = Duration::from_secs(10);
-/// Recovery intervals for the slow score.
+/// Disk recovery intervals for the disk slow score.
 /// If the score has reached 100 and there is no timeout inspecting requests
 /// during this interval, the score will go back to 1 after 5min.
-const RECOVERY_INTERVALS: Duration = Duration::from_secs(60 * 5);
+pub const DISK_RECOVERY_INTERVALS: Duration = Duration::from_secs(60 * 5);
+/// Network recovery intervals for the network slow score.
+/// If the score has reached 100 and there is no timeout inspecting requests
+/// during this interval, the score will go back to 1 after 30min.
+pub const NETWORK_RECOVERY_INTERVALS: Duration = Duration::from_secs(60 * 30);
 /// After every DISK_ROUND_TICKS, the disk's slow score will be updated.
 pub const DISK_ROUND_TICKS: u64 = 30;
 /// After every NETWORK_ROUND_TICKS, the network's slow score will be updated.
-pub const NETWORK_ROUND_TICKS: u64 = 10;
+pub const NETWORK_ROUND_TICKS: u64 = 3;
 /// DISK_TIMEOUT_RATIO_THRESHOLD is the maximal tolerated timeout ratio
 /// for disk inspecting requests. If the timeout ratio is larger than this
 /// threshold, the disk's slow score will be multiplied by 2.
@@ -25,7 +30,7 @@ pub const DISK_TIMEOUT_RATIO_THRESHOLD: f64 = 0.1;
 /// NETWORK_TIMEOUT_RATIO_THRESHOLD is the maximal tolerated timeout ratio
 /// for network inspecting requests. If the timeout ratio is larger than this
 /// threshold, the network's slow score will be multiplied by 2.
-pub const NETWORK_TIMEOUT_RATIO_THRESHOLD: f64 = 0.5;
+pub const NETWORK_TIMEOUT_RATIO_THRESHOLD: f64 = 1.0;
 /// The timeout threshold for network inspecting requests.
 pub const NETWORK_TIMEOUT_THRESHOLD: Duration = Duration::from_secs(1);
 // Slow score is a value that represents the speed of a store and ranges in [1,
@@ -42,6 +47,9 @@ pub struct SlowScore {
     timeout_requests: usize,
     total_requests: usize,
 
+    // mutil_value: HashMap<u64, OrderedFloat<f64>>,
+    // mutil_timeout_requests: HashMap<u64, usize>,
+
     timeout_threshold: Duration,
     // The maximal tolerated timeout ratio.
     ratio_thresh: OrderedFloat<f64>,
@@ -56,6 +64,8 @@ pub struct SlowScore {
     // this tick as timeout.
     min_timeout_ticks: u64,
     uncompleted_ticks: HashSet<u64>,
+
+    reached_100: bool,
 }
 
 impl SlowScore {
@@ -64,9 +74,10 @@ impl SlowScore {
         inspect_interval: Duration,
         ratio_thresh: f64,
         round_ticks: u64,
+        recovery_interval: Duration,
     ) -> SlowScore {
         let min_timeout_ticks = if inspect_interval.is_zero() {
-            1  
+            1
         } else {
             timeout_threshold.div_duration_f64(inspect_interval).ceil() as u64
         };
@@ -78,13 +89,14 @@ impl SlowScore {
 
             timeout_threshold,
             ratio_thresh: OrderedFloat(ratio_thresh),
-            min_ttr: RECOVERY_INTERVALS,
+            min_ttr: recovery_interval,
             last_record_time: Instant::now(),
             last_update_time: Instant::now(),
             round_ticks,
             last_tick_id: 0,
             min_timeout_ticks,
             uncompleted_ticks: HashSet::new(),
+            reached_100: false,
         }
     }
 
@@ -98,7 +110,7 @@ impl SlowScore {
 
             timeout_threshold: inspect_interval,
             ratio_thresh: OrderedFloat(timeout_ratio),
-            min_ttr: RECOVERY_INTERVALS,
+            min_ttr: DISK_RECOVERY_INTERVALS,
             last_record_time: Instant::now(),
             last_update_time: Instant::now(),
             // The minimal round ticks is 1 for kvdb.
@@ -109,7 +121,16 @@ impl SlowScore {
             last_tick_id: 0,
             min_timeout_ticks: 1,
             uncompleted_ticks: HashSet::new(),
+            reached_100: false,
         }
+    }
+
+    pub fn set_last_tick_id(&mut self, id: u64) {
+        self.last_tick_id = id;
+    }
+
+    pub fn get_last_tick_id(&mut self) -> u64 {
+        self.last_tick_id
     }
 
     pub fn record(&mut self, id: u64, duration: Duration, not_busy: bool) {
@@ -127,7 +148,7 @@ impl SlowScore {
 
     pub fn record_timeout(&mut self) {
         self.last_record_time = Instant::now();
-        let threshold = self.last_tick_id.saturating_sub(self.min_timeout_ticks + 1);
+        let threshold = self.last_tick_id.saturating_sub(self.min_timeout_ticks - 1);
         let timeout_requests = self
             .uncompleted_ticks
             .iter()
@@ -144,11 +165,14 @@ impl SlowScore {
         self.update_impl(elapsed).into()
     }
 
-    pub fn get(&self) -> f64 {
+    pub fn get(&mut self) -> f64 {
+        if self.reached_100 {
+            self.reached_100 = false;
+            return 100.0;
+        }
         self.value.into()
     }
 
-    // Update the score in a AIMD way.
     fn update_impl(&mut self, elapsed: Duration) -> OrderedFloat<f64> {
         if self.timeout_requests == 0 {
             let desc = 100.0 * (elapsed.as_millis() as f64 / self.min_ttr.as_millis() as f64);
@@ -165,6 +189,10 @@ impl SlowScore {
             self.value = cmp::min(OrderedFloat(100.0), value);
         }
 
+        if self.value >= OrderedFloat(100.0) {
+            self.reached_100 = true;
+        }
+    
         self.total_requests = 0;
         self.timeout_requests = 0;
         self.last_update_time = Instant::now();
@@ -175,12 +203,20 @@ impl SlowScore {
         self.value >= OrderedFloat(100.0) && (self.last_tick_id % self.round_ticks == 0)
     }
 
-    // Check if the last timeout tick is finished. If a tick id is less than
-    // `last_tick_id` - `min_timeout_ticks`, we view this tick as timeout.
+    // Check if the last timeout tick is finished. If a tick id is less than or
+    // equal to `last_tick_id` - `min_timeout_ticks` + 1, we view this tick as
+    // timeout.
     pub fn last_tick_finished(&self) -> bool {
-        let threshold = self.last_tick_id.saturating_sub(self.min_timeout_ticks + 1);
+        let threshold = self.last_tick_id.saturating_sub(self.min_timeout_ticks - 1);
         let exist_uncompleted_tick = self.uncompleted_ticks.iter().any(|&id| id <= threshold);
 
+        info!(
+            "last_tick_finished: last_tick_id: {}, min_timeout_ticks: {}, threshold: {}, exist_uncompleted_tick: {}",
+            self.last_tick_id,
+            self.min_timeout_ticks,
+            threshold,
+            exist_uncompleted_tick
+        );
         !exist_uncompleted_tick
     }
 
@@ -211,6 +247,7 @@ impl SlowScore {
     }
 }
 
+#[derive(Default, Debug)]
 pub struct SlowScoreTickResult {
     pub tick_id: u64,
     // None if skipped in this tick
@@ -230,6 +267,7 @@ mod tests {
             Duration::from_millis(500),
             DISK_TIMEOUT_RATIO_THRESHOLD,
             DISK_ROUND_TICKS,
+            DISK_RECOVERY_INTERVALS,
         );
         slow_score.timeout_requests = 5;
         slow_score.total_requests = 100;
@@ -336,12 +374,17 @@ mod tests {
             Duration::from_millis(100),
             DISK_TIMEOUT_RATIO_THRESHOLD,
             6,
+            DISK_RECOVERY_INTERVALS,
         );
+
+        assert_eq!(5, slow_score.min_timeout_ticks);
 
         // Record some uncompleted ticks.
         for i in 0..=slow_score.min_timeout_ticks {
             slow_score.uncompleted_ticks.insert(i);
         }
+        assert_eq!(6, slow_score.uncompleted_ticks.len());
+        assert!(slow_score.uncompleted_ticks.contains(&5));
         slow_score.last_tick_id = 5;
 
         // Record a timeout and completed tick.
@@ -361,10 +404,11 @@ mod tests {
         // A new tick is coming, the last_tick_id is false. So we should record
         // the timeout requests.
         slow_score.record_timeout();
-        assert_eq!(2, slow_score.timeout_requests);
-        assert_eq!(3, slow_score.total_requests);
+        assert_eq!(3, slow_score.timeout_requests);
+        assert_eq!(4, slow_score.total_requests);
         assert!(slow_score.last_tick_finished());
         assert!(!slow_score.uncompleted_ticks.contains(&0)); // The uncompleted ticks should be removed.
+        assert!(!slow_score.uncompleted_ticks.contains(&1));
 
         let result = slow_score.tick();
         assert_eq!(6, result.tick_id);

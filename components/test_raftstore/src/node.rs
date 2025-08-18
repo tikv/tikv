@@ -253,6 +253,7 @@ impl Simulator for NodeCluster {
                 cfg.coprocessor.region_split_size(),
                 cfg.coprocessor.enable_region_bucket(),
                 cfg.coprocessor.region_bucket_size,
+                cfg.server.inspect_network_interval,
                 false,
             )
             .unwrap();
@@ -367,7 +368,7 @@ impl Simulator for NodeCluster {
             cm,
             CollectorRegHandle::new_for_test(),
             None,
-            InpectorRunner::dummy(),
+            DiskCheckRunner::dummy(),
             GrpcServiceManager::dummy(),
             Arc::new(AtomicU64::new(0)),
         )?;

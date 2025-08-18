@@ -3750,7 +3750,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/okjiang/kvproto?branch=network-slow-store#c8dbf06da7c2c661d5c6bbd8bb0f56b53da3350b"
+source = "git+https://github.com/pingcap/kvproto.git#89cf1fa685b99e454612f3d462836d2faa41bce1"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -4692,7 +4692,6 @@ dependencies = [
  "fail",
  "futures 0.3.15",
  "grpcio",
- "grpcio-health",
  "kvproto",
  "lazy_static",
  "log_wrappers",
@@ -5331,8 +5330,6 @@ dependencies = [
  "futures 0.3.15",
  "futures-util",
  "getset",
- "grpcio",
- "grpcio-health",
  "health_controller",
  "into_other",
  "itertools",
