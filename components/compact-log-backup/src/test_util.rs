@@ -518,11 +518,37 @@ impl TmpStorage {
         &self,
         log_path: &str,
         meta_path: &str,
-        builders: impl IntoIterator<Item = LogFileBuilder>,
+        data_kv_file_builders: impl IntoIterator<Item = LogFileBuilder>,
     ) -> MetaFile {
-        let result = save_many_log_files(log_path, builders, self.storage.as_ref())
-            .await
-            .unwrap();
+        self.build_flush_with_meta(
+            log_path,
+            meta_path,
+            data_kv_file_builders,
+            None::<std::iter::Empty<LogFileBuilder>>,
+        )
+        .await
+    }
+
+    pub async fn build_flush_with_meta(
+        &self,
+        log_path: &str,
+        meta_path: &str,
+        data_kv_file_builders: impl IntoIterator<Item = LogFileBuilder>,
+        meta_kv_file_builders: Option<impl IntoIterator<Item = LogFileBuilder>>,
+    ) -> MetaFile {
+        let mut result =
+            save_many_log_files(log_path, data_kv_file_builders, self.storage.as_ref())
+                .await
+                .unwrap();
+        if let Some(builders) = meta_kv_file_builders {
+            let meta_kv_path = format!("meta_kv_{}", log_path);
+            let meta_result = save_many_log_files(&meta_kv_path, builders, self.storage.as_ref())
+                .await
+                .unwrap();
+            // hack way to merge different physical to one metadata.
+            result.file_groups.push(meta_result.file_groups[0].clone());
+        }
+
         let content = result.write_to_bytes().unwrap();
         self.storage
             .write(
