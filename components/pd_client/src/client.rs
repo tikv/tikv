@@ -24,7 +24,7 @@ use kvproto::{
         self as mpb, DeleteRequest, GetRequest, PutRequest, WatchRequest, WatchResponse,
     },
     metapb,
-    pdpb::{self, Member},
+    pdpb::{self, GcState, Member},
     replication_modepb::{RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus},
     resource_manager::TokenBucketsRequest,
 };
@@ -881,6 +881,37 @@ impl PdClient for RpcClient {
                     .observe(timer.saturating_elapsed_secs());
                 check_resp_header(resp.get_header())?;
                 Ok(resp.get_safe_point())
+            }) as PdFuture<_>
+        };
+
+        self.pd_client
+            .request(req, executor, LEADER_CHANGE_RETRY)
+            .execute()
+    }
+
+    fn get_gc_state(&self) -> PdFuture<GcState> {
+        let timer = Instant::now();
+
+        let mut req = pdpb::GetGcStateRequest::default();
+        req.set_header(self.header());
+
+        let executor = move |client: &Client, req: pdpb::GetGcStateRequest| {
+            let handler = {
+                let inner = client.inner.rl();
+                inner
+                    .client_stub
+                    .get_gc_state_async_opt(&req, call_option_inner(&inner))
+                    .unwrap_or_else(|e| {
+                        panic!("fail to request PD {} err {:?}", "get_gc_safe_point", e)
+                    })
+            };
+            Box::pin(async move {
+                let mut resp = handler.await?;
+                PD_REQUEST_HISTOGRAM_VEC
+                    .get_gc_states
+                    .observe(timer.saturating_elapsed_secs());
+                check_resp_header(resp.get_header())?;
+                Ok(resp.take_gc_state())
             }) as PdFuture<_>
         };
 
