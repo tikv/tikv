@@ -45,9 +45,6 @@ pub struct SlowScore {
     timeout_requests: usize,
     total_requests: usize,
 
-    // mutil_value: HashMap<u64, OrderedFloat<f64>>,
-    // mutil_timeout_requests: HashMap<u64, usize>,
-
     timeout_threshold: Duration,
     // The maximal tolerated timeout ratio.
     ratio_thresh: OrderedFloat<f64>,
@@ -113,7 +110,7 @@ impl SlowScore {
         self.last_tick_id = id;
     }
 
-    pub fn get_last_tick_id(&mut self) -> u64 {
+    pub fn get_last_tick_id(&self) -> u64 {
         self.last_tick_id
     }
 
@@ -160,7 +157,6 @@ impl SlowScore {
             let value = self.value * (OrderedFloat(1.0) + near_thresh);
             self.value = cmp::min(OrderedFloat(100.0), value);
         }
-    
         self.total_requests = 0;
         self.timeout_requests = 0;
         self.last_update_time = Instant::now();

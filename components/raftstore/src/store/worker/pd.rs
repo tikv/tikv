@@ -2021,7 +2021,7 @@ where
 
         if factor == InspectFactor::Network {
             let duration = std::collections::HashMap::<u64, Duration>::new();
-            
+
             for (store_id, network_duration) in &duration {
                 STORE_INSPECT_NETWORK_DURATION_HISTOGRAM
                     .with_label_values(&[&store_id.to_string()])
@@ -2049,23 +2049,17 @@ where
                             STORE_INSPECT_DURATION_HISTOGRAM
                                 .with_label_values(&["store_wait"])
                                 .observe(tikv_util::time::duration_to_sec(
-                                    duration
-                                        .store_wait_duration
-                                        .unwrap_or_default(),
+                                    duration.store_wait_duration.unwrap_or_default(),
                                 ));
                             STORE_INSPECT_DURATION_HISTOGRAM
                                 .with_label_values(&["store_commit"])
                                 .observe(tikv_util::time::duration_to_sec(
-                                    duration
-                                        .store_commit_duration
-                                        .unwrap_or_default(),
+                                    duration.store_commit_duration.unwrap_or_default(),
                                 ));
 
                             STORE_INSPECT_DURATION_HISTOGRAM
                                 .with_label_values(&["all"])
-                                .observe(tikv_util::time::duration_to_sec(
-                                    duration.sum(),
-                                ));
+                                .observe(tikv_util::time::duration_to_sec(duration.sum()));
                             if let Err(e) = scheduler.schedule(Task::UpdateSlowScore {
                                 id,
                                 factor,
@@ -2082,16 +2076,12 @@ where
                         STORE_INSPECT_DURATION_HISTOGRAM
                             .with_label_values(&["apply_wait"])
                             .observe(tikv_util::time::duration_to_sec(
-                                duration
-                                    .apply_wait_duration
-                                    .unwrap_or_default(),
+                                duration.apply_wait_duration.unwrap_or_default(),
                             ));
                         STORE_INSPECT_DURATION_HISTOGRAM
                             .with_label_values(&["apply_process"])
                             .observe(tikv_util::time::duration_to_sec(
-                                duration
-                                    .apply_process_duration
-                                    .unwrap_or_default(),
+                                duration.apply_process_duration.unwrap_or_default(),
                             ));
                         if let Err(e) = scheduler.schedule(Task::UpdateSlowScore {
                             id,
@@ -2105,7 +2095,7 @@ where
                 other => {
                     warn!("unknown inspect factor"; "factor" => ?other);
                     return;
-                },
+                }
             }
         };
         let msg = StoreMsg::LatencyInspect {

@@ -1,16 +1,14 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::Arc,
     collections::HashMap,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
-use std::sync::Mutex;
 
 use kvproto::pdpb;
 use pdpb::SlowTrend as SlowTrendPb;
 use prometheus::IntGauge;
-
 use tikv_util::info;
 
 use crate::{
@@ -95,7 +93,7 @@ impl UnifiedSlowScore {
         not_busy: bool,
     ) {
         // For disk factors, we care about the raftstore duration.
-        let dur = duration.delays_on_disk_io(false);   
+        let dur = duration.delays_on_disk_io(false);
         self.factors[factor as usize].record(id, dur, not_busy);
     }
 
@@ -104,15 +102,26 @@ impl UnifiedSlowScore {
         id: u64,
         durations: HashMap<u64, Duration>, // store_id -> duration
     ) {
+        let mut network_factors = self.network_factors.lock().unwrap();
+
+        // Remove store_ids that exist in network_factors but not in durations
+        let store_ids_in_durations: std::collections::HashSet<u64> =
+            durations.keys().cloned().collect();
+        network_factors.retain(|store_id, _| store_ids_in_durations.contains(store_id));
+
+        // Record durations for each store
         for (store_id, duration) in durations.iter() {
-            self.network_factors.lock().unwrap().entry(*store_id).or_insert_with(|| {
-                SlowScore::new(
-                    NETWORK_TIMEOUT_THRESHOLD,
-                    NETWORK_TIMEOUT_RATIO_THRESHOLD,
-                    NETWORK_ROUND_TICKS,
-                    NETWORK_RECOVERY_INTERVALS,
-                )
-            }).record(id, *duration, true);
+            network_factors
+                .entry(*store_id)
+                .or_insert_with(|| {
+                    SlowScore::new(
+                        NETWORK_TIMEOUT_THRESHOLD,
+                        NETWORK_TIMEOUT_RATIO_THRESHOLD,
+                        NETWORK_ROUND_TICKS,
+                        NETWORK_RECOVERY_INTERVALS,
+                    )
+                })
+                .record(id, *duration, true);
         }
     }
 
@@ -128,14 +137,17 @@ impl UnifiedSlowScore {
 
     // Returns the maximum score of disk factors.
     pub fn get_disk_score(&mut self) -> f64 {
-        (self.factors[InspectFactor::RaftDisk as usize].get() + 
-            self.factors[InspectFactor::KvDisk as usize].get()) / 2.0
+        (self.factors[InspectFactor::RaftDisk as usize].get()
+            + self.factors[InspectFactor::KvDisk as usize].get())
+            / 2.0
     }
 
     pub fn get_network_score(&self) -> HashMap<u64, u64> {
-        self.network_factors.lock().unwrap()
+        self.network_factors
+            .lock()
+            .unwrap()
             .iter_mut()
-            .map(|(k, v)| (*k, v.get() as u64)) 
+            .map(|(k, v)| (*k, v.get() as u64))
             .collect()
     }
 
@@ -152,49 +164,54 @@ impl UnifiedSlowScore {
     }
 
     pub fn tick(&mut self, factor: InspectFactor) -> SlowScoreTickResult {
-        let mut slow_score_tick_result = SlowScoreTickResult::default();
         if factor == InspectFactor::Network {
-            // For network factor, we need to tick all network factors and return the avg result.
-            let mut network_factors = self.network_factors.lock().unwrap();
-            let mut total_score = 0.0;
-            let mut total_count = 0;
-
-            let mut need_sync = false;
-            let mut last_tick_id = 0;
-            for (_, factor) in network_factors.iter_mut() {
-                if last_tick_id != 0 {
-                    need_sync = need_sync || !last_tick_id.eq(&factor.get_last_tick_id());
-                }
-                last_tick_id = factor.get_last_tick_id().max(last_tick_id);
-            }
-            if need_sync {
-                for (_, factor) in network_factors.iter_mut() {
-                    factor.set_last_tick_id(last_tick_id);
-                }
-            }
-            for (_, factor) in network_factors.iter_mut() {
-                let factor_tick_result = factor.tick();
-                if factor_tick_result.updated_score.is_some() {
-                    slow_score_tick_result.has_new_record = true;
-                    total_score += factor_tick_result.updated_score.unwrap_or(0.0);
-                    total_count += 1;
-                }
-                slow_score_tick_result.tick_id = factor_tick_result.tick_id.max(slow_score_tick_result.tick_id);
-            }
-
-            // To ensure that score can display complete information
-            if total_count == network_factors.len() {
-                slow_score_tick_result.updated_score = Some(total_score / total_count as f64);
-            }
-            info!(
-                "network slow score tick: {:?}, total_score: {}, total_count: {}",
-                slow_score_tick_result,
-                total_score,
-                total_count
-            );
+            self.tick_network()
         } else {
-            slow_score_tick_result = self.factors[factor as usize].tick();
+            self.factors[factor as usize].tick()
         }
+    }
+
+    fn tick_network(&mut self) -> SlowScoreTickResult {
+        let mut slow_score_tick_result = SlowScoreTickResult::default();
+        // For network factor, we need to tick all network factors and return the avg
+        // result.
+        let mut network_factors = self.network_factors.lock().unwrap();
+        let mut total_score = 0.0;
+        let mut total_count = 0;
+
+        let mut need_sync = false;
+        let mut last_tick_id = 0;
+        for (_, factor) in network_factors.iter_mut() {
+            if last_tick_id != 0 {
+                need_sync = need_sync || !last_tick_id.eq(&factor.get_last_tick_id());
+            }
+            last_tick_id = factor.get_last_tick_id().max(last_tick_id);
+        }
+        if need_sync {
+            for (_, factor) in network_factors.iter_mut() {
+                factor.set_last_tick_id(last_tick_id);
+            }
+        }
+        for (_, factor) in network_factors.iter_mut() {
+            let factor_tick_result = factor.tick();
+            if factor_tick_result.updated_score.is_some() {
+                slow_score_tick_result.has_new_record = true;
+                total_score += factor_tick_result.updated_score.unwrap_or(1.0);
+                total_count += 1;
+            }
+            slow_score_tick_result.tick_id = factor_tick_result
+                .tick_id
+                .max(slow_score_tick_result.tick_id);
+        }
+
+        // To ensure that score can display complete information
+        if total_count == network_factors.len() {
+            slow_score_tick_result.updated_score = Some(total_score / total_count as f64);
+        }
+        info!(
+            "network slow score tick: {:?}, total_score: {}, total_count: {}",
+            slow_score_tick_result, total_score, total_count
+        );
         slow_score_tick_result
     }
 }
@@ -209,10 +226,7 @@ pub struct RaftstoreReporter {
 impl RaftstoreReporter {
     const MODULE_NAME: &'static str = "raftstore";
 
-    pub fn new(
-        health_controller: &HealthController,
-        cfg: RaftstoreReporterConfig,
-    ) -> Self {
+    pub fn new(health_controller: &HealthController, cfg: RaftstoreReporterConfig) -> Self {
         Self {
             health_controller_inner: health_controller.inner.clone(),
             slow_score: UnifiedSlowScore::new(&cfg),
@@ -241,7 +255,7 @@ impl RaftstoreReporter {
         store_not_busy: bool,
     ) {
         // Fine-tuned, `SlowScore` only takes the I/O jitters on the disk into account.
-        
+
         self.slow_trend.record(&duration);
 
         if factor == InspectFactor::RaftDisk || factor == InspectFactor::KvDisk {
@@ -253,11 +267,7 @@ impl RaftstoreReporter {
         }
     }
 
-    pub fn record_network_duration(
-        &mut self,
-        id: u64,
-        duration: HashMap<u64, Duration>,
-    ) {
+    pub fn record_network_duration(&mut self, id: u64, duration: HashMap<u64, Duration>) {
         self.slow_score.record_network(id, duration);
     }
 
@@ -320,10 +330,7 @@ impl RaftstoreReporter {
                     self.health_controller_inner
                         .update_raftstore_slow_score(self.slow_score.get_disk_score());
                 }
-                InspectFactor::Network => {
-                    // self.health_controller_inner
-                    //     .update_network_slow_score(self.slow_score.get_network_score());
-                }
+                InspectFactor::Network => {}
             }
         }
 
@@ -446,5 +453,236 @@ impl TestReporter {
     pub fn set_raftstore_slow_score(&self, slow_score: f64) {
         self.health_controller_inner
             .update_raftstore_slow_score(slow_score);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, time::Duration};
+
+    use prometheus::IntGauge;
+
+    use super::*;
+
+    fn create_test_config() -> RaftstoreReporterConfig {
+        RaftstoreReporterConfig {
+            inspect_interval: Duration::from_secs(1),
+            inspect_kvdb_interval: Duration::from_secs(1),
+            inspect_network_interval: Duration::from_secs(1),
+            unsensitive_cause: 0.5,
+            unsensitive_result: 0.5,
+            net_io_factor: 1.0,
+            cause_spike_filter_value_gauge: IntGauge::new("cause_spike_filter_value", "help")
+                .unwrap(),
+            cause_spike_filter_count_gauge: IntGauge::new("cause_spike_filter_count", "help")
+                .unwrap(),
+            cause_l1_gap_gauges: IntGauge::new("cause_l1_gap", "help").unwrap(),
+            cause_l2_gap_gauges: IntGauge::new("cause_l2_gap", "help").unwrap(),
+            result_spike_filter_value_gauge: IntGauge::new("result_spike_filter_value", "help")
+                .unwrap(),
+            result_spike_filter_count_gauge: IntGauge::new("result_spike_filter_count", "help")
+                .unwrap(),
+            result_l1_gap_gauges: IntGauge::new("result_l1_gap", "help").unwrap(),
+            result_l2_gap_gauges: IntGauge::new("result_l2_gap", "help").unwrap(),
+        }
+    }
+
+    #[test]
+    fn test_unified_slow_score_record_network() {
+        let cfg = create_test_config();
+        let mut unified_slow_score = UnifiedSlowScore::new(&cfg);
+
+        // Test recording network durations for multiple stores
+        let mut durations = HashMap::new();
+        durations.insert(1u64, Duration::from_millis(100));
+        durations.insert(2u64, Duration::from_millis(200));
+        durations.insert(3u64, Duration::from_millis(300));
+
+        // First tick to establish baseline
+        let result = unified_slow_score.tick_network();
+        assert_eq!(result.tick_id, 1);
+
+        // Record network durations for current tick
+        unified_slow_score.record_network(1, durations.clone());
+
+        // Verify that network factors are created
+        let network_factors = unified_slow_score.network_factors.lock().unwrap();
+        assert_eq!(network_factors.len(), 3);
+        assert!(network_factors.contains_key(&1));
+        assert!(network_factors.contains_key(&2));
+        assert!(network_factors.contains_key(&3));
+        assert!(!network_factors.contains_key(&4));
+        drop(network_factors);
+
+        // Tick again to advance
+        let result2 = unified_slow_score.tick_network();
+        assert_eq!(result2.tick_id, 2);
+
+        durations.insert(4u64, Duration::from_millis(400));
+        unified_slow_score.record_network(2, durations.clone());
+
+        // Test updating with fewer stores (should remove missing stores)
+        let mut new_durations = HashMap::new();
+        new_durations.insert(1u64, Duration::from_millis(150));
+        new_durations.insert(2u64, Duration::from_millis(250));
+        // Store 3 is not included, should be removed
+
+        unified_slow_score.record_network(2, new_durations);
+
+        let network_factors = unified_slow_score.network_factors.lock().unwrap();
+        assert_eq!(network_factors.len(), 2);
+        assert!(network_factors.contains_key(&1));
+        assert!(network_factors.contains_key(&2));
+        assert!(!network_factors.contains_key(&3));
+    }
+
+    #[test]
+    fn test_unified_slow_score_tick_network_synchronization() {
+        let cfg = create_test_config();
+        let mut unified_slow_score = UnifiedSlowScore::new(&cfg);
+
+        // Record network durations
+        let mut durations = HashMap::new();
+        durations.insert(1u64, Duration::from_millis(100));
+        durations.insert(2u64, Duration::from_millis(200));
+
+        // First tick to establish baseline
+        let result1 = unified_slow_score.tick_network();
+        assert_eq!(result1.tick_id, 1);
+
+        unified_slow_score.record_network(1, durations);
+
+        // Manually set different tick IDs to test synchronization
+        {
+            let mut network_factors = unified_slow_score.network_factors.lock().unwrap();
+            let factor_1 = network_factors.get_mut(&1).unwrap();
+            factor_1.set_last_tick_id(5);
+            let factor_2 = network_factors.get_mut(&2).unwrap();
+            factor_2.set_last_tick_id(3);
+        }
+
+        // Tick should synchronize the tick IDs
+        let result2 = unified_slow_score.tick_network();
+
+        // Verify all factors have the same (maximum) tick ID
+        {
+            let network_factors = unified_slow_score.network_factors.lock().unwrap();
+            let factor_1_id = network_factors.get(&1).unwrap().get_last_tick_id();
+            let factor_2_id = network_factors.get(&2).unwrap().get_last_tick_id();
+            assert_eq!(factor_1_id, factor_2_id);
+            assert_eq!(factor_1_id, 6); // Should be the maximum (5 + 1 from tick)
+            assert_eq!(result2.tick_id, 6);
+        }
+    }
+
+    #[test]
+    fn test_unified_slow_score_get_network_score() {
+        let cfg = create_test_config();
+        let mut unified_slow_score = UnifiedSlowScore::new(&cfg);
+
+        // Initially should return empty scores
+        let scores = unified_slow_score.get_network_score();
+        assert!(scores.is_empty());
+
+        // Record network durations
+        let mut durations = HashMap::new();
+        durations.insert(1u64, Duration::from_millis(100));
+        durations.insert(2u64, Duration::from_millis(200));
+        unified_slow_score.record_network(1, durations);
+
+        // Get network scores
+        let scores = unified_slow_score.get_network_score();
+        assert_eq!(scores.len(), 2);
+        assert!(scores.contains_key(&1));
+        assert!(scores.contains_key(&2));
+
+        // All scores should start at 1 (default slow score)
+        assert_eq!(scores[&1], 1);
+        assert_eq!(scores[&2], 1);
+
+        // Test multiple ticks to see score evolution
+        // NETWORK_ROUND_TICKS = 3, so scores will update every 3 ticks
+
+        // First 2 ticks - no score update yet
+        let result1 = unified_slow_score.tick_network();
+        assert!(result1.updated_score.is_none());
+        assert_eq!(result1.tick_id, 1);
+
+        let result2 = unified_slow_score.tick_network();
+        assert!(result2.updated_score.is_none());
+        assert_eq!(result2.tick_id, 2);
+
+        // 3rd tick - should trigger score update
+        let result3 = unified_slow_score.tick_network();
+        assert!(result3.updated_score.is_some());
+        assert_eq!(result3.tick_id, 3);
+        // Since no timeout requests were recorded, scores should still be 1.0
+        assert_eq!(result3.updated_score.unwrap(), 1.0);
+
+        // Verify scores remain at 1
+        let scores_after_ticks = unified_slow_score.get_network_score();
+        assert_eq!(scores_after_ticks[&1], 1);
+        assert_eq!(scores_after_ticks[&2], 1);
+
+        // Now record some timeout durations to test score increase
+        let mut timeout_durations = HashMap::new();
+        timeout_durations.insert(1u64, Duration::from_secs(2)); // > NETWORK_TIMEOUT_THRESHOLD (1s)
+        timeout_durations.insert(2u64, Duration::from_secs(3)); // > NETWORK_TIMEOUT_THRESHOLD (1s)
+
+        // Tick to next round (ticks 4, 5, 6)
+        let result4 = unified_slow_score.tick_network();
+        assert!(result4.updated_score.is_none());
+        assert_eq!(result4.tick_id, 4);
+
+        // Record timeouts for tick 4 (current tick)
+        unified_slow_score.record_network(4, timeout_durations.clone());
+
+        let result5 = unified_slow_score.tick_network();
+        assert!(result5.updated_score.is_none());
+        assert_eq!(result5.tick_id, 5);
+
+        // Record timeouts for tick 5 (current tick)
+        unified_slow_score.record_network(5, timeout_durations.clone());
+
+        let result6 = unified_slow_score.tick_network();
+        assert!(result6.updated_score.is_some());
+        assert_eq!(result6.tick_id, 6);
+        // Score should increase due to timeout requests
+        assert!(result6.updated_score.unwrap() > 1.0);
+
+        // Verify scores have increased
+        let scores_after_timeout = unified_slow_score.get_network_score();
+        assert!(scores_after_timeout[&1] > 1);
+        assert!(scores_after_timeout[&2] > 1);
+
+        // Test recovery - record normal durations (no timeouts)
+        let mut normal_durations = HashMap::new();
+        normal_durations.insert(1u64, Duration::from_millis(100));
+        normal_durations.insert(2u64, Duration::from_millis(200));
+
+        // Record for several rounds to test score recovery
+        for i in 7..=15 {
+            unified_slow_score.record_network(i, normal_durations.clone());
+            let result = unified_slow_score.tick_network();
+
+            // Every 3rd tick should have updated score
+            if i % 3 == 0 {
+                assert!(result.updated_score.is_some());
+                // Scores should gradually decrease back towards 1.0
+                if i >= 12 {
+                    // After several rounds without timeouts, scores should be decreasing
+                    let current_scores = unified_slow_score.get_network_score();
+                    // Scores should be lower than after the timeout round
+                    assert!(
+                        current_scores[&1] <= scores_after_timeout[&1] || current_scores[&1] == 1
+                    );
+                    assert!(
+                        current_scores[&2] <= scores_after_timeout[&2] || current_scores[&2] == 1
+                    );
+                }
+            } else {
+                assert!(result.updated_score.is_none());
+            }
+        }
     }
 }
