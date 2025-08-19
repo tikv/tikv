@@ -26,7 +26,10 @@ use futures::{
     stream,
 };
 use kvproto::{kvrpcpb::Context, metapb, raft_cmdpb};
-use raftstore::coprocessor::CoprocessorHost;
+use raftstore::{
+    SeekRegionCallback,
+    coprocessor::{CoprocessorHost, RegionInfoProvider},
+};
 use tempfile::{Builder, TempDir};
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 use txn_types::{Key, Value};
@@ -94,6 +97,7 @@ pub struct RocksEngine<RE = FakeExtension> {
     engines: Engines<BaseRocksEngine, BaseRocksEngine>,
     not_leader: Arc<AtomicBool>,
     coprocessor: CoprocessorHost<BaseRocksEngine>,
+    region_info_provider: Option<Arc<Box<dyn RegionInfoProvider>>>,
     ext: RE,
 }
 
@@ -105,6 +109,7 @@ impl<RE> RocksEngine<RE> {
             engines: self.engines,
             not_leader: self.not_leader,
             coprocessor: self.coprocessor,
+            region_info_provider: None,
             ext,
         }
     }
@@ -142,6 +147,7 @@ impl RocksEngine {
             not_leader: Arc::new(AtomicBool::new(false)),
             engines,
             coprocessor: CoprocessorHost::default(),
+            region_info_provider: None,
             ext: FakeExtension,
         })
     }
@@ -206,6 +212,14 @@ impl<RE> RocksEngine<RE> {
             .map(Into::into)
             .collect::<Vec<_>>();
         Ok(batch)
+    }
+
+    pub fn set_region_info_provider(&mut self, provider: impl RegionInfoProvider + 'static) {
+        self.region_info_provider = Some(Arc::new(Box::new(provider)))
+    }
+
+    pub fn clear_region_info_provider(&mut self) {
+        self.region_info_provider = None;
     }
 }
 
@@ -319,6 +333,15 @@ impl<RE: RaftExtension + 'static> Engine for RocksEngine<RE> {
     type IMSnapshotRes = impl Future<Output = Result<Self::Snap>> + Send;
     fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
         self.async_snapshot(ctx)
+    }
+
+    fn seek_region(&self, from: &[u8], callback: SeekRegionCallback) -> Result<()> {
+        match self.region_info_provider {
+            Some(ref accessor) => accessor
+                .seek_region(from, callback)
+                .map_err(|e| box_err!(e)),
+            None => Err(box_err!("region_info_accessor is not available")),
+        }
     }
 }
 
