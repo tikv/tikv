@@ -39,7 +39,9 @@ async fn load_storage_checkpoint(storage: &dyn ExternalStorage) -> Result<Option
             };
             let res = match i {
                 None => Some(ts),
-                Some(ts0) => Some(ts.min(ts0)),
+                // Any checkpoint stored in storage is a verified checkpoint TS.
+                // Choose the max value among them is still safe.
+                Some(ts0) => Some(ts.max(ts0)),
             };
             Ok(res)
         })
