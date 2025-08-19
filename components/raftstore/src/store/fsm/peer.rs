@@ -6100,8 +6100,8 @@ where
             }
             if let Some(last_heartbeat) = self.fsm.peer.peer_heartbeats.get(peer_id) {
                 if *last_heartbeat > cache_alive_limit {
-                    if alive_cache_idx > p.matched && p.matched >= truncated_idx {
-                        alive_cache_idx = p.matched;
+                    if alive_cache_idx > p.matched {
+                        alive_cache_idx = std::cmp::max(p.matched, truncated_idx);
                     } else if p.matched == 0 {
                         // the new peer is still applying snapshot, do not compact cache now
                         alive_cache_idx = 0;

@@ -953,10 +953,7 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 } => {
                     self.on_wake_up_regions(abnormal_stores, region_ids);
                 }
-                StoreMsg::RegionLeaderGrowth {
-                    region_id,
-                    log_lag,
-                } => {
+                StoreMsg::RegionLeaderGrowth { region_id, log_lag } => {
                     self.on_region_leader_growth(region_id, log_lag);
                 }
             }
@@ -3217,10 +3214,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
                 .iter()
                 .map(|(region_id, growth)| format!("{}:{}", region_id, growth))
                 .collect();
-            info!(
-                "pinned regions details: [{}]",
-                pinned_details.join(", ")
-            );
+            info!("pinned regions details: [{}]", pinned_details.join(", "));
         }
 
         info!(
