@@ -21,7 +21,7 @@ impl std::fmt::Display for DeadlineError {
 }
 
 /// A handy structure for checking deadline.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub struct Deadline {
     deadline: Instant,
 }

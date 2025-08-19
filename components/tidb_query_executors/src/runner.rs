@@ -11,7 +11,7 @@ use tidb_query_common::{
     Result,
     execute_stats::ExecSummary,
     metrics::*,
-    storage::{IntervalRange, Storage},
+    storage::{IntervalRange, RegionStorageAccessor, Storage},
 };
 use tidb_query_datatype::{
     EvalType, FieldTypeAccessor,
@@ -179,6 +179,7 @@ fn is_arrow_encodable<'a>(mut schema: impl Iterator<Item = &'a FieldType>) -> bo
 pub fn build_executors<S: Storage + 'static, F: KvFormat>(
     executor_descriptors: Vec<tipb::Executor>,
     storage: S,
+    _secondary_storage_accessor: Option<impl RegionStorageAccessor<Storage = S>>,
     ranges: Vec<KeyRange>,
     config: Arc<EvalConfig>,
     is_scanned_range_aware: bool,
@@ -424,6 +425,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         mut req: DagRequest,
         ranges: Vec<KeyRange>,
         storage: S,
+        secondary_storage_accessor: Option<impl RegionStorageAccessor<Storage = S>>,
         deadline: Deadline,
         stream_row_limit: usize,
         is_streaming: bool,
@@ -439,6 +441,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let out_most_executor = build_executors::<_, F>(
             req.take_executors().into(),
             storage,
+            secondary_storage_accessor,
             ranges,
             config.clone(),
             is_streaming || paging_size.is_some(), /* For streaming and paging request,
