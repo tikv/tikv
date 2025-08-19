@@ -42,7 +42,7 @@ use tikv::{
     server::{raftkv::ReplicaReadLockChecker, Node, Result as ServerResult},
 };
 use tikv_util::{
-    config::VersionTrack,
+    config::{ReadableSize, VersionTrack},
     sys::disk,
     time::ThreadReadId,
     worker::{Builder as WorkerBuilder, LazyWorker},
@@ -312,9 +312,27 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
             router.clone(),
         );
         let cfg_controller = ConfigController::new(cfg.tikv.clone());
+        // Region stats manager collects region heartbeat for use by in-memory engine.
+        let region_stats_manager_enabled_cb: Arc<dyn Fn() -> bool + Send + Sync> =
+            if cfg!(feature = "memory-engine") {
+                let cfg_controller_clone = cfg_controller.clone();
+                Arc::new(move || {
+                    cfg_controller_clone.get_current().region_cache_memory_limit != ReadableSize(0)
+                })
+            } else {
+                Arc::new(|| false)
+            };
+        let region_info_accessor = raftstore::RegionInfoAccessor::new(
+            &mut coprocessor_host,
+            region_stats_manager_enabled_cb,
+        );
 
-        let split_check_runner =
-            SplitCheckRunner::new(engines.kv.clone(), router.clone(), coprocessor_host.clone());
+        let split_check_runner = SplitCheckRunner::new(
+            engines.kv.clone(),
+            router.clone(),
+            coprocessor_host.clone(),
+            Some(Arc::new(region_info_accessor)),
+        );
         let split_scheduler = bg_worker.start("test-split-check", split_check_runner);
         cfg_controller.register(
             Module::Coprocessor,
