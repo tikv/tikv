@@ -291,28 +291,30 @@ impl RaftstoreReporter {
     }
 
     pub fn tick(&mut self, store_maybe_busy: bool, factor: InspectFactor) -> SlowScoreTickResult {
-        // Record a fairly great value when timeout
-        self.slow_trend.slow_cause.record(500_000, Instant::now());
+        if factor != InspectFactor::Network {
+            // Record a fairly great value when timeout
+            self.slow_trend.slow_cause.record(500_000, Instant::now());
 
-        // healthy: The health status of the current store.
-        // all_ticks_finished: The last tick of all factors is finished.
-        // factor_tick_finished: The last tick of the current factor is finished.
-        let (healthy, all_ticks_finished, factor_tick_finished) = (
-            self.is_healthy(),
-            self.slow_score.last_tick_finished(),
-            self.slow_score.get(factor).last_tick_finished(),
-        );
-        // The health status is recovered to serving as long as any tick
-        // does not timeout.
-        if !healthy && all_ticks_finished {
-            self.set_is_healthy(true);
-        }
-        if !all_ticks_finished && factor != InspectFactor::Network {
-            // If the last tick is not finished, it means that the current store might
-            // be busy on handling requests or delayed on I/O operations. And only when
-            // the current store is not busy, it should record the last_tick as a timeout.
-            if !store_maybe_busy && !factor_tick_finished {
-                self.slow_score.get_mut(factor).record_timeout();
+            // healthy: The health status of the current store.
+            // all_ticks_finished: The last tick of all factors is finished.
+            // factor_tick_finished: The last tick of the current factor is finished.
+            let (healthy, all_ticks_finished, factor_tick_finished) = (
+                self.is_healthy(),
+                self.slow_score.last_tick_finished(),
+                self.slow_score.get(factor).last_tick_finished(),
+            );
+            // The health status is recovered to serving as long as any tick
+            // does not timeout.
+            if !healthy && all_ticks_finished {
+                self.set_is_healthy(true);
+            }
+            if !all_ticks_finished {
+                // If the last tick is not finished, it means that the current store might
+                // be busy on handling requests or delayed on I/O operations. And only when
+                // the current store is not busy, it should record the last_tick as a timeout.
+                if !store_maybe_busy && !factor_tick_finished {
+                    self.slow_score.get_mut(factor).record_timeout();
+                }
             }
         }
 
