@@ -750,6 +750,10 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                     SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_ok.inc();
                     let term = snapshot.ext().get_term();
                     let extra_op = snapshot.ext().get_txn_extra_op();
+                    #[cfg(feature = "linearizability-track")]
+                    GLOBAL_TRACKERS.with_tracker(task.tracker_token(), |tracker| {
+                        tracker.track_flush_scheduler_snapshot();
+                    });
                     if !sched
                         .inner
                         .get_task_slot(task.cid())

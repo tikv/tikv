@@ -18,6 +18,7 @@ test-engine-kv-rocksdb = ["engine_test/test-engine-kv-rocksdb"]
 test-engine-raft-raft-engine = ["engine_test/test-engine-raft-raft-engine"]
 test-engines-rocksdb = ["engine_test/test-engines-rocksdb"]
 test-engines-panic = ["engine_test/test-engines-panic"]
+linearizability-track = []
 
 [dependencies]
 batch-system = { workspace = true }

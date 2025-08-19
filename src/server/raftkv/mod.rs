@@ -52,6 +52,8 @@ use raftstore::{
 };
 use thiserror::Error;
 use tikv_kv::{OnAppliedCb, WriteEvent, write_modifies};
+#[cfg(feature = "linearizability-track")]
+use tikv_util::linearizability_track::log_read_index;
 use tikv_util::{
     callback::must_call,
     future::{paired_future_callback, paired_must_called_future_callback},
@@ -777,7 +779,14 @@ where
                 };
                 Err(e)
             }
-            Ok(CmdRes::Snap(s)) => Ok(s),
+            Ok(CmdRes::Snap(s)) => {
+                #[cfg(feature = "linearizability-track")]
+                GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+                    use engine_traits::SnapshotMiscExt;
+                    tracker.track_snapshot_seq_no(s.get_snapshot().sequence_number());
+                });
+                Ok(s)
+            }
             Err(e) => {
                 let status_kind = get_status_kind_from_engine_error(&e);
                 ASYNC_REQUESTS_COUNTER_VEC.snapshot.get(status_kind).inc();
@@ -825,6 +834,8 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
         let mut rctx = ReadIndexContext::parse(msg.get_entries()[0].get_data()).unwrap();
         if let Some(mut request) = rctx.request.take() {
             let begin_instant = Instant::now();
+            #[cfg(feature = "linearizability-track")]
+            log_read_index(rctx.id, request.get_start_ts());
 
             let start_ts = request.get_start_ts().into();
             if let Err(e) = self

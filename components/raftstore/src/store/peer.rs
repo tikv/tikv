@@ -3197,6 +3197,13 @@ where
                                     .collect::<Vec<_>>().as_slice())
                             );
                         }
+
+                        #[cfg(feature = "linearizability-track")]
+                        if let Some(tracker_token) = p.cb.as_tracker_token() {
+                            GLOBAL_TRACKERS.with_tracker(tracker_token, |t| {
+                                t.track_ready_committed();
+                            });
+                        }
                         p
                     })
                     .collect();
@@ -3537,6 +3544,12 @@ where
             }
             if req.get_header().get_replica_read() {
                 // We should check epoch since the range could be changed.
+                #[cfg(feature = "linearizability-track")]
+                cb.read_tracker().map(|tracker| {
+                    GLOBAL_TRACKERS.with_tracker(tracker, |t| {
+                        t.track_ready_replica_read(read.read_index);
+                    })
+                });
                 cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
             } else {
                 // The request could be proposed when the peer was leader.
@@ -3898,6 +3911,16 @@ where
         let policy = self.inspect(&req);
         let res = match policy {
             Ok(RequestPolicy::ReadLocal) | Ok(RequestPolicy::StaleRead) => {
+                #[cfg(feature = "linearizability-track")]
+                if let Some(tracker_token) = cb.as_tracker_token() {
+                    GLOBAL_TRACKERS.with_tracker(tracker_token, |t| {
+                        t.track_propose_skip(match policy {
+                            Ok(RequestPolicy::ReadLocal) => "raftrouter-local-read",
+                            Ok(RequestPolicy::StaleRead) => "raftrouter-stale-read",
+                            _ => unreachable!(),
+                        });
+                    });
+                }
                 self.read_local(ctx, req, cb);
                 return false;
             }
@@ -3935,6 +3958,12 @@ where
                 false
             }
             Ok(Either::Left(idx)) => {
+                #[cfg(feature = "linearizability-track")]
+                if let Some(tracker_token) = cb.as_tracker_token() {
+                    GLOBAL_TRACKERS.with_tracker(tracker_token, |t| {
+                        t.track_propose_normal();
+                    });
+                }
                 let has_applied_to_current_term = self.has_applied_to_current_term();
                 if has_applied_to_current_term {
                     // After this peer has applied to current term and passed above checking
@@ -4233,6 +4262,12 @@ where
                 // For more details, see the annotations above `on_leader_commit_idx_changed`.
                 let commit_index = self.get_store().commit_index();
                 if let Some(read) = self.pending_reads.back_mut() {
+                    #[cfg(feature = "linearizability-track")]
+                    if let Some(tracker_token) = cb.as_tracker_token() {
+                        GLOBAL_TRACKERS.with_tracker(tracker_token, |t| {
+                            t.track_propose_amend(read.id.clone());
+                        });
+                    }
                     // A read request proposed in the current lease is found; combine the new
                     // read request to that previous one, so that no proposing needed.
                     read.push_command(req, cb, commit_index);
@@ -4293,6 +4328,13 @@ where
             apply::notify_stale_req(self.term(), cb);
             poll_ctx.raft_metrics.propose.dropped_read_index.inc();
             return false;
+        }
+
+        #[cfg(feature = "linearizability-track")]
+        if let Some(tracker_token) = cb.as_tracker_token() {
+            GLOBAL_TRACKERS.with_tracker(tracker_token, |t| {
+                t.track_propose_read_index(id, self.is_leader());
+            });
         }
 
         let mut read = ReadIndexRequest::with_command(id, req, cb, now);

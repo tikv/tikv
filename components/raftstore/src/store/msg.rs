@@ -216,6 +216,16 @@ where
         };
         committed_cb.take()
     }
+
+    pub fn as_tracker_token(&self) -> Option<TrackerToken> {
+        match self {
+            Callback::Read { tracker, .. } => Some(*tracker),
+            Callback::Write { trackers, .. } => {
+                trackers.first().copied().and_then(|t| t.as_tracker_token())
+            }
+            _ => None,
+        }
+    }
 }
 
 pub trait ReadCallback: ErrorCallback {

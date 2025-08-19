@@ -5,7 +5,11 @@ edition = "2021"
 publish = false
 license = "Apache-2.0"
 
+[features]
+linearizability-track = []
+
 [dependencies]
+chrono = { workspace = true }
 crossbeam-utils = { workspace = true }
 kvproto = { workspace = true }
 lazy_static = "1"
@@ -14,3 +18,4 @@ pin-project = "1"
 prometheus = "0.13"
 slab = "0.4"
 slog = { workspace = true }
+uuid = { version = "0.8.1", features = ["serde", "v4"] }
