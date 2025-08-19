@@ -227,6 +227,9 @@ sysinfo = { git = "https://github.com/tikv/sysinfo", branch = "0.26-fix-cpu" }
 # [patch.'https://github.com/tikv/rust-rocksdb']
 # rocksdb = { git = "https://github.com/your_github_id/rust-rocksdb", branch = "your_branch" }
 
+ [patch.'https://github.com/pingcap/tipb']
+ tipb = { git = "https://github.com/lcwangchao/tipb", branch = "indexlookuppushdown" }
+
 [workspace]
 # See https://github.com/rust-lang/rfcs/blob/master/text/2957-cargo-features2.md
 # Without resolver = 2, using `cargo build --features x` to build `cmd`
@@ -420,7 +423,7 @@ opt-level = 1
 
 [profile.dev]
 opt-level = 0
-debug = 0
+debug = 2
 codegen-units = 4
 lto = false
 incremental = true

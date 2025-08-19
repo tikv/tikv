@@ -9,12 +9,13 @@ use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
 use tidb_query_common::{execute_stats::ExecSummary, storage::IntervalRange};
+use tidb_query_executors::interface::{new_empty_locate_key_fn, AsyncRegion, FnLocateRegionKey};
 use tikv_alloc::trace::MemoryTraceGuard;
 use tipb::{DagRequest, SelectResponse, StreamResponse};
 
 pub use self::storage_impl::TikvStorage;
 use crate::{
-    coprocessor::{Deadline, RequestHandler, Result, metrics::*},
+    coprocessor::{metrics::*, Deadline, RequestHandler, Result},
     storage::{Statistics, Store},
     tikv_util::quota_limiter::QuotaLimiter,
 };
@@ -30,6 +31,7 @@ pub struct DagHandlerBuilder<S: Store + 'static, F: KvFormat> {
     is_cache_enabled: bool,
     paging_size: Option<u64>,
     quota_limiter: Arc<QuotaLimiter>,
+    locate_key: FnLocateRegionKey<S>,
     _phantom: PhantomData<F>,
 }
 
@@ -56,6 +58,7 @@ impl<S: Store + 'static, F: KvFormat> DagHandlerBuilder<S, F> {
             is_cache_enabled,
             paging_size,
             quota_limiter,
+            locate_key: new_empty_locate_key_fn(),
             _phantom: PhantomData,
         }
     }
@@ -66,9 +69,14 @@ impl<S: Store + 'static, F: KvFormat> DagHandlerBuilder<S, F> {
         self
     }
 
+    pub fn locate_key_fn(mut self, locate_key: FnLocateRegionKey<S>) -> Self {
+        self.locate_key = locate_key;
+        self
+    }
+
     pub fn build(self) -> Result<Box<dyn RequestHandler>> {
         COPR_DAG_REQ_COUNT.with_label_values(&["batch"]).inc();
-        Ok(BatchDagHandler::new::<_, F>(
+        Ok(BatchDagHandler::<_, F>::new(
             self.req,
             self.ranges,
             self.store,
@@ -79,18 +87,19 @@ impl<S: Store + 'static, F: KvFormat> DagHandlerBuilder<S, F> {
             self.is_streaming,
             self.paging_size,
             self.quota_limiter,
+            self.locate_key,
         )?
         .into_boxed())
     }
 }
 
-pub struct BatchDagHandler {
-    runner: tidb_query_executors::runner::BatchExecutorsRunner<Statistics>,
+pub struct BatchDagHandler<S: Store, F> {
+    runner: tidb_query_executors::runner::BatchExecutorsRunner<TikvStorage<S>, Statistics, F>,
     data_version: Option<u64>,
 }
 
-impl BatchDagHandler {
-    pub fn new<S: Store + 'static, F: KvFormat>(
+impl<S: Store + 'static, F: KvFormat> BatchDagHandler<S, F> {
+    pub fn new(
         req: DagRequest,
         ranges: Vec<KeyRange>,
         store: S,
@@ -101,9 +110,10 @@ impl BatchDagHandler {
         is_streaming: bool,
         paging_size: Option<u64>,
         quota_limiter: Arc<QuotaLimiter>,
+        locate_key_fn: FnLocateRegionKey<S>,
     ) -> Result<Self> {
         Ok(Self {
-            runner: tidb_query_executors::runner::BatchExecutorsRunner::from_request::<_, F>(
+            runner: tidb_query_executors::runner::BatchExecutorsRunner::<_, _, F>::from_request(
                 req,
                 ranges,
                 TikvStorage::new(store, is_cache_enabled),
@@ -112,6 +122,13 @@ impl BatchDagHandler {
                 is_streaming,
                 paging_size,
                 quota_limiter,
+                Box::new(move |key: &[u8]| -> Option<AsyncRegion<TikvStorage<S>>> {
+                    if let Some(r) = locate_key_fn(key) {
+                        Some(r.into_map_store(move |s| TikvStorage::new(s, is_cache_enabled)))
+                    } else {
+                        None
+                    }
+                }),
             )?,
             data_version,
         })
@@ -119,7 +136,7 @@ impl BatchDagHandler {
 }
 
 #[async_trait]
-impl RequestHandler for BatchDagHandler {
+impl<S: Store + 'static, F: KvFormat> RequestHandler for BatchDagHandler<S, F> {
     async fn handle_request(&mut self) -> Result<MemoryTraceGuard<Response>> {
         let result = self.runner.handle_request().await;
         handle_qe_response(result, self.runner.can_be_cached(), self.data_version).map(|x| x.into())

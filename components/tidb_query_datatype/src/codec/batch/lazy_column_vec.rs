@@ -6,7 +6,7 @@ use tipb::FieldType;
 
 use super::LazyBatchColumn;
 use crate::{
-    codec::{Result, data_type::VectorValue},
+    codec::{data_type::VectorValue, Result},
     expr::EvalContext,
 };
 
@@ -162,7 +162,7 @@ impl LazyBatchColumnVec {
     /// Encode into chunk format.
     // TODO: Move to other place.
     pub fn encode_chunk(
-        &mut self,
+        &self,
         logical_rows: &[usize],
         output_offsets: &[u32],
         schema: &[FieldType],

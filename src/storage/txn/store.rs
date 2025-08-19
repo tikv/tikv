@@ -666,7 +666,7 @@ mod tests {
             TestEngineBuilder, WriteData,
         },
         mvcc::{Mutation, MvccTxn, SnapshotReader},
-        txn::{CommitKind, TransactionKind, TransactionProperties, commit, prewrite},
+        txn::{commit, prewrite, CommitKind, TransactionKind, TransactionProperties},
     };
 
     const KEY_PREFIX: &str = "key_prefix";
