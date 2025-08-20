@@ -67,31 +67,6 @@ impl Default for RawRecords {
 }
 
 impl RawRecords {
-    /// Keep a maximum of `k` self.records and aggregate the others into
-    /// returned [RawRecord].
-    pub fn keep_top_k(&mut self, k: usize) -> RawRecord {
-        let mut others = RawRecord::default();
-        if self.records.len() <= k {
-            return others;
-        }
-        let mut buf = STATIC_BUF.with(|b| b.take());
-        buf.clear();
-        // Find kth top cpu time.
-        for record in self.records.values() {
-            buf.push(record.cpu_time);
-        }
-        pdqselect::select_by(&mut buf, k, |a, b| b.cmp(a));
-        let kth = buf[k];
-        // Evict records with cpu time less or equal than `kth`
-        let evicted_records = self.records.extract_if(|_, r| r.cpu_time <= kth);
-        // Record evicted into others
-        for (_, record) in evicted_records {
-            others.merge(&record);
-        }
-        STATIC_BUF.with(move |b| b.set(buf));
-        others
-    }
-
     /// Returns RawRecord aggregated by tidb passed tag.
     pub fn aggregate_by_tidb_tag(&self) -> HashMap<Vec<u8>, RawRecord>
     {
@@ -113,30 +88,6 @@ impl RawRecords {
             value.unwrap().merge(&record);
         }
         raw_map
-    }
-
-    /// Returns (TopK, Evicted).
-    /// It is caller's responsibility to ensure that k < records.len().
-    pub fn top_k(
-        &self,
-        k: usize,
-    ) -> (
-        impl Iterator<Item = (&Arc<TagInfos>, &RawRecord)>,
-        impl Iterator<Item = (&Arc<TagInfos>, &RawRecord)>,
-    ) {
-        assert!(self.records.len() > k);
-        let mut buf = STATIC_BUF.with(|b| b.take());
-        buf.clear();
-        for record in self.records.values() {
-            buf.push(record.cpu_time);
-        }
-        pdqselect::select_by(&mut buf, k, |a, b| b.cmp(a));
-        let kth = buf[k];
-        STATIC_BUF.with(move |b| b.set(buf));
-        (
-            self.records.iter().filter(move |(_, v)| v.cpu_time > kth),
-            self.records.iter().filter(move |(_, v)| v.cpu_time <= kth),
-        )
     }
 }
 
