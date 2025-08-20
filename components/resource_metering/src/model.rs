@@ -626,7 +626,7 @@ mod tests {
         });        
         let mut records = HashMap::default();
         records.insert(
-            tag1,
+            tag1.clone(),
             RawRecord {
                 cpu_time: 111,
                 read_keys: 222,
@@ -634,7 +634,7 @@ mod tests {
             },
         );
         records.insert(
-            tag2,
+            tag2.clone(),
             RawRecord {
                 cpu_time: 444,
                 read_keys: 555,
@@ -642,7 +642,7 @@ mod tests {
             },
         );
         records.insert(
-            tag3,
+            tag3.clone(),
             RawRecord {
                 cpu_time: 777,
                 read_keys: 888,
