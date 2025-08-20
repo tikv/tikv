@@ -99,7 +99,7 @@ impl Reporter {
 
     fn handle_records(&mut self, records: Arc<RawRecords>) {
         let ts = records.begin_unix_time_secs;
-        let agg_map = records.aggregate_by_tidb_tag();
+        let agg_map = records.aggregate_by_extra_tag();
         if self.config.max_resource_groups >= agg_map.len() {
             self.records.new_append(ts, agg_map.iter());
             return;

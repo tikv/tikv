@@ -84,8 +84,8 @@ impl Default for RawRecords {
 }
 
 impl RawRecords {
-    /// Returns RawRecord aggregated by tidb passed tag.
-    pub fn aggregate_by_tidb_tag(&self) -> HashMap<Vec<u8>, RawRecord>
+    /// Returns RawRecord aggregated by extra tag.
+    pub fn aggregate_by_extra_tag(&self) -> HashMap<Vec<u8>, RawRecord>
     {
         let mut raw_map : HashMap<Vec<u8>, RawRecord> = HashMap::default();
         // Aggregate
@@ -409,7 +409,7 @@ mod tests {
             duration: Duration::from_secs(1),
             records: raw_map,
         };
-        let agg_map = raw.aggregate_by_tidb_tag();
+        let agg_map = raw.aggregate_by_extra_tag();
         assert_eq!(records.records.len(), 0);
         records.new_append(raw.begin_unix_time_secs, agg_map.iter());
         assert_eq!(records.records.len(), 3);
@@ -469,7 +469,7 @@ mod tests {
             records,
         };
 
-        let agg_map = rs.aggregate_by_tidb_tag();
+        let agg_map = rs.aggregate_by_extra_tag();
         let kth = find_kth_cpu_time(agg_map.iter(), 2);
         let (top, evicted) = (
             agg_map.iter().filter(move |(_, v)| v.cpu_time > kth),
@@ -560,7 +560,7 @@ mod tests {
             },
         );
 
-        let agg_map = raw_records.aggregate_by_tidb_tag();
+        let agg_map = raw_records.aggregate_by_extra_tag();
         let kth = find_kth_cpu_time(agg_map.iter(), 1);
         // top.len() == 0
         // evicted.len() == 3
