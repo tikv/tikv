@@ -451,7 +451,7 @@ mod tests {
             records,
         };
 
-        let agg_map = raw_records.aggregate_by_tidb_tag();
+        let agg_map = rs.aggregate_by_tidb_tag();
         let kth = self.find_kth_cpu_time(agg_map.iter(), 2);
         let (top, evicted) = (
             agg_map.iter().filter(move |(_, v)| v.cpu_time > kth),
