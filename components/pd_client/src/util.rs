@@ -494,7 +494,7 @@ where
             Err(err) => {
                 // these errors are not caused by network, no need to retry
                 if err.retryable() && self.remain_request_count > 0 {
-                    error!(?*err; "request failed, retry");
+                    warn!("request failed, retry"; "err" => ?*err);
                     false
                 } else {
                     true
@@ -550,7 +550,7 @@ where
                 return Ok(r);
             }
             Err(e) => {
-                error!(?e; "request failed");
+                warn!("request failed"; "err" => ?e);
                 if retry == 0 {
                     return Err(e);
                 }
@@ -559,7 +559,7 @@ where
         // try reconnect
         retry -= 1;
         if let Err(e) = block_on(client.reconnect(true)) {
-            error!(?e; "reconnect failed");
+            warn!("reconnect failed"; "err" => ?e);
             thread::sleep(REQUEST_RECONNECT_INTERVAL);
         }
     }
@@ -718,7 +718,7 @@ impl PdConnector {
                         }
                     }
                     Err(e) => {
-                        error!("connect failed"; "endpoints" => ep, "error" => ?e);
+                        warn!("connect failed"; "endpoints" => ep, "error" => ?e);
                         continue;
                     }
                 }
