@@ -398,7 +398,7 @@ mod tests {
     }
 
     #[test]
-    fn test_raw_records_top_k() {
+    fn test_raw_records_agg_and_top_k() {
         let tag1 = Arc::new(TagInfos {
             store_id: 0,
             region_id: 0,
@@ -450,7 +450,13 @@ mod tests {
             duration: Duration::from_secs(1),
             records,
         };
-        let (top, evicted) = rs.top_k(2);
+
+        let agg_map = raw_records.aggregate_by_tidb_tag();
+        let kth = self.find_kth_cpu_time(agg_map.iter(), 2);
+        let (top, evicted) = (
+            agg_map.iter().filter(move |(_, v)| v.cpu_time > kth),
+            agg_map.iter().filter(move |(_, v)| v.cpu_time <= kth)
+        );
         let others = evicted
             .map(|(_, v)| v)
             .fold(RawRecord::default(), |mut others, r| {
@@ -461,7 +467,12 @@ mod tests {
         assert_eq!(others.cpu_time, 111);
         assert_eq!(others.read_keys, 222);
         assert_eq!(others.write_keys, 333);
-        let (top, evicted) = rs.top_k(0);
+
+        let kth = self.find_kth_cpu_time(agg_map.iter(), 0);
+        let (top, evicted) = (
+            agg_map.iter().filter(move |(_, v)| v.cpu_time > kth),
+            agg_map.iter().filter(move |(_, v)| v.cpu_time <= kth)
+        );
         // let top = top.collect::<Vec<(&Arc<TagInfos>, &RawRecord)>>();
         let others = evicted
             .map(|(_, v)| v)
@@ -532,9 +543,7 @@ mod tests {
         );
 
         let agg_map = raw_records.aggregate_by_tidb_tag();
-
-        let kth = self.find_kth_cpu_time(agg_map.iter(), 1);
-        self.records.new_append(ts, agg_map.iter().filter(move |(_, v)| v.cpu_time > kth));        
+        let kth = self.find_kth_cpu_time(agg_map.iter(), 1); 
         // top.len() == 0
         // evicted.len() == 3
         let (top, evicted) = (
