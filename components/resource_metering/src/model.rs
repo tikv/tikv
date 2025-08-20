@@ -680,7 +680,7 @@ mod tests {
         };
 
         let agg_map = rs.aggregate_by_extra_tag();
-        assert_eq!(agg_map.into_iter().count(), 3);
+        assert_eq!(agg_map.iter().count(), 3);
         assert_eq!(agg_map.get(&tag1.extra_attachment).unwrap().cpu_time, 111 + 1110 + 4440);
         assert_eq!(agg_map.get(&tag2.extra_attachment).unwrap().cpu_time, 555 + 7770);
         assert_eq!(agg_map.get(&tag3.extra_attachment).unwrap().cpu_time, 777);
