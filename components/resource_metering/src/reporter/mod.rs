@@ -26,7 +26,7 @@ use crate::{
         collector_impl::CollectorImpl,
         data_sink_reg::{DataSinkId, DataSinkReg, DataSinkRegHandle},
     },
-    Config, DataSink, RawRecords, Records,
+    Config, DataSink, RawRecord, RawRecords, Records,
 };
 
 thread_local! {
@@ -99,23 +99,13 @@ impl Reporter {
 
     fn handle_records(&mut self, records: Arc<RawRecords>) {
         let ts = records.begin_unix_time_secs;
-        let agg_map = records.aggregate();
+        let agg_map = records.aggregate_by_tidb_tag();
         if self.config.max_resource_groups >= agg_map.len() {
             self.records.new_append(ts, agg_map.iter());
             return;
         }
 
-        // Pick topN
-        let k = self.config.max_resource_groups;
-        let mut buf = STATIC_BUF.with(|b| b.take());
-        buf.clear();
-        for record in agg_map.values() {
-            buf.push(record.cpu_time);
-        }
-        pdqselect::select_by(&mut buf, k, |a, b| b.cmp(a));
-        let kth = buf[k];
-        STATIC_BUF.with(move |b| b.set(buf));
-
+        let kth = self.find_kth_cpu_time(agg_map.iter());
         self.records.new_append(ts, agg_map.iter().filter(move |(_, v)| v.cpu_time > kth));
         let others = self.records.others.entry(ts).or_default();
         agg_map.iter().filter(move |(_, v)| v.cpu_time <= kth).for_each(|(_, v)| {
@@ -123,6 +113,19 @@ impl Reporter {
         });
     }
 
+    fn find_kth_cpu_time<'a>(&self, iter: impl Iterator<Item = (&'a Vec<u8>, &'a RawRecord)>) -> u32 {
+        let k = self.config.max_resource_groups;
+        let mut buf = STATIC_BUF.with(|b| b.take());
+        buf.clear();
+        for (_, record) in iter {
+            buf.push(record.cpu_time);
+        }
+        pdqselect::select_by(&mut buf, k, |a, b| b.cmp(a));
+        let kth = buf[k];
+        STATIC_BUF.with(move |b| b.set(buf));
+        kth
+    }
+    
     fn handle_config_change(&mut self, config: Config) {
         self.config = config;
     }
