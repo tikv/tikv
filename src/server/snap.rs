@@ -510,7 +510,7 @@ impl<R: RaftExtension + 'static> Runnable for Runner<R> {
                     let result = recv_snap(stream, sink, snap_mgr, raft_router).await;
                     recving_count.fetch_sub(1, Ordering::SeqCst);
                     if let Err(e) = result {
-                        error!("failed to recv snapshot"; "err" => %e);
+                        warn!("failed to recv snapshot"; "err" => %e);
                     }
                 };
                 self.pool.spawn(task);
@@ -553,7 +553,7 @@ impl<R: RaftExtension + 'static> Runnable for Runner<R> {
                     .await;
                     recving_count.fetch_sub(1, Ordering::SeqCst);
                     if let Err(e) = result {
-                        error!("failed to recv snapshot"; "err" => %e);
+                        warn!("failed to recv snapshot"; "err" => %e);
                     }
                 };
                 self.pool.spawn(task);
@@ -595,7 +595,7 @@ impl<R: RaftExtension + 'static> Runnable for Runner<R> {
                             cb(Ok(()));
                         }
                         Err(e) => {
-                            error!("failed to send snap"; "to_addr" => addr, "region_id" => region_id, "err" => ?e);
+                            warn!("failed to send snap"; "to_addr" => addr, "region_id" => region_id, "err" => ?e);
                             cb(Err(e));
                         }
                     };
