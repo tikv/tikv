@@ -204,7 +204,7 @@ impl From<Records> for Vec<ResourceUsageRecord> {
 
 impl Records {
     /// Append aggregated [RawRecords] into [Records].
-    pub fn new_append<'a>(
+    pub fn append<'a>(
         &mut self,
         ts: u64,
         iter: impl Iterator<Item = (&'a Vec<u8>, &'a RawRecord)>,
@@ -411,7 +411,7 @@ mod tests {
         };
         let agg_map = raw.aggregate_by_extra_tag();
         assert_eq!(records.records.len(), 0);
-        records.new_append(raw.begin_unix_time_secs, agg_map.iter());
+        records.append(raw.begin_unix_time_secs, agg_map.iter());
         assert_eq!(records.records.len(), 3);
     }
 
@@ -570,7 +570,7 @@ mod tests {
         );
 
         let mut records = Records::default();
-        records.new_append(0, top);
+        records.append(0, top);
         let others = records.others.entry(0).or_default();
         evicted.for_each(|(_, v)| {
             others.merge(v);

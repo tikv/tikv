@@ -101,12 +101,12 @@ impl Reporter {
         let ts = records.begin_unix_time_secs;
         let agg_map = records.aggregate_by_extra_tag();
         if self.config.max_resource_groups >= agg_map.len() {
-            self.records.new_append(ts, agg_map.iter());
+            self.records.append(ts, agg_map.iter());
             return;
         }
 
         let kth = find_kth_cpu_time(agg_map.iter(), self.config.max_resource_groups);
-        self.records.new_append(ts, agg_map.iter().filter(move |(_, v)| v.cpu_time > kth));
+        self.records.append(ts, agg_map.iter().filter(move |(_, v)| v.cpu_time > kth));
         let others = self.records.others.entry(ts).or_default();
         agg_map.iter().filter(move |(_, v)| v.cpu_time <= kth).for_each(|(_, v)| {
             others.merge(v);
