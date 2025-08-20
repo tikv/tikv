@@ -128,8 +128,8 @@ impl ConcurrencyManager {
         };
 
         if limit_valid_duration >= max_ts_drift_allowance {
-            error!("improper setting: limit_valid_duration >= max_ts_drift_allowance; \
-                consider increasing max-ts-drift-allowance or decreasing max-ts-sync-interval";
+            warn!("improper setting: limit_valid_duration >= max_ts_drift_allowance; \
+                consider increasing storage.max-ts.max-drift or decreasing storage.max-ts.cache-sync-interval";
                 "limit_valid_duration" => ?limit_valid_duration,
                 "max_ts_drift_allowance" => ?max_ts_drift_allowance,
             );
