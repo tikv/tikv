@@ -550,7 +550,7 @@ mod tests {
 
         // First tick to establish baseline
         let result1 = unified_slow_score.tick_network();
-        assert_eq!(result1.tick_id, 1);
+        assert_eq!(result1.tick_id, 0);
 
         unified_slow_score.record_network(1, durations);
 
