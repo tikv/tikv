@@ -531,12 +531,19 @@ mod tests {
             },
         );
 
+        let agg_map = raw_records.aggregate_by_tidb_tag();
+
+        let kth = self.find_kth_cpu_time(agg_map.iter(), 1);
+        self.records.new_append(ts, agg_map.iter().filter(move |(_, v)| v.cpu_time > kth));        
         // top.len() == 0
         // evicted.len() == 3
-        let (top, evicted) = raw_records.top_k(1);
+        let (top, evicted) = (
+            agg_map.iter().filter(move |(_, v)| v.cpu_time > kth),
+            agg_map.iter().filter(move |(_, v)| v.cpu_time <= kth)
+        );
 
         let mut records = Records::default();
-        records.append(0, top);
+        records.new_append(0, top);
         let others = records.others.entry(0).or_default();
         evicted.for_each(|(_, v)| {
             others.merge(v);

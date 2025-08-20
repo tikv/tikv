@@ -105,7 +105,7 @@ impl Reporter {
             return;
         }
 
-        let kth = self.find_kth_cpu_time(agg_map.iter());
+        let kth = self.find_kth_cpu_time(agg_map.iter(), self.config.max_resource_groups);
         self.records.new_append(ts, agg_map.iter().filter(move |(_, v)| v.cpu_time > kth));
         let others = self.records.others.entry(ts).or_default();
         agg_map.iter().filter(move |(_, v)| v.cpu_time <= kth).for_each(|(_, v)| {
@@ -113,8 +113,7 @@ impl Reporter {
         });
     }
 
-    fn find_kth_cpu_time<'a>(&self, iter: impl Iterator<Item = (&'a Vec<u8>, &'a RawRecord)>) -> u32 {
-        let k = self.config.max_resource_groups;
+    fn find_kth_cpu_time<'a>(&self, iter: impl Iterator<Item = (&'a Vec<u8>, &'a RawRecord)>, k: usize) -> u32 {
         let mut buf = STATIC_BUF.with(|b| b.take());
         buf.clear();
         for (_, record) in iter {
