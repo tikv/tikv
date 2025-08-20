@@ -1739,7 +1739,7 @@ mod tests {
         let (mut tx, mut rx) = futures::channel::mpsc::unbounded();
         let runtime = tokio::runtime::Runtime::new().unwrap();
         runtime.spawn(async move {
-            drain.forward(&mut tx).await.unwrap();
+            drain.forward(&mut tx, None).await.unwrap();
         });
         let (e, _) = recv_timeout(&mut rx, std::time::Duration::from_secs(5))
             .unwrap()
@@ -1806,7 +1806,7 @@ mod tests {
         let (mut tx, mut rx) = futures::channel::mpsc::unbounded();
         let runtime = tokio::runtime::Runtime::new().unwrap();
         runtime.spawn(async move {
-            drain.forward(&mut tx).await.unwrap();
+            drain.forward(&mut tx, None).await.unwrap();
         });
         let (e, _) = recv_timeout(&mut rx, std::time::Duration::from_secs(5))
             .unwrap()
