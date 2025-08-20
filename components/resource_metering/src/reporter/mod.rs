@@ -26,7 +26,7 @@ use crate::{
         collector_impl::CollectorImpl,
         data_sink_reg::{DataSinkId, DataSinkReg, DataSinkRegHandle},
     },
-    Config, DataSink, RawRecord, RawRecords, Records,
+    Config, DataSink, RawRecords, Records, find_kth_cpu_time
 };
 
 thread_local! {
@@ -105,24 +105,12 @@ impl Reporter {
             return;
         }
 
-        let kth = self.find_kth_cpu_time(agg_map.iter(), self.config.max_resource_groups);
+        let kth = find_kth_cpu_time(agg_map.iter(), self.config.max_resource_groups);
         self.records.new_append(ts, agg_map.iter().filter(move |(_, v)| v.cpu_time > kth));
         let others = self.records.others.entry(ts).or_default();
         agg_map.iter().filter(move |(_, v)| v.cpu_time <= kth).for_each(|(_, v)| {
             others.merge(v);
         });
-    }
-
-    fn find_kth_cpu_time<'a>(&self, iter: impl Iterator<Item = (&'a Vec<u8>, &'a RawRecord)>, k: usize) -> u32 {
-        let mut buf = STATIC_BUF.with(|b| b.take());
-        buf.clear();
-        for (_, record) in iter {
-            buf.push(record.cpu_time);
-        }
-        pdqselect::select_by(&mut buf, k, |a, b| b.cmp(a));
-        let kth = buf[k];
-        STATIC_BUF.with(move |b| b.set(buf));
-        kth
     }
     
     fn handle_config_change(&mut self, config: Config) {

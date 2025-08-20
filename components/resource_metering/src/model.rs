@@ -15,6 +15,19 @@ thread_local! {
     static STATIC_BUF: Cell<Vec<u32>> = const {Cell::new(vec![])};
 }
 
+/// Find the kth cpu time in the iterator.
+pub fn find_kth_cpu_time<'a>(iter: impl Iterator<Item = (&'a Vec<u8>, &'a RawRecord)>, k: usize) -> u32 {
+    let mut buf = STATIC_BUF.with(|b| b.take());
+    buf.clear();
+    for (_, record) in iter {
+        buf.push(record.cpu_time);
+    }
+    pdqselect::select_by(&mut buf, k, |a, b| b.cmp(a));
+    let kth = buf[k];
+    STATIC_BUF.with(move |b| b.set(buf));
+    kth
+}
+
 /// Raw resource statistics record.
 #[derive(Debug, Default, Copy, Clone, PartialEq)]
 pub struct RawRecord {
@@ -452,7 +465,7 @@ mod tests {
         };
 
         let agg_map = rs.aggregate_by_tidb_tag();
-        let kth = self.find_kth_cpu_time(agg_map.iter(), 2);
+        let kth = find_kth_cpu_time(agg_map.iter(), 2);
         let (top, evicted) = (
             agg_map.iter().filter(move |(_, v)| v.cpu_time > kth),
             agg_map.iter().filter(move |(_, v)| v.cpu_time <= kth)
@@ -468,7 +481,7 @@ mod tests {
         assert_eq!(others.read_keys, 222);
         assert_eq!(others.write_keys, 333);
 
-        let kth = self.find_kth_cpu_time(agg_map.iter(), 0);
+        let kth = find_kth_cpu_time(agg_map.iter(), 0);
         let (top, evicted) = (
             agg_map.iter().filter(move |(_, v)| v.cpu_time > kth),
             agg_map.iter().filter(move |(_, v)| v.cpu_time <= kth)
@@ -543,7 +556,7 @@ mod tests {
         );
 
         let agg_map = raw_records.aggregate_by_tidb_tag();
-        let kth = self.find_kth_cpu_time(agg_map.iter(), 1); 
+        let kth = find_kth_cpu_time(agg_map.iter(), 1);
         // top.len() == 0
         // evicted.len() == 3
         let (top, evicted) = (
