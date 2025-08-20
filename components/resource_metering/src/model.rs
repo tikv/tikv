@@ -98,11 +98,11 @@ impl RawRecords {
             if value.is_none() {
                 raw_map.insert(
                     tag.clone(),
-                    record.clone(),
+                    *record,
                 );
                 continue;
             }
-            value.unwrap().merge(&record);
+            value.unwrap().merge(record);
         }
         raw_map
     }
@@ -600,7 +600,7 @@ mod tests {
             key_ranges: vec![],
             extra_attachment: b"c".to_vec(),
         });
-        /// tag4's extra tag is equal to tag1's
+        // tag4's extra tag is equal to tag1's
         let tag4 = Arc::new(TagInfos {
             store_id: 0,
             region_id: 2,
@@ -608,7 +608,7 @@ mod tests {
             key_ranges: vec![],
             extra_attachment: b"a".to_vec(),
         });
-        /// tag5's extra tag is equal to tag1's
+        // tag5's extra tag is equal to tag1's
         let tag5 = Arc::new(TagInfos {
             store_id: 0,
             region_id: 3,
@@ -616,7 +616,7 @@ mod tests {
             key_ranges: vec![],
             extra_attachment: b"a".to_vec(),
         });
-        /// tag6's extra tag is equal to tag2's
+        // tag6's extra tag is equal to tag2's
         let tag6 = Arc::new(TagInfos {
             store_id: 0,
             region_id: 5,
@@ -680,7 +680,7 @@ mod tests {
         };
 
         let agg_map = rs.aggregate_by_extra_tag();
-        assert_eq!(agg_map.count(), 3);
+        assert_eq!(agg_map.into_iter().count(), 3);
         assert_eq!(agg_map.get(&tag1.extra_attachment).unwrap().cpu_time, 111 + 1110 + 4440);
         assert_eq!(agg_map.get(&tag2.extra_attachment).unwrap().cpu_time, 555 + 7770);
         assert_eq!(agg_map.get(&tag3.extra_attachment).unwrap().cpu_time, 777);
