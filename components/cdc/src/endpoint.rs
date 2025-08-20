@@ -881,7 +881,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 }
                 Err(e) => {
                     CDC_SCAN_TASKS.with_label_values(&["abort"]).inc();
-                    error!(
+                    warn!(
                         "cdc initialize fail: {}", e; "region_id" => region_id,
                         "conn_id" => ?init.conn_id, "request_id" => init.request_id,
                     );
