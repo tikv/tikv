@@ -1,11 +1,15 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cell::Cell, collections::HashMap, sync::{
-        atomic::{AtomicU32, Ordering::Relaxed}, Arc
-    }, time::{Duration, SystemTime, UNIX_EPOCH}
+    cell::Cell,
+    sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering::Relaxed},
+    },
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use collections::HashMap;
 use kvproto::resource_usage_agent::{GroupTagRecord, GroupTagRecordItem, ResourceUsageRecord};
 use tikv_util::warn;
 
