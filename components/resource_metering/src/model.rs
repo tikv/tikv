@@ -405,8 +405,9 @@ mod tests {
             duration: Duration::from_secs(1),
             records: raw_map,
         };
+        let agg_map = raw.aggregate_by_tidb_tag();
         assert_eq!(records.records.len(), 0);
-        records.append(raw.begin_unix_time_secs, raw.records.iter());
+        records.new_append(raw.begin_unix_time_secs, agg_map.iter());
         assert_eq!(records.records.len(), 3);
     }
 
