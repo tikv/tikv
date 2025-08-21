@@ -112,7 +112,7 @@ impl FindRegionResult {
     }
 }
 
-/// The abstract interface for accessing some secondary region storages in the
+/// The abstract interface for accessing some extra region storages in the
 /// cop-task.
 /// For example, in the `IndexLookUp` executor can use it to find the regions
 /// and storages where the primary keys are located.

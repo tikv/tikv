@@ -252,8 +252,10 @@ where
         };
 
         let mut output_result = Self::empty_result(BatchExecIsDrain::Remain);
-        mem::swap(&mut result.warnings, &mut output_result.warnings);
         mem::swap(&mut result.is_drained, &mut output_result.is_drained);
+        if result.warnings.warning_cnt > 0 {
+            mem::swap(&mut result.warnings, &mut output_result.warnings);
+        }
         if self.force_no_index_lookup {
             if !result.logical_rows.is_empty() {
                 self.intermediate_results.push(result);
