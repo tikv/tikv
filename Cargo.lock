@@ -3750,7 +3750,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/glorv/kvproto?branch=force-partition#5ee967714cfba0b1a2ec322f5de74240f6859778"
+source = "git+https://github.com/glorv/kvproto?branch=force-partition#7ec9a531fac7b0e9c184e10c2bc7384de8bc2e6e"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
