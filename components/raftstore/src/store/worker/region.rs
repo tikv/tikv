@@ -940,8 +940,10 @@ pub(crate) mod tests {
     };
 
     use crossbeam::channel::TrySendError;
-    use engine_rocks::RocksSnapshot;
-    use engine_test::{ctor::CfOptions, kv::KvTestEngine};
+    use engine_test::{
+        ctor::CfOptions,
+        kv::{KvTestEngine, KvTestSnapshot},
+    };
     use engine_traits::{
         CF_DEFAULT, CF_WRITE, CompactExt, FlowControlFactorsExt, KvEngine, MiscExt, Mutable,
         Peekable, RaftEngineReadOnly, SyncMutable, WriteBatch, WriteBatchExt,
@@ -976,13 +978,13 @@ pub(crate) mod tests {
     #[derive(Clone)]
     pub struct TestRaftStoreRouter {
         casual_msg_sender: SyncSender<(u64, CasualMessage<KvTestEngine>)>,
-        significant_msg_sender: SyncSender<SignificantMsg<RocksSnapshot>>,
+        significant_msg_sender: SyncSender<SignificantMsg<KvTestSnapshot>>,
     }
 
     impl TestRaftStoreRouter {
         pub fn new(
             casual_msg_sender: SyncSender<(u64, CasualMessage<KvTestEngine>)>,
-            significant_msg_sender: SyncSender<SignificantMsg<RocksSnapshot>>,
+            significant_msg_sender: SyncSender<SignificantMsg<KvTestSnapshot>>,
         ) -> TestRaftStoreRouter {
             TestRaftStoreRouter {
                 casual_msg_sender,
@@ -1002,18 +1004,18 @@ pub(crate) mod tests {
         fn significant_send(
             &self,
             _: u64,
-            msg: SignificantMsg<RocksSnapshot>,
+            msg: SignificantMsg<KvTestSnapshot>,
         ) -> RaftstoreResult<()> {
             let _ = self.significant_msg_sender.send(msg);
             Ok(())
         }
     }
 
-    impl ProposalRouter<RocksSnapshot> for TestRaftStoreRouter {
+    impl ProposalRouter<KvTestSnapshot> for TestRaftStoreRouter {
         fn send(
             &self,
-            _: RaftCommand<RocksSnapshot>,
-        ) -> std::result::Result<(), TrySendError<RaftCommand<RocksSnapshot>>> {
+            _: RaftCommand<KvTestSnapshot>,
+        ) -> std::result::Result<(), TrySendError<RaftCommand<KvTestSnapshot>>> {
             Ok(())
         }
     }
