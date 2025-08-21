@@ -16,7 +16,7 @@ use std::{
     convert::TryFrom,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::{atomic::AtomicU64, mpsc, Arc, Mutex},
+    sync::{Arc, Mutex, atomic::AtomicU64, mpsc},
     time::Duration,
 };
 
@@ -68,9 +68,10 @@ use raftstore::{
     },
     router::{CdcRaftRouter, ServerRaftStoreRouter},
     store::{
-        AutoSplitController, CheckLeaderRunner, DiskCheckRunner, LocalReader, SnapManager,
-        SnapManagerBuilder, SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
-        config::RaftstoreConfigManager, ForcePartitionRangeManager,
+        AutoSplitController, CheckLeaderRunner, DiskCheckRunner, ForcePartitionRangeManager,
+        LocalReader, SnapManager, SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
+        StoreMetaDelegate,
+        config::RaftstoreConfigManager,
         fsm,
         fsm::store::{
             MULTI_FILES_SNAPSHOT_FEATURE, PENDING_MSG_CAP, RaftBatchSystem, RaftRouter, StoreMeta,
@@ -1868,7 +1869,8 @@ mod test {
         config.validate().unwrap();
         let cache = config.storage.block_cache.build_shared_cache();
 
-        let factory = KvEngineFactoryBuilder::new(env, &config, cache, None, Default::default()).build();
+        let factory =
+            KvEngineFactoryBuilder::new(env, &config, cache, None, Default::default()).build();
         let reg = TabletRegistry::new(Box::new(factory), path.path().join("tablets")).unwrap();
 
         for i in 1..6 {

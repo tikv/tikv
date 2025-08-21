@@ -1,6 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{ffi::CString, cmp::Ordering, sync::{Arc, RwLock}, time::Duration};
+use std::{
+    cmp::Ordering,
+    ffi::CString,
+    sync::{Arc, RwLock},
+    time::Duration,
+};
 
 use engine_traits::{
     CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, CfName, SstPartitioner, SstPartitionerContext,
@@ -8,7 +13,7 @@ use engine_traits::{
 };
 use keys::{data_end_key, origin_key};
 use lazy_static::lazy_static;
-use tikv_util::{warn, time::Instant};
+use tikv_util::{time::Instant, warn};
 
 use super::metrics::*;
 use crate::{Error, Result, coprocessor::RegionInfoProvider};
@@ -29,9 +34,7 @@ struct TtlRange {
 impl TtlRange {
     #[cfg(test)]
     fn new(start: Vec<u8>, end: Vec<u8>, ttl: Instant) -> Self {
-        Self {
-            start, end, ttl,
-        }
+        Self { start, end, ttl }
     }
 }
 
@@ -43,7 +46,12 @@ impl Ord for TtlRange {
 
 impl std::fmt::Debug for TtlRange {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Range({:?}, {:?})", log_wrappers::Value(&self.start), log_wrappers::Value(&self.end))
+        write!(
+            f,
+            "Range({:?}, {:?})",
+            log_wrappers::Value(&self.start),
+            log_wrappers::Value(&self.end)
+        )
     }
 }
 
@@ -65,11 +73,7 @@ impl ForcePartitionRangeManager {
                 return false;
             }
         }
-        ranges.push(TtlRange {
-            start,
-            end,
-            ttl,
-        });
+        ranges.push(TtlRange { start, end, ttl });
         ranges.sort();
         true
     }
@@ -128,14 +132,18 @@ impl ForcePartitionRangeManager {
     pub fn iter_all_ranges(&self, mut func: impl FnMut(&[u8], &[u8], u64)) {
         let now = Instant::now_coarse();
         let mut need_clean = false;
-        self.force_partition_ranges.read().unwrap().iter().for_each(|r| {
-            let ttl = r.ttl.saturating_duration_since(now);
-            if ttl == Duration::ZERO {
-                need_clean = true;
-                return;
-            }
-            func(&r.start, &r.end, ttl.as_secs());
-        });
+        self.force_partition_ranges
+            .read()
+            .unwrap()
+            .iter()
+            .for_each(|r| {
+                let ttl = r.ttl.saturating_duration_since(now);
+                if ttl == Duration::ZERO {
+                    need_clean = true;
+                    return;
+                }
+                func(&r.start, &r.end, ttl.as_secs());
+            });
         if need_clean {
             self.remove_outdated_ranges();
         }
@@ -192,7 +200,9 @@ impl<P: RegionInfoProvider + Clone + 'static> SstPartitionerFactory
     }
 
     fn create_partitioner(&self, context: &SstPartitionerContext<'_>) -> Option<Self::Partitioner> {
-        let force_partition_ranges = self.partition_range_mgr.get_overlapped_ranges(context.smallest_key, context.largest_key);
+        let force_partition_ranges = self
+            .partition_range_mgr
+            .get_overlapped_ranges(context.smallest_key, context.largest_key);
 
         // create_partitioner can be called in RocksDB while holding db_mutex. It can
         // block other operations on RocksDB. To avoid such cases, we defer
@@ -282,7 +292,11 @@ impl<P: RegionInfoProvider> CompactionGuardGenerator<P> {
                     let mut boundaries = regions
                         .iter()
                         .map(|region| data_end_key(&region.end_key))
-                        .chain(self.force_partition_ranges.iter().flat_map(|r| [r.start.clone(), r.end.clone()].into_iter()))
+                        .chain(
+                            self.force_partition_ranges
+                                .iter()
+                                .flat_map(|r| [r.start.clone(), r.end.clone()].into_iter()),
+                        )
                         .collect::<Vec<Vec<u8>>>();
                     boundaries.sort();
                     boundaries.dedup();
@@ -312,7 +326,7 @@ fn overlap_with(ranges: &[TtlRange], last_key: &[u8], next_key: &[u8]) -> bool {
         return false;
     }
     // find the range who's end_key is larger than the start_key
-    let check_idx = ranges.partition_point(|r|  *last_key >= *r.end);
+    let check_idx = ranges.partition_point(|r| *last_key >= *r.end);
     // if the range's start key is smaller than next_key, then it should overlap.
     check_idx < ranges.len() && *next_key > *ranges[check_idx].start
 }
@@ -378,13 +392,13 @@ impl<P: RegionInfoProvider> SstPartitioner for CompactionGuardGenerator<P> {
                     } else {
                         &[]
                     };
-                    let next_pos = if self.pos > 0 && self.pos < self.boundaries.len() -1 {
-                        self.boundaries[self.pos+1].as_slice()
+                    let next_pos = if self.pos > 0 && self.pos < self.boundaries.len() - 1 {
+                        self.boundaries[self.pos + 1].as_slice()
                     } else {
                         &[]
                     };
 
-                    tikv_util::info!("sst partition due to force partition ranges"; 
+                    tikv_util::info!("sst partition due to force partition ranges";
                         "prev_key" => ?log_wrappers::Value(req.prev_user_key),
                         "next_key" => ?log_wrappers::Value(req.current_user_key),
                         "last_pos" => ?log_wrappers::Value(last_pos),
@@ -518,7 +532,13 @@ mod tests {
             provider: MockRegionInfoProvider::new(vec![]),
             initialized: true,
             use_guard: true,
-            boundaries: vec![b"bbb".to_vec(), b"ccc".to_vec(), b"ddd".to_vec(), b"e".to_vec(), b"f".to_vec()],
+            boundaries: vec![
+                b"bbb".to_vec(),
+                b"ccc".to_vec(),
+                b"ddd".to_vec(),
+                b"e".to_vec(),
+                b"f".to_vec(),
+            ],
             pos: 0,
             current_next_level_size: 0,
             next_level_pos: 0,
@@ -528,7 +548,11 @@ mod tests {
                 .collect(),
             next_level_size: [&[1 << 18; 99][..], &[1 << 28; 10][..]].concat(),
             max_compaction_size: 1 << 30, // 1GB
-            force_partition_ranges: vec![TtlRange::new("e".into(), "f".into(), Instant::now_coarse()+Duration::from_secs(100))],
+            force_partition_ranges: vec![TtlRange::new(
+                "e".into(),
+                "f".into(),
+                Instant::now_coarse() + Duration::from_secs(100),
+            )],
         };
         // Crossing region boundary.
         let mut req = SstPartitionerRequest {
@@ -574,7 +598,7 @@ mod tests {
                 if **i > *start {
                     break;
                 }
-                idx+=1;
+                idx += 1;
             }
             assert_eq!(guard.pos, idx, "pos: {}, idx: {}", guard.pos, idx);
             assert_eq!(guard.next_level_pos, 110);
@@ -583,7 +607,13 @@ mod tests {
         }
 
         // small output file, but overlap with force partition boundary.
-        let cases: [(&[u8], &[u8]); 5] = [(b"abc", b"eee"), (b"dde", b"eee"), (b"eff", b"g"), (b"e", b"f"), (b"de", b"fg")];
+        let cases: [(&[u8], &[u8]); 5] = [
+            (b"abc", b"eee"),
+            (b"dde", b"eee"),
+            (b"eff", b"g"),
+            (b"e", b"f"),
+            (b"de", b"fg"),
+        ];
         for (start, end) in cases {
             req = SstPartitionerRequest {
                 prev_user_key: start,
@@ -597,7 +627,9 @@ mod tests {
             assert_eq!(
                 guard.should_partition(&req),
                 SstPartitionerResult::Required,
-                "start: {:?}, end: {:?}", start, end,
+                "start: {:?}, end: {:?}",
+                start,
+                end,
             );
         }
         guard.pos = 0;
@@ -1007,10 +1039,18 @@ mod tests {
         assert!(mgr.force_partition_ranges.read().unwrap().is_sorted());
 
         #[track_caller]
-        fn check_overlap(mgr: &ForcePartitionRangeManager, start: &[u8], end: &[u8], expect: &[(&[u8], &[u8])]) {
+        fn check_overlap(
+            mgr: &ForcePartitionRangeManager,
+            start: &[u8],
+            end: &[u8],
+            expect: &[(&[u8], &[u8])],
+        ) {
             let ranges = mgr.get_overlapped_ranges(start, end);
             assert_eq!(ranges.len(), expect.len());
-            ranges.iter().zip(expect.into_iter()).for_each(|(got, exp)| assert!(*got.start == *exp.0 && *got.end == *exp.1));
+            ranges
+                .iter()
+                .zip(expect.into_iter())
+                .for_each(|(got, exp)| assert!(*got.start == *exp.0 && *got.end == *exp.1));
         }
 
         check_overlap(&mgr, b"a", b"aa", &[]);
@@ -1020,7 +1060,7 @@ mod tests {
         check_overlap(&mgr, b"a", b"i", &[(b"b", b"f"), (b"h", b"n")]);
         check_overlap(&mgr, b"a", b"n", &[(b"b", b"f"), (b"h", b"n")]);
         check_overlap(&mgr, b"a", b"z", &[(b"b", b"f"), (b"h", b"n")]);
-        
+
         // test overlapped ranges
         mgr.add_range(b"b".to_vec(), b"d".to_vec(), 10);
         check_overlap(&mgr, b"a", b"d", &[(b"b", b"f")]);

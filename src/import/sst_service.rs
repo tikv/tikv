@@ -26,7 +26,7 @@ use kvproto::{
 use raftstore::{
     RegionInfoAccessor,
     coprocessor::{RegionInfo, RegionInfoProvider},
-    store::{util::is_epoch_stale, ForcePartitionRangeManager},
+    store::{ForcePartitionRangeManager, util::is_epoch_stale},
 };
 use raftstore_v2::StoreMeta;
 use rand::Rng;
@@ -1328,12 +1328,17 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         ctx.spawn(async move { send_rpc_response!(Ok(resp), sink, label, timer) });
     }
 
-    fn add_force_partition_range(&mut self, _ctx: RpcContext<'_>, req: AddPartitionRangeRequest, sink: UnarySink<AddPartitionRangeResponse>) {
+    fn add_force_partition_range(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        req: AddPartitionRangeRequest,
+        sink: UnarySink<AddPartitionRangeResponse>,
+    ) {
         let label = "add_force_partition_range";
         let timer = Instant::now_coarse();
         let engine = self.engine.kv_engine().unwrap();
         let force_partition_range_mgr = self.force_partition_range_mgr.clone();
-        
+
         let handle_task = async move {
             let start = keys::data_key(Key::from_raw(req.get_range().get_start()).as_encoded());
             let end = keys::data_end_key(Key::from_raw(req.get_range().get_end()).as_encoded());
@@ -1343,20 +1348,31 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 ttl = 3600;
             }
             if start >= end {
-                send_rpc_response!(Err(Error::Io(
-                    std::io::Error::new(std::io::ErrorKind::InvalidInput,
-                    format!("start keys must be smaller than end key, start: {:?}, end: {:?}",
-                    req.get_range().get_start(), req.get_range().get_end())))), sink, label, timer);
+                send_rpc_response!(
+                    Err(Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!(
+                            "start keys must be smaller than end key, start: {:?}, end: {:?}",
+                            req.get_range().get_start(),
+                            req.get_range().get_end()
+                        )
+                    ))),
+                    sink,
+                    label,
+                    timer
+                );
                 return;
             }
 
             let added = force_partition_range_mgr.add_range(start.clone(), end.clone(), ttl);
 
-            // here, we don't compact the whole range directly because it's possible that the task is 
-            // restart from a checkpoint, thus, there may be already many SST files, but there's no
-            // need to compact them. Instaed, we try to compact a range that won't overlap with any 
-            // real data kv at both side of the range. These 2 ranges won't overlap with any real 
-            // data kv, but can trigger a compact if a SST with huge range overlaps with the input range.
+            // here, we don't compact the whole range directly because it's possible that
+            // the task is restart from a checkpoint, thus, there may be already
+            // many SST files, but there's no need to compact them. Instaed, we
+            // try to compact a range that won't overlap with any real data kv
+            // at both side of the range. These 2 ranges won't overlap with any real
+            // data kv, but can trigger a compact if a SST with huge range overlaps with the
+            // input range.
             let mut start_next = req.get_range().get_start().to_owned();
             start_next.push(0);
             let start_next_data_key = keys::data_key(Key::from_raw(&start_next).as_encoded());
@@ -1388,10 +1404,15 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
 
         self.threads.spawn(handle_task);
     }
-    fn remove_force_partition_range(&mut self, ctx: RpcContext<'_>, req: RemovePartitionRangeRequest, sink: UnarySink<RemovePartitionRangeResponse>) {
+    fn remove_force_partition_range(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: RemovePartitionRangeRequest,
+        sink: UnarySink<RemovePartitionRangeResponse>,
+    ) {
         let label = "remove_force_partition_range";
         let timer = Instant::now_coarse();
-        
+
         let start = keys::data_key(Key::from_raw(req.get_range().get_start()).as_encoded());
         let end = keys::data_end_key(Key::from_raw(req.get_range().get_end()).as_encoded());
         let removed = self.force_partition_range_mgr.remove_range(&start, &end);

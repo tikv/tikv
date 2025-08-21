@@ -737,17 +737,25 @@ fn check_sst_num(dir: &Path, expected_count: usize) {
             real_count += 1;
         }
     }
-    assert_eq!(real_count, expected_count, "expected: {}, got: {}", expected_count, real_count);
-} 
+    assert_eq!(
+        real_count, expected_count,
+        "expected: {}, got: {}",
+        expected_count, real_count
+    );
+}
 
 #[test]
 fn test_force_partition_range() {
     let (cluster, ctx, _tikv, import) = new_cluster_and_tikv_import_client();
-    let temp_dir = Builder::new().prefix("test_force_partition_range").tempdir().unwrap();
+    let temp_dir = Builder::new()
+        .prefix("test_force_partition_range")
+        .tempdir()
+        .unwrap();
     let sst_path = temp_dir.path().join("test.sst");
 
     // ingest a sst with a big range
-    let (mut meta, data) = gen_sst_file_with_tidb_kvs(sst_path.clone(), &[(b"a", b"a"), (b"z", b"z")], None);
+    let (mut meta, data) =
+        gen_sst_file_with_tidb_kvs(sst_path.clone(), &[(b"a", b"a"), (b"z", b"z")], None);
     meta.set_region_id(ctx.get_region_id());
     meta.set_region_epoch(ctx.get_region_epoch().clone());
     meta.set_cf_name("write".to_string());
@@ -765,8 +773,11 @@ fn test_force_partition_range() {
     range.set_end(b"c".to_vec());
     partition_range_req.set_range(range);
     partition_range_req.set_ttl(3600);
-    import.add_force_partition_range(&partition_range_req).unwrap();
+    import
+        .add_force_partition_range(&partition_range_req)
+        .unwrap();
 
-    // force partition should trigger a manual compact and split the original sst to 2 sst.
+    // force partition should trigger a manual compact and split the original sst to
+    // 2 sst.
     check_sst_num(&db_path, 2);
 }

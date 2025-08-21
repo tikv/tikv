@@ -51,7 +51,7 @@ use raftstore::store::ForcePartitionRangeManager;
 use regex::Regex;
 use resource_control::ResourceGroupManager;
 use security::{self, SecurityConfig};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use service::service_manager::GrpcServiceManager;
 use tikv_kv::RaftExtension;
@@ -476,18 +476,18 @@ where
         ))
     }
 
-    pub fn dump_partition_ranges(force_partition_range_mgr: &ForcePartitionRangeManager) -> hyper::Result<Response<Body>> {
+    pub fn dump_partition_ranges(
+        force_partition_range_mgr: &ForcePartitionRangeManager,
+    ) -> hyper::Result<Response<Body>> {
         let mut ranges = vec![];
         force_partition_range_mgr.iter_all_ranges(|start, end, ttl| {
-            ranges.push(
-                HexRange {
-                    start: hex::encode(keys::origin_key(start)),
-                    end: hex::encode(keys::origin_end_key(end)),
-                    ttl,
-                }
-            );
+            ranges.push(HexRange {
+                start: hex::encode(keys::origin_key(start)),
+                end: hex::encode(keys::origin_end_key(end)),
+                ttl,
+            });
         });
-        
+
         let body = match serde_json::to_vec(&ranges) {
             Ok(body) => body,
             Err(err) => {
@@ -509,7 +509,10 @@ where
         }
     }
 
-    async fn add_partition_ranges(req: Request<Body>, force_partition_range_mgr: &ForcePartitionRangeManager) -> hyper::Result<Response<Body>> {
+    async fn add_partition_ranges(
+        req: Request<Body>,
+        force_partition_range_mgr: &ForcePartitionRangeManager,
+    ) -> hyper::Result<Response<Body>> {
         let mut body = Vec::new();
         req.into_body()
             .try_for_each(|bytes| {
@@ -519,13 +522,14 @@ where
             .await?;
 
         let res = || -> std::result::Result<_, String> {
-            let range: HexRange =
-                serde_json::from_slice(&body).map_err(|e| e.to_string())?;
-            let start = hex::decode(&range.start).map_err(|e| format!("invalie start key, err: {:?}", e))?;
-            let end = hex::decode(&range.end).map_err(|e| format!("invalie end key, err: {:?}", e))?;
+            let range: HexRange = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
+            let start = hex::decode(&range.start)
+                .map_err(|e| format!("invalie start key, err: {:?}", e))?;
+            let end =
+                hex::decode(&range.end).map_err(|e| format!("invalie end key, err: {:?}", e))?;
             Ok((range, (keys::data_key(&start), keys::data_end_key(&end))))
         }();
-        
+
         match res {
             Ok((hex_range, range)) => {
                 let added = force_partition_range_mgr.add_range(range.0, range.1, 3600);
@@ -536,7 +540,10 @@ where
         }
     }
 
-    async fn remove_partition_ranges(req: Request<Body>, force_partition_range_mgr: &ForcePartitionRangeManager) -> hyper::Result<Response<Body>> {
+    async fn remove_partition_ranges(
+        req: Request<Body>,
+        force_partition_range_mgr: &ForcePartitionRangeManager,
+    ) -> hyper::Result<Response<Body>> {
         let mut body = Vec::new();
         req.into_body()
             .try_for_each(|bytes| {
@@ -546,13 +553,14 @@ where
             .await?;
 
         let res = || -> std::result::Result<_, String> {
-            let range: HexRange =
-                serde_json::from_slice(&body).map_err(|e| e.to_string())?;
-            let start = hex::decode(&range.start).map_err(|e| format!("invalie start key, err: {:?}", e))?;
-            let end = hex::decode(&range.end).map_err(|e| format!("invalie end key, err: {:?}", e))?;
+            let range: HexRange = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
+            let start = hex::decode(&range.start)
+                .map_err(|e| format!("invalie start key, err: {:?}", e))?;
+            let end =
+                hex::decode(&range.end).map_err(|e| format!("invalie end key, err: {:?}", e))?;
             Ok((range, (keys::data_key(&start), keys::data_end_key(&end))))
         }();
-        
+
         match res {
             Ok((hex_range, range)) => {
                 let removed = force_partition_range_mgr.remove_range(&range.0, &range.1);
@@ -1489,7 +1497,7 @@ mod tests {
                 None,
                 GrpcServiceManager::dummy(),
                 None,
-            Default::default(),
+                Default::default(),
             )
             .unwrap();
             let addr = "127.0.0.1:0".to_owned();
@@ -2062,7 +2070,7 @@ mod tests {
                 None,
                 GrpcServiceManager::dummy(),
                 None,
-            Default::default(),
+                Default::default(),
             )
             .unwrap();
             let addr = "127.0.0.1:0".to_owned();
@@ -2101,7 +2109,7 @@ mod tests {
                 None,
                 GrpcServiceManager::dummy(),
                 None,
-            Default::default(),
+                Default::default(),
             )
             .unwrap();
             let addr = "127.0.0.1:0".to_owned();

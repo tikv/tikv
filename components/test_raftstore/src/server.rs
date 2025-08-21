@@ -35,9 +35,17 @@ use kvproto::{
 };
 use pd_client::PdClient;
 use raftstore::{
-    coprocessor::{CoprocessorHost, RegionInfoAccessor}, errors::Error as RaftError, router::{CdcRaftRouter, LocalReadRouter, RaftStoreRouter, ReadContext, ServerRaftStoreRouter}, store::{
-        fsm::{store::StoreMeta, ApplyRouter, RaftBatchSystem, RaftRouter}, msg::RaftCmdExtraOpts, AutoSplitController, Callback, CheckLeaderRunner, DiskCheckRunner, ForcePartitionRangeManager, LocalReader, RegionSnapshot, SnapManager, SnapManagerBuilder, SplitCheckRunner, SplitConfigManager, StoreMetaDelegate
-    }, Result
+    Result,
+    coprocessor::{CoprocessorHost, RegionInfoAccessor},
+    errors::Error as RaftError,
+    router::{CdcRaftRouter, LocalReadRouter, RaftStoreRouter, ReadContext, ServerRaftStoreRouter},
+    store::{
+        AutoSplitController, Callback, CheckLeaderRunner, DiskCheckRunner,
+        ForcePartitionRangeManager, LocalReader, RegionSnapshot, SnapManager, SnapManagerBuilder,
+        SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
+        fsm::{ApplyRouter, RaftBatchSystem, RaftRouter, store::StoreMeta},
+        msg::RaftCmdExtraOpts,
+    },
 };
 use resource_control::ResourceGroupManager;
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};

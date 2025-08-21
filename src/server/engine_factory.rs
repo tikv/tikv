@@ -58,7 +58,9 @@ impl KvEngineFactoryBuilder {
                 sst_recovery_sender: None,
                 encryption_key_manager: key_manager,
                 db_resources: config.rocksdb.build_resources(env, config.storage.engine),
-                cf_resources: config.rocksdb.build_cf_resources(cache, force_partition_range_mgr),
+                cf_resources: config
+                    .rocksdb
+                    .build_cf_resources(cache, force_partition_range_mgr),
                 state_storage: None,
                 lite: false,
             },
@@ -285,7 +287,8 @@ mod tests {
         let dir = test_util::temp_dir(name, false);
         let env = cfg.build_shared_rocks_env(None, None).unwrap();
 
-        let factory = KvEngineFactoryBuilder::new(env, &cfg, cache, None, Default::default()).build();
+        let factory =
+            KvEngineFactoryBuilder::new(env, &cfg, cache, None, Default::default()).build();
         let reg = TabletRegistry::new(Box::new(factory), dir.path()).unwrap();
         (dir, reg)
     }

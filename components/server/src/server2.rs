@@ -1689,7 +1689,8 @@ mod test {
         let path = Builder::new().prefix("test-update").tempdir().unwrap();
         let cache = config.storage.block_cache.build_shared_cache();
 
-        let factory = KvEngineFactoryBuilder::new(env, &config, cache, None, Default::default()).build();
+        let factory =
+            KvEngineFactoryBuilder::new(env, &config, cache, None, Default::default()).build();
         let reg = TabletRegistry::new(Box::new(factory), path.path().join("tablets")).unwrap();
 
         for i in 1..6 {

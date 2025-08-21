@@ -57,7 +57,10 @@ use raft_log_engine::{
 };
 use raftstore::{
     coprocessor::{Config as CopConfig, RegionInfoAccessor},
-    store::{CompactionGuardGeneratorFactory, ForcePartitionRangeManager, Config as RaftstoreConfig, SplitConfig},
+    store::{
+        CompactionGuardGeneratorFactory, Config as RaftstoreConfig, ForcePartitionRangeManager,
+        SplitConfig,
+    },
 };
 use resource_control::config::Config as ResourceControlConfig;
 use resource_metering::Config as ResourceMeteringConfig;
@@ -1663,7 +1666,11 @@ impl DbConfig {
         opts
     }
 
-    pub fn build_cf_resources(&self, cache: Cache, force_partition_range_mgr: ForcePartitionRangeManager) -> CfResources {
+    pub fn build_cf_resources(
+        &self,
+        cache: Cache,
+        force_partition_range_mgr: ForcePartitionRangeManager,
+    ) -> CfResources {
         let mut compaction_thread_limiters = HashMap::new();
         if let Some(n) = self.defaultcf.max_compactions
             && n > 0
@@ -5983,8 +5990,10 @@ mod tests {
             &cfg.infer_kv_engine_path(None).unwrap(),
             Some(cfg.rocksdb.build_opt(&resource, cfg.storage.engine)),
             cfg.rocksdb.build_cf_opts(
-                &cfg.rocksdb
-                    .build_cf_resources(cfg.storage.block_cache.build_shared_cache(), Default::default()),
+                &cfg.rocksdb.build_cf_resources(
+                    cfg.storage.block_cache.build_shared_cache(),
+                    Default::default(),
+                ),
                 None,
                 cfg.storage.api_version(),
                 None,
@@ -6951,7 +6960,14 @@ mod tests {
             ..Default::default()
         };
         let provider = Some(MockRegionInfoProvider::new(vec![]));
-        let cf_opts = build_cf_opt!(config, CF_DEFAULT, &cache, no_limiter.as_ref(), provider, Default::default(),);
+        let cf_opts = build_cf_opt!(
+            config,
+            CF_DEFAULT,
+            &cache,
+            no_limiter.as_ref(),
+            provider,
+            Default::default(),
+        );
         assert_eq!(
             config.target_file_size_base(),
             cf_opts.get_target_file_size_base()
@@ -6964,7 +6980,14 @@ mod tests {
             ..Default::default()
         };
         let provider: Option<MockRegionInfoProvider> = None;
-        let cf_opts = build_cf_opt!(config, CF_DEFAULT, &cache, no_limiter.as_ref(), provider, Default::default(),);
+        let cf_opts = build_cf_opt!(
+            config,
+            CF_DEFAULT,
+            &cache,
+            no_limiter.as_ref(),
+            provider,
+            Default::default(),
+        );
         assert_eq!(
             config.target_file_size_base(),
             cf_opts.get_target_file_size_base()
@@ -6979,7 +7002,14 @@ mod tests {
             ..Default::default()
         };
         let provider = Some(MockRegionInfoProvider::new(vec![]));
-        let cf_opts = build_cf_opt!(config, CF_DEFAULT, &cache, no_limiter.as_ref(), provider, Default::default(),);
+        let cf_opts = build_cf_opt!(
+            config,
+            CF_DEFAULT,
+            &cache,
+            no_limiter.as_ref(),
+            provider,
+            Default::default(),
+        );
         assert_eq!(
             config.compaction_guard_max_output_file_size.0,
             cf_opts.get_target_file_size_base()

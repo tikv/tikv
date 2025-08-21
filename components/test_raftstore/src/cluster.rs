@@ -253,7 +253,12 @@ impl<T: Simulator> Cluster<T> {
 
     fn create_engine(&mut self, router: Option<RaftRouter<RocksEngine, RaftTestEngine>>) {
         let (engines, key_manager, dir, sst_worker, kv_statistics, raft_statistics) =
-            create_test_engine(router, self.io_rate_limiter.clone(), &self.cfg, &self.force_partition_mgr);
+            create_test_engine(
+                router,
+                self.io_rate_limiter.clone(),
+                &self.cfg,
+                &self.force_partition_mgr,
+            );
         self.dbs.push(engines);
         self.key_managers.push(key_manager);
         self.paths.push(dir);
@@ -274,7 +279,13 @@ impl<T: Simulator> Cluster<T> {
             self.engines.remove(&node_id);
         }
         let (engines, key_manager, dir, sst_worker, kv_statistics, raft_statistics) =
-            start_test_engine(None, self.io_rate_limiter.clone(), &self.cfg, &self.force_partition_mgr, path);
+            start_test_engine(
+                None,
+                self.io_rate_limiter.clone(),
+                &self.cfg,
+                &self.force_partition_mgr,
+                path,
+            );
         self.dbs.insert(idx, engines);
         self.key_managers.insert(idx, key_manager);
         self.paths.insert(idx, dir);

@@ -128,7 +128,7 @@ pub fn gen_sst_file_with_tidb_kvs<P: AsRef<Path>>(
     w.finish().unwrap();
 
     // set end to the `next_key` of the largest key.
-    let mut end = raw_kvs[raw_kvs.len()-1].0.to_vec();
+    let mut end = raw_kvs[raw_kvs.len() - 1].0.to_vec();
     end.push(0);
     read_sst_file(path, (raw_kvs[0].0, &end))
 }

@@ -43,7 +43,9 @@ use pd_client::PdClient;
 use protobuf::RepeatedField;
 use raft::eraftpb::ConfChangeType;
 use raftstore::{
-    coprocessor::CoprocessorHost, store::{fsm::RaftRouter, util::encode_start_ts_into_flag_data, *}, RaftRouterCompactedEventSender, RegionInfoAccessor, Result
+    RaftRouterCompactedEventSender, RegionInfoAccessor, Result,
+    coprocessor::CoprocessorHost,
+    store::{fsm::RaftRouter, util::encode_start_ts_into_flag_data, *},
 };
 use rand::{RngCore, seq::SliceRandom};
 use server::common::ConfiguredRaftEngine;
@@ -771,10 +773,16 @@ pub fn start_test_engine(
     let (raft_engine, raft_statistics) = RaftTestEngine::build(&cfg, &env, &key_manager, &cache);
 
     let mut host: CoprocessorHost<RocksEngine> = CoprocessorHost::default();
-    let accessor = RegionInfoAccessor::new(&mut host, Arc::new(||{true}), Box::new(||1));
-    let mut builder = KvEngineFactoryBuilder::new(env, &cfg, cache, key_manager.clone(), force_partition_mgr.clone())
-        .sst_recovery_sender(Some(scheduler))
-        .region_info_accessor(accessor);
+    let accessor = RegionInfoAccessor::new(&mut host, Arc::new(|| true), Box::new(|| 1));
+    let mut builder = KvEngineFactoryBuilder::new(
+        env,
+        &cfg,
+        cache,
+        key_manager.clone(),
+        force_partition_mgr.clone(),
+    )
+    .sst_recovery_sender(Some(scheduler))
+    .region_info_accessor(accessor);
     if let Some(router) = router {
         builder = builder.compaction_event_sender(Arc::new(RaftRouterCompactedEventSender {
             router: Mutex::new(router),
