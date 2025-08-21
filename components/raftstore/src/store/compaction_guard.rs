@@ -24,6 +24,8 @@ lazy_static! {
     static ref COMPACTION_GUARD: CString = CString::new(b"CompactionGuard".to_vec()).unwrap();
 }
 
+// `Instant` does not implement the "Ord" trait.
+#[allow(clippy::derive_ord_xor_partial_ord)]
 #[derive(Eq, PartialEq, PartialOrd, Clone)]
 struct TtlRange {
     start: Vec<u8>,
@@ -1049,7 +1051,7 @@ mod tests {
             assert_eq!(ranges.len(), expect.len());
             ranges
                 .iter()
-                .zip(expect.into_iter())
+                .zip(&*expect)
                 .for_each(|(got, exp)| assert!(*got.start == *exp.0 && *got.end == *exp.1));
         }
 
