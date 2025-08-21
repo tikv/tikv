@@ -445,7 +445,7 @@ mod tests {
         assert_eq!(records.records.len(), 1);
         assert_eq!(
             &records.records.keys().next().unwrap().extra_attachment,
-            &[1]
+            &Arc::new([1])
         );
 
         // deregister collector
@@ -510,7 +510,7 @@ mod tests {
         assert_eq!(records.records.len(), 1);
         assert_eq!(
             &records.records.keys().next().unwrap().extra_attachment,
-            &[1]
+            &Arc::new([1])
         );
         assert_eq!(records, {
             collector2.records.lock().unwrap().take().unwrap()
@@ -565,7 +565,7 @@ mod tests {
         assert_eq!(records.records.len(), 1);
         assert_eq!(
             &records.records.keys().next().unwrap().extra_attachment,
-            &[1]
+            &Arc::new([1])
         );
         assert_eq!(records, {
             observer.records.lock().unwrap().take().unwrap()

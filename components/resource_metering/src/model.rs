@@ -361,21 +361,21 @@ mod tests {
             region_id: 0,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: Arc::new(b"a".to_vec()),
+            extra_attachment: b"a".to_vec().into(),
         });
         let tag2 = Arc::new(TagInfos {
             store_id: 0,
             region_id: 0,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: Arc::new(b"b".to_vec()),
+            extra_attachment: b"b".to_vec().into(),
         });
         let tag3 = Arc::new(TagInfos {
             store_id: 0,
             region_id: 0,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: Arc::new(b"c".to_vec()),
+            extra_attachment: b"c".to_vec().into(),
         });
         let mut records = Records::default();
         let mut raw_map = HashMap::default();
@@ -421,21 +421,21 @@ mod tests {
             region_id: 0,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: Arc::new(b"a".to_vec()),
+            extra_attachment: b"a".to_vec().into(),
         });
         let tag2 = Arc::new(TagInfos {
             store_id: 0,
             region_id: 0,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: Arc::new(b"b".to_vec()),
+            extra_attachment: b"b".to_vec().into(),
         });
         let tag3 = Arc::new(TagInfos {
             store_id: 0,
             region_id: 0,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: Arc::new(b"c".to_vec()),
+            extra_attachment: b"c".to_vec().into(),
         });
         let mut records = HashMap::default();
         records.insert(
@@ -511,21 +511,21 @@ mod tests {
             region_id: 0,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: Arc::new(b"a".to_vec()),
+            extra_attachment: b"a".to_vec().into(),
         });
         let tag2 = Arc::new(TagInfos {
             store_id: 0,
             region_id: 0,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: Arc::new(b"b".to_vec()),
+            extra_attachment: b"b".to_vec().into(),
         });
         let tag3 = Arc::new(TagInfos {
             store_id: 0,
             region_id: 0,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: Arc::new(b"c".to_vec()),
+            extra_attachment: b"c".to_vec().into(),
         });
 
         // Keep cpu_time same for all tags.
@@ -583,21 +583,21 @@ mod tests {
             region_id: 0,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: Arc::new(b"a".to_vec()),
+            extra_attachment: b"a".to_vec().into(),
         });
         let tag2 = Arc::new(TagInfos {
             store_id: 0,
             region_id: 0,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: Arc::new(b"b".to_vec()),
+            extra_attachment: b"b".to_vec().into(),
         });
         let tag3 = Arc::new(TagInfos {
             store_id: 0,
             region_id: 0,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: Arc::new(b"c".to_vec()),
+            extra_attachment: b"c".to_vec().into(),
         });
         // tag4's extra tag is equal to tag1's
         let tag4 = Arc::new(TagInfos {
@@ -605,7 +605,7 @@ mod tests {
             region_id: 2,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: Arc::new(b"a".to_vec()),
+            extra_attachment: b"a".to_vec().into(),
         });
         // tag5's extra tag is equal to tag1's
         let tag5 = Arc::new(TagInfos {
@@ -613,7 +613,7 @@ mod tests {
             region_id: 3,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: Arc::new(b"a".to_vec()),
+            extra_attachment: b"a".to_vec().into(),
         });
         // tag6's extra tag is equal to tag2's
         let tag6 = Arc::new(TagInfos {
@@ -621,7 +621,7 @@ mod tests {
             region_id: 5,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: Arc::new(b"b".to_vec()),
+            extra_attachment: b"b".to_vec().into(),
         });        
         let mut records = HashMap::default();
         records.insert(

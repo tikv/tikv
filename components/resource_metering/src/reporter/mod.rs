@@ -290,7 +290,7 @@ mod tests {
                 region_id: 0,
                 peer_id: 0,
                 key_ranges: vec![],
-                extra_attachment: b"12345".to_vec(),
+                extra_attachment: b"12345".to_vec().into(),
             }),
             RawRecord {
                 cpu_time: 1,
@@ -336,7 +336,7 @@ mod tests {
                 region_id: 0,
                 peer_id: 0,
                 key_ranges: vec![],
-                extra_attachment: b"12345".to_vec(),
+                extra_attachment: b"12345".to_vec().into(),
             }),
             RawRecord {
                 cpu_time: 1,
