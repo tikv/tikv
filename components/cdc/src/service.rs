@@ -495,8 +495,8 @@ impl Service {
 
         let last_flush_time = Arc::new(AtomicCell::new(Instant::now()));
         let last_flush_time_for_forward = last_flush_time.clone();
-        let last_flush_time_for_watchdog = last_flush_time.clone();
-        let peer_for_watchdog = ctx.peer().to_string();
+        let last_flush_time_for_watchdog = last_flush_time;
+        let peer_for_watchdog = ctx.peer();
 
         let peer = ctx.peer();
         let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
@@ -529,8 +529,8 @@ impl Service {
         // Start watchdog to monitor connection activity
         Self::start_connection_watchdog(
             self.pool.clone(),
-            last_flush_time_for_watchdog.clone(),
-            peer_for_watchdog.clone(),
+            last_flush_time_for_watchdog,
+            peer_for_watchdog,
             conn_id,
             cancel_tx,
             forward_exit_rx,
@@ -550,9 +550,6 @@ impl Service {
         cancel_tx: tokio::sync::oneshot::Sender<()>,
         mut forward_exit_rx: tokio::sync::oneshot::Receiver<()>,
     ) {
-        let last_flush_time_clone = last_flush_time.clone();
-        let peer_clone = peer.clone();
-
         // Create a custom interval task that can be stopped
         let _ = pool.pool().spawn(async move {
             let mut interval = GLOBAL_TIMER_HANDLE
@@ -569,12 +566,12 @@ impl Service {
                         break;
                     }
                     _ = interval.next() => {
-                        let elapsed = last_flush_time_clone.load().elapsed();
+                        let elapsed = last_flush_time.load().elapsed();
 
                         // Check if last flush was more than the warning threshold
                         if elapsed > Duration::from_secs(CDC_IDLE_WARNING_THRESHOLD_SECS) {
                             warn!("cdc connection idle too long";
-                                  "downstream" => peer_clone.clone(),
+                                  "downstream" => peer.clone(),
                                   "conn_id" => ?conn_id,
                                   "seconds_since_last_flush" => elapsed.as_secs());
                         }
@@ -597,7 +594,7 @@ impl Service {
                         // Check if last flush was more than the deregister threshold
                         if elapsed > Duration::from_secs(_idle_threshold) {
                             error!("cdc connection idle for too long, aborting connection";
-                                   "downstream" => peer_clone.clone(),
+                                   "downstream" => peer.clone(),
                                    "conn_id" => ?conn_id,
                                    "seconds_since_last_flush" => elapsed.as_secs());
                             // Cancel the gRPC connection
@@ -633,9 +630,6 @@ impl ChangeData for Service {
 
 #[cfg(feature = "failpoints")]
 async fn sleep_before_drain_change_event() {
-    use std::time::{Duration, Instant};
-
-    use tikv_util::timer::GLOBAL_TIMER_HANDLE;
     let should_sleep = || {
         fail::fail_point!("cdc_sleep_before_drain_change_event", |_| true);
         false

@@ -787,6 +787,7 @@ fn test_cdc_watchdog_idle_timeout() {
     // We can do this by trying to receive from the underlying receiver
     // If the connection is closed, recv_timeout should return an error
     let mut connection_cancelled = false;
+    use std::time::Instant;
     let start_time = Instant::now();
 
     // Try to detect connection closure for up to 5 seconds (shorter timeout for
