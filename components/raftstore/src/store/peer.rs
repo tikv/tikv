@@ -1416,7 +1416,7 @@ where
                 pending_create_peers.clone(),
             )
             .is_err();
-        // Failed to synchronously destroy the peer (channel is closed),
+        // Failed to asynchronously destroy the peer (channel is closed),
         // redirecting to synchronously destroy the peer.
         let clear_stat = if async_failed {
             match clear_meta_in_kv_and_raft(

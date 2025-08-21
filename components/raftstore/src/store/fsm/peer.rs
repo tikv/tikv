@@ -1630,7 +1630,7 @@ where
             // for snapshot recovery (safe recovery)
             SignificantMsg::SnapshotBrWaitApply(syncer) => self.on_snapshot_br_wait_apply(syncer),
             SignificantMsg::CheckPendingAdmin(ch) => self.on_check_pending_admin(ch),
-            SignificantMsg::DestroyPeer {
+            SignificantMsg::ReadyToDestroyPeer {
                 merged_by_target,
                 clear_stat,
             } => {
@@ -4180,9 +4180,9 @@ where
             self.ctx.store_meta.clone(),
             self.ctx.pending_create_peers.clone(),
         );
-        // If clear_stat is valid, which means that the above destroy task is executed
-        // synchronously, we should continue to do the consequential jobs for destroying
-        // peer right now.
+        // If clear_stat is valid, it means the destroy task above was executed
+        // synchronously. In this case, we should immediately perform the
+        // follow-up steps required to complete the peer destruction process.
         if !clear_stat.is_zero() {
             self.on_ready_destroy_peer(merged_by_target, clear_stat);
         }

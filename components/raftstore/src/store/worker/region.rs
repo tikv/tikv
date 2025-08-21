@@ -71,8 +71,8 @@ pub enum Task {
         start_key: Vec<u8>,
         end_key: Vec<u8>,
     },
-    /// Destroys and clears data belonging to the corresponding peer.
-    DestroyPeer {
+    /// Clears metadata belonging to the corresponding peer.
+    ClearPeerMeta {
         peer: Peer,
         region: Region,
         raft_state: RaftLocalState,
@@ -112,7 +112,7 @@ impl Display for Task {
                 log_wrappers::Value::key(start_key),
                 log_wrappers::Value::key(end_key)
             ),
-            Task::DestroyPeer {
+            Task::ClearPeerMeta {
                 ref peer,
                 ref region,
                 ..
@@ -789,7 +789,7 @@ where
         SNAP_PENDING_APPLIES_GAUGE.set(self.pending_applies.len() as i64);
     }
 
-    fn handle_destroy_peer(
+    fn handle_clear_peer_meta(
         &mut self,
         peer: Peer,
         region: Region,
@@ -858,7 +858,7 @@ where
                 self.clean_stale_ranges();
                 fail_point!("after_region_worker_destroy");
             }
-            Task::DestroyPeer {
+            Task::ClearPeerMeta {
                 peer,
                 region,
                 raft_state,
@@ -871,7 +871,7 @@ where
             } => {
                 let peer_id = peer.get_id();
                 let region_id = region.get_id();
-                match self.handle_destroy_peer(
+                match self.handle_clear_peer_meta(
                     peer,
                     region,
                     raft_state,
@@ -894,7 +894,7 @@ where
                     Ok(clear_stat) => {
                         let _ = self.router.significant_send(
                             region_id,
-                            SignificantMsg::DestroyPeer {
+                            SignificantMsg::ReadyToDestroyPeer {
                                 merged_by_target: keep_data,
                                 clear_stat,
                             },

@@ -770,11 +770,11 @@ where
         pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
     ) -> Result<()> {
         self.entry_storage.clear();
-        // For DestroyPeer task, it must be sent to the worker even
+        // For ClearPeerMeta task, it must be sent to the worker even
         // if the capacityis full.
         box_try!(
             self.region_scheduler
-                .schedule_force(RegionTask::DestroyPeer {
+                .schedule_force(RegionTask::ClearPeerMeta {
                     peer,
                     region,
                     raft_state: self.raft_state().clone(),
