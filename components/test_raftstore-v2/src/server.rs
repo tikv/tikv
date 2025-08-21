@@ -747,7 +747,11 @@ impl<EK: KvEngine> ServerCluster<EK> {
         self.concurrency_managers
             .insert(node_id, concurrency_manager);
 
-        let client = RaftClient::new(node_id, self.conn_builder.clone());
+        let client = RaftClient::new(
+            node_id,
+            self.conn_builder.clone(),
+            Duration::from_millis(10),
+        );
         self.raft_clients.insert(node_id, client);
         Ok(node_id)
     }

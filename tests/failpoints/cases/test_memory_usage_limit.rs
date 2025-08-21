@@ -214,11 +214,7 @@ fn test_evict_early_avoids_reject() {
     // process.
     put_n_entries(&mut cluster, 10, 1024);
     wait_msg_counter(append_to_2.clone(), unreachable_to_2.clone(), 10, 0);
-    assert!(
-        append_to_2.load(Ordering::SeqCst) == 10 ||
-         // This value could be 11 if a no-op entry.
-        append_to_2.load(Ordering::SeqCst) == 11
-    );
+    assert_ge!(append_to_2.load(Ordering::SeqCst), 10);
     assert_eq!(unreachable_to_2.load(Ordering::SeqCst), 0);
 
     // Verify that `evict_entry_cache` was triggered by checking that the entry

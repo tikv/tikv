@@ -662,10 +662,10 @@ where
                     if !self.ctx.coprocessor_host.on_raft_message(&msg.msg) {
                         continue;
                     }
-
                     if let Err(e) = self.on_raft_message(msg) {
-                        error!(%e;
+                        warn!(
                             "handle raft message err";
+                            "err" => ?e,
                             "region_id" => self.fsm.region_id(),
                             "peer_id" => self.fsm.peer_id(),
                         );
@@ -2270,7 +2270,7 @@ where
             Some(mb) => mb,
             None => {
                 self.fsm.tick_registry[idx] = false;
-                error!(
+                warn!(
                     "failed to get mailbox";
                     "region_id" => self.fsm.region_id(),
                     "peer_id" => self.fsm.peer_id(),
@@ -3216,7 +3216,7 @@ where
         }
 
         if !msg.has_region_epoch() {
-            error!(
+            warn!(
                 "missing epoch in raft message, ignore it";
                 "region_id" => region_id,
             );
@@ -4156,7 +4156,7 @@ where
         );
         let task = PdTask::DestroyPeer { region_id };
         if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
-            error!(
+            warn!(
                 "failed to notify pd";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
@@ -4529,7 +4529,7 @@ where
                 regions: regions.to_vec(),
             };
             if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
-                error!(
+                warn!(
                     "failed to notify pd";
                     "region_id" => self.fsm.region_id(),
                     "peer_id" => self.fsm.peer_id(),
@@ -5572,6 +5572,7 @@ where
                             &mut self.fsm.peer.transfer_leader_state.cache_warmup_state;
                         let peer_store = self.fsm.peer.raft_group.mut_store();
                         peer_store.set_apply_state(apply_state);
+                        peer_store.compact_term_cache(last_index + 1);
                         peer_store.compact_entry_cache(last_index + 1, cache_warmup_state.as_mut());
                         peer_store.raft_state_mut().mut_hard_state().commit = last_index;
                         peer_store.raft_state_mut().last_index = last_index;
@@ -6428,7 +6429,7 @@ where
             callback: cb,
         };
         if let Err(ScheduleError::Stopped(t)) = self.ctx.pd_scheduler.schedule(task) {
-            error!(
+            warn!(
                 "failed to notify pd to split: Stopped";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
@@ -6883,7 +6884,7 @@ where
                     region: self.fsm.peer.region().clone(),
                 };
                 if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
-                    error!(
+                    warn!(
                         "failed to notify pd";
                         "region_id" => self.fsm.region_id(),
                         "peer_id" => self.fsm.peer_id(),

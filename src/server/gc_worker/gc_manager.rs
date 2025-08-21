@@ -638,7 +638,10 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
         );
 
         if let Err(e) = res {
-            error!(?e; "gc_worker: failed to get next region information");
+            warn!(
+                "gc_worker: failed to get next region information";
+                "err" => ?e
+            );
             return (None, None);
         };
 

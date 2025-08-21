@@ -173,6 +173,7 @@ pub struct ServerCluster {
     pub causal_ts_providers: HashMap<u64, Arc<CausalTsProviderImpl>>,
     pub encryption: Option<Arc<DataKeyManager>>,
     pub in_memory_engines: HashMap<u64, Option<HybridEngineImpl>>,
+    pub gc_safe_point: Arc<AtomicU64>,
 }
 
 impl ServerCluster {
@@ -219,6 +220,7 @@ impl ServerCluster {
             txn_extra_schedulers: HashMap::default(),
             causal_ts_providers: HashMap::default(),
             encryption: None,
+            gc_safe_point: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -403,6 +405,14 @@ impl ServerCluster {
             Arc::new(region_info_accessor.clone()),
         );
         gc_worker.start(node_id, coprocessor_host.clone()).unwrap();
+
+        if let Err(e) =
+            gc_worker.start_auto_compaction(self.pd_client.clone(), region_info_accessor.clone())
+        {
+            warn!("failed to start auto_compaction: {}", e);
+        } else {
+            info!("Auto compaction started successfully for node {}", node_id);
+        }
 
         let txn_status_cache = Arc::new(TxnStatusCache::new_for_test());
         let rts_worker = if cfg.resolved_ts.enable {
@@ -658,8 +668,12 @@ impl ServerCluster {
         let max_unified_read_pool_thread_count = cfg.readpool.unified.max_thread_count;
         let pessimistic_txn_cfg = cfg.tikv.pessimistic_txn;
 
-        let split_check_runner =
-            SplitCheckRunner::new(engines.kv.clone(), router.clone(), coprocessor_host.clone());
+        let split_check_runner = SplitCheckRunner::new(
+            engines.kv.clone(),
+            router.clone(),
+            coprocessor_host.clone(),
+            Some(Arc::new(region_info_accessor.clone())),
+        );
         let split_check_scheduler = bg_worker.start("split-check", split_check_runner);
         let split_config_manager =
             SplitConfigManager::new(Arc::new(VersionTrack::new(cfg.tikv.split)));
@@ -686,7 +700,7 @@ impl ServerCluster {
             causal_ts_provider,
             DiskCheckRunner::dummy(),
             GrpcServiceManager::dummy(),
-            Arc::new(AtomicU64::new(0)),
+            self.gc_safe_point.clone(),
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
@@ -731,7 +745,11 @@ impl ServerCluster {
         self.concurrency_managers
             .insert(node_id, concurrency_manager);
 
-        let client = RaftClient::new(node_id, self.conn_builder.clone());
+        let client = RaftClient::new(
+            node_id,
+            self.conn_builder.clone(),
+            Duration::from_millis(10),
+        );
         self.raft_clients.insert(node_id, client);
         Ok(node_id)
     }

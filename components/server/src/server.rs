@@ -1011,6 +1011,7 @@ where
             engines.engines.kv.clone(),
             self.router.clone(),
             self.coprocessor_host.clone().unwrap(),
+            Some(Arc::new(self.region_info_accessor.clone().unwrap())),
         );
         let split_check_scheduler = self
             .core
@@ -1090,6 +1091,14 @@ where
             .unwrap_or_else(|e| fatal!("failed to start gc worker: {}", e));
         if let Err(e) = gc_worker.start_auto_gc(auto_gc_config, safe_point) {
             fatal!("failed to start auto_gc on storage, error: {}", e);
+        }
+
+        // Start auto compaction
+        if let Err(e) = gc_worker.start_auto_compaction(
+            self.pd_client.clone(),
+            self.region_info_accessor.clone().unwrap(),
+        ) {
+            fatal!("failed to start auto_compaction on storage, error: {}", e);
         }
 
         initial_metric(&self.core.config.metric);
