@@ -50,6 +50,7 @@ use crate::{
         async_io::{read::ReadTask, write::WriteTask},
         entry_storage::{CacheWarmupState, EntryStorage},
         fsm::{GenSnapTask, StoreMeta},
+        msg::PeerClearMetaStat,
         peer::PersistSnapshotResult,
         util,
     },
@@ -758,7 +759,7 @@ where
         Ok((region, for_witness))
     }
 
-    pub fn mark_peer_destroyed(
+    pub fn schedule_destroy_peer(
         &mut self,
         peer: metapb::Peer,
         region: metapb::Region,
@@ -1159,7 +1160,7 @@ where
     Ok(())
 }
 
-pub fn do_perparations_for_destroy<EK, ER>(
+pub fn clear_meta_in_kv_and_raft<EK, ER>(
     engines: &Engines<EK, ER>,
     peer: Peer,
     region: Region,
@@ -1171,7 +1172,7 @@ pub fn do_perparations_for_destroy<EK, ER>(
     // Holding lock to avoid apply worker applies split.
     store_meta: Arc<Mutex<StoreMeta>>,
     pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
-) -> Result<(Duration, Duration) /* (destroy_raft duration, destroy_kv duration) */>
+) -> Result<PeerClearMetaStat>
 where
     EK: KvEngine,
     ER: RaftEngine,
@@ -1267,7 +1268,7 @@ where
         (Duration::ZERO, Duration::ZERO)
     };
 
-    Ok((raft_duration, kv_duration))
+    Ok(PeerClearMetaStat::new(raft_duration, kv_duration))
 }
 
 pub fn do_snapshot<E>(

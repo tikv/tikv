@@ -64,6 +64,32 @@ pub struct PeerInternalStat {
     pub bucket_ranges: Option<Vec<BucketRange>>,
 }
 
+/// Statistics about clearing peer metadata.
+#[derive(Debug, Default, Clone)]
+pub struct PeerClearMetaStat {
+    // Duration of clearing metadata in raft
+    pub raft_duration: Duration,
+    // Duration of clearning metadata in kvdb
+    pub kvdb_duration: Duration,
+}
+
+impl PeerClearMetaStat {
+    pub fn new(raft_duration: Duration, kvdb_duration: Duration) -> Self {
+        Self {
+            raft_duration,
+            kvdb_duration,
+        }
+    }
+
+    pub fn is_zero(&self) -> bool {
+        self.raft_duration.is_zero() && self.kvdb_duration.is_zero()
+    }
+
+    pub fn duration(&self) -> Duration {
+        self.raft_duration + self.kvdb_duration
+    }
+}
+
 // This is only necessary because of seeming limitations in derive(Clone) w/r/t
 // generics. If it can be deleted in the future in favor of derive, it should
 // be.
@@ -554,11 +580,11 @@ where
     CheckPendingAdmin(UnboundedSender<CheckAdminResponse>),
     /// A message to destroy the corresponding peer.
     ///
-    /// Durations record the consuming durations when clear raft state and
-    /// data in kvdb.
+    /// `clear_stat` records the statistics of duration when clear raft state
+    /// and data in kvdb.
     DestroyPeer {
         merged_by_target: bool,
-        duration: (Duration, Duration),
+        clear_stat: PeerClearMetaStat,
     },
 }
 

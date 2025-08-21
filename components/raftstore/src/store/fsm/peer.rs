@@ -88,7 +88,7 @@ use crate::{
         local_metrics::{RaftMetrics, TimeTracker},
         memory::*,
         metrics::*,
-        msg::{Callback, CampaignType, ExtCallback, InspectedRaftMessage},
+        msg::{Callback, CampaignType, ExtCallback, InspectedRaftMessage, PeerClearMetaStat},
         peer::{ConsistencyState, Peer, PersistSnapshotResult, StaleState, TransferLeaderContext},
         region_meta::RegionMeta,
         snapshot_backup::{AbortReason, SnapshotBrState, SnapshotBrWaitApplyRequest},
@@ -1632,10 +1632,10 @@ where
             SignificantMsg::CheckPendingAdmin(ch) => self.on_check_pending_admin(ch),
             SignificantMsg::DestroyPeer {
                 merged_by_target,
-                duration,
+                clear_stat,
             } => {
                 assert!(self.fsm.peer.pending_remove);
-                self.on_ready_destroy_peer(merged_by_target, duration);
+                self.on_ready_destroy_peer(merged_by_target, clear_stat);
             }
         }
     }
@@ -4174,40 +4174,17 @@ where
         // safety to be executed.
         drop(meta);
 
-        // Asynchronously destroy the peer by triggering a task to background worker,
-        // and the corresponding worker will finish the preparations for destroying.
-        let async_failed = self
-            .fsm
-            .peer
-            .prepare_for_destroy(
-                &self.ctx.engines,
-                merged_by_target,
-                self.ctx.store_meta.clone(),
-                self.ctx.pending_create_peers.clone(),
-                true,
-            )
-            .is_err();
-        // Failed to synchronously destroy the peer (channel is closed),
-        // redirecting to synchronously destroy the peer.
-        if async_failed {
-            match self.fsm.peer.prepare_for_destroy(
-                &self.ctx.engines,
-                merged_by_target,
-                self.ctx.store_meta.clone(),
-                self.ctx.pending_create_peers.clone(),
-                false,
-            ) {
-                Err(e) => {
-                    // If not panic here, the peer will be recreated in the next restart,
-                    // then it will be gc again. But if some overlap region is created
-                    // before restarting, the gc action will delete the overlap region's
-                    // data too.
-                    panic!("{} prepare to destroy err {:?}", self.fsm.peer.tag, e);
-                }
-                Ok(duration) => {
-                    self.on_ready_destroy_peer(merged_by_target, duration);
-                }
-            }
+        let clear_stat = self.fsm.peer.destroy(
+            &self.ctx.engines,
+            merged_by_target,
+            self.ctx.store_meta.clone(),
+            self.ctx.pending_create_peers.clone(),
+        );
+        // If clear_stat is valid, which means that the above destroy task is executed
+        // synchronously, we should continue to do the consequential jobs for destroying
+        // peer right now.
+        if !clear_stat.is_zero() {
+            self.on_ready_destroy_peer(merged_by_target, clear_stat);
         }
 
         true
@@ -4216,12 +4193,12 @@ where
     fn on_ready_destroy_peer(
         &mut self,
         merged_by_target: bool,
-        clean_duration: (Duration, Duration),
+        clear_stat: PeerClearMetaStat,
     ) -> bool {
         // Clean remains if needs and notify all pending requests to exit.
         self.fsm
             .peer
-            .ready_to_destroy(merged_by_target, clean_duration, &self.ctx.raft_metrics);
+            .ready_to_destroy(merged_by_target, clear_stat, &self.ctx.raft_metrics);
 
         let region_id = self.region_id();
         let is_peer_initialized = self.fsm.peer.is_initialized();

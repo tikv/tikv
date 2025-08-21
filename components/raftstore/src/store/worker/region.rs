@@ -42,9 +42,10 @@ use crate::{
         ApplyOptions, CasualMessage, Config, SignificantMsg, SnapEntry, SnapKey, SnapManager,
         check_abort,
         fsm::StoreMeta,
+        msg::PeerClearMetaStat,
         peer_storage::{
             JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING, JOB_STATUS_FAILED, JOB_STATUS_FINISHED,
-            JOB_STATUS_PENDING, JOB_STATUS_RUNNING, do_perparations_for_destroy,
+            JOB_STATUS_PENDING, JOB_STATUS_RUNNING, clear_meta_in_kv_and_raft,
         },
         snap::{Error, Result, SNAPSHOT_CFS, plain_file_used},
     },
@@ -799,14 +800,13 @@ where
         first_index: u64,
         // Holding lock to avoid apply worker applies split.
         pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
-    ) -> RaftstoreResult<(Duration, Duration) /* (destroy_raft duration, destroy_kv duration) */>
-    {
+    ) -> RaftstoreResult<PeerClearMetaStat> {
         info!(
             "handle destroy peer in async mode";
             "peer_id" => peer.get_id(),
             "region_id" => region.get_id(),
         );
-        do_perparations_for_destroy(
+        clear_meta_in_kv_and_raft(
             &self.engines,
             peer,
             region,
@@ -891,12 +891,12 @@ where
                             peer_id, region_id, e
                         );
                     }
-                    Ok(duration) => {
+                    Ok(clear_stat) => {
                         let _ = self.router.significant_send(
                             region_id,
                             SignificantMsg::DestroyPeer {
                                 merged_by_target: keep_data,
-                                duration,
+                                clear_stat,
                             },
                         );
                     }

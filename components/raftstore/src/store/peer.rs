@@ -98,8 +98,8 @@ use crate::{
         },
         hibernate_state::GroupState,
         memory::{MEMTRACE_RAFT_ENTRIES, needs_evict_entry_cache},
-        msg::{CampaignType, CasualMessage, ErrorCallback, RaftCommand},
-        peer_storage::{HandleSnapshotResult, do_perparations_for_destroy},
+        msg::{CampaignType, CasualMessage, ErrorCallback, PeerClearMetaStat, RaftCommand},
+        peer_storage::{HandleSnapshotResult, clear_meta_in_kv_and_raft},
         snapshot_backup::{AbortReason, SnapshotBrState},
         txn_ext::LocksStatus,
         unsafe_recovery::{ForceLeaderState, UnsafeRecoveryState},
@@ -471,7 +471,7 @@ pub struct ApplySnapshotContext {
     /// Destroy the peer after apply task finished or aborted
     /// This flag is set to true when the peer destroy is skipped because of
     /// running snapshot task.
-    /// This is to accelerate peer destroy without waiting for extra destory
+    /// This is to accelerate peer destroy without waiting for extra destroy
     /// peer message.
     pub destroy_peer_after_apply: bool,
 }
@@ -1374,20 +1374,21 @@ where
         })
     }
 
-    /// Do the preparations before destroying peer by scheduling
-    /// an asychronous task to the region worker.
-    pub fn prepare_for_destroy(
+    /// Destroys the peer by scheduling an asychronous task to the region
+    /// worker by default.
+    ///
+    /// If the scheduling is abnormal due to `region-worker` is exited, it
+    /// will redirect to directly destroy the peer synchronously.
+    pub fn destroy(
         &mut self,
         engines: &Engines<EK, ER>,
         keep_data: bool,
         store_meta: Arc<Mutex<StoreMeta>>,
         pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
-        async_mode: bool,
-    ) -> Result<(Duration, Duration)> {
-        fail_point!("raft_store_skip_destroy_peer", |_| Ok((
-            Duration::ZERO,
-            Duration::ZERO
-        )));
+    ) -> PeerClearMetaStat {
+        fail_point!("raft_store_skip_destroy_peer", |_| {
+            PeerClearMetaStat::default()
+        });
 
         let peer = self.peer.clone();
         let region = self.region().clone();
@@ -1400,21 +1401,25 @@ where
         } else {
             None
         };
-        let (raft_duration, kv_duration) = if async_mode {
-            // Asynchronously mark the peer destroyed.
-            self.mut_store().mark_peer_destroyed(
-                peer,
-                region,
+
+        // Asynchronously destroy the peer by triggering a task to background worker,
+        // and the corresponding worker will finish the preparations for destroying.
+        let async_failed = self
+            .mut_store()
+            .schedule_destroy_peer(
+                peer.clone(),
+                region.clone(),
                 keep_data,
                 local_first_replicate,
                 last_compacted_idx,
-                merge_state,
-                pending_create_peers,
-            )?;
-            (Duration::ZERO, Duration::ZERO)
-        } else {
-            // Sync mode, directly make preparations for destroy.
-            do_perparations_for_destroy(
+                merge_state.clone(),
+                pending_create_peers.clone(),
+            )
+            .is_err();
+        // Failed to synchronously destroy the peer (channel is closed),
+        // redirecting to synchronously destroy the peer.
+        let clear_stat = if async_failed {
+            match clear_meta_in_kv_and_raft(
                 engines,
                 peer,
                 region,
@@ -1425,16 +1430,29 @@ where
                 last_compacted_idx,
                 store_meta.clone(),
                 pending_create_peers,
-            )?
+            ) {
+                Err(e) => {
+                    // If not panic here, the peer will be recreated in the next restart,
+                    // then it will be gc again. But if some overlap region is created
+                    // before restarting, the gc action will delete the overlap region's
+                    // data too.
+                    panic!("{} prepare to destroy err {:?}", self.tag, e);
+                }
+                Ok(stat) => stat,
+            }
+        } else {
+            // Uses default value to reresent that the destroy task is successfully
+            // scheduled.
+            PeerClearMetaStat::default()
         };
 
         info!(
             "trigger destroy peer task";
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
-            "async" => async_mode,
+            "async" => !async_failed,
         );
-        Ok((raft_duration, kv_duration))
+        clear_stat
     }
 
     /// Does the final destroy task which includes:
@@ -1443,21 +1461,20 @@ where
     pub fn ready_to_destroy(
         &mut self,
         keep_data: bool,
-        clean_duration: (Duration, Duration),
+        clear_stat: PeerClearMetaStat,
         raft_metrics: &RaftMetrics,
     ) {
         let t = TiInstant::now();
         let region_id = self.region_id;
-        let (raft_duration, kvdb_duration) = clean_duration;
-        let clean = !raft_duration.is_zero() || !kvdb_duration.is_zero();
+        let clean = !clear_stat.is_zero();
 
         if clean {
             raft_metrics
                 .io_write_peer_destroy_raft
-                .observe(raft_duration.as_secs_f64());
+                .observe(clear_stat.raft_duration.as_secs_f64());
             raft_metrics
                 .io_write_peer_destroy_kv
-                .observe(kvdb_duration.as_secs_f64());
+                .observe(clear_stat.kvdb_duration.as_secs_f64());
             if self.get_store().is_initialized() && !keep_data {
                 // If we meet panic when deleting data and raft log, the dirty data
                 // will be cleared by a newer snapshot applying or restart.
@@ -1481,7 +1498,7 @@ where
             "peer destroy itself";
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
-            "takes" => ?(t.saturating_elapsed() + raft_duration + kvdb_duration),
+            "takes" => ?(t.saturating_elapsed() + clear_stat.duration()),
             "clean" => clean,
             "keep_data" => keep_data,
         );
