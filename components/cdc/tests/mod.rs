@@ -31,8 +31,12 @@ use tikv::{
 use tikv_util::{
     config::ReadableDuration,
     memory::MemoryQuota,
+<<<<<<< HEAD
     worker::{LazyWorker, Runnable},
     HandyRwLock,
+=======
+    worker::{Builder, LazyWorker, Runnable},
+>>>>>>> a01b4143de (cdc: add watchdog for cdc conn (#18757))
 };
 use txn_types::TimeStamp;
 static INIT: Once = Once::new();
@@ -188,11 +192,16 @@ impl TestSuiteBuilder {
             let memory_quota = Arc::new(MemoryQuota::new(memory_quota));
             let memory_quota_ = memory_quota.clone();
             let scheduler = worker.scheduler();
+            let pool = Arc::new(Builder::new("cdc-watchdog-test").thread_count(1).create());
             sim.pending_services
                 .entry(id)
                 .or_default()
                 .push(Box::new(move || {
-                    create_change_data(cdc::Service::new(scheduler.clone(), memory_quota_.clone()))
+                    create_change_data(cdc::Service::new(
+                        scheduler.clone(),
+                        memory_quota_.clone(),
+                        pool.clone(),
+                    ))
                 }));
             sim.txn_extra_schedulers.insert(
                 id,
