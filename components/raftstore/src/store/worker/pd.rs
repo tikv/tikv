@@ -1326,7 +1326,12 @@ where
         self.store_stat.region_keys_read.flush();
 
         stats.set_slow_score(self.health_reporter.get_disk_slow_score() as u64);
-        stats.set_network_slow_scores(self.health_reporter.get_network_slow_score());
+        // Filter out network slow scores equal to 1 to reduce message volume
+        let network_scores = self.health_reporter.get_network_slow_score()
+            .into_iter()
+            .filter(|(_, score)| *score != 1)
+            .collect();
+        stats.set_network_slow_scores(network_scores);
 
         let (rps, slow_trend_pb) = self
             .health_reporter
