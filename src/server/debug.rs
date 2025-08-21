@@ -918,13 +918,6 @@ where
     ) -> Result<()> {
         validate_db_and_cf(db, cf)?;
         let db = self.get_db_from_type(db)?;
-
-        if let Err(e) = db.flush(true) {
-            println!("flush rocksdb failed: {:?}", e);
-            return Err(Error::Other(tikv_util::box_err!("flush rocksdb failed: {:?}", e)));
-        }
-        println!("flush rocksdb success");
-
         let handle = box_try!(get_cf_handle(db.as_inner(), cf));
         let start = if start.is_empty() { None } else { Some(start) };
         let end = if end.is_empty() { None } else { Some(end) };

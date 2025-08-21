@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{ffi::CString, sync::{Arc, RwLock}, time::Duration};
+use std::{ffi::CString, cmp::Ordering, sync::{Arc, RwLock}, time::Duration};
 
 use engine_traits::{
     CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, CfName, SstPartitioner, SstPartitionerContext,
@@ -35,6 +35,12 @@ impl TtlRange {
     }
 }
 
+impl Ord for TtlRange {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.partial_cmp(other).unwrap_or(Ordering::Equal)
+    }
+}
+
 impl std::fmt::Debug for TtlRange {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Range({:?}, {:?})", log_wrappers::Value(&self.start), log_wrappers::Value(&self.end))
@@ -64,6 +70,7 @@ impl ForcePartitionRangeManager {
             end,
             ttl,
         });
+        ranges.sort();
         true
     }
 
@@ -304,20 +311,10 @@ fn overlap_with(ranges: &[TtlRange], last_key: &[u8], next_key: &[u8]) -> bool {
     if ranges.is_empty() {
         return false;
     }
-    let mut left_index: isize = -1;
-    for i in 0..ranges.len() {
-        if *last_key < *ranges[i].end {
-            left_index = i as isize;
-            break;
-        } else if i == ranges.len() - 1 {
-            return false;
-        }
-    }
-    let check_idx = left_index.max(0) as usize;
-    if *next_key > *ranges[check_idx].start {
-        return true;
-    }
-    false
+    // find the range who's end_key is larger than the start_key
+    let check_idx = ranges.partition_point(|r|  *last_key >= *r.end);
+    // if the range's start key is smaller than next_key, then it should overlap.
+    check_idx < ranges.len() && *next_key > *ranges[check_idx].start
 }
 
 impl<P: RegionInfoProvider> SstPartitioner for CompactionGuardGenerator<P> {
@@ -959,5 +956,76 @@ mod tests {
             }
         }
         res
+    }
+
+    #[test]
+    fn test_overlap_with() {
+        // empty ranges
+        assert!(!overlap_with(&[], b"a", b"b"));
+
+        let ttl = Instant::now_coarse() + Duration::from_secs(10);
+        let ranges = vec![
+            TtlRange::new(b"b".to_vec(), b"c".to_vec(), ttl),
+            TtlRange::new(b"e".to_vec(), b"g".to_vec(), ttl),
+            TtlRange::new(b"j".to_vec(), b"p".to_vec(), ttl),
+        ];
+
+        let cases = [
+            (b"a".as_ref(), b"aaa".as_ref(), false),
+            (b"a", b"b", false),
+            (b"a", b"bb", true),
+            (b"a", b"c", true),
+            (b"a", b"e", true),
+            (b"a", b"j", true),
+            (b"a", b"p", true),
+            (b"a", b"z", true),
+            (b"b", b"bccc", true),
+            (b"b", b"c", true),
+            (b"b", b"d", true),
+            (b"c", b"d", false),
+            (b"c", b"e", false),
+            (b"c", b"f", true),
+            (b"c", b"g", true),
+            (b"c", b"h", true),
+            (b"g", b"h", false),
+            (b"j", b"p", true),
+            (b"jj", b"n", true),
+            (b"p", b"q", false),
+            (b"q", b"r", false),
+        ];
+        for (i, (start, end, overlap)) in cases.into_iter().enumerate() {
+            assert_eq!(overlap_with(&ranges, start, end), overlap, "case: {}", i);
+        }
+    }
+
+    #[test]
+    fn test_force_partition_range() {
+        let mgr = ForcePartitionRangeManager::default();
+
+        mgr.add_range(b"h".to_vec(), b"n".to_vec(), 10);
+        mgr.add_range(b"b".to_vec(), b"f".to_vec(), 10);
+        assert!(mgr.force_partition_ranges.read().unwrap().is_sorted());
+
+        #[track_caller]
+        fn check_overlap(mgr: &ForcePartitionRangeManager, start: &[u8], end: &[u8], expect: &[(&[u8], &[u8])]) {
+            let ranges = mgr.get_overlapped_ranges(start, end);
+            assert_eq!(ranges.len(), expect.len());
+            ranges.iter().zip(expect.into_iter()).for_each(|(got, exp)| assert!(*got.start == *exp.0 && *got.end == *exp.1));
+        }
+
+        check_overlap(&mgr, b"a", b"aa", &[]);
+        check_overlap(&mgr, b"a", b"b", &[]);
+        check_overlap(&mgr, b"a", b"c", &[(b"b", b"f")]);
+        check_overlap(&mgr, b"a", b"h", &[(b"b", b"f")]);
+        check_overlap(&mgr, b"a", b"i", &[(b"b", b"f"), (b"h", b"n")]);
+        check_overlap(&mgr, b"a", b"n", &[(b"b", b"f"), (b"h", b"n")]);
+        check_overlap(&mgr, b"a", b"z", &[(b"b", b"f"), (b"h", b"n")]);
+        
+        // test overlapped ranges
+        mgr.add_range(b"b".to_vec(), b"d".to_vec(), 10);
+        check_overlap(&mgr, b"a", b"d", &[(b"b", b"f")]);
+
+        mgr.add_range(b"bb".to_vec(), b"g".to_vec(), 10);
+        check_overlap(&mgr, b"a", b"d", &[(b"b", b"g")]);
     }
 }
