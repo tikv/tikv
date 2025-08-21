@@ -20,7 +20,7 @@ thread_local! {
 }
 
 /// Find the kth cpu time in the iterator.
-pub fn find_kth_cpu_time<'a>(iter: impl Iterator<Item = (&'a Vec<u8>, &'a RawRecord)>, k: usize) -> u32 {
+pub fn find_kth_cpu_time<'a>(iter: impl Iterator<Item = (&'a Arc<Vec<u8>>, &'a RawRecord)>, k: usize) -> u32 {
     let mut buf = STATIC_BUF.with(|b| b.take());
     buf.clear();
     for (_, record) in iter {
@@ -85,15 +85,14 @@ impl Default for RawRecords {
 
 impl RawRecords {
     /// Returns RawRecord aggregated by extra tag.
-    pub fn aggregate_by_extra_tag(&self) -> HashMap<Vec<u8>, RawRecord>
+    pub fn aggregate_by_extra_tag(&self) -> HashMap<Arc<Vec<u8>>, RawRecord>
     {
-        let mut raw_map : HashMap<Vec<u8>, RawRecord> = HashMap::default();
-        // Aggregate
+        let mut raw_map : HashMap<Arc<Vec<u8>>, RawRecord> = HashMap::default();
         for (tag_info, record) in self.records.iter() {
             let tag = &tag_info.extra_attachment;
             if tag.is_empty() {
                 continue;
-            }       
+            }
             let value = raw_map.get_mut(tag);
             if value.is_none() {
                 raw_map.insert(
@@ -152,7 +151,7 @@ impl Record {
 /// [Client]: crate::client::Client
 #[derive(Debug, Default)]
 pub struct Records {
-    pub records: HashMap<Vec<u8>, Record>,
+    pub records: HashMap<Arc<Vec<u8>>, Record>,
     pub others: HashMap<u64, RawRecord>,
 }
 
@@ -166,7 +165,7 @@ impl From<Records> for Vec<ResourceUsageRecord> {
             }
             let items: Vec<GroupTagRecordItem> = record.into();
             let mut tag_record = GroupTagRecord::new();
-            tag_record.set_resource_group_tag(tag);
+            tag_record.set_resource_group_tag(tag.to_vec());
             tag_record.set_items(items.into());
             let mut r = ResourceUsageRecord::new();
             r.set_record(tag_record);
@@ -207,7 +206,7 @@ impl Records {
     pub fn append<'a>(
         &mut self,
         ts: u64,
-        iter: impl Iterator<Item = (&'a Vec<u8>, &'a RawRecord)>,
+        iter: impl Iterator<Item = (&'a Arc<Vec<u8>>, &'a RawRecord)>,
     ) {
         // # Before
         //
@@ -362,21 +361,21 @@ mod tests {
             region_id: 0,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: b"a".to_vec(),
+            extra_attachment: Arc::new(b"a".to_vec()),
         });
         let tag2 = Arc::new(TagInfos {
             store_id: 0,
             region_id: 0,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: b"b".to_vec(),
+            extra_attachment: Arc::new(b"b".to_vec()),
         });
         let tag3 = Arc::new(TagInfos {
             store_id: 0,
             region_id: 0,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: b"c".to_vec(),
+            extra_attachment: Arc::new(b"c".to_vec()),
         });
         let mut records = Records::default();
         let mut raw_map = HashMap::default();
@@ -422,21 +421,21 @@ mod tests {
             region_id: 0,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: b"a".to_vec(),
+            extra_attachment: Arc::new(b"a".to_vec()),
         });
         let tag2 = Arc::new(TagInfos {
             store_id: 0,
             region_id: 0,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: b"b".to_vec(),
+            extra_attachment: Arc::new(b"b".to_vec()),
         });
         let tag3 = Arc::new(TagInfos {
             store_id: 0,
             region_id: 0,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: b"c".to_vec(),
+            extra_attachment: Arc::new(b"c".to_vec()),
         });
         let mut records = HashMap::default();
         records.insert(
@@ -512,21 +511,21 @@ mod tests {
             region_id: 0,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: b"a".to_vec(),
+            extra_attachment: Arc::new(b"a".to_vec()),
         });
         let tag2 = Arc::new(TagInfos {
             store_id: 0,
             region_id: 0,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: b"b".to_vec(),
+            extra_attachment: Arc::new(b"b".to_vec()),
         });
         let tag3 = Arc::new(TagInfos {
             store_id: 0,
             region_id: 0,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: b"c".to_vec(),
+            extra_attachment: Arc::new(b"c".to_vec()),
         });
 
         // Keep cpu_time same for all tags.
@@ -584,21 +583,21 @@ mod tests {
             region_id: 0,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: b"a".to_vec(),
+            extra_attachment: Arc::new(b"a".to_vec()),
         });
         let tag2 = Arc::new(TagInfos {
             store_id: 0,
             region_id: 0,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: b"b".to_vec(),
+            extra_attachment: Arc::new(b"b".to_vec()),
         });
         let tag3 = Arc::new(TagInfos {
             store_id: 0,
             region_id: 0,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: b"c".to_vec(),
+            extra_attachment: Arc::new(b"c".to_vec()),
         });
         // tag4's extra tag is equal to tag1's
         let tag4 = Arc::new(TagInfos {
@@ -606,7 +605,7 @@ mod tests {
             region_id: 2,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: b"a".to_vec(),
+            extra_attachment: Arc::new(b"a".to_vec()),
         });
         // tag5's extra tag is equal to tag1's
         let tag5 = Arc::new(TagInfos {
@@ -614,7 +613,7 @@ mod tests {
             region_id: 3,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: b"a".to_vec(),
+            extra_attachment: Arc::new(b"a".to_vec()),
         });
         // tag6's extra tag is equal to tag2's
         let tag6 = Arc::new(TagInfos {
@@ -622,7 +621,7 @@ mod tests {
             region_id: 5,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: b"b".to_vec(),
+            extra_attachment: Arc::new(b"b".to_vec()),
         });        
         let mut records = HashMap::default();
         records.insert(
