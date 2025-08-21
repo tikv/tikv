@@ -1,17 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-<<<<<<< HEAD
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
-=======
 use std::{
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
->>>>>>> a01b4143de (cdc: add watchdog for cdc conn (#18757))
 };
 
 use collections::{HashMap, HashMapEntry};
