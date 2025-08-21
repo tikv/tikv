@@ -186,11 +186,19 @@ pub fn memory_usage_reaches_high_water(usage: &mut u64) -> bool {
     *usage >= high_water
 }
 
-pub fn needs_force_compact(over_ratio: &mut f64, usage: &mut f64, high_water_ratio: f64) -> bool {
-    *usage = get_global_memory_usage() as f64;
-    let memry_limit = get_memory_usage_high_water() as f64 * high_water_ratio;
-    *over_ratio = *usage / memry_limit;
-    *usage >= memry_limit
+pub fn needs_force_compact(
+    over_ratio: &mut f64,
+    raftengine_memory_usage: f64,
+    evict_cache_on_memory_ratio: f64,
+) -> bool {
+    let usage = get_global_memory_usage() as f64;
+    *over_ratio = raftengine_memory_usage / (usage * evict_cache_on_memory_ratio);
+    let high_water = get_memory_usage_high_water() as f64;
+
+    if *over_ratio >= 1.0 || usage >= high_water * MEMORY_HIGH_WATER_PERCENTAGE_MARGIN {
+        return true;
+    }
+    false
 }
 
 pub fn memory_usage_reaches_near_high_water(usage: &mut u64) -> bool {

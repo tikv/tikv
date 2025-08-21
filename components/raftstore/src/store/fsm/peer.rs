@@ -6120,23 +6120,32 @@ where
             );
             REGION_MAX_LOG_LAG.observe(log_lag);
         }
+        let applied_count = applied_idx - first_idx;
 
         // Accumulate interval time
         self.fsm.sampling_interval += self.ctx.cfg.raft_log_gc_tick_interval.0.as_millis() as u64;
 
         if self.fsm.sampling_interval >= self.ctx.cfg.region_sampling_interval.0.as_millis() as u64
         {
-            // send growth rate to store
-            let store_msg = StoreMsg::RegionLeaderGrowth {
-                region_id: self.fsm.region_id(),
-                log_lag: log_lag as u64,
-            };
+            // Calculate write rate (last_index - previous_last_index)
+            let write_rate = last_idx.saturating_sub(self.fsm.previous_last_index);
 
-            if let Err(e) = self.ctx.router.send_control(store_msg) {
-                info!("failed to send region leader growth info to store: {}", e);
+            // Only send if applied_count > raft_log_gc_count_limit / 10
+            if applied_count > self.ctx.cfg.raft_log_gc_count_limit() / 10 {
+                let store_msg: StoreMsg<EK> = StoreMsg::RegionLeaderGrowth {
+                    region_id: self.fsm.region_id(),
+                    log_lag: write_rate,
+                };
+                if let Err(e) = self.ctx.router.send_control(store_msg) {
+                    warn!(
+                        "failed to send region leader growth info to store";
+                        "region_id" => self.fsm.region_id(),
+                        "err" => %e,
+                    );
+                }
             }
 
-            // Update previous_last_index for next growth calculation
+            // Update previous_last_index for next write rate calculation
             self.fsm.previous_last_index = last_idx;
 
             // Reset interval accumulator
@@ -6158,20 +6167,21 @@ where
             }
         }
 
-        let applied_count = applied_idx - first_idx;
+        let quorum_replicated_idx = if voter_matched_indices.len() > 0 {
+            voter_matched_indices.sort_unstable();
+            let quorum_index = (voter_matched_indices.len() + 1) / 2 - 1;
+            voter_matched_indices[quorum_index]
+        } else {
+            applied_idx
+        };
+
+        let compact_pin_regions_ratio = 1.0 / self.ctx.cfg.pin_compact_region_ratio;
 
         let mut compact_idx = match action {
             RaftLogGcAction::ForceCompact => {
                 let should_force_compact =
                     applied_count > self.ctx.cfg.raft_log_gc_count_limit() / 10;
                 if should_force_compact {
-                    let quorum_replicated_idx = if voter_matched_indices.len() > 0 {
-                        voter_matched_indices.sort_unstable();
-                        let quorum_index = (voter_matched_indices.len() + 1) / 2 - 1;
-                        voter_matched_indices[quorum_index]
-                    } else {
-                        applied_idx
-                    };
                     self.ctx
                         .raft_metrics
                         .raft_log_gc
@@ -6187,7 +6197,27 @@ where
                 }
             }
             RaftLogGcAction::Normal => {
-                if replicated_idx < first_idx || last_idx - first_idx < 3 {
+                if applied_count
+                    >= (self.ctx.cfg.raft_log_gc_count_limit() as f64 * compact_pin_regions_ratio)
+                        as u64
+                {
+                    self.ctx
+                        .raft_metrics
+                        .raft_log_gc
+                        .log_force_gc_count_limit
+                        .inc();
+                    quorum_replicated_idx
+                } else if self.fsm.peer.raft_log_size_hint
+                    >= (self.ctx.cfg.raft_log_gc_size_limit().0 as f64 * compact_pin_regions_ratio)
+                        as u64
+                {
+                    self.ctx
+                        .raft_metrics
+                        .raft_log_gc
+                        .log_force_gc_size_limit
+                        .inc();
+                    quorum_replicated_idx
+                } else if replicated_idx < first_idx || last_idx - first_idx < 3 {
                     // In the current implementation one compaction can't delete all stale Raft
                     // logs. There will be at least 3 entries left after one compaction:
                     // ```

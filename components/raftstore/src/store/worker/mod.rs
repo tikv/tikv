@@ -9,7 +9,6 @@ mod consistency_check;
 mod disk_check;
 pub mod metrics;
 mod pd;
-mod raftlog_compact_checker;
 mod raftlog_gc;
 mod read;
 mod refresh_config;

@@ -3155,13 +3155,10 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
 
     fn send_force_compact_messages(&mut self, over_ratio: f64) {
         // Create region classification on-demand when force compact is needed
-        let classification = self.create_region_classification();
+        let classification = self.create_region_classification(over_ratio);
 
-        let mut pinned_regions_compacted = 0;
-        let mut gc_candidates_compacted = 0;
-
-        // Get configuration values first to avoid borrow conflicts
-        let pin_ratio = self.ctx.cfg.pin_compact_region_ratio;
+        let pinned_regions_compacted = classification.pinned_regions.len();
+        let gc_candidates_compacted = classification.gc_candidate_regions.len();
 
         // Send force compact messages to GC candidate regions
         for (region_id, _) in &classification.gc_candidate_regions {
@@ -3169,43 +3166,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
                 *region_id,
                 PeerMsg::CasualMessage(Box::new(CasualMessage::ForceCompactRaftLogs)),
             );
-            gc_candidates_compacted += 1;
         }
-
-        // If memory pressure is high, also send to some pinned regions
-        if over_ratio > 1.0 {
-            // Calculate dynamic pin ratio: shrink based on memory pressure
-            let dynamic_pin_ratio = pin_ratio / over_ratio;
-            let total_regions =
-                classification.pinned_regions.len() + classification.gc_candidate_regions.len();
-            let dynamic_pin_count =
-                std::cmp::max(1, (total_regions as f64 * dynamic_pin_ratio) as usize);
-
-            // Convert pinned regions to sorted vector for selection
-            let mut sorted_pinned: Vec<(u64, u64)> = classification
-                .pinned_regions
-                .iter()
-                .map(|(k, v)| (*k, *v))
-                .collect();
-            sorted_pinned.sort_by(|a, b| b.1.cmp(&a.1)); // Sort by growth rate (descending: fastest first)
-
-            // Send to pinned regions that exceed the dynamic pin count
-            // Choose the slowest growth pinned regions to minimize impact
-            for i in dynamic_pin_count..sorted_pinned.len() {
-                let (region_id, _) = sorted_pinned[i];
-                let _ = self.ctx.router.send(
-                    region_id,
-                    PeerMsg::CasualMessage(Box::new(CasualMessage::ForceCompactRaftLogs)),
-                );
-                pinned_regions_compacted += 1;
-                info!(
-                    "sending force compact to pinned region {} due to high memory pressure (over_ratio: {})",
-                    region_id, over_ratio
-                );
-            }
-        }
-
-        let regions_compacted = gc_candidates_compacted + pinned_regions_compacted;
 
         // Log pinned regions details with their IDs and log lag values
         if !classification.pinned_regions.is_empty() {
@@ -3216,6 +3177,8 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
                 .collect();
             info!("pinned regions details: [{}]", pinned_details.join(", "));
         }
+
+        let regions_compacted = gc_candidates_compacted + pinned_regions_compacted;
 
         info!(
             "force GC completed: {} total regions, {} GC candidates, {} pinned regions",
@@ -3253,7 +3216,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         });
     }
 
-    fn create_region_classification(&self) -> RegionClassification {
+    fn create_region_classification(&self, over_ratio: f64) -> RegionClassification {
         // Collect all (region_id, growth) into a vector
         let mut all_growth = Vec::new();
         for (region_id, (growth_rate, _)) in &self.fsm.store.region_leader_growth {
@@ -3268,50 +3231,22 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         }
 
         let len = all_growth.len();
+
+        // Calculate dynamic pin ratio based on memory pressure
+        let base_pin_ratio = self.ctx.cfg.pin_compact_region_ratio;
+        let dynamic_pin_ratio = base_pin_ratio / over_ratio;
+
         // At least pin 1 region to avoid the corner case of pin_count = 0
-        let pin_count = std::cmp::max(
-            1,
-            (len as f64 * self.ctx.cfg.pin_compact_region_ratio) as usize,
-        );
+        let pin_count = std::cmp::max(1, (len as f64 * dynamic_pin_ratio) as usize);
 
         if len > pin_count {
-            // Partition by growth rate (tuple.1), ascending order
-            let k = len - pin_count; // Right side will have pin_count elements with the largest growth rate
+            // Full sort by growth rate in ascending order
+            all_growth.sort_by(|a, b| a.1.cmp(&b.1));
 
-            info!(
-                "partitioning {} regions: pin_count={}, k={}, will select {} largest elements",
-                len, pin_count, k, pin_count
-            );
-
-            // Log some sample data before partitioning
-            if !all_growth.is_empty() {
-                let sample_size = std::cmp::min(5, all_growth.len());
-                let sample: Vec<_> = all_growth.iter().take(sample_size).collect();
-                info!("sample data before partitioning: {:?}", sample);
-            }
-
-            all_growth.select_nth_unstable_by(k, |a, b| a.1.cmp(&b.1));
-
-            // Move the largest pin_count elements into a new Vec (no copy, just move)
-            let pinned_regions = all_growth.split_off(k);
+            // Take the largest pin_count elements for pinned regions
+            let pinned_regions = all_growth.split_off(len - pin_count);
             // The left part is the GC candidate regions
             let gc_candidate_regions = all_growth;
-
-            // Log some sample data after partitioning
-            if !pinned_regions.is_empty() {
-                let sample_size = std::cmp::min(3, pinned_regions.len());
-                let sample: Vec<_> = pinned_regions.iter().take(sample_size).collect();
-                info!("sample pinned regions (largest growth): {:?}", sample);
-            }
-
-            if !gc_candidate_regions.is_empty() {
-                let sample_size = std::cmp::min(3, gc_candidate_regions.len());
-                let sample: Vec<_> = gc_candidate_regions.iter().take(sample_size).collect();
-                info!(
-                    "sample GC candidate regions (smallest growth): {:?}",
-                    sample
-                );
-            }
 
             info!(
                 "region classification created: {} pinned regions, {} GC candidate regions",
@@ -3326,7 +3261,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         } else {
             // pin_count >= len: all regions go into pinned, no GC candidates
             info!(
-                "region classification created: {} pinned regions, {} GC candidate regions",
+                "region classification created: {} pinned regions, {} GC candidate regions (all regions pinned due to dynamic ratio)",
                 all_growth.len(),
                 0
             );
@@ -3338,18 +3273,18 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
     }
 
     fn check_force_gc_needed(&self) -> Option<f64> {
+        let raftengine_memory_usage = self.ctx.engines.raft.get_memory_usage().unwrap() as f64;
         let mut over_ratio = 0.0;
-        let mut usage: f64 = 0.0;
-        let raft_memory_usage = self.ctx.engines.raft.get_memory_usage().unwrap() as f64;
-
         if needs_force_compact(
             &mut over_ratio,
-            &mut usage,
+            raftengine_memory_usage,
             self.ctx.cfg.evict_cache_on_memory_ratio,
         ) {
-            if raft_memory_usage > usage * 0.04 {
-                return Some(over_ratio);
-            }
+            info!(
+                "force GC needed based on memory pressure, over_ratio: {}",
+                over_ratio
+            );
+            return Some(over_ratio);
         }
         None
     }
