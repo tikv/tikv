@@ -502,10 +502,10 @@ mod tests {
 
         // First tick to establish baseline
         let result = unified_slow_score.tick_network();
-        assert_eq!(result.tick_id, 1);
+        assert_eq!(result.tick_id, 0);
 
         // Record network durations for current tick
-        unified_slow_score.record_network(1, durations.clone());
+        unified_slow_score.record_network(0, durations.clone());
 
         // Verify that network factors are created
         let network_factors = unified_slow_score.network_factors.lock().unwrap();
@@ -518,10 +518,10 @@ mod tests {
 
         // Tick again to advance
         let result2 = unified_slow_score.tick_network();
-        assert_eq!(result2.tick_id, 2);
+        assert_eq!(result2.tick_id, 1);
 
         durations.insert(4u64, Duration::from_millis(400));
-        unified_slow_score.record_network(2, durations.clone());
+        unified_slow_score.record_network(1, durations.clone());
 
         // Test updating with fewer stores (should remove missing stores)
         let mut new_durations = HashMap::new();
