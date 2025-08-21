@@ -369,6 +369,7 @@ impl ServerCluster {
         let mut raft_kv = RaftKv::new(
             sim_router.clone(),
             engines.kv.clone(),
+            Some(region_info_accessor.clone()),
             region_info_accessor.region_leaders(),
         );
 
@@ -923,7 +924,7 @@ impl Cluster<ServerCluster> {
             ctx.set_peer(leader);
             ctx.set_region_epoch(epoch);
 
-            let mut storage = self.sim.rl().storages.get(&store_id).unwrap().clone();
+            let mut storage = self.must_get_raft_engine(store_id);
             let snap_ctx = SnapContext {
                 pb_ctx: &ctx,
                 ..snap_ctx.clone()
@@ -937,6 +938,10 @@ impl Cluster<ServerCluster> {
             thread::sleep(Duration::from_millis(200));
         }
         panic!("failed to get snapshot of region {}", region_id);
+    }
+
+    pub fn must_get_raft_engine(&self, store_id: u64) -> SimulateEngine {
+        self.sim.rl().storages.get(&store_id).unwrap().clone()
     }
 
     pub fn raft_extension(&self, node_id: u64) -> SimulateRaftExtension {
