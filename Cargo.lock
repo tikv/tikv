@@ -184,9 +184,9 @@ dependencies = [
 
 [[package]]
 name = "async-compression"
-version = "0.4.12"
+version = "0.4.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fec134f64e2bc57411226dfc4e52dec859ddfc7e711fc5e07b612584f000e4aa"
+checksum = "ddb939d66e4ae03cee6091612804ba446b12878410cfa17f785f4dd67d4014e8"
 dependencies = [
  "futures-core",
  "futures-io",
@@ -3750,7 +3750,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#08fddd37b0f5526219ac9730c51d4689cf3b6d33"
+source = "git+https://github.com/pingcap/kvproto.git#89cf1fa685b99e454612f3d462836d2faa41bce1"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -7240,6 +7240,7 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "api_version",
+ "async-trait",
  "byteorder",
  "derive_more 0.99.3",
  "error_code",
@@ -7249,6 +7250,7 @@ dependencies = [
  "log_wrappers",
  "prometheus",
  "prometheus-static-metric",
+ "raft",
  "serde_json",
  "thiserror 1.0.40",
  "tikv_util",

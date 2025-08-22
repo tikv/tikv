@@ -645,10 +645,9 @@ where
         *gen_snap_task = Some(task);
     }
 
-    pub fn on_compact_raftlog(&mut self, idx: u64, state: Option<&mut CacheWarmupState>) {
+    pub fn on_compact_raftlog_cache(&mut self, idx: u64, state: Option<&mut CacheWarmupState>) {
         self.entry_storage.compact_entry_cache(idx, state);
         self.entry_storage.compact_term_cache(idx);
-        self.cancel_generating_snap(Some(idx));
     }
 
     // Apply the peer with given snapshot.
@@ -834,6 +833,20 @@ where
     pub fn is_generating_snapshot(&self) -> bool {
         fail_point!("is_generating_snapshot", |_| { true });
         matches!(*self.snap_state.borrow(), SnapState::Generating { .. })
+    }
+
+    /// Return the index of the snapshot that is currently being generated, if
+    /// any.
+    ///
+    /// This is useful to avoid over-aggressive raft log compaction that may
+    /// abort an ongoing snapshot generation. Callers can clamp compaction
+    /// index to `snap_index + 1` to keep the snapshot valid.
+    #[inline]
+    pub fn get_generating_snap_index(&self) -> Option<u64> {
+        match &*self.snap_state.borrow() {
+            SnapState::Generating { index, .. } => Some(index.load(Ordering::SeqCst)),
+            _ => None,
+        }
     }
 
     /// Check if the storage is applying a snapshot.

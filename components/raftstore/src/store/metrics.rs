@@ -237,7 +237,7 @@ make_static_metric! {
         high_log_lag_tick,
     }
 
-    pub label_enum RaftLogGcReason {
+    pub label_enum RaftLogForceGcReason {
         max_ticks,
         memory_high_water,
         raft_engine_memory_limit,
@@ -341,8 +341,8 @@ make_static_metric! {
         "reason" => RaftLogGcSkippedReason,
     }
 
-    pub struct RaftLogGcCounterVec: LocalIntCounter {
-        "reason" => RaftLogGcReason,
+    pub struct RaftLogForceGcCounterVec: LocalIntCounter {
+        "reason" => RaftLogForceGcReason,
     }
 
     pub struct LoadBaseSplitEventCounterVec: IntCounter {
@@ -976,9 +976,9 @@ lazy_static! {
     )
     .unwrap();
 
-    pub static ref RAFT_LOG_GC_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
-        "tikv_raftstore_raft_log_gc",
-        "Total number of ok raft log gc.",
+    pub static ref RAFT_LOG_FORCE_GC_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_raftstore_raft_log_force_gc",
+        "Total number of raft log force gc.",
         &["reason"]
     )
     .unwrap();

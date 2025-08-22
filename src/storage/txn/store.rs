@@ -30,6 +30,9 @@ pub trait Store: Send {
     /// Whether there was data > ts during previous incremental gets.
     fn incremental_get_met_newer_ts_data(&self) -> NewerTsCheckState;
 
+    /// Whether checks the newer ts data
+    fn is_check_has_newer_ts_data(&self) -> bool;
+
     /// Fetch the provided set of keys.
     fn batch_get(
         &self,
@@ -344,6 +347,11 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         }
     }
 
+    #[inline]
+    fn is_check_has_newer_ts_data(&self) -> bool {
+        self.check_has_newer_ts_data
+    }
+
     fn batch_get(
         &self,
         keys: &[Key],
@@ -452,13 +460,38 @@ impl<S: Snapshot> SnapshotStore<S> {
     }
 
     #[inline]
+    pub fn get_start_ts(&self) -> TimeStamp {
+        self.start_ts
+    }
+
+    #[inline]
     pub fn set_isolation_level(&mut self, isolation_level: IsolationLevel) {
         self.isolation_level = isolation_level;
     }
 
     #[inline]
+    pub fn get_isolation_level(&self) -> IsolationLevel {
+        self.isolation_level
+    }
+
+    #[inline]
     pub fn set_bypass_locks(&mut self, locks: TsSet) {
         self.bypass_locks = locks;
+    }
+
+    #[inline]
+    pub fn get_by_pass_locks(&self) -> TsSet {
+        self.bypass_locks.clone()
+    }
+
+    #[inline]
+    pub fn get_access_locks(&self) -> TsSet {
+        self.access_locks.clone()
+    }
+
+    #[inline]
+    pub fn is_fill_cache(&self) -> bool {
+        self.fill_cache
     }
 
     fn verify_range(&self, lower_bound: &Option<Key>, upper_bound: &Option<Key>) -> Result<()> {
@@ -549,6 +582,10 @@ impl Store for FixtureStore {
     #[inline]
     fn incremental_get_met_newer_ts_data(&self) -> NewerTsCheckState {
         NewerTsCheckState::Unknown
+    }
+
+    fn is_check_has_newer_ts_data(&self) -> bool {
+        false
     }
 
     #[inline]

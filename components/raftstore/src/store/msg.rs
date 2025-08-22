@@ -997,10 +997,10 @@ where
         region_ids: Vec<u64>,
     },
 
-    /// Region leader growth rate update (only sent by leaders)
-    RegionLeaderGrowth {
+    /// Region leader write rate update (only sent by leaders)
+    RegionWriteRate {
         region_id: u64,
-        log_lag: u64,
+        write_rate: u64,
     },
 
     /// Message only used for test.
@@ -1038,7 +1038,7 @@ where
             }
             StoreMsg::GcSnapshotFinish => write!(fmt, "GcSnapshotFinish"),
             StoreMsg::AwakenRegions { .. } => write!(fmt, "AwakenRegions"),
-            StoreMsg::RegionLeaderGrowth { .. } => write!(fmt, "RegionLeaderGrowth"),
+            StoreMsg::RegionWriteRate { .. } => write!(fmt, "RegionWriteRate"),
             #[cfg(any(test, feature = "testexport"))]
             StoreMsg::Validate(_) => write!(fmt, "Validate config"),
         }
@@ -1060,7 +1060,7 @@ impl<EK: KvEngine> StoreMsg<EK> {
             StoreMsg::UnsafeRecoveryCreatePeer { .. } => 9,
             StoreMsg::GcSnapshotFinish => 10,
             StoreMsg::AwakenRegions { .. } => 11,
-            StoreMsg::RegionLeaderGrowth { .. } => 12,
+            StoreMsg::RegionWriteRate { .. } => 12,
             #[cfg(any(test, feature = "testexport"))]
             StoreMsg::Validate(_) => 13, // Please keep this always be the last one.
         }

@@ -103,9 +103,11 @@ pub struct Config {
     pub raft_log_reserve_max_ticks: usize,
     // Old logs in Raft engine needs to be purged peridically.
     pub raft_engine_purge_interval: ReadableDuration,
-    // Logs in Raft Engine memory needs to be purged peridically.
+    // Interval to check whether to force gc raft logs.
     #[doc(hidden)]
-    pub raft_log_force_gc_interval: ReadableDuration,
+    pub raft_log_force_gc_tick_interval: ReadableDuration,
+    // Interval to sample the write rate of each leader peer.
+    // only sample the peer which has a certain amount of log lag.
     #[doc(hidden)]
     pub region_sampling_interval: ReadableDuration,
     #[doc(hidden)]
@@ -345,6 +347,8 @@ pub struct Config {
     // * system=32G, memory_usage_limit=24G, evict=2.4G
     pub evict_cache_on_memory_ratio: f64,
 
+    #[doc(hidden)]
+    /// The ratio of region to be pinned when compacting.
     pub pin_compact_region_ratio: f64,
 
     pub cmd_batch: bool,
@@ -537,7 +541,7 @@ impl Default for Config {
             follower_read_max_log_gap: 100,
             raft_log_reserve_max_ticks: 6,
             raft_engine_purge_interval: ReadableDuration::secs(10),
-            raft_log_force_gc_interval: ReadableDuration::secs(300),
+            raft_log_force_gc_tick_interval: ReadableDuration::secs(300),
             region_sampling_interval: ReadableDuration::secs(300),
             max_manual_flush_rate: 3.0,
             raft_entry_cache_life_time: ReadableDuration::secs(30),
@@ -603,7 +607,7 @@ impl Default for Config {
             apply_yield_write_size: ReadableSize::kb(32),
             perf_level: PerfLevel::Uninitialized,
             evict_cache_on_memory_ratio: 0.05,
-            pin_compact_region_ratio: 0.2,
+            pin_compact_region_ratio: 0.1,
             cmd_batch: true,
             cmd_batch_concurrent_ready_max_count: 1,
             raft_write_size_limit: ReadableSize::mb(1),
@@ -1121,8 +1125,8 @@ impl Config {
             .with_label_values(&["raft_engine_purge_interval"])
             .set(self.raft_engine_purge_interval.as_secs_f64());
         CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["raft_log_force_gc_interval"])
-            .set(self.raft_log_force_gc_interval.as_secs_f64());
+            .with_label_values(&["raft_log_force_gc_tick_interval"])
+            .set(self.raft_log_force_gc_tick_interval.as_secs_f64());
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["region_sampling_interval"])
             .set(self.region_sampling_interval.as_secs_f64());
