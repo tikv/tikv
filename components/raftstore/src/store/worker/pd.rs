@@ -2026,19 +2026,6 @@ where
         let id = slow_score_tick_result.tick_id;
         let scheduler = self.scheduler.clone();
 
-        if factor == InspectFactor::Network {
-            let duration = std::collections::HashMap::<u64, Duration>::new();
-
-            for (store_id, network_duration) in &duration {
-                STORE_INSPECT_NETWORK_DURATION_HISTOGRAM
-                    .with_label_values(&[&store_id.to_string()])
-                    .observe(tikv_util::time::duration_to_sec(*network_duration));
-            }
-
-            self.health_reporter.record_network_duration(id, duration);
-
-            return;
-        }
         let inspector = {
             match factor {
                 InspectFactor::RaftDisk => {
@@ -2100,7 +2087,16 @@ where
                     }),
                 ),
                 other => {
-                    warn!("unknown inspect factor"; "factor" => ?other);
+                    let duration = std::collections::HashMap::<u64, Duration>::new();
+
+                    for (store_id, network_duration) in &duration {
+                        STORE_INSPECT_NETWORK_DURATION_HISTOGRAM
+                            .with_label_values(&[&store_id.to_string()])
+                            .observe(tikv_util::time::duration_to_sec(*network_duration));
+                    }
+
+                    self.health_reporter.record_network_duration(id, duration);
+
                     return;
                 }
             }

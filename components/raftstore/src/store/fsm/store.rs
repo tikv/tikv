@@ -912,9 +912,7 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                                 );
                             }
                         }
-                        other => {
-                            warn!("unknown inspect factor"; "factor" => ?other);
-                        }
+                        other => unimplemented!(),
                     }
                 }
                 StoreMsg::UnsafeRecoveryReport(report) => self.store_heartbeat_pd(Some(report)),

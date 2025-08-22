@@ -9,7 +9,7 @@ use std::{
 use kvproto::pdpb;
 use pdpb::SlowTrend as SlowTrendPb;
 use prometheus::IntGauge;
-use tikv_util::info;
+use tikv_util::debug;
 
 use crate::{
     HealthController, HealthControllerInner, RaftstoreDuration,
@@ -137,9 +137,10 @@ impl UnifiedSlowScore {
 
     // Returns the maximum score of disk factors.
     pub fn get_disk_score(&mut self) -> f64 {
-        (self.factors[InspectFactor::RaftDisk as usize].get()
-            + self.factors[InspectFactor::KvDisk as usize].get())
-            / 2.0
+        self.factors
+            .iter()
+            .map(|factor| factor.get())
+            .fold(1.0, f64::max)
     }
 
     pub fn get_network_score(&self) -> HashMap<u64, u64> {
@@ -156,6 +157,8 @@ impl UnifiedSlowScore {
     }
 
     pub fn record_timeout(&mut self, factor: InspectFactor) {
+        // We should be able to get the latency from HealthChecker
+        // every time, so there is no need to explicitly mark timeout
         if factor == InspectFactor::Network {
             return;
         }
@@ -208,7 +211,7 @@ impl UnifiedSlowScore {
         if total_count == network_factors.len() {
             slow_score_tick_result.updated_score = Some(total_score / total_count as f64);
         }
-        info!(
+        debug!(
             "network slow score tick: {:?}, total_score: {}, total_count: {}",
             slow_score_tick_result, total_score, total_count
         );
