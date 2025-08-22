@@ -500,6 +500,7 @@ where
                 ),
             ),
             engines.kv.clone(),
+            self.region_info_accessor.clone(),
             self.region_info_accessor.as_ref().unwrap().region_leaders(),
         );
 
@@ -1337,6 +1338,7 @@ where
         let cdc_service = cdc::Service::new(
             servers.cdc_scheduler.clone(),
             servers.cdc_memory_quota.clone(),
+            Arc::new(self.core.background_worker.clone()),
         );
         if servers
             .server

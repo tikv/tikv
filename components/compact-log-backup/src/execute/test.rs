@@ -230,10 +230,16 @@ async fn test_consistency_guard() {
     let mut exec = create_compaction(st.backend());
     exec.cfg.until_ts = 41;
     let c = StorageConsistencyGuard::default();
-    tokio::task::block_in_place(|| exec.run(c).unwrap_err());
+    tokio::task::block_in_place(|| exec.run(c).unwrap());
 
     let mut exec = create_compaction(st.backend());
     exec.cfg.until_ts = 39;
+    let c = StorageConsistencyGuard::default();
+    tokio::task::block_in_place(|| exec.run(c).unwrap());
+
+    put_checkpoint(strg, 2, 49).await;
+    let mut exec = create_compaction(st.backend());
+    exec.cfg.until_ts = 43;
     let c = StorageConsistencyGuard::default();
     tokio::task::block_in_place(|| exec.run(c).unwrap());
 }

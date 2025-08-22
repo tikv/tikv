@@ -6084,6 +6084,7 @@ where
         let truncated_idx = self.fsm.peer.get_store().truncated_index();
         let first_idx = self.fsm.peer.get_store().first_index();
         let last_idx = self.fsm.peer.get_store().last_index();
+        let generating_snap_index = self.fsm.peer.get_store().get_generating_snap_index();
 
         let mut voter_replicated_idx = last_idx;
         let (mut replicated_idx, mut alive_cache_idx) = (last_idx, last_idx);
@@ -6102,6 +6103,10 @@ where
                 if *last_heartbeat > cache_alive_limit {
                     if alive_cache_idx > p.matched {
                         alive_cache_idx = std::cmp::max(p.matched, truncated_idx);
+                        if let Some(generating_snap_index) = generating_snap_index {
+                            alive_cache_idx =
+                                std::cmp::max(alive_cache_idx, generating_snap_index + 1);
+                        }
                     } else if p.matched == 0 {
                         // the new peer is still applying snapshot, do not compact cache now
                         alive_cache_idx = 0;
@@ -6175,8 +6180,6 @@ where
             applied_idx
         };
 
-        let compact_pin_regions_ratio = 1.0 / self.ctx.cfg.pin_compact_region_ratio;
-
         let mut compact_idx = match action {
             RaftLogGcAction::ForceCompact => {
                 let should_force_compact =
@@ -6198,8 +6201,7 @@ where
             }
             RaftLogGcAction::Normal => {
                 if applied_count
-                    >= (self.ctx.cfg.raft_log_gc_count_limit() as f64 * compact_pin_regions_ratio)
-                        as u64
+                    >= self.ctx.cfg.raft_log_gc_count_limit() 
                 {
                     self.ctx
                         .raft_metrics
@@ -6208,8 +6210,7 @@ where
                         .inc();
                     quorum_replicated_idx
                 } else if self.fsm.peer.raft_log_size_hint
-                    >= (self.ctx.cfg.raft_log_gc_size_limit().0 as f64 * compact_pin_regions_ratio)
-                        as u64
+                    >= self.ctx.cfg.raft_log_gc_size_limit().0
                 {
                     self.ctx
                         .raft_metrics

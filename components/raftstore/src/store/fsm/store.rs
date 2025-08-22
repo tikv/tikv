@@ -3206,14 +3206,16 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         let now = Instant::now();
 
         // Use retain to remove stale regions in one pass
-        self.fsm.store.region_leader_growth.retain(|region_id, (_, last_update_time)| {
-            if now.duration_since(*last_update_time) > timeout_duration {
-                info!("removing stale region from growth tracking due to timeout"; "region_id" => region_id);
-                false // remove this entry
-            } else {
-                true // keep this entry
-            }
-        });
+        self.fsm
+            .store
+            .region_leader_growth
+            .retain(|_, (_, last_update_time)| {
+                if now.duration_since(*last_update_time) > timeout_duration {
+                    false // remove this entry
+                } else {
+                    true // keep this entry
+                }
+            });
     }
 
     fn create_region_classification(&self, over_ratio: f64) -> RegionClassification {
