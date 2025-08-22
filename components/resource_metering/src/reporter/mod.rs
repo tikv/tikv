@@ -103,14 +103,14 @@ impl Reporter {
 
         let kth = find_kth_cpu_time(agg_map.iter(), self.config.max_resource_groups);
         self.records
-            .append(ts, agg_map.iter().filter(move |(_, v)| v.cpu_time > kth));        
+            .append(ts, agg_map.iter().filter(move |(_, v)| v.cpu_time > kth));
         let others = self.records.others.entry(ts).or_default();
         agg_map
             .iter()
             .filter(move |(_, v)| v.cpu_time <= kth)
             .for_each(|(_, v)| {
                 others.merge(v);
-            });        
+            });
     }
 
     fn handle_config_change(&mut self, config: Config) {

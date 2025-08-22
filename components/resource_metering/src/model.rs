@@ -564,7 +564,7 @@ mod tests {
         // evicted.len() == 3
         let (top, evicted) = (
             agg_map.iter().filter(move |(_, v)| v.cpu_time > kth),
-            agg_map.iter().filter(move |(_, v)| v.cpu_time <= kth)
+            agg_map.iter().filter(move |(_, v)| v.cpu_time <= kth),
         );
 
         let mut records = Records::default();
@@ -670,7 +670,7 @@ mod tests {
                 read_keys: 8880,
                 write_keys: 9990,
             },
-        ); 
+        );
         let rs = RawRecords {
             begin_unix_time_secs: 1,
             duration: Duration::from_secs(1),
@@ -686,7 +686,7 @@ mod tests {
         assert_eq!(
             agg_map.get(&tag2.extra_attachment).unwrap().cpu_time,
             555 + 7770
-        );        
+        );
         assert_eq!(agg_map.get(&tag3.extra_attachment).unwrap().cpu_time, 777);
     }
 }
