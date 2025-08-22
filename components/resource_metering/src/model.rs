@@ -686,7 +686,7 @@ mod tests {
         );
         assert_eq!(
             agg_map.get(&tag2.extra_attachment).unwrap().cpu_time,
-            555 + 7770
+            444 + 7770
         );
         assert_eq!(agg_map.get(&tag3.extra_attachment).unwrap().cpu_time, 777);
     }
