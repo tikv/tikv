@@ -26,7 +26,7 @@ test = true
 harness = true
 
 [dependencies]
-async-compression = { version = "0.4.12", features = ["tokio", "zstd"] }
+async-compression = { version = "0.4.27", features = ["tokio", "zstd"] }
 async-trait = { version = "0.1" }
 base64 = "0.13.0"
 chrono = { workspace = true }

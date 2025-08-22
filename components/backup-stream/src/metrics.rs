@@ -197,6 +197,21 @@ lazy_static! {
         "The duration of polling read temp file.",
         exponential_buckets(0.001, 2.0, 10).unwrap()
     ).unwrap();
+
+    pub static ref STORE_SMALLEST_CHECKPOINT_REGION_ID: IntGauge = register_int_gauge!(
+        "tikv_log_backup_store_last_checkpoint_region_id",
+        "ID of the region with the smallest checkpoint ts in the store."
+    ).unwrap();
+
+    pub static ref STORE_SMALLEST_CHECKPOINT_TS: IntGauge = register_int_gauge!(
+        "tikv_log_backup_store_last_checkpoint_ts",
+        "The smallest checkpoint ts in the store."
+    ).unwrap();
+
+    pub static ref ACTIVE_SUBSCRIPTION_NUMBER: IntGauge = register_int_gauge!(
+        "tikv_log_backup_active_subscription_number",
+        "The number of active subscriptions from advancer in the store."
+    ).unwrap();
 }
 
 make_static_metric! {

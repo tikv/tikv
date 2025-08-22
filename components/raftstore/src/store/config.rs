@@ -345,6 +345,8 @@ pub struct Config {
     // * system=32G, memory_usage_limit=24G, evict=2.4G
     pub evict_cache_on_memory_ratio: f64,
 
+    #[doc(hidden)]
+    /// The ratio of region to be pinned when compacting.
     pub pin_compact_region_ratio: f64,
 
     pub cmd_batch: bool,
@@ -603,7 +605,7 @@ impl Default for Config {
             apply_yield_write_size: ReadableSize::kb(32),
             perf_level: PerfLevel::Uninitialized,
             evict_cache_on_memory_ratio: 0.05,
-            pin_compact_region_ratio: 0.2,
+            pin_compact_region_ratio: 0.1,
             cmd_batch: true,
             cmd_batch_concurrent_ready_max_count: 1,
             raft_write_size_limit: ReadableSize::mb(1),

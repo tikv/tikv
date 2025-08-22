@@ -66,6 +66,7 @@ impl SubscriptionManager {
         info!("subscription manager started!");
         defer! { info!("subscription manager exit.") }
         while let Some(msg) = self.input.next().await {
+            metrics::ACTIVE_SUBSCRIPTION_NUMBER.set(self.subscribers.len() as _);
             match msg {
                 SubscriptionOp::Add(sub) => {
                     let uid = Uuid::new_v4();

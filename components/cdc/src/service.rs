@@ -1,13 +1,19 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::{Duration, Instant},
 };
 
 use collections::{HashMap, HashMapEntry};
 use crossbeam::atomic::AtomicCell;
-use futures::stream::TryStreamExt;
+use futures::{
+    compat::Stream01CompatExt,
+    stream::{StreamExt, TryStreamExt},
+};
 use grpcio::{DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode};
 use kvproto::{
     cdcpb::{
@@ -16,15 +22,21 @@ use kvproto::{
     },
     kvrpcpb::ApiVersion,
 };
-use tikv_util::{error, info, memory::MemoryQuota, warn, worker::*};
+use tikv_util::{error, info, memory::MemoryQuota, timer::GLOBAL_TIMER_HANDLE, warn, worker::*};
 
 use crate::{
     channel::{CDC_CHANNLE_CAPACITY, Sink, channel},
     delegate::{Downstream, DownstreamId, DownstreamState, ObservedRange},
     endpoint::{Deregister, Task},
+    metrics::CDC_ABORTED_CONNECTIONS,
 };
 
 static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
+
+// CDC connection monitoring constants in seconds
+const CDC_WATCHDOG_CHECK_INTERVAL_SECS: u64 = 2;
+const CDC_IDLE_WARNING_THRESHOLD_SECS: u64 = 60;
+const CDC_IDLE_DEREGISTER_THRESHOLD_SECS: u64 = 60 * 20; // 20 minutes
 
 pub fn validate_kv_api(kv_api: ChangeDataRequestKvApi, api_version: ApiVersion) -> bool {
     kv_api == ChangeDataRequestKvApi::TiDb
@@ -248,16 +260,22 @@ impl EventFeedHeaders {
 pub struct Service {
     scheduler: Scheduler<Task>,
     memory_quota: Arc<MemoryQuota>,
+    pool: Arc<Worker>,
 }
 
 impl Service {
     /// Create a ChangeData service.
     ///
     /// It requires a scheduler of an `Endpoint` in order to schedule tasks.
-    pub fn new(scheduler: Scheduler<Task>, memory_quota: Arc<MemoryQuota>) -> Service {
+    pub fn new(
+        scheduler: Scheduler<Task>,
+        memory_quota: Arc<MemoryQuota>,
+        pool: Arc<Worker>,
+    ) -> Service {
         Service {
             scheduler,
             memory_quota,
+            pool,
         }
     }
 
@@ -428,7 +446,8 @@ impl Service {
             };
             explicit_features = headers.features;
         }
-        info!("cdc connection created"; "downstream" => ctx.peer(), "features" => ?explicit_features);
+        info!("cdc connection created"; "downstream" => ctx.peer(),
+         "conn_id" => ?conn_id,"features" => ?explicit_features);
 
         if let Err(e) = self.scheduler.schedule(Task::OpenConn { conn }) {
             let peer = ctx.peer();
@@ -473,14 +492,119 @@ impl Service {
             }
         });
 
+        let last_flush_time = Arc::new(AtomicCell::new(Instant::now()));
+        let last_flush_time_for_forward = last_flush_time.clone();
+        let last_flush_time_for_watchdog = last_flush_time.clone();
+        let peer_for_watchdog = ctx.peer().to_string();
+
         let peer = ctx.peer();
+        let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
+
+        // Create cancelCh for eventDrain.forward exit signal
+        let (forward_exit_tx, forward_exit_rx) = tokio::sync::oneshot::channel::<()>();
+
         ctx.spawn(async move {
             #[cfg(feature = "failpoints")]
             sleep_before_drain_change_event().await;
-            if let Err(e) = event_drain.forward(&mut sink).await {
-                warn!("cdc send failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
-            } else {
-                info!("cdc send closed"; "downstream" => peer, "conn_id" => ?conn_id);
+            tokio::select! {
+                _ = &mut cancel_rx => {
+                    warn!("cdc send cancelled"; "downstream" => peer, "conn_id" => ?conn_id);
+                    let status = RpcStatus::with_message(RpcStatusCode::UNKNOWN, "connection cancelled".to_string());
+                    let _ = sink.fail(status).await;
+                    CDC_ABORTED_CONNECTIONS.inc();
+                }
+                result = event_drain.forward(&mut sink, Some(&last_flush_time_for_forward)) => {
+                    if let Err(e) = result {
+                        warn!("cdc send failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
+                    } else {
+                        info!("cdc send closed"; "downstream" => peer, "conn_id" => ?conn_id);
+                    }
+                    // Send signal when eventDrain.forward exits
+                    let _ = forward_exit_tx.send(());
+                }
+            }
+        });
+
+        // Start watchdog to monitor connection activity
+        Self::start_connection_watchdog(
+            self.pool.clone(),
+            last_flush_time_for_watchdog.clone(),
+            peer_for_watchdog.clone(),
+            conn_id,
+            cancel_tx,
+            forward_exit_rx,
+        );
+    }
+
+    /// Start a watchdog to monitor CDC connection activity.
+    ///
+    /// This function creates a background task that periodically checks if the
+    /// connection has been idle for too long and takes appropriate action
+    /// (warning or aborting).
+    fn start_connection_watchdog(
+        pool: Arc<Worker>,
+        last_flush_time: Arc<AtomicCell<Instant>>,
+        peer: String,
+        conn_id: ConnId,
+        cancel_tx: tokio::sync::oneshot::Sender<()>,
+        mut forward_exit_rx: tokio::sync::oneshot::Receiver<()>,
+    ) {
+        let last_flush_time_clone = last_flush_time.clone();
+        let peer_clone = peer.clone();
+
+        // Create a custom interval task that can be stopped
+        let _ = pool.pool().spawn(async move {
+            let mut interval = GLOBAL_TIMER_HANDLE
+                .interval(
+                    Instant::now(),
+                    Duration::from_secs(CDC_WATCHDOG_CHECK_INTERVAL_SECS),
+                )
+                .compat();
+
+            loop {
+                tokio::select! {
+                    _ = &mut forward_exit_rx => {
+                        info!("cdc connection forward exit signal received, stopping watchdog");
+                        break;
+                    }
+                    _ = interval.next() => {
+                        let elapsed = last_flush_time_clone.load().elapsed();
+
+                        // Check if last flush was more than the warning threshold
+                        if elapsed > Duration::from_secs(CDC_IDLE_WARNING_THRESHOLD_SECS) {
+                            warn!("cdc connection idle too long";
+                                  "downstream" => peer_clone.clone(),
+                                  "conn_id" => ?conn_id,
+                                  "seconds_since_last_flush" => elapsed.as_secs());
+                        }
+
+                        let _idle_threshold = CDC_IDLE_DEREGISTER_THRESHOLD_SECS;
+
+                        #[cfg(feature = "failpoints")]
+                        let _idle_threshold = {
+                            let should_adjust = || {
+                                fail::fail_point!("cdc_idle_deregister_threshold", |_| true);
+                                false
+                            };
+                            if should_adjust() {
+                                5
+                            } else {
+                                CDC_IDLE_DEREGISTER_THRESHOLD_SECS
+                            }
+                        };
+
+                        // Check if last flush was more than the deregister threshold
+                        if elapsed > Duration::from_secs(_idle_threshold) {
+                            error!("cdc connection idle for too long, aborting connection";
+                                   "downstream" => peer_clone.clone(),
+                                   "conn_id" => ?conn_id,
+                                   "seconds_since_last_flush" => elapsed.as_secs());
+                            // Cancel the gRPC connection
+                            let _ = cancel_tx.send(());
+                            break;
+                        }
+                    }
+                }
             }
         });
     }
@@ -536,8 +660,9 @@ mod tests {
 
     fn new_rpc_suite(capacity: usize) -> (Server, ChangeDataClient, ReceiverWrapper<Task>) {
         let memory_quota = Arc::new(MemoryQuota::new(capacity));
+        let pool = Arc::new(Builder::new("cdc-watchdog-test").thread_count(1).create());
         let (scheduler, rx) = dummy_scheduler();
-        let cdc_service = Service::new(scheduler, memory_quota);
+        let cdc_service = Service::new(scheduler, memory_quota, pool);
         let env = Arc::new(EnvBuilder::new().build());
         let builder =
             ServerBuilder::new(env.clone()).register_service(create_change_data(cdc_service));

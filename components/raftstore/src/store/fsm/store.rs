@@ -765,8 +765,8 @@ struct Store {
     start_time: Option<Timespec>,
     consistency_check_time: HashMap<u64, Instant>,
     store_reachability: HashMap<u64, StoreReachability>,
-    // Region leader growth rate information for GC decision
-    region_leader_growth: HashMap<u64, (u64, Instant)>, /* region_id -> (growth_rate,
+    // Region leader write rate information for GC decision
+    region_leader_growth: HashMap<u64, (u64, Instant)>, /* region_id -> (write_rate,
                                                          * last_update_time) */
 }
 
@@ -953,8 +953,11 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 } => {
                     self.on_wake_up_regions(abnormal_stores, region_ids);
                 }
-                StoreMsg::RegionLeaderGrowth { region_id, log_lag } => {
-                    self.on_region_leader_growth(region_id, log_lag);
+                StoreMsg::RegionWriteRateGrowth {
+                    region_id,
+                    write_rate,
+                } => {
+                    self.on_region_leader_growth(region_id, write_rate);
                 }
             }
         }
@@ -3094,16 +3097,16 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         }
     }
 
-    fn on_region_leader_growth(&mut self, region_id: u64, log_lag: u64) {
+    fn on_region_leader_growth(&mut self, region_id: u64, write_rate: u64) {
         info!(
             "received region leader growth update";
             "region_id" => region_id,
-            "log_lag" => log_lag
+            "write_rate" => write_rate
         );
         self.fsm
             .store
             .region_leader_growth
-            .insert(region_id, (log_lag, Instant::now()));
+            .insert(region_id, (write_rate, Instant::now()));
     }
 
     fn register_pd_store_heartbeat_tick(&self) {
@@ -3168,16 +3171,6 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
             );
         }
 
-        // Log pinned regions details with their IDs and log lag values
-        if !classification.pinned_regions.is_empty() {
-            let pinned_details: Vec<String> = classification
-                .pinned_regions
-                .iter()
-                .map(|(region_id, growth)| format!("{}:{}", region_id, growth))
-                .collect();
-            info!("pinned regions details: [{}]", pinned_details.join(", "));
-        }
-
         let regions_compacted = gc_candidates_compacted + pinned_regions_compacted;
 
         info!(
@@ -3195,9 +3188,8 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
 
     fn on_region_sampling_tick(&mut self) {
         self.register_region_sampling_tick();
-        // Only clean up stale regions, classification will be done when needed
+        // Clean up stale regions
         self.cleanup_stale_region_data();
-        info!("region sampling completed, stale data cleaned up");
     }
 
     fn cleanup_stale_region_data(&mut self) {
@@ -3206,14 +3198,16 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         let now = Instant::now();
 
         // Use retain to remove stale regions in one pass
-        self.fsm.store.region_leader_growth.retain(|region_id, (_, last_update_time)| {
-            if now.duration_since(*last_update_time) > timeout_duration {
-                info!("removing stale region from growth tracking due to timeout"; "region_id" => region_id);
-                false // remove this entry
-            } else {
-                true // keep this entry
-            }
-        });
+        self.fsm
+            .store
+            .region_leader_growth
+            .retain(|_, (_, last_update_time)| {
+                if now.duration_since(*last_update_time) > timeout_duration {
+                    false // remove this entry
+                } else {
+                    true // keep this entry
+                }
+            });
     }
 
     fn create_region_classification(&self, over_ratio: f64) -> RegionClassification {
@@ -3273,8 +3267,15 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
     }
 
     fn check_force_gc_needed(&self) -> Option<f64> {
+        // If there is no region leader growth, no need to check
+        if self.fsm.store.region_leader_growth.is_empty() {
+            return None;
+        }
+        // Get current raft engine memory usage
         let raftengine_memory_usage = self.ctx.engines.raft.get_memory_usage().unwrap() as f64;
         let mut over_ratio = 0.0;
+        // If raft engine memory usage exceeds threshold, we need to shrink pinned
+        // regions to release more memory
         if needs_force_compact(
             &mut over_ratio,
             raftengine_memory_usage,

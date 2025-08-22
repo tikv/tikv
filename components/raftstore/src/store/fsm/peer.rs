@@ -170,7 +170,7 @@ where
     /// deleted if the skip time reaches this `skip_gc_raft_log_ticks`.
     skip_gc_raft_log_ticks: usize,
 
-    /// Previous last_index for calculating growth rate in GC tick
+    /// Previous last_index for calculating growth rate in sampling tick
     previous_last_index: u64,
 
     /// Accumulated interval time for region growth sampling
@@ -4460,10 +4460,19 @@ where
         self.fsm.peer.schedule_raftlog_gc(self.ctx, compact_to);
         self.fsm.peer.last_compacted_idx = compact_to;
         let transfer_leader_state = &mut self.fsm.peer.transfer_leader_state;
-        self.fsm.peer.raft_group.mut_store().on_compact_raftlog(
-            compact_to,
-            transfer_leader_state.cache_warmup_state.as_mut(),
-        );
+        self.fsm
+            .peer
+            .raft_group
+            .mut_store()
+            .on_compact_raftlog_cache(
+                compact_to,
+                transfer_leader_state.cache_warmup_state.as_mut(),
+            );
+        self.fsm
+            .peer
+            .raft_group
+            .mut_store()
+            .cancel_generating_snap(Some(compact_to));
         if self.fsm.peer.is_witness() {
             self.fsm.peer.last_compacted_time = Instant::now();
         }
@@ -6100,8 +6109,8 @@ where
             }
             if let Some(last_heartbeat) = self.fsm.peer.peer_heartbeats.get(peer_id) {
                 if *last_heartbeat > cache_alive_limit {
-                    if alive_cache_idx > p.matched {
-                        alive_cache_idx = std::cmp::max(p.matched, truncated_idx);
+                    if alive_cache_idx > p.matched && p.matched >= truncated_idx {
+                        alive_cache_idx = p.matched;
                     } else if p.matched == 0 {
                         // the new peer is still applying snapshot, do not compact cache now
                         alive_cache_idx = 0;
@@ -6125,6 +6134,7 @@ where
         // Accumulate interval time
         self.fsm.sampling_interval += self.ctx.cfg.raft_log_gc_tick_interval.0.as_millis() as u64;
 
+        //
         if self.fsm.sampling_interval >= self.ctx.cfg.region_sampling_interval.0.as_millis() as u64
         {
             // Calculate write rate (last_index - previous_last_index)
@@ -6132,9 +6142,9 @@ where
 
             // Only send if applied_count > raft_log_gc_count_limit / 10
             if applied_count > self.ctx.cfg.raft_log_gc_count_limit() / 10 {
-                let store_msg: StoreMsg<EK> = StoreMsg::RegionLeaderGrowth {
+                let store_msg: StoreMsg<EK> = StoreMsg::RegionWriteRateGrowth {
                     region_id: self.fsm.region_id(),
-                    log_lag: write_rate,
+                    write_rate,
                 };
                 if let Err(e) = self.ctx.router.send_control(store_msg) {
                     warn!(
@@ -6155,10 +6165,14 @@ where
         // leader may call `get_term()` on the latest replicated index, so compact
         // entries before `alive_cache_idx` instead of `alive_cache_idx + 1`.
         let transfer_leader_state = &mut self.fsm.peer.transfer_leader_state;
-        self.fsm.peer.raft_group.mut_store().on_compact_raftlog(
-            std::cmp::min(alive_cache_idx, applied_idx + 1),
-            transfer_leader_state.cache_warmup_state.as_mut(),
-        );
+        self.fsm
+            .peer
+            .raft_group
+            .mut_store()
+            .on_compact_raftlog_cache(
+                std::cmp::min(alive_cache_idx, applied_idx + 1),
+                transfer_leader_state.cache_warmup_state.as_mut(),
+            );
         if needs_evict_entry_cache(self.ctx.cfg.evict_cache_on_memory_ratio) {
             self.fsm.peer.mut_store().evict_entry_cache(true);
             self.ctx.raft_metrics.raft_log_gc.cache_evict.inc();
@@ -6174,8 +6188,6 @@ where
         } else {
             applied_idx
         };
-
-        let compact_pin_regions_ratio = 1.0 / self.ctx.cfg.pin_compact_region_ratio;
 
         let mut compact_idx = match action {
             RaftLogGcAction::ForceCompact => {
@@ -6197,10 +6209,7 @@ where
                 }
             }
             RaftLogGcAction::Normal => {
-                if applied_count
-                    >= (self.ctx.cfg.raft_log_gc_count_limit() as f64 * compact_pin_regions_ratio)
-                        as u64
-                {
+                if applied_count >= self.ctx.cfg.raft_log_gc_count_limit() {
                     self.ctx
                         .raft_metrics
                         .raft_log_gc
@@ -6208,8 +6217,7 @@ where
                         .inc();
                     quorum_replicated_idx
                 } else if self.fsm.peer.raft_log_size_hint
-                    >= (self.ctx.cfg.raft_log_gc_size_limit().0 as f64 * compact_pin_regions_ratio)
-                        as u64
+                    >= self.ctx.cfg.raft_log_gc_size_limit().0
                 {
                     self.ctx
                         .raft_metrics
@@ -6262,6 +6270,11 @@ where
                 .inc();
             return;
         }
+        self.fsm
+            .peer
+            .raft_group
+            .mut_store()
+            .cancel_generating_snap(Some(compact_idx));
 
         // Create a compact log request and notify directly.
         let region_id = self.fsm.peer.region().get_id();

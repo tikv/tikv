@@ -1081,6 +1081,16 @@ impl MockRegionInfoProvider {
                 .collect_vec(),
         ))
     }
+
+    pub fn set_role(&self, region_id: u64, role: StateRole) {
+        let mut region_infos = self.0.lock().unwrap();
+        if let Some(region_info) = region_infos
+            .iter_mut()
+            .find(|info| info.region.get_id() == region_id)
+        {
+            region_info.role = role;
+        }
+    }
 }
 
 impl Clone for MockRegionInfoProvider {
