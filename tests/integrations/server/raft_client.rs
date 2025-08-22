@@ -28,7 +28,7 @@ use tikv::server::{
 use tikv_kv::{FakeExtension, RaftExtension};
 use tikv_util::{
     config::{ReadableDuration, VersionTrack},
-    worker::{Builder as WorkerBuilder, LazyWorker},
+    worker::{Builder as WorkerBuilder, LazyWorker, Worker},
 };
 
 use super::*;
@@ -55,7 +55,12 @@ where
         worker.scheduler(),
         loads,
     );
-    RaftClient::new(0, builder, Duration::from_millis(50))
+    RaftClient::new(
+        0,
+        builder,
+        Duration::from_millis(50),
+        Worker::new("test-worker"),
+    )
 }
 
 fn get_raft_client_by_port(port: u16) -> RaftClient<resolve::MockStoreAddrResolver, FakeExtension> {

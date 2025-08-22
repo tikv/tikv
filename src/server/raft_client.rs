@@ -42,7 +42,7 @@ use tikv_util::{
     lru::LruCache,
     time::{InstantExt, duration_to_sec},
     timer::GLOBAL_TIMER_HANDLE,
-    worker::Scheduler,
+    worker::{Scheduler, Worker},
 };
 use yatp::{ThreadPool, task::future::TaskCell};
 
@@ -1056,6 +1056,7 @@ where
         self_store_id: u64,
         builder: ConnectionBuilder<S, R>,
         inspect_interval: Duration,
+        background_worker: Worker,
     ) -> Self {
         let future_pool = Arc::new(
             yatp::Builder::new(thd_name!("raft-stream"))
@@ -1063,7 +1064,12 @@ where
                 .build_future_pool(),
         );
         let pool: Arc<Mutex<ConnectionPool>> = Arc::default();
-        let health_checker = HealthChecker::new(self_store_id, pool.clone(), inspect_interval);
+        let health_checker = HealthChecker::new(
+            self_store_id,
+            pool.clone(),
+            inspect_interval,
+            background_worker.clone(),
+        );
         RaftClient {
             self_store_id,
             pool,
@@ -1322,7 +1328,7 @@ pub struct HealthChecker {
     inspect_interval: Duration,
     // Store shutdown senders for each store inspection task
     task_handles: Arc<Mutex<HashMap<u64, oneshot::Sender<()>>>>,
-    future_pool: Arc<ThreadPool<TaskCell>>,
+    background_worker: Worker,
     // Store the maximum latency for each store (in milliseconds)
     max_latencies: Arc<Mutex<HashMap<u64, f64>>>,
 }
@@ -1332,18 +1338,14 @@ impl HealthChecker {
         self_store_id: u64,
         pool: Arc<Mutex<ConnectionPool>>,
         inspect_interval: Duration,
+        background_worker: Worker,
     ) -> Self {
-        let future_pool = Arc::new(
-            yatp::Builder::new(thd_name!("network-health-checker"))
-                .max_thread_count(1)
-                .build_future_pool(),
-        );
         HealthChecker {
             self_store_id,
             pool,
             inspect_interval,
             task_handles: Arc::new(Mutex::new(HashMap::default())),
-            future_pool,
+            background_worker,
             max_latencies: Arc::new(Mutex::new(HashMap::default())),
         }
     }
@@ -1406,13 +1408,13 @@ impl HealthChecker {
             handles.insert(store_id, shutdown_tx);
         }
 
-        // Spawn the inspection task using the future pool
+        // Spawn the inspection task using the background worker
         let pool = self.pool.clone();
         let inspect_interval = self.inspect_interval;
         let max_latencies = self.max_latencies.clone();
         let self_store_id = self.self_store_id;
 
-        self.future_pool.spawn(async move {
+        self.background_worker.spawn_async_task(async move {
             Self::store_inspection_loop(
                 self_store_id,
                 store_id,
@@ -1758,8 +1760,10 @@ mod tests {
         let self_store_id = 1;
         let pool: Arc<Mutex<ConnectionPool>> = Arc::default();
         let interval = Duration::from_millis(100);
+        let background_worker = Worker::new("test-worker");
 
-        let health_checker = HealthChecker::new(self_store_id, pool.clone(), interval);
+        let health_checker =
+            HealthChecker::new(self_store_id, pool.clone(), interval, background_worker);
 
         assert_eq!(health_checker.self_store_id, self_store_id);
         assert!(Arc::ptr_eq(&health_checker.pool, &pool));
@@ -1773,8 +1777,9 @@ mod tests {
         let self_store_id = 1;
         let pool: Arc<Mutex<ConnectionPool>> = Arc::default();
         let interval = Duration::from_millis(100);
+        let background_worker = Worker::new("test-worker");
 
-        let health_checker = HealthChecker::new(self_store_id, pool, interval);
+        let health_checker = HealthChecker::new(self_store_id, pool, interval, background_worker);
 
         // Manually add some latencies for testing
         {
@@ -1820,8 +1825,9 @@ mod tests {
         let self_store_id = 1;
         let pool: Arc<Mutex<ConnectionPool>> = Arc::default();
         let interval = Duration::from_millis(50);
+        let background_worker = Worker::new("test-worker");
 
-        let health_checker = HealthChecker::new(self_store_id, pool, interval);
+        let health_checker = HealthChecker::new(self_store_id, pool, interval, background_worker);
         let store_id = 2;
 
         // Start inspection for a store
