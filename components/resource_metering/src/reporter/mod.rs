@@ -20,6 +20,10 @@ use tikv_util::{
 };
 
 use crate::{
+<<<<<<< HEAD
+=======
+    Config, DataSink, RawRecords, Records, find_kth_cpu_time,
+>>>>>>> 0d3302b5e9 (resource_metering: Aggregate RawRecords before picking topN records (#18834))
     recorder::{CollectorGuard, CollectorRegHandle},
     reporter::{
         collector_impl::CollectorImpl,
@@ -94,16 +98,22 @@ impl Reporter {
 
     fn handle_records(&mut self, records: Arc<RawRecords>) {
         let ts = records.begin_unix_time_secs;
-        if self.config.max_resource_groups >= records.records.len() {
-            self.records.append(ts, records.records.iter());
+        let agg_map = records.aggregate_by_extra_tag();
+        if self.config.max_resource_groups >= agg_map.len() {
+            self.records.append(ts, agg_map.iter());
             return;
         }
-        let (top, evicted) = records.top_k(self.config.max_resource_groups);
-        self.records.append(ts, top);
+
+        let kth = find_kth_cpu_time(agg_map.iter(), self.config.max_resource_groups);
+        self.records
+            .append(ts, agg_map.iter().filter(move |(_, v)| v.cpu_time > kth));
         let others = self.records.others.entry(ts).or_default();
-        evicted.for_each(|(_, v)| {
-            others.merge(v);
-        });
+        agg_map
+            .iter()
+            .filter(move |(_, v)| v.cpu_time <= kth)
+            .for_each(|(_, v)| {
+                others.merge(v);
+            });
     }
 
     fn handle_config_change(&mut self, config: Config) {
@@ -283,7 +293,7 @@ mod tests {
                 region_id: 0,
                 peer_id: 0,
                 key_ranges: vec![],
-                extra_attachment: b"12345".to_vec(),
+                extra_attachment: Arc::new(b"12345".to_vec()),
             }),
             RawRecord {
                 cpu_time: 1,
@@ -329,7 +339,7 @@ mod tests {
                 region_id: 0,
                 peer_id: 0,
                 key_ranges: vec![],
-                extra_attachment: b"12345".to_vec(),
+                extra_attachment: Arc::new(b"12345".to_vec()),
             }),
             RawRecord {
                 cpu_time: 1,
