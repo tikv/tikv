@@ -29,10 +29,6 @@ use crate::{
     Config, DataSink, RawRecords, Records, find_kth_cpu_time
 };
 
-thread_local! {
-    static STATIC_BUF: Cell<Vec<u32>> = const {Cell::new(vec![])};
-}
-
 /// A structure for reporting statistics through [Client].
 ///
 /// `Reporter` implements [Runnable] and [RunnableWithTimer] to handle [Task]s
