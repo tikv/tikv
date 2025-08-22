@@ -7,7 +7,6 @@ pub mod pubsub;
 pub mod single_target;
 
 use std::{
-    cell::Cell,
     fmt::{self, Display, Formatter},
     sync::Arc,
 };

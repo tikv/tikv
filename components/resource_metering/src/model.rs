@@ -576,6 +576,7 @@ mod tests {
         assert!(!records.is_empty());
     }
 
+    #[test]
     fn test_raw_records_agg() {
         let tag1 = Arc::new(TagInfos {
             store_id: 0,
