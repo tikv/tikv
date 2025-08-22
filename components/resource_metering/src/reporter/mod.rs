@@ -21,12 +21,12 @@ use tikv_util::{
 };
 
 use crate::{
+    Config, DataSink, RawRecords, Records, find_kth_cpu_time,
     recorder::{CollectorGuard, CollectorRegHandle},
     reporter::{
         collector_impl::CollectorImpl,
         data_sink_reg::{DataSinkId, DataSinkReg, DataSinkRegHandle},
     },
-    Config, DataSink, RawRecords, Records, find_kth_cpu_time
 };
 
 /// A structure for reporting statistics through [Client].
@@ -102,13 +102,17 @@ impl Reporter {
         }
 
         let kth = find_kth_cpu_time(agg_map.iter(), self.config.max_resource_groups);
-        self.records.append(ts, agg_map.iter().filter(move |(_, v)| v.cpu_time > kth));
+        self.records
+            .append(ts, agg_map.iter().filter(move |(_, v)| v.cpu_time > kth));        
         let others = self.records.others.entry(ts).or_default();
-        agg_map.iter().filter(move |(_, v)| v.cpu_time <= kth).for_each(|(_, v)| {
-            others.merge(v);
-        });
+        agg_map
+            .iter()
+            .filter(move |(_, v)| v.cpu_time <= kth)
+            .for_each(|(_, v)| {
+                others.merge(v);
+            });        
     }
-    
+
     fn handle_config_change(&mut self, config: Config) {
         self.config = config;
     }
@@ -247,7 +251,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::{error::Result, RawRecord, TagInfos};
+    use crate::{RawRecord, TagInfos, error::Result};
 
     #[derive(Default, Clone)]
     struct MockDataSink {

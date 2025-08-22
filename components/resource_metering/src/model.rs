@@ -20,7 +20,10 @@ thread_local! {
 }
 
 /// Find the kth cpu time in the iterator.
-pub fn find_kth_cpu_time<'a>(iter: impl Iterator<Item = (&'a Arc<Vec<u8>>, &'a RawRecord)>, k: usize) -> u32 {
+pub fn find_kth_cpu_time<'a>(
+    iter: impl Iterator<Item = (&'a Arc<Vec<u8>>, &'a RawRecord)>,
+    k: usize,
+) -> u32 {
     let mut buf = STATIC_BUF.with(|b| b.take());
     buf.clear();
     for (_, record) in iter {
@@ -85,9 +88,8 @@ impl Default for RawRecords {
 
 impl RawRecords {
     /// Returns RawRecord aggregated by extra tag.
-    pub fn aggregate_by_extra_tag(&self) -> HashMap<Arc<Vec<u8>>, RawRecord>
-    {
-        let mut raw_map : HashMap<Arc<Vec<u8>>, RawRecord> = HashMap::default();
+    pub fn aggregate_by_extra_tag(&self) -> HashMap<Arc<Vec<u8>>, RawRecord> {
+        let mut raw_map: HashMap<Arc<Vec<u8>>, RawRecord> = HashMap::default();
         for (tag_info, record) in self.records.iter() {
             let tag = &tag_info.extra_attachment;
             if tag.is_empty() {
@@ -95,10 +97,7 @@ impl RawRecords {
             }
             let value = raw_map.get_mut(tag);
             if value.is_none() {
-                raw_map.insert(
-                    tag.clone(),
-                    *record,
-                );
+                raw_map.insert(tag.clone(), *record);
                 continue;
             }
             value.unwrap().merge(record);
@@ -262,7 +261,7 @@ impl Records {
                 record.write_keys_list.push(raw_record.write_keys);
             }
         }
-    }    
+    }
 
     /// Clear all internal data.
     pub fn clear(&mut self) {
@@ -472,7 +471,7 @@ mod tests {
         let kth = find_kth_cpu_time(agg_map.iter(), 2);
         let (top, evicted) = (
             agg_map.iter().filter(move |(_, v)| v.cpu_time > kth),
-            agg_map.iter().filter(move |(_, v)| v.cpu_time <= kth)
+            agg_map.iter().filter(move |(_, v)| v.cpu_time <= kth),
         );
         let others = evicted
             .map(|(_, v)| v)
@@ -488,7 +487,7 @@ mod tests {
         let kth = find_kth_cpu_time(agg_map.iter(), 0);
         let (top, evicted) = (
             agg_map.iter().filter(move |(_, v)| v.cpu_time > kth),
-            agg_map.iter().filter(move |(_, v)| v.cpu_time <= kth)
+            agg_map.iter().filter(move |(_, v)| v.cpu_time <= kth),
         );
         // let top = top.collect::<Vec<(&Arc<TagInfos>, &RawRecord)>>();
         let others = evicted
@@ -622,7 +621,7 @@ mod tests {
             peer_id: 0,
             key_ranges: vec![],
             extra_attachment: Arc::new(b"b".to_vec()),
-        });        
+        });
         let mut records = HashMap::default();
         records.insert(
             tag1.clone(),
@@ -671,7 +670,7 @@ mod tests {
                 read_keys: 8880,
                 write_keys: 9990,
             },
-        );        
+        ); 
         let rs = RawRecords {
             begin_unix_time_secs: 1,
             duration: Duration::from_secs(1),
@@ -680,8 +679,14 @@ mod tests {
 
         let agg_map = rs.aggregate_by_extra_tag();
         assert_eq!(agg_map.len(), 3);
-        assert_eq!(agg_map.get(&tag1.extra_attachment).unwrap().cpu_time, 111 + 1110 + 4440);
-        assert_eq!(agg_map.get(&tag2.extra_attachment).unwrap().cpu_time, 555 + 7770);
+        assert_eq!(
+            agg_map.get(&tag1.extra_attachment).unwrap().cpu_time,
+            111 + 1110 + 4440
+        );
+        assert_eq!(
+            agg_map.get(&tag2.extra_attachment).unwrap().cpu_time,
+            555 + 7770
+        );        
         assert_eq!(agg_map.get(&tag3.extra_attachment).unwrap().cpu_time, 777);
-    }    
+    }
 }
