@@ -2086,7 +2086,7 @@ where
                         }
                     }),
                 ),
-                other => {
+                InspectFactor::Network => {
                     let duration = std::collections::HashMap::<u64, Duration>::new();
 
                     for (store_id, network_duration) in &duration {
