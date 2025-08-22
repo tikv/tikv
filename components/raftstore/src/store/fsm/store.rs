@@ -912,7 +912,7 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                                 );
                             }
                         }
-                        other => unimplemented!(),
+                        _ => unimplemented!(),
                     }
                 }
                 StoreMsg::UnsafeRecoveryReport(report) => self.store_heartbeat_pd(Some(report)),

@@ -63,7 +63,7 @@ impl InspectFactor {
         match *self {
             InspectFactor::RaftDisk => "raft",
             InspectFactor::KvDisk => "kvdb",
-            InspectFactor::Network => "Network",
+            InspectFactor::Network => "network",
         }
     }
 }

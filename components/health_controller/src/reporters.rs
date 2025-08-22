@@ -9,7 +9,6 @@ use std::{
 use kvproto::pdpb;
 use pdpb::SlowTrend as SlowTrendPb;
 use prometheus::IntGauge;
-use tikv_util::debug;
 
 use crate::{
     HealthController, HealthControllerInner, RaftstoreDuration,
@@ -50,31 +49,33 @@ pub struct RaftstoreReporterConfig {
 
 /// A unified slow score that combines multiple slow scores.
 ///
-/// It calculates the final slow score of a store by picking the maximum
-/// score among multiple factors. Each factor represents a different aspect of
-/// the store's performance. Typically, we have two factors: Raft Disk I/O and
-/// KvDB Disk I/O. If there are more factors in the future, we can add them
-/// here.
+/// For disk factor, it calculates the final slow score of a store by picking
+/// the maximum score among multiple disk_factors. Each factor represents a
+/// different aspect of the store's performance. Typically, we have two
+/// disk_factors: Raft Disk I/O and KvDB Disk I/O.
+/// For network factor, it calculates all stores' slow score and report them
+/// which is greater than 1 to PD.
 pub struct UnifiedSlowScore {
-    factors: Vec<SlowScore>,
+    disk_factors: Vec<SlowScore>,
+    // store_id -> SlowScore
     network_factors: Arc<Mutex<HashMap<u64, SlowScore>>>,
 }
 
 impl UnifiedSlowScore {
     pub fn new(cfg: &RaftstoreReporterConfig) -> Self {
         let mut unified_slow_score = UnifiedSlowScore {
-            factors: Vec::new(),
+            disk_factors: Vec::new(),
             network_factors: Arc::new(Mutex::new(HashMap::new())),
         };
         // The first factor is for Raft Disk I/O.
-        unified_slow_score.factors.push(SlowScore::new(
+        unified_slow_score.disk_factors.push(SlowScore::new(
             cfg.inspect_interval, // timeout
             DISK_TIMEOUT_RATIO_THRESHOLD,
             DISK_ROUND_TICKS,
             DISK_RECOVERY_INTERVALS,
         ));
         // The second factor is for KvDB Disk I/O.
-        unified_slow_score.factors.push(SlowScore::new(
+        unified_slow_score.disk_factors.push(SlowScore::new(
             cfg.inspect_kvdb_interval, // timeout
             DISK_TIMEOUT_RATIO_THRESHOLD,
             DISK_ROUND_TICKS,
@@ -92,9 +93,9 @@ impl UnifiedSlowScore {
         duration: &RaftstoreDuration,
         not_busy: bool,
     ) {
-        // For disk factors, we care about the raftstore duration.
+        // For disk disk_factors, we care about the raftstore duration.
         let dur = duration.delays_on_disk_io(false);
-        self.factors[factor as usize].record(id, dur, not_busy);
+        self.disk_factors[factor as usize].record(id, dur, not_busy);
     }
 
     pub fn record_network(
@@ -127,17 +128,17 @@ impl UnifiedSlowScore {
 
     #[inline]
     pub fn get(&self, factor: InspectFactor) -> &SlowScore {
-        &self.factors[factor as usize]
+        &self.disk_factors[factor as usize]
     }
 
     #[inline]
     pub fn get_mut(&mut self, factor: InspectFactor) -> &mut SlowScore {
-        &mut self.factors[factor as usize]
+        &mut self.disk_factors[factor as usize]
     }
 
-    // Returns the maximum score of disk factors.
+    // Returns the maximum score of disk disk_factors.
     pub fn get_disk_score(&mut self) -> f64 {
-        self.factors
+        self.disk_factors
             .iter()
             .map(|factor| factor.get())
             .fold(1.0, f64::max)
@@ -153,7 +154,7 @@ impl UnifiedSlowScore {
     }
 
     pub fn last_tick_finished(&self) -> bool {
-        self.factors.iter().all(SlowScore::last_tick_finished)
+        self.disk_factors.iter().all(SlowScore::last_tick_finished)
     }
 
     pub fn record_timeout(&mut self, factor: InspectFactor) {
@@ -163,14 +164,14 @@ impl UnifiedSlowScore {
             return;
         }
 
-        self.factors[factor as usize].record_timeout();
+        self.disk_factors[factor as usize].record_timeout();
     }
 
     pub fn tick(&mut self, factor: InspectFactor) -> SlowScoreTickResult {
         if factor == InspectFactor::Network {
             self.tick_network()
         } else {
-            self.factors[factor as usize].tick()
+            self.disk_factors[factor as usize].tick()
         }
     }
 
@@ -182,6 +183,12 @@ impl UnifiedSlowScore {
         let mut total_score = 0.0;
         let mut total_count = 0;
 
+        // We need to sync last_tick_id among all stores' network factors, because
+        // we record network duration based on the last_tick_id and record network
+        // duration at the same time. If the last_tick_id is different, we can't
+        // record network duration correctly. In addition, the same last_tick_id
+        // makes it easier for us to return the result to the upper layer to record
+        // metrics.
         let mut need_sync = false;
         let mut last_tick_id = 0;
         for (_, factor) in network_factors.iter_mut() {
@@ -211,10 +218,6 @@ impl UnifiedSlowScore {
         if total_count == network_factors.len() {
             slow_score_tick_result.updated_score = Some(total_score / total_count as f64);
         }
-        debug!(
-            "network slow score tick: {:?}, total_score: {}, total_count: {}",
-            slow_score_tick_result, total_score, total_count
-        );
         slow_score_tick_result
     }
 }
@@ -299,7 +302,7 @@ impl RaftstoreReporter {
             self.slow_trend.slow_cause.record(500_000, Instant::now());
 
             // healthy: The health status of the current store.
-            // all_ticks_finished: The last tick of all factors is finished.
+            // all_ticks_finished: The last tick of all disk_factors is finished.
             // factor_tick_finished: The last tick of the current factor is finished.
             let (healthy, all_ticks_finished, factor_tick_finished) = (
                 self.is_healthy(),
@@ -426,7 +429,7 @@ impl SlowTrendStatistics {
     pub fn record(&mut self, duration: &RaftstoreDuration) {
         // TODO: It's more appropriate to divide the factor into `Disk IO factor` and
         // `Net IO factor`.
-        // Currently, when `network ratio == 1`, it summarizes all factors by `sum`
+        // Currently, when `network ratio == 1`, it summarizes all disk_factors by `sum`
         // simplily, approved valid to common cases when there exists IO jitters on
         // Network or Disk.
         let latency = || -> u64 {
@@ -510,7 +513,7 @@ mod tests {
         // Record network durations for current tick
         unified_slow_score.record_network(0, durations.clone());
 
-        // Verify that network factors are created
+        // Verify that network disk_factors are created
         let network_factors = unified_slow_score.network_factors.lock().unwrap();
         assert_eq!(network_factors.len(), 3);
         assert!(network_factors.contains_key(&1));
@@ -569,7 +572,7 @@ mod tests {
         // Tick should synchronize the tick IDs
         let result2 = unified_slow_score.tick_network();
 
-        // Verify all factors have the same (maximum) tick ID
+        // Verify all disk_factors have the same (maximum) tick ID
         {
             let network_factors = unified_slow_score.network_factors.lock().unwrap();
             let factor_1_id = network_factors.get(&1).unwrap().get_last_tick_id();
