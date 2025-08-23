@@ -9,7 +9,7 @@ use security::SecurityConfig;
 use test_raftstore::*;
 use test_raftstore_v2::{Cluster as ClusterV2, ServerCluster as ServerClusterV2};
 use tikv::config::TikvConfig;
-use tikv_util::HandyRwLock;
+use tikv_util::{HandyRwLock, config::ReadableSize};
 
 const CLEANUP_SST_MILLIS: u64 = 10;
 
@@ -17,6 +17,7 @@ pub fn new_cluster(cfg: TikvConfig) -> (Cluster<ServerCluster>, Context) {
     let count = 1;
     let mut cluster = new_server_cluster(0, count);
     cluster.set_cfg(cfg);
+    cluster.cfg.import.ingest_size_limit = ReadableSize::default(); // Make all ssts imported with ImportType::Ingest
     cluster.run();
 
     let region_id = 1;
@@ -39,6 +40,7 @@ pub fn new_cluster_v2(
     let count = 1;
     let mut cluster = test_raftstore_v2::new_server_cluster(0, count);
     cluster.set_cfg(cfg);
+    cluster.cfg.import.ingest_size_limit = ReadableSize::default(); // Make all ssts imported with ImportType::Ingest
     cluster.run();
 
     let region_id = 1;
@@ -61,6 +63,7 @@ pub fn open_cluster_and_tikv_import_client(
         let cleanup_interval = Duration::from_millis(CLEANUP_SST_MILLIS);
         config.raft_store.cleanup_import_sst_interval.0 = cleanup_interval;
         config.server.grpc_concurrency = 1;
+        config.import.ingest_size_limit = ReadableSize::default(); // Make all ssts imported with ImportType::Ingest
         config
     });
 
@@ -101,6 +104,7 @@ pub fn open_cluster_and_tikv_import_client_v2(
         let cleanup_interval = Duration::from_millis(CLEANUP_SST_MILLIS);
         config.raft_store.cleanup_import_sst_interval.0 = cleanup_interval;
         config.server.grpc_concurrency = 1;
+        config.import.ingest_size_limit = ReadableSize::default(); // Make all ssts imported with ImportType::Ingest
         config
     });
 
@@ -149,6 +153,7 @@ pub fn new_cluster_and_tikv_import_client_tde() -> (
     config.raft_store.cleanup_import_sst_interval.0 = cleanup_interval;
     config.server.grpc_concurrency = 1;
     config.security = security;
+    config.import.ingest_size_limit = ReadableSize::default(); // Make all ssts imported with ImportType::Ingest
     let (cluster, ctx, tikv, import) = open_cluster_and_tikv_import_client(Some(config));
     (tmp_dir, cluster, ctx, tikv, import)
 }
