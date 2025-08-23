@@ -793,7 +793,8 @@ where
             }
 
             if self.batch.is_empty() {
-                self.clear_latency_inspect();
+                // No-ops, using default duration to update latency inspectors.
+                self.clear_latency_inspect(None);
                 continue;
             }
 
@@ -803,8 +804,6 @@ where
             STORE_WRITE_TRIGGER_SIZE_HISTOGRAM.observe(self.batch.get_raft_size() as f64);
 
             self.write_to_db(true);
-
-            self.clear_latency_inspect();
 
             STORE_WRITE_LOOP_DURATION_HISTOGRAM
                 .observe(duration_to_sec(handle_begin.saturating_elapsed()));
@@ -896,7 +895,7 @@ where
         }
         fail_point!("raft_between_save");
 
-        let mut write_raft_time = 0f64;
+        let (mut write_raft_dur, mut write_raft_time) = (Duration::default(), 0f64);
         if !self.batch.raft_wbs[0].is_empty() {
             fail_point!("raft_before_save_on_store_1", self.store_id == 1, |_| {});
 
@@ -925,7 +924,8 @@ where
                 .flat_map(|task| task.trackers.iter().flat_map(|t| t.as_tracker_token()))
                 .collect();
             self.perf_context.report_metrics(&trackers);
-            write_raft_time = duration_to_sec(now.saturating_elapsed());
+            write_raft_dur = now.saturating_elapsed();
+            write_raft_time = duration_to_sec(write_raft_dur);
             STORE_WRITE_RAFTDB_DURATION_HISTOGRAM.observe(write_raft_time);
             debug!("raft log is persisted";
                 "req_info" => TrackerTokenArray::new(trackers.as_slice()));
@@ -1020,7 +1020,7 @@ where
         self.batch.clear();
         self.metrics.flush();
 
-        // update config
+        // Update configuration if there are any changes
         if let Some(incoming) = self.cfg_tracker.any_new() {
             self.raft_write_size_limit = incoming.raft_write_size_limit.0 as usize;
             self.metrics.waterfall_metrics = incoming.waterfall_metrics;
@@ -1029,20 +1029,28 @@ where
                 incoming.raft_write_wait_duration.0,
             );
         }
+
+        // Update latency inspectors with the actual Raft write duration.
+        // Using the precise write duration is crucial for accurate SlowScore
+        // calculations and helps minimize false positives in performance
+        // monitoring.
+        self.clear_latency_inspect(Some(write_raft_dur));
     }
 
     pub fn is_empty(&self) -> bool {
         self.batch.is_empty()
     }
 
-    fn clear_latency_inspect(&mut self) {
+    fn clear_latency_inspect(&mut self, write_duration: Option<Duration>) {
         if self.pending_latency_inspect.is_empty() {
             return;
         }
         let now = Instant::now();
         for (time, inspectors) in std::mem::take(&mut self.pending_latency_inspect) {
             for mut inspector in inspectors {
-                inspector.record_store_write(now.saturating_duration_since(time));
+                inspector.record_store_write(
+                    write_duration.unwrap_or(now.saturating_duration_since(time)),
+                );
                 inspector.finish();
             }
         }
