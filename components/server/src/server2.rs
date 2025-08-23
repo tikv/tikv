@@ -443,30 +443,38 @@ where
     }
 
     fn init_servers<F: KvFormat>(&mut self) -> Arc<VersionTrack<ServerConfig>> {
+        // Flow Control: Initializes tablet-based global flow controller to throttle
+        // writes.
         let flow_controller = Arc::new(FlowController::Tablet(TabletFlowController::new(
             &self.core.config.storage.flow_control,
             self.tablet_registry.clone().unwrap(),
             self.core.flow_info_receiver.take().unwrap(),
         )));
+
+        // GC Worker: Background garbage collection tasks.
         let mut gc_worker = self.init_gc_worker();
+
+        // TTL Checker: Scans for and removes expired key-value entries.
         let ttl_checker = Box::new(LazyWorker::new("ttl-checker"));
         let ttl_scheduler = ttl_checker.scheduler();
 
+        // Config Manager Registration: Enables runtime config updates for various
+        // modules.
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
-
         cfg_controller.register(
             tikv::config::Module::Quota,
             Box::new(QuotaLimitConfigManager::new(Arc::clone(
                 &self.quota_limiter,
             ))),
         );
-
         cfg_controller.register(tikv::config::Module::Log, Box::new(LogConfigManager));
         cfg_controller.register(tikv::config::Module::Memory, Box::new(MemoryConfigManager));
         cfg_controller.register(
             tikv::config::Module::Security,
             Box::new(SecurityConfigManager),
         );
+
+        // Lock Manager: Initializes for pessimistic transactions and role detection.
         let lock_mgr = LockManager::new(&self.core.config.pessimistic_txn);
         cfg_controller.register(
             tikv::config::Module::PessimisticTxn,
@@ -476,12 +484,15 @@ where
 
         let engines = self.engines.as_mut().unwrap();
 
+        // PD Worker: support metadata queries in background threads.
         let pd_worker = LazyWorker::new("pd-worker");
         let pd_sender = raftstore_v2::PdReporter::new(
             pd_worker.scheduler(),
             slog_global::borrow_global().new(slog::o!()),
         );
 
+        // Unified Read Pool (Yatp): Reads workloads across components.
+        // Optional: if disabled, components will fall back to legacy thread pools.
         let unified_read_pool = if self.core.config.readpool.is_unified_pool_enabled() {
             let resource_ctl = self
                 .resource_manager
@@ -508,7 +519,8 @@ where
             );
         }
 
-        // The `DebugService` and `DiagnosticsService` will share the same thread pool
+        // Debugging Thread Pool: The `DebugService` and `DiagnosticsService` will share
+        // the same thread pool.
         let props = tikv_util::thread_group::current_properties();
         let debug_thread_pool = Arc::new(
             Builder::new_multi_thread()
@@ -524,7 +536,7 @@ where
                 .unwrap(),
         );
 
-        // Start resource metering.
+        // Resource Metering: Initializes metrics collection system for CPU and memory.
         let (recorder_notifier, collector_reg_handle, resource_tag_factory, recorder_worker) =
             resource_metering::init_recorder(
                 self.core.config.resource_metering.precision.as_millis(),
@@ -542,8 +554,8 @@ where
             data_sink_reg_handle.clone(),
         );
         self.core.to_stop.push(single_target_worker);
-        let rsmeter_pubsub_service = resource_metering::PubSubService::new(data_sink_reg_handle);
 
+        let rsmeter_pubsub_service = resource_metering::PubSubService::new(data_sink_reg_handle);
         let cfg_manager = resource_metering::ConfigManager::new(
             self.core.config.resource_metering.clone(),
             recorder_notifier,
@@ -554,6 +566,8 @@ where
             tikv::config::Module::ResourceMetering,
             Box::new(cfg_manager),
         );
+
+        // Register Resource Control if enabled
         if let Some(resource_ctl) = &self.resource_manager {
             cfg_controller.register(
                 tikv::config::Module::ResourceControl,
@@ -561,6 +575,7 @@ where
             );
         }
 
+        // Storage Engine: Creates the storage engine with all relevant dependencies.
         let storage_read_pool_handle = if self.core.config.readpool.storage.use_unified_pool() {
             unified_read_pool.as_ref().unwrap().handle()
         } else {
@@ -574,7 +589,6 @@ where
         let txn_status_cache = Arc::new(TxnStatusCache::new(
             self.core.config.storage.txn_status_cache_capacity,
         ));
-
         let storage = Storage::<_, _, F>::from_engine(
             engines.engine.clone(),
             &self.core.config.storage,
@@ -595,6 +609,8 @@ where
             txn_status_cache.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
+
+        // Storage Config Manager
         cfg_controller.register(
             tikv::config::Module::Storage,
             Box::new(StorageConfigManger::new(
@@ -606,6 +622,8 @@ where
             )),
         );
 
+        // Resolver: Creates the region metadata resolver used by CDC and the
+        // coprocessor.
         let (resolver, state) = resolve::new_resolver(
             self.pd_client.clone(),
             &self.core.background_worker,
@@ -613,10 +631,11 @@ where
         );
         self.resolver = Some(resolver);
 
+        // Registers an observer for replica read locks to validate read safety.
         ReplicaReadLockChecker::new(self.concurrency_manager.clone())
             .register(self.coprocessor_host.as_mut().unwrap());
 
-        // Create snapshot manager, server.
+        // Snapshot Manager: Tablet snapshot handling with encryption.
         let snap_path = self
             .core
             .store_path
@@ -624,14 +643,14 @@ where
             .to_str()
             .unwrap()
             .to_owned();
-
         let snap_mgr =
             match TabletSnapManager::new(&snap_path, self.core.encryption_key_manager.clone()) {
                 Ok(mgr) => mgr,
                 Err(e) => fatal!("failed to create snapshot manager at {}: {}", snap_path, e),
             };
 
-        // Create coprocessor endpoint.
+        // Coprocessor Read Pool: Thread pool for handling DAG and expression queries.
+        // Uses unified pool if configured, otherwise uses legacy pool.
         let cop_read_pool_handle = if self.core.config.readpool.coprocessor.use_unified_pool() {
             unified_read_pool.as_ref().unwrap().handle()
         } else {
@@ -643,6 +662,8 @@ where
             cop_read_pools.handle()
         };
 
+        // Unified Read Pool Config Manager (Optional): Enables dynamic scaling of
+        // thread count if auto-adjust is enabled.
         let mut unified_read_pool_scale_receiver = None;
         if self.core.config.readpool.is_unified_pool_enabled() {
             let (unified_read_pool_scale_notifier, rx) = mpsc::sync_channel(10);
@@ -659,11 +680,11 @@ where
             unified_read_pool_scale_receiver = Some(rx);
         }
 
+        // Leader Validation: Periodic check to maintain raft leadership consistency.
         // Run check leader in a dedicate thread, because it is time sensitive
         // and crucial to TiCDC replication lag.
         let check_leader_worker =
             Box::new(WorkerBuilder::new("check-leader").thread_count(1).create());
-        // Create check leader runer.
         let check_leader_runner = CheckLeaderRunner::new(
             self.router.as_ref().unwrap().store_meta().clone(),
             self.coprocessor_host.clone().unwrap(),
@@ -671,20 +692,16 @@ where
         let check_leader_scheduler = check_leader_worker.start("check-leader", check_leader_runner);
         self.core.to_stop.push(check_leader_worker);
 
-        // Create cdc worker.
+        // CDC Endpoint and Observer: Captures Raft logs and tracks changes.
         let mut cdc_worker = self.cdc_worker.take().unwrap();
         let cdc_scheduler = self.cdc_scheduler.clone().unwrap();
-
         let cdc_memory_quota = self.cdc_memory_quota.as_ref().unwrap();
-        // Register cdc observer.
         let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone(), cdc_memory_quota.clone());
         cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
-        // Register cdc config manager.
         cfg_controller.register(
             tikv::config::Module::Cdc,
             Box::new(CdcConfigManager(cdc_scheduler.clone())),
         );
-        // Start cdc endpoint.
         let cdc_endpoint = cdc::Endpoint::new(
             self.core.config.server.cluster_id,
             &self.core.config.cdc,
@@ -706,13 +723,12 @@ where
         cdc_worker.start_with_timer(cdc_endpoint);
         self.core.to_stop.push(cdc_worker);
 
-        // Create resolved ts.
+        // Resolved TS Worker (Optional): Emits globally consistent timestamps to
+        // downstream CDC subscribers.
         if self.core.config.resolved_ts.enable {
             let mut rts_worker = Box::new(LazyWorker::new("resolved-ts"));
-            // Register the resolved ts observer
             let resolved_ts_ob = resolved_ts::Observer::new(rts_worker.scheduler());
             resolved_ts_ob.register_to(self.coprocessor_host.as_mut().unwrap());
-            // Register config manager for resolved ts worker
             cfg_controller.register(
                 tikv::config::Module::ResolvedTs,
                 Box::new(resolved_ts::ResolvedTsConfigManager::new(
@@ -735,16 +751,12 @@ where
             self.core.to_stop.push(rts_worker);
         }
 
-        // Start backup stream
+        // Backup Stream (Optional): Log-based incremental backups.
         self.backup_stream_scheduler = if self.core.config.log_backup.enable {
-            // Create backup stream.
             let mut backup_stream_worker = Box::new(LazyWorker::new("backup-stream"));
             let backup_stream_scheduler = backup_stream_worker.scheduler();
-
-            // Register backup-stream observer.
             let backup_stream_ob = BackupStreamObserver::new(backup_stream_scheduler.clone());
             backup_stream_ob.register_to(self.coprocessor_host.as_mut().unwrap());
-            // Register config manager.
             cfg_controller.register(
                 tikv::config::Module::BackupStream,
                 Box::new(BackupStreamConfigManager::new(
@@ -752,12 +764,9 @@ where
                     self.core.config.log_backup.clone(),
                 )),
             );
-
-            // build stream backup encryption manager
             let backup_encryption_manager =
                 utils::build_backup_encryption_manager(self.core.encryption_key_manager.clone())
                     .expect("failed to build backup encryption manager in server");
-
             let backup_stream_endpoint = backup_stream::Endpoint::new(
                 self.node.as_ref().unwrap().id(),
                 PdStore::new(Checked::new(Sourced::new(
@@ -783,8 +792,8 @@ where
             None
         };
 
+        // Server Configuration and Validation: Applies runtime-optimized settings.
         let server_config = Arc::new(VersionTrack::new(self.core.config.server.clone()));
-
         self.core.config.raft_store.optimize_for(true);
         self.core
             .config
@@ -797,11 +806,13 @@ where
             )
             .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));
         let raft_store = Arc::new(VersionTrack::new(self.core.config.raft_store.clone()));
+
         let health_controller = HealthController::new();
 
         let node = self.node.as_ref().unwrap();
 
-        // Create coprocessor endpoint.
+        // Coprocessor Endpoint: For SQL/DAG execution and expression evaluation.
+        // Uses unified pool or dedicated thread pool.
         let copr = coprocessor::Endpoint::new(
             &server_config.value(),
             cop_read_pool_handle,
@@ -813,7 +824,9 @@ where
         let copr_config_manager = copr.config_manager();
 
         self.snap_mgr = Some(snap_mgr.clone());
-        // Create server
+
+        // GRPC Server: Main gRPC server initialization to coordinate all service
+        // endpoints.
         let server = Server::new(
             node.id(),
             &server_config,
@@ -845,6 +858,7 @@ where
             )),
         );
 
+        // SST Importer: Handles external SST file ingestion.
         let import_path = self.core.store_path.join("import");
         let mut importer = SstImporter::new(
             &self.core.config.import,
@@ -878,6 +892,7 @@ where
 
         // V2 starts split-check worker within raftstore.
 
+        // Auto Split Controller: Dynamically tunes region splitting.
         let split_config_manager =
             SplitConfigManager::new(Arc::new(VersionTrack::new(self.core.config.split.clone())));
         cfg_controller.register(
@@ -892,6 +907,8 @@ where
             unified_read_pool_scale_receiver,
         );
 
+        // Consistency Checker: Validates data correctness across regions and detects
+        // corruption.
         // `ConsistencyCheckObserver` must be registered before `Node::start`.
         let safe_point = Arc::new(AtomicU64::new(0));
         let observer = match self.core.config.coprocessor.consistency_check_method {
@@ -908,6 +925,7 @@ where
             .registry
             .register_consistency_check_observer(100, observer);
 
+        // Raft Server: Initializing all related Raft services and runners.
         self.node
             .as_mut()
             .unwrap()
@@ -931,7 +949,6 @@ where
                 self.grpc_service_mgr.clone(),
             )
             .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
-
         cfg_controller.register(
             tikv::config::Module::Raftstore,
             Box::new(RaftstoreConfigManager::new(
@@ -940,8 +957,9 @@ where
             )),
         );
 
-        // Start auto gc. Must after `Node::start` because `node_id` is initialized
-        // there.
+        // GC Worker: Starts GC services after node is started.
+        // This must be done after `Node::start` because the `node_id` is assigned
+        // during node initialization.
         let store_id = self.node.as_ref().unwrap().id();
         let auto_gc_config = AutoGcConfig::new(
             self.pd_client.clone(),
@@ -957,6 +975,7 @@ where
 
         initial_metric(&self.core.config.metric);
 
+        // Servers: Contains all initialized servers.
         self.servers = Some(Servers {
             lock_mgr,
             server,
