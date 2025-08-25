@@ -86,7 +86,7 @@ use tikv_util::{
     quota_limiter::QuotaLimiter,
     sys::thread::ThreadBuildWrapper,
     time::ThreadReadId,
-    worker::{Builder as WorkerBuilder, LazyWorker, Scheduler},
+    worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
 };
 use tokio::runtime::Builder as TokioBuilder;
 use txn_types::TxnExtraScheduler;
@@ -591,6 +591,7 @@ impl ServerCluster {
                 cfg.coprocessor.region_split_size(),
                 cfg.coprocessor.enable_region_bucket(),
                 cfg.coprocessor.region_bucket_size,
+                cfg.server.inspect_network_interval,
                 false,
             )
             .unwrap();
@@ -629,6 +630,7 @@ impl ServerCluster {
                 Arc::new(DefaultGrpcMessageFilter::new(
                     server_cfg.value().reject_messages_on_memory_ratio,
                 )),
+                Worker::new("test-background-worker"),
             )
             .unwrap();
             svr.register_service(create_import_sst(import_service.clone()));
@@ -745,7 +747,12 @@ impl ServerCluster {
         self.concurrency_managers
             .insert(node_id, concurrency_manager);
 
-        let client = RaftClient::new(node_id, self.conn_builder.clone());
+        let client = RaftClient::new(
+            node_id,
+            self.conn_builder.clone(),
+            Duration::from_millis(10),
+            Worker::new("test-worker"),
+        );
         self.raft_clients.insert(node_id, client);
         Ok(node_id)
     }

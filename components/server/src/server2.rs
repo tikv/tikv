@@ -793,6 +793,7 @@ where
                 self.core.config.coprocessor.region_split_size(),
                 self.core.config.coprocessor.enable_region_bucket(),
                 self.core.config.coprocessor.region_bucket_size,
+                self.core.config.server.inspect_network_interval,
                 true,
             )
             .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));
@@ -833,6 +834,7 @@ where
             Arc::new(DefaultGrpcMessageFilter::new(
                 server_config.value().reject_messages_on_memory_ratio,
             )),
+            self.core.background_worker.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
         cfg_controller.register(
