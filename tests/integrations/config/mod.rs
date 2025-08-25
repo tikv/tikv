@@ -130,6 +130,7 @@ fn test_serde_custom_tikv_config() {
         reject_messages_on_memory_ratio: 0.8,
         simplify_metrics: false,
         health_feedback_interval: ReadableDuration::secs(2),
+        inspect_network_interval: ReadableDuration::millis(222),
         ..Default::default()
     };
     value.readpool = ReadPoolConfig {
@@ -252,7 +253,6 @@ fn test_serde_custom_tikv_config() {
         io_reschedule_hotpot_duration: ReadableDuration::secs(4321),
         inspect_interval: ReadableDuration::millis(444),
         inspect_kvdb_interval: ReadableDuration::millis(333),
-        inspect_network_interval: ReadableDuration::millis(222),
         inspect_cpu_util_thd: 0.666,
         check_leader_lease_interval: ReadableDuration::millis(123),
         renew_leader_lease_advance_duration: ReadableDuration::millis(456),
