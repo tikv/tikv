@@ -896,6 +896,7 @@ where
             Arc::new(DefaultGrpcMessageFilter::new(
                 server_config.value().reject_messages_on_memory_ratio,
             )),
+            self.core.background_worker.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
         cfg_controller.register(

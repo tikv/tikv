@@ -27,6 +27,7 @@ use grpcio::{
     CallOption, Channel, ChannelBuilder, ClientCStreamReceiver, ClientCStreamSender, Environment,
     MetadataBuilder, RpcStatusCode, WriteFlags,
 };
+use grpcio_health::proto::HealthClient;
 use kvproto::{
     raft_serverpb::{Done, RaftMessage, RaftSnapshotData},
     tikvpb::{BatchRaftMessage, TikvClient},
@@ -41,7 +42,7 @@ use tikv_util::{
     lru::LruCache,
     time::{InstantExt, duration_to_sec},
     timer::GLOBAL_TIMER_HANDLE,
-    worker::Scheduler,
+    worker::{Scheduler, Worker},
 };
 use yatp::{ThreadPool, task::future::TaskCell};
 
@@ -853,8 +854,9 @@ async fn start<S, R>(
                 error_unknown!(?e; "resolve store address failed"; "store_id" => back_end.store_id,);
                 if let ResolveError::StoreTombstone(_) = e {
                     let mut pool = pool.lock().unwrap();
-                    if let Some(s) = pool.connections.remove(&(back_end.store_id, conn_id)) {
-                        s.set_conn_state(ConnState::Disconnected);
+                    if let Some(conn_info) = pool.connections.remove(&(back_end.store_id, conn_id))
+                    {
+                        conn_info.queue.set_conn_state(ConnState::Disconnected);
                     }
                     pool.tombstone_stores.insert(back_end.store_id);
                     return;
@@ -899,6 +901,17 @@ async fn start<S, R>(
                 .observe(duration_to_sec(wait_conn_duration));
             begin = None;
             try_count = 0;
+
+            // Update the channel in ConnectionPool for health check
+            {
+                let mut pool_guard = pool.lock().unwrap();
+                if let Some(conn_info) = pool_guard
+                    .connections
+                    .get_mut(&(back_end.store_id, conn_id))
+                {
+                    conn_info.channel = Some(channel.clone());
+                }
+            }
         }
 
         let client = TikvClient::new(channel);
@@ -927,9 +940,44 @@ async fn start<S, R>(
                     .router
                     .report_store_unreachable(back_end.store_id);
                 addr_channel = None;
+
+                // Clear the channel when connection is lost
+                {
+                    let mut pool_guard = pool.lock().unwrap();
+                    if let Some(conn_info) = pool_guard
+                        .connections
+                        .get_mut(&(back_end.store_id, conn_id))
+                    {
+                        conn_info.channel = None;
+                    }
+                }
             }
         }
     }
+}
+
+/// Connection information for a specific store connection.
+///
+/// This struct contains the essential components needed to manage a connection
+/// to a remote TiKV store, including message queuing and gRPC channel
+/// management.
+struct ConnectionInfo {
+    /// Message queue for buffering raft messages before sending.
+    ///
+    /// The queue is shared between the sender (RaftClient) and the background
+    /// connection task. It handles connection states
+    /// (established/paused/disconnected) and provides backpressure when
+    /// full.
+    queue: Arc<Queue>,
+
+    /// Optional gRPC channel for the connection.
+    ///
+    /// This is `None` when the connection is not established or has been lost.
+    /// When `Some`, it contains an active gRPC channel that can be used for
+    /// health checks and other communication with the remote store.
+    /// The channel is updated by the background connection task when the
+    /// connection state changes.
+    channel: Option<Channel>,
 }
 
 /// A global connection pool.
@@ -938,7 +986,7 @@ async fn start<S, R>(
 /// from the struct, all cache clone should also remove it at some time.
 #[derive(Default)]
 struct ConnectionPool {
-    connections: HashMap<(u64, usize), Arc<Queue>>,
+    connections: HashMap<(u64, usize), ConnectionInfo>,
     tombstone_stores: HashSet<u64>,
     store_allowlist: Vec<u64>,
 }
@@ -946,12 +994,15 @@ struct ConnectionPool {
 impl ConnectionPool {
     fn set_store_allowlist(&mut self, stores: Vec<u64>) {
         self.store_allowlist = stores;
-        for (&(store_id, _), q) in self.connections.iter() {
+        let need_pause_check = !self.store_allowlist.is_empty();
+        let allowlist = &self.store_allowlist;
+
+        for (&(store_id, _), conn_info) in self.connections.iter_mut() {
             let mut state = ConnState::Established;
-            if self.need_pause(store_id) {
+            if need_pause_check && !allowlist.contains(&store_id) {
                 state = ConnState::Paused;
             }
-            q.set_conn_state(state);
+            conn_info.queue.set_conn_state(state);
         }
     }
 
@@ -992,6 +1043,8 @@ pub struct RaftClient<S, R> {
     future_pool: Arc<ThreadPool<TaskCell>>,
     builder: ConnectionBuilder<S, R>,
     last_hash: (u64, u64),
+
+    health_checker: HealthChecker,
 }
 
 impl<S, R> RaftClient<S, R>
@@ -999,22 +1052,69 @@ where
     S: StoreAddrResolver + Send + 'static,
     R: RaftExtension + Unpin + Send + 'static,
 {
-    pub fn new(self_store_id: u64, builder: ConnectionBuilder<S, R>) -> Self {
+    pub fn new(
+        self_store_id: u64,
+        builder: ConnectionBuilder<S, R>,
+        inspect_interval: Duration,
+        background_worker: Worker,
+    ) -> Self {
         let future_pool = Arc::new(
             yatp::Builder::new(thd_name!("raft-stream"))
                 .max_thread_count(1)
                 .build_future_pool(),
         );
+        let pool: Arc<Mutex<ConnectionPool>> = Arc::default();
+        let health_checker = HealthChecker::new(
+            self_store_id,
+            pool.clone(),
+            inspect_interval,
+            background_worker.clone(),
+        );
         RaftClient {
             self_store_id,
-            pool: Arc::default(),
+            pool,
             cache: LruCache::with_capacity_and_sample(0, 7),
             need_flush: vec![],
             full_stores: vec![],
             future_pool,
             builder,
             last_hash: (0, 0),
+            health_checker,
         }
+    }
+
+    // Start the network inspection
+    pub fn start_network_inspection(&self) {
+        let health_checker = self.health_checker.clone();
+        self.future_pool.spawn(async move {
+            health_checker.run().await;
+        });
+    }
+
+    /// Get the maximum latency for a specific store and reset it to 0
+    /// Returns the latency in milliseconds, or None if no latency recorded for
+    /// this store
+    pub fn get_and_reset_max_latency(&self, store_id: u64) -> Option<f64> {
+        self.health_checker.get_and_reset_max_latency(store_id)
+    }
+
+    /// Get all maximum latencies and reset them
+    /// Returns a HashMap of store_id -> max_latency_ms
+    pub fn get_and_reset_all_max_latencies(&self) -> HashMap<u64, f64> {
+        self.health_checker.get_and_reset_all_max_latencies()
+    }
+
+    /// Get the maximum latency for a specific store without resetting
+    /// Returns the latency in milliseconds, or None if no latency recorded for
+    /// this store
+    pub fn get_max_latency(&self, store_id: u64) -> Option<f64> {
+        self.health_checker.get_max_latency(store_id)
+    }
+
+    /// Get all maximum latencies without resetting
+    /// Returns a HashMap of store_id -> max_latency_ms
+    pub fn get_all_max_latencies(&self) -> HashMap<u64, f64> {
+        self.health_checker.get_all_max_latencies()
     }
 
     /// Loads connection from pool.
@@ -1031,7 +1131,7 @@ where
                 return false;
             }
             let need_pause = pool.need_pause(store_id);
-            let conn = pool
+            let conn_info = pool
                 .connections
                 .entry((store_id, conn_id))
                 .or_insert_with(|| {
@@ -1049,10 +1149,13 @@ where
                     };
                     self.future_pool
                         .spawn(start(back_end, conn_id, self.pool.clone()));
-                    queue
-                })
-                .clone();
-            (conn, pool.connections.len())
+                    ConnectionInfo {
+                        queue: queue.clone(),
+                        channel: None,
+                    }
+                });
+            let queue = conn_info.queue.clone();
+            (queue, pool.connections.len())
         };
         self.cache.resize(pool_len);
         self.cache.insert(
@@ -1180,9 +1283,9 @@ where
                 continue;
             }
             let l = self.pool.lock().unwrap();
-            if let Some(q) = l.connections.get(id) {
+            if let Some(conn_info) = l.connections.get(id) {
                 counter += 1;
-                q.notify();
+                conn_info.queue.notify();
             }
         }
         self.need_flush.clear();
@@ -1213,7 +1316,309 @@ where
             future_pool: self.future_pool.clone(),
             builder: self.builder.clone(),
             last_hash: (0, 0),
+            health_checker: self.health_checker.clone(),
         }
+    }
+}
+
+#[derive(Clone)]
+pub struct HealthChecker {
+    self_store_id: u64,
+    pool: Arc<Mutex<ConnectionPool>>,
+    inspect_interval: Duration,
+    // Store shutdown senders for each store inspection task
+    task_handles: Arc<Mutex<HashMap<u64, oneshot::Sender<()>>>>,
+    background_worker: Worker,
+    // Store the maximum latency for each store (in milliseconds)
+    max_latencies: Arc<Mutex<HashMap<u64, f64>>>,
+}
+
+impl HealthChecker {
+    fn new(
+        self_store_id: u64,
+        pool: Arc<Mutex<ConnectionPool>>,
+        inspect_interval: Duration,
+        background_worker: Worker,
+    ) -> Self {
+        HealthChecker {
+            self_store_id,
+            pool,
+            inspect_interval,
+            task_handles: Arc::new(Mutex::new(HashMap::default())),
+            background_worker,
+            max_latencies: Arc::new(Mutex::new(HashMap::default())),
+        }
+    }
+
+    /// Main control loop that manages inspection tasks for all stores
+    pub async fn run(&self) {
+        if self.inspect_interval.is_zero() {
+            info!("Network inspection is disabled.");
+            return;
+        }
+        let mut watched_stores = HashSet::default();
+        let check_interval = (|| {
+            fail_point!("network_inspection_interval", |_| {
+                Duration::from_millis(10)
+            });
+            Duration::from_secs(30)
+        })();
+
+        loop {
+            // Check current stores in the pool
+            let current_stores: HashSet<u64> = {
+                let pool_guard = self.pool.lock().unwrap();
+                pool_guard
+                    .connections
+                    .keys()
+                    .map(|(store_id, _)| *store_id)
+                    .collect()
+            };
+
+            // Find stores that need to be added
+            for store_id in current_stores.difference(&watched_stores) {
+                self.start_store_inspection(*store_id);
+            }
+
+            // Find stores that need to be removed
+            for store_id in watched_stores.difference(&current_stores) {
+                self.stop_store_inspection(*store_id);
+            }
+
+            watched_stores = current_stores;
+            if let Err(e) = GLOBAL_TIMER_HANDLE
+                .delay(Instant::now() + check_interval)
+                .compat()
+                .await
+            {
+                error!("failed to delay in store inspection management"; "error" => ?e);
+            }
+        }
+    }
+
+    /// Start inspection task for a specific store
+    fn start_store_inspection(&self, store_id: u64) {
+        info!("Starting health check inspection for store"; "store_id" => store_id);
+
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+
+        // Store the shutdown sender
+        {
+            let mut handles = self.task_handles.lock().unwrap();
+            handles.insert(store_id, shutdown_tx);
+        }
+
+        // Spawn the inspection task using the background worker
+        let pool = self.pool.clone();
+        let inspect_interval = self.inspect_interval;
+        let max_latencies = self.max_latencies.clone();
+        let self_store_id = self.self_store_id;
+
+        self.background_worker.spawn_async_task(async move {
+            Self::store_inspection_loop(
+                self_store_id,
+                store_id,
+                pool,
+                inspect_interval,
+                max_latencies,
+                shutdown_rx,
+            )
+            .await;
+        });
+    }
+
+    /// Stop inspection task for a specific store
+    fn stop_store_inspection(&self, store_id: u64) {
+        info!("Stopping health check inspection for store"; "store_id" => store_id);
+
+        let shutdown_tx = {
+            let mut handles = self.task_handles.lock().unwrap();
+            handles.remove(&store_id)
+        };
+
+        if let Some(tx) = shutdown_tx {
+            let _ = tx.send(());
+        }
+    }
+
+    /// Main inspection loop for a single store
+    async fn store_inspection_loop(
+        self_store_id: u64,
+        store_id: u64,
+        pool: Arc<Mutex<ConnectionPool>>,
+        inspect_interval: Duration,
+        max_latencies: Arc<Mutex<HashMap<u64, f64>>>,
+        mut shutdown_rx: oneshot::Receiver<()>,
+    ) {
+        let mut last_check_time = Instant::now();
+
+        loop {
+            // Check if we should shutdown
+            if let Ok(Some(())) = shutdown_rx.try_recv() {
+                info!("Shutting down health check inspection for store"; "store_id" => store_id);
+                // Reset max latency for this store
+                {
+                    let mut max_latencies = max_latencies.lock().unwrap();
+                    max_latencies.remove(&store_id);
+                }
+                break;
+            }
+
+            // Wait for the specified interval
+            if let Err(e) = GLOBAL_TIMER_HANDLE
+                .delay(last_check_time + inspect_interval)
+                .compat()
+                .await
+            {
+                error!("failed to latency in network inspection"; "store_id" => store_id, "error" => ?e);
+                continue;
+            }
+
+            last_check_time = Instant::now();
+
+            // Get connections for this specific store
+            let store_connections: Vec<(usize, Arc<Queue>, Option<Channel>)> = {
+                let pool_guard = pool.lock().unwrap();
+                pool_guard
+                    .connections
+                    .iter()
+                    .filter_map(|((sid, conn_id), conn_info)| {
+                        if *sid == store_id {
+                            Some((*conn_id, conn_info.queue.clone(), conn_info.channel.clone()))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            };
+
+            // If no connections for this store, continue
+            if store_connections.is_empty() {
+                continue;
+            }
+
+            // Perform health check for each connection of this store
+            for (conn_id, queue, channel_opt) in store_connections {
+                // Skip if the connection is not established
+                if queue.conn_state.load(Ordering::SeqCst) != ConnState::Established as u8 {
+                    continue;
+                }
+
+                // Get the channel if available
+                if let Some(channel) = channel_opt {
+                    Self::perform_health_check(
+                        self_store_id,
+                        store_id,
+                        conn_id,
+                        channel,
+                        max_latencies.clone(),
+                    )
+                    .await;
+
+                    break;
+                }
+            }
+        }
+    }
+
+    async fn perform_health_check(
+        self_store_id: u64,
+        store_id: u64,
+        conn_id: usize,
+        channel: Channel,
+        max_latencies: Arc<Mutex<HashMap<u64, f64>>>,
+    ) {
+        let start_time = Instant::now();
+
+        let health_client = HealthClient::new(channel);
+
+        let mut req = grpcio_health::proto::HealthCheckRequest::new();
+        req.set_service("".to_string()); // Empty service name for overall health
+
+        // Slow score calculation algorithm
+        //   1. By default, the latency is sampled every 100ms, and latencies exceeding
+        //      1s are considered timeouts.
+        //   2. A slow score is calculated every 3 samples. If there are n timeouts in
+        //      the 3 samples, the slow score is multiplied by 2^(n/3).
+        // If a request does not return within 5s, it will resulting in 40(4s) timeout
+        // samples. Thus, the slow score will reach 2^(40/3) > 100. Since the upper
+        // limit of the slow score (100) has already been reached, the probing
+        // can be stopped.
+        let call_opt = CallOption::default().timeout(Duration::from_secs(5));
+
+        match health_client.check_async_opt(&req, call_opt) {
+            Ok(resp_future) => {
+                let _ = resp_future.await;
+                let elapsed = start_time.elapsed();
+
+                let latency_ms = elapsed.as_secs_f64() * 1000.0;
+                {
+                    let mut latencies = max_latencies.lock().unwrap();
+                    let current_max = latencies.entry(store_id).or_insert(0.0);
+                    if latency_ms > *current_max {
+                        *current_max = latency_ms;
+                    }
+                }
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to create health check request";
+                    "self_store_id" => self_store_id,
+                    "store_id" => store_id,
+                    "conn_id" => conn_id,
+                    "error" => ?e
+                );
+            }
+        }
+    }
+
+    /// Get the maximum latency for a specific store and reset it to 0
+    /// Returns the latency in milliseconds, or None if no latency recorded for
+    /// this store
+    pub fn get_and_reset_max_latency(&self, store_id: u64) -> Option<f64> {
+        let mut latencies = self.max_latencies.lock().unwrap();
+        latencies.remove(&store_id)
+    }
+
+    /// Get all maximum latencies and reset them
+    /// Returns a HashMap of store_id -> max_latency_ms
+    pub fn get_and_reset_all_max_latencies(&self) -> HashMap<u64, f64> {
+        let mut latencies = self.max_latencies.lock().unwrap();
+        std::mem::take(&mut *latencies)
+    }
+
+    /// Get the maximum latency for a specific store without resetting
+    /// Returns the latency in milliseconds, or None if no latency recorded for
+    /// this store
+    pub fn get_max_latency(&self, store_id: u64) -> Option<f64> {
+        let latencies = self.max_latencies.lock().unwrap();
+        latencies.get(&store_id).copied()
+    }
+
+    /// Get all maximum latencies without resetting
+    /// Returns a HashMap of store_id -> max_latency_ms
+    pub fn get_all_max_latencies(&self) -> HashMap<u64, f64> {
+        let latencies = self.max_latencies.lock().unwrap();
+        latencies.clone()
+    }
+}
+
+impl Drop for HealthChecker {
+    fn drop(&mut self) {
+        info!(
+            "Shutting down HealthChecker, sending shutdown signals to all running inspection tasks"
+        );
+
+        // Send shutdown signals to all running inspection tasks
+        let mut handles = self.task_handles.lock().unwrap();
+        for (store_id, shutdown_tx) in handles.drain() {
+            info!("Sending shutdown signal to inspection task for store"; "store_id" => store_id);
+            if shutdown_tx.send(()).is_err() {
+                warn!("Failed to send shutdown signal to inspection task for store"; "store_id" => store_id);
+            }
+        }
+
+        info!("HealthChecker shutdown complete, all inspection tasks signaled to stop");
     }
 }
 
@@ -1346,5 +1751,99 @@ mod tests {
 
             test::black_box(&mut msg_buf);
         });
+    }
+
+    #[test]
+    fn test_health_checker_creation() {
+        let self_store_id = 1;
+        let pool: Arc<Mutex<ConnectionPool>> = Arc::default();
+        let interval = Duration::from_millis(100);
+        let background_worker = Worker::new("test-worker");
+
+        let health_checker =
+            HealthChecker::new(self_store_id, pool.clone(), interval, background_worker);
+
+        assert_eq!(health_checker.self_store_id, self_store_id);
+        assert!(Arc::ptr_eq(&health_checker.pool, &pool));
+        assert_eq!(health_checker.inspect_interval, interval);
+        assert!(health_checker.task_handles.lock().unwrap().is_empty());
+        assert!(health_checker.max_latencies.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_health_checker_latency_management() {
+        let self_store_id = 1;
+        let pool: Arc<Mutex<ConnectionPool>> = Arc::default();
+        let interval = Duration::from_millis(100);
+        let background_worker = Worker::new("test-worker");
+
+        let health_checker = HealthChecker::new(self_store_id, pool, interval, background_worker);
+
+        // Manually add some latencies for testing
+        {
+            let mut latencies = health_checker.max_latencies.lock().unwrap();
+            latencies.insert(1, 100.5);
+            latencies.insert(2, 200.8);
+            latencies.insert(3, 50.2);
+        }
+
+        // Test get without reset
+        assert_eq!(health_checker.get_max_latency(1), Some(100.5));
+        assert_eq!(health_checker.get_max_latency(2), Some(200.8));
+        assert_eq!(health_checker.get_max_latency(4), None);
+
+        let all_latencies = health_checker.get_all_max_latencies();
+        assert_eq!(all_latencies.len(), 3);
+        assert_eq!(all_latencies[&1], 100.5);
+        assert_eq!(all_latencies[&2], 200.8);
+        assert_eq!(all_latencies[&3], 50.2);
+
+        // latencies should still be there after get_max_latency
+        assert_eq!(health_checker.get_max_latency(1), Some(100.5));
+
+        // Test get and reset single store
+        assert_eq!(health_checker.get_and_reset_max_latency(1), Some(100.5));
+        assert_eq!(health_checker.get_max_latency(1), None); // Should be reset now
+        assert_eq!(health_checker.get_max_latency(2), Some(200.8)); // Should still be there
+
+        // Test get and reset all
+        let remaining_latencies = health_checker.get_and_reset_all_max_latencies();
+        assert_eq!(remaining_latencies.len(), 2);
+        assert_eq!(remaining_latencies[&2], 200.8);
+        assert_eq!(remaining_latencies[&3], 50.2);
+
+        // All latencies should be reset now
+        assert_eq!(health_checker.get_max_latency(2), None);
+        assert_eq!(health_checker.get_max_latency(3), None);
+        assert!(health_checker.get_all_max_latencies().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_health_checker_start_stop_store_inspection() {
+        let self_store_id = 1;
+        let pool: Arc<Mutex<ConnectionPool>> = Arc::default();
+        let interval = Duration::from_millis(50);
+        let background_worker = Worker::new("test-worker");
+
+        let health_checker = HealthChecker::new(self_store_id, pool, interval, background_worker);
+        let store_id = 2;
+
+        // Start inspection for a store
+        health_checker.start_store_inspection(store_id);
+
+        // Verify the task handle was added
+        {
+            let handles = health_checker.task_handles.lock().unwrap();
+            assert!(handles.contains_key(&store_id));
+        }
+
+        // Stop inspection for the store
+        health_checker.stop_store_inspection(store_id);
+
+        // Verify the task handle was removed
+        {
+            let handles = health_checker.task_handles.lock().unwrap();
+            assert!(!handles.contains_key(&store_id));
+        }
     }
 }
