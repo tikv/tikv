@@ -949,14 +949,9 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             loop {
                 // when get the guard, release it until we finish scanning a batch,
                 // because if we were suspended during scanning,
-<<<<<<< HEAD
-                // the region info have higher possibility to change (then we must compensate that by the fine-grained backup).
-                let guard = limit.guard().await;
-=======
                 // the region info have higher possibility to change (then we must compensate
                 // that by the fine-grained backup).
-                let guard = soft_limit_keeper.guard().await;
->>>>>>> 72760df16e (backup: move verbose errors to warn level (#18494))
+                let guard = limit.guard().await;
                 if let Err(e) = guard {
                     warn!("failed to retrieve limit guard, omitting."; "err" => %e);
                 };
