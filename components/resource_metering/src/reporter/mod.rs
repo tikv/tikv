@@ -20,16 +20,12 @@ use tikv_util::{
 };
 
 use crate::{
-<<<<<<< HEAD
-=======
     Config, DataSink, RawRecords, Records, find_kth_cpu_time,
->>>>>>> 0d3302b5e9 (resource_metering: Aggregate RawRecords before picking topN records (#18834))
     recorder::{CollectorGuard, CollectorRegHandle},
     reporter::{
         collector_impl::CollectorImpl,
         data_sink_reg::{DataSinkId, DataSinkReg, DataSinkRegHandle},
     },
-    Config, DataSink, RawRecords, Records,
 };
 
 /// A structure for reporting statistics through [Client].
