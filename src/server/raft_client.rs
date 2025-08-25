@@ -1584,9 +1584,7 @@ impl HealthChecker {
     /// Returns a HashMap of store_id -> max_latency_ms
     pub fn get_and_reset_all_max_latencies(&self) -> HashMap<u64, f64> {
         let mut latencies = self.max_latencies.lock().unwrap();
-        let result = latencies.clone();
-        latencies.clear();
-        result
+        std::mem::take(&mut *latencies)
     }
 
     /// Get the maximum latency for a specific store without resetting

@@ -28,6 +28,7 @@ use tikv::server::{
 use tikv_kv::{FakeExtension, RaftExtension};
 use tikv_util::{
     config::{ReadableDuration, VersionTrack},
+    debug,
     worker::{Builder as WorkerBuilder, LazyWorker, Worker},
 };
 
@@ -453,7 +454,7 @@ async fn test_health_checker_lifecycle() {
     );
 
     // Step 1: Send messages to establish connections for stores 1, 2, 3
-    println!("Establishing connections to stores 1, 2, 3");
+    debug!("Establishing connections to stores 1, 2, 3");
     for store_id in 1..=3 {
         let mut raft_m = RaftMessage::default();
         raft_m.mut_to_peer().set_store_id(store_id);
@@ -478,7 +479,7 @@ async fn test_health_checker_lifecycle() {
     }
 
     // Step 2: Add more stores (4, 5) to test dynamic store detection
-    println!("Adding connections to stores 4, 5");
+    debug!("Adding connections to stores 4, 5");
     for store_id in 4..=5 {
         let mut raft_m = RaftMessage::default();
         raft_m.mut_to_peer().set_store_id(store_id);
