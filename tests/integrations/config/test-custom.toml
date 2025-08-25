@@ -86,6 +86,7 @@ end-point-slow-log-threshold = "1s"
 forward-max-connections-per-address = 5
 reject-messages-on-memory-ratio = 0.8
 health-feedback-interval = "2s"
+inspect-network-interval = "222ms"
 
 [server.labels]
 a = "b"

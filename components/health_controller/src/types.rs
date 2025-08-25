@@ -54,6 +54,7 @@ impl RaftstoreDuration {
 pub enum InspectFactor {
     RaftDisk = 0,
     KvDisk,
+    Network,
     // TODO: Add more factors, like network io.
 }
 
@@ -62,6 +63,7 @@ impl InspectFactor {
         match *self {
             InspectFactor::RaftDisk => "raft",
             InspectFactor::KvDisk => "kvdb",
+            InspectFactor::Network => "network",
         }
     }
 }
