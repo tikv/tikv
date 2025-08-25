@@ -1,6 +1,13 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
+
+/// Region classification for force GC and sampling
+#[derive(Debug, Clone)]
+struct RegionClassification {
+    pinned_regions: Vec<(u64, u64)>,       // (region_id, growth)
+    gc_candidate_regions: Vec<(u64, u64)>, // (region_id, growth)
+}
 use std::{
     cell::Cell,
     cmp::{Ord, Ordering as CmpOrdering},
@@ -67,6 +74,7 @@ use tikv_util::{
         self as sys_util,
         cpu_time::ProcessStat,
         disk::{DiskUsage, get_disk_status},
+        needs_force_compact,
     },
     time::{Instant as TiInstant, SlowTimer, duration_to_sec, monotonic_raw_now},
     timer::SteadyTimer,
@@ -80,9 +88,22 @@ use crate::{
     Error, Result, bytes_capacity,
     coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason},
     store::{
-        Callback, CasualMessage, FullCompactController, GlobalReplicationState,
-        InspectedRaftMessage, MergeResultKind, PdTask, PeerMsg, PeerTick, RaftCommand,
-        SignificantMsg, SnapManager, StoreMsg, StoreTick,
+        Callback,
+        CasualMessage,
+        FullCompactController,
+        GlobalReplicationState,
+        InspectedRaftMessage,
+        MergeResultKind,
+        PdTask,
+        PeerMsg,
+        PeerTick,
+        RaftCommand,
+        SignificantMsg,
+        SnapManager,
+        StoreMsg,
+        StoreTick,
+        // worker::raftlog_compact::{Task as RaftLogCompactTask, RegionClassification,
+        // ForceGcResult}, // No longer needed
         async_io::{
             read::{ReadRunner, ReadTask},
             write::{StoreWriters, StoreWritersContext, Worker as WriteWorker, WriteMsg},
@@ -744,6 +765,9 @@ struct Store {
     start_time: Option<Timespec>,
     consistency_check_time: HashMap<u64, Instant>,
     store_reachability: HashMap<u64, StoreReachability>,
+    // Region leader growth rate information for GC decision
+    region_leader_growth: HashMap<u64, (u64, Instant)>, /* region_id -> (growth_rate,
+                                                         * last_update_time) */
 }
 
 struct StoreReachability {
@@ -772,6 +796,7 @@ where
                 start_time: None,
                 consistency_check_time: HashMap::default(),
                 store_reachability: HashMap::default(),
+                region_leader_growth: HashMap::default(),
             },
             receiver: rx,
         });
@@ -816,6 +841,8 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             StoreTick::ConsistencyCheck => self.on_consistency_check_tick(),
             StoreTick::CleanupImportSst => self.on_cleanup_import_sst_tick(),
             StoreTick::PdReportMinResolvedTs => self.on_pd_report_min_resolved_ts_tick(),
+            StoreTick::RaftEngineForceGc => self.on_raft_engine_force_gc_tick(),
+            StoreTick::RegionSampling => self.on_region_sampling_tick(),
         }
         let elapsed = timer.saturating_elapsed();
         self.ctx
@@ -926,6 +953,9 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 } => {
                     self.on_wake_up_regions(abnormal_stores, region_ids);
                 }
+                StoreMsg::RegionLeaderGrowth { region_id, log_lag } => {
+                    self.on_region_leader_growth(region_id, log_lag);
+                }
             }
         }
         slow_log!(
@@ -960,6 +990,8 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
         self.register_compact_lock_cf_tick();
         self.register_snap_mgr_gc_tick();
         self.register_consistency_check_tick();
+        self.register_raft_engine_force_gc_tick();
+        self.register_region_sampling_tick();
     }
 }
 
@@ -1711,9 +1743,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                         for region_id in regions {
                             let _ = router_clone.send(
                                 region_id,
-                                PeerMsg::CasualMessage(Box::new(
-                                    CasualMessage::ForceCompactRaftLogs,
-                                )),
+                                PeerMsg::CasualMessage(Box::new(CasualMessage::RaftEnginePurge)),
                             );
                         }
                     }
@@ -1726,6 +1756,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         } else {
             None
         };
+
         let bgworker_remote = background_worker.remote();
         let snap_gen_worker = WorkerBuilder::new("snap-generator")
             .thread_count(cfg.value().snap_generator_pool_size)
@@ -1934,7 +1965,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
 
         let tag = format!("raftstore-{}", store.get_id());
         let coprocessor_host = builder.coprocessor_host.clone();
-        self.system.spawn(tag, builder);
+        self.system.spawn(tag, builder.clone());
         let mut mailboxes = Vec::with_capacity(region_peers.len());
         let mut address = Vec::with_capacity(region_peers.len());
         for (tx, fsm) in region_peers {
@@ -2027,6 +2058,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         workers.coprocessor_host.shutdown();
         workers.cleanup_worker.stop();
         workers.region_worker.stop();
+        // workers.raftlog_compact_worker.stop(); // No longer needed
         workers.background_worker.stop();
         if let Some(w) = workers.purge_worker {
             w.stop();
@@ -3062,6 +3094,18 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         }
     }
 
+    fn on_region_leader_growth(&mut self, region_id: u64, log_lag: u64) {
+        info!(
+            "received region leader growth update";
+            "region_id" => region_id,
+            "log_lag" => log_lag
+        );
+        self.fsm
+            .store
+            .region_leader_growth
+            .insert(region_id, (log_lag, Instant::now()));
+    }
+
     fn register_pd_store_heartbeat_tick(&self) {
         self.ctx.schedule_store_tick(
             StoreTick::PdStoreHeartbeat,
@@ -3086,6 +3130,165 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
             StoreTick::CompactLockCf,
             self.ctx.cfg.lock_cf_compact_interval.0,
         )
+    }
+
+    // Force GC tick registration is no longer needed
+    fn register_raft_engine_force_gc_tick(&self) {
+        self.ctx.schedule_store_tick(
+            StoreTick::RaftEngineForceGc,
+            self.ctx.cfg.raft_log_force_gc_interval.0,
+        );
+    }
+
+    fn on_raft_engine_force_gc_tick(&mut self) {
+        self.register_raft_engine_force_gc_tick();
+
+        // Check if force GC is needed and execute it
+        if let Some(over_ratio) = self.check_force_gc_needed() {
+            info!(
+                "force GC needed based on memory pressure, over_ratio: {}",
+                over_ratio
+            );
+            self.send_force_compact_messages(over_ratio);
+        }
+    }
+
+    fn send_force_compact_messages(&mut self, over_ratio: f64) {
+        // Create region classification on-demand when force compact is needed
+        let classification = self.create_region_classification(over_ratio);
+
+        let pinned_regions_compacted = classification.pinned_regions.len();
+        let gc_candidates_compacted = classification.gc_candidate_regions.len();
+
+        // Send force compact messages to GC candidate regions
+        for (region_id, _) in &classification.gc_candidate_regions {
+            let _ = self.ctx.router.send(
+                *region_id,
+                PeerMsg::CasualMessage(Box::new(CasualMessage::ForceCompactRaftLogs)),
+            );
+        }
+
+        // Log pinned regions details with their IDs and log lag values
+        if !classification.pinned_regions.is_empty() {
+            let pinned_details: Vec<String> = classification
+                .pinned_regions
+                .iter()
+                .map(|(region_id, growth)| format!("{}:{}", region_id, growth))
+                .collect();
+            info!("pinned regions details: [{}]", pinned_details.join(", "));
+        }
+
+        let regions_compacted = gc_candidates_compacted + pinned_regions_compacted;
+
+        info!(
+            "force GC completed: {} total regions, {} GC candidates, {} pinned regions",
+            regions_compacted, gc_candidates_compacted, pinned_regions_compacted
+        );
+    }
+
+    fn register_region_sampling_tick(&self) {
+        self.ctx.schedule_store_tick(
+            StoreTick::RegionSampling,
+            self.ctx.cfg.region_sampling_interval.0,
+        );
+    }
+
+    fn on_region_sampling_tick(&mut self) {
+        self.register_region_sampling_tick();
+        // Only clean up stale regions, classification will be done when needed
+        self.cleanup_stale_region_data();
+        info!("region sampling completed, stale data cleaned up");
+    }
+
+    fn cleanup_stale_region_data(&mut self) {
+        // Clean up stale regions based on timeout
+        let timeout_duration = self.ctx.cfg.region_sampling_interval.0 * 2; // 2x sampling interval
+        let now = Instant::now();
+
+        // Use retain to remove stale regions in one pass
+        self.fsm
+            .store
+            .region_leader_growth
+            .retain(|_, (_, last_update_time)| {
+                if now.duration_since(*last_update_time) > timeout_duration {
+                    false // remove this entry
+                } else {
+                    true // keep this entry
+                }
+            });
+    }
+
+    fn create_region_classification(&self, over_ratio: f64) -> RegionClassification {
+        // Collect all (region_id, growth) into a vector
+        let mut all_growth = Vec::new();
+        for (region_id, (growth_rate, _)) in &self.fsm.store.region_leader_growth {
+            all_growth.push((*region_id, *growth_rate));
+        }
+
+        if all_growth.is_empty() {
+            return RegionClassification {
+                pinned_regions: Vec::new(),
+                gc_candidate_regions: Vec::new(),
+            };
+        }
+
+        let len = all_growth.len();
+
+        // Calculate dynamic pin ratio based on memory pressure
+        let base_pin_ratio = self.ctx.cfg.pin_compact_region_ratio;
+        let dynamic_pin_ratio = base_pin_ratio / over_ratio;
+
+        // At least pin 1 region to avoid the corner case of pin_count = 0
+        let pin_count = std::cmp::max(1, (len as f64 * dynamic_pin_ratio) as usize);
+
+        if len > pin_count {
+            // Full sort by growth rate in ascending order
+            all_growth.sort_by(|a, b| a.1.cmp(&b.1));
+
+            // Take the largest pin_count elements for pinned regions
+            let pinned_regions = all_growth.split_off(len - pin_count);
+            // The left part is the GC candidate regions
+            let gc_candidate_regions = all_growth;
+
+            info!(
+                "region classification created: {} pinned regions, {} GC candidate regions",
+                pinned_regions.len(),
+                gc_candidate_regions.len()
+            );
+
+            RegionClassification {
+                pinned_regions,
+                gc_candidate_regions,
+            }
+        } else {
+            // pin_count >= len: all regions go into pinned, no GC candidates
+            info!(
+                "region classification created: {} pinned regions, {} GC candidate regions (all regions pinned due to dynamic ratio)",
+                all_growth.len(),
+                0
+            );
+            RegionClassification {
+                pinned_regions: all_growth,
+                gc_candidate_regions: Vec::new(),
+            }
+        }
+    }
+
+    fn check_force_gc_needed(&self) -> Option<f64> {
+        let raftengine_memory_usage = self.ctx.engines.raft.get_memory_usage().unwrap() as f64;
+        let mut over_ratio = 0.0;
+        if needs_force_compact(
+            &mut over_ratio,
+            raftengine_memory_usage,
+            self.ctx.cfg.evict_cache_on_memory_ratio,
+        ) {
+            info!(
+                "force GC needed based on memory pressure, over_ratio: {}",
+                over_ratio
+            );
+            return Some(over_ratio);
+        }
+        None
     }
 }
 

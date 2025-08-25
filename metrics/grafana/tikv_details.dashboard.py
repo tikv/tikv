@@ -285,6 +285,58 @@ def Cluster() -> RowPanel:
     layout.row(
         [
             graph_panel(
+                title="Raft Engine size",
+                description="The Raft Engine size per TiKV instance",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                fill=1,
+                stack=True,
+                legend=graph_legend(max=False),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_store_size_bytes",
+                            label_selectors=['type="raft_size"'],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="KV Engine size",
+                description="The KV Engine size per TiKV instance",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                fill=1,
+                stack=True,
+                legend=graph_legend(max=False),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_store_size_bytes",
+                            label_selectors=['type="kv_size"'],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Snapshot size",
+                description="The Snapshot size per TiKV instance",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                fill=1,
+                stack=True,
+                legend=graph_legend(max=False),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_store_size_bytes",
+                            label_selectors=['type="snap_size"'],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
                 title="CPU",
                 description="The CPU usage of each TiKV instance",
                 yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
@@ -2918,6 +2970,22 @@ def RaftLog() -> RowPanel:
     layout.row(
         [
             graph_panel(
+                title="GC Raft Log Total",
+                description="The total number of GC raft log",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_gc_raft_log_total",
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
                 title="Raft log lag",
                 targets=[
                     target(
@@ -2933,6 +3001,17 @@ def RaftLog() -> RowPanel:
                     target(
                         expr=expr_sum_rate(
                             "tikv_raftstore_raft_log_gc_skipped",
+                            by_labels=["instance", "reason"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Raft log gc forced",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_raft_log_gc",
                             by_labels=["instance", "reason"],
                         ),
                     ),
