@@ -4170,8 +4170,8 @@ where
             );
         }
 
-        // Here, drop the lock of `StoreMeta` to make the preparations for destroy
-        // safety to be executed.
+        // Drop the `StoreMeta` lock here to ensure that the asynchronous destroy task
+        // can execute safely without blocking other threads.
         drop(meta);
 
         let clear_stat = self.fsm.peer.destroy(

@@ -770,8 +770,8 @@ where
         pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
     ) -> Result<()> {
         self.entry_storage.clear();
-        // For ClearPeerMeta task, it must be sent to the worker even
-        // if the capacityis full.
+        // For `ClearPeerMeta` task, it must be sent to the worker even
+        // if the capacity is full.
         box_try!(
             self.region_scheduler
                 .schedule_force(RegionTask::ClearPeerMeta {
