@@ -325,7 +325,9 @@ impl RaftstoreReporter {
         }
 
         let slow_score_tick_result = self.slow_score.tick(factor);
-        if slow_score_tick_result.updated_score.is_some() && !slow_score_tick_result.has_new_record
+        if factor != InspectFactor::Network
+            && slow_score_tick_result.updated_score.is_some()
+            && !slow_score_tick_result.has_new_record
         {
             self.set_is_healthy(false);
         }
