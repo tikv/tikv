@@ -1,6 +1,6 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
-    collections::{BTreeSet, HashMap, HashSet, VecDeque},
+    collections::{BTreeSet, HashMap, HashSet, VecDeque, hash_map::Entry},
     future::Future,
     ops::Not,
     path::Path,
@@ -582,12 +582,19 @@ struct MetaEditFilters(HashMap<String, MetaEditFilter>);
 
 impl MetaEditFilters {
     fn from_migrations(migs: impl IntoIterator<Item = Migration>) -> Self {
-        Self(
-            migs.into_iter()
-                .flat_map(|mut m| m.take_edit_meta().into_iter())
-                .map(|em| (em.path.clone(), MetaEditFilter::from_meta_edit(em)))
-                .collect(),
-        )
+        let iter = migs
+            .into_iter()
+            .flat_map(|mut m| m.take_edit_meta().into_iter());
+        let mut m: HashMap<String, MetaEditFilter> = HashMap::with_capacity(iter.size_hint().0);
+        iter.for_each(|em| {
+            match m.entry(em.path.clone()) {
+                Entry::Occupied(mut o) => o.get_mut().merge_from_meta_edit(em),
+                Entry::Vacant(v) => {
+                    v.insert(MetaEditFilter::from_meta_edit(em));
+                }
+            };
+        });
+        Self(m)
     }
 
     fn should_fully_skip(&self, meta: &str) -> bool {
@@ -649,6 +656,37 @@ impl MetaEditFilter {
         }
 
         this
+    }
+
+    fn merge_from_meta_edit(&mut self, mut em: MetaEdit) {
+        self.destructed_self = self.destructed_self || em.destruct_self;
+        self.all_data_files_compacted =
+            self.all_data_files_compacted || em.all_data_files_compacted;
+        if self.destructed_self || self.all_data_files_compacted {
+            // NOTE: the metakv files will be filtered out in
+            // `SubcompactionCollector::add_new_file`. Therefore, the
+            // self.segments and self.full_files can be clear here.
+            self.full_files = Default::default();
+            self.segments = Default::default();
+            return;
+        }
+        self.full_files
+            .extend(em.take_delete_physical_files().into_iter());
+        for deletion in em.get_delete_logical_files() {
+            if !self.segments.contains_key(deletion.get_path()) {
+                self.segments
+                    .insert(deletion.get_path().to_owned(), Default::default());
+            }
+
+            self.segments
+                .get_mut(deletion.get_path())
+                .unwrap()
+                .extend(deletion.get_spans().iter().map(|span| span.offset));
+        }
+        for path in &self.full_files {
+            self.segments.remove(path);
+        }
+        self.segments.shrink_to_fit();
     }
 
     fn should_retain(&self, file: &LogFileId) -> bool {
@@ -792,7 +830,7 @@ mod test {
 
     use super::{LoadFromExt, MetaFile, StreamMetaStorage};
     use crate::{
-        storage::MigrationStorageWrapper,
+        storage::{LogFileId, MetaEditFilters, MigrationStorageWrapper},
         test_util::{KvGen, LogFileBuilder, TmpStorage, gen_step},
     };
 
@@ -853,6 +891,65 @@ mod test {
         test_for_concurrency(1).await;
         test_for_concurrency(2).await;
         test_for_concurrency(16).await;
+    }
+
+    #[tokio::test]
+    async fn test_merge_meta_edits() {
+        let meta_path = |i| format!("v1/backupmeta/00000000-{i}.meta");
+        let file_path = |i| format!("v1/00000000/00000000-{i}.log");
+        let span = |i, i1, i2, i3| {
+            let mut s = DeleteSpansOfFile::new();
+            s.set_path(file_path(i));
+            let mut s1 = Span::new();
+            s1.set_offset(i1);
+            let mut s2 = Span::new();
+            s2.set_offset(i2);
+            let mut s3 = Span::new();
+            s3.set_offset(i3);
+            s.set_spans(vec![s1, s2, s3].into());
+            s
+        };
+        let mut meta_edit1 = MetaEdit::new();
+        meta_edit1.set_path(meta_path(1));
+        meta_edit1.mut_delete_physical_files().push(file_path(1));
+        meta_edit1.mut_delete_logical_files().push(span(2, 1, 2, 3));
+        meta_edit1.mut_delete_logical_files().push(span(3, 1, 2, 3));
+        let mut meta_edit2 = MetaEdit::new();
+        meta_edit2.set_path(meta_path(1));
+        meta_edit2.mut_delete_physical_files().push(file_path(2));
+        meta_edit2.mut_delete_logical_files().push(span(3, 4, 5, 6));
+        let mut meta_edit3 = MetaEdit::new();
+        meta_edit3.set_path(meta_path(2));
+        meta_edit3.mut_delete_physical_files().push(file_path(4));
+        meta_edit3.mut_delete_logical_files().push(span(5, 1, 2, 3));
+        let mut meta_edit4 = MetaEdit::new();
+        meta_edit4.set_path(meta_path(2));
+        meta_edit4.set_destruct_self(true);
+        let mut mig1 = Migration::new();
+        mig1.mut_edit_meta().push(meta_edit1);
+        mig1.mut_edit_meta().push(meta_edit3);
+        let mut mig2 = Migration::new();
+        mig2.mut_edit_meta().push(meta_edit2);
+        mig2.mut_edit_meta().push(meta_edit4);
+        let migs = vec![mig1, mig2];
+        let mefs = MetaEditFilters::from_migrations(migs);
+        assert!(mefs.should_fully_skip(&meta_path(2)));
+        assert!(!mefs.should_fully_skip(&meta_path(1)));
+        let f1 = mefs.0.get(&meta_path(1)).unwrap();
+        let log_file_id = |name: String, offset: u64| LogFileId {
+            name: std::sync::Arc::from(name.into_boxed_str()),
+            offset,
+            length: offset + 1,
+        };
+        assert!(!f1.should_retain(&log_file_id(file_path(1), 234)));
+        assert!(!f1.should_retain(&log_file_id(file_path(2), 435)));
+        assert!(!f1.should_retain(&log_file_id(file_path(3), 1)));
+        assert!(!f1.should_retain(&log_file_id(file_path(3), 2)));
+        assert!(!f1.should_retain(&log_file_id(file_path(3), 3)));
+        assert!(!f1.should_retain(&log_file_id(file_path(3), 4)));
+        assert!(!f1.should_retain(&log_file_id(file_path(3), 5)));
+        assert!(!f1.should_retain(&log_file_id(file_path(3), 6)));
+        assert!(f1.should_retain(&log_file_id(file_path(3), 7)));
     }
 
     #[tokio::test]
