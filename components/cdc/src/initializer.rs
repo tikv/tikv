@@ -394,7 +394,9 @@ impl<E: KvEngine> Initializer<E> {
         }
         let takes = start.saturating_elapsed();
         info!("cdc async incremental scan finished";
+            "scanned_bytes" => scan_stat.emit,
             "scanned_entries" => total_scanned_entries,
+            "sink_takes" => ?sink_time,
             "takes" => ?takes,
             "observe_id" => ?observe_id,
             "region_id" => region_id,
