@@ -1373,7 +1373,10 @@ pub struct RegionReadProgress {
     core: Mutex<RegionReadProgressCore>,
     // The fast path to read `safe_ts` without acquiring the mutex
     // on `core`
+    // Use `AcqRel` to ensure that the `safe_ts` is always visible to
+    // the readers after it is updated.
     safe_ts: AtomicU64,
+    // Use `AcqRel` same as `safe_ts`.
     pub read_index_safe_ts: AtomicU64,
 }
 
@@ -1463,6 +1466,9 @@ impl RegionReadProgress {
                 coprocessor.on_update_safe_ts(core.region_id, ts, ts)
             }
         }
+        // Reset `read_index_safe_ts` to 0 after region merge, because the source
+        // region's `read_index_safe_ts` may lag from the target region's.
+        self.read_index_safe_ts.store(0, AtomicOrdering::Release);
     }
 
     // Consume the provided `LeaderInfo` to update `safe_ts` and return whether the
@@ -1524,11 +1530,12 @@ impl RegionReadProgress {
             find_store_id(&core.leader_info.peers, core.leader_info.leader_id)
     }
 
-    /// Reset `safe_ts` to 0 and stop updating it
+    /// Reset `safe_ts` and `read_index_safe_ts` to 0 and stop updating them
     pub fn pause(&self) {
         let mut core = self.core.lock().unwrap();
         core.pause = true;
         self.safe_ts.store(0, AtomicOrdering::Release);
+        self.read_index_safe_ts.store(0, AtomicOrdering::Release);
     }
 
     /// Discard incoming `read_state` item and stop updating `safe_ts`
@@ -1536,6 +1543,7 @@ impl RegionReadProgress {
         let mut core = self.core.lock().unwrap();
         core.pause = true;
         core.discard = true;
+        self.read_index_safe_ts.store(0, AtomicOrdering::Release);
     }
 
     /// Reset `safe_ts` and resume updating it
@@ -1545,6 +1553,7 @@ impl RegionReadProgress {
         core.discard = false;
         self.safe_ts
             .store(core.read_state.ts, AtomicOrdering::Release);
+        self.read_index_safe_ts.store(0, AtomicOrdering::Release);
     }
 
     pub fn safe_ts(&self) -> u64 {
@@ -1552,13 +1561,20 @@ impl RegionReadProgress {
     }
 
     pub fn update_read_index_safe_ts(&self, start_ts: u64) {
+        if start_ts == u64::MAX {
+            return;
+        }
+        let core = self.core.lock().unwrap();
+        if core.pause || core.discard {
+            return;
+        }
         let current_ts: u64 = self.read_index_safe_ts();
         if start_ts > current_ts {
             let compare_exchange = self.read_index_safe_ts.compare_exchange(
                 current_ts,
                 start_ts,
-                AtomicOrdering::SeqCst,
-                AtomicOrdering::Relaxed,
+                AtomicOrdering::AcqRel,
+                AtomicOrdering::Acquire,
             );
             // it is a single threaded function
             debug_assert!(
@@ -1569,7 +1585,7 @@ impl RegionReadProgress {
     }
 
     pub fn read_index_safe_ts(&self) -> u64 {
-        self.read_index_safe_ts.load(AtomicOrdering::Relaxed)
+        self.read_index_safe_ts.load(AtomicOrdering::Acquire)
     }
 
     // `safe_ts` is calculated from the `resolved_ts`, they are the same thing
@@ -2843,5 +2859,48 @@ mod tests {
                 assert!(result.is_err(), "{:?}", cp);
             }
         }
+    }
+
+    #[test]
+    fn test_read_index_safe_ts() {
+        let cap = 10;
+        let region = Region::default();
+        let rrp = RegionReadProgress::new(&region, 10, cap, 1);
+        rrp.update_read_index_safe_ts(10);
+        assert_eq!(rrp.read_index_safe_ts(), 10);
+        rrp.update_read_index_safe_ts(15);
+        assert_eq!(rrp.read_index_safe_ts(), 15);
+        // read index safe ts will not go backward
+        rrp.update_read_index_safe_ts(10);
+        assert_eq!(rrp.read_index_safe_ts(), 15);
+        // read index will not be updated if the ts is max
+        rrp.update_read_index_safe_ts(u64::MAX);
+        assert_eq!(rrp.read_index_safe_ts(), 15);
+
+        // read index safe ts is set to 0 when pause and cannot be updated
+        rrp.pause();
+        assert_eq!(rrp.read_index_safe_ts(), 0);
+        rrp.update_read_index_safe_ts(20);
+        assert_eq!(rrp.read_index_safe_ts(), 0);
+
+        // resume will reset read index safe ts and the update will work again
+        rrp.resume();
+        rrp.update_read_index_safe_ts(30);
+        assert_eq!(rrp.read_index_safe_ts(), 30);
+
+        // donot update read index safe ts when discarded
+        rrp.discard();
+        assert_eq!(rrp.read_index_safe_ts(), 0);
+        rrp.update_read_index_safe_ts(40);
+        assert_eq!(rrp.read_index_safe_ts(), 0);
+
+        rrp.resume();
+        rrp.update_read_index_safe_ts(50);
+        assert_eq!(rrp.read_index_safe_ts(), 50);
+
+        // reset read index safe ts after region merge
+        let coprocessor_host = CoprocessorHost::<KvTestEngine>::default();
+        rrp.merge_safe_ts(40, 10, &coprocessor_host);
+        assert_eq!(rrp.read_index_safe_ts(), 0);
     }
 }

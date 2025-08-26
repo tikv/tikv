@@ -191,11 +191,6 @@ fn init_raft_state<EK: KvEngine, ER: RaftEngine>(
         raft_state.last_index = RAFT_INIT_LOG_INDEX;
         raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
         raft_state.mut_hard_state().set_commit(RAFT_INIT_LOG_INDEX);
-        let mut lb = engines.raft.log_batch(0);
-        lb.put_raft_state(region.get_id(), &raft_state)?;
-        let start = Instant::now();
-        engines.raft.consume(&mut lb, true)?;
-        PEER_CREATE_RAFT_DURATION_HISTOGRAM.observe(start.saturating_elapsed().as_secs_f64());
     }
     Ok(raft_state)
 }
@@ -652,6 +647,7 @@ where
 
     pub fn on_compact_raftlog(&mut self, idx: u64, state: Option<&mut CacheWarmupState>) {
         self.entry_storage.compact_entry_cache(idx, state);
+        self.entry_storage.compact_term_cache(idx);
         self.cancel_generating_snap(Some(idx));
     }
 
@@ -1339,7 +1335,9 @@ pub mod tests {
         let mut write_task: WriteTask<KvTestEngine, _> =
             WriteTask::new(store.get_region_id(), store.peer_id, 1);
         store.append(ents[1..].to_vec(), &mut write_task);
-        store.update_cache_persisted(ents.last().unwrap().get_index());
+        let last_entry = ents.last().unwrap();
+        store.update_cache_persisted(last_entry.get_index());
+        store.update_term_cache(last_entry.get_index(), last_entry.get_term());
         store
             .apply_state_mut()
             .mut_truncated_state()

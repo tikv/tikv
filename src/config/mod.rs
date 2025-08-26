@@ -7379,6 +7379,8 @@ mod tests {
             default_cfg.readpool.coprocessor.normal_concurrency;
         cfg.readpool.coprocessor.low_concurrency = default_cfg.readpool.coprocessor.low_concurrency;
         cfg.server.grpc_memory_pool_quota = default_cfg.server.grpc_memory_pool_quota;
+        cfg.server.grpc_concurrency = default_cfg.server.grpc_concurrency;
+        cfg.server.grpc_raft_conn_num = default_cfg.server.grpc_raft_conn_num;
         cfg.server.background_thread_count = default_cfg.server.background_thread_count;
         cfg.server.end_point_max_concurrency = default_cfg.server.end_point_max_concurrency;
         cfg.server.end_point_memory_quota = default_cfg.server.end_point_memory_quota;
@@ -7432,7 +7434,6 @@ mod tests {
         default_cfg.rocksdb.lockcf.target_file_size_base = Some(ReadableSize::mb(8));
         default_cfg.rocksdb.lockcf.write_buffer_size = Some(ReadableSize::mb(32));
         default_cfg.raftdb.defaultcf.target_file_size_base = Some(ReadableSize::mb(8));
-        default_cfg.raft_store.region_compact_check_step = Some(100);
         default_cfg.rocksdb.titan.enabled = Some(true);
 
         // Other special cases.
@@ -8013,69 +8014,6 @@ mod tests {
         assert_eq!(
             cfg.rocksdb.defaultcf.soft_pending_compaction_bytes_limit,
             Some(ReadableSize::gb(1))
-        );
-    }
-
-    #[test]
-    fn test_compact_check_default() {
-        let content = r#"
-            [raftstore]
-            region-compact-check-step = 50
-        "#;
-        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
-        cfg.validate().unwrap();
-        assert_eq!(cfg.raft_store.region_compact_check_step.unwrap(), 50);
-        assert_eq!(
-            cfg.raft_store
-                .region_compact_redundant_rows_percent
-                .unwrap(),
-            20
-        );
-
-        let content = r#"
-            [raftstore]
-            region-compact-check-step = 50
-            [storage]
-            engine = "partitioned-raft-kv"
-        "#;
-        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
-        cfg.validate().unwrap();
-        assert_eq!(cfg.raft_store.region_compact_check_step.unwrap(), 50);
-        assert_eq!(
-            cfg.raft_store
-                .region_compact_redundant_rows_percent
-                .unwrap(),
-            20
-        );
-
-        let content = r#"
-            [raftstore]
-            region-compact-redundant-rows-percent = 50
-        "#;
-        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
-        cfg.validate().unwrap();
-        assert_eq!(cfg.raft_store.region_compact_check_step.unwrap(), 100);
-        assert_eq!(
-            cfg.raft_store
-                .region_compact_redundant_rows_percent
-                .unwrap(),
-            50
-        );
-
-        let content = r#"
-            [raftstore]
-            region-compact-redundant-rows-percent = 50
-            [storage]
-            engine = "partitioned-raft-kv"
-        "#;
-        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
-        cfg.validate().unwrap();
-        assert_eq!(cfg.raft_store.region_compact_check_step.unwrap(), 5);
-        assert_eq!(
-            cfg.raft_store
-                .region_compact_redundant_rows_percent
-                .unwrap(),
-            50
         );
     }
 

@@ -9,7 +9,7 @@ use raftstore::{
     Result,
     store::{check_sst_for_ingestion, metrics::PEER_WRITE_CMD_COUNTER, util},
 };
-use slog::{error, info};
+use slog::{error, info, warn};
 use sst_importer::range_overlaps;
 use tikv_util::{box_try, slog_panic};
 
@@ -25,7 +25,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'_, EK, ER, T> {
     #[inline]
     pub fn on_cleanup_import_sst(&mut self) {
         if let Err(e) = self.fsm.store.on_cleanup_import_sst(self.store_ctx) {
-            error!(self.fsm.store.logger(), "cleanup import sst failed"; "error" => ?e);
+            warn!(self.fsm.store.logger(), "cleanup import sst failed"; "error" => ?e);
         }
         self.schedule_tick(
             StoreTick::CleanupImportSst,

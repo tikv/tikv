@@ -500,6 +500,7 @@ where
                 ),
             ),
             engines.kv.clone(),
+            self.region_info_accessor.clone(),
             self.region_info_accessor.as_ref().unwrap().region_leaders(),
         );
 
@@ -1007,10 +1008,10 @@ where
         let importer = Arc::new(importer);
 
         let split_check_runner = SplitCheckRunner::new(
-            Some(engines.store_meta.clone()),
             engines.engines.kv.clone(),
             self.router.clone(),
             self.coprocessor_host.clone().unwrap(),
+            Some(Arc::new(self.region_info_accessor.clone().unwrap())),
         );
         let split_check_scheduler = self
             .core
@@ -1070,6 +1071,7 @@ where
                 self.causal_ts_provider.clone(),
                 disk_check_runner,
                 self.grpc_service_mgr.clone(),
+                safe_point.clone(),
             )
             .unwrap_or_else(|e| fatal!("failed to start raft_server: {}", e));
 
@@ -1089,6 +1091,14 @@ where
             .unwrap_or_else(|e| fatal!("failed to start gc worker: {}", e));
         if let Err(e) = gc_worker.start_auto_gc(auto_gc_config, safe_point) {
             fatal!("failed to start auto_gc on storage, error: {}", e);
+        }
+
+        // Start auto compaction
+        if let Err(e) = gc_worker.start_auto_compaction(
+            self.pd_client.clone(),
+            self.region_info_accessor.clone().unwrap(),
+        ) {
+            fatal!("failed to start auto_compaction on storage, error: {}", e);
         }
 
         initial_metric(&self.core.config.metric);
@@ -1328,6 +1338,7 @@ where
         let cdc_service = cdc::Service::new(
             servers.cdc_scheduler.clone(),
             servers.cdc_memory_quota.clone(),
+            Arc::new(self.core.background_worker.clone()),
         );
         if servers
             .server

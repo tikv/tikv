@@ -2,7 +2,8 @@
 
 // Created from https://www.unicode.org/Public/UCA/4.0.0/allkeys-4.0.0.txt
 
-use super::{super::PADDING_SPACE, UnicodeVersion};
+use super::UnicodeVersion;
+use crate::codec::collation::collator::trim_end_padding;
 
 static LONG_RUNE: u64 = 0xFFFD;
 
@@ -11,8 +12,8 @@ pub struct Unicode0400 {}
 
 impl UnicodeVersion for Unicode0400 {
     #[inline]
-    fn preprocess(s: &str) -> &str {
-        s.trim_end_matches(PADDING_SPACE)
+    fn preprocess(s: &[u8]) -> &[u8] {
+        trim_end_padding(s)
     }
 
     #[inline]

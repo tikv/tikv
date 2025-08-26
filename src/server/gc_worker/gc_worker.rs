@@ -43,6 +43,7 @@ use super::{
         CompactionFilterInitializer, DeleteBatch, GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED,
         GC_COMPACTION_FILTER_MVCC_DELETION_WASTED, GC_COMPACTION_FILTER_ORPHAN_VERSIONS,
     },
+    compaction_runner::{CompactionRunner, CompactionRunnerHandle},
     config::{GcConfig, GcWorkerConfigManager},
     gc_manager::{AutoGcConfig, GcManager, GcManagerHandle},
 };
@@ -1210,6 +1211,7 @@ where
     worker_scheduler: Scheduler<GcTask<<E::Local as MiscExt>::DiskEngine>>,
 
     gc_manager_handle: Arc<Mutex<Option<GcManagerHandle>>>,
+    compaction_runner_handle: Arc<Mutex<Option<CompactionRunnerHandle>>>,
     feature_gate: FeatureGate,
 }
 
@@ -1226,6 +1228,7 @@ impl<E: Engine> Clone for GcWorker<E> {
             worker: self.worker.clone(),
             worker_scheduler: self.worker_scheduler.clone(),
             gc_manager_handle: self.gc_manager_handle.clone(),
+            compaction_runner_handle: self.compaction_runner_handle.clone(),
             feature_gate: self.feature_gate.clone(),
             region_info_provider: self.region_info_provider.clone(),
         }
@@ -1289,6 +1292,41 @@ where
         Ok(())
     }
 
+    pub fn start_auto_compaction<
+        S: GcSafePointProvider,
+        R: RegionInfoProvider + Clone + 'static,
+    >(
+        &self,
+        safe_point_provider: S,
+        region_info_provider: R,
+    ) -> Result<()> {
+        let mut handle = self.compaction_runner_handle.lock().unwrap();
+        assert!(handle.is_none(), "compaction runner already started");
+
+        let kv_engine = match self.engine.kv_engine() {
+            Some(engine) => engine,
+            None => {
+                warn!("kv_engine not available, auto compaction cannot start");
+                return Ok(());
+            }
+        };
+
+        let compaction_runner = CompactionRunner::new(
+            safe_point_provider,
+            region_info_provider,
+            kv_engine,
+            self.config_manager.clone(),
+        );
+
+        let new_handle = compaction_runner
+            .start()
+            .map_err(|e| -> Error { box_err!("failed to start compaction runner: {:?}", e) })?;
+
+        *handle = Some(new_handle);
+        info!("compaction runner started");
+        Ok(())
+    }
+
     pub fn scheduler(&self) -> Scheduler<GcTask<<E::Local as MiscExt>::DiskEngine>> {
         self.worker_scheduler.clone()
     }
@@ -1318,6 +1356,7 @@ impl<E: Engine> GcWorker<E> {
             worker: Arc::new(Mutex::new(worker)),
             worker_scheduler,
             gc_manager_handle: Arc::new(Mutex::new(None)),
+            compaction_runner_handle: Arc::new(Mutex::new(None)),
             feature_gate,
             region_info_provider,
         }
@@ -1349,6 +1388,10 @@ impl<E: Engine> GcWorker<E> {
     pub fn stop(&self) -> Result<()> {
         // Stop GcManager.
         if let Some(h) = self.gc_manager_handle.lock().unwrap().take() {
+            h.stop()?;
+        }
+        // Stop CompactionRunner.
+        if let Some(h) = self.compaction_runner_handle.lock().unwrap().take() {
             h.stop()?;
         }
         // Stop self.

@@ -5,7 +5,7 @@ use kvproto::{
     metapb::Region,
     raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest},
 };
-use tikv_util::{box_err, box_try, codec::bytes, error, warn};
+use tikv_util::{box_err, box_try, codec::bytes, warn};
 
 use super::{AdminObserver, Coprocessor, ObserverContext, Result as CopResult};
 use crate::{Error, store::util};
@@ -124,7 +124,7 @@ impl AdminObserver for SplitObserver {
                 }
                 let mut request = vec![req.take_split()];
                 if let Err(e) = self.on_split(ctx, &mut request) {
-                    error!(
+                    warn!(
                         "failed to handle split req";
                         "region_id" => ctx.region().get_id(),
                         "err" => ?e,
@@ -145,7 +145,7 @@ impl AdminObserver for SplitObserver {
                 }
                 let mut requests = req.mut_splits().take_requests().into();
                 if let Err(e) = self.on_split(ctx, &mut requests) {
-                    error!(
+                    warn!(
                         "failed to handle split req";
                         "region_id" => ctx.region().get_id(),
                         "err" => ?e,

@@ -15,7 +15,7 @@ use pd_client::{
     meta_storage::{Checked, Get, MetaStorageClient, Sourced, Watch},
 };
 use serde::{Deserialize, Serialize};
-use tikv_util::{error, info, timer::GLOBAL_TIMER_HANDLE};
+use tikv_util::{error, info, timer::GLOBAL_TIMER_HANDLE, warn};
 
 /// RegionLabel is the label of a region. This struct is partially copied from
 /// https://github.com/tikv/pd/blob/783d060861cef37c38cbdcab9777fe95c17907fe/server/schedule/labeler/rules.go#L31.
@@ -239,7 +239,7 @@ impl RegionLabelService {
                         });
                     }
                     Err(PdError::DataCompacted(msg)) => {
-                        error!("ime required revision has been compacted"; "err" => ?msg);
+                        warn!("ime required revision has been compacted"; "err" => ?msg);
                         self.reload_all_region_labels().await;
                         cancel.abort();
                         continue 'outer;

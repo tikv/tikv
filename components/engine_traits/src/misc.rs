@@ -61,7 +61,20 @@ pub trait StatisticsReporter<T: ?Sized> {
     fn flush(&mut self);
 }
 
-#[derive(Default)]
+/// RocksDB example:
+/// lv0: f5: [{k1_t6, delete: () /* RocksDB tombstone */}]
+/// lv1: f4: [{k1_t10, put: v13}, {k2_t11, put: tombstone /* MVCC delete */},
+/// {k3_t12, put: v32}]
+/// ...
+/// lv5: f3: [{k2_t8, put: v21}], f2: [{k3_t9, put: v31}]
+/// lv6: f1: [{k1_t6, put: v11}, {k1_t7, put: v12}]
+/// The range stats for the range [k1, k3] will be:
+/// num_entries: 8
+/// num_versions: 7 (all entries except k1_t6 RocksDB delete entry)
+/// num_rows: 6 (f4: 3 + f3: 1 + f2: 1 + f1: 1, k1_t6 is masked by k1_t7)
+/// num_deletes: 1 (k2 in f4)
+
+#[derive(Default, Debug, Clone)]
 pub struct RangeStats {
     // The number of entries in write cf.
     pub num_entries: u64,

@@ -492,6 +492,8 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
             self.last_row.extend(k);
         } else {
             self.row_versions += 1;
+            self.props.oldest_stale_version_ts = cmp::min(self.props.oldest_stale_version_ts, ts);
+            self.props.newest_stale_version_ts = cmp::max(self.props.newest_stale_version_ts, ts);
         }
         if self.row_versions > self.props.max_row_versions {
             self.props.max_row_versions = self.row_versions;
@@ -526,7 +528,11 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
 
                 match write_type {
                     WriteType::Put => self.props.num_puts += 1,
-                    WriteType::Delete => self.props.num_deletes += 1,
+                    WriteType::Delete => {
+                        self.props.num_deletes += 1;
+                        self.props.oldest_delete_ts = cmp::min(self.props.oldest_delete_ts, ts);
+                        self.props.newest_delete_ts = cmp::max(self.props.newest_delete_ts, ts);
+                    }
                     _ => {}
                 }
             }

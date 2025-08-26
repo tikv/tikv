@@ -46,10 +46,14 @@ use kvproto::{
     errorpb::Error as ErrorHeader,
     import_sstpb::SstMeta,
     kvrpcpb::{Context, DiskFullOpt, ExtraOp as TxnExtraOp, KeyRange},
+    metapb::{Peer, RegionEpoch},
     raft_cmdpb,
 };
 use pd_client::BucketMeta;
-use raftstore::store::{PessimisticLockPair, TxnExt};
+use raftstore::{
+    SeekRegionCallback,
+    store::{PessimisticLockPair, TxnExt},
+};
 use thiserror::Error;
 use tikv_util::{
     deadline::Deadline, escape, future::block_on_timeout, memory::HeapSize, time::ThreadReadId,
@@ -322,6 +326,14 @@ impl WriteEvent {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct SecondaryRegionOverride {
+    pub region_id: u64,
+    pub region_epoch: RegionEpoch,
+    pub peer: Peer,
+    pub check_term: Option<u64>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SnapContext<'a> {
     pub pb_ctx: &'a Context,
@@ -335,6 +347,15 @@ pub struct SnapContext<'a> {
     pub key_ranges: Vec<KeyRange>,
     // Marks that this snapshot request is allowed in the flashback state.
     pub allowed_in_flashback: bool,
+    // secondary_region_override overrides some context fields in the `pb_ctx` for the secondary
+    // regions.
+    // The "secondary region" means the regions that are not the source region
+    // in a request.
+    // For example, if a cop-task contains a `IndexLookUp` executor which needs to
+    // access look up the primary rows,
+    // it will set this field to get the secondary region snapshot
+    // in lookup phase.
+    pub secondary_region_override: Option<SecondaryRegionOverride>,
 }
 
 /// Engine defines the common behaviour for a storage engine type.
@@ -464,6 +485,13 @@ pub trait Engine: Send + Clone + 'static {
     /// the engine there is probably a notable difference in range, so
     /// engine may update its statistics.
     fn hint_change_in_range(&self, _start_key: Vec<u8>, _end_key: Vec<u8>) {}
+
+    /// seek the regions from the specified key
+    /// The argument `from` should be the comparable format, you should use
+    /// `Key::from_raw` encode the raw key.
+    fn seek_region(&self, _from: &[u8], _callback: SeekRegionCallback) -> Result<()> {
+        Err(box_err!("not supported"))
+    }
 }
 
 /// A Snapshot is a consistent view of the underlying engine at a given point in

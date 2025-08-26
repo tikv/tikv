@@ -1,8 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{Range, Result};
+use engine_traits::{MvccProperties, Range, Result};
 
-use crate::{RangeProperties, RocksEngine, r2e, util};
+use crate::{RangeProperties, RocksEngine, mvcc_properties::RocksMvccProperties, r2e, util};
 
 #[repr(transparent)]
 pub struct UserCollectedProperties(rocksdb::UserCollectedProperties);
@@ -16,20 +16,38 @@ impl engine_traits::UserCollectedProperties for UserCollectedProperties {
         let x = rp.get_approximate_distance_in_range(start, end);
         Some((x.0 as usize, x.1 as usize))
     }
+
+    fn get_mvcc_properties(&self) -> Option<MvccProperties> {
+        let mvcc = RocksMvccProperties::decode(&self.0).ok()?;
+        Some(mvcc)
+    }
 }
 
 #[repr(transparent)]
+pub struct TableProperties(rocksdb::TableProperties);
+impl engine_traits::TableProperties for TableProperties {
+    type UserCollectedProperties = UserCollectedProperties;
+    fn get_user_collected_properties(&self) -> &Self::UserCollectedProperties {
+        unsafe {
+            std::mem::transmute::<_, &UserCollectedProperties>(self.0.user_collected_properties())
+        }
+    }
+
+    fn get_num_entries(&self) -> u64 {
+        self.0.num_entries()
+    }
+}
+#[repr(transparent)]
 pub struct TablePropertiesCollection(rocksdb::TablePropertiesCollection);
 impl engine_traits::TablePropertiesCollection for TablePropertiesCollection {
-    type UserCollectedProperties = UserCollectedProperties;
-    fn iter_user_collected_properties<F>(&self, mut f: F)
+    type TableProperties = TableProperties;
+    fn iter_table_properties<F>(&self, mut f: F)
     where
-        F: FnMut(&Self::UserCollectedProperties) -> bool,
+        F: FnMut(&Self::TableProperties) -> bool,
     {
         for (_, props) in self.0.into_iter() {
             let props = unsafe {
-                #[allow(clippy::missing_transmute_annotations)]
-                std::mem::transmute(props.user_collected_properties())
+                std::mem::transmute::<&rocksdb::TableProperties, &TableProperties>(props)
             };
             if !f(props) {
                 break;

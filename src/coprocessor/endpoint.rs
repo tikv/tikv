@@ -1,13 +1,14 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    borrow::Cow, future::Future, iter::FromIterator, marker::PhantomData, mem, sync::Arc,
-    time::Duration,
+    borrow::Cow, fmt::Display, future::Future, iter::FromIterator, marker::PhantomData, mem,
+    sync::Arc, time::Duration,
 };
 
 use ::tracker::{
     GLOBAL_TRACKERS, RequestInfo, RequestType, set_tls_tracker_token, track, with_tls_tracker,
 };
+use anyhow::anyhow;
 use api_version::{KvFormat, dispatch_api_version};
 use async_stream::try_stream;
 use concurrency_manager::ConcurrencyManager;
@@ -17,18 +18,23 @@ use futures::{
     future::Either,
     prelude::*,
 };
-use kvproto::{coprocessor as coppb, errorpb, kvrpcpb, kvrpcpb::CommandPri};
+use kvproto::{coprocessor as coppb, errorpb, kvrpcpb, kvrpcpb::CommandPri, metapb};
 use online_config::ConfigManager;
 use protobuf::{CodedInputStream, Message};
 use resource_control::{ResourceGroupManager, ResourceLimiter, TaskMetadata};
 use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
-use tidb_query_common::execute_stats::ExecSummary;
+use tidb_query_common::{
+    error::StorageError,
+    execute_stats::ExecSummary,
+    storage::{FindRegionResult, RegionStorageAccessor, Result as StorageResult},
+};
 use tikv_alloc::trace::MemoryTraceGuard;
-use tikv_kv::SnapshotExt;
+use tikv_kv::{SecondaryRegionOverride, SnapshotExt};
 use tikv_util::{
     deadline::set_deadline_exceeded_busy_error,
     memory::{MemoryQuota, OwnedAllocated},
     quota_limiter::QuotaLimiter,
+    store::find_peer,
     time::Instant,
 };
 use tipb::{AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, DagRequest, ExecType};
@@ -91,6 +97,24 @@ pub struct Endpoint<E: Engine> {
     resource_ctl: Option<Arc<ResourceGroupManager>>,
 
     _phantom: PhantomData<E>,
+}
+
+/// The result of parsing a Coprocessor request.
+pub struct ParseCopRequestResult<Snap> {
+    req_tag: ReqTag,
+    req_ctx: ReqContext,
+    handler_builder: RequestHandlerBuilder<Snap>,
+}
+
+impl<Snap> ParseCopRequestResult<Snap> {
+    #[cfg(test)]
+    pub fn default_for_test(handler_builder: RequestHandlerBuilder<Snap>) -> Self {
+        Self {
+            req_tag: ReqTag::test,
+            req_ctx: ReqContext::default_for_test(),
+            handler_builder,
+        }
+    }
 }
 
 impl<E: Engine> tikv_util::AssertSend for Endpoint<E> {}
@@ -179,7 +203,7 @@ impl<E: Engine> Endpoint<E> {
         req: coppb::Request,
         peer: Option<String>,
         is_streaming: bool,
-    ) -> Result<(RequestHandlerBuilder<E::IMSnap>, ReqContext)> {
+    ) -> Result<ParseCopRequestResult<E::IMSnap>> {
         dispatch_api_version!(req.get_context().get_api_version(), {
             self.parse_request_and_check_memory_locks_impl::<API>(req, peer, is_streaming)
         })
@@ -194,7 +218,7 @@ impl<E: Engine> Endpoint<E> {
         mut req: coppb::Request,
         peer: Option<String>,
         is_streaming: bool,
-    ) -> Result<(RequestHandlerBuilder<E::IMSnap>, ReqContext)> {
+    ) -> Result<ParseCopRequestResult<E::IMSnap>> {
         fail_point!("coprocessor_parse_request", |_| Err(box_err!(
             "unsupported tp (failpoint)"
         )));
@@ -214,8 +238,9 @@ impl<E: Engine> Endpoint<E> {
         let mut input = CodedInputStream::from_bytes(&data);
         input.set_recursion_limit(self.recursion_limit);
 
-        let mut req_ctx: ReqContext;
-        let builder: RequestHandlerBuilder<E::IMSnap>;
+        let req_ctx: ReqContext;
+        let handler_builder: RequestHandlerBuilder<E::IMSnap>;
+        let req_tag: ReqTag;
         match req.get_tp() {
             REQ_TYPE_DAG => {
                 let mut dag = DagRequest::default();
@@ -233,14 +258,13 @@ impl<E: Engine> Endpoint<E> {
                 if start_ts == 0 {
                     start_ts = dag.get_start_ts_fallback();
                 }
-                let tag = if table_scan {
+                req_tag = if table_scan {
                     ReqTag::select
                 } else {
                     ReqTag::index
                 };
 
                 req_ctx = ReqContext::new(
-                    tag,
                     context,
                     ranges,
                     self.max_handle_duration,
@@ -249,6 +273,7 @@ impl<E: Engine> Endpoint<E> {
                     start_ts.into(),
                     cache_match_version,
                     self.perf_level,
+                    false,
                 );
                 with_tls_tracker(|tracker| {
                     tracker.req_info.request_type = RequestType::CoprocessorDag;
@@ -259,7 +284,7 @@ impl<E: Engine> Endpoint<E> {
 
                 let batch_row_limit = self.get_batch_row_limit(is_streaming);
                 let quota_limiter = self.quota_limiter.clone();
-                builder = Box::new(move |snap, req_ctx| {
+                handler_builder = Box::new(move |snap, req_ctx| {
                     let data_version = snap.ext().get_data_version();
                     let store = SnapshotStore::new(
                         snap,
@@ -274,10 +299,11 @@ impl<E: Engine> Endpoint<E> {
                         0 => None,
                         i => Some(i),
                     };
-                    dag::DagHandlerBuilder::<_, F>::new(
+                    dag::DagHandlerBuilder::<_, _, F>::new(
                         dag,
                         req_ctx.ranges.clone(),
                         store,
+                        SecondarySnapStoreAccessor::<E>::new(req_ctx.clone()),
                         req_ctx.deadline,
                         batch_row_limit,
                         is_streaming,
@@ -296,14 +322,13 @@ impl<E: Engine> Endpoint<E> {
                     start_ts = analyze.get_start_ts_fallback();
                 }
 
-                let tag = match analyze.get_tp() {
+                req_tag = match analyze.get_tp() {
                     AnalyzeType::TypeIndex | AnalyzeType::TypeCommonHandle => ReqTag::analyze_index,
                     AnalyzeType::TypeColumn | AnalyzeType::TypeMixed => ReqTag::analyze_table,
                     AnalyzeType::TypeFullSampling => ReqTag::analyze_full_sampling,
                     AnalyzeType::TypeSampleIndex => unimplemented!(),
                 };
                 req_ctx = ReqContext::new(
-                    tag,
                     context,
                     ranges,
                     self.max_handle_duration,
@@ -312,6 +337,7 @@ impl<E: Engine> Endpoint<E> {
                     start_ts.into(),
                     cache_match_version,
                     self.perf_level,
+                    false,
                 );
                 with_tls_tracker(|tracker| {
                     tracker.req_info.request_type = RequestType::CoprocessorAnalyze;
@@ -322,7 +348,7 @@ impl<E: Engine> Endpoint<E> {
 
                 let quota_limiter = self.quota_limiter.clone();
 
-                builder = Box::new(move |snap, req_ctx| {
+                handler_builder = Box::new(move |snap, req_ctx| {
                     AnalyzeContext::<_, F>::new(
                         analyze,
                         req_ctx.ranges.clone(),
@@ -342,13 +368,12 @@ impl<E: Engine> Endpoint<E> {
                     start_ts = checksum.get_start_ts_fallback();
                 }
 
-                let tag = if table_scan {
+                req_tag = if table_scan {
                     ReqTag::checksum_table
                 } else {
                     ReqTag::checksum_index
                 };
                 req_ctx = ReqContext::new(
-                    tag,
                     context,
                     ranges,
                     self.max_handle_duration,
@@ -357,10 +382,11 @@ impl<E: Engine> Endpoint<E> {
                     start_ts.into(),
                     cache_match_version,
                     self.perf_level,
+                    // Checksum is allowed during the flashback period to make sure the tool such
+                    // like BR can work.
+                    true,
                 );
-                // Checksum is allowed during the flashback period to make sure the tool such
-                // like BR can work.
-                req_ctx.allowed_in_flashback = true;
+
                 with_tls_tracker(|tracker| {
                     tracker.req_info.request_type = RequestType::CoprocessorChecksum;
                     tracker.req_info.start_ts = start_ts;
@@ -368,7 +394,7 @@ impl<E: Engine> Endpoint<E> {
 
                 self.check_memory_locks(&req_ctx)?;
 
-                builder = Box::new(move |snap, req_ctx| {
+                handler_builder = Box::new(move |snap, req_ctx| {
                     checksum::ChecksumContext::new(
                         checksum,
                         req_ctx.ranges.clone(),
@@ -382,7 +408,11 @@ impl<E: Engine> Endpoint<E> {
             tp => return Err(box_err!("unsupported tp {}", tp)),
         };
 
-        Ok((builder, req_ctx))
+        Ok(ParseCopRequestResult {
+            req_tag,
+            req_ctx,
+            handler_builder,
+        })
     }
 
     /// Get the batch row limit configuration.
@@ -526,9 +556,9 @@ impl<E: Engine> Endpoint<E> {
     /// other cases. The future inside may be an error however.
     fn handle_unary_request(
         &self,
-        req_ctx: ReqContext,
-        handler_builder: RequestHandlerBuilder<E::IMSnap>,
+        r: ParseCopRequestResult<E::IMSnap>,
     ) -> impl Future<Output = Result<MemoryTraceGuard<coppb::Response>>> {
+        let req_ctx = r.req_ctx;
         let priority = req_ctx.context.get_priority();
         let task_id = req_ctx.build_task_id();
         let key_ranges: Vec<_> = req_ctx
@@ -556,12 +586,12 @@ impl<E: Engine> Endpoint<E> {
             )
         });
         // box the tracker so that moving it is cheap.
-        let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
+        let tracker = Box::new(Tracker::new(req_ctx, r.req_tag, self.slow_log_threshold));
         allocated_bytes += tracker.approximate_mem_size();
 
         let (tx, rx) = oneshot::channel();
         let future =
-            Self::handle_unary_request_impl(self.semaphore.clone(), tracker, handler_builder)
+            Self::handle_unary_request_impl(self.semaphore.clone(), tracker, r.handler_builder)
                 .in_resource_metering_tag(resource_tag)
                 .map(|res| {
                     let _ = tx.send(res);
@@ -609,7 +639,7 @@ impl<E: Engine> Endpoint<E> {
         set_tls_tracker_token(tracker);
         let result_of_future = self
             .parse_request_and_check_memory_locks(req, peer, false)
-            .map(|(handler_builder, req_ctx)| self.handle_unary_request(req_ctx, handler_builder));
+            .map(|r| self.handle_unary_request(r));
         with_tls_tracker(|tracker| {
             tracker.metrics.grpc_process_nanos =
                 tracker.req_info.begin.saturating_elapsed().as_nanos() as u64;
@@ -675,10 +705,10 @@ impl<E: Engine> Endpoint<E> {
             let mut response = coppb::StoreBatchTaskResponse::new();
             response.set_task_id(task_id);
             match self.parse_request_and_check_memory_locks(cur_req, peer.clone(), false) {
-                Ok((handler_builder, req_ctx)) => {
+                Ok(r) => {
                     let cur_tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(request_info));
                     set_tls_tracker_token(cur_tracker);
-                    let fut = self.handle_unary_request(req_ctx, handler_builder);
+                    let fut = self.handle_unary_request(r);
                     let fut = async move {
                         let res = fut.await;
                         match res {
@@ -800,9 +830,9 @@ impl<E: Engine> Endpoint<E> {
     /// other cases. The stream inside may produce errors however.
     fn handle_stream_request(
         &self,
-        req_ctx: ReqContext,
-        handler_builder: RequestHandlerBuilder<E::IMSnap>,
+        r: ParseCopRequestResult<E::IMSnap>,
     ) -> Result<impl futures::stream::Stream<Item = Result<coppb::Response>>> {
+        let req_ctx = r.req_ctx;
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let priority = req_ctx.context.get_priority();
         let metadata = TaskMetadata::from_ctx(req_ctx.context.get_resource_control_context());
@@ -830,11 +860,11 @@ impl<E: Engine> Endpoint<E> {
         let mut allocated_bytes = resource_tag.approximate_heap_size();
 
         let task_id = req_ctx.build_task_id();
-        let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
+        let tracker = Box::new(Tracker::new(req_ctx, r.req_tag, self.slow_log_threshold));
         allocated_bytes += tracker.approximate_mem_size();
 
         let future =
-            Self::handle_stream_request_impl(self.semaphore.clone(), tracker, handler_builder)
+            Self::handle_stream_request_impl(self.semaphore.clone(), tracker, r.handler_builder)
                 .in_resource_metering_tag(resource_tag)
                 .then(futures::future::ok::<_, mpsc::SendError>)
                 .forward(tx)
@@ -865,9 +895,7 @@ impl<E: Engine> Endpoint<E> {
     ) -> impl futures::stream::Stream<Item = coppb::Response> {
         let result_of_stream = self
             .parse_request_and_check_memory_locks(req, peer, true)
-            .and_then(|(handler_builder, req_ctx)| {
-                self.handle_stream_request(req_ctx, handler_builder)
-            }); // Result<Stream<Resp, Error>, Error>
+            .and_then(|r| self.handle_stream_request(r)); // Result<Stream<Resp, Error>, Error>
 
         futures::stream::once(futures::future::ready(result_of_stream)) // Stream<Stream<Resp, Error>, Error>
             .try_flatten() // Stream<Resp, Error>
@@ -978,16 +1006,172 @@ fn make_error_response(e: Error) -> coppb::Response {
     resp
 }
 
+/// SecondarySnapStoreAccessor is used to get the snapshot stores for the
+/// secondary regions.
+/// The "secondary region" means the regions that are not the source region in a
+/// request.
+/// For example, if a cop-task contains a `IndexLookUp` executor which needs to
+/// access look up the primary rows, it will use this accessor to locate and get
+/// the snapshot of the regions which these primary rows located.
+pub struct SecondarySnapStoreAccessor<E> {
+    store_id: u64,
+    req_ctx: ReqContext,
+    _phantom: PhantomData<fn() -> E>,
+}
+
+impl<E: Engine> SecondarySnapStoreAccessor<E> {
+    /// new creates an Optional EngineSnapshotStoreAccessor.
+    /// Please note that not all scenes are supported.
+    /// If the current request is not supported, a `None` value will be
+    /// returned to force the request to access the source region only.
+    pub fn new(req_ctx: ReqContext) -> Option<Self> {
+        let pb_ctx = &req_ctx.context;
+        let store_id = match pb_ctx.peer.as_ref() {
+            // Though it is possible that the request carries a wrong store_id, we can still use
+            // it to find the peer in the region because it will be validated in get snapshot phase.
+            Some(peer) => peer.get_store_id(),
+            None => return None,
+        };
+
+        if pb_ctx.get_isolation_level() == kvrpcpb::IsolationLevel::Si
+            && !pb_ctx.get_stale_read()
+            && !pb_ctx.get_replica_read()
+        {
+            // Some scenes are not supported before an effective argument, including:
+            // - stale-read & replica-read, TODO: support it later
+            // - non-SI isolation level, TODO: support it later
+            return Some(Self {
+                store_id,
+                req_ctx,
+                _phantom: PhantomData,
+            });
+        }
+        None
+    }
+
+    #[inline]
+    fn err<S: Display>(s: S) -> StorageError {
+        StorageError::from(anyhow!("{}", s))
+    }
+}
+
+#[async_trait]
+impl<E: Engine> RegionStorageAccessor for SecondarySnapStoreAccessor<E> {
+    type Storage = SnapshotStore<E::IMSnap>;
+
+    /// find the region by the specified key.
+    /// The argument `key` should be the comparable format, you should use
+    /// `Key::from_raw` encode the raw key.
+    async fn find_region_by_key(&self, key: &[u8]) -> StorageResult<FindRegionResult> {
+        let key_in_vec = key.to_vec();
+        let (tx, rx) = oneshot::channel();
+        unsafe {
+            with_tls_engine(|engine: &mut E| -> StorageResult<()> {
+                engine
+                    .seek_region(
+                        key,
+                        Box::new(move |iter| {
+                            let result = match iter.next() {
+                                Some(info)
+                                    if info.region.get_start_key() <= key_in_vec.as_slice() =>
+                                {
+                                    FindRegionResult::with_found(info.region.clone(), info.role)
+                                }
+                                Some(info) => FindRegionResult::with_not_found(Some(
+                                    info.region.start_key.clone(),
+                                )),
+                                None => FindRegionResult::with_not_found(None),
+                            };
+
+                            if tx.send(result).is_err() {
+                                warn!("failed to send find_region_by_key result");
+                            }
+                        }),
+                    )
+                    .map_err(Self::err)
+            })?;
+        }
+        rx.map_err(Self::err).await
+    }
+
+    async fn get_local_region_storage(
+        &self,
+        region: &metapb::Region,
+        _key_range: &[coppb::KeyRange],
+    ) -> StorageResult<Self::Storage> {
+        let peer = match find_peer(region, self.store_id) {
+            Some(peer) => peer.clone(),
+            None => {
+                return Err(Self::err(format!(
+                    "cannot find peer in region, region_id: {}, request store_id: {}",
+                    self.store_id,
+                    region.get_id()
+                )));
+            }
+        };
+
+        let pb_ctx = &self.req_ctx.context;
+        let start_ts = self.req_ctx.txn_start_ts;
+        let snap_ctx = SnapContext {
+            pb_ctx,
+            // read_id is used by batch_get to cache the snapshot.
+            // We set it as None here to disable this optimization for simple.
+            read_id: None,
+            start_ts: Some(start_ts),
+            // does not support in-flashback execution currently to avoid some potential
+            // issues for simple.
+            allowed_in_flashback: false,
+            // key_ranges is always empty because replica-read is not supported.
+            // TODO: check the locks for the input key_ranges for replica-read if
+            // it is supported in the future.
+            key_ranges: Vec::default(),
+            secondary_region_override: Some(SecondaryRegionOverride {
+                region_id: region.get_id(),
+                region_epoch: region.get_region_epoch().clone(),
+                peer,
+                // Do not need to check the term because only readonly requests are
+                // supported currently.
+                check_term: None,
+            }),
+        };
+
+        let snap = unsafe {
+            with_tls_engine(move |engine: &mut E| kv::in_memory_snapshot(engine, snap_ctx))
+        }
+        .await
+        .map_err(Self::err)?;
+
+        Ok(SnapshotStore::new(
+            snap,
+            start_ts,
+            pb_ctx.get_isolation_level(),
+            !pb_ctx.get_not_fill_cache(),
+            self.req_ctx.bypass_locks.clone(),
+            self.req_ctx.access_locks.clone(),
+            // If `check_has_newer_ts_data` is enabled, the internal scanner will check if there is
+            // newer data in the region to tell the TiDB whether to cache the cop response or not.
+            // However, the current cop-cache implementation only supports the source region.
+            // So here we force to set it to `false` to avoid caching the cop response when
+            // any other region snapshot is accessed in a request.
+            false,
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
-        sync::{atomic, mpsc},
+        sync::{Mutex, atomic, mpsc},
         thread, vec,
     };
 
     use futures::executor::{block_on, block_on_stream};
     use kvproto::kvrpcpb::IsolationLevel;
     use protobuf::Message;
+    use raft::StateRole;
+    use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
+    use tidb_query_common::storage::Storage;
+    use tikv_kv::{MockEngine, MockEngineBuilder, destroy_tls_engine, set_tls_engine};
     use tipb::{Executor, Expr};
     use txn_types::{Key, LockType};
 
@@ -996,7 +1180,7 @@ mod tests {
         config::CoprReadPoolConfig,
         coprocessor::readpool_impl::build_read_pool_for_test,
         read_pool::ReadPool,
-        storage::{TestEngineBuilder, kv::RocksEngine},
+        storage::{Store, TestEngineBuilder, kv::RocksEngine},
     };
 
     /// A unary `RequestHandler` that always produces a fixture.
@@ -1166,16 +1350,16 @@ mod tests {
         // a normal request
         let handler_builder =
             Box::new(|_, _: &_| Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed()));
-        let resp =
-            block_on(copr.handle_unary_request(ReqContext::default_for_test(), handler_builder))
-                .unwrap();
+        let resp = block_on(
+            copr.handle_unary_request(ParseCopRequestResult::default_for_test(handler_builder)),
+        )
+        .unwrap();
         assert!(resp.get_other_error().is_empty());
 
         // an outdated request
         let handler_builder =
             Box::new(|_, _: &_| Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed()));
         let outdated_req_ctx = ReqContext::new(
-            ReqTag::test,
             Default::default(),
             Vec::new(),
             Duration::from_secs(0),
@@ -1184,8 +1368,14 @@ mod tests {
             TimeStamp::max(),
             None,
             PerfLevel::EnableCount,
+            false,
         );
-        block_on(copr.handle_unary_request(outdated_req_ctx, handler_builder)).unwrap_err();
+        block_on(copr.handle_unary_request(ParseCopRequestResult {
+            req_ctx: outdated_req_ctx,
+            req_tag: ReqTag::test,
+            handler_builder,
+        }))
+        .unwrap_err();
     }
 
     #[test]
@@ -1297,12 +1487,12 @@ mod tests {
             .map(|config| {
                 let engine = Arc::new(Mutex::new(engine.clone()));
                 YatpPoolBuilder::new(DefaultTicker::default())
-                    .config(config)
-                    .name_prefix("coprocessor_endpoint_test_full")
-                    .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
-                    // Safety: we call `set_` and `destroy_` with the same engine type.
-                    .before_stop(|| unsafe { destroy_tls_engine::<RocksEngine>() })
-                    .build_future_pool()
+                        .config(config)
+                        .name_prefix("coprocessor_endpoint_test_full")
+                        .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
+                        // Safety: we call `set_` and `destroy_` with the same engine type.
+                        .before_stop(|| unsafe { destroy_tls_engine::<RocksEngine>() })
+                        .build_future_pool()
             })
             .collect::<Vec<_>>(),
         );
@@ -1333,7 +1523,8 @@ mod tests {
                         .into_boxed(),
                 )
             });
-            let future = copr.handle_unary_request(ReqContext::default_for_test(), handler_builder);
+            let future =
+                copr.handle_unary_request(ParseCopRequestResult::default_for_test(handler_builder));
             let tx = tx.clone();
             thread::spawn(move || {
                 tx.send(block_on(future)).unwrap();
@@ -1371,9 +1562,10 @@ mod tests {
 
         let handler_builder =
             Box::new(|_, _: &_| Ok(UnaryFixture::new(Err(box_err!("foo"))).into_boxed()));
-        let resp =
-            block_on(copr.handle_unary_request(ReqContext::default_for_test(), handler_builder))
-                .unwrap();
+        let resp = block_on(
+            copr.handle_unary_request(ParseCopRequestResult::default_for_test(handler_builder)),
+        )
+        .unwrap();
         assert_eq!(resp.get_data().len(), 0);
         assert!(!resp.get_other_error().is_empty());
     }
@@ -1399,7 +1591,7 @@ mod tests {
         let handler_builder =
             Box::new(|_, _: &_| Ok(StreamFixture::new(vec![Err(box_err!("foo"))]).into_boxed()));
         let resp_vec = block_on_stream(
-            copr.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+            copr.handle_stream_request(ParseCopRequestResult::default_for_test(handler_builder))
                 .unwrap(),
         )
         .collect::<Result<Vec<_>>>()
@@ -1419,7 +1611,7 @@ mod tests {
 
         let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(responses).into_boxed()));
         let resp_vec = block_on_stream(
-            copr.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+            copr.handle_stream_request(ParseCopRequestResult::default_for_test(handler_builder))
                 .unwrap(),
         )
         .collect::<Result<Vec<_>>>()
@@ -1451,7 +1643,7 @@ mod tests {
 
         let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(vec![]).into_boxed()));
         let resp_vec = block_on_stream(
-            copr.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+            copr.handle_stream_request(ParseCopRequestResult::default_for_test(handler_builder))
                 .unwrap(),
         )
         .collect::<Result<Vec<_>>>()
@@ -1495,7 +1687,7 @@ mod tests {
         });
         let handler_builder = Box::new(move |_, _: &_| Ok(handler.into_boxed()));
         let resp_vec = block_on_stream(
-            copr.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+            copr.handle_stream_request(ParseCopRequestResult::default_for_test(handler_builder))
                 .unwrap(),
         )
         .collect::<Result<Vec<_>>>()
@@ -1521,7 +1713,7 @@ mod tests {
         });
         let handler_builder = Box::new(move |_, _: &_| Ok(handler.into_boxed()));
         let resp_vec = block_on_stream(
-            copr.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+            copr.handle_stream_request(ParseCopRequestResult::default_for_test(handler_builder))
                 .unwrap(),
         )
         .collect::<Result<Vec<_>>>()
@@ -1547,7 +1739,7 @@ mod tests {
         });
         let handler_builder = Box::new(move |_, _: &_| Ok(handler.into_boxed()));
         let resp_vec = block_on_stream(
-            copr.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+            copr.handle_stream_request(ParseCopRequestResult::default_for_test(handler_builder))
                 .unwrap(),
         )
         .collect::<Result<Vec<_>>>()
@@ -1589,7 +1781,7 @@ mod tests {
         });
         let handler_builder = Box::new(move |_, _: &_| Ok(handler.into_boxed()));
         let resp_vec = block_on_stream(
-            copr.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+            copr.handle_stream_request(ParseCopRequestResult::default_for_test(handler_builder))
                 .unwrap(),
         )
         .take(7)
@@ -1651,9 +1843,11 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
 
         // A request that requests execution details.
-        let mut req_with_exec_detail = ReqContext::default_for_test();
-        req_with_exec_detail.context.set_record_time_stat(true);
-
+        let req_with_exec_detail: ReqContext = {
+            let mut inner = ReqContextInner::default_for_test();
+            inner.context.set_record_time_stat(true);
+            inner.into()
+        };
         {
             let mut wait_time: Duration = Duration::default();
 
@@ -1664,8 +1858,11 @@ mod tests {
                         .into_boxed(),
                 )
             });
-            let resp_future_1 =
-                copr.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
+            let resp_future_1 = copr.handle_unary_request(ParseCopRequestResult {
+                req_tag: ReqTag::test,
+                req_ctx: req_with_exec_detail.clone(),
+                handler_builder,
+            });
             let sender = tx.clone();
             thread::spawn(move || sender.send(vec![block_on(resp_future_1).unwrap()]).unwrap());
             // Sleep a while to make sure that thread is spawn and snapshot is taken.
@@ -1678,8 +1875,11 @@ mod tests {
                         .into_boxed(),
                 )
             });
-            let resp_future_2 =
-                copr.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
+            let resp_future_2 = copr.handle_unary_request(ParseCopRequestResult {
+                req_tag: ReqTag::test,
+                req_ctx: req_with_exec_detail.clone(),
+                handler_builder,
+            });
             let sender = tx.clone();
             thread::spawn(move || sender.send(vec![block_on(resp_future_2).unwrap()]).unwrap());
             thread::sleep(SNAPSHOT_DURATION);
@@ -1784,8 +1984,11 @@ mod tests {
                 )
                 .into_boxed())
             });
-            let resp_future_1 =
-                copr.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
+            let resp_future_1 = copr.handle_unary_request(ParseCopRequestResult {
+                req_tag: ReqTag::test,
+                req_ctx: req_with_exec_detail.clone(),
+                handler_builder,
+            });
             let sender = tx.clone();
             thread::spawn(move || sender.send(vec![block_on(resp_future_1).unwrap()]).unwrap());
             // Sleep a while to make sure that thread is spawn and snapshot is taken.
@@ -1798,8 +2001,11 @@ mod tests {
                         .into_boxed(),
                 )
             });
-            let resp_future_2 =
-                copr.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
+            let resp_future_2 = copr.handle_unary_request(ParseCopRequestResult {
+                req_tag: ReqTag::test,
+                req_ctx: req_with_exec_detail.clone(),
+                handler_builder,
+            });
             let sender = tx.clone();
             thread::spawn(move || sender.send(vec![block_on(resp_future_2).unwrap()]).unwrap());
             thread::sleep(SNAPSHOT_DURATION);
@@ -1861,8 +2067,11 @@ mod tests {
                         .into_boxed(),
                 )
             });
-            let resp_future_1 =
-                copr.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
+            let resp_future_1 = copr.handle_unary_request(ParseCopRequestResult {
+                req_tag: ReqTag::test,
+                req_ctx: req_with_exec_detail.clone(),
+                handler_builder,
+            });
             let sender = tx.clone();
             thread::spawn(move || sender.send(vec![block_on(resp_future_1).unwrap()]).unwrap());
             // Sleep a while to make sure that thread is spawn and snapshot is taken.
@@ -1881,7 +2090,11 @@ mod tests {
                 .into_boxed())
             });
             let resp_future_3 = copr
-                .handle_stream_request(req_with_exec_detail, handler_builder)
+                .handle_stream_request(ParseCopRequestResult {
+                    req_tag: ReqTag::test,
+                    req_ctx: req_with_exec_detail.clone(),
+                    handler_builder,
+                })
                 .unwrap()
                 .map(|x| x.map(|x| x.into()));
             thread::spawn(move || {
@@ -2034,10 +2247,16 @@ mod tests {
                 Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed())
             });
 
-            let mut config = ReqContext::default_for_test();
-            config.deadline = Deadline::from_now(Duration::from_millis(500));
+            let mut inner = ReqContextInner::default_for_test();
+            inner.deadline = Deadline::from_now(Duration::from_millis(500));
+            let config: ReqContext = inner.into();
 
-            let resp = block_on(copr.handle_unary_request(config, handler_builder)).unwrap();
+            let resp = block_on(copr.handle_unary_request(ParseCopRequestResult {
+                req_tag: ReqTag::test,
+                req_ctx: config,
+                handler_builder,
+            }))
+            .unwrap();
             assert_eq!(resp.get_data().len(), 0);
             let region_err = resp.get_region_error();
             assert_eq!(
@@ -2055,10 +2274,16 @@ mod tests {
                 .into_boxed())
             });
 
-            let mut config = ReqContext::default_for_test();
-            config.deadline = Deadline::from_now(Duration::from_millis(500));
+            let mut inner = ReqContextInner::default_for_test();
+            inner.deadline = Deadline::from_now(Duration::from_millis(500));
+            let config: ReqContext = inner.into();
 
-            let resp = block_on(copr.handle_unary_request(config, handler_builder)).unwrap();
+            let resp = block_on(copr.handle_unary_request(ParseCopRequestResult {
+                req_tag: ReqTag::test,
+                req_ctx: config,
+                handler_builder,
+            }))
+            .unwrap();
             assert_eq!(resp.get_data().len(), 0);
             let region_err = resp.get_region_error();
             assert_eq!(
@@ -2154,10 +2379,16 @@ mod tests {
                 Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed())
             });
 
-            let mut config = ReqContext::default_for_test();
-            config.deadline = Deadline::from_now(Duration::from_millis(500));
+            let mut inner = ReqContextInner::default_for_test();
+            inner.deadline = Deadline::from_now(Duration::from_millis(500));
+            let config: ReqContext = inner.into();
 
-            let resp = block_on(copr.handle_unary_request(config, handler_builder)).unwrap();
+            let resp = block_on(copr.handle_unary_request(ParseCopRequestResult {
+                req_tag: ReqTag::test,
+                req_ctx: config,
+                handler_builder,
+            }))
+            .unwrap();
             assert!(!resp.has_region_error(), "{:?}", resp);
         }
 
@@ -2168,10 +2399,15 @@ mod tests {
                 Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed())
             });
 
-            let mut config = ReqContext::default_for_test();
-            config.deadline = Deadline::from_now(Duration::from_millis(500));
+            let mut inner = ReqContextInner::default_for_test();
+            inner.deadline = Deadline::from_now(Duration::from_millis(500));
+            let config: ReqContext = inner.into();
 
-            let res = block_on(copr.handle_unary_request(config, handler_builder));
+            let res = block_on(copr.handle_unary_request(ParseCopRequestResult {
+                req_tag: ReqTag::test,
+                req_ctx: config,
+                handler_builder,
+            }));
             assert!(res.is_err(), "{:?}", res);
             let resp = make_error_response(res.unwrap_err());
             assert_eq!(resp.get_data().len(), 0);
@@ -2185,5 +2421,411 @@ mod tests {
                 region_err.get_server_is_busy().reason
             );
         }
+    }
+
+    // A default ReqContext that support to access another snapshot in a
+    // request. It can be used to create an not None value of
+    // Option<EngineSnapshotStoreAccessor>
+    fn default_req_ctx_support_snap_accessor() -> ReqContextInner {
+        let mut pb_ctx = kvrpcpb::Context::default();
+        pb_ctx.set_isolation_level(IsolationLevel::Si);
+        pb_ctx.set_stale_read(false);
+        pb_ctx.set_replica_read(false);
+        pb_ctx.set_peer(metapb::Peer {
+            id: 12,
+            store_id: 100,
+            ..Default::default()
+        });
+        pb_ctx.set_region_id(23);
+        let mut req_ctx = ReqContextInner::default_for_test();
+        req_ctx.context = pb_ctx;
+        req_ctx.txn_start_ts = TimeStamp::new(1234567);
+        req_ctx.is_desc_scan = Some(true);
+        req_ctx.ranges = vec![
+            coppb::KeyRange {
+                start: b"a1".to_vec(),
+                end: b"b1".to_vec(),
+                ..Default::default()
+            },
+            coppb::KeyRange {
+                start: b"b3".to_vec(),
+                end: b"b4".to_vec(),
+                ..Default::default()
+            },
+        ];
+        req_ctx
+    }
+
+    #[test]
+    fn test_secondary_snap_store_accessor_new() {
+        type StoreAccessor = SecondarySnapStoreAccessor<RocksEngine>;
+        // construct a ReqContext that support to access another snapshot in a request
+        let req_ctx = default_req_ctx_support_snap_accessor();
+
+        // accessor support case
+        let mut ctx = req_ctx.clone();
+        assert!(StoreAccessor::new(ctx.into()).is_some());
+
+        // does not support Rc / RcCheckTs
+        ctx = req_ctx.clone();
+        ctx.context.set_isolation_level(IsolationLevel::Rc);
+        assert!(StoreAccessor::new(ctx.into()).is_none());
+        ctx = req_ctx.clone();
+        ctx.context.set_isolation_level(IsolationLevel::RcCheckTs);
+        assert!(StoreAccessor::new(ctx.into()).is_none());
+
+        // does not support stale read
+        ctx = req_ctx.clone();
+        ctx.context.set_stale_read(true);
+        assert!(StoreAccessor::new(ctx.into()).is_none());
+
+        // does not support replica read
+        ctx = req_ctx.clone();
+        ctx.context.set_replica_read(true);
+        assert!(StoreAccessor::new(ctx.into()).is_none());
+    }
+
+    #[test]
+    fn test_secondary_snap_store_accessor_locate_region_by_key() {
+        set_tls_engine(TestEngineBuilder::new().build().unwrap());
+        defer! {
+            unsafe {destroy_tls_engine::<RocksEngine>()}
+        }
+
+        let (r1, r2, r3) = (
+            metapb::Region {
+                id: 1,
+                start_key: b"b".to_vec(),
+                end_key: b"d".to_vec(),
+                ..Default::default()
+            },
+            metapb::Region {
+                id: 2,
+                start_key: b"e".to_vec(),
+                end_key: b"g".to_vec(),
+                ..Default::default()
+            },
+            metapb::Region {
+                id: 3,
+                start_key: b"g".to_vec(),
+                end_key: b"h".to_vec(),
+                ..Default::default()
+            },
+        );
+
+        unsafe {
+            let provider = MockRegionInfoProvider::new(vec![r1.clone(), r2.clone(), r3.clone()]);
+            provider.set_role(2, StateRole::Follower);
+            with_tls_engine(|e: &mut RocksEngine| e.set_region_info_provider(provider))
+        }
+
+        type StoreAccessor = SecondarySnapStoreAccessor<RocksEngine>;
+        let accessor = StoreAccessor::new(default_req_ctx_support_snap_accessor().into()).unwrap();
+
+        // key is before any region, not found
+        assert_eq!(
+            block_on(accessor.find_region_by_key(b"a")).unwrap(),
+            FindRegionResult::with_not_found(Some(b"b".to_vec())),
+        );
+        // key is region start, found
+        assert_eq!(
+            block_on(accessor.find_region_by_key(b"b")).unwrap(),
+            FindRegionResult::with_found(r1.clone(), StateRole::Leader),
+        );
+        // key is in a region range, found
+        assert_eq!(
+            block_on(accessor.find_region_by_key(b"b1")).unwrap(),
+            FindRegionResult::with_found(r1.clone(), StateRole::Leader),
+        );
+        assert_eq!(
+            block_on(accessor.find_region_by_key(b"c")).unwrap(),
+            FindRegionResult::with_found(r1.clone(), StateRole::Leader),
+        );
+        assert_eq!(
+            block_on(accessor.find_region_by_key(b"c1")).unwrap(),
+            FindRegionResult::with_found(r1.clone(), StateRole::Leader),
+        );
+        // key is a region's end, but not any region's end, not found
+        assert_eq!(
+            block_on(accessor.find_region_by_key(b"d")).unwrap(),
+            FindRegionResult::with_not_found(Some(b"e".to_vec())),
+        );
+        // key is between a region's end and another region's start, not found
+        assert_eq!(
+            block_on(accessor.find_region_by_key(b"d1")).unwrap(),
+            FindRegionResult::with_not_found(Some(b"e".to_vec())),
+        );
+        // key is in a region, but the region is not a leader
+        assert_eq!(
+            block_on(accessor.find_region_by_key(b"e")).unwrap(),
+            FindRegionResult::with_found(r2.clone(), StateRole::Follower),
+        );
+        assert_eq!(
+            block_on(accessor.find_region_by_key(b"f")).unwrap(),
+            FindRegionResult::with_found(r2.clone(), StateRole::Follower),
+        );
+        // key is a region's end, and another region's start found
+        assert_eq!(
+            block_on(accessor.find_region_by_key(b"g")).unwrap(),
+            FindRegionResult::with_found(r3.clone(), StateRole::Leader),
+        );
+        // key is after all regions, not found without next_region_start
+        assert_eq!(
+            block_on(accessor.find_region_by_key(b"h")).unwrap(),
+            FindRegionResult::with_not_found(None),
+        );
+        assert_eq!(
+            block_on(accessor.find_region_by_key(b"i")).unwrap(),
+            FindRegionResult::with_not_found(None),
+        );
+
+        // clear_region_info_provider makes RocksEngine::seek_region returns error
+        unsafe { with_tls_engine(|e: &mut RocksEngine| e.clear_region_info_provider()) }
+        let err = block_on(accessor.find_region_by_key(b"a")).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("region_info_accessor is not available"),
+        );
+    }
+
+    #[test]
+    fn test_secondary_snap_store_accessor_get_local_region_storage() {
+        type StoreAccessor = SecondarySnapStoreAccessor<MockEngine>;
+        #[derive(Clone)]
+        struct TestCtx {
+            store_id: u64,
+            req_ctx: Arc<Mutex<ReqContextInner>>,
+            req_region: Arc<Mutex<metapb::Region>>,
+            req_ranges: Arc<Mutex<Vec<coppb::KeyRange>>>,
+            called: Arc<atomic::AtomicBool>,
+        }
+
+        impl TestCtx {
+            fn new_accessor(&self) -> StoreAccessor {
+                StoreAccessor::new(self.get_req_ctx()).unwrap()
+            }
+
+            fn get_req_ctx(&self) -> ReqContext {
+                ReqContext(Arc::new(self.req_ctx.lock().unwrap().clone()))
+            }
+
+            fn get_req_region(&self) -> metapb::Region {
+                self.req_region.lock().unwrap().clone()
+            }
+
+            fn get_req_ranges(&self) -> Vec<coppb::KeyRange> {
+                self.req_ranges.lock().unwrap().clone()
+            }
+
+            fn get_local_region_storage_with_check(
+                &self,
+            ) -> StorageResult<SnapshotStore<<MockEngine as Engine>::Snap>> {
+                let accessor = &self.new_accessor();
+                assert!(!self.called.load(atomic::Ordering::SeqCst));
+                let result = block_on(
+                    accessor
+                        .get_local_region_storage(&self.get_req_region(), &self.get_req_ranges()),
+                );
+                let called = self.called.swap(false, atomic::Ordering::SeqCst);
+
+                if let Ok(ref store) = result {
+                    assert!(called);
+                    let req_ctx = self.get_req_ctx();
+                    let pb_ctx = &req_ctx.context;
+                    assert_eq!(store.get_start_ts(), req_ctx.txn_start_ts);
+                    assert_eq!(store.get_isolation_level(), pb_ctx.isolation_level);
+                    assert_eq!(store.is_fill_cache(), !pb_ctx.get_not_fill_cache());
+                    assert_eq!(store.get_by_pass_locks(), req_ctx.bypass_locks);
+                    assert_eq!(store.get_access_locks(), req_ctx.access_locks);
+                    // check_has_newer_ts_data should always be false to avoid caching the cop
+                    // response
+                    assert!(!store.is_check_has_newer_ts_data());
+                }
+
+                result
+            }
+        }
+
+        let test_ctx = {
+            let req_ctx = Arc::new(Mutex::new(default_req_ctx_support_snap_accessor()));
+            let store_id = req_ctx.lock().unwrap().context.get_peer().get_store_id();
+            assert!(store_id > 0);
+            TestCtx {
+                store_id,
+                req_ctx,
+                req_region: Arc::new(Mutex::new(metapb::Region {
+                    id: 123,
+                    start_key: b"a".to_vec(),
+                    end_key: b"z".to_vec(),
+                    peers: vec![
+                        metapb::Peer {
+                            id: 1,
+                            store_id: store_id - 1,
+                            ..Default::default()
+                        },
+                        metapb::Peer {
+                            id: 2,
+                            store_id,
+                            ..Default::default()
+                        },
+                        metapb::Peer {
+                            id: 3,
+                            store_id: store_id + 1,
+                            ..Default::default()
+                        },
+                    ]
+                    .into(),
+                    ..Default::default()
+                })),
+                req_ranges: Arc::new(Mutex::new(vec![coppb::KeyRange {
+                    start: b"a".to_vec(),
+                    end: b"b".to_vec(),
+                    ..Default::default()
+                }])),
+                called: Arc::new(atomic::AtomicBool::new(false)),
+            }
+        };
+
+        let test_ctx_for_engine = test_ctx.clone();
+        set_tls_engine(
+            MockEngineBuilder::from_rocks_engine(TestEngineBuilder::new().build().unwrap())
+                // set the hook to check the snap_ctx as the argument of Engine::async_snapshot
+                .set_pre_async_snapshot(move |snap_ctx| {
+                    let test_ctx = test_ctx_for_engine.clone();
+                    assert!(!test_ctx.called.swap(
+                        true,
+                        atomic::Ordering::SeqCst,
+                    ));
+
+                    let check_ctx = test_ctx.get_req_ctx();
+                    let check_region = test_ctx.get_req_region();
+                    // Currently, only leader read is supported in this test.
+                    assert!(!check_ctx.context.get_replica_read() && !check_ctx.context.get_stale_read());
+                    assert!(!check_ctx.ranges.is_empty());
+                    // snap_ctx.pb_ctx should be the same as ReqContext.context
+                    assert_eq!(snap_ctx.pb_ctx.clone(), check_ctx.context.clone());
+                    // snap_ctx.extra_snap_override should be present with the correct region info
+                    assert_eq!(
+                        snap_ctx.secondary_region_override,
+                        Some(SecondaryRegionOverride {
+                            region_id: check_region.id,
+                            region_epoch: check_region.get_region_epoch().clone(),
+                            peer: check_region.get_peers()[1].clone(),
+                            check_term: None,
+                        })
+                    );
+                    // should select a peer with the right store_id.
+                    assert_eq!(
+                        snap_ctx.secondary_region_override.as_ref().unwrap().peer.store_id,
+                        test_ctx.store_id
+                    );
+                    // snapshot cache is not supported currently, so snap_ctx.read_id is always None.
+                    assert!(snap_ctx.read_id.is_none());
+                    // snap_ctx.start_ts should be the same as req_ctx.txn_start_ts
+                    assert!(check_ctx.txn_start_ts > TimeStamp::zero());
+                    assert_eq!(snap_ctx.start_ts, Some(check_ctx.txn_start_ts));
+                    // Even if req_ctx.ranges is not empty, snap_ctx.key_ranges should be empty in
+                    // leader read because leader read does not need to check keys locks.
+                    assert!(!test_ctx.get_req_ranges().is_empty());
+                    assert_eq!(snap_ctx.key_ranges.len(), 0);
+                    // not allowed in flashback
+                    assert!(!snap_ctx.allowed_in_flashback);
+                })
+                .build(),
+        );
+        defer! {
+            unsafe {destroy_tls_engine::<MockEngine>()}
+        }
+
+        // normal case
+        test_ctx
+            .get_local_region_storage_with_check()
+            .expect("should succeed");
+
+        // if set_not_fill_cache, it should work
+        {
+            let mut req_ctx = test_ctx.req_ctx.lock().unwrap();
+            // in previous test, get_not_fill_cache should return false.
+            assert!(!req_ctx.context.get_not_fill_cache());
+            req_ctx.context.set_not_fill_cache(true);
+        }
+        let store = test_ctx
+            .get_local_region_storage_with_check()
+            .expect("should succeed");
+        assert!(!store.is_fill_cache());
+
+        // cannot find peer
+        {
+            test_ctx.req_region.lock().unwrap().peers[1].store_id = 99999999;
+        }
+        let err = test_ctx
+            .get_local_region_storage_with_check()
+            .err()
+            .unwrap();
+        println!("error: {}", err);
+        assert!(err.to_string().contains("cannot find peer in region"));
+        {
+            test_ctx.req_region.lock().unwrap().peers[1].store_id = test_ctx.store_id;
+        }
+
+        // always not allow in flashback
+        {
+            test_ctx.req_ctx.lock().unwrap().allowed_in_flashback = true;
+        }
+        test_ctx
+            // snap_ctx.allowed_in_flashback will be validated in pre_async_snapshot func
+            .get_local_region_storage_with_check()
+            .expect("should succeed");
+
+        // should return error when engine returns error
+        unsafe {
+            with_tls_engine(|e: &mut MockEngine| e.rocks_engine().trigger_not_leader());
+        }
+        let err = test_ctx
+            .get_local_region_storage_with_check()
+            .err()
+            .unwrap();
+        assert!(err.to_string().contains("not_leader"));
+    }
+
+    #[test]
+    fn test_secondary_tikv_storage_accessor() {
+        set_tls_engine(TestEngineBuilder::new().build().unwrap());
+        defer! {
+            unsafe {destroy_tls_engine::<RocksEngine>()}
+        }
+        let def_req = default_req_ctx_support_snap_accessor();
+        let store_id = def_req.context.get_peer().get_store_id();
+        let store_accessor =
+            SecondarySnapStoreAccessor::<RocksEngine>::new(def_req.into()).unwrap();
+        let storage_accessor = dag::SecondaryTiKVStorageAccessor::<
+            SecondarySnapStoreAccessor<RocksEngine>,
+        >::from_store_accessor(store_accessor);
+
+        let storage = block_on(
+            storage_accessor.get_local_region_storage(
+                &metapb::Region {
+                    id: 123,
+                    start_key: b"a".to_vec(),
+                    end_key: b"z".to_vec(),
+                    peers: vec![metapb::Peer {
+                        id: 1,
+                        store_id,
+                        ..Default::default()
+                    }]
+                    .into(),
+                    ..Default::default()
+                },
+                &[coppb::KeyRange {
+                    start: b"a".to_vec(),
+                    end: b"b".to_vec(),
+                    ..Default::default()
+                }],
+            ),
+        )
+        .unwrap();
+
+        // should always disable check_can_be_cached
+        assert!(storage.met_uncacheable_data().is_none());
     }
 }
