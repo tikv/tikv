@@ -10,10 +10,7 @@ use std::{
 
 use collections::{HashMap, HashMapEntry};
 use crossbeam::atomic::AtomicCell;
-use futures::{
-    compat::Stream01CompatExt,
-    stream::{StreamExt, TryStreamExt},
-};
+use futures::{compat::Stream01CompatExt, stream::{StreamExt, TryStreamExt}, SinkExt};
 use grpcio::{DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode};
 use kvproto::{
     cdcpb::{
