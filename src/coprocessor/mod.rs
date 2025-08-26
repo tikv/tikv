@@ -35,14 +35,13 @@ pub mod readpool_impl;
 mod statistics;
 mod tracker;
 
-use std::sync::Arc;
+use std::{ops::Deref, sync::Arc};
 
 use async_trait::async_trait;
 pub use checksum::checksum_crc64_xor;
 use engine_traits::PerfLevel;
 use kvproto::{coprocessor as coppb, kvrpcpb};
 use lazy_static::lazy_static;
-use metrics::ReqTag;
 use rand::prelude::*;
 use tidb_query_common::execute_stats::ExecSummary;
 use tikv_alloc::{Id, MemoryTrace, MemoryTraceGuard, mem_trace};
@@ -97,12 +96,9 @@ pub trait RequestHandler: Send {
 type RequestHandlerBuilder<Snap> =
     Box<dyn for<'a> FnOnce(Snap, &ReqContext) -> Result<Box<dyn RequestHandler>> + Send>;
 
-/// Encapsulate the `kvrpcpb::Context` to provide some extra properties.
-#[derive(Debug, Clone)]
-pub struct ReqContext {
-    /// The tag of the request
-    pub tag: ReqTag,
-
+/// The inner state of ReqContext.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReqContextInner {
     /// The rpc context carried in the request
     pub context: kvrpcpb::Context,
 
@@ -150,19 +146,9 @@ pub struct ReqContext {
     pub allowed_in_flashback: bool,
 }
 
-impl HeapSize for ReqContext {
-    fn approximate_heap_size(&self) -> usize {
-        self.context.approximate_heap_size()
-            + self.ranges.approximate_heap_size()
-            + self.peer.as_ref().map_or(0, |p| p.len())
-            + self.lower_bound.approximate_heap_size()
-            + self.upper_bound.approximate_heap_size()
-    }
-}
-
-impl ReqContext {
+impl ReqContextInner {
+    #[inline]
     pub fn new(
-        tag: ReqTag,
         mut context: kvrpcpb::Context,
         ranges: Vec<coppb::KeyRange>,
         max_handle_duration: Duration,
@@ -171,6 +157,7 @@ impl ReqContext {
         txn_start_ts: TimeStamp,
         cache_match_version: Option<u64>,
         perf_level: PerfLevel,
+        allowed_in_flashback: bool,
     ) -> Self {
         let mut deadline_duration = max_handle_duration;
         if context.max_execution_duration_ms > 0 {
@@ -188,7 +175,6 @@ impl ReqContext {
             None => vec![],
         };
         Self {
-            tag,
             context,
             deadline,
             peer,
@@ -201,14 +187,13 @@ impl ReqContext {
             lower_bound,
             upper_bound,
             perf_level,
-            allowed_in_flashback: false,
+            allowed_in_flashback,
         }
     }
 
     #[cfg(test)]
     pub fn default_for_test() -> Self {
         Self::new(
-            ReqTag::test,
             Default::default(),
             Vec::new(),
             Duration::from_secs(100),
@@ -217,7 +202,71 @@ impl ReqContext {
             TimeStamp::max(),
             None,
             PerfLevel::EnableCount,
+            false,
         )
+    }
+}
+
+/// ReqContext provides the context for the coprocessor request.
+/// It Encapsulate the `kvrpcpb::Context` to provide some extra properties.
+/// It is immutable and can be shared across threads.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReqContext(Arc<ReqContextInner>);
+
+impl Deref for ReqContext {
+    type Target = Arc<ReqContextInner>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl HeapSize for ReqContext {
+    fn approximate_heap_size(&self) -> usize {
+        self.0.context.approximate_heap_size()
+            + self.0.ranges.approximate_heap_size()
+            + self.0.peer.as_ref().map_or(0, |p| p.len())
+            + self.0.lower_bound.approximate_heap_size()
+            + self.0.upper_bound.approximate_heap_size()
+    }
+}
+
+impl From<ReqContextInner> for ReqContext {
+    fn from(inner: ReqContextInner) -> Self {
+        Self(Arc::new(inner))
+    }
+}
+
+impl ReqContext {
+    #[inline]
+    pub fn new(
+        context: kvrpcpb::Context,
+        ranges: Vec<coppb::KeyRange>,
+        max_handle_duration: Duration,
+        peer: Option<String>,
+        is_desc_scan: Option<bool>,
+        txn_start_ts: TimeStamp,
+        cache_match_version: Option<u64>,
+        perf_level: PerfLevel,
+        allowed_in_flashback: bool,
+    ) -> Self {
+        ReqContextInner::new(
+            context,
+            ranges,
+            max_handle_duration,
+            peer,
+            is_desc_scan,
+            txn_start_ts,
+            cache_match_version,
+            perf_level,
+            allowed_in_flashback,
+        )
+        .into()
+    }
+
+    #[cfg(test)]
+    pub fn default_for_test() -> Self {
+        ReqContextInner::default_for_test().into()
     }
 
     pub fn build_task_id(&self) -> u64 {
@@ -257,7 +306,6 @@ mod tests {
         max_handle_duration: Duration,
     ) -> ReqContext {
         ReqContext::new(
-            ReqTag::test,
             context,
             Vec::new(),
             max_handle_duration,
@@ -266,18 +314,21 @@ mod tests {
             TimeStamp::max(),
             None,
             PerfLevel::EnableCount,
+            false,
         )
     }
 
     #[test]
     fn test_build_task_id() {
-        let mut ctx = ReqContext::default_for_test();
+        let mut inner = ReqContextInner::default_for_test();
         let start_ts: u64 = 0x05C6_1BFA_2648_324A;
-        ctx.txn_start_ts = start_ts.into();
-        ctx.context.set_task_id(1);
+        inner.txn_start_ts = start_ts.into();
+        inner.context.set_task_id(1);
+        let ctx: ReqContext = inner.clone().into();
         assert_eq!(ctx.build_task_id(), 0x0001_1BFA_2648_324A);
 
-        ctx.context.set_task_id(0);
+        inner.context.set_task_id(0);
+        let ctx: ReqContext = inner.clone().into();
         assert_eq!(ctx.build_task_id(), start_ts);
     }
 
@@ -302,5 +353,60 @@ mod tests {
             .deadline
             .check()
             .expect("deadline should not exceed");
+    }
+
+    #[test]
+    fn test_req_ctx_new_match_inner() {
+        let pb_ctx = kvrpcpb::Context {
+            region_id: 12345,
+            ..Default::default()
+        };
+        let ranges = vec![coppb::KeyRange {
+            start: vec![1, 2, 3],
+            end: vec![4, 5, 6],
+            ..Default::default()
+        }];
+        let max_handle_duration = Duration::from_secs(100);
+        let peer = Some(String::from("1223"));
+        let is_desc_scan = Some(true);
+        let txn_start_ts = TimeStamp::new(9898);
+        let cache_match_version = Some(42);
+        let perf_level = PerfLevel::EnableCount;
+        let allow_in_flashback = true;
+
+        let mut inner = ReqContextInner::new(
+            pb_ctx.clone(),
+            ranges.clone(),
+            max_handle_duration,
+            peer.clone(),
+            is_desc_scan,
+            txn_start_ts,
+            cache_match_version,
+            perf_level,
+            allow_in_flashback,
+        );
+
+        let ctx = ReqContext::new(
+            pb_ctx,
+            ranges,
+            max_handle_duration,
+            peer,
+            is_desc_scan,
+            txn_start_ts,
+            cache_match_version,
+            perf_level,
+            allow_in_flashback,
+        );
+
+        // deadlines are not exactly equal, just compare the delta
+        assert!(
+            ctx.deadline.inner().duration_since(inner.deadline.inner()) < Duration::from_secs(1),
+            "{:?} - {:?} > 1s",
+            ctx.deadline,
+            inner.deadline
+        );
+        inner.deadline = ctx.deadline;
+        // test ReqContextInner::new and ReqContext::new should match
+        assert_eq!(ctx.0.as_ref().clone(), inner);
     }
 }

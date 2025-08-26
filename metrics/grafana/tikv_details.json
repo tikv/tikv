@@ -74824,7 +74824,7 @@
           "thresholds": [],
           "timeFrom": null,
           "timeShift": null,
-          "title": "Abnormal Checkpoint TS Lag",
+          "title": "Checkpoint TS Lag",
           "tooltip": {
             "msResolution": true,
             "shared": true,
@@ -75903,7 +75903,7 @@
           },
           "dataFormat": "tsbuckets",
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The duration of waiting the mutex of the controller.",
+          "description": "The duration of calculating the next resolved TS of observed regions.",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -75942,7 +75942,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(increase(\n    tikv_log_backup_event_handle_duration_sec_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",stage=~\"get_router_lock\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_log_backup_resolve_duration_sec_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -75950,7 +75950,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(increase(\n    tikv_log_backup_event_handle_duration_sec_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",stage=~\"get_router_lock\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_log_backup_resolve_duration_sec_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -75958,7 +75958,7 @@
           ],
           "timeFrom": null,
           "timeShift": null,
-          "title": "Wait for Lock Duration",
+          "title": "Resolve Region TS duration",
           "tooltip": {
             "msResolution": true,
             "shared": true,
@@ -77102,7 +77102,7 @@
           },
           "gridPos": {
             "h": 7,
-            "w": 8,
+            "w": 12,
             "x": 0,
             "y": 70
           },
@@ -77235,8 +77235,8 @@
           },
           "gridPos": {
             "h": 7,
-            "w": 8,
-            "x": 8,
+            "w": 12,
+            "x": 12,
             "y": 70
           },
           "height": null,
@@ -77347,7 +77347,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "",
+          "description": "The memory usage of buffer file (stores logs about to be flushed to external storage) cache.",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -77369,8 +77369,8 @@
           "gridPos": {
             "h": 7,
             "w": 8,
-            "x": 16,
-            "y": 70
+            "x": 0,
+            "y": 77
           },
           "height": null,
           "hideTimeOverride": false,
@@ -77417,15 +77417,15 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_log_backup_metadata_key_operation\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type) ",
+              "expr": "sum((\n    tikv_log_backup_temp_file_memory_usage\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
               "format": "time_series",
               "hide": false,
               "instant": false,
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "{{type}}",
+              "legendFormat": "{{instance}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_log_backup_metadata_key_operation\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type) ",
+              "query": "sum((\n    tikv_log_backup_temp_file_memory_usage\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -77434,7 +77434,7 @@
           "thresholds": [],
           "timeFrom": null,
           "timeShift": null,
-          "title": "Region Checkpoint Key Putting",
+          "title": "Buffer File Cache Mem Usage",
           "tooltip": {
             "msResolution": true,
             "shared": true,
@@ -77453,7 +77453,273 @@
           "yaxes": [
             {
               "decimals": null,
-              "format": "cps",
+              "format": "bytes",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The number of temporary buffer files.",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 8,
+            "x": 8,
+            "y": 77
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 565,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum((\n    tikv_log_backup_temp_file_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{instance}}",
+              "metric": "",
+              "query": "sum((\n    tikv_log_backup_temp_file_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Buffer File Count",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "none",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The total size of buffer files that are swapped out to disk.",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 8,
+            "x": 16,
+            "y": 77
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 566,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_log_backup_in_disk_temp_file_size_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{instance}}",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_log_backup_in_disk_temp_file_size_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Buffer File Swap out Bytes",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "binBps",
               "label": null,
               "logBase": 1,
               "max": null,
@@ -77507,14 +77773,14 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 77
+            "y": 84
           },
           "heatmap": {},
           "height": null,
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 565,
+          "id": 567,
           "interval": null,
           "legend": {
             "show": false
@@ -77612,14 +77878,14 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 77
+            "y": 84
           },
           "heatmap": {},
           "height": null,
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 566,
+          "id": 568,
           "interval": null,
           "legend": {
             "show": false
@@ -77713,11 +77979,11 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 84
+            "y": 91
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 567,
+          "id": 569,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -77846,11 +78112,11 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 84
+            "y": 91
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 568,
+          "id": 570,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -77977,13 +78243,13 @@
           },
           "gridPos": {
             "h": 7,
-            "w": 12,
+            "w": 8,
             "x": 0,
-            "y": 91
+            "y": 98
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 569,
+          "id": 571,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78089,7 +78355,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The internal handling message duration.",
+          "description": "The region with minimal checkpoint.",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -78110,13 +78376,13 @@
           },
           "gridPos": {
             "h": 7,
-            "w": 12,
-            "x": 12,
-            "y": 91
+            "w": 8,
+            "x": 8,
+            "y": 98
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 570,
+          "id": 572,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78159,15 +78425,15 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "histogram_quantile(0.9,(\n    sum(rate(\n    tidb_log_backup_advancer_tick_duration_sec_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (step, le) \n    \n    \n))  ",
+              "expr": "((\n    tidb_log_backup_current_last_region_id\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
               "format": "time_series",
               "hide": false,
               "instant": false,
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "{{ step }}",
+              "legendFormat": "{{ instance }}",
               "metric": "",
-              "query": "histogram_quantile(0.9,(\n    sum(rate(\n    tidb_log_backup_advancer_tick_duration_sec_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (step, le) \n    \n    \n))  ",
+              "query": "((\n    tidb_log_backup_current_last_region_id\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -78176,7 +78442,7 @@
           "thresholds": [],
           "timeFrom": null,
           "timeShift": null,
-          "title": "Tick Duration (P90)",
+          "title": "Current Last Region ID",
           "tooltip": {
             "msResolution": true,
             "shared": true,
@@ -78195,7 +78461,539 @@
           "yaxes": [
             {
               "decimals": null,
-              "format": "s",
+              "format": "none",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The leader of the region with minimal checkpoint.",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 8,
+            "x": 16,
+            "y": 98
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 573,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "((\n    tikv_log_backup_store_last_checkpoint_ts\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  / 262144",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{ instance }}",
+              "metric": "",
+              "query": "((\n    tikv_log_backup_store_last_checkpoint_ts\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  / 262144",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Current Last Region Leader Store ID",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "none",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The region with minimal checkpoint of each store.",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 8,
+            "x": 0,
+            "y": 105
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 574,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "((\n    tikv_log_backup_store_last_checkpoint_region_id\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{ instance }}",
+              "metric": "",
+              "query": "((\n    tikv_log_backup_store_last_checkpoint_region_id\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Current Last Region ID per Store",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "none",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The minimal checkpoint TS of each store.",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 8,
+            "x": 8,
+            "y": 105
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 575,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "((\n    tikv_log_backup_store_last_checkpoint_ts\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{ instance }}",
+              "metric": "",
+              "query": "((\n    tikv_log_backup_store_last_checkpoint_ts\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Current Last Checkpoint TS per Store",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "ms",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The active progress subscription from each store",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 8,
+            "x": 16,
+            "y": 105
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 576,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "((\n    tikv_log_backup_active_subscription_number\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{instance}}",
+              "metric": "",
+              "query": "((\n    tikv_log_backup_active_subscription_number\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Active Progress Subscrption Per Store",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "none",
               "label": null,
               "logBase": 1,
               "max": null,
@@ -78245,11 +79043,11 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 98
+            "y": 112
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 571,
+          "id": 577,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78378,11 +79176,11 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 98
+            "y": 112
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 572,
+          "id": 578,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78518,7 +79316,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 573,
+      "id": 579,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -78557,7 +79355,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 574,
+          "id": 580,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78705,7 +79503,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 575,
+          "id": 581,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78838,7 +79636,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 576,
+          "id": 582,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78971,7 +79769,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 577,
+          "id": 583,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79107,7 +79905,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 578,
+      "id": 584,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -79146,7 +79944,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 579,
+          "id": 585,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79279,7 +80077,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 580,
+          "id": 586,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79412,7 +80210,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 581,
+          "id": 587,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79545,7 +80343,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 582,
+          "id": 588,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79678,7 +80476,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 583,
+          "id": 589,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79811,7 +80609,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 584,
+          "id": 590,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79947,7 +80745,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 585,
+      "id": 591,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -79986,7 +80784,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 586,
+          "id": 592,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80119,7 +80917,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 587,
+          "id": 593,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80255,7 +81053,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 588,
+      "id": 594,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -80294,7 +81092,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 589,
+          "id": 595,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80495,7 +81293,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 590,
+          "id": 596,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80631,7 +81429,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 591,
+      "id": 597,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -80670,7 +81468,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 592,
+          "id": 598,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80803,7 +81601,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 593,
+          "id": 599,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80936,7 +81734,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 594,
+          "id": 600,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81069,7 +81867,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 595,
+          "id": 601,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81202,7 +82000,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 596,
+          "id": 602,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81350,7 +82148,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 597,
+          "id": 603,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81554,7 +82352,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 598,
+      "id": 604,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -81593,7 +82391,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 599,
+          "id": 605,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81726,7 +82524,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 600,
+          "id": 606,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81859,7 +82657,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 601,
+          "id": 607,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81992,7 +82790,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 602,
+          "id": 608,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82125,7 +82923,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 603,
+          "id": 609,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82322,7 +83120,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 604,
+          "id": 610,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -82404,7 +83202,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 605,
+      "id": 611,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -82473,7 +83271,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 606,
+          "id": 612,
           "interval": null,
           "links": [],
           "mappings": [],
@@ -82590,7 +83388,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 607,
+          "id": 613,
           "interval": null,
           "links": [],
           "mappings": [],
@@ -82707,7 +83505,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 608,
+          "id": 614,
           "interval": null,
           "links": [],
           "mappings": [],
@@ -82824,7 +83622,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 609,
+          "id": 615,
           "interval": null,
           "links": [],
           "mappings": [],
