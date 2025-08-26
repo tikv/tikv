@@ -660,7 +660,8 @@ impl MetaEditFilter {
 
     fn merge_from_meta_edit(&mut self, mut em: MetaEdit) {
         self.destructed_self = self.destructed_self || em.destruct_self;
-        self.all_data_files_compacted = self.all_data_files_compacted || em.all_data_files_compacted;
+        self.all_data_files_compacted =
+            self.all_data_files_compacted || em.all_data_files_compacted;
         if self.destructed_self || self.all_data_files_compacted {
             self.full_files = Default::default();
             self.segments = Default::default();
