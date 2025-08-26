@@ -83287,21 +83287,21 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_config_rocksdb_db\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
+              "expr": "((\n    tikv_config_rocksdb_db\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
               "format": "table",
               "hide": false,
-              "instant": false,
+              "instant": true,
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "",
+              "legendFormat": null,
               "metric": "",
-              "query": "((\n    tikv_config_rocksdb_db\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
+              "query": "((\n    tikv_config_rocksdb_db\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
               "refId": "",
               "step": 10,
               "target": ""
             }
           ],
-          "timeFrom": "1s",
+          "timeFrom": null,
           "timeShift": null,
           "title": "RocksDB DB Config",
           "transformations": [
@@ -83404,21 +83404,21 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_config_rocksdb_cf\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))   or (tikv_config_rocksdb unless tikv_config_rocksdb_cf)",
+              "expr": "((\n    tikv_config_rocksdb_cf\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))   or (tikv_config_rocksdb unless tikv_config_rocksdb_cf)",
               "format": "table",
               "hide": false,
-              "instant": false,
+              "instant": true,
               "interval": "",
               "intervalFactor": 1,
               "legendFormat": null,
               "metric": "",
-              "query": "((\n    tikv_config_rocksdb_cf\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))   or (tikv_config_rocksdb unless tikv_config_rocksdb_cf)",
+              "query": "((\n    tikv_config_rocksdb_cf\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))   or (tikv_config_rocksdb unless tikv_config_rocksdb_cf)",
               "refId": "",
               "step": 10,
               "target": ""
             }
           ],
-          "timeFrom": "1s",
+          "timeFrom": null,
           "timeShift": null,
           "title": "RocksDB CF Config",
           "transformations": [
@@ -83521,21 +83521,21 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_config_flow_control\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
+              "expr": "((\n    tikv_config_flow_control\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
               "format": "table",
               "hide": false,
-              "instant": false,
+              "instant": true,
               "interval": "",
               "intervalFactor": 1,
               "legendFormat": null,
               "metric": "",
-              "query": "((\n    tikv_config_flow_control\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
+              "query": "((\n    tikv_config_flow_control\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
               "refId": "",
               "step": 10,
               "target": ""
             }
           ],
-          "timeFrom": "1s",
+          "timeFrom": null,
           "timeShift": null,
           "title": "Flow Control Config",
           "transformations": [
@@ -83638,21 +83638,21 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_config_raftstore\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
+              "expr": "((\n    tikv_config_raftstore\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
               "format": "table",
               "hide": false,
-              "instant": false,
+              "instant": true,
               "interval": "",
               "intervalFactor": 1,
               "legendFormat": null,
               "metric": "",
-              "query": "((\n    tikv_config_raftstore\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
+              "query": "((\n    tikv_config_raftstore\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
               "refId": "",
               "step": 10,
               "target": ""
             }
           ],
-          "timeFrom": "1s",
+          "timeFrom": null,
           "timeShift": null,
           "title": "Raftstore Config",
           "transformations": [
