@@ -54,6 +54,13 @@ use crate::server::{
     snap::Task as SnapTask,
 };
 
+// Implement HealthCheckerTrait for HealthChecker to bridge with health_controller
+impl health_controller::HealthCheckerTrait for HealthChecker {
+    fn get_and_reset_all_max_latencies(&self) -> HashMap<u64, f64> {
+        self.get_and_reset_all_max_latencies()
+    }
+}
+
 pub struct MetadataSourceStoreId {}
 
 impl MetadataSourceStoreId {
@@ -1091,19 +1098,6 @@ where
         });
     }
 
-    /// Get the maximum latency for a specific store and reset it to 0
-    /// Returns the latency in milliseconds, or None if no latency recorded for
-    /// this store
-    pub fn get_and_reset_max_latency(&self, store_id: u64) -> Option<f64> {
-        self.health_checker.get_and_reset_max_latency(store_id)
-    }
-
-    /// Get all maximum latencies and reset them
-    /// Returns a HashMap of store_id -> max_latency_ms
-    pub fn get_and_reset_all_max_latencies(&self) -> HashMap<u64, f64> {
-        self.health_checker.get_and_reset_all_max_latencies()
-    }
-
     /// Get the maximum latency for a specific store without resetting
     /// Returns the latency in milliseconds, or None if no latency recorded for
     /// this store
@@ -1298,6 +1292,10 @@ where
     pub fn set_store_allowlist(&mut self, stores: Vec<u64>) {
         let mut p = self.pool.lock().unwrap();
         p.set_store_allowlist(stores);
+    }
+
+    pub fn get_health_checker(&self) -> HealthChecker {
+        self.health_checker.clone()
     }
 }
 

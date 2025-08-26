@@ -1,10 +1,12 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::HashMap,
+    collections::HashSet,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
+
+use collections::HashMap;
 
 use kvproto::pdpb;
 use pdpb::SlowTrend as SlowTrendPb;
@@ -65,7 +67,7 @@ impl UnifiedSlowScore {
     pub fn new(cfg: &RaftstoreReporterConfig) -> Self {
         let mut unified_slow_score = UnifiedSlowScore {
             disk_factors: Vec::new(),
-            network_factors: Arc::new(Mutex::new(HashMap::new())),
+            network_factors: Arc::new(Mutex::new(HashMap::default())),
         };
         // The first factor is for Raft Disk I/O.
         unified_slow_score.disk_factors.push(SlowScore::new(
@@ -106,7 +108,7 @@ impl UnifiedSlowScore {
         let mut network_factors = self.network_factors.lock().unwrap();
 
         // Remove store_ids that exist in network_factors but not in durations
-        let store_ids_in_durations: std::collections::HashSet<u64> =
+        let store_ids_in_durations: HashSet<u64> =
             durations.keys().cloned().collect();
         network_factors.retain(|store_id, _| store_ids_in_durations.contains(store_id));
 
@@ -273,8 +275,10 @@ impl RaftstoreReporter {
         }
     }
 
-    pub fn record_network_duration(&mut self, id: u64, duration: HashMap<u64, Duration>) {
-        self.slow_score.record_network(id, duration);
+    pub fn record_network_duration(&mut self, id: u64) -> HashMap<u64, Duration> {
+        let network_durations = self.health_controller_inner.get_network_latencies();
+        self.slow_score.record_network(id, network_durations.clone());
+        network_durations
     }
 
     fn is_healthy(&self) -> bool {
@@ -503,7 +507,7 @@ mod tests {
         let mut unified_slow_score = UnifiedSlowScore::new(&cfg);
 
         // Test recording network durations for multiple stores
-        let mut durations = HashMap::new();
+        let mut durations = HashMap::default();
         durations.insert(1u64, Duration::from_millis(100));
         durations.insert(2u64, Duration::from_millis(200));
         durations.insert(3u64, Duration::from_millis(300));
@@ -532,7 +536,7 @@ mod tests {
         unified_slow_score.record_network(1, durations.clone());
 
         // Test updating with fewer stores (should remove missing stores)
-        let mut new_durations = HashMap::new();
+        let mut new_durations = HashMap::default();
         new_durations.insert(1u64, Duration::from_millis(150));
         new_durations.insert(2u64, Duration::from_millis(250));
         // Store 3 is not included, should be removed
@@ -552,7 +556,7 @@ mod tests {
         let mut unified_slow_score = UnifiedSlowScore::new(&cfg);
 
         // Record network durations
-        let mut durations = HashMap::new();
+        let mut durations = HashMap::default();
         durations.insert(1u64, Duration::from_millis(100));
         durations.insert(2u64, Duration::from_millis(200));
 
@@ -595,7 +599,7 @@ mod tests {
         assert!(scores.is_empty());
 
         // Record network durations
-        let mut durations = HashMap::new();
+        let mut durations = HashMap::default();
         durations.insert(1u64, Duration::from_millis(100));
         durations.insert(2u64, Duration::from_millis(200));
         unified_slow_score.record_network(1, durations);
@@ -635,7 +639,7 @@ mod tests {
         assert_eq!(scores_after_ticks[&2], 1);
 
         // Now record some timeout durations to test score increase
-        let mut timeout_durations = HashMap::new();
+        let mut timeout_durations = HashMap::default();
         timeout_durations.insert(1u64, Duration::from_secs(2)); // > NETWORK_TIMEOUT_THRESHOLD (1s)
         timeout_durations.insert(2u64, Duration::from_secs(3)); // > NETWORK_TIMEOUT_THRESHOLD (1s)
 
@@ -666,7 +670,7 @@ mod tests {
         assert!(scores_after_timeout[&2] > 1);
 
         // Test recovery - record normal durations (no timeouts)
-        let mut normal_durations = HashMap::new();
+        let mut normal_durations = HashMap::default();
         normal_durations.insert(1u64, Duration::from_millis(100));
         normal_durations.insert(2u64, Duration::from_millis(200));
 
