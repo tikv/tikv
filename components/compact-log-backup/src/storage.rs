@@ -663,6 +663,9 @@ impl MetaEditFilter {
         self.all_data_files_compacted =
             self.all_data_files_compacted || em.all_data_files_compacted;
         if self.destructed_self || self.all_data_files_compacted {
+            // NOTE: the metakv files will be filtered out in
+            // `SubcompactionCollector::add_new_file`. Therefore, the
+            // self.segments and self.full_files can be clear here.
             self.full_files = Default::default();
             self.segments = Default::default();
             return;
