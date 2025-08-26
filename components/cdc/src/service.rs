@@ -10,7 +10,11 @@ use std::{
 
 use collections::{HashMap, HashMapEntry};
 use crossbeam::atomic::AtomicCell;
-use futures::{compat::Stream01CompatExt, stream::{StreamExt, TryStreamExt}, SinkExt};
+use futures::{
+    SinkExt,
+    compat::Stream01CompatExt,
+    stream::{StreamExt, TryStreamExt},
+};
 use grpcio::{DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode};
 use kvproto::{
     cdcpb::{
@@ -511,6 +515,10 @@ impl Service {
                 result = event_drain.forward(&mut sink, Some(&last_flush_time_for_forward)) => {
                     if let Err(e) = result {
                         warn!("cdc send failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
+                        let status = RpcStatus::with_message(RpcStatusCode::UNKNOWN,  format!("{:?}", e));
+                        sink.fail(status).await.unwrap_or_else(|e| {
+                            error!("cdc failed to send error"; "error" => ?e, "conn_id" => ?conn_id);
+                        });
                     } else {
                         info!("cdc send closed"; "downstream" => peer, "conn_id" => ?conn_id);
                     }
