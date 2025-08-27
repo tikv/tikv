@@ -1350,7 +1350,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             let mut ttl_seconds = req.get_ttl_seconds();
             if ttl_seconds == 0 {
                 // default value if the ttl is not set, 1h is big enough for most cases.
-                ttl_seconds = 3600;
+                ttl_seconds = DEFAULT_FORCE_PARTITION_RANGE_TTL_SECONDS;
             }
             if start >= end {
                 send_rpc_response!(

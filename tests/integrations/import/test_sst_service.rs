@@ -772,7 +772,7 @@ fn test_force_partition_range() {
     range.set_start(b"b".to_vec());
     range.set_end(b"c".to_vec());
     partition_range_req.set_range(range);
-    partition_range_req.set_ttl(3600);
+    partition_range_req.set_ttl_seconds(3600);
     import
         .add_force_partition_range(&partition_range_req)
         .unwrap();
