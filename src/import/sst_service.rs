@@ -98,6 +98,11 @@ const REJECT_SERVE_MEMORY_USAGE: u64 = 1024 * 1024 * 1024; //1G
 // consider block cache and raft store. the memory usage will be
 const HIGH_IMPORT_MEMORY_WATER_RATIO: f64 = 0.95;
 
+// the default TTL seconds of force partition range.
+// the TTL is to ensure all force partition ranges can be
+// cleaned up eventually.
+const DEFAULT_FORCE_PARTITION_RANGE_TTL_SECONDS: u64 = 3600;
+
 /// Check if the system has enough resources for import tasks
 async fn check_import_resources(mem_limit: u64) -> Result<()> {
     #[cfg(feature = "failpoints")]
@@ -1342,10 +1347,10 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let handle_task = async move {
             let start = keys::data_key(Key::from_raw(req.get_range().get_start()).as_encoded());
             let end = keys::data_end_key(Key::from_raw(req.get_range().get_end()).as_encoded());
-            let mut ttl = req.get_ttl();
-            if ttl == 0 {
+            let mut ttl_seconds = req.get_ttl_seconds();
+            if ttl_seconds == 0 {
                 // default value if the ttl is not set, 1h is big enough for most cases.
-                ttl = 3600;
+                ttl_seconds = 3600;
             }
             if start >= end {
                 send_rpc_response!(
@@ -1364,7 +1369,8 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 return;
             }
 
-            let added = force_partition_range_mgr.add_range(start.clone(), end.clone(), ttl);
+            let added =
+                force_partition_range_mgr.add_range(start.clone(), end.clone(), ttl_seconds);
 
             // here, we don't compact the whole range directly because it's possible that
             // the task is restart from a checkpoint, thus, there may be already
@@ -1396,7 +1402,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             }
 
             info!("add force_partition range"; "start" => ?log_wrappers::Value::key(req.get_range().get_start()),
-                    "end" => ?log_wrappers::Value::key(req.get_range().get_end()), "ttl" => ttl, "added" => added);
+                    "end" => ?log_wrappers::Value::key(req.get_range().get_end()), "ttl" => ttl_seconds, "added" => added);
 
             let resp = AddPartitionRangeResponse::default();
             send_rpc_response!(Ok(resp), sink, label, timer);
