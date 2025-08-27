@@ -338,7 +338,7 @@ def Cluster() -> RowPanel:
                         fill=0,
                         dashes=True,
                     ),
-                ],                
+                ],
             ),
         ]
     )

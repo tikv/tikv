@@ -915,7 +915,18 @@
           "renderer": "flot",
           "repeat": null,
           "repeatDirection": null,
-          "seriesOverrides": [],
+          "seriesOverrides": [
+            {
+              "alias": "/quota-.*/",
+              "bars": false,
+              "dashes": true,
+              "fill": 0,
+              "fillBelowTo": null,
+              "lines": true,
+              "yaxis": 1,
+              "zindex": 0
+            }
+          ],
           "span": null,
           "stack": false,
           "steppedLine": false,
@@ -939,7 +950,7 @@
               "datasource": "${DS_TEST-CLUSTER}",
               "expr": "((\n    tikv_server_cpu_cores_quota\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",job=~\".*tikv\"}\n    \n))  ",
               "format": "time_series",
-              "hide": false,
+              "hide": true,
               "instant": false,
               "interval": "",
               "intervalFactor": 1,
@@ -1063,7 +1074,18 @@
           "renderer": "flot",
           "repeat": null,
           "repeatDirection": null,
-          "seriesOverrides": [],
+          "seriesOverrides": [
+            {
+              "alias": "/quota-.*/",
+              "bars": false,
+              "dashes": true,
+              "fill": 0,
+              "fillBelowTo": null,
+              "lines": true,
+              "yaxis": 1,
+              "zindex": 0
+            }
+          ],
           "span": null,
           "stack": false,
           "steppedLine": false,
@@ -1087,7 +1109,7 @@
               "datasource": "${DS_TEST-CLUSTER}",
               "expr": "((\n    tikv_server_memory_quota_bytes\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",job=~\".*tikv\"}\n    \n))  ",
               "format": "time_series",
-              "hide": false,
+              "hide": true,
               "instant": false,
               "interval": "",
               "intervalFactor": 1,
