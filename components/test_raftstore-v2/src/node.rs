@@ -218,7 +218,6 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
                 cfg.coprocessor.region_split_size(),
                 cfg.coprocessor.enable_region_bucket(),
                 cfg.coprocessor.region_bucket_size,
-                cfg.server.inspect_network_interval,
                 true,
             )
             .unwrap();
