@@ -747,7 +747,7 @@ impl Config {
 
     /// Optimize the interval of different inspectors according to the
     /// configuration.
-    pub fn optimize_inspector(
+    pub fn tune_inspector_configs(
         &mut self,
         separated_raft_mount_path: bool,
         inspect_network_interval: ReadableDuration,
@@ -1736,23 +1736,23 @@ mod tests {
             .unwrap_err();
 
         cfg = Config::new();
-        cfg.optimize_inspector(false, ReadableDuration::millis(100));
+        cfg.tune_inspector_configs(false, ReadableDuration::millis(100));
         assert_eq!(cfg.inspect_kvdb_interval, ReadableDuration::ZERO);
 
         cfg = Config::new();
         cfg.inspect_kvdb_interval = ReadableDuration::secs(1);
-        cfg.optimize_inspector(false, ReadableDuration::millis(100));
+        cfg.tune_inspector_configs(false, ReadableDuration::millis(100));
         assert_eq!(cfg.inspect_kvdb_interval, ReadableDuration::ZERO);
-        cfg.optimize_inspector(true, ReadableDuration::millis(100));
+        cfg.tune_inspector_configs(true, ReadableDuration::millis(100));
         assert_eq!(cfg.inspect_kvdb_interval, ReadableDuration::ZERO);
 
         cfg.inspect_kvdb_interval = ReadableDuration::secs(1);
-        cfg.optimize_inspector(true, ReadableDuration::millis(100));
+        cfg.tune_inspector_configs(true, ReadableDuration::millis(100));
         assert_eq!(cfg.inspect_kvdb_interval, ReadableDuration::secs(1));
 
         cfg = Config::new();
         cfg.inspect_kvdb_interval = ReadableDuration::millis(1);
-        cfg.optimize_inspector(true, ReadableDuration::millis(100));
+        cfg.tune_inspector_configs(true, ReadableDuration::millis(100));
         assert_eq!(cfg.inspect_kvdb_interval, ReadableDuration::millis(1));
     }
 }

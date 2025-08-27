@@ -828,7 +828,7 @@ where
         let server_config = Arc::new(VersionTrack::new(self.core.config.server.clone()));
 
         self.core.config.raft_store.optimize_for(false);
-        self.core.config.raft_store.optimize_inspector(
+        self.core.config.raft_store.tune_inspector_configs(
             path_in_diff_mount_point(
                 engines.engines.raft.get_engine_path().to_string().as_str(),
                 engines.engines.kv.path(),

@@ -139,7 +139,7 @@ impl UnifiedSlowScore {
     }
 
     // Returns the maximum score of disk disk_factors.
-    pub fn get_disk_score(&mut self) -> f64 {
+    pub fn get_disk_score(&self) -> f64 {
         self.disk_factors
             .iter()
             .map(|factor| factor.get())
@@ -301,54 +301,51 @@ impl RaftstoreReporter {
     }
 
     pub fn tick(&mut self, store_maybe_busy: bool, factor: InspectFactor) -> SlowScoreTickResult {
-        if factor != InspectFactor::Network {
-            // Record a fairly great value when timeout
-            self.slow_trend.slow_cause.record(500_000, Instant::now());
+        match factor {
+            InspectFactor::Network => self.slow_score.tick(factor),
+            InspectFactor::RaftDisk | InspectFactor::KvDisk => {
+                // Record a fairly great value when timeout
+                self.slow_trend.slow_cause.record(500_000, Instant::now());
 
-            // healthy: The health status of the current store.
-            // all_ticks_finished: The last tick of all disk_factors is finished.
-            // factor_tick_finished: The last tick of the current factor is finished.
-            let (healthy, all_ticks_finished, factor_tick_finished) = (
-                self.is_healthy(),
-                self.slow_score.last_tick_finished(),
-                self.slow_score.get(factor).last_tick_finished(),
-            );
-            // The health status is recovered to serving as long as any tick
-            // does not timeout.
-            if !healthy && all_ticks_finished {
-                self.set_is_healthy(true);
-            }
-            if !all_ticks_finished {
-                // If the last tick is not finished, it means that the current store might
-                // be busy on handling requests or delayed on I/O operations. And only when
-                // the current store is not busy, it should record the last_tick as a timeout.
-                if !store_maybe_busy && !factor_tick_finished {
-                    self.slow_score.get_mut(factor).record_timeout();
+                // healthy: The health status of the current store.
+                // all_ticks_finished: The last tick of all disk_factors is finished.
+                // factor_tick_finished: The last tick of the current factor is finished.
+                let (healthy, all_ticks_finished, factor_tick_finished) = (
+                    self.is_healthy(),
+                    self.slow_score.last_tick_finished(),
+                    self.slow_score.get(factor).last_tick_finished(),
+                );
+                // The health status is recovered to serving as long as any tick
+                // does not timeout.
+                if !healthy && all_ticks_finished {
+                    self.set_is_healthy(true);
                 }
-            }
-        }
+                if !all_ticks_finished {
+                    // If the last tick is not finished, it means that the current store might
+                    // be busy on handling requests or delayed on I/O operations. And only when
+                    // the current store is not busy, it should record the last_tick as a timeout.
+                    if !store_maybe_busy && !factor_tick_finished {
+                        self.slow_score.get_mut(factor).record_timeout();
+                    }
+                }
 
-        let slow_score_tick_result = self.slow_score.tick(factor);
-        if factor != InspectFactor::Network
-            && slow_score_tick_result.updated_score.is_some()
-            && !slow_score_tick_result.has_new_record
-        {
-            self.set_is_healthy(false);
-        }
+                let slow_score_tick_result = self.slow_score.tick(factor);
+                if slow_score_tick_result.updated_score.is_some()
+                    && !slow_score_tick_result.has_new_record
+                {
+                    self.set_is_healthy(false);
+                }
 
-        // Publish the slow score to health controller
-        if slow_score_tick_result.updated_score.is_some() {
-            match factor {
-                InspectFactor::RaftDisk | InspectFactor::KvDisk => {
+                // Publish the slow score to health controller
+                if slow_score_tick_result.updated_score.is_some() {
                     // Publish slow score to health controller
                     self.health_controller_inner
                         .update_raftstore_slow_score(self.slow_score.get_disk_score());
                 }
-                InspectFactor::Network => {}
+
+                slow_score_tick_result
             }
         }
-
-        slow_score_tick_result
     }
 
     pub fn update_slow_trend(
