@@ -2927,7 +2927,7 @@ mod tests {
                             region_id: 1,
                             peer_id: 0,
                             key_ranges: vec![],
-                            extra_attachment: b"a".to_vec(),
+                            extra_attachment: Arc::new(b"a".to_vec()),
                         }),
                         RawRecord {
                             cpu_time: 111,
