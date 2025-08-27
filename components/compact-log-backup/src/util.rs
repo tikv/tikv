@@ -145,6 +145,12 @@ pub fn cf_name(s: &str) -> CfName {
     }
 }
 
+/// Compare a str with a [`engine_traits::CfName`]\(`&'static str`).
+/// Return true if it is the same as [`engine_traits::CF_WRITE`].
+pub fn is_write_cf(s: &str) -> bool {
+    s == CF_WRITE
+}
+
 /// A wrapper that make a `u64` always be displayed as {:016X}.
 #[derive(Debug)]
 struct HexU64(u64);

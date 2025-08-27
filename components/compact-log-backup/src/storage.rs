@@ -593,7 +593,7 @@ impl MetaEditFilters {
     fn should_fully_skip(&self, meta: &str) -> bool {
         self.0
             .get(meta)
-            .map(|v| v.all_data_files_compacted || v.destructed_self)
+            .map(|v| v.no_data_files_to_be_compacted || v.destructed_self)
             .unwrap_or(false)
     }
 
@@ -623,7 +623,7 @@ struct MetaEditFilter {
     // FileName -> Offset
     segments: HashMap<String, BTreeSet<u64>>,
     destructed_self: bool,
-    all_data_files_compacted: bool,
+    no_data_files_to_be_compacted: bool,
 }
 
 impl MetaEditFilter {
@@ -632,7 +632,7 @@ impl MetaEditFilter {
             full_files: Default::default(),
             segments: Default::default(),
             destructed_self: em.destruct_self,
-            all_data_files_compacted: em.all_data_files_compacted,
+            no_data_files_to_be_compacted: em.all_data_files_compacted,
         };
         this.full_files
             .extend(em.take_delete_physical_files().into_iter());

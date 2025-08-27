@@ -405,7 +405,8 @@ fn main() {
             compression_level,
             name,
             force_regenerate,
-            minimal_compaction_size,
+            minimal_compaction_size_default,
+            minimal_compaction_size_write,
         } => {
             let tmp_engine =
                 TemporaryRocks::new(&cfg).expect("failed to create temp engine for writing SSTs.");
@@ -481,7 +482,10 @@ fn main() {
             } else {
                 Some(compact_log_hooks::checkpoint::Checkpoint::default())
             };
-            let skip_small_compaction = SkipSmallCompaction::new(minimal_compaction_size.0);
+            let skip_small_compaction = SkipSmallCompaction::new(
+                minimal_compaction_size_default.0,
+                minimal_compaction_size_write.0,
+            );
             let hooks = (
                 (
                     (log_to_term, checkpoint),
