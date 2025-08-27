@@ -304,13 +304,6 @@ def Cluster() -> RowPanel:
                         hide=True,
                     ),
                 ],
-                series_overrides=[
-                    series_override(
-                        alias="/quota-.*/",
-                        fill=0,
-                        dashes=True,
-                    ),
-                ],
             ),
             graph_panel(
                 title="Memory",
@@ -330,13 +323,6 @@ def Cluster() -> RowPanel:
                         ),
                         legend_format=r"quota-{{instance}}",
                         hide=True,
-                    ),
-                ],
-                series_overrides=[
-                    series_override(
-                        alias="/quota-.*/",
-                        fill=0,
-                        dashes=True,
                     ),
                 ],
             ),

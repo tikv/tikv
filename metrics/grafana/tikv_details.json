@@ -915,18 +915,7 @@
           "renderer": "flot",
           "repeat": null,
           "repeatDirection": null,
-          "seriesOverrides": [
-            {
-              "alias": "/quota-.*/",
-              "bars": false,
-              "dashes": true,
-              "fill": 0,
-              "fillBelowTo": null,
-              "lines": true,
-              "yaxis": 1,
-              "zindex": 0
-            }
-          ],
+          "seriesOverrides": [],
           "span": null,
           "stack": false,
           "steppedLine": false,
@@ -1074,18 +1063,7 @@
           "renderer": "flot",
           "repeat": null,
           "repeatDirection": null,
-          "seriesOverrides": [
-            {
-              "alias": "/quota-.*/",
-              "bars": false,
-              "dashes": true,
-              "fill": 0,
-              "fillBelowTo": null,
-              "lines": true,
-              "yaxis": 1,
-              "zindex": 0
-            }
-          ],
+          "seriesOverrides": [],
           "span": null,
           "stack": false,
           "steppedLine": false,
