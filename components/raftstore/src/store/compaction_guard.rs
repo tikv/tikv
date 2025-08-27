@@ -25,8 +25,6 @@ lazy_static! {
 }
 
 #[derive(Eq, PartialEq, PartialOrd, Clone)]
-// `Instant` does not implement the "Ord" trait.
-#[allow(clippy::derive_ord_xor_partial_ord)]
 struct TtlRange {
     start: Vec<u8>,
     end: Vec<u8>,
