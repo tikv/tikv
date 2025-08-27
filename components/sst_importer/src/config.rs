@@ -6,7 +6,11 @@ use std::{
 };
 
 use online_config::{self, OnlineConfig};
-use tikv_util::{HandyRwLock, config::ReadableDuration, resizable_threadpool::ResizableRuntime};
+use tikv_util::{
+    HandyRwLock,
+    config::{ReadableDuration, ReadableSize},
+    resizable_threadpool::ResizableRuntime,
+};
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
@@ -22,6 +26,10 @@ pub struct Config {
     pub import_mode_timeout: ReadableDuration,
     /// the ratio of system memory used for import.
     pub memory_use_ratio: f64,
+    /// Minimal size of sst for import with ingestion.
+    /// If the size of sst is smaller than this value, it will be imported
+    /// without ingestion, just bulk write kvs to kvdb.
+    pub ingest_size_limit: ReadableSize,
 }
 
 impl Default for Config {
@@ -31,6 +39,7 @@ impl Default for Config {
             stream_channel_window: 128,
             import_mode_timeout: ReadableDuration::minutes(10),
             memory_use_ratio: 0.3,
+            ingest_size_limit: ReadableSize::mb(2),
         }
     }
 }

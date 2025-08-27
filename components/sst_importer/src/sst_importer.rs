@@ -7,7 +7,10 @@ use std::{
     io::{self, BufReader, ErrorKind, Read},
     ops::Bound,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, SystemTime},
 };
 
@@ -160,6 +163,9 @@ pub struct SstImporter<E: KvEngine> {
     file_locks: Arc<DashMap<String, (CacheKvFile, Instant)>>,
     memory_quota: Arc<MemoryQuota>,
     multi_master_keys_backend: MultiMasterKeyBackend,
+    // Configurations for the minimal threshold of ingestion, if the size of the relative
+    // sst is under the limit, this sst will be import with bulk load.
+    ingest_sst_size_limit: Arc<AtomicU64>,
 }
 
 impl<E: KvEngine> SstImporter<E> {
@@ -213,6 +219,7 @@ impl<E: KvEngine> SstImporter<E> {
             _download_rt: download_rt,
             memory_quota: Arc::new(MemoryQuota::new(memory_limit as _)),
             multi_master_keys_backend: MultiMasterKeyBackend::new(),
+            ingest_sst_size_limit: Arc::new(AtomicU64::new(cfg.ingest_size_limit.0)),
         })
     }
 
@@ -339,7 +346,11 @@ impl<E: KvEngine> SstImporter<E> {
     }
 
     pub fn validate(&self, meta: &SstMeta) -> Result<SstMetaInfo> {
-        self.dir.validate(meta, self.key_manager.clone())
+        self.dir.validate(
+            meta,
+            self.key_manager.clone(),
+            self.ingest_sst_size_limit.load(Ordering::Relaxed),
+        )
     }
 
     /// check if api version of sst files are compatible
@@ -563,7 +574,12 @@ impl<E: KvEngine> SstImporter<E> {
         Ok(())
     }
 
-    pub fn update_config_memory_use_ratio(&self, cfg_mgr: &ImportConfigManager) {
+    pub fn update_config(&self, cfg_mgr: &ImportConfigManager) {
+        self.update_config_memory_use_ratio(cfg_mgr);
+        self.update_config_ingest_size_limit(cfg_mgr);
+    }
+
+    fn update_config_memory_use_ratio(&self, cfg_mgr: &ImportConfigManager) {
         let mem_ratio = cfg_mgr.rl().memory_use_ratio;
         let memory_limit = Self::calcualte_usage_mem(mem_ratio) as usize;
 
@@ -574,6 +590,11 @@ impl<E: KvEngine> SstImporter<E> {
                 "size" => memory_limit,
             )
         }
+    }
+
+    fn update_config_ingest_size_limit(&self, cfg_mgr: &ImportConfigManager) {
+        self.ingest_sst_size_limit
+            .store(cfg_mgr.rl().ingest_size_limit.0, Ordering::Relaxed);
     }
 
     pub fn shrink_by_tick(&self) -> usize {
@@ -1745,8 +1766,8 @@ mod tests {
     use encryption::{EncrypterWriter, Iv};
     use engine_rocks::get_env;
     use engine_traits::{
-        CF_DEFAULT, DATA_CFS, Error as TraitError, ExternalSstFileInfo, Iterable, Iterator,
-        RefIterable, SstCompressionType::Zstd, SstReader, SstWriter, collect,
+        CF_DEFAULT, DATA_CFS, Error as TraitError, ExternalSstFileInfo, ImportType, Iterable,
+        Iterator, RefIterable, SstCompressionType::Zstd, SstReader, SstWriter, collect,
     };
     use external_storage::read_external_storage_info_buff;
     use file_system::Sha256Reader;
@@ -1762,8 +1783,8 @@ mod tests {
     use test_sst_importer::*;
     use test_util::new_test_key_manager;
     use tikv_util::{
-        codec::stream_event::EventEncoder, resizable_threadpool::ResizableRuntime,
-        stream::block_on_external_io,
+        codec::stream_event::EventEncoder, config::ReadableSize,
+        resizable_threadpool::ResizableRuntime, stream::block_on_external_io,
     };
     use tokio::io::{AsyncWrite, AsyncWriteExt};
     use tokio_util::compat::{FuturesAsyncWriteCompatExt, TokioAsyncWriteCompatExt};
@@ -1782,7 +1803,7 @@ mod tests {
             .build()
     }
 
-    fn do_test_import_dir(key_manager: Option<Arc<DataKeyManager>>) {
+    fn do_test_import_dir(key_manager: Option<Arc<DataKeyManager>>, import_type: ImportType) {
         let temp_dir = Builder::new().prefix("test_import_dir").tempdir().unwrap();
         let dir = ImportDir::new(temp_dir.path()).unwrap();
 
@@ -1841,6 +1862,7 @@ mod tests {
                 total_bytes: 0,
                 total_kvs: 0,
                 meta: meta.to_owned(),
+                import_type,
             };
             let api_version = info.meta.api_version;
             dir.ingest(&[info], &db, key_manager.clone(), api_version)
@@ -1864,10 +1886,12 @@ mod tests {
 
     #[test]
     fn test_import_dir() {
-        do_test_import_dir(None);
+        for t in [ImportType::Ingest, ImportType::WriteBatch] {
+            do_test_import_dir(None, t);
 
-        let (_tmp_dir, key_manager) = new_key_manager_for_test();
-        do_test_import_dir(Some(key_manager));
+            let (_tmp_dir, key_manager) = new_key_manager_for_test();
+            do_test_import_dir(Some(key_manager), t);
+        }
     }
 
     fn do_test_import_file(data_key_manager: Option<Arc<DataKeyManager>>) {
@@ -2415,47 +2439,95 @@ mod tests {
     }
 
     #[test]
-    fn test_update_config_memory_use_ratio() {
-        // create SstImporter with default.
-        let cfg = Config {
-            memory_use_ratio: 0.3,
-            ..Default::default()
-        };
-        let import_dir = tempfile::tempdir().unwrap();
-        let importer =
-            SstImporter::<TestEngine>::new(&cfg, import_dir, None, ApiVersion::V1, false).unwrap();
-        let mem_quota_old = importer.memory_quota.capacity();
+    fn test_update_config() {
+        // Cases for the validation of updating memory_use_ratio
+        {
+            // create SstImporter with default.
+            let cfg = Config {
+                memory_use_ratio: 0.3,
+                ..Default::default()
+            };
+            let import_dir = tempfile::tempdir().unwrap();
+            let importer =
+                SstImporter::<TestEngine>::new(&cfg, import_dir, None, ApiVersion::V1, false)
+                    .unwrap();
+            let mem_quota_old = importer.memory_quota.capacity();
 
-        // create new config and get the diff config.
-        let cfg_new = Config {
-            memory_use_ratio: 0.1,
-            ..Default::default()
-        };
-        let change = cfg.diff(&cfg_new);
+            // create new config and get the diff config.
+            let cfg_new = Config {
+                memory_use_ratio: 0.1,
+                ..Default::default()
+            };
+            let change = cfg.diff(&cfg_new);
 
-        let threads = ResizableRuntime::new(
-            cfg.num_threads,
-            "test",
-            Box::new(create_tokio_runtime),
-            Box::new(|_| {}),
-        );
+            let threads = ResizableRuntime::new(
+                cfg.num_threads,
+                "test",
+                Box::new(create_tokio_runtime),
+                Box::new(|_| {}),
+            );
 
-        let threads_clone = Arc::new(Mutex::new(threads));
+            let threads_clone = Arc::new(Mutex::new(threads));
 
-        // create config manager and update config.
-        let mut cfg_mgr = ImportConfigManager::new(cfg, Arc::downgrade(&threads_clone));
-        cfg_mgr.dispatch(change).unwrap();
-        importer.update_config_memory_use_ratio(&cfg_mgr);
+            // create config manager and update config.
+            let mut cfg_mgr = ImportConfigManager::new(cfg, Arc::downgrade(&threads_clone));
+            cfg_mgr.dispatch(change).unwrap();
+            importer.update_config(&cfg_mgr);
 
-        let mem_quota_new = importer.memory_quota.capacity();
-        assert!(mem_quota_old > mem_quota_new);
-        assert_eq!(
-            mem_quota_old / 3,
-            mem_quota_new,
-            "mem_quota_old / 3 = {} mem_quota_new = {}",
-            mem_quota_old / 3,
-            mem_quota_new
-        );
+            let mem_quota_new = importer.memory_quota.capacity();
+            assert!(mem_quota_old > mem_quota_new);
+            assert_eq!(
+                mem_quota_old / 3,
+                mem_quota_new,
+                "mem_quota_old / 3 = {} mem_quota_new = {}",
+                mem_quota_old / 3,
+                mem_quota_new
+            );
+        }
+        // Cases for the validation of updating ingest_size_limit
+        {
+            // create SstImporter with default.
+            let cfg = Config {
+                ingest_size_limit: ReadableSize::mb(1),
+                ..Default::default()
+            };
+            let import_dir = tempfile::tempdir().unwrap();
+            let importer =
+                SstImporter::<TestEngine>::new(&cfg, import_dir, None, ApiVersion::V1, false)
+                    .unwrap();
+            let ingest_size_old = importer.ingest_sst_size_limit.load(Ordering::Relaxed);
+
+            // create new config and get the diff config.
+            let cfg_new = Config {
+                ingest_size_limit: ReadableSize::kb(1),
+                ..Default::default()
+            };
+            let change = cfg.diff(&cfg_new);
+
+            let threads = ResizableRuntime::new(
+                cfg.num_threads,
+                "test",
+                Box::new(create_tokio_runtime),
+                Box::new(|_| {}),
+            );
+
+            let threads_clone = Arc::new(Mutex::new(threads));
+
+            // create config manager and update config.
+            let mut cfg_mgr = ImportConfigManager::new(cfg, Arc::downgrade(&threads_clone));
+            cfg_mgr.dispatch(change).unwrap();
+            importer.update_config(&cfg_mgr);
+
+            let ingest_size_new = importer.ingest_sst_size_limit.load(Ordering::Relaxed);
+            assert!(ingest_size_old > ingest_size_new);
+            assert_eq!(
+                ingest_size_old / 1024,
+                ingest_size_new,
+                "ingest_size_old / 1024 = {} ingest_size_new = {}",
+                ingest_size_old / 1024,
+                ingest_size_new
+            );
+        }
     }
 
     #[test]
@@ -3252,7 +3324,11 @@ mod tests {
 
             // performs the download.
             let importer_dir = tempfile::tempdir().unwrap();
-            let cfg = Config::default();
+            let cfg = Config {
+                ingest_size_limit: ReadableSize(0), /* all files will be imported by
+                                                     * ImportType::Ingest */
+                ..Default::default()
+            };
             let importer =
                 SstImporter::<TestEngine>::new(&cfg, &importer_dir, None, ApiVersion::V1, false)
                     .unwrap();

@@ -1,5 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
+use std::sync::Arc;
 
+use encryption::DataKeyManager;
 use engine_traits::{ImportExt, IngestExternalFileOptions, Range, Result};
 use tikv_util::range_latch::RangeLatchGuard;
 
@@ -14,6 +16,15 @@ impl ImportExt for PanicEngine {
         files: &[&str],
         range: Option<Range<'_>>,
         force_allow_write: bool,
+    ) -> Result<()> {
+        panic!()
+    }
+
+    fn import_external_file_cf_without_ingest(
+        &self,
+        cf: &str,
+        files: &[&str],
+        key_manager: Option<Arc<DataKeyManager>>,
     ) -> Result<()> {
         panic!()
     }
