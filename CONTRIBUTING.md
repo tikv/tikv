@@ -93,7 +93,7 @@ make format
 make clippy
 ```
 
-See the [style doc](https://github.com/rust-lang/fmt-rfcs/blob/master/guide/guide.md) and the [API guidelines](https://rust-lang-nursery.github.io/api-guidelines/) for details on the conventions.
+See the [style doc](https://github.com/rust-lang/rust/tree/HEAD/src/doc/style-guide/src) and the [API guidelines](https://rust-lang-nursery.github.io/api-guidelines/) for details on the conventions.
 
 Please follow this style to make TiKV easy to review, maintain, and develop.
 
@@ -163,7 +163,7 @@ Thanks for your contributions!
 
 ### Finding something to work on
 
-For beginners, we have prepared many suitable tasks for you. Checkout our [Help Wanted issues](https://github.com/tikv/tikv/issues?q=is%3Aopen+is%3Aissue+label%3Astatus%2Fhelp-wanted) for a list, in which we have also marked the difficulty level.
+For beginners, we have prepared many suitable tasks for you. Checkout our [Help Wanted issues](https://github.com/tikv/tikv/issues?q=is%3Aopen%20is%3Aissue%20label%3A%22help%20wanted%22) for a list, in which we have also marked the difficulty level.
 
 If you are planning something big, for example, relates to multiple components or changes current behaviors, make sure to open an issue to discuss with us before going on.
 
