@@ -30,13 +30,17 @@ lazy_static! {
 struct TtlRange {
     start: Vec<u8>,
     end: Vec<u8>,
-    ttl: Instant,
+    expired_at: Instant,
 }
 
 impl TtlRange {
     #[cfg(test)]
-    fn new(start: Vec<u8>, end: Vec<u8>, ttl: Instant) -> Self {
-        Self { start, end, ttl }
+    fn new(start: Vec<u8>, end: Vec<u8>, expired_at: Instant) -> Self {
+        Self {
+            start,
+            end,
+            expired_at,
+        }
     }
 }
 
@@ -64,18 +68,22 @@ pub struct ForcePartitionRangeManager {
 
 impl ForcePartitionRangeManager {
     pub fn add_range(&self, start: Vec<u8>, end: Vec<u8>, ttl: u64) -> bool {
-        let ttl = Instant::now_coarse() + Duration::from_secs(ttl);
+        let expires = Instant::now_coarse() + Duration::from_secs(ttl);
         let mut ranges = self.force_partition_ranges.write().unwrap();
         for r in &mut *ranges {
             if r.start == start && r.end == end {
                 // prolong the ttl if needed.
-                if r.ttl < ttl {
-                    r.ttl = ttl;
+                if r.expired_at < expires {
+                    r.expired_at = expires;
                 }
                 return false;
             }
         }
-        ranges.push(TtlRange { start, end, ttl });
+        ranges.push(TtlRange {
+            start,
+            end,
+            expired_at: expires,
+        });
         ranges.sort();
         true
     }
@@ -98,7 +106,7 @@ impl ForcePartitionRangeManager {
         let now = Instant::now_coarse();
         let mut clean = false;
         for rg in &*self.force_partition_ranges.read().unwrap() {
-            if rg.ttl < now {
+            if rg.expired_at < now {
                 clean = true;
                 continue;
             }
@@ -123,7 +131,7 @@ impl ForcePartitionRangeManager {
     fn remove_outdated_ranges(&self) {
         let now = Instant::now_coarse();
         self.force_partition_ranges.write().unwrap().retain(|r| {
-            let keep = r.ttl > now;
+            let keep = r.expired_at > now;
             if !keep {
                 tikv_util::info!("remove outdated force partition range"; "start" => ?log_wrappers::Value(&r.start), "end" => ?log_wrappers::Value(&r.end));
             }
@@ -139,12 +147,12 @@ impl ForcePartitionRangeManager {
             .unwrap()
             .iter()
             .for_each(|r| {
-                let ttl = r.ttl.saturating_duration_since(now);
-                if ttl == Duration::ZERO {
+                let expired = r.expired_at.saturating_duration_since(now);
+                if expired == Duration::ZERO {
                     need_clean = true;
                     return;
                 }
-                func(&r.start, &r.end, ttl.as_secs());
+                func(&r.start, &r.end, expired.as_secs());
             });
         if need_clean {
             self.remove_outdated_ranges();
@@ -388,7 +396,9 @@ impl<P: RegionInfoProvider> SstPartitioner for CompactionGuardGenerator<P> {
                 // greater than the `max-sst-size`, which is tiny comparing to the
                 // `max-compaction-size` usually.
                 self.current_next_level_size = 0;
-                if req.current_output_file_size < self.min_output_file_size {
+                if req.current_output_file_size < self.min_output_file_size
+                    && self.current_next_level_size < self.max_compaction_size
+                {
                     let last_pos = if self.pos > 0 {
                         self.boundaries[self.pos].as_slice()
                     } else {
