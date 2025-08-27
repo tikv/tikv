@@ -451,22 +451,41 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
                     if let Some(before) = cf_checker.pending_bytes_before_unsafe_destroy_range {
                         let soft =
                             (current_cfg.soft_pending_compaction_bytes_limit.0 as f64).log2();
-                        let after = (self.engine.pending_compaction_bytes(self.region_id, cf)
-                            as f64)
-                            .log2();
+                        let current_pending_bytes =
+                            (self.engine.pending_compaction_bytes(self.region_id, cf) as f64)
+                                .log2();
+
+                        let avg_pending_bytes = if let Some(long_term_pending_bytes) =
+                            cf_checker.long_term_pending_bytes.as_ref()
+                        {
+                            long_term_pending_bytes.get_avg()
+                        } else {
+                            current_pending_bytes
+                        };
 
                         assert!(before < soft);
-                        if after >= soft {
-                            // there is a pending bytes jump
+                        if current_pending_bytes >= soft || avg_pending_bytes >= soft {
+                            // There is a pending bytes jump. Flow control for
+                            // compaction bytes won't be re-enabled until the
+                            // pending bytes drop below the soft limit.
                             SCHED_THROTTLE_ACTION_COUNTER
                                 .with_label_values(&[cf, "pending_bytes_jump"])
                                 .inc();
+                        } else {
+                            cf_checker.pending_bytes_before_unsafe_destroy_range = None;
+                            info!(
+                                "re-enabled compaction pending bytes flow control";
+                                "cf" => cf,
+                            );
                         }
+
                         info!(
                             "after unsafe destroy range";
                             "cf" => cf,
                             "before" => before,
-                            "after" => after
+                            "current_pending_bytes" => current_pending_bytes,
+                            "avg_pending_bytes" => avg_pending_bytes,
+                            "soft_limit" => soft,
                         );
                     }
                 }
@@ -1270,6 +1289,48 @@ pub(super) mod tests {
         stub.0
             .pending_compaction_bytes
             .store(10000000000 * 1024 * 1024 * 1024, Ordering::Relaxed);
+        send_flow_info(&tx, region_id);
+        assert!(flow_controller.discard_ratio(region_id) > f64::EPSILON);
+    }
+
+    #[test]
+    fn test_flow_controller_pending_compaction_bytes_no_jump_control() {
+        let region_id = 0;
+        let stub = EngineStub::new();
+        let (tx, rx) = mpsc::sync_channel(0);
+        let flow_controller =
+            EngineFlowController::new(&FlowControlConfig::default(), stub.clone(), rx);
+        let flow_controller = FlowController::Singleton(flow_controller);
+
+        // Before unsafe destroy range, pending compaction bytes is 0.
+        stub.0.pending_compaction_bytes.store(0, Ordering::Relaxed);
+        send_flow_info(&tx, region_id);
+        assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
+        tx.send(FlowInfo::BeforeUnsafeDestroyRange(region_id))
+            .unwrap();
+        assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
+
+        // After unsafe destroy range, pending compaction bytes did not reach
+        // the threshold, so jump control should not be triggered.
+        stub.0
+            .pending_compaction_bytes
+            .store(1024 * 1024 * 1024, Ordering::Relaxed);
+        send_flow_info(&tx, region_id);
+        tx.send(FlowInfo::AfterUnsafeDestroyRange(region_id))
+            .unwrap();
+        assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
+        // sleep a while to wait for the above message to be processed.
+        std::thread::sleep(Duration::from_millis(100));
+
+        // If pending_compaction_bytes increases and exceeds the threshold,
+        // should perform throttle.
+        stub.0
+            .pending_compaction_bytes
+            .store(1000000000 * 1024 * 1024 * 1024, Ordering::Relaxed);
+        // call `send_flow_info` multiple times to bring up the average pending
+        // compaction bytes.
+        send_flow_info(&tx, region_id);
+        send_flow_info(&tx, region_id);
         send_flow_info(&tx, region_id);
         assert!(flow_controller.discard_ratio(region_id) > f64::EPSILON);
     }

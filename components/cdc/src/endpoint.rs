@@ -714,19 +714,26 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         fail_point!("cdc_before_handle_deregister", |_| {});
         match deregister {
             Deregister::Conn(conn_id) => {
-                let conn = self.connections.remove(&conn_id).unwrap();
-                conn.iter_downstreams(|_, region_id, downstream_id, _| {
-                    self.deregister_downstream(region_id, downstream_id, None);
-                });
+                if let Some(conn) = self.connections.remove(&conn_id) {
+                    conn.iter_downstreams(|_, region_id, downstream_id, _| {
+                        self.deregister_downstream(region_id, downstream_id, None);
+                    });
+                } else {
+                    info!("cdc connection already deregistered"; "conn_id" => ?conn_id);
+                }
             }
             Deregister::Request {
                 conn_id,
                 request_id,
             } => {
-                let conn = self.connections.get_mut(&conn_id).unwrap();
-                for (region_id, downstream) in conn.unsubscribe_request(request_id) {
-                    let err = Some(Error::Other("region not found".into()));
-                    self.deregister_downstream(region_id, downstream, err);
+                if let Some(conn) = self.connections.get_mut(&conn_id) {
+                    for (region_id, downstream) in conn.unsubscribe_request(request_id) {
+                        let err = Some(Error::Other("region not found".into()));
+                        self.deregister_downstream(region_id, downstream, err);
+                    }
+                } else {
+                    info!("cdc connection already deregistered for request deregister"; 
+                    "request_id" => ?request_id, "conn_id" => ?conn_id);
                 }
             }
             Deregister::Region {
@@ -734,10 +741,14 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 request_id,
                 region_id,
             } => {
-                let conn = self.connections.get_mut(&conn_id).unwrap();
-                if let Some(downstream) = conn.unsubscribe(request_id, region_id) {
-                    let err = Some(Error::Other("region not found".into()));
-                    self.deregister_downstream(region_id, downstream, err);
+                if let Some(conn) = self.connections.get_mut(&conn_id) {
+                    if let Some(downstream) = conn.unsubscribe(request_id, region_id) {
+                        let err = Some(Error::Other("region not found".into()));
+                        self.deregister_downstream(region_id, downstream, err);
+                    }
+                } else {
+                    info!("cdc connection already deregistered for region deregister";
+                      "request_id" => ?request_id, "region_id" => region_id, "conn_id" => ?conn_id);
                 }
             }
             Deregister::Downstream {

@@ -258,6 +258,7 @@ pub struct Config {
     #[doc(hidden)]
     #[online_config(skip)]
     // Interval to inspect the network latency between tikv and tikv for slow store detection.
+    // If it set to 0, it will disable the inspection.
     pub inspect_network_interval: ReadableDuration,
 
     // Server labels to specify some attributes about this server.
@@ -480,6 +481,15 @@ impl Config {
             // The configuration has been changed to describe CPU usage of a single thread
             // instead of all threads. So migrate from the old style.
             self.heavy_load_threshold = 75;
+        }
+
+        if self
+            .inspect_network_interval
+            .lt(&ReadableDuration::millis(10))
+        {
+            return Err(box_err!(
+                "server.inspect-network-interval can't be less than 10ms."
+            ));
         }
 
         Ok(())

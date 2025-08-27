@@ -7241,6 +7241,7 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "api_version",
+ "async-trait",
  "byteorder",
  "derive_more 0.99.3",
  "error_code",
@@ -7250,6 +7251,7 @@ dependencies = [
  "log_wrappers",
  "prometheus",
  "prometheus-static-metric",
+ "raft",
  "serde_json",
  "thiserror 1.0.40",
  "tikv_util",
