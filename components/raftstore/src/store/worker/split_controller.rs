@@ -1409,7 +1409,7 @@ mod tests {
                 region_id,
                 peer_id: 0,
                 key_ranges: vec![(key_range.start_key.clone(), key_range.end_key.clone())],
-                extra_attachment: vec![],
+                extra_attachment: Arc::new(vec![]),
             });
             raw_records.records.insert(
                 key_range_tag.clone(),
@@ -1840,14 +1840,14 @@ mod tests {
             region_id: 1,
             peer_id: 0,
             key_ranges: vec![(b"a".to_vec(), b"b".to_vec())],
-            extra_attachment: vec![],
+            extra_attachment: Arc::new(vec![]),
         });
         let cd_key_range_tag = Arc::new(TagInfos {
             store_id: 0,
             region_id: 1,
             peer_id: 0,
             key_ranges: vec![(b"c".to_vec(), b"d".to_vec())],
-            extra_attachment: vec![],
+            extra_attachment: Arc::new(vec![]),
         });
         let multiple_key_ranges_tag = Arc::new(TagInfos {
             store_id: 0,
@@ -1857,14 +1857,14 @@ mod tests {
                 (b"a".to_vec(), b"b".to_vec()),
                 (b"c".to_vec(), b"d".to_vec()),
             ],
-            extra_attachment: vec![],
+            extra_attachment: Arc::new(vec![]),
         });
         let empty_key_range_tag = Arc::new(TagInfos {
             store_id: 0,
             region_id: 1,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: vec![],
+            extra_attachment: Arc::new(vec![]),
         });
 
         let test_cases = vec![
