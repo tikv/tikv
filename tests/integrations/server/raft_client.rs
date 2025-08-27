@@ -579,15 +579,5 @@ async fn test_network_inspection_with_connection_failures() {
     mock_server.shutdown();
     drop(mock_server);
 
-    // Wait for inspection to potentially detect the failure
-    // TODO: mock pool remove connection
-
-    // // The latency API should still work even after connection failure
-    // assert!(raft_client.get_max_latency(1).is_none());
-    // assert!(raft_client.get_max_latency(2).is_none());
-
-    // // Test that reset operations work correctly even with empty data
-    // let _ = raft_client.get_and_reset_all_max_latencies();
-    // assert!(raft_client.get_all_max_latencies().is_empty());
     fail::remove("network_inspection_interval")
 }
