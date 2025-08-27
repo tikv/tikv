@@ -301,6 +301,14 @@ def Cluster() -> RowPanel:
                             label_selectors=['job=~".*tikv"'],
                         ),
                         legend_format=r"quota-{{instance}}",
+                        hide=True,
+                    ),
+                ],
+                series_overrides=[
+                    series_override(
+                        alias="/quota-.*/",
+                        fill=0,
+                        dashes=True,
                     ),
                 ],
             ),
@@ -321,8 +329,16 @@ def Cluster() -> RowPanel:
                             label_selectors=['job=~".*tikv"'],
                         ),
                         legend_format=r"quota-{{instance}}",
+                        hide=True,
                     ),
                 ],
+                series_overrides=[
+                    series_override(
+                        alias="/quota-.*/",
+                        fill=0,
+                        dashes=True,
+                    ),
+                ],                
             ),
         ]
     )
