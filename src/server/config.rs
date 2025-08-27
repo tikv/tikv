@@ -258,6 +258,7 @@ pub struct Config {
     #[doc(hidden)]
     #[online_config(hidden)]
     // Interval to inspect the network latency between tikv and tikv for slow store detection.
+    // If it set to 0, it will disable the inspection.
     pub inspect_network_interval: ReadableDuration,
 
     // Server labels to specify some attributes about this server.
