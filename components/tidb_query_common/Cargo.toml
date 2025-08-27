@@ -24,6 +24,7 @@ thiserror = "1.0"
 tikv_util = { workspace = true }
 time = { workspace = true }
 yatp = { workspace = true }
+txn_types = { workspace = true }
 
 [dev-dependencies]
 byteorder = "1.2"

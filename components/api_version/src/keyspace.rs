@@ -2,6 +2,7 @@ use std::fmt::Debug;
 
 use engine_traits::{Error, Result};
 use tikv_util::box_err;
+use txn_types::ValueExtra;
 
 use super::*;
 
@@ -13,20 +14,25 @@ pub trait KvPair {
     fn kv(&self) -> (&[u8], &[u8]) {
         (self.key(), self.value())
     }
+    fn extra(&self) -> ValueExtra;
 }
 
-impl KvPair for (Vec<u8>, Vec<u8>) {
+impl KvPair for (Vec<u8>, Vec<u8>, ValueExtra) {
     fn key(&self) -> &[u8] {
         &self.0
     }
     fn value(&self) -> &[u8] {
         &self.1
     }
+
+    fn extra(&self) -> ValueExtra {
+        self.2
+    }
 }
 
 pub trait Keyspace {
-    type KvPair: KvPair = (Vec<u8>, Vec<u8>);
-    fn make_kv_pair(p: (Vec<u8>, Vec<u8>)) -> Result<Self::KvPair>;
+    type KvPair: KvPair = (Vec<u8>, Vec<u8>, ValueExtra);
+    fn make_kv_pair(p: (Vec<u8>, Vec<u8>, ValueExtra)) -> Result<Self::KvPair>;
     fn parse_keyspace(key: &[u8]) -> Result<(Option<KeyspaceId>, &[u8])> {
         Ok((None, key))
     }
@@ -42,13 +48,13 @@ impl From<u32> for KeyspaceId {
 }
 
 impl Keyspace for ApiV1 {
-    fn make_kv_pair(p: (Vec<u8>, Vec<u8>)) -> Result<Self::KvPair> {
+    fn make_kv_pair(p: (Vec<u8>, Vec<u8>, ValueExtra)) -> Result<Self::KvPair> {
         Ok(p)
     }
 }
 
 impl Keyspace for ApiV1Ttl {
-    fn make_kv_pair(p: (Vec<u8>, Vec<u8>)) -> Result<Self::KvPair> {
+    fn make_kv_pair(p: (Vec<u8>, Vec<u8>, ValueExtra)) -> Result<Self::KvPair> {
         Ok(p)
     }
 }
@@ -56,12 +62,13 @@ impl Keyspace for ApiV1Ttl {
 impl Keyspace for ApiV2 {
     type KvPair = KeyspaceKv;
 
-    fn make_kv_pair(p: (Vec<u8>, Vec<u8>)) -> Result<Self::KvPair> {
-        let (k, v) = p;
+    fn make_kv_pair(p: (Vec<u8>, Vec<u8>, ValueExtra)) -> Result<Self::KvPair> {
+        let (k, v, extra) = p;
         let (keyspace, _) = Self::parse_keyspace(&k)?;
         Ok(KeyspaceKv {
             k,
             v,
+            extra,
             keyspace: keyspace.unwrap(),
         })
     }
@@ -82,6 +89,7 @@ impl Keyspace for ApiV2 {
 pub struct KeyspaceKv {
     k: Vec<u8>,
     v: Vec<u8>,
+    extra: ValueExtra,
     keyspace: KeyspaceId,
 }
 
@@ -92,6 +100,10 @@ impl KvPair for KeyspaceKv {
 
     fn value(&self) -> &[u8] {
         &self.v
+    }
+
+    fn extra(&self) -> ValueExtra {
+        self.extra
     }
 }
 

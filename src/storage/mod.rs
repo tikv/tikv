@@ -105,7 +105,7 @@ use tracker::{
     TlsTrackedFuture, TrackerToken, clear_tls_tracker_token, set_tls_tracker_token,
     with_tls_tracker,
 };
-use txn_types::{Key, KvPair, Lock, LockType, TimeStamp, TsSet, Value};
+use txn_types::{Key, KvPair, KvWithExtra, Lock, LockType, TimeStamp, TsSet, Value, ValueExtra};
 
 use self::kv::SnapContext;
 pub use self::{
@@ -735,7 +735,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             .as_ref()
                             .unwrap_or(&None)
                             .as_ref()
-                            .map_or(0, |v| v.len());
+                            .map_or(0, |v| v.0.len());
                     sample.add_read_bytes(read_bytes);
                     let quota_delay = quota_limiter.consume_sample(sample, true).await;
                     if !quota_delay.is_zero() {
@@ -764,7 +764,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             schedule_wait_time.as_nanos() as u64;
                     });
                     Ok((
-                        result?,
+                        result?.map(|v| v.0),
                         KvGetStatistics {
                             stats: statistics,
                             latency_stats,
@@ -1003,7 +1003,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         ctx: Context,
         mut keys: Vec<Key>,
         start_ts: TimeStamp,
-    ) -> impl Future<Output = Result<(Vec<Result<KvPair>>, KvGetStatistics)>> {
+    ) -> impl Future<Output = Result<(Vec<Result<KvWithExtra>>, KvGetStatistics)>> {
         let deadline = Self::get_deadline(&ctx);
         const CMD: CommandKind = CommandKind::buffer_batch_get;
         let priority = ctx.get_priority();
@@ -1092,10 +1092,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         );
                         // TODO: metrics
                         // TODO: refactor: reuse functions in PointGetter
-                        let result: Vec<Result<KvPair>> = keys
+                        let result: Vec<Result<KvWithExtra>> = keys
                             .into_iter()
                             .filter_map(|k| {
-                                let pair: Option<std::result::Result<KvPair, _>> =
+                                let pair: Option<std::result::Result<KvWithExtra, _>> =
                                     match reader.load_lock(&k) {
                                         Ok(None) => None,
                                         Ok(Some(lock)) => {
@@ -1109,15 +1109,15 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                                     // Deletions are returned in the result pairs.
                                                     // This is the same behavior as TiDB's memdb.
                                                     // This is different from a normal batch_get.
-                                                    LockType::Delete => Some(Ok((k.into_raw().unwrap(), vec![]))),
+                                                    LockType::Delete => Some(Ok((k.into_raw().unwrap(), vec![], ValueExtra::default()))),
                                                     LockType::Lock => unreachable!("Unexpected LockType::Lock. pipelined-dml only supports optimistic transactions"),
                                                     LockType::Pessimistic => unreachable!("Unexpected LockType::Pessimistic. pipelined-dml only supports optimistic transactions"),
                                                     LockType::Put => {
                                                         match lock.short_value {
-                                                            Some(v) => Some(Ok((k.into_raw().unwrap(), v))),
+                                                            Some(v) => Some(Ok((k.into_raw().unwrap(), v, ValueExtra::default()))),
                                                             None => match reader.get_value(&k, start_ts) {
                                                                 Ok(Some(data)) => {
-                                                                    Some(Ok((k.into_raw().unwrap(), data)))
+                                                                    Some(Ok((k.into_raw().unwrap(), data, ValueExtra::default())))
                                                                 }
                                                                 Ok(None) => None,
                                                                 Err(e) => Some(Err(e)),
@@ -1199,7 +1199,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         mut ctx: Context,
         keys: Vec<Key>,
         start_ts: TimeStamp,
-    ) -> impl Future<Output = Result<(Vec<Result<KvPair>>, KvGetStatistics)>> {
+    ) -> impl Future<Output = Result<(Vec<Result<KvWithExtra>>, KvGetStatistics)>> {
         let deadline = Self::get_deadline(&ctx);
         const CMD: CommandKind = CommandKind::batch_get;
         let priority = ctx.get_priority();
@@ -1312,11 +1312,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                         !(v.is_ok() && v.as_ref().unwrap().is_none())
                                     })
                                     .map(|(_, (v, k))| match v {
-                                        Ok(Some(x)) => Ok((k.into_raw().unwrap(), x)),
+                                        Ok(Some(x)) => Ok((k.into_raw().unwrap(), x.0, x.1)),
                                         Err(e) => Err(Error::from(e)),
                                         _ => unreachable!(),
                                     })
                                     .collect();
+
                                 KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
                                     .get(CMD)
                                     .observe(kv_pairs.len() as f64);
@@ -1568,7 +1569,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             .observe(results.len() as f64);
                         results
                             .into_iter()
-                            .map(|x| x.map_err(Error::from))
+                            .map(|x| x.map_err(Error::from).map(|kv| (kv.0, kv.1)))
                             .collect()
                     })
                 })
@@ -3793,8 +3794,8 @@ pub mod test_util {
         assert_eq!(x.unwrap(), v);
     }
 
-    pub fn expect_multi_values(v: Vec<Option<KvPair>>, x: Vec<Result<KvPair>>) {
-        let x: Vec<Option<KvPair>> = x.into_iter().map(Result::ok).collect();
+    pub fn expect_multi_values<T: PartialEq + Debug>(v: Vec<Option<T>>, x: Vec<Result<T>>) {
+        let x: Vec<Option<T>> = x.into_iter().map(Result::ok).collect();
         assert_eq!(x, v);
     }
 
@@ -5115,7 +5116,7 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        expect_multi_values(
+        expect_multi_values::<KvPair>(
             vec![
                 Some((b"c".to_vec(), b"cc".to_vec())),
                 Some((b"a".to_vec(), b"aa".to_vec())),
@@ -5132,7 +5133,10 @@ mod tests {
                 5.into(),
             ))
             .unwrap()
-            .0,
+            .0
+            .into_iter()
+            .map(|r| r.map(|kv| (kv.0, kv.1)))
+            .collect(),
         );
     }
 

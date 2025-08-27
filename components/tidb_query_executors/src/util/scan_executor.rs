@@ -12,6 +12,7 @@ use tidb_query_common::{
 };
 use tidb_query_datatype::{codec::batch::LazyBatchColumnVec, expr::EvalContext};
 use tipb::{ColumnInfo, FieldType};
+use txn_types::ValueExtra;
 
 use crate::interface::*;
 
@@ -34,6 +35,7 @@ pub trait ScanExecutorImpl: Send {
         &mut self,
         key: &[u8],
         value: &[u8],
+        extra: ValueExtra,
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()>;
 }
@@ -113,7 +115,7 @@ impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> ScanExecutor<S, I, F> {
                 // Retrieved one row from point range or non-point range.
 
                 let (key, value) = row.kv();
-                if let Err(e) = self.imp.process_kv_pair(key, value, columns) {
+                if let Err(e) = self.imp.process_kv_pair(key, value, row.extra(), columns) {
                     // When there are errors in `process_kv_pair`, columns' length may not be
                     // identical. For example, the filling process may be partially done so that
                     // first several columns have N rows while the rest have N-1 rows. Since we do

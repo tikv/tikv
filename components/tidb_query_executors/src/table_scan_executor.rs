@@ -14,12 +14,15 @@ use tidb_query_common::{
 use tidb_query_datatype::{
     EvalType, FieldTypeAccessor,
     codec::{
+        Datum,
         batch::{LazyBatchColumn, LazyBatchColumnVec},
+        datum::DatumEncoder,
         row, table,
     },
     expr::{EvalConfig, EvalContext},
 };
 use tipb::{ColumnInfo, FieldType, TableScan};
+use txn_types::ValueExtra;
 
 use super::util::scan_executor::*;
 use crate::interface::*;
@@ -342,6 +345,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         &mut self,
         key: &[u8],
         value: &[u8],
+        extra: ValueExtra,
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
         use tidb_query_datatype::codec::datum;
@@ -356,6 +360,19 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
                 row::v2::CODEC_VERSION => self.process_v2(value, columns, &mut decoded_columns)?,
                 _ => self.process_v1(key, value, columns, &mut decoded_columns)?,
             }
+        }
+
+        const COMMIT_TS_COL_ID: i64 = -5;
+        if let Some(&commit_ts_index) = self.column_id_index.get(&COMMIT_TS_COL_ID) {
+            let mut datum_raw = Vec::new();
+            datum_raw.write_datum(
+                &mut self.context,
+                &[Datum::U64(extra.commit_ts.into_inner())],
+                false,
+            )?;
+
+            columns[commit_ts_index].mut_raw().push(&datum_raw);
+            self.is_column_filled[commit_ts_index] = true;
         }
 
         if !self.handle_indices.is_empty() {

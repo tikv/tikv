@@ -13,7 +13,7 @@ use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::{errorpb, kvrpcpb, kvrpcpb::ApiVersion};
 use thiserror::Error;
 use tikv_util::deadline::{DeadlineError, set_deadline_exceeded_busy_error};
-use txn_types::{KvPair, TimeStamp};
+use txn_types::{KvPair, KvWithExtra, TimeStamp};
 
 use crate::storage::{
     CommandKind, Result,
@@ -559,6 +559,25 @@ pub fn map_kv_pairs(r: Vec<Result<KvPair>>) -> Vec<kvrpcpb::KvPair> {
                 let mut pair = kvrpcpb::KvPair::default();
                 pair.set_key(key);
                 pair.set_value(value);
+                pair
+            }
+            Err(e) => {
+                let mut pair = kvrpcpb::KvPair::default();
+                pair.set_error(extract_key_error(&e));
+                pair
+            }
+        })
+        .collect()
+}
+
+pub fn map_kv_pairs_with_extra(r: Vec<Result<KvWithExtra>>) -> Vec<kvrpcpb::KvPair> {
+    r.into_iter()
+        .map(|r| match r {
+            Ok((key, value, extra)) => {
+                let mut pair = kvrpcpb::KvPair::default();
+                pair.set_key(key);
+                pair.set_value(value);
+                pair.set_commit_ts(extra.commit_ts.into_inner());
                 pair
             }
             Err(e) => {

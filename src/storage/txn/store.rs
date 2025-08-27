@@ -1,7 +1,10 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use kvproto::kvrpcpb::IsolationLevel;
-use txn_types::{Key, KvPair, LastChange, Lock, OldValue, TimeStamp, TsSet, Value, WriteRef};
+use txn_types::{
+    Key, KvPair, KvWithExtra, LastChange, Lock, OldValue, TimeStamp, TsSet, Value, ValueExtra,
+    WriteRef,
+};
 
 use super::{Error, ErrorInner, Result};
 use crate::storage::{
@@ -18,11 +21,11 @@ pub trait Store: Send {
     type Scanner: Scanner;
 
     /// Fetch the provided key.
-    fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>>;
+    fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<(Value, ValueExtra)>>;
 
     /// Re-use last cursor to incrementally (if possible) fetch the provided
     /// key.
-    fn incremental_get(&mut self, key: &Key) -> Result<Option<Value>>;
+    fn incremental_get(&mut self, key: &Key) -> Result<Option<(Value, ValueExtra)>>;
 
     /// Take the statistics. Currently only available for `incremental_get`.
     fn incremental_get_take_statistics(&mut self) -> Statistics;
@@ -38,7 +41,7 @@ pub trait Store: Send {
         &self,
         keys: &[Key],
         statistics: &mut Vec<Statistics>,
-    ) -> Result<Vec<Result<Option<Value>>>>;
+    ) -> Result<Vec<Result<Option<(Value, ValueExtra)>>>>;
 
     /// Retrieve a scanner over the bounds.
     fn scanner(
@@ -57,24 +60,24 @@ pub trait Store: Send {
 /// operation.
 pub trait Scanner: Send {
     /// Get the next [`KvPair`](KvPair) if it exists.
-    fn next(&mut self) -> Result<Option<(Key, Value)>>;
+    fn next(&mut self) -> Result<Option<(Key, Value, ValueExtra)>>;
 
     /// Get the next [`KvPair`](KvPair)s up to `limit` if they exist.
     /// If `sample_step` is greater than 0, skips `sample_step - 1` number of
     /// keys after each returned key.
-    fn scan(&mut self, limit: usize, sample_step: usize) -> Result<Vec<Result<KvPair>>> {
+    fn scan(&mut self, limit: usize, sample_step: usize) -> Result<Vec<Result<KvWithExtra>>> {
         let mut row_count = 0;
         let mut results = Vec::with_capacity(limit);
         while results.len() < limit {
             match self.next() {
-                Ok(Some((k, v))) => {
+                Ok(Some((k, v, extra))) => {
                     if sample_step > 0 {
                         row_count += 1;
                         if (row_count - 1) % sample_step != 0 {
                             continue;
                         }
                     }
-                    results.push(Ok((k.to_raw()?, v)));
+                    results.push(Ok((k.to_raw()?, v, extra)));
                 }
                 Ok(None) => break,
                 Err(
@@ -299,19 +302,19 @@ pub struct SnapshotStore<S: Snapshot> {
 impl<S: Snapshot> Store for SnapshotStore<S> {
     type Scanner = MvccScanner<S>;
 
-    fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>> {
+    fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<(Value, ValueExtra)>> {
         let mut point_getter = PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
             .fill_cache(self.fill_cache)
             .isolation_level(self.isolation_level)
             .bypass_locks(self.bypass_locks.clone())
             .access_locks(self.access_locks.clone())
             .build()?;
-        let v = point_getter.get(key)?;
+        let v = point_getter.get_with_extra(key)?;
         statistics.add(&point_getter.take_statistics());
         Ok(v)
     }
 
-    fn incremental_get(&mut self, key: &Key) -> Result<Option<Value>> {
+    fn incremental_get(&mut self, key: &Key) -> Result<Option<(Value, ValueExtra)>> {
         if self.point_getter_cache.is_none() {
             self.point_getter_cache = Some(
                 PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
@@ -323,7 +326,11 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
                     .build()?,
             );
         }
-        Ok(self.point_getter_cache.as_mut().unwrap().get(key)?)
+        Ok(self
+            .point_getter_cache
+            .as_mut()
+            .unwrap()
+            .get_with_extra(key)?)
     }
 
     #[inline]
@@ -356,7 +363,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         &self,
         keys: &[Key],
         statistics: &mut Vec<Statistics>,
-    ) -> Result<Vec<Result<Option<Value>>>> {
+    ) -> Result<Vec<Result<Option<(Value, ValueExtra)>>>> {
         let mut point_getter = PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
             .fill_cache(self.fill_cache)
             .isolation_level(self.isolation_level)
@@ -366,7 +373,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
 
         let mut values = Vec::with_capacity(keys.len());
         for key in keys {
-            let value = point_getter.get(key).map_err(Error::from);
+            let value = point_getter.get_with_extra(key).map_err(Error::from);
             values.push(value);
             statistics.push(point_getter.take_statistics());
         }
@@ -559,17 +566,21 @@ impl Store for FixtureStore {
     type Scanner = FixtureStoreScanner;
 
     #[inline]
-    fn get(&self, key: &Key, _statistics: &mut Statistics) -> Result<Option<Vec<u8>>> {
+    fn get(
+        &self,
+        key: &Key,
+        _statistics: &mut Statistics,
+    ) -> Result<Option<(Vec<u8>, ValueExtra)>> {
         let r = self.data.get(key);
         match r {
             None => Ok(None),
-            Some(Ok(v)) => Ok(Some(v.clone())),
+            Some(Ok(v)) => Ok(Some((v.clone(), ValueExtra::default()))),
             Some(Err(e)) => Err(e.maybe_clone().unwrap()),
         }
     }
 
     #[inline]
-    fn incremental_get(&mut self, key: &Key) -> Result<Option<Vec<u8>>> {
+    fn incremental_get(&mut self, key: &Key) -> Result<Option<(Vec<u8>, ValueExtra)>> {
         let mut s = Statistics::default();
         self.get(key, &mut s)
     }
@@ -593,7 +604,7 @@ impl Store for FixtureStore {
         &self,
         keys: &[Key],
         statistics: &mut Vec<Statistics>,
-    ) -> Result<Vec<Result<Option<Vec<u8>>>>> {
+    ) -> Result<Vec<Result<Option<(Vec<u8>, ValueExtra)>>>> {
         Ok(keys
             .iter()
             .map(|key| {
@@ -667,11 +678,11 @@ pub struct FixtureStoreScanner {
 
 impl Scanner for FixtureStoreScanner {
     #[inline]
-    fn next(&mut self) -> Result<Option<(Key, Vec<u8>)>> {
+    fn next(&mut self) -> Result<Option<(Key, Vec<u8>, ValueExtra)>> {
         let value = self.data.next();
         match value {
             None => Ok(None),
-            Some((k, Ok(v))) => Ok(Some((k, v))),
+            Some((k, Ok(v))) => Ok(Some((k, v, ValueExtra::default()))),
             Some((_k, Err(e))) => Err(e),
         }
     }
