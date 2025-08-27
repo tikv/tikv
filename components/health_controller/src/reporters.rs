@@ -7,7 +7,6 @@ use std::{
 };
 
 use collections::HashMap;
-
 use kvproto::pdpb;
 use pdpb::SlowTrend as SlowTrendPb;
 use prometheus::IntGauge;
@@ -108,8 +107,7 @@ impl UnifiedSlowScore {
         let mut network_factors = self.network_factors.lock().unwrap();
 
         // Remove store_ids that exist in network_factors but not in durations
-        let store_ids_in_durations: HashSet<u64> =
-            durations.keys().cloned().collect();
+        let store_ids_in_durations: HashSet<u64> = durations.keys().cloned().collect();
         network_factors.retain(|store_id, _| store_ids_in_durations.contains(store_id));
 
         // Record durations for each store
@@ -277,7 +275,8 @@ impl RaftstoreReporter {
 
     pub fn record_network_duration(&mut self, id: u64) -> HashMap<u64, Duration> {
         let network_durations = self.health_controller_inner.get_network_latencies();
-        self.slow_score.record_network(id, network_durations.clone());
+        self.slow_score
+            .record_network(id, network_durations.clone());
         network_durations
     }
 

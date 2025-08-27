@@ -46,7 +46,6 @@ use std::{
 };
 
 use collections::HashMap;
-
 use grpcio_health::HealthService;
 use kvproto::pdpb::SlowTrend as SlowTrendPb;
 use parking_lot::{Mutex, RwLock};
@@ -226,9 +225,7 @@ impl HealthControllerInner {
             checker
                 .get_and_reset_all_max_latencies()
                 .into_iter()
-                .map(|(store_id, latency_ms)| {
-                    (store_id, Duration::from_millis(latency_ms as u64))
-                })
+                .map(|(store_id, latency_ms)| (store_id, Duration::from_millis(latency_ms as u64)))
                 .collect()
         } else {
             HashMap::default()
@@ -249,7 +246,7 @@ impl HealthController {
     }
 
     /// Set a health checker that implements HealthCheckerTrait
-    pub fn set_health_checker(& self, checker: Box<dyn HealthCheckerTrait>) {
+    pub fn set_health_checker(&self, checker: Box<dyn HealthCheckerTrait>) {
         self.inner.set_health_checker(checker);
     }
 
