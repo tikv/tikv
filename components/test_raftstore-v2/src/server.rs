@@ -77,8 +77,12 @@ use tikv_util::{
     quota_limiter::QuotaLimiter,
     sys::thread::ThreadBuildWrapper,
     thd_name,
+<<<<<<< HEAD
     worker::{Builder as WorkerBuilder, LazyWorker},
     Either, HandyRwLock,
+=======
+    worker::{Builder as WorkerBuilder, LazyWorker, Worker},
+>>>>>>> e10ed4b366 (raft-client: Implement health check inspection for TiKV stores (#18798))
 };
 use tokio::runtime::{Builder as TokioBuilder, Handle};
 use txn_types::TxnExtraScheduler;
@@ -624,6 +628,13 @@ impl<EK: KvEngine> ServerCluster<EK> {
                 debug_thread_pool.clone(),
                 health_service.clone(),
                 resource_manager.clone(),
+<<<<<<< HEAD
+=======
+                Arc::new(DefaultGrpcMessageFilter::new(
+                    server_cfg.value().reject_messages_on_memory_ratio,
+                )),
+                Worker::new("test-background-worker"),
+>>>>>>> e10ed4b366 (raft-client: Implement health check inspection for TiKV stores (#18798))
             )
             .unwrap();
             svr.register_service(create_diagnostics(diag_service.clone()));
@@ -724,7 +735,12 @@ impl<EK: KvEngine> ServerCluster<EK> {
         self.concurrency_managers
             .insert(node_id, concurrency_manager);
 
-        let client = RaftClient::new(node_id, self.conn_builder.clone());
+        let client = RaftClient::new(
+            node_id,
+            self.conn_builder.clone(),
+            Duration::from_millis(10),
+            Worker::new("test-worker"),
+        );
         self.raft_clients.insert(node_id, client);
         Ok(node_id)
     }

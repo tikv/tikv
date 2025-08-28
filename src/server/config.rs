@@ -208,6 +208,21 @@ pub struct Config {
     #[doc(hidden)]
     pub simplify_metrics: bool,
 
+<<<<<<< HEAD
+=======
+    #[doc(hidden)]
+    #[online_config(skip)]
+    /// Minimum interval to send health feedback information in each
+    /// `BatchCommands` gRPC stream. 0 to disable sending health feedback.
+    pub health_feedback_interval: ReadableDuration,
+
+    #[doc(hidden)]
+    #[online_config(hidden)]
+    // Interval to inspect the network latency between tikv and tikv for slow store detection.
+    // If it set to 0, it will disable the inspection.
+    pub inspect_network_interval: ReadableDuration,
+
+>>>>>>> e10ed4b366 (raft-client: Implement health check inspection for TiKV stores (#18798))
     // Server labels to specify some attributes about this server.
     #[online_config(skip)]
     pub labels: HashMap<String, String>,
@@ -293,6 +308,11 @@ impl Default for Config {
             // Go tikv client uses 4 as well.
             forward_max_connections_per_address: 4,
             simplify_metrics: false,
+<<<<<<< HEAD
+=======
+            health_feedback_interval: ReadableDuration::secs(1),
+            inspect_network_interval: ReadableDuration::millis(100),
+>>>>>>> e10ed4b366 (raft-client: Implement health check inspection for TiKV stores (#18798))
         }
     }
 }
@@ -425,6 +445,15 @@ impl Config {
             // The configuration has been changed to describe CPU usage of a single thread
             // instead of all threads. So migrate from the old style.
             self.heavy_load_threshold = 75;
+        }
+
+        if self
+            .inspect_network_interval
+            .lt(&ReadableDuration::millis(10))
+        {
+            return Err(box_err!(
+                "server.inspect-network-interval can't be less than 10ms."
+            ));
         }
 
         Ok(())
