@@ -500,6 +500,7 @@ where
                 ),
             ),
             engines.kv.clone(),
+            self.region_info_accessor.clone(),
             self.region_info_accessor.as_ref().unwrap().region_leaders(),
         );
 
@@ -828,13 +829,13 @@ where
         let server_config = Arc::new(VersionTrack::new(self.core.config.server.clone()));
 
         self.core.config.raft_store.optimize_for(false);
-        self.core
-            .config
-            .raft_store
-            .optimize_inspector(path_in_diff_mount_point(
+        self.core.config.raft_store.tune_inspector_configs(
+            path_in_diff_mount_point(
                 engines.engines.raft.get_engine_path().to_string().as_str(),
                 engines.engines.kv.path(),
-            ));
+            ),
+            self.core.config.server.inspect_network_interval,
+        );
         self.core
             .config
             .raft_store
@@ -895,6 +896,7 @@ where
             Arc::new(DefaultGrpcMessageFilter::new(
                 server_config.value().reject_messages_on_memory_ratio,
             )),
+            self.core.background_worker.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
         cfg_controller.register(
@@ -1337,6 +1339,7 @@ where
         let cdc_service = cdc::Service::new(
             servers.cdc_scheduler.clone(),
             servers.cdc_memory_quota.clone(),
+            Arc::new(self.core.background_worker.clone()),
         );
         if servers
             .server

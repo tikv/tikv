@@ -1,6 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    assert_matches::assert_matches,
     fs,
     path::PathBuf,
     sync::{
@@ -17,9 +18,12 @@ use file_system::{IoOp, IoType};
 use futures::executor::block_on;
 use grpcio::{self, ChannelBuilder, Environment};
 use kvproto::{
+    kvrpcpb,
+    kvrpcpb::KeyRange,
     raft_serverpb::{ExtraMessageType, RaftMessage, RaftSnapshotData},
     tikvpb::TikvClient,
 };
+use pd_client::PdClient;
 use protobuf::Message as M1;
 use raft::eraftpb::{Message, MessageType, Snapshot};
 use raftstore::{
@@ -33,6 +37,9 @@ use test_raftstore::*;
 use test_raftstore_macro::test_case;
 use test_raftstore_v2::WrapFactory;
 use tikv::server::{snap::send_snap, tablet_snap::send_snap as send_snap_v2};
+use tikv_kv::{
+    Engine, Error, ErrorInner, SecondaryRegionOverride, SnapContext, Snapshot as _, SnapshotExt,
+};
 use tikv_util::{
     HandyRwLock,
     config::*,
@@ -1259,4 +1266,138 @@ fn test_node_apply_snapshot_by_or_without_ingest() {
             std::thread::sleep(Duration::from_millis(50));
         }
     }
+}
+
+#[test_case(test_raftstore::new_server_cluster)]
+fn test_extra_snapshot_override() {
+    let mut cluster = new_cluster(0, 3);
+    configure_for_snapshot(&mut cluster.cfg);
+    cluster.run_conf_change();
+    let pd_client = cluster.pd_client.clone();
+    for key in [b"a", b"b", b"c", b"d"] {
+        let region = pd_client.get_region_info(key).unwrap();
+        cluster.must_split(&region, key);
+    }
+
+    // make sure leaders of region0 and region2 are in the same store
+    let r0 = pd_client.get_region_info(b"a").unwrap();
+    let r0_leader = r0.leader.as_ref().unwrap();
+    let mut r2 = pd_client.get_region_info(b"c").unwrap();
+    r2.leader = Some(find_peer(&r2, r0_leader.get_store_id()).unwrap().clone());
+    let r2_leader = r2.leader.as_ref().unwrap();
+    pd_client.transfer_leader(r2.get_id(), r2_leader.clone(), vec![]);
+    pd_client.region_leader_must_be(r2.get_id(), r2_leader.clone());
+
+    // constructs a snap_ctx with the base info region 0.
+    let pb_ctx = {
+        let mut ctx = kvrpcpb::Context::default();
+        ctx.set_region_id(r0.get_id());
+        ctx.set_region_epoch(r0.get_region_epoch().clone());
+        ctx.set_peer(r0_leader.clone());
+        ctx.set_term(10000);
+        ctx
+    };
+
+    let mut snap_ctx = SnapContext {
+        pb_ctx: &pb_ctx,
+        start_ts: Some(get_tso(pd_client.as_ref()).into()),
+        key_ranges: vec![KeyRange {
+            start_key: b"c1".to_vec(),
+            end_key: b"c2".to_vec(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    // when `extra_snap_override`, should use the override region info
+    snap_ctx.secondary_region_override = Some(SecondaryRegionOverride {
+        region_id: r2.get_id(),
+        region_epoch: r2.get_region_epoch().clone(),
+        peer: r2_leader.clone(),
+        // test None term will not check the term in snapshot
+        check_term: None,
+    });
+    let snap = cluster
+        .must_get_raft_engine(r0_leader.get_store_id())
+        .snapshot(snap_ctx.clone())
+        .unwrap();
+    let r2_term = snap.ext().get_term().unwrap().get();
+    assert_eq!(snap.get_region().clone(), r2.region.clone());
+
+    // If`extra_snap_override`.`term` is set with an invalid value, should return an
+    // error.
+    snap_ctx
+        .secondary_region_override
+        .as_mut()
+        .unwrap()
+        .check_term = Some(r2_term - 2);
+    let err = cluster
+        .must_get_raft_engine(r0_leader.get_store_id())
+        .snapshot(snap_ctx.clone())
+        .err()
+        .unwrap();
+    assert_matches!(err, Error(box ErrorInner::Request(header)) if header.stale_command.is_some());
+    snap_ctx
+        .secondary_region_override
+        .as_mut()
+        .unwrap()
+        .check_term = None;
+
+    // If `extra_snap_override`.`term` is set with a valid value, should return
+    // a snapshot.
+    snap_ctx
+        .secondary_region_override
+        .as_mut()
+        .unwrap()
+        .check_term = Some(r2_term);
+    let snap = cluster
+        .must_get_raft_engine(r0_leader.get_store_id())
+        .snapshot(snap_ctx.clone())
+        .unwrap();
+    assert_eq!(snap.get_region().clone(), r2.region.clone());
+    snap_ctx
+        .secondary_region_override
+        .as_mut()
+        .unwrap()
+        .check_term = None;
+
+    // test invalid req_epoch will return an error
+    let mut req_epoch = r2.get_region_epoch().clone();
+    req_epoch.version -= 1;
+    snap_ctx
+        .secondary_region_override
+        .as_mut()
+        .unwrap()
+        .region_epoch = req_epoch;
+    let err = cluster
+        .must_get_raft_engine(r0_leader.get_store_id())
+        .snapshot(snap_ctx.clone())
+        .err()
+        .unwrap();
+    assert_matches!(err, Error(box ErrorInner::Request(header)) if header.epoch_not_match.is_some());
+    snap_ctx
+        .secondary_region_override
+        .as_mut()
+        .unwrap()
+        .region_epoch = r2.get_region_epoch().clone();
+
+    // test no-leader request will return an error
+    let r2_old_leader = r2_leader.clone();
+    let r2_leader = r2
+        .peers
+        .iter()
+        .find(|p| p.get_id() != r2_old_leader.get_id())
+        .unwrap()
+        .clone();
+    pd_client.transfer_leader(r2.get_id(), r2_leader.clone(), vec![]);
+    pd_client.region_leader_must_be(r2.get_id(), r2_leader.clone());
+    r2.leader = Some(r2_leader.clone());
+    snap_ctx.secondary_region_override.as_mut().unwrap().peer = r2_old_leader.clone();
+    assert!(!snap_ctx.pb_ctx.replica_read);
+    let err = cluster
+        .must_get_raft_engine(r0_leader.get_store_id())
+        .snapshot(snap_ctx.clone())
+        .err()
+        .unwrap();
+    assert_matches!(err, Error(box ErrorInner::Request(header)) if header.not_leader.is_some());
 }
