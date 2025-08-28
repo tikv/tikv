@@ -97,7 +97,7 @@ async fn test_exec_simple() {
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(16);
     let bg_exec = tokio::task::spawn_blocking(move || {
-        exec.run((SaveMeta::default(), CompactionSpy(tx))).unwrap()
+        exec.run((SaveMeta::new(0), CompactionSpy(tx))).unwrap()
     });
     while let Some(item) = rx.recv().await {
         let rid = item.meta.get_meta().get_region_id() as usize;
@@ -161,7 +161,7 @@ async fn test_checkpointing() {
     );
     let hooks = move || {
         (
-            (SaveMeta::default(), Checkpoint::default()),
+            (SaveMeta::new(0), Checkpoint::default()),
             cloneable_hooks.clone(),
         )
     };
@@ -321,7 +321,7 @@ async fn test_filter_out_small_compactions() {
     let exec = create_compaction(st.backend());
 
     tokio::task::spawn_blocking(move || {
-        exec.run((SkipSmallCompaction::new(27800, 6950), SaveMeta::default()))
+        exec.run((SkipSmallCompaction::new(27800, 6950), SaveMeta::new(0)))
     })
     .await
     .unwrap()

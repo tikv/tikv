@@ -4,11 +4,10 @@ use std::{
     sync::Arc,
 };
 
-use tikv_util::info;
-
 use external_storage::ExternalStorage;
 use futures::stream::TryStreamExt;
 use kvproto::brpb::{self, DeleteSpansOfFile};
+use tikv_util::info;
 
 use super::{
     EpochHint, Subcompaction, SubcompactionCollectKey, SubcompactionResult, UnformedSubcompaction,
@@ -170,6 +169,7 @@ impl Ord for SortByOffset {
 pub struct CompactionRunInfoBuilder {
     files: HashMap<Arc<str>, BTreeSet<SortByOffset>>,
     compaction: brpb::LogFileCompaction,
+    ignore_file_size_threshold: u64,
 }
 
 impl Default for CompactionRunInfoBuilder {
@@ -177,6 +177,7 @@ impl Default for CompactionRunInfoBuilder {
         let mut this = Self {
             files: Default::default(),
             compaction: Default::default(),
+            ignore_file_size_threshold: IGNORE_FILE_SIZE_THRESHOLD,
         };
         this.compaction.input_min_ts = u64::MAX;
         this
@@ -237,6 +238,13 @@ impl ExpiringFilesOfMeta {
 }
 
 impl CompactionRunInfoBuilder {
+    #[cfg(test)]
+    pub fn new(ignore_file_size_threshold: u64) -> Self {
+        let mut builder = Self::default();
+        builder.ignore_file_size_threshold = ignore_file_size_threshold;
+        builder
+    }
+
     pub fn is_empty(&self) -> bool {
         self.files.is_empty()
     }
@@ -355,7 +363,7 @@ impl CompactionRunInfoBuilder {
                     if f.is_meta {
                         return false;
                     }
-                    if f.file_real_size > IGNORE_FILE_SIZE_THRESHOLD {
+                    if f.file_real_size >= self.ignore_file_size_threshold {
                         return true;
                     }
                     if f.file_real_size < 32 {
@@ -373,7 +381,7 @@ impl CompactionRunInfoBuilder {
                     }
                     false
                     // return !f.is_meta && f.file_real_size >
-                    // IGNORE_FILE_SIZE_THRESHOLD
+                    // self.ignore_file_size_threshold
                 }) {
                     no_data_files_to_be_compacted = false;
                 }
@@ -423,6 +431,97 @@ mod test {
     }
 
     #[tokio::test]
+    async fn test_ignore_small_files() {
+        let const_val = |_| b"fiolvit".to_vec();
+        let g11 =
+            LogFileBuilder::from_iter(KvGen::new(gen_min_max(1, 1, 2, 10, 20), const_val), |_| {});
+        let g12 =
+            LogFileBuilder::from_iter(KvGen::new(gen_min_max(1, 3, 4, 15, 25), const_val), |_| {});
+        let g21 =
+            LogFileBuilder::from_iter(KvGen::new(gen_min_max(3, 5, 6, 30, 40), const_val), |_| {});
+        let g22 =
+            LogFileBuilder::from_iter(KvGen::new(gen_min_max(4, 7, 8, 45, 55), const_val), |_| {});
+        let st = TmpStorage::create();
+        let m = st
+            .build_flush_logs("v1/1", "v1/backupmeta/1.meta", [[g11, g12], [g21, g22]])
+            .await;
+
+        let mut coll1 = CompactionRunInfoBuilder::new(0);
+        let cr = SubcompactionExec::default_config(st.storage().clone());
+        let subc = Subcompaction::singleton(m.physical_files[0].files[0].clone());
+        let res = cr.run(subc, Default::default()).await.unwrap();
+        coll1.add_subcompaction(&res);
+        let mig = coll1.mig(st.storage().as_ref()).await.unwrap();
+        assert_eq!(mig.edit_meta.len(), 1);
+        assert!(!mig.edit_meta[0].destruct_self);
+        assert!(!mig.edit_meta[0].all_data_files_compacted);
+        assert_eq!(mig.edit_meta[0].delete_physical_files.len(), 0);
+        assert_eq!(mig.edit_meta[0].delete_logical_files.len(), 1);
+        let mut coll2 = CompactionRunInfoBuilder::default();
+        coll2.add_subcompaction(&res);
+        let mig = coll2.mig(st.storage().as_ref()).await.unwrap();
+        assert_eq!(mig.edit_meta.len(), 1);
+        assert!(!mig.edit_meta[0].destruct_self);
+        assert!(mig.edit_meta[0].all_data_files_compacted);
+        assert_eq!(mig.edit_meta[0].delete_physical_files.len(), 0);
+        assert_eq!(mig.edit_meta[0].delete_logical_files.len(), 1);
+
+        let subc = Subcompaction::singleton(m.physical_files[0].files[1].clone());
+        let cr = SubcompactionExec::default_config(st.storage().clone());
+        let res2 = cr.run(subc, Default::default()).await.unwrap();
+        coll1.add_subcompaction(&res2);
+        let mig = coll1.mig(st.storage().as_ref()).await.unwrap();
+        assert_eq!(mig.edit_meta.len(), 1);
+        assert!(!mig.edit_meta[0].destruct_self);
+        assert!(!mig.edit_meta[0].all_data_files_compacted);
+        assert_eq!(mig.edit_meta[0].delete_physical_files.len(), 1);
+        assert_eq!(mig.edit_meta[0].delete_logical_files.len(), 0);
+        coll2.add_subcompaction(&res2);
+        let mig = coll2.mig(st.storage().as_ref()).await.unwrap();
+        assert_eq!(mig.edit_meta.len(), 1);
+        assert!(!mig.edit_meta[0].destruct_self);
+        assert!(mig.edit_meta[0].all_data_files_compacted);
+        assert_eq!(mig.edit_meta[0].delete_physical_files.len(), 1);
+        assert_eq!(mig.edit_meta[0].delete_logical_files.len(), 0);
+
+        let subc = Subcompaction::singleton(m.physical_files[1].files[0].clone());
+        let cr = SubcompactionExec::default_config(st.storage().clone());
+        let res3 = cr.run(subc, Default::default()).await.unwrap();
+        coll1.add_subcompaction(&res3);
+        let mig = coll1.mig(st.storage().as_ref()).await.unwrap();
+        assert_eq!(mig.edit_meta.len(), 1);
+        assert!(!mig.edit_meta[0].destruct_self);
+        assert!(!mig.edit_meta[0].all_data_files_compacted);
+        assert_eq!(mig.edit_meta[0].delete_physical_files.len(), 1);
+        assert_eq!(mig.edit_meta[0].delete_logical_files.len(), 1);
+        coll2.add_subcompaction(&res3);
+        let mig = coll2.mig(st.storage().as_ref()).await.unwrap();
+        assert_eq!(mig.edit_meta.len(), 1);
+        assert!(!mig.edit_meta[0].destruct_self);
+        assert!(mig.edit_meta[0].all_data_files_compacted);
+        assert_eq!(mig.edit_meta[0].delete_physical_files.len(), 1);
+        assert_eq!(mig.edit_meta[0].delete_logical_files.len(), 1);
+
+        let subc = Subcompaction::singleton(m.physical_files[1].files[1].clone());
+        let cr = SubcompactionExec::default_config(st.storage().clone());
+        let res4 = cr.run(subc, Default::default()).await.unwrap();
+        coll1.add_subcompaction(&res4);
+        let mig = coll1.mig(st.storage().as_ref()).await.unwrap();
+        assert_eq!(mig.edit_meta.len(), 1);
+        assert!(mig.edit_meta[0].destruct_self);
+        assert!(mig.edit_meta[0].all_data_files_compacted);
+        assert_eq!(mig.edit_meta[0].delete_physical_files.len(), 2);
+        assert_eq!(mig.edit_meta[0].delete_logical_files.len(), 0);
+        coll2.add_subcompaction(&res4);
+        let mig = coll2.mig(st.storage().as_ref()).await.unwrap();
+        assert_eq!(mig.edit_meta.len(), 1);
+        assert!(mig.edit_meta[0].destruct_self);
+        assert!(mig.edit_meta[0].all_data_files_compacted);
+        assert_eq!(mig.edit_meta[0].delete_physical_files.len(), 2);
+        assert_eq!(mig.edit_meta[0].delete_logical_files.len(), 0);
+    }
+
+    #[tokio::test]
     async fn test_collect_single() {
         let const_val = |_| b"fiolvit".to_vec();
         let g1 =
@@ -434,7 +533,7 @@ mod test {
             .build_flush("1.log", "v1/backupmeta/1.meta", [g1, g2])
             .await;
 
-        let mut coll = CompactionRunInfoBuilder::default();
+        let mut coll = CompactionRunInfoBuilder::new(0);
         let cr = SubcompactionExec::default_config(st.storage().clone());
         let subc = Subcompaction::singleton(m.physical_files[0].files[0].clone());
         let res = cr.run(subc, Default::default()).await.unwrap();
@@ -443,7 +542,7 @@ mod test {
         assert_eq!(mig.edit_meta.len(), 1);
         assert!(!mig.edit_meta[0].destruct_self);
 
-        let mut coll = CompactionRunInfoBuilder::default();
+        let mut coll = CompactionRunInfoBuilder::new(0);
         let subc = Subcompaction::of_many(m.physical_files[0].files.iter().cloned());
         coll.add_subcompaction(&SubcompactionResult::of(subc));
         let mig = coll.mig(st.storage().as_ref()).await.unwrap();
@@ -501,7 +600,7 @@ mod test {
         ]);
         let subc3 = Subcompaction::singleton(f2.physical_files[0].files[2].clone());
 
-        let mut coll = CompactionRunInfoBuilder::default();
+        let mut coll = CompactionRunInfoBuilder::new(0);
         coll.add_subcompaction(&SubcompactionResult::of(subc1));
         coll.add_subcompaction(&SubcompactionResult::of(subc2));
         coll.add_subcompaction(&SubcompactionResult::of(subc3));

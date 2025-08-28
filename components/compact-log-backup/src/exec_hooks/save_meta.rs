@@ -60,6 +60,15 @@ impl Default for SaveMeta {
 }
 
 impl SaveMeta {
+    #[cfg(test)]
+    pub fn new(ignore_file_size_threshold: u64) -> Self {
+        Self {
+            collector: CompactionRunInfoBuilder::new(ignore_file_size_threshold),
+            stats: Default::default(),
+            begin: Local::now(),
+        }
+    }
+
     fn comments(&self) -> String {
         let now = Local::now();
         let stat = CompactLogBackupStatistic {
