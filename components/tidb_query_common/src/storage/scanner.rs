@@ -280,7 +280,7 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
     fn update_scanned_range_from_scanned_row(&mut self, some_row: &Option<OwnedKvPair>) {
         assert!(self.is_scanned_range_aware);
 
-        if let Some((key, _)) = some_row {
+        if let Some((key, ..)) = some_row {
             self.working_range_end_key.clear();
             self.working_range_end_key.extend(key);
             if !self.scan_backward_in_range {

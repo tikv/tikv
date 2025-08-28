@@ -26,7 +26,7 @@ use tikv::{
 };
 use tikv_util::time::Instant;
 use tracker::INVALID_TRACKER_TOKEN;
-use txn_types::{Key, KvPair, Mutation, TimeStamp, Value};
+use txn_types::{Key, KvPair, KvWithExtra, Mutation, TimeStamp, Value};
 
 /// A builder to build a `SyncTestStorage`.
 ///
@@ -159,7 +159,7 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
         ctx: Context,
         keys: &[Key],
         start_ts: impl Into<TimeStamp>,
-    ) -> Result<(Vec<Result<KvPair>>, KvGetStatistics)> {
+    ) -> Result<(Vec<Result<KvWithExtra>>, KvGetStatistics)> {
         block_on(self.store.batch_get(ctx, keys.to_owned(), start_ts.into()))
     }
 

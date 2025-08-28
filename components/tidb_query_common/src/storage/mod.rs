@@ -8,12 +8,13 @@ pub mod test_fixture;
 use async_trait::async_trait;
 use kvproto::{coprocessor::KeyRange, metapb::Region};
 use raft::StateRole;
+use txn_types::ValueExtra;
 
 pub use self::range::*;
 
 pub type Result<T> = std::result::Result<T, crate::error::StorageError>;
 
-pub type OwnedKvPair = (Vec<u8>, Vec<u8>);
+pub type OwnedKvPair = (Vec<u8>, Vec<u8>, ValueExtra);
 
 /// The abstract storage interface. The table scan and index scan executor
 /// relies on a `Storage` implementation to provide source data.

@@ -60,6 +60,7 @@ use crate::{
         errors::{
             extract_committed, extract_key_error, extract_key_errors, extract_kv_pairs,
             extract_region_error, extract_region_error_from_error, map_kv_pairs,
+            map_kv_pairs_with_extra,
         },
         kv::Engine,
         lock_manager::LockManager,
@@ -1750,7 +1751,7 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
         } else {
             match v {
                 Ok((kv_res, stats)) => {
-                    let pairs = map_kv_pairs(kv_res);
+                    let pairs = map_kv_pairs_with_extra(kv_res);
                     let exec_detail_v2 = resp.mut_exec_details_v2();
                     stats
                         .stats
@@ -1800,7 +1801,7 @@ fn future_buffer_batch_get<E: Engine, L: LockManager, F: KvFormat>(
         } else {
             match v {
                 Ok((kv_res, stats)) => {
-                    let pairs = map_kv_pairs(kv_res);
+                    let pairs = map_kv_pairs_with_extra(kv_res);
                     let exec_detail_v2 = resp.mut_exec_details_v2();
                     let scan_detail_v2 = exec_detail_v2.mut_scan_detail_v2();
                     stats.stats.write_scan_detail(scan_detail_v2);

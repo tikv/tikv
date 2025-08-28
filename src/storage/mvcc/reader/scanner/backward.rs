@@ -5,7 +5,7 @@ use std::{borrow::Cow, cmp::Ordering};
 
 use engine_traits::CF_DEFAULT;
 use kvproto::kvrpcpb::{IsolationLevel, WriteConflictReason};
-use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
+use txn_types::{Key, Lock, TimeStamp, Value, ValueExtra, Write, WriteRef, WriteType};
 
 use super::ScannerConfig;
 use crate::storage::{
@@ -75,7 +75,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
     }
 
     /// Get the next key-value pair, in backward order.
-    pub fn read_next(&mut self) -> Result<Option<(Key, Value)>> {
+    pub fn read_next(&mut self) -> Result<Option<(Key, Value, ValueExtra)>> {
         if !self.is_started {
             if self.cfg.upper_bound.is_some() {
                 // TODO: `seek_to_last` is better, however it has performance issues currently.
@@ -106,7 +106,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
         // cursor and lock cursor. Please refer to `ForwardKvScanner` for details.
 
         loop {
-            let (current_user_key, mut has_write, has_lock) = {
+            let (current_user_key, mut has_write, has_lock, commit_ts) = {
                 let w_key = if self.write_cursor.valid()? {
                     Some(self.write_cursor.key(&mut self.statistics.write))
                 } else {
@@ -125,29 +125,35 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                 // `res` is `(current_user_key_slice, has_write, has_lock)`
                 let res = match (w_key, l_key) {
                     (None, None) => return Ok(None),
-                    (None, Some(lk)) => (lk, false, true),
-                    (Some(wk), None) => (Key::truncate_ts_for(wk)?, true, false),
+                    (None, Some(lk)) => (lk, false, true, TimeStamp::zero()),
+                    (Some(wk), None) => (
+                        Key::truncate_ts_for(wk)?,
+                        true,
+                        false,
+                        Key::decode_ts_from(wk)?,
+                    ),
                     (Some(wk), Some(lk)) => {
                         let write_user_key = Key::truncate_ts_for(wk)?;
+                        let commit_ts = Key::decode_ts_from(wk)?;
                         match write_user_key.cmp(lk) {
                             Ordering::Less => {
                                 // We are scanning from largest user key to smallest user key, so
                                 // this indicate that we meet a lock first, thus its corresponding
                                 // write does not exist.
-                                (lk, false, true)
+                                (lk, false, true, TimeStamp::zero())
                             }
                             Ordering::Greater => {
                                 // We meet write first, so the lock of the write key does not exist.
-                                (write_user_key, true, false)
+                                (write_user_key, true, false, commit_ts)
                             }
-                            Ordering::Equal => (write_user_key, true, true),
+                            Ordering::Equal => (write_user_key, true, true, commit_ts),
                         }
                     }
                 };
 
                 // Use `from_encoded_slice` to reserve space for ts, so later we can append ts
                 // to the key or its clones without reallocation.
-                (Key::from_encoded_slice(res.0), res.1, res.2)
+                (Key::from_encoded_slice(res.0), res.1, res.2, res.3)
             };
 
             let mut result = Ok(None);
@@ -214,7 +220,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                 self.statistics.write.processed_keys += 1;
                 self.statistics.processed_size += current_user_key.len() + v.len();
                 resource_metering::record_read_keys(1);
-                return Ok(Some((current_user_key, v)));
+                return Ok(Some((current_user_key, v, ValueExtra { commit_ts })));
             }
         }
     }

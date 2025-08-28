@@ -6,7 +6,9 @@ use std::borrow::Cow;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{IsolationLevel, WriteConflictReason};
 use tikv_kv::SEEK_BOUND;
-use txn_types::{Key, LastChange, Lock, LockType, TimeStamp, TsSet, Value, WriteRef, WriteType};
+use txn_types::{
+    Key, LastChange, Lock, LockType, TimeStamp, TsSet, Value, ValueExtra, WriteRef, WriteType,
+};
 
 use crate::storage::{
     kv::{Cursor, CursorBuilder, ScanMode, Snapshot, Statistics},
@@ -169,15 +171,13 @@ impl<S: Snapshot> PointGetter<S> {
     /// Get the value of a user key.
     pub fn get(&mut self, user_key: &Key) -> Result<Option<Value>> {
         fail_point!("point_getter_get");
+        self.get_with_extra(user_key).map(|o| o.map(|val| val.0))
+    }
 
+    pub fn get_with_extra(&mut self, user_key: &Key) -> Result<Option<(Value, ValueExtra)>> {
         if need_check_locks(self.isolation_level) {
-            // Check locks that signal concurrent writes for `Si` or more recent writes for
-            // `RcCheckTs`.
-            if let Some(lock) = self.load_and_check_lock(user_key)? {
-                return self.load_data_from_lock(user_key, lock);
-            }
+            self.load_and_check_lock(user_key)?;
         }
-
         self.load_data(user_key)
     }
 
@@ -189,7 +189,7 @@ impl<S: Snapshot> PointGetter<S> {
     /// In common cases we expect to get nothing in lock cf. Using a `get_cf`
     /// instead of `seek` is fast in such cases due to no need for RocksDB
     /// to continue move and skip deleted entries until find a user key.
-    fn load_and_check_lock(&mut self, user_key: &Key) -> Result<Option<Lock>> {
+    fn load_and_check_lock(&mut self, user_key: &Key) -> Result<()> {
         self.statistics.lock.get += 1;
         let lock_value = self.snapshot.get_cf(CF_LOCK, user_key)?;
 
@@ -206,15 +206,12 @@ impl<S: Snapshot> PointGetter<S> {
                 self.isolation_level,
             ) {
                 self.statistics.lock.processed_keys += 1;
-                if self.access_locks.contains(lock.ts) {
-                    return Ok(Some(lock));
-                }
                 Err(e.into())
             } else {
-                Ok(None)
+                Ok(())
             }
         } else {
-            Ok(None)
+            Ok(())
         }
     }
 
@@ -222,7 +219,7 @@ impl<S: Snapshot> PointGetter<S> {
     ///
     /// First, a correct version info in the Write CF will be sought. Then,
     /// value will be loaded from Default CF if necessary.
-    fn load_data(&mut self, user_key: &Key) -> Result<Option<Value>> {
+    fn load_data(&mut self, user_key: &Key) -> Result<Option<(Value, ValueExtra)>> {
         let mut use_near_seek = false;
         let mut seek_key = user_key.clone();
 
@@ -282,6 +279,8 @@ impl<S: Snapshot> PointGetter<S> {
             return Ok(None);
         }
 
+        let cursor_key = self.write_cursor.key(&mut self.statistics.write);
+        let commit_ts = Key::decode_ts_from(cursor_key)?;
         let mut write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))?;
         let mut owned_value: Vec<u8>; // To work around lifetime problem
         loop {
@@ -295,19 +294,19 @@ impl<S: Snapshot> PointGetter<S> {
                     resource_metering::record_read_keys(1);
 
                     if self.omit_value {
-                        return Ok(Some(vec![]));
+                        return Ok(Some((vec![], ValueExtra { commit_ts })));
                     }
                     match write.short_value {
                         Some(value) => {
                             // Value is carried in `write`.
                             self.statistics.processed_size += user_key.len() + value.len();
-                            return Ok(Some(value.to_vec()));
+                            return Ok(Some((value.to_vec(), ValueExtra { commit_ts })));
                         }
                         None => {
                             let start_ts = write.start_ts;
                             let value = self.load_data_from_default_cf(start_ts, user_key)?;
                             self.statistics.processed_size += user_key.len() + value.len();
-                            return Ok(Some(value));
+                            return Ok(Some((value, ValueExtra { commit_ts })));
                         }
                     }
                 }

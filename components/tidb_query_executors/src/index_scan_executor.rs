@@ -27,6 +27,7 @@ use tidb_query_datatype::{
     expr::{EvalConfig, EvalContext},
 };
 use tipb::{ColumnInfo, FieldType, IndexScan};
+use txn_types::ValueExtra;
 
 use super::util::scan_executor::*;
 use crate::interface::*;
@@ -340,6 +341,7 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
         &mut self,
         key: &[u8],
         value: &[u8],
+        _extra: ValueExtra,
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
         check_index_key(key)?;

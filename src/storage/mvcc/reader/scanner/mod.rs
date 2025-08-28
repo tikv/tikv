@@ -9,7 +9,7 @@ use std::ops::Bound;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE, CfName};
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
 use txn_types::{
-    Key, Lock, LockType, OldValue, TimeStamp, TsSet, Value, Write, WriteRef, WriteType,
+    Key, Lock, LockType, OldValue, TimeStamp, TsSet, Value, ValueExtra, Write, WriteRef, WriteType,
 };
 
 pub use self::forward::{DeltaScanner, EntryScanner, test_util};
@@ -224,11 +224,11 @@ pub enum Scanner<S: Snapshot> {
 }
 
 impl<S: Snapshot> StoreScanner for Scanner<S> {
-    fn next(&mut self) -> TxnResult<Option<(Key, Value)>> {
+    fn next(&mut self) -> TxnResult<Option<(Key, Value, ValueExtra)>> {
         fail_point!("scanner_next");
 
         match self {
-            Scanner::Forward(scanner) => Ok(scanner.read_next()?),
+            Scanner::Forward(scanner) => Ok(scanner.read_next()?.map(|(o, e)| (o.0, o.1, e))),
             Scanner::Backward(scanner) => Ok(scanner.read_next()?),
         }
     }

@@ -5,7 +5,9 @@ use std::{borrow::Cow, cmp::Ordering};
 
 use engine_traits::CF_DEFAULT;
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel, WriteConflictReason};
-use txn_types::{Key, LastChange, Lock, LockType, OldValue, TimeStamp, Value, WriteRef, WriteType};
+use txn_types::{
+    Key, LastChange, Lock, LockType, OldValue, TimeStamp, Value, ValueExtra, WriteRef, WriteType,
+};
 
 use super::ScannerConfig;
 use crate::storage::{
@@ -166,7 +168,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
     }
 
     /// Get the next key-value pair, in forward order.
-    pub fn read_next(&mut self) -> Result<Option<P::Output>> {
+    pub fn read_next(&mut self) -> Result<Option<(P::Output, ValueExtra)>> {
         if !self.is_started {
             if self.cfg.lower_bound.is_some() {
                 // TODO: `seek_to_first` is better, however it has performance issues currently.
@@ -206,7 +208,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
             //
             // `has_lock` indicates whether `current_user_key` has a corresponding `lock`.
             // If there is one, it is what current lock cursor pointing to.
-            let (mut current_user_key, has_write, has_lock) = {
+            let (mut current_user_key, has_write, has_lock, commit_ts) = {
                 let w_key = if self.cursors.write.valid()? {
                     Some(self.cursors.write.key(&mut self.statistics.write))
                 } else {
@@ -232,31 +234,33 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                         // Write cursor yields `None` but lock cursor yields something:
                         // In RC, it means we got nothing.
                         // In SI, we need to check if the lock will cause conflict.
-                        (k, false, true)
+                        (k, false, true, TimeStamp::zero())
                     }
                     (Some(k), None) => {
                         // Write cursor yields something but lock cursor yields `None`:
                         // We need to further step write cursor to our desired version
-                        (Key::truncate_ts_for(k)?, true, false)
+                        let commit_ts = Key::decode_ts_from(k)?;
+                        (Key::truncate_ts_for(k)?, true, false, commit_ts)
                     }
                     (Some(wk), Some(lk)) => {
+                        let commit_ts = Key::decode_ts_from(wk)?;
                         let write_user_key = Key::truncate_ts_for(wk)?;
                         match write_user_key.cmp(lk) {
                             Ordering::Less => {
                                 // Write cursor user key < lock cursor, it means the lock of the
                                 // current key that write cursor is pointing to does not exist.
-                                (write_user_key, true, false)
+                                (write_user_key, true, false, commit_ts)
                             }
                             Ordering::Greater => {
                                 // Write cursor user key > lock cursor, it means we got a lock of a
                                 // key that does not have a write. In SI, we need to check if the
                                 // lock will cause conflict.
-                                (lk, false, true)
+                                (lk, false, true, TimeStamp::zero())
                             }
                             Ordering::Equal => {
                                 // Write cursor user key == lock cursor, it means the lock of the
                                 // current key that write cursor is pointing to *exists*.
-                                (lk, true, true)
+                                (lk, true, true, commit_ts)
                             }
                         }
                     }
@@ -264,7 +268,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
 
                 // Use `from_encoded_slice` to reserve space for ts, so later we can append ts
                 // to the key or its clones without reallocation.
-                (Key::from_encoded_slice(res.0), res.1, res.2)
+                (Key::from_encoded_slice(res.0), res.1, res.2, res.3)
             };
 
             if has_lock {
@@ -279,7 +283,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                 )? {
                     HandleRes::Return(output) => {
                         self.statistics.processed_size += self.scan_policy.output_size(&output);
-                        return Ok(Some(output));
+                        return Ok(Some((output, ValueExtra::default())));
                     }
                     HandleRes::Skip(key) => key,
                     HandleRes::MoveToNext => continue,
@@ -297,7 +301,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                         self.statistics.write.processed_keys += 1;
                         self.statistics.processed_size += self.scan_policy.output_size(&output);
                         resource_metering::record_read_keys(1);
-                        return Ok(Some(output));
+                        return Ok(Some((output, ValueExtra { commit_ts })));
                     }
                 }
             }
@@ -870,7 +874,7 @@ where
     P: ScanPolicy<S, Output = TxnEntry> + Send,
 {
     fn next_entry(&mut self) -> TxnResult<Option<TxnEntry>> {
-        Ok(self.read_next()?)
+        Ok(self.read_next()?.map(|v| v.0))
     }
     fn take_statistics(&mut self) -> Statistics {
         std::mem::take(&mut self.statistics)

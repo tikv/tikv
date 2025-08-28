@@ -3750,7 +3750,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#89cf1fa685b99e454612f3d462836d2faa41bce1"
+source = "git+https://github.com/lcwangchao/kvproto?branch=commit_ts#9bf0d97f5c21ef834fa16c840cb54383fe572140"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -7255,6 +7255,7 @@ dependencies = [
  "thiserror 1.0.40",
  "tikv_util",
  "time 0.1.43",
+ "txn_types",
  "yatp",
 ]
 
@@ -7328,6 +7329,7 @@ dependencies = [
  "tikv_util",
  "tipb",
  "tipb_helper",
+ "txn_types",
 ]
 
 [[package]]

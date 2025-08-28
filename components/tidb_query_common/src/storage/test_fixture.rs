@@ -5,6 +5,8 @@ use std::{
     sync::Arc,
 };
 
+use txn_types::ValueExtra;
+
 use super::{Result, range::*};
 
 type ErrorBuilder = Box<dyn Send + Sync + Fn() -> crate::error::StorageError>;
@@ -84,9 +86,9 @@ impl super::Storage for FixtureStorage {
             None => Ok(None),
             Some((k, Ok(v))) => {
                 if !self.is_key_only {
-                    Ok(Some((k.clone(), v.clone())))
+                    Ok(Some((k.clone(), v.clone(), ValueExtra::default())))
                 } else {
-                    Ok(Some((k.clone(), Vec::new())))
+                    Ok(Some((k.clone(), Vec::new(), ValueExtra::default())))
                 }
             }
             Some((_k, Err(err_producer))) => Err(err_producer()),
@@ -99,9 +101,9 @@ impl super::Storage for FixtureStorage {
             None => Ok(None),
             Some(Ok(v)) => {
                 if !is_key_only {
-                    Ok(Some((range.0, v.clone())))
+                    Ok(Some((range.0, v.clone(), ValueExtra::default())))
                 } else {
-                    Ok(Some((range.0, Vec::new())))
+                    Ok(Some((range.0, Vec::new(), ValueExtra::default())))
                 }
             }
             Some(Err(err_producer)) => Err(err_producer()),

@@ -37,6 +37,13 @@ pub type Value = Vec<u8>;
 /// encoded bytes.
 pub type KvPair = (Vec<u8>, Value);
 
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ValueExtra {
+    pub commit_ts: TimeStamp,
+}
+
+pub type KvWithExtra = (Vec<u8>, Value, ValueExtra);
+
 /// Key type.
 ///
 /// Keys have 2 types of binary representation - raw and encoded. The raw

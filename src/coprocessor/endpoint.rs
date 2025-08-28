@@ -291,8 +291,8 @@ impl<E: Engine> Endpoint<E> {
                         start_ts.into(),
                         req_ctx.context.get_isolation_level(),
                         !req_ctx.context.get_not_fill_cache(),
-                        req_ctx.bypass_locks.clone(),
-                        req_ctx.access_locks.clone(),
+                        TsSet::default(),
+                        TsSet::default(),
                         req.get_is_cache_enabled(),
                     );
                     let paging_size = match req.get_paging_size() {
@@ -1146,8 +1146,8 @@ impl<E: Engine> RegionStorageAccessor for SecondarySnapStoreAccessor<E> {
             start_ts,
             pb_ctx.get_isolation_level(),
             !pb_ctx.get_not_fill_cache(),
-            self.req_ctx.bypass_locks.clone(),
-            self.req_ctx.access_locks.clone(),
+            TsSet::default(),
+            TsSet::default(),
             // If `check_has_newer_ts_data` is enabled, the internal scanner will check if there is
             // newer data in the region to tell the TiDB whether to cache the cop response or not.
             // However, the current cop-cache implementation only supports the source region.

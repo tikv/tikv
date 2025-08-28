@@ -71,7 +71,7 @@ impl<S: Store> Storage for TikvStorage<S> {
         // Unwrap is fine because we must have called `reset_range` before calling
         // `scan_next`.
         let kv = self.scanner.as_mut().unwrap().next().map_err(Error::from)?;
-        Ok(kv.map(|(k, v)| (k.into_raw().unwrap(), v)))
+        Ok(kv.map(|(k, v, e)| (k.into_raw().unwrap(), v, e)))
     }
 
     fn get(&mut self, _is_key_only: bool, range: PointRange) -> QeResult<Option<OwnedKvPair>> {
@@ -82,7 +82,7 @@ impl<S: Store> Storage for TikvStorage<S> {
             .store
             .incremental_get(&Key::from_raw(&key))
             .map_err(Error::from)?;
-        Ok(value.map(move |v| (key, v)))
+        Ok(value.map(move |v| (key, v.0, v.1)))
     }
 
     #[inline]
