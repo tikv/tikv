@@ -227,6 +227,8 @@ impl Downstream {
         let mut change_data_event = Event::default();
         change_data_event.event = Some(Event_oneof_event::Error(err_event));
         change_data_event.region_id = region_id;
+
+        CDC_EVENTS_PENDING_COUNT.with_label_values(&["error"]).inc();
         // Try it's best to send error events.
         let force_send = true;
         self.sink_event(change_data_event, force_send)
@@ -994,6 +996,9 @@ impl Delegate {
                 })),
                 ..Default::default()
             };
+            CDC_EVENTS_PENDING_COUNT
+                .with_label_values(&["observed"])
+                .inc();
             downstream.sink_event(event, false)?;
         }
         Ok(())
