@@ -19,6 +19,22 @@ thread_local! {
     static STATIC_BUF: Cell<Vec<u32>> = const {Cell::new(vec![])};
 }
 
+/// Find the kth cpu time in the iterator.
+pub fn find_kth_cpu_time<'a>(
+    iter: impl Iterator<Item = (&'a Arc<Vec<u8>>, &'a RawRecord)>,
+    k: usize,
+) -> u32 {
+    let mut buf = STATIC_BUF.with(|b| b.take());
+    buf.clear();
+    for (_, record) in iter {
+        buf.push(record.cpu_time);
+    }
+    pdqselect::select_by(&mut buf, k, |a, b| b.cmp(a));
+    let kth = buf[k];
+    STATIC_BUF.with(move |b| b.set(buf));
+    kth
+}
+
 /// Raw resource statistics record.
 #[derive(Debug, Default, Copy, Clone, PartialEq)]
 pub struct RawRecord {
@@ -71,53 +87,22 @@ impl Default for RawRecords {
 }
 
 impl RawRecords {
-    /// Keep a maximum of `k` self.records and aggregate the others into
-    /// returned [RawRecord].
-    pub fn keep_top_k(&mut self, k: usize) -> RawRecord {
-        let mut others = RawRecord::default();
-        if self.records.len() <= k {
-            return others;
+    /// Returns RawRecord aggregated by extra tag.
+    pub fn aggregate_by_extra_tag(&self) -> HashMap<Arc<Vec<u8>>, RawRecord> {
+        let mut raw_map: HashMap<Arc<Vec<u8>>, RawRecord> = HashMap::default();
+        for (tag_info, record) in self.records.iter() {
+            let tag = &tag_info.extra_attachment;
+            if tag.is_empty() {
+                continue;
+            }
+            let value = raw_map.get_mut(tag);
+            if value.is_none() {
+                raw_map.insert(tag.clone(), *record);
+                continue;
+            }
+            value.unwrap().merge(record);
         }
-        let mut buf = STATIC_BUF.with(|b| b.take());
-        buf.clear();
-        // Find kth top cpu time.
-        for record in self.records.values() {
-            buf.push(record.cpu_time);
-        }
-        pdqselect::select_by(&mut buf, k, |a, b| b.cmp(a));
-        let kth = buf[k];
-        // Evict records with cpu time less or equal than `kth`
-        let evicted_records = self.records.extract_if(|_, r| r.cpu_time <= kth);
-        // Record evicted into others
-        for (_, record) in evicted_records {
-            others.merge(&record);
-        }
-        STATIC_BUF.with(move |b| b.set(buf));
-        others
-    }
-
-    /// Returns (TopK, Evicted).
-    /// It is caller's responsibility to ensure that k < records.len().
-    pub fn top_k(
-        &self,
-        k: usize,
-    ) -> (
-        impl Iterator<Item = (&Arc<TagInfos>, &RawRecord)>,
-        impl Iterator<Item = (&Arc<TagInfos>, &RawRecord)>,
-    ) {
-        assert!(self.records.len() > k);
-        let mut buf = STATIC_BUF.with(|b| b.take());
-        buf.clear();
-        for record in self.records.values() {
-            buf.push(record.cpu_time);
-        }
-        pdqselect::select_by(&mut buf, k, |a, b| b.cmp(a));
-        let kth = buf[k];
-        STATIC_BUF.with(move |b| b.set(buf));
-        (
-            self.records.iter().filter(move |(_, v)| v.cpu_time > kth),
-            self.records.iter().filter(move |(_, v)| v.cpu_time <= kth),
-        )
+        raw_map
     }
 }
 
@@ -165,7 +150,7 @@ impl Record {
 /// [Client]: crate::client::Client
 #[derive(Debug, Default)]
 pub struct Records {
-    pub records: HashMap<Vec<u8>, Record>,
+    pub records: HashMap<Arc<Vec<u8>>, Record>,
     pub others: HashMap<u64, RawRecord>,
 }
 
@@ -179,7 +164,7 @@ impl From<Records> for Vec<ResourceUsageRecord> {
             }
             let items: Vec<GroupTagRecordItem> = record.into();
             let mut tag_record = GroupTagRecord::new();
-            tag_record.set_resource_group_tag(tag);
+            tag_record.set_resource_group_tag(tag.to_vec());
             tag_record.set_items(items.into());
             let mut r = ResourceUsageRecord::new();
             r.set_record(tag_record);
@@ -216,11 +201,11 @@ impl From<Records> for Vec<ResourceUsageRecord> {
 }
 
 impl Records {
-    /// Aggregates [RawRecords] into [Records].
+    /// Append aggregated [RawRecords] into [Records].
     pub fn append<'a>(
         &mut self,
         ts: u64,
-        iter: impl Iterator<Item = (&'a Arc<TagInfos>, &'a RawRecord)>,
+        iter: impl Iterator<Item = (&'a Arc<Vec<u8>>, &'a RawRecord)>,
     ) {
         // # Before
         //
@@ -230,7 +215,6 @@ impl Records {
         //          | t1  |  500     |
         //          | t2  |  600     |
         //          | t3  |  200     |
-        //          | t2  |  100     |
 
         // # After
         //
@@ -239,15 +223,14 @@ impl Records {
         //     | total    | $total + 500     |
         //
         // t2: | ts       | ... | 1630464417 |
-        //     | cpu time | ... |    700     |
-        //     | total    | $total + 700     |
+        //     | cpu time | ... |    600     |
+        //     | total    | $total + 600     |
         //
         // t3: | ts       | ... | 1630464417 |
         //     | cpu time | ... |    200     |
         //     | total    | $total + 200     |
 
         for (tag, raw_record) in iter {
-            let tag = &tag.extra_attachment;
             if tag.is_empty() {
                 continue;
             }
@@ -377,21 +360,21 @@ mod tests {
             region_id: 0,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: b"a".to_vec(),
+            extra_attachment: Arc::new(b"a".to_vec()),
         });
         let tag2 = Arc::new(TagInfos {
             store_id: 0,
             region_id: 0,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: b"b".to_vec(),
+            extra_attachment: Arc::new(b"b".to_vec()),
         });
         let tag3 = Arc::new(TagInfos {
             store_id: 0,
             region_id: 0,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: b"c".to_vec(),
+            extra_attachment: Arc::new(b"c".to_vec()),
         });
         let mut records = Records::default();
         let mut raw_map = HashMap::default();
@@ -424,33 +407,34 @@ mod tests {
             duration: Duration::from_secs(1),
             records: raw_map,
         };
+        let agg_map = raw.aggregate_by_extra_tag();
         assert_eq!(records.records.len(), 0);
-        records.append(raw.begin_unix_time_secs, raw.records.iter());
+        records.append(raw.begin_unix_time_secs, agg_map.iter());
         assert_eq!(records.records.len(), 3);
     }
 
     #[test]
-    fn test_raw_records_top_k() {
+    fn test_raw_records_agg_and_top_k() {
         let tag1 = Arc::new(TagInfos {
             store_id: 0,
             region_id: 0,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: b"a".to_vec(),
+            extra_attachment: Arc::new(b"a".to_vec()),
         });
         let tag2 = Arc::new(TagInfos {
             store_id: 0,
             region_id: 0,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: b"b".to_vec(),
+            extra_attachment: Arc::new(b"b".to_vec()),
         });
         let tag3 = Arc::new(TagInfos {
             store_id: 0,
             region_id: 0,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: b"c".to_vec(),
+            extra_attachment: Arc::new(b"c".to_vec()),
         });
         let mut records = HashMap::default();
         records.insert(
@@ -482,7 +466,13 @@ mod tests {
             duration: Duration::from_secs(1),
             records,
         };
-        let (top, evicted) = rs.top_k(2);
+
+        let agg_map = rs.aggregate_by_extra_tag();
+        let kth = find_kth_cpu_time(agg_map.iter(), 2);
+        let (top, evicted) = (
+            agg_map.iter().filter(move |(_, v)| v.cpu_time > kth),
+            agg_map.iter().filter(move |(_, v)| v.cpu_time <= kth),
+        );
         let others = evicted
             .map(|(_, v)| v)
             .fold(RawRecord::default(), |mut others, r| {
@@ -493,7 +483,12 @@ mod tests {
         assert_eq!(others.cpu_time, 111);
         assert_eq!(others.read_keys, 222);
         assert_eq!(others.write_keys, 333);
-        let (top, evicted) = rs.top_k(0);
+
+        let kth = find_kth_cpu_time(agg_map.iter(), 0);
+        let (top, evicted) = (
+            agg_map.iter().filter(move |(_, v)| v.cpu_time > kth),
+            agg_map.iter().filter(move |(_, v)| v.cpu_time <= kth),
+        );
         // let top = top.collect::<Vec<(&Arc<TagInfos>, &RawRecord)>>();
         let others = evicted
             .map(|(_, v)| v)
@@ -515,21 +510,21 @@ mod tests {
             region_id: 0,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: b"a".to_vec(),
+            extra_attachment: Arc::new(b"a".to_vec()),
         });
         let tag2 = Arc::new(TagInfos {
             store_id: 0,
             region_id: 0,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: b"b".to_vec(),
+            extra_attachment: Arc::new(b"b".to_vec()),
         });
         let tag3 = Arc::new(TagInfos {
             store_id: 0,
             region_id: 0,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: b"c".to_vec(),
+            extra_attachment: Arc::new(b"c".to_vec()),
         });
 
         // Keep cpu_time same for all tags.
@@ -563,9 +558,14 @@ mod tests {
             },
         );
 
+        let agg_map = raw_records.aggregate_by_extra_tag();
+        let kth = find_kth_cpu_time(agg_map.iter(), 1);
         // top.len() == 0
         // evicted.len() == 3
-        let (top, evicted) = raw_records.top_k(1);
+        let (top, evicted) = (
+            agg_map.iter().filter(move |(_, v)| v.cpu_time > kth),
+            agg_map.iter().filter(move |(_, v)| v.cpu_time <= kth),
+        );
 
         let mut records = Records::default();
         records.append(0, top);
@@ -574,5 +574,120 @@ mod tests {
             others.merge(v);
         });
         assert!(!records.is_empty());
+    }
+
+    #[test]
+    fn test_raw_records_agg() {
+        let tag1 = Arc::new(TagInfos {
+            store_id: 0,
+            region_id: 0,
+            peer_id: 0,
+            key_ranges: vec![],
+            extra_attachment: Arc::new(b"a".to_vec()),
+        });
+        let tag2 = Arc::new(TagInfos {
+            store_id: 0,
+            region_id: 0,
+            peer_id: 0,
+            key_ranges: vec![],
+            extra_attachment: Arc::new(b"b".to_vec()),
+        });
+        let tag3 = Arc::new(TagInfos {
+            store_id: 0,
+            region_id: 0,
+            peer_id: 0,
+            key_ranges: vec![],
+            extra_attachment: Arc::new(b"c".to_vec()),
+        });
+        // tag4's extra tag is equal to tag1's
+        let tag4 = Arc::new(TagInfos {
+            store_id: 0,
+            region_id: 2,
+            peer_id: 0,
+            key_ranges: vec![],
+            extra_attachment: Arc::new(b"a".to_vec()),
+        });
+        // tag5's extra tag is equal to tag1's
+        let tag5 = Arc::new(TagInfos {
+            store_id: 0,
+            region_id: 3,
+            peer_id: 0,
+            key_ranges: vec![],
+            extra_attachment: Arc::new(b"a".to_vec()),
+        });
+        // tag6's extra tag is equal to tag2's
+        let tag6 = Arc::new(TagInfos {
+            store_id: 0,
+            region_id: 5,
+            peer_id: 0,
+            key_ranges: vec![],
+            extra_attachment: Arc::new(b"b".to_vec()),
+        });
+        let mut records = HashMap::default();
+        records.insert(
+            tag1.clone(),
+            RawRecord {
+                cpu_time: 111,
+                read_keys: 222,
+                write_keys: 333,
+            },
+        );
+        records.insert(
+            tag2.clone(),
+            RawRecord {
+                cpu_time: 444,
+                read_keys: 555,
+                write_keys: 666,
+            },
+        );
+        records.insert(
+            tag3.clone(),
+            RawRecord {
+                cpu_time: 777,
+                read_keys: 888,
+                write_keys: 999,
+            },
+        );
+        records.insert(
+            tag4,
+            RawRecord {
+                cpu_time: 1110,
+                read_keys: 2220,
+                write_keys: 3330,
+            },
+        );
+        records.insert(
+            tag5,
+            RawRecord {
+                cpu_time: 4440,
+                read_keys: 5550,
+                write_keys: 6660,
+            },
+        );
+        records.insert(
+            tag6,
+            RawRecord {
+                cpu_time: 7770,
+                read_keys: 8880,
+                write_keys: 9990,
+            },
+        );
+        let rs = RawRecords {
+            begin_unix_time_secs: 1,
+            duration: Duration::from_secs(1),
+            records,
+        };
+
+        let agg_map = rs.aggregate_by_extra_tag();
+        assert_eq!(agg_map.len(), 3);
+        assert_eq!(
+            agg_map.get(&tag1.extra_attachment).unwrap().cpu_time,
+            111 + 1110 + 4440
+        );
+        assert_eq!(
+            agg_map.get(&tag2.extra_attachment).unwrap().cpu_time,
+            444 + 7770
+        );
+        assert_eq!(agg_map.get(&tag3.extra_attachment).unwrap().cpu_time, 777);
     }
 }
