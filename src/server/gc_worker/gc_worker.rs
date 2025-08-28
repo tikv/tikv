@@ -22,7 +22,7 @@ use engine_traits::{
 };
 use file_system::{IoType, WithIoType};
 use futures::executor::block_on;
-use kvproto::{kvrpcpb::Context, metapb::Region, pdpb::GcState};
+use kvproto::{kvrpcpb::Context, metapb::Region};
 use pd_client::{FeatureGate, PdClient};
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoProvider};
 use tikv_kv::{CfStatistics, CursorBuilder, Modify, SnapContext};
@@ -70,15 +70,16 @@ const GC_MAX_PENDING_TASKS: usize = 4096;
 pub const STAT_TXN_KEYMODE: &str = "txn";
 pub const STAT_RAW_KEYMODE: &str = "raw";
 
-// Provides GC states.
-pub trait GcStatesProvider: Send + 'static {
-    fn get_state(&self) -> Result<GcState>;
+/// Provides safe point.
+pub trait GcSafePointProvider: Send + 'static {
+    fn get_safe_point(&self) -> Result<TimeStamp>;
 }
 
-impl<T: PdClient + 'static> GcStatesProvider for Arc<T> {
-    fn get_state(&self) -> Result<GcState> {
-        block_on(self.get_gc_state())
-            .map_err(|e| box_err!("failed to get gc state from PD: {:?}", e))
+impl<T: PdClient + 'static> GcSafePointProvider for Arc<T> {
+    fn get_safe_point(&self) -> Result<TimeStamp> {
+        block_on(self.get_gc_safe_point())
+            .map(Into::into)
+            .map_err(|e| box_err!("failed to get safe point from PD: {:?}", e))
     }
 }
 
@@ -1254,7 +1255,7 @@ impl<E> GcWorker<E>
 where
     E: Engine<Local: KvEngine<DiskEngine = RocksEngine>>,
 {
-    pub fn start_auto_gc<S: GcStatesProvider, R: RegionInfoProvider + Clone + 'static>(
+    pub fn start_auto_gc<S: GcSafePointProvider, R: RegionInfoProvider + Clone + 'static>(
         &self,
         cfg: AutoGcConfig<S, R>,
         safe_point: Arc<AtomicU64>, // Store safe point here.
@@ -1291,9 +1292,12 @@ where
         Ok(())
     }
 
-    pub fn start_auto_compaction<S: GcStatesProvider, R: RegionInfoProvider + Clone + 'static>(
+    pub fn start_auto_compaction<
+        S: GcSafePointProvider,
+        R: RegionInfoProvider + Clone + 'static,
+    >(
         &self,
-        gc_states_provider: S,
+        safe_point_provider: S,
         region_info_provider: R,
     ) -> Result<()> {
         let mut handle = self.compaction_runner_handle.lock().unwrap();
@@ -1308,7 +1312,7 @@ where
         };
 
         let compaction_runner = CompactionRunner::new(
-            gc_states_provider,
+            safe_point_provider,
             region_info_provider,
             kv_engine,
             self.config_manager.clone(),

@@ -22,7 +22,7 @@ use super::{
     Error, ErrorInner, Result,
     compaction_filter::is_compaction_filter_allowed,
     config::GcWorkerConfigManager,
-    gc_worker::{GcStatesProvider, GcTask, schedule_gc},
+    gc_worker::{GcSafePointProvider, GcTask, schedule_gc},
 };
 use crate::{server::metrics::*, storage::Callback, tikv_util::sys::thread::StdThreadBuildWrapper};
 
@@ -34,8 +34,8 @@ const PROCESS_TYPE_GC: &str = "gc";
 const PROCESS_TYPE_SCAN: &str = "scan";
 
 /// The configurations of automatic GC.
-pub struct AutoGcConfig<S: GcStatesProvider, R: RegionInfoProvider> {
-    pub gc_states_provider: S,
+pub struct AutoGcConfig<S: GcSafePointProvider, R: RegionInfoProvider> {
+    pub safe_point_provider: S,
     pub region_info_provider: R,
 
     /// Used to find which peer of a region is on this TiKV, so that we can
@@ -54,11 +54,11 @@ pub struct AutoGcConfig<S: GcStatesProvider, R: RegionInfoProvider> {
     pub post_a_round_of_gc: Option<Box<dyn Fn() + Send>>,
 }
 
-impl<S: GcStatesProvider, R: RegionInfoProvider> AutoGcConfig<S, R> {
+impl<S: GcSafePointProvider, R: RegionInfoProvider> AutoGcConfig<S, R> {
     /// Creates a new config.
-    pub fn new(gc_states_provider: S, region_info_provider: R, self_store_id: u64) -> Self {
+    pub fn new(safe_point_provider: S, region_info_provider: R, self_store_id: u64) -> Self {
         Self {
-            gc_states_provider,
+            safe_point_provider,
             region_info_provider,
             self_store_id,
             poll_safe_point_interval: Duration::from_secs(POLL_SAFE_POINT_INTERVAL_SECS),
@@ -70,12 +70,12 @@ impl<S: GcStatesProvider, R: RegionInfoProvider> AutoGcConfig<S, R> {
     /// Creates a config for test purpose. The interval to poll safe point is as
     /// short as 0.1s and during GC it never skips checking safe point.
     pub fn new_test_cfg(
-        gc_states_provider: S,
+        safe_point_provider: S,
         region_info_provider: R,
         self_store_id: u64,
     ) -> Self {
         Self {
-            gc_states_provider,
+            safe_point_provider,
             region_info_provider,
             self_store_id,
             poll_safe_point_interval: Duration::from_millis(100),
@@ -227,7 +227,7 @@ impl GcManagerHandle {
 /// It polls safe point periodically, and when the safe point is updated,
 /// `GcManager` will start to scan all regions (whose leader is on this TiKV),
 /// and does GC on all those regions.
-pub(super) struct GcManager<S: GcStatesProvider, R: RegionInfoProvider, E: KvEngine> {
+pub(super) struct GcManager<S: GcSafePointProvider, R: RegionInfoProvider, E: KvEngine> {
     cfg: AutoGcConfig<S, R>,
 
     /// The current safe point. `GcManager` will try to update it periodically.
@@ -250,7 +250,7 @@ pub(super) struct GcManager<S: GcStatesProvider, R: RegionInfoProvider, E: KvEng
     max_concurrent_tasks: usize,
 }
 
-impl<S: GcStatesProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcManager<S, R, E> {
+impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcManager<S, R, E> {
     pub fn new(
         cfg: AutoGcConfig<S, R>,
         safe_point: Arc<AtomicU64>,
@@ -366,8 +366,8 @@ impl<S: GcStatesProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcManage
     fn try_update_safe_point(&mut self) -> bool {
         self.safe_point_last_check_time = Instant::now();
 
-        let safe_point: TimeStamp = match self.cfg.gc_states_provider.get_state() {
-            Ok(res) => res.get_gc_safe_point().into(),
+        let safe_point = match self.cfg.safe_point_provider.get_safe_point() {
+            Ok(res) => res,
             // Return false directly so we will check it a while later.
             Err(e) => {
                 error!(?e; "failed to get safe point from pd");

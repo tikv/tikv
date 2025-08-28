@@ -24,7 +24,7 @@ use txn_types::TimeStamp;
 use super::{
     Error, Result,
     config::{GcConfig, GcWorkerConfigManager},
-    gc_worker::GcStatesProvider,
+    gc_worker::GcSafePointProvider,
 };
 
 make_static_metric! {
@@ -116,8 +116,8 @@ impl CompactionRunnerHandle {
 
 /// Runs automatic compaction on TiKV
 /// Runs in a dedicated thread and continuously evaluates compaction candidates
-pub struct CompactionRunner<S: GcStatesProvider, R: RegionInfoProvider, E: KvEngine> {
-    gc_states_provider: S,
+pub struct CompactionRunner<S: GcSafePointProvider, R: RegionInfoProvider, E: KvEngine> {
+    safe_point_provider: S,
     region_info_provider: R,
     engine: E,
     stop_signal_receiver: Option<mpsc::Receiver<()>>,
@@ -125,15 +125,17 @@ pub struct CompactionRunner<S: GcStatesProvider, R: RegionInfoProvider, E: KvEng
     cfg_tracker: GcWorkerConfigManager,
 }
 
-impl<S: GcStatesProvider, R: RegionInfoProvider + 'static, E: KvEngine> CompactionRunner<S, R, E> {
+impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
+    CompactionRunner<S, R, E>
+{
     pub fn new(
-        gc_states_provider: S,
+        safe_point_provider: S,
         region_info_provider: R,
         engine: E,
         cfg_tracker: GcWorkerConfigManager,
     ) -> Self {
         Self {
-            gc_states_provider,
+            safe_point_provider,
             region_info_provider,
             engine,
             stop_signal_receiver: None,
@@ -143,9 +145,9 @@ impl<S: GcStatesProvider, R: RegionInfoProvider + 'static, E: KvEngine> Compacti
     }
 
     fn curr_safe_point(&self) -> TimeStamp {
-        self.gc_states_provider
-            .get_state()
-            .map_or(TimeStamp::zero(), |state| state.get_gc_safe_point().into())
+        self.safe_point_provider
+            .get_safe_point()
+            .unwrap_or(TimeStamp::zero())
     }
 
     /// Starts the compaction runner in a separate thread
