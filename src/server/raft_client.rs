@@ -1527,6 +1527,7 @@ impl HealthChecker {
         channel: Channel,
         max_latencies: Arc<Mutex<HashMap<u64, (f64, Instant)>>>,
     ) {
+        info!("Performing health check for store"; "self_store_id" => self_store_id, "store_id" => store_id, "conn_id" => conn_id);
         let start_time = Instant::now();
 
         let health_client = HealthClient::new(channel);
@@ -1558,6 +1559,7 @@ impl HealthChecker {
                     if latency_ms > entry.0 {
                         *entry = (latency_ms, now);
                     }
+                    info!("Health check successful"; "self_store_id" => self_store_id, "store_id" => store_id, "conn_id" => conn_id, "latency_ms" => latency_ms);
                 }
             }
             Err(e) => {
@@ -1597,9 +1599,16 @@ impl HealthChecker {
         let mut result = HashMap::default();
         for (k, (lat, ts)) in latencies.iter_mut() {
             let elapsed = now.duration_since(*ts).as_secs_f64() * 1000.;
-            let ret = lat.max(elapsed);
+            let mut ret = lat.clone();
+            // Because each elapsed time is at least the inspect interval.
+            // If take the maximum value directly, the delay that is less
+            // than the inspect_interval will be overwritten.
+            if elapsed > self.inspect_interval.as_secs_f64() * 1000. * 1.2 {
+                ret = lat.max(elapsed);
+            }
             result.insert(*k, ret);
             *lat = 0.0; // reset latency, keep timestamp
+            info!("Resetting max latency for store"; "store_id" => k, "max_latency_ms" => ret);
         }
         result
     }
