@@ -353,6 +353,7 @@ impl Sink {
             self.memory_quota.free(total_bytes as _);
             return Err(SendError::from(e));
         }
+        CDC_SCAN_SINK_FLUSH_DURATION_HISTOGRAM.observe(now.saturating_elapsed_secs());
         Ok(())
     }
 }
@@ -366,17 +367,30 @@ pub struct Drain {
 
 impl<'a> Drain {
     pub fn drain(&'a mut self) -> impl Stream<Item = (CdcEvent, usize)> + 'a {
-        let observed = (&mut self.unbounded_receiver).map(|x| (x.created, x.event, x.size));
+        let observed = (&mut self.unbounded_receiver).map(|x| {
+            CDC_EVENTS_PENDING_DURATION
+                .with_label_values(&["observed"])
+                .observe(x.created.saturating_elapsed_secs());
+            (x.created, x.event, x.size)
+        });
         let scaned = (&mut self.bounded_receiver).filter_map(|x| {
             if x.truncated.load(Ordering::Acquire) {
+                CDC_EVENTS_PENDING_DURATION
+                    .with_label_values(&["truncated"])
+                    .observe(x.created.saturating_elapsed_secs());
                 self.memory_quota.free(x.size as _);
                 return futures::future::ready(None);
             }
+            CDC_EVENTS_PENDING_DURATION
+                .with_label_values(&["scanned"])
+                .observe(x.created.saturating_elapsed_secs());
             futures::future::ready(Some((x.created, x.event, x.size)))
         });
 
         stream::select(scaned, observed).map(|(start, mut event, size)| {
-            CDC_EVENTS_PENDING_DURATION.observe(start.saturating_elapsed_secs());
+            CDC_EVENTS_PENDING_DURATION
+                .with_label_values(&["selected"])
+                .observe(start.saturating_elapsed_secs());
             if let CdcEvent::Barrier(ref mut barrier) = event {
                 if let Some(barrier) = barrier.take() {
                     // Unset barrier when it is received.
@@ -414,12 +428,24 @@ impl<'a> Drain {
             let resps_len = resps.len();
             // Events are about to be sent, free pending events memory counter.
             memory_quota.free(bytes as _);
+
+            let now = Instant::now_coarse();
             for (i, e) in resps.into_iter().enumerate() {
                 // Buffer messages and flush them at once.
                 let write_flags = WriteFlags::default().buffer_hint(i + 1 != resps_len);
                 sink.feed((e, write_flags)).await?;
             }
+
+            CDC_SCAN_DRAIN_DURATION_HISTOGRAM
+                .with_label_values(&["feed"])
+                .observe(now.saturating_elapsed_secs());
+
+            let now = Instant::now_coarse();
             sink.flush().await?;
+            CDC_SCAN_DRAIN_DURATION_HISTOGRAM
+                .with_label_values(&["flush"])
+                .observe(now.saturating_elapsed_secs());
+
             #[cfg(feature = "failpoints")]
             sleep_after_sink_flush().await;
             // Update last flush time if provided

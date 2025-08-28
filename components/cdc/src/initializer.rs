@@ -44,7 +44,7 @@ use tikv_util::{
     codec::number,
     debug, defer, error, info,
     sys::inspector::{ThreadInspector, self_thread_inspector},
-    time::{Instant, Limiter, duration_to_sec},
+    time::{Instant, Limiter},
     warn,
     worker::Scheduler,
 };
@@ -405,7 +405,7 @@ impl<E: KvEngine> Initializer<E> {
         );
 
         CDC_SCAN_DURATION_HISTOGRAM.observe(takes.as_secs_f64());
-        CDC_SCAN_SINK_DURATION_HISTOGRAM.observe(duration_to_sec(sink_time));
+        CDC_SCAN_SINK_DURATION_HISTOGRAM.observe(sink_time.as_secs_f64());
         Ok(scan_stat)
     }
 
