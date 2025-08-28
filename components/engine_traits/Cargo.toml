@@ -16,6 +16,7 @@ error_code = { workspace = true }
 fail = "0.5"
 file_system = { workspace = true }
 keys = { workspace = true }
+kll-rs = "0.1.4"
 kvproto = { workspace = true }
 log_wrappers = { workspace = true }
 protobuf = "2"

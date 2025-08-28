@@ -19,6 +19,70 @@ fn test_gc_worker_auto_compaction_with_failpoints() {
     // Test that auto compaction can be started and stopped gracefully
     // This test verifies that the auto compaction infrastructure works,
     // even though it may not actually compact in test environments
+
+    // Set up failpoint BEFORE cluster starts to catch the thread creation
+    let fp_thread_start = "gc_worker_auto_compaction_thread_start";
+    let thread_started = Arc::new(AtomicBool::new(false));
+    let thread_started_clone = thread_started.clone();
+
+    fail::cfg_callback(fp_thread_start, move || {
+        thread_started_clone.store(true, Ordering::SeqCst);
+    })
+    .unwrap();
+
+    // Set up failpoint to notify test when auto compaction main loop starts
+    let fp_start_notify = "gc_worker_auto_compaction_start";
+    let compaction_started = Arc::new(AtomicBool::new(false));
+    let compaction_started_clone = compaction_started.clone();
+
+    fail::cfg_callback(fp_start_notify, move || {
+        compaction_started_clone.store(true, Ordering::SeqCst);
+    })
+    .unwrap();
+
+    // Set up failpoint to pause execution after candidates are collected
+    let fp_pause_after_candidates = "gc_worker_auto_compaction_candidates_collected";
+    fail::cfg(fp_pause_after_candidates, "pause").unwrap();
+
+    // Set up failpoints to check which specific regions are found as candidates
+    // We expect ranges k05-k10, k10-k15, k15-k20, and k20-k35 to be candidates
+    // (high redundancy)
+    let fp_k05_k10 = "gc_worker_auto_compaction_candidate_k05_k10";
+    let k05_k10_found = Arc::new(AtomicBool::new(false));
+    let k05_k10_found_clone = k05_k10_found.clone();
+
+    fail::cfg_callback(fp_k05_k10, move || {
+        k05_k10_found_clone.store(true, Ordering::SeqCst);
+    })
+    .unwrap();
+
+    let fp_k10_k15 = "gc_worker_auto_compaction_candidate_k10_k15";
+    let k10_k15_found = Arc::new(AtomicBool::new(false));
+    let k10_k15_found_clone = k10_k15_found.clone();
+
+    fail::cfg_callback(fp_k10_k15, move || {
+        k10_k15_found_clone.store(true, Ordering::SeqCst);
+    })
+    .unwrap();
+
+    let fp_k15_k20 = "gc_worker_auto_compaction_candidate_k15_k20";
+    let k15_k20_found = Arc::new(AtomicBool::new(false));
+    let k15_k20_found_clone = k15_k20_found.clone();
+
+    fail::cfg_callback(fp_k15_k20, move || {
+        k15_k20_found_clone.store(true, Ordering::SeqCst);
+    })
+    .unwrap();
+
+    let fp_k20_k35 = "gc_worker_auto_compaction_candidate_k20_k35";
+    let k20_k35_found = Arc::new(AtomicBool::new(false));
+    let k20_k35_found_clone = k20_k35_found.clone();
+
+    fail::cfg_callback(fp_k20_k35, move || {
+        k20_k35_found_clone.store(true, Ordering::SeqCst);
+    })
+    .unwrap();
+
     let (mut cluster, client, _ctx) = must_new_cluster_with_cfg_and_kv_client_mul(1, |cluster| {
         cluster.cfg.rocksdb.writecf.disable_auto_compactions = true;
         cluster.cfg.gc.auto_compaction.check_interval = ReadableDuration::secs(1); // 1 second for fast testing
@@ -32,13 +96,9 @@ fn test_gc_worker_auto_compaction_with_failpoints() {
             .redundant_rows_percent_threshold = 10; // Low threshold for testing
     });
 
-    cluster.pd_client.disable_default_operator();
-    cluster
-        .sim
-        .write()
-        .unwrap()
-        .gc_safe_point
-        .store(17, Ordering::SeqCst);
+    // Set GC safe point through the PD client instead of sim.gc_safe_point
+    // This ensures the auto compaction's safe_point_provider gets the correct value
+    cluster.pd_client.set_gc_safe_point(17);
 
     let mut region = cluster.get_region(b"k1");
 
@@ -77,30 +137,6 @@ fn test_gc_worker_auto_compaction_with_failpoints() {
     ctx5.set_region_epoch(region5.get_region_epoch().clone());
     ctx5.set_peer(region5.get_peers()[0].clone());
 
-    // Set up failpoint to notify test when auto compaction thread starts
-    let fp_thread_start = "gc_worker_auto_compaction_thread_start";
-    let thread_started = Arc::new(AtomicBool::new(false));
-    let thread_started_clone = thread_started.clone();
-
-    fail::cfg_callback(fp_thread_start, move || {
-        thread_started_clone.store(true, Ordering::SeqCst);
-    })
-    .unwrap();
-
-    // Set up failpoint to notify test when auto compaction main loop starts
-    let fp_start_notify = "gc_worker_auto_compaction_start";
-    let compaction_started = Arc::new(AtomicBool::new(false));
-    let compaction_started_clone = compaction_started.clone();
-
-    fail::cfg_callback(fp_start_notify, move || {
-        compaction_started_clone.store(true, Ordering::SeqCst);
-    })
-    .unwrap();
-
-    // Set up failpoint to pause execution after candidates are collected
-    let fp_pause_after_candidates = "gc_worker_auto_compaction_candidates_collected";
-    fail::cfg(fp_pause_after_candidates, "pause").unwrap();
-
     let large_value = vec![b'x'; 100];
 
     // Range 1: k0-k5 (low redundancy - clean data)
@@ -137,7 +173,7 @@ fn test_gc_worker_auto_compaction_with_failpoints() {
     cluster.engines[&1].kv.flush_cf(CF_WRITE, true).unwrap();
 
     // Range 3: k10-k15 high redundancy, 15 total entries, 10 redundant versions.
-    // Estimated num of discardable versions is 2 = 10 * (17 - 15) / (25 - 15)
+    // The num of discardable versions is 5 (all key with commit_ts = 15 <= 17).
     for i in 10..15 {
         let key = format!("k{:02}", i);
         let pk = key.as_bytes().to_vec();
@@ -162,7 +198,8 @@ fn test_gc_worker_auto_compaction_with_failpoints() {
 
     // Range 4: k15-k20 (high redundancy with more versions before GC safe point)
     // 20 total entries, 15 redundant versions.
-    // Estimated num of discardable versions is 7 = 15 * (17 - 10) / (25 - 10)
+    // The num of discardable versions is 10 (all key with commit_ts = 10, 15 <=
+    // 17).
     for i in 15..20 {
         let key = format!("k{:02}", i);
         let pk = key.as_bytes().to_vec();
@@ -186,10 +223,10 @@ fn test_gc_worker_auto_compaction_with_failpoints() {
     // Range 5: k20-k35 (write ts 10-25, delete ts 15-30)
     // Each key has 2 versions: 1 write and 1 delete
     // 30 total entries, 15 redundant versions. 15 deletes.
-    // Estimated num of discardable versions is:
-    //  discardable_mvccs = 15 * (17 - 10) / (24 - 10) ~= 8
-    //  discardable_deletes = 15 * (17 - 15) / (29 - 15) ~= 2
-    // Total discardable = 8 + 2 = 10
+    // The num of discardable versions is:
+    //  discardable_mvccs = 8 (10 <= commit_ts <= 17)
+    //  discardable_deletes = 3 (15 <= commit_ts <= 17)
+    // Total discardable = 8 + 3 = 11
     for i in 20..35 {
         let key = format!("k{:02}", i);
         let pk = key.as_bytes().to_vec();
@@ -233,15 +270,6 @@ fn test_gc_worker_auto_compaction_with_failpoints() {
         timeout -= 1;
     }
 
-    if !thread_started.load(Ordering::SeqCst) {
-        // Auto compaction couldn't start (likely due to test engine limitations)
-        // This is acceptable - just verify no crash occurred
-        fail::remove(fp_thread_start);
-        fail::remove(fp_start_notify);
-        fail::remove(fp_pause_after_candidates);
-        return;
-    }
-
     // Auto compaction thread started successfully, now test the full flow
     assert!(
         thread_started.load(Ordering::SeqCst),
@@ -262,45 +290,6 @@ fn test_gc_worker_auto_compaction_with_failpoints() {
     // Remove the start notify failpoint and the pause to allow execution to proceed
     fail::remove(fp_start_notify);
     fail::remove(fp_pause_after_candidates);
-
-    // Set up failpoints to check which specific regions are found as candidates
-    // We expect ranges k05-k10, k10-k15, k15-k20, and k20-k35 to be candidates
-    // (high redundancy)
-    let fp_k05_k10 = "gc_worker_auto_compaction_candidate_k05_k10";
-    let k05_k10_found = Arc::new(AtomicBool::new(false));
-    let k05_k10_found_clone = k05_k10_found.clone();
-
-    fail::cfg_callback(fp_k05_k10, move || {
-        k05_k10_found_clone.store(true, Ordering::SeqCst);
-    })
-    .unwrap();
-
-    let fp_k10_k15 = "gc_worker_auto_compaction_candidate_k10_k15";
-    let k10_k15_found = Arc::new(AtomicBool::new(false));
-    let k10_k15_found_clone = k10_k15_found.clone();
-
-    fail::cfg_callback(fp_k10_k15, move || {
-        k10_k15_found_clone.store(true, Ordering::SeqCst);
-    })
-    .unwrap();
-
-    let fp_k15_k20 = "gc_worker_auto_compaction_candidate_k15_k20";
-    let k15_k20_found = Arc::new(AtomicBool::new(false));
-    let k15_k20_found_clone = k15_k20_found.clone();
-
-    fail::cfg_callback(fp_k15_k20, move || {
-        k15_k20_found_clone.store(true, Ordering::SeqCst);
-    })
-    .unwrap();
-
-    let fp_k20_k35 = "gc_worker_auto_compaction_candidate_k20_k35";
-    let k20_k35_found = Arc::new(AtomicBool::new(false));
-    let k20_k35_found_clone = k20_k35_found.clone();
-
-    fail::cfg_callback(fp_k20_k35, move || {
-        k20_k35_found_clone.store(true, Ordering::SeqCst);
-    })
-    .unwrap();
 
     // Wait for candidate evaluation to complete
     timeout = 100; // 10 seconds  
