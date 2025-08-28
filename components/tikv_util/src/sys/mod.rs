@@ -192,9 +192,11 @@ pub fn needs_force_compact(
     evict_cache_on_memory_ratio: f64,
 ) -> bool {
     let usage = get_global_memory_usage() as f64;
+    if usage == 0.0 {
+        return false;
+    }
     *over_ratio = raftengine_memory_usage / (usage * evict_cache_on_memory_ratio);
     let high_water = get_memory_usage_high_water() as f64;
-
     // we need to check both raftengine memory usage and system memory usage
     if *over_ratio >= 1.0 || usage >= high_water * MEMORY_HIGH_WATER_PERCENTAGE_MARGIN {
         return true;

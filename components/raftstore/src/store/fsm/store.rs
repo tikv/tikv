@@ -3229,6 +3229,10 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
     }
 
     fn check_force_gc_needed(&self) -> Option<f64> {
+        fail_point!("needs_force_compact", |_| {
+            info!("force GC triggered by failpoint for testing");
+            Some(1.0) // Return a test over_ratio
+        });
         // If there is no region leader growth, no need to check
         if self.fsm.store.region_write_rate.is_empty() {
             return None;
