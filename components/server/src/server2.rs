@@ -569,9 +569,16 @@ where
             Box::new(cfg_manager),
         );
         if let Some(resource_ctl) = &self.resource_manager {
+            struct DummpyPublisher;
+            impl resource_control::ResourcePublisher for DummpyPublisher {
+                fn publish(&self, _event: resource_control::ResourceEvent) {}
+            }
             cfg_controller.register(
                 tikv::config::Module::ResourceControl,
-                Box::new(ResourceContrlCfgMgr::new(resource_ctl.get_config().clone())),
+                Box::new(ResourceContrlCfgMgr::new(
+                    resource_ctl.get_config().clone(),
+                    Arc::new(DummpyPublisher),
+                )),
             );
         }
 

@@ -914,6 +914,26 @@ fn test_serde_custom_tikv_config() {
     value.resource_control = ResourceControlConfig {
         enabled: false,
         priority_ctl_strategy: PriorityCtlStrategy::Aggressive,
+        dry_run: true,
+        debug: true,
+        window_size: ReadableDuration::secs(120),
+        stats_interval: ReadableDuration::secs(2),
+        limiter_stats_interval: ReadableDuration::secs(2),
+        limiter_timeout: ReadableDuration::millis(100),
+        smoothing_factor: 0.5,
+        active_quota_ratio: 0.5,
+        min_quota_ratio: 0.1,
+        severity_stressed_factor: 0.8,
+        severity_critical_factor: 0.9,
+        severity_exhausted_factor: 0.95,
+        severity_threshold_stressed: 0.8,
+        severity_threshold_critical: 0.9,
+        severity_threshold_exhausted: 1.0,
+        max_read_bytes_factor: 0.3,
+        ignore_resource_groups: "[\"test\"]".to_string(),
+        max_read_cpu_ratio: 0.2,
+        max_read_bytes_per_core_per_second: ReadableSize::mb(3),
+        max_read_wait_time: ReadableDuration::millis(120),
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");
