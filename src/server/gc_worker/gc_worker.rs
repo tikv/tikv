@@ -22,7 +22,7 @@ use engine_traits::{
 };
 use file_system::{IoType, WithIoType};
 use futures::executor::block_on;
-use kvproto::{kvrpcpb::Context, metapb::Region};
+use kvproto::{kvrpcpb::Context, metapb::Region, pdpb::GcState};
 use pd_client::{FeatureGate, PdClient};
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoProvider};
 use tikv_kv::{CfStatistics, CursorBuilder, Modify, SnapContext};
@@ -77,9 +77,9 @@ pub trait GcSafePointProvider: Send + 'static {
 
 impl<T: PdClient + 'static> GcSafePointProvider for Arc<T> {
     fn get_safe_point(&self) -> Result<TimeStamp> {
-        block_on(self.get_gc_safe_point())
-            .map(Into::into)
-            .map_err(|e| box_err!("failed to get safe point from PD: {:?}", e))
+	let state: GcState = block_on(self.get_gc_state())
+	    .map_err(|e| -> Error { box_err!("failed to get gc state from PD: {:?}", e)})?;
+	Ok(state.get_gc_safe_point().into())
     }
 }
 
