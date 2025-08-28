@@ -651,7 +651,7 @@ impl PdClient for RpcClient {
                             info!("cancel region heartbeat sender");
                         }
                         Err(e) => {
-                            error!(?e; "failed to send heartbeat");
+                            warn!("failed to send heartbeat"; "err" => ?e);
                         }
                     };
                 });

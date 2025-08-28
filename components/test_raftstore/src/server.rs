@@ -86,7 +86,7 @@ use tikv_util::{
     quota_limiter::QuotaLimiter,
     sys::thread::ThreadBuildWrapper,
     time::ThreadReadId,
-    worker::{Builder as WorkerBuilder, LazyWorker, Scheduler},
+    worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
 };
 use tokio::runtime::Builder as TokioBuilder;
 use txn_types::TxnExtraScheduler;
@@ -173,6 +173,7 @@ pub struct ServerCluster {
     pub causal_ts_providers: HashMap<u64, Arc<CausalTsProviderImpl>>,
     pub encryption: Option<Arc<DataKeyManager>>,
     pub in_memory_engines: HashMap<u64, Option<HybridEngineImpl>>,
+    pub gc_safe_point: Arc<AtomicU64>,
 }
 
 impl ServerCluster {
@@ -219,6 +220,7 @@ impl ServerCluster {
             txn_extra_schedulers: HashMap::default(),
             causal_ts_providers: HashMap::default(),
             encryption: None,
+            gc_safe_point: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -374,6 +376,7 @@ impl ServerCluster {
         let mut raft_kv = RaftKv::new(
             sim_router.clone(),
             engines.kv.clone(),
+            Some(region_info_accessor.clone()),
             region_info_accessor.region_leaders(),
         );
 
@@ -403,6 +406,14 @@ impl ServerCluster {
             Arc::new(region_info_accessor.clone()),
         );
         gc_worker.start(node_id, coprocessor_host.clone()).unwrap();
+
+        if let Err(e) =
+            gc_worker.start_auto_compaction(self.pd_client.clone(), region_info_accessor.clone())
+        {
+            warn!("failed to start auto_compaction: {}", e);
+        } else {
+            info!("Auto compaction started successfully for node {}", node_id);
+        }
 
         let txn_status_cache = Arc::new(TxnStatusCache::new_for_test());
         let rts_worker = if cfg.resolved_ts.enable {
@@ -618,6 +629,7 @@ impl ServerCluster {
                 Arc::new(DefaultGrpcMessageFilter::new(
                     server_cfg.value().reject_messages_on_memory_ratio,
                 )),
+                Worker::new("test-background-worker"),
             )
             .unwrap();
             svr.register_service(create_import_sst(import_service.clone()));
@@ -657,8 +669,12 @@ impl ServerCluster {
         let max_unified_read_pool_thread_count = cfg.readpool.unified.max_thread_count;
         let pessimistic_txn_cfg = cfg.tikv.pessimistic_txn;
 
-        let split_check_runner =
-            SplitCheckRunner::new(engines.kv.clone(), router.clone(), coprocessor_host.clone());
+        let split_check_runner = SplitCheckRunner::new(
+            engines.kv.clone(),
+            router.clone(),
+            coprocessor_host.clone(),
+            Some(Arc::new(region_info_accessor.clone())),
+        );
         let split_check_scheduler = bg_worker.start("split-check", split_check_runner);
         let split_config_manager =
             SplitConfigManager::new(Arc::new(VersionTrack::new(cfg.tikv.split)));
@@ -685,7 +701,7 @@ impl ServerCluster {
             causal_ts_provider,
             DiskCheckRunner::dummy(),
             GrpcServiceManager::dummy(),
-            Arc::new(AtomicU64::new(0)),
+            self.gc_safe_point.clone(),
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
@@ -730,7 +746,12 @@ impl ServerCluster {
         self.concurrency_managers
             .insert(node_id, concurrency_manager);
 
-        let client = RaftClient::new(node_id, self.conn_builder.clone());
+        let client = RaftClient::new(
+            node_id,
+            self.conn_builder.clone(),
+            Duration::from_millis(10),
+            Worker::new("test-worker"),
+        );
         self.raft_clients.insert(node_id, client);
         Ok(node_id)
     }
@@ -913,7 +934,7 @@ impl Cluster<ServerCluster> {
             ctx.set_peer(leader);
             ctx.set_region_epoch(epoch);
 
-            let mut storage = self.sim.rl().storages.get(&store_id).unwrap().clone();
+            let mut storage = self.must_get_raft_engine(store_id);
             let snap_ctx = SnapContext {
                 pb_ctx: &ctx,
                 ..snap_ctx.clone()
@@ -927,6 +948,10 @@ impl Cluster<ServerCluster> {
             thread::sleep(Duration::from_millis(200));
         }
         panic!("failed to get snapshot of region {}", region_id);
+    }
+
+    pub fn must_get_raft_engine(&self, store_id: u64) -> SimulateEngine {
+        self.sim.rl().storages.get(&store_id).unwrap().clone()
     }
 
     pub fn raft_extension(&self, node_id: u64) -> SimulateRaftExtension {

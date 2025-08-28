@@ -184,9 +184,9 @@ dependencies = [
 
 [[package]]
 name = "async-compression"
-version = "0.4.12"
+version = "0.4.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fec134f64e2bc57411226dfc4e52dec859ddfc7e711fc5e07b612584f000e4aa"
+checksum = "ddb939d66e4ae03cee6091612804ba446b12878410cfa17f785f4dd67d4014e8"
 dependencies = [
  "futures-core",
  "futures-io",
@@ -3821,7 +3821,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#489433e1cbaba553500c5c9145bf7290f58d9e73"
+source = "git+https://github.com/tikv/rust-rocksdb.git#755d152ec4eb443039296ceecf9a072a1142e014"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -3840,7 +3840,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#489433e1cbaba553500c5c9145bf7290f58d9e73"
+source = "git+https://github.com/tikv/rust-rocksdb.git#755d152ec4eb443039296ceecf9a072a1142e014"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -5233,7 +5233,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.4.2"
-source = "git+https://github.com/tikv/raft-engine.git#392f5e66f8286dc1b6d7cf69f2bc20ed72d40123"
+source = "git+https://github.com/tikv/raft-engine.git#03f77d90c09793a6f79411ff5f88233715eb23da"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -5267,7 +5267,7 @@ dependencies = [
 [[package]]
 name = "raft-engine-ctl"
 version = "0.4.2"
-source = "git+https://github.com/tikv/raft-engine.git#392f5e66f8286dc1b6d7cf69f2bc20ed72d40123"
+source = "git+https://github.com/tikv/raft-engine.git#03f77d90c09793a6f79411ff5f88233715eb23da"
 dependencies = [
  "clap 3.1.6",
  "env_logger 0.10.0",
@@ -5835,7 +5835,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#489433e1cbaba553500c5c9145bf7290f58d9e73"
+source = "git+https://github.com/tikv/rust-rocksdb.git#755d152ec4eb443039296ceecf9a072a1142e014"
 dependencies = [
  "libc 0.2.151",
  "librocksdb_sys",
@@ -7240,6 +7240,7 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "api_version",
+ "async-trait",
  "byteorder",
  "derive_more 0.99.3",
  "error_code",
@@ -7249,6 +7250,7 @@ dependencies = [
  "log_wrappers",
  "prometheus",
  "prometheus-static-metric",
+ "raft",
  "serde_json",
  "thiserror 1.0.40",
  "tikv_util",
@@ -7367,7 +7369,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "9.0.0-beta.1"
+version = "9.0.0-beta.2"
 dependencies = [
  "anyhow",
  "api_version",

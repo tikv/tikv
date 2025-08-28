@@ -833,6 +833,7 @@ where
             Arc::new(DefaultGrpcMessageFilter::new(
                 server_config.value().reject_messages_on_memory_ratio,
             )),
+            self.core.background_worker.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
         cfg_controller.register(
@@ -1105,6 +1106,7 @@ where
         let cdc_service = cdc::Service::new(
             self.cdc_scheduler.as_ref().unwrap().clone(),
             self.cdc_memory_quota.as_ref().unwrap().clone(),
+            Arc::new(self.core.background_worker.clone()),
         );
         if servers
             .server

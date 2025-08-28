@@ -58,7 +58,7 @@ use super::{
 use crate::{
     import::duplicate_detect::DuplicateDetector,
     send_rpc_response,
-    server::CONFIG_ROCKSDB_GAUGE,
+    server::CONFIG_ROCKSDB_CF_GAUGE,
     storage::{self, errors::extract_region_error_from_error},
     tikv_util::sys::thread::ThreadBuildWrapper,
 };
@@ -187,6 +187,7 @@ pub struct ImportSstService<E: Engine> {
     importer: Arc<SstImporter<E::Local>>,
     limiter: Limiter,
     ingest_latch: Arc<IngestLatch>,
+    ingest_admission_guard: Arc<Mutex<()>>,
     raft_entry_max_size: ReadableSize,
     region_info_accessor: Arc<RegionInfoAccessor>,
 
@@ -446,6 +447,7 @@ impl<E: Engine> ImportSstService<E> {
             importer,
             limiter: Limiter::new(f64::INFINITY),
             ingest_latch: Arc::default(),
+            ingest_admission_guard: Arc::default(),
             raft_entry_max_size,
             region_info_accessor,
             writer,
@@ -753,62 +755,71 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
     // future.
     fn switch_mode(
         &mut self,
-        ctx: RpcContext<'_>,
+        _ctx: RpcContext<'_>,
         mut req: SwitchModeRequest,
         sink: UnarySink<SwitchModeResponse>,
     ) {
         let label = "switch_mode";
         IMPORT_RPC_COUNT.with_label_values(&[label]).inc();
         let timer = Instant::now_coarse();
+        let importer = self.importer.clone();
+        let tablets = self.tablets.clone();
 
-        let res = {
-            fn mf(cf: &str, name: &str, v: f64) {
-                CONFIG_ROCKSDB_GAUGE.with_label_values(&[cf, name]).set(v);
-            }
+        let task = async move {
+            let req_mode = req.get_mode();
+            let handle = tokio::task::spawn_blocking(move || {
+                fn mf(cf: &str, name: &str, v: f64) {
+                    CONFIG_ROCKSDB_CF_GAUGE
+                        .with_label_values(&[cf, name])
+                        .set(v);
+                }
 
-            match &self.tablets {
-                LocalTablets::Singleton(tablet) => match req.get_mode() {
-                    SwitchMode::Normal => self.importer.enter_normal_mode(tablet.clone(), mf),
-                    SwitchMode::Import => self.importer.enter_import_mode(tablet.clone(), mf),
-                },
-                LocalTablets::Registry(_) => {
-                    if req.get_mode() == SwitchMode::Import {
-                        if !req.get_ranges().is_empty() {
-                            let ranges = req.take_ranges().to_vec();
-                            self.importer.ranges_enter_import_mode(ranges);
-                            Ok(true)
+                match tablets {
+                    LocalTablets::Singleton(tablet) => match req.get_mode() {
+                        SwitchMode::Normal => importer.enter_normal_mode(tablet, mf),
+                        SwitchMode::Import => importer.enter_import_mode(tablet, mf),
+                    },
+                    LocalTablets::Registry(_) => {
+                        if req.get_mode() == SwitchMode::Import {
+                            if !req.get_ranges().is_empty() {
+                                let ranges = req.take_ranges().to_vec();
+                                importer.ranges_enter_import_mode(ranges);
+                                Ok(true)
+                            } else {
+                                Err(sst_importer::Error::Engine(
+                                    "partitioned-raft-kv only support switch mode with range set"
+                                        .into(),
+                                ))
+                            }
                         } else {
-                            Err(sst_importer::Error::Engine(
-                                "partitioned-raft-kv only support switch mode with range set"
-                                    .into(),
-                            ))
-                        }
-                    } else {
-                        // case SwitchMode::Normal
-                        if !req.get_ranges().is_empty() {
-                            let ranges = req.take_ranges().to_vec();
-                            self.importer.clear_import_mode_regions(ranges);
-                            Ok(true)
-                        } else {
-                            Err(sst_importer::Error::Engine(
-                                "partitioned-raft-kv only support switch mode with range set"
-                                    .into(),
-                            ))
+                            // case SwitchMode::Normal
+                            if !req.get_ranges().is_empty() {
+                                let ranges = req.take_ranges().to_vec();
+                                importer.clear_import_mode_regions(ranges);
+                                Ok(true)
+                            } else {
+                                Err(sst_importer::Error::Engine(
+                                    "partitioned-raft-kv only support switch mode with range set"
+                                        .into(),
+                                ))
+                            }
                         }
                     }
                 }
+            });
+            match handle.await.map_err(|e| Error::Io(e.into())) {
+                Ok(res) => match res {
+                    Ok(_) => info!("switch mode"; "mode" => ?req_mode),
+                    Err(ref e) => error!(%*e; "switch mode failed"; "mode" => ?req_mode,),
+                },
+                Err(ref e) => {
+                    error!(%*e; "joining the background job failed"; "mode" => ?req_mode,)
+                }
             }
-        };
-        match res {
-            Ok(_) => info!("switch mode"; "mode" => ?req.get_mode()),
-            Err(ref e) => error!(%*e; "switch mode failed"; "mode" => ?req.get_mode(),),
-        }
-
-        let task = async move {
             defer! { IMPORT_RPC_COUNT.with_label_values(&[label]).dec() }
             crate::send_rpc_response!(Ok(SwitchModeResponse::default()), sink, label, timer);
         };
-        ctx.spawn(task);
+        self.threads.spawn(task);
     }
 
     /// Receive SST from client and save the file for later ingesting.
@@ -1052,6 +1063,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let tablets = self.tablets.clone();
         let store_meta = self.store_meta.clone();
         let ingest_latch = self.ingest_latch.clone();
+        let ingest_admission_guard = self.ingest_admission_guard.clone();
 
         let handle_task = async move {
             defer! { IMPORT_RPC_COUNT.with_label_values(&[label]).dec() }
@@ -1066,6 +1078,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 &store_meta,
                 &import,
                 &ingest_latch,
+                &ingest_admission_guard,
                 label,
             )
             .await;
@@ -1090,6 +1103,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let tablets = self.tablets.clone();
         let store_meta = self.store_meta.clone();
         let ingest_latch = self.ingest_latch.clone();
+        let ingest_admission_guard = self.ingest_admission_guard.clone();
 
         let handle_task = async move {
             defer! { IMPORT_RPC_COUNT.with_label_values(&[label]).dec() }
@@ -1101,6 +1115,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 &store_meta,
                 &import,
                 &ingest_latch,
+                &ingest_admission_guard,
                 label,
             )
             .await;
@@ -1539,7 +1554,7 @@ mod test {
     fn convert_write_batch_to_request_raftkv1(ctx: &Context, batch: WriteData) -> RaftCmdRequest {
         let reqs: Vec<Request> = batch.modifies.into_iter().map(Into::into).collect();
         let txn_extra = batch.extra;
-        let mut header = raftkv::new_request_header(ctx);
+        let mut header = raftkv::new_request_header(ctx, None);
         if batch.avoid_batch {
             header.set_uuid(uuid::Uuid::new_v4().as_bytes().to_vec());
         }

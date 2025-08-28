@@ -17,7 +17,7 @@ use pd_client::{
     meta_storage::{Checked, Get, MetaStorageClient, Sourced, Watch},
 };
 use serde::{Deserialize, Serialize};
-use tikv_util::{error, info, timer::GLOBAL_TIMER_HANDLE};
+use tikv_util::{error, info, timer::GLOBAL_TIMER_HANDLE, warn};
 
 use crate::{ResourceGroupManager, resource_limiter::ResourceType};
 
@@ -88,7 +88,7 @@ impl ResourceManagerService {
                             }});
                     }
                     Err(PdError::DataCompacted(msg)) => {
-                        error!("required revision has been compacted"; "err" => ?msg);
+                        warn!("required revision has been compacted"; "err" => ?msg);
                         self.reload_all_resource_groups().await;
                         cancel.abort();
                         continue 'outer;

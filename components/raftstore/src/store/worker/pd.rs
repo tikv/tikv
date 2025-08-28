@@ -6,7 +6,7 @@ use std::{
     fmt::{self, Display, Formatter},
     io, mem,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, RwLock,
         atomic::Ordering,
         mpsc::{self, Receiver, Sender, SyncSender},
     },
@@ -109,13 +109,13 @@ where
 {
     fn report_read_stats(&self, read_stats: ReadStats) {
         if let Err(e) = self.schedule(Task::ReadStats { read_stats }) {
-            error!("Failed to send read flow statistics"; "err" => ?e);
+            warn!("Failed to send read flow statistics"; "err" => ?e);
         }
     }
 
     fn report_write_stats(&self, write_stats: WriteStats) {
         if let Err(e) = self.schedule(Task::WriteStats { write_stats }) {
-            error!("Failed to send write flow statistics"; "err" => ?e);
+            warn!("Failed to send write flow statistics"; "err" => ?e);
         }
     }
 }
@@ -606,7 +606,7 @@ where
             min_resolved_ts,
         };
         if let Err(e) = self.0.schedule(task) {
-            error!(
+            warn!(
                 "failed to send min resolved ts to pd worker";
                 "err" => ?e,
             );
@@ -616,7 +616,7 @@ where
     fn auto_split(&self, split_infos: Vec<SplitInfo>) {
         let task = Task::AutoSplit { split_infos };
         if let Err(e) = self.0.schedule(task) {
-            error!(
+            warn!(
                 "failed to send split infos to pd worker";
                 "err" => ?e,
             );
@@ -628,7 +628,7 @@ where
                 "tick" => timer_tick);
         let task = Task::InspectLatency { factor };
         if let Err(e) = self.0.schedule(task) {
-            error!(
+            warn!(
                 "failed to send inspect raftstore latency task to pd worker";
                 "err" => ?e,
             );
@@ -924,7 +924,7 @@ where
     store_id: u64,
     pd_client: Arc<T>,
     router: RaftRouter<EK, ER>,
-    region_peers: HashMap<u64, PeerStat>,
+    region_peers: Arc<RwLock<HashMap<u64, PeerStat>>>,
     region_buckets: HashMap<u64, ReportBucket>,
     store_stat: StoreStat,
     is_hb_receiver_scheduled: bool,
@@ -1026,7 +1026,7 @@ where
             pd_client,
             router,
             is_hb_receiver_scheduled: false,
-            region_peers: HashMap::default(),
+            region_peers: Arc::new(RwLock::new(HashMap::default())),
             region_buckets: HashMap::default(),
             store_stat,
             start_ts: UnixSecs::now(),
@@ -1245,29 +1245,32 @@ where
         dr_autosync_status: Option<StoreDrAutoSyncStatus>,
     ) {
         let mut report_peers = HashMap::default();
-        for (region_id, region_peer) in &mut self.region_peers {
-            let read_bytes = region_peer.read_bytes - region_peer.last_store_report_read_bytes;
-            let read_keys = region_peer.read_keys - region_peer.last_store_report_read_keys;
-            let query_stats = region_peer
-                .query_stats
-                .sub_query_stats(&region_peer.last_store_report_query_stats);
-            region_peer.last_store_report_read_bytes = region_peer.read_bytes;
-            region_peer.last_store_report_read_keys = region_peer.read_keys;
-            region_peer
-                .last_store_report_query_stats
-                .fill_query_stats(&region_peer.query_stats);
-            if read_bytes < hotspot_byte_report_threshold()
-                && read_keys < hotspot_key_report_threshold()
-                && query_stats.get_read_query_num() < hotspot_query_num_report_threshold()
-            {
-                continue;
+        {
+            let mut region_peers = self.region_peers.write().unwrap();
+            for (region_id, region_peer) in region_peers.iter_mut() {
+                let read_bytes = region_peer.read_bytes - region_peer.last_store_report_read_bytes;
+                let read_keys = region_peer.read_keys - region_peer.last_store_report_read_keys;
+                let query_stats = region_peer
+                    .query_stats
+                    .sub_query_stats(&region_peer.last_store_report_query_stats);
+                region_peer.last_store_report_read_bytes = region_peer.read_bytes;
+                region_peer.last_store_report_read_keys = region_peer.read_keys;
+                region_peer
+                    .last_store_report_query_stats
+                    .fill_query_stats(&region_peer.query_stats);
+                if read_bytes < hotspot_byte_report_threshold()
+                    && read_keys < hotspot_key_report_threshold()
+                    && query_stats.get_read_query_num() < hotspot_query_num_report_threshold()
+                {
+                    continue;
+                }
+                let mut read_stat = pdpb::PeerStat::default();
+                read_stat.set_region_id(*region_id);
+                read_stat.set_read_keys(read_keys);
+                read_stat.set_read_bytes(read_bytes);
+                read_stat.set_query_stats(query_stats.0);
+                report_peers.insert(*region_id, read_stat);
             }
-            let mut read_stat = pdpb::PeerStat::default();
-            read_stat.set_region_id(*region_id);
-            read_stat.set_read_keys(read_keys);
-            read_stat.set_read_bytes(read_bytes);
-            read_stat.set_query_stats(query_stats.0);
-            report_peers.insert(*region_id, read_stat);
         }
 
         stats = collect_report_read_peer_stats(HOTSPOT_REPORT_CAPACITY, report_peers, stats);
@@ -1345,6 +1348,7 @@ where
 
         let scheduler = self.scheduler.clone();
         let router = self.router.clone();
+        let region_peers = self.region_peers.clone();
         let mut snap_mgr = self.snap_mgr.clone();
         let resp = self
             .pd_client
@@ -1411,13 +1415,39 @@ where
                             }
                         }
                     }
-                    // Forcely awaken all hibernated regions if there existed slow stores in this
-                    // cluster.
+                    // Force awaken all hibernated regions if there are slow stores in this
+                    // cluster. To mitigate the impact of stalls when awakening too many regions,
+                    // we break up all regions into small batches.
                     if let Some(awaken_regions) = resp.awaken_regions.take() {
                         info!("forcely awaken hibernated regions in this store");
-                        let _ = router.send_store_msg(StoreMsg::AwakenRegions {
-                            abnormal_stores: awaken_regions.get_abnormal_stores().to_vec(),
-                        });
+                        let abnormal_stores = awaken_regions.get_abnormal_stores().to_vec();
+                        // The chunk_size of 1024 is an empirical batch size that balances
+                        // between generating too many `StoreMsg::AwakenRegions` messages and
+                        // keeping each batch small enough to avoid stalling Raftstore for
+                        // extended periods.
+                        let chunk_size = 1024;
+                        let mut region_ids = Vec::with_capacity(chunk_size);
+
+                        for (id, _) in region_peers.read().unwrap().iter() {
+                            region_ids.push(*id);
+
+                            // Send batch when it reaches the chunk size
+                            if region_ids.len() >= chunk_size {
+                                let _ = router.send_store_msg(StoreMsg::AwakenRegions {
+                                    abnormal_stores: abnormal_stores.clone(),
+                                    region_ids: std::mem::take(&mut region_ids),
+                                });
+                                region_ids.reserve(chunk_size);
+                            }
+                        }
+
+                        // Send remaining regions if any
+                        if !region_ids.is_empty() {
+                            let _ = router.send_store_msg(StoreMsg::AwakenRegions {
+                                abnormal_stores: abnormal_stores.clone(),
+                                region_ids,
+                            });
+                        }
                     }
                     // Control grpc server.
                     if let Some(op) = resp.control_grpc.take() {
@@ -1459,7 +1489,7 @@ where
                     }
                 }
                 Err(e) => {
-                    error!("store heartbeat failed"; "err" => ?e);
+                    warn!("store heartbeat failed"; "err" => ?e);
                 }
             }
         };
@@ -1581,7 +1611,7 @@ where
                         .inc();
                 }
                 Err(e) => {
-                    error!("get region failed"; "err" => ?e);
+                    warn!("get region failed"; "err" => ?e);
                 }
             }
         };
@@ -1714,15 +1744,18 @@ where
 
     fn handle_read_stats(&mut self, mut read_stats: ReadStats) {
         for (region_id, region_info) in read_stats.region_infos.iter_mut() {
-            let peer_stat = self.region_peers.entry(*region_id).or_default();
-            peer_stat.read_bytes += region_info.flow.read_bytes as u64;
-            peer_stat.read_keys += region_info.flow.read_keys as u64;
-            self.store_stat.engine_total_bytes_read += region_info.flow.read_bytes as u64;
-            self.store_stat.engine_total_keys_read += region_info.flow.read_keys as u64;
-            peer_stat
-                .query_stats
-                .add_query_stats(&region_info.query_stats.0);
-            peer_stat.cop_detail.add(&region_info.cop_detail);
+            {
+                let mut region_peers = self.region_peers.write().unwrap();
+                let peer_stat = region_peers.entry(*region_id).or_default();
+                peer_stat.read_bytes += region_info.flow.read_bytes as u64;
+                peer_stat.read_keys += region_info.flow.read_keys as u64;
+                self.store_stat.engine_total_bytes_read += region_info.flow.read_bytes as u64;
+                self.store_stat.engine_total_keys_read += region_info.flow.read_keys as u64;
+                peer_stat
+                    .query_stats
+                    .add_query_stats(&region_info.query_stats.0);
+                peer_stat.cop_detail.add(&region_info.cop_detail);
+            }
             self.store_stat
                 .engine_total_query_num
                 .add_query_stats(&region_info.query_stats.0);
@@ -1737,8 +1770,11 @@ where
 
     fn handle_write_stats(&mut self, mut write_stats: WriteStats) {
         for (region_id, region_info) in write_stats.region_infos.iter_mut() {
-            let peer_stat = self.region_peers.entry(*region_id).or_default();
-            peer_stat.query_stats.add_query_stats(&region_info.0);
+            {
+                let mut region_peers = self.region_peers.write().unwrap();
+                let peer_stat = region_peers.entry(*region_id).or_default();
+                peer_stat.query_stats.add_query_stats(&region_info.0);
+            }
             self.store_stat
                 .engine_total_query_num
                 .add_query_stats(&region_info.0);
@@ -1746,7 +1782,7 @@ where
     }
 
     fn handle_destroy_peer(&mut self, region_id: u64) {
-        match self.region_peers.remove(&region_id) {
+        match self.region_peers.write().unwrap().remove(&region_id) {
             None => {}
             Some(_) => info!("remove peer statistic record in pd"; "region_id" => region_id),
         }
@@ -1865,13 +1901,13 @@ where
                     if leader.get_store_id() != 0 {
                         let msg = Box::new(CasualMessage::QueryRegionLeaderResp { region, leader });
                         if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg)) {
-                            error!("send region info message failed"; "region_id" => region_id, "err" => ?e);
+                            warn!("send region info message failed"; "region_id" => region_id, "err" => ?e);
                         }
                     }
                 }
                 Ok(None) => {}
                 Err(e) => {
-                    error!("get region failed"; "err" => ?e);
+                    warn!("get region failed"; "err" => ?e);
                 }
             }
         };
@@ -1953,7 +1989,7 @@ where
     fn handle_fake_store_heartbeat(&mut self) {
         let mut stats = pdpb::StoreStats::default();
         stats.set_store_id(self.store_id);
-        stats.set_region_count(self.region_peers.len() as u32);
+        stats.set_region_count(self.region_peers.read().unwrap().len() as u32);
 
         let snap_stats = self.snap_mgr.stats();
         stats.set_sending_snap_count(snap_stats.sending_count as u32);
@@ -2223,7 +2259,7 @@ where
                                 cb: Callback::None,
                             });
                             if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg)) {
-                                error!("send auto half split request failed";
+                                warn!("send auto half split request failed";
                                     "region_id" => region_id,
                                     "start_key" => log_wrappers::Value::key(&start_key),
                                     "end_key" => log_wrappers::Value::key(&end_key),
@@ -2258,7 +2294,8 @@ where
                     cpu_usage,
                 ) = {
                     let region_id = hb_task.region.get_id();
-                    let peer_stat = self.region_peers.entry(region_id).or_default();
+                    let mut region_peers = self.region_peers.write().unwrap();
+                    let peer_stat = region_peers.entry(region_id).or_default();
                     peer_stat.approximate_size = approximate_size;
                     peer_stat.approximate_keys = approximate_keys;
 
@@ -2516,7 +2553,7 @@ fn send_admin_request<EK, ER>(
 
     let cmd = RaftCommand::new_ext(req, callback, extra_opts);
     if let Err(e) = router.send_raft_command(cmd) {
-        error!(
+        warn!(
             "send request failed";
             "region_id" => region_id, "cmd_type" => ?cmd_type, "err" => ?e,
         );
@@ -2925,7 +2962,7 @@ mod tests {
                             region_id: 1,
                             peer_id: 0,
                             key_ranges: vec![],
-                            extra_attachment: b"a".to_vec(),
+                            extra_attachment: Arc::new(b"a".to_vec()),
                         }),
                         RawRecord {
                             cpu_time: 111,

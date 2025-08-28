@@ -391,7 +391,8 @@ where
         Some(Range {
             start_key: start_key.as_slice(),
             end_key: end_key.as_slice()
-        })
+        }),
+        true, // force_allow_write
     ));
     Ok(())
 }

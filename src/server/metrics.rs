@@ -269,6 +269,12 @@ lazy_static! {
         exponential_buckets(5e-5, 2.0, 22).unwrap() // 50us ~ 104s
     )
     .unwrap();
+    pub static ref GRPC_BATCH_COMMANDS_WAIT_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_grpc_batch_commands_wait_duration_seconds",
+        "Bucketed histogram of grpc server batch commands waiting duration",
+        exponential_buckets(5e-5, 2.0, 22).unwrap() // 50us ~ 104s
+    )
+    .unwrap();
     pub static ref SERVER_INFO_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
         "tikv_server_info",
         "Indicate the tikv server info, and the value is the server startup timestamp(s).",
@@ -454,10 +460,22 @@ lazy_static! {
             &["reason"]
         )
         .unwrap();
-    pub static ref CONFIG_ROCKSDB_GAUGE: GaugeVec = register_gauge_vec!(
-        "tikv_config_rocksdb",
-        "Config information of rocksdb",
+    pub static ref CONFIG_ROCKSDB_DB_GAUGE: GaugeVec = register_gauge_vec!(
+        "tikv_config_rocksdb_db",
+        "DB Config information of rocksdb",
+        &["db", "name"]
+    )
+    .unwrap();
+    pub static ref CONFIG_ROCKSDB_CF_GAUGE: GaugeVec = register_gauge_vec!(
+        "tikv_config_rocksdb_cf",
+        "CF Config information of rocksdb",
         &["cf", "name"]
+    )
+    .unwrap();
+    pub static ref CONFIG_FLOW_CONTROL_GAUGE: GaugeVec = register_gauge_vec!(
+        "tikv_config_flow_control",
+        "Config information of flow control",
+        &["name"]
     )
     .unwrap();
     pub static ref REQUEST_BATCH_SIZE_HISTOGRAM_VEC: RequestBatchSizeHistogramVec =
