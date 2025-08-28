@@ -258,6 +258,7 @@ where
             store_heartbeat_interval / NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
             cfg.value().inspect_interval.0,
             std::time::Duration::default(),
+            cfg.value().inspect_network_interval.0,
             PdReporter::new(pd_scheduler, logger.clone()),
         );
         stats_monitor.start(auto_split_controller, collector_reg_handle)?;
