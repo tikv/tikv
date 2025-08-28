@@ -338,6 +338,7 @@ impl Sink {
         }
         self.memory_quota.alloc(total_bytes as _)?;
 
+        let count = scaned_events.len();
         let now = Instant::now_coarse();
         for event in scaned_events {
             let bytes = event.size() as usize;
@@ -354,6 +355,9 @@ impl Sink {
             return Err(SendError::from(e));
         }
         CDC_SCAN_SINK_FLUSH_DURATION_HISTOGRAM.observe(now.saturating_elapsed_secs());
+        CDC_EVENTS_PENDING_COUNT
+            .with_label_values(&["scanned"])
+            .add(count as _);
         Ok(())
     }
 }
@@ -371,19 +375,38 @@ impl<'a> Drain {
             CDC_EVENTS_PENDING_DURATION
                 .with_label_values(&["observed"])
                 .observe(x.created.saturating_elapsed_secs());
+
+            match &x.event {
+                CdcEvent::Event(e) => {
+                    if e.has_error() {
+                        CDC_EVENTS_PENDING_COUNT.with_label_values(&["error"]).dec();
+                    } else {
+                        CDC_EVENTS_PENDING_COUNT
+                            .with_label_values(&["observed"])
+                            .dec();
+                    }
+                }
+                CdcEvent::ResolvedTs(_) => {
+                    CDC_EVENTS_PENDING_COUNT
+                        .with_label_values(&["resolved-ts"])
+                        .dec();
+                }
+                CdcEvent::Barrier(_) => {}
+            }
+
             (x.created, x.event, x.size)
         });
         let scaned = (&mut self.bounded_receiver).filter_map(|x| {
+            CDC_EVENTS_PENDING_DURATION
+                .with_label_values(&["truncated"])
+                .observe(x.created.saturating_elapsed_secs());
+            CDC_EVENTS_PENDING_COUNT
+                .with_label_values(&["scanned"])
+                .dec();
             if x.truncated.load(Ordering::Acquire) {
-                CDC_EVENTS_PENDING_DURATION
-                    .with_label_values(&["truncated"])
-                    .observe(x.created.saturating_elapsed_secs());
                 self.memory_quota.free(x.size as _);
                 return futures::future::ready(None);
             }
-            CDC_EVENTS_PENDING_DURATION
-                .with_label_values(&["scanned"])
-                .observe(x.created.saturating_elapsed_secs());
             futures::future::ready(Some((x.created, x.event, x.size)))
         });
 

@@ -405,6 +405,10 @@ impl Advance {
             resolved_ts.request_id = req_id.0;
             *resolved_ts.mut_regions() = regions;
 
+            CDC_EVENTS_PENDING_COUNT
+                .with_label_values(&["resolved-ts"])
+                .inc();
+
             let res = conn
                 .get_sink()
                 .unbounded_send(CdcEvent::ResolvedTs(resolved_ts), false);
