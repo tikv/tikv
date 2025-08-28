@@ -1457,8 +1457,13 @@ dependencies = [
  "error_code",
  "futures 0.3.15",
  "futures-io",
+ "futures-util",
  "kvproto",
  "lazy_static",
+<<<<<<< HEAD
+=======
+ "openssl",
+>>>>>>> 69f275f970 (azblob: use copy to implement read_to_end (#18419) (#18781))
  "pin-project",
  "prometheus",
  "protobuf 2.8.0",
@@ -2797,9 +2802,12 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "matches",
+<<<<<<< HEAD
  "regex",
  "serde",
  "serde_json",
+=======
+>>>>>>> 69f275f970 (azblob: use copy to implement read_to_end (#18419) (#18781))
  "slog",
  "slog-global",
  "tame-gcs",

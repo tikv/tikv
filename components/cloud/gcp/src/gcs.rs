@@ -4,15 +4,26 @@ use std::{fmt::Display, io};
 use async_trait::async_trait;
 use cloud::{
     blob::{
+<<<<<<< HEAD
         none_to_empty, read_to_end, BlobConfig, BlobObject, BlobStorage, BucketConf,
         DeletableStorage, IterableStorage, PutResource, StringNonEmpty,
+=======
+        none_to_empty, read_to_end, BlobConfig, BlobStorage, BucketConf, PutResource,
+        StringNonEmpty,
+>>>>>>> 69f275f970 (azblob: use copy to implement read_to_end (#18419) (#18781))
     },
     metrics,
 };
 use futures_util::{
+<<<<<<< HEAD
     future::{FutureExt, LocalBoxFuture, TryFutureExt},
     io::Cursor,
     stream::{self, Stream, StreamExt, TryStreamExt},
+=======
+    future::TryFutureExt,
+    io::Cursor,
+    stream::{StreamExt, TryStreamExt},
+>>>>>>> 69f275f970 (azblob: use copy to implement read_to_end (#18419) (#18781))
 };
 use http::HeaderValue;
 use hyper::{Body, Request, Response};

@@ -5,6 +5,11 @@ use std::{fmt::Display, io, marker::Unpin, panic::Location, pin::Pin, task::Poll
 use async_trait::async_trait;
 use futures::{future::LocalBoxFuture, io as async_io, io::Cursor, stream::Stream};
 use futures_io::AsyncRead;
+<<<<<<< HEAD
+=======
+use futures_util::{io as async_io, io::Cursor};
+pub use kvproto::brpb::CloudDynamic;
+>>>>>>> 69f275f970 (azblob: use copy to implement read_to_end (#18419) (#18781))
 
 pub trait BlobConfig: 'static + Send + Sync {
     fn name(&self) -> &'static str;
@@ -240,7 +245,11 @@ pub async fn read_to_end<R: AsyncRead>(r: R, v: &mut Vec<u8>) -> std::io::Result
 #[cfg(test)]
 mod tests {
     extern crate test;
+<<<<<<< HEAD
     use futures::AsyncReadExt;
+=======
+    use futures_util::AsyncReadExt;
+>>>>>>> 69f275f970 (azblob: use copy to implement read_to_end (#18419) (#18781))
 
     use super::*;
 
