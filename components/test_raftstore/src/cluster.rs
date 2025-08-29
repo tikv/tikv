@@ -80,6 +80,7 @@ pub trait Simulator {
         router: RaftRouter<RocksEngine, RaftTestEngine>,
         system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
         resource_manager: &Option<Arc<ResourceGroupManager>>,
+        force_partition_mgr: &ForcePartitionRangeManager,
     ) -> ServerResult<u64>;
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
@@ -176,6 +177,7 @@ pub struct Cluster<T: Simulator> {
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
     resource_manager: Option<Arc<ResourceGroupManager>>,
+    pub force_partition_mgr: ForcePartitionRangeManager,
 }
 
 impl<T: Simulator> Cluster<T> {
@@ -209,6 +211,7 @@ impl<T: Simulator> Cluster<T> {
             resource_manager: Some(Arc::new(ResourceGroupManager::default())),
             kv_statistics: vec![],
             raft_statistics: vec![],
+            force_partition_mgr: Default::default(),
         }
     }
 
@@ -250,7 +253,12 @@ impl<T: Simulator> Cluster<T> {
 
     fn create_engine(&mut self, router: Option<RaftRouter<RocksEngine, RaftTestEngine>>) {
         let (engines, key_manager, dir, sst_worker, kv_statistics, raft_statistics) =
-            create_test_engine(router, self.io_rate_limiter.clone(), &self.cfg);
+            create_test_engine(
+                router,
+                self.io_rate_limiter.clone(),
+                &self.cfg,
+                &self.force_partition_mgr,
+            );
         self.dbs.push(engines);
         self.key_managers.push(key_manager);
         self.paths.push(dir);
@@ -271,7 +279,13 @@ impl<T: Simulator> Cluster<T> {
             self.engines.remove(&node_id);
         }
         let (engines, key_manager, dir, sst_worker, kv_statistics, raft_statistics) =
-            start_test_engine(None, self.io_rate_limiter.clone(), &self.cfg, path);
+            start_test_engine(
+                None,
+                self.io_rate_limiter.clone(),
+                &self.cfg,
+                &self.force_partition_mgr,
+                path,
+            );
         self.dbs.insert(idx, engines);
         self.key_managers.insert(idx, key_manager);
         self.paths.insert(idx, dir);
@@ -324,6 +338,7 @@ impl<T: Simulator> Cluster<T> {
                 router,
                 system,
                 &self.resource_manager,
+                &self.force_partition_mgr,
             )?;
             self.group_props.insert(node_id, props);
             self.engines.insert(node_id, engines);
@@ -410,6 +425,7 @@ impl<T: Simulator> Cluster<T> {
             router,
             system,
             &self.resource_manager,
+            &self.force_partition_mgr,
         )?;
         debug!("node {} started", node_id);
         Ok(())
