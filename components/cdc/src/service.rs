@@ -11,6 +11,7 @@ use std::{
 use collections::{HashMap, HashMapEntry};
 use crossbeam::atomic::AtomicCell;
 use futures::{
+    SinkExt,
     compat::Stream01CompatExt,
     stream::{StreamExt, TryStreamExt},
 };
@@ -427,18 +428,18 @@ impl Service {
         let (event_sink, mut event_drain) =
             channel(conn_id, CDC_CHANNLE_CAPACITY, self.memory_quota.clone());
         let conn = Conn::new(conn_id, event_sink, ctx.peer());
-        let mut explicit_features = vec![];
 
+        let mut explicit_features = vec![];
         if event_feed_v2 {
             let headers = match Self::parse_headers(&ctx) {
                 Ok(headers) => headers,
                 Err(e) => {
                     let peer = ctx.peer();
-                    error!("cdc connection with bad headers"; "downstream" => ?peer, "headers" => &e);
+                    error!("cdc connection with bad headers"; "headers" => &e, "downstream" => ?peer, "conn_id" => ?conn_id);
                     ctx.spawn(async move {
                         let status = RpcStatus::with_message(RpcStatusCode::UNIMPLEMENTED, e);
                         if let Err(e) = sink.fail(status).await {
-                            error!("cdc failed to send error"; "downstream" => ?peer, "error" => ?e);
+                            error!("cdc failed to send error"; "error" => ?e, "downstream" => ?peer, "conn_id" => ?conn_id);
                         }
                     });
                     return;
@@ -446,20 +447,19 @@ impl Service {
             };
             explicit_features = headers.features;
         }
-        info!("cdc connection created"; "downstream" => ctx.peer(),
-         "conn_id" => ?conn_id,"features" => ?explicit_features);
 
         if let Err(e) = self.scheduler.schedule(Task::OpenConn { conn }) {
             let peer = ctx.peer();
-            error!("cdc connection initiate failed"; "downstream" => ?peer, "error" => ?e);
+            error!("cdc connection initiate failed"; "error" => ?e, "downstream" => ?peer, "conn_id" => ?conn_id);
             ctx.spawn(async move {
                 let status = RpcStatus::with_message(RpcStatusCode::UNKNOWN, format!("{:?}", e));
                 if let Err(e) = sink.fail(status).await {
-                    error!("cdc failed to send error"; "downstream" => ?peer, "error" => ?e);
+                    error!("cdc failed to send error"; "error" => ?e, "downstream" => ?peer, "conn_id" => ?conn_id);
                 }
             });
             return;
         }
+        info!("cdc connection created"; "features" => ?explicit_features, "downstream" => ctx.peer(), "conn_id" => ?conn_id);
 
         let peer = ctx.peer();
         let scheduler = self.scheduler.clone();
@@ -477,17 +477,16 @@ impl Service {
             Ok::<(), String>(())
         };
 
-        let scheduler_dereg = self.scheduler.clone();
         let peer = ctx.peer();
+        let scheduler = self.scheduler.clone();
         ctx.spawn(async move {
             if let Err(e) = recv_req.await {
                 warn!("cdc receive failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
             } else {
                 info!("cdc receive closed"; "downstream" => peer, "conn_id" => ?conn_id);
             }
-
             let deregister = Deregister::Conn(conn_id);
-            if let Err(e) = scheduler_dereg.schedule(Task::Deregister(deregister)) {
+            if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
                 error!("cdc deregister failed"; "error" => ?e, "conn_id" => ?conn_id);
             }
         });
@@ -516,8 +515,13 @@ impl Service {
                 result = event_drain.forward(&mut sink, Some(&last_flush_time_for_forward)) => {
                     if let Err(e) = result {
                         warn!("cdc send failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
+                        let status = RpcStatus::with_message(RpcStatusCode::UNKNOWN,  format!("{:?}", e));
+                        sink.fail(status).await.unwrap_or_else(|e| {
+                            error!("cdc failed to send error"; "error" => ?e, "conn_id" => ?conn_id);
+                        });
                     } else {
                         info!("cdc send closed"; "downstream" => peer, "conn_id" => ?conn_id);
+                        let _ = sink.close().await;
                     }
                     // Send signal when eventDrain.forward exits
                     let _ = forward_exit_tx.send(());
