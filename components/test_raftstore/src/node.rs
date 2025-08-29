@@ -2,7 +2,11 @@
 
 use std::{
     path::{Path, PathBuf},
+<<<<<<< HEAD
     sync::{atomic::AtomicU64, Arc, Mutex, RwLock},
+=======
+    sync::{Arc, Mutex, RwLock},
+>>>>>>> d4db90887a (GC: remove compact on split (#18500))
 };
 
 use collections::{HashMap, HashSet};
@@ -372,7 +376,6 @@ impl Simulator for NodeCluster {
             None,
             DiskCheckRunner::dummy(),
             GrpcServiceManager::dummy(),
-            Arc::new(AtomicU64::new(0)),
         )?;
         assert!(
             engines
