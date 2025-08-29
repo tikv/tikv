@@ -40,7 +40,8 @@ const DEFAULT_ENDPOINT_REQUEST_MAX_HANDLE_SECS: u64 = 60;
 // Number of rows in each chunk for streaming coprocessor.
 const DEFAULT_ENDPOINT_STREAM_BATCH_ROW_LIMIT: usize = 128;
 
-// By default, endpoint memory quota will be set to 12.5% of system memory.
+// By default, endpoint memory quota will be set to 12.5% of the available
+// memory of TiKV.
 //
 // TPCC check test shows that:
 // * The actual endpoint memory usage is about 3 times to memory quota.
