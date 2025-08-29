@@ -327,7 +327,7 @@ impl WriteEvent {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct SecondaryRegionOverride {
+pub struct ExtraRegionOverride {
     pub region_id: u64,
     pub region_epoch: RegionEpoch,
     pub peer: Peer,
@@ -347,15 +347,15 @@ pub struct SnapContext<'a> {
     pub key_ranges: Vec<KeyRange>,
     // Marks that this snapshot request is allowed in the flashback state.
     pub allowed_in_flashback: bool,
-    // secondary_region_override overrides some context fields in the `pb_ctx` for the secondary
+    // extra_region_override overrides some context fields in the `pb_ctx` for the secondary
     // regions.
-    // The "secondary region" means the regions that are not the source region
+    // The "extra region" means the regions that are not the source region
     // in a request.
     // For example, if a cop-task contains a `IndexLookUp` executor which needs to
     // access look up the primary rows,
-    // it will set this field to get the secondary region snapshot
+    // it will set this field to get the extra region snapshot
     // in lookup phase.
-    pub secondary_region_override: Option<SecondaryRegionOverride>,
+    pub extra_region_override: Option<ExtraRegionOverride>,
 }
 
 /// Engine defines the common behaviour for a storage engine type.

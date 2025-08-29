@@ -181,7 +181,7 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
         ASYNC_REQUESTS_COUNTER_VEC.snapshot.all.inc();
         let begin_instant = Instant::now();
 
-        let mut header = new_request_header(ctx.pb_ctx, ctx.secondary_region_override.as_ref());
+        let mut header = new_request_header(ctx.pb_ctx, ctx.extra_region_override.as_ref());
         let mut flags = 0;
         let need_encoded_start_ts = ctx.start_ts.is_none_or(|ts| !ts.is_zero());
         if ctx.pb_ctx.get_stale_read() && need_encoded_start_ts {
