@@ -24,7 +24,7 @@ use kvproto::{
         self as mpb, DeleteRequest, GetRequest, PutRequest, WatchRequest, WatchResponse,
     },
     metapb,
-    pdpb::{self, GcState, Member},
+    pdpb::{self, GcState, KeyspaceScope, Member},
     replication_modepb::{RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus},
     resource_manager::TokenBucketsRequest,
 };
@@ -894,6 +894,10 @@ impl PdClient for RpcClient {
 
         let mut req = pdpb::GetGcStateRequest::default();
         req.set_header(self.header());
+        let mut keyspace_scope = KeyspaceScope::new();
+        const NULL_KEYSPACE_ID: u32 = 0xFFFFFFFF;
+        keyspace_scope.set_keyspace_id(NULL_KEYSPACE_ID);
+        req.set_keyspace_scope(keyspace_scope);
 
         let executor = move |client: &Client, req: pdpb::GetGcStateRequest| {
             let handler = {
