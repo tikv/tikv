@@ -7,9 +7,15 @@ use std::{
     time::Duration,
 };
 
+<<<<<<< HEAD
 use engine_traits::{CompactExt, CF_DEFAULT, CF_WRITE};
 use file_system::{set_io_type, IoType};
 use futures::{sink::SinkExt, stream::TryStreamExt, FutureExt, TryFutureExt};
+=======
+use engine_traits::{CF_DEFAULT, CF_WRITE, CompactExt, ManualCompactionOptions};
+use file_system::{IoType, set_io_type};
+use futures::{FutureExt, TryFutureExt, sink::SinkExt, stream::TryStreamExt};
+>>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
 use grpcio::{
     ClientStreamingSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink,
     UnarySink, WriteFlags,
@@ -25,8 +31,12 @@ use kvproto::{
 };
 use raftstore::{
     coprocessor::{RegionInfo, RegionInfoProvider},
+<<<<<<< HEAD
     store::util::is_epoch_stale,
     RegionInfoAccessor,
+=======
+    store::{ForcePartitionRangeManager, util::is_epoch_stale},
+>>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
 };
 use raftstore_v2::StoreMeta;
 use resource_control::{with_resource_limiter, ResourceGroupManager};
@@ -92,6 +102,71 @@ const WRITER_GC_INTERVAL: Duration = Duration::from_secs(300);
 const SUSPEND_REQUEST_MAX_SECS: u64 = // 6h
     6 * 60 * 60;
 
+<<<<<<< HEAD
+=======
+const REJECT_SERVE_MEMORY_USAGE: u64 = 1024 * 1024 * 1024; //1G
+// consider block cache and raft store. the memory usage will be
+const HIGH_IMPORT_MEMORY_WATER_RATIO: f64 = 0.95;
+
+// the default TTL seconds of force partition range.
+// the TTL is to ensure all force partition ranges can be
+// cleaned up eventually.
+const DEFAULT_FORCE_PARTITION_RANGE_TTL_SECONDS: u64 = 3600;
+
+/// Check if the system has enough resources for import tasks
+async fn check_import_resources(mem_limit: u64) -> Result<()> {
+    #[cfg(feature = "failpoints")]
+    let mem_limit = (|| {
+        fail_point!("mock_memory_limit", |t| {
+            t.unwrap().parse::<u64>().unwrap()
+        });
+        mem_limit
+    })();
+    #[cfg(not(feature = "failpoints"))]
+    let mem_limit = mem_limit;
+
+    // these error(memory or disk) cannot be recover at a short time,
+    // in case client retry immediately, sleep for a while
+    async fn sleep_with_jitter() {
+        let jitter = rand::thread_rng().gen_range(1000, 2000);
+        tokio::time::sleep(Duration::from_millis(jitter)).await;
+    }
+    // Check disk space first
+    if get_disk_status(0) != DiskUsage::Normal {
+        sleep_with_jitter().await;
+        return Err(Error::DiskSpaceNotEnough);
+    }
+
+    let usage = get_global_memory_usage();
+    if mem_limit == 0 || mem_limit < usage {
+        // make it through when cannot get correct memory
+        warn!(
+            "Memory limit isn't correct. skip next check, limit is {} bytes, usage is {} bytes",
+            mem_limit, usage
+        );
+        return Ok(());
+    }
+
+    let available_memory = mem_limit - usage;
+    let min_required_memory = std::cmp::min(
+        REJECT_SERVE_MEMORY_USAGE,
+        ((1.0 - HIGH_IMPORT_MEMORY_WATER_RATIO) * mem_limit as f64) as u64,
+    );
+
+    // Reject ONLY if BOTH:
+    // - Available memory is below REJECT_SERVE_MEMORY_USAGE
+    // - Memory usage ratio is 95%+
+    if available_memory < min_required_memory {
+        sleep_with_jitter().await;
+        return Err(Error::ResourceNotEnough(format!(
+            "Memory usage too high, usage: {} bytes, mem limit {} bytes",
+            usage, mem_limit
+        )));
+    }
+    Ok(())
+}
+
+>>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
 fn transfer_error(err: storage::Error) -> ImportPbError {
     let mut e = ImportPbError::default();
     if let Some(region_error) = extract_region_error_from_error(&err) {
@@ -140,6 +215,12 @@ pub struct ImportSstService<E: Engine> {
 
     // When less than now, don't accept any requests.
     suspend: Arc<SuspendDeadline>,
+<<<<<<< HEAD
+=======
+
+    mem_limit: u64,
+    force_partition_range_mgr: ForcePartitionRangeManager,
+>>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
 }
 
 struct RequestCollector {
@@ -326,6 +407,7 @@ impl<E: Engine> ImportSstService<E> {
         store_meta: Option<Arc<Mutex<StoreMeta<E::Local>>>>,
         resource_manager: Option<Arc<ResourceGroupManager>>,
         region_info_accessor: Arc<RegionInfoAccessor>,
+        force_partition_range_mgr: ForcePartitionRangeManager,
     ) -> Self {
         let eng = Arc::new(Mutex::new(engine.clone()));
         let create_tokio_runtime = move |thread_count: usize, thread_name: &str| {
@@ -392,6 +474,11 @@ impl<E: Engine> ImportSstService<E> {
             store_meta,
             resource_manager,
             suspend: Arc::default(),
+<<<<<<< HEAD
+=======
+            mem_limit,
+            force_partition_range_mgr,
+>>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
         }
     }
 
@@ -1244,6 +1331,102 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         };
         let mut resp = SuspendImportRpcResponse::default();
         resp.set_already_suspended(suspended);
+        ctx.spawn(async move { send_rpc_response!(Ok(resp), sink, label, timer) });
+    }
+
+    fn add_force_partition_range(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        req: AddPartitionRangeRequest,
+        sink: UnarySink<AddPartitionRangeResponse>,
+    ) {
+        let label = "add_force_partition_range";
+        let timer = Instant::now_coarse();
+        let engine = self.engine.kv_engine().unwrap();
+        let force_partition_range_mgr = self.force_partition_range_mgr.clone();
+
+        let handle_task = async move {
+            let start = keys::data_key(Key::from_raw(req.get_range().get_start()).as_encoded());
+            let end = keys::data_end_key(Key::from_raw(req.get_range().get_end()).as_encoded());
+            let mut ttl_seconds = req.get_ttl_seconds();
+            if ttl_seconds == 0 {
+                // default value if the ttl is not set, 1h is big enough for most cases.
+                ttl_seconds = DEFAULT_FORCE_PARTITION_RANGE_TTL_SECONDS;
+            }
+            if start >= end {
+                send_rpc_response!(
+                    Err(Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!(
+                            "start keys must be smaller than end key, start: {:?}, end: {:?}",
+                            req.get_range().get_start(),
+                            req.get_range().get_end()
+                        )
+                    ))),
+                    sink,
+                    label,
+                    timer
+                );
+                return;
+            }
+
+            let added =
+                force_partition_range_mgr.add_range(start.clone(), end.clone(), ttl_seconds);
+
+            // here, we don't compact the whole range directly because it's possible that
+            // the task is restart from a checkpoint, thus, there may be already
+            // many SST files, but there's no need to compact them. Instaed, we
+            // try to compact a range that won't overlap with any real data kv
+            // at both side of the range. These 2 ranges won't overlap with any real
+            // data kv, but can trigger a compact if a SST with huge range overlaps with the
+            // input range.
+            let mut start_next = req.get_range().get_start().to_owned();
+            start_next.push(0);
+            let start_next_data_key = keys::data_key(Key::from_raw(&start_next).as_encoded());
+            let mut end_next = req.get_range().get_end().to_owned();
+            end_next.push(0);
+            let end_next_data_key = keys::data_key(Key::from_raw(&end_next).as_encoded());
+            let opts = ManualCompactionOptions::new(false, 1, true);
+            for cf in [CF_WRITE, CF_DEFAULT] {
+                for rg in [(&*start, &*start_next_data_key), (&end, &end_next_data_key)] {
+                    let start = Instant::now_coarse();
+                    let start_key = log_wrappers::Value::key(req.get_range().get_start());
+                    let end_key = log_wrappers::Value::key(req.get_range().get_end());
+                    let res = engine.compact_range_cf(cf, Some(rg.0), Some(rg.1), opts.clone());
+                    let dur = start.saturating_elapsed();
+                    if let Err(e) = res {
+                        warn!("manual compact range failed"; "cf" => cf, "start" => ?start_key, "end" => ?end_key, "err" => ?e, "dur" => ?dur);
+                    } else {
+                        info!("manual compact range success"; "cf" => cf, "start" => ?start_key, "end" => ?end_key, "dur" => ?dur);
+                    }
+                }
+            }
+
+            info!("add force_partition range"; "start" => ?log_wrappers::Value::key(req.get_range().get_start()),
+                    "end" => ?log_wrappers::Value::key(req.get_range().get_end()), "ttl" => ttl_seconds, "added" => added);
+
+            let resp = AddPartitionRangeResponse::default();
+            send_rpc_response!(Ok(resp), sink, label, timer);
+        };
+
+        self.threads.spawn(handle_task);
+    }
+    fn remove_force_partition_range(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: RemovePartitionRangeRequest,
+        sink: UnarySink<RemovePartitionRangeResponse>,
+    ) {
+        let label = "remove_force_partition_range";
+        let timer = Instant::now_coarse();
+
+        let start = keys::data_key(Key::from_raw(req.get_range().get_start()).as_encoded());
+        let end = keys::data_end_key(Key::from_raw(req.get_range().get_end()).as_encoded());
+        let removed = self.force_partition_range_mgr.remove_range(&start, &end);
+        info!("remove force_partition range"; "start" => log_wrappers::Value::key(req.get_range().get_start()),
+                "end" => log_wrappers::Value::key(req.get_range().get_end()), "removed" => removed);
+
+        let resp = RemovePartitionRangeResponse::default();
         ctx.spawn(async move { send_rpc_response!(Ok(resp), sink, label, timer) });
     }
 }
