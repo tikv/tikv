@@ -94,6 +94,7 @@ pub trait Simulator<EK: KvEngine> {
         router: RaftRouter<EK, RaftTestEngine>,
         system: RaftBatchSystem<EK, RaftTestEngine>,
         resource_manager: &Option<Arc<ResourceGroupManager>>,
+        force_partition_mgr: &ForcePartitionRangeManager,
     ) -> ServerResult<u64>;
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
@@ -191,11 +192,15 @@ pub struct Cluster<EK: KvEngineWithRocks, T: Simulator<EK>> {
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
     resource_manager: Option<Arc<ResourceGroupManager>>,
+<<<<<<< HEAD
 
     // When this is set, the `HybridEngineImpl` will be used as the underlying KvEngine. In
     // addition, it atomaticaly load the whole range when start. When we want to do something
     // specific, for example, only load ranges of some regions, we may not set this.
     range_cache_engine_enabled_with_whole_range: bool,
+=======
+    pub force_partition_mgr: ForcePartitionRangeManager,
+>>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
 }
 
 impl<EK, T> Cluster<EK, T>
@@ -233,7 +238,11 @@ where
             resource_manager: Some(Arc::new(ResourceGroupManager::default())),
             kv_statistics: vec![],
             raft_statistics: vec![],
+<<<<<<< HEAD
             range_cache_engine_enabled_with_whole_range: false,
+=======
+            force_partition_mgr: Default::default(),
+>>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
         }
     }
 
@@ -275,7 +284,12 @@ where
 
     fn create_engine(&mut self, router: Option<RaftRouter<EK, RaftTestEngine>>) {
         let (engines, key_manager, dir, sst_worker, kv_statistics, raft_statistics) =
-            create_test_engine(router, self.io_rate_limiter.clone(), &self.cfg);
+            create_test_engine(
+                router,
+                self.io_rate_limiter.clone(),
+                &self.cfg,
+                &self.force_partition_mgr,
+            );
         self.dbs.push(engines);
         self.key_managers.push(key_manager);
         self.paths.push(dir);
@@ -284,6 +298,38 @@ where
         self.raft_statistics.push(raft_statistics);
     }
 
+<<<<<<< HEAD
+=======
+    pub fn restart_engine(&mut self, node_id: u64) {
+        let idx = node_id as usize - 1;
+        let path = self.paths.remove(idx);
+        {
+            self.dbs.remove(idx);
+            self.key_managers.remove(idx);
+            self.sst_workers.remove(idx);
+            self.kv_statistics.remove(idx);
+            self.raft_statistics.remove(idx);
+            self.engines.remove(&node_id);
+        }
+        let (engines, key_manager, dir, sst_worker, kv_statistics, raft_statistics) =
+            start_test_engine(
+                None,
+                self.io_rate_limiter.clone(),
+                &self.cfg,
+                &self.force_partition_mgr,
+                path,
+            );
+        self.dbs.insert(idx, engines);
+        self.key_managers.insert(idx, key_manager);
+        self.paths.insert(idx, dir);
+        self.sst_workers.insert(idx, sst_worker);
+        self.kv_statistics.insert(idx, kv_statistics);
+        self.raft_statistics.insert(idx, raft_statistics);
+        self.engines
+            .insert(node_id, self.dbs.last().unwrap().clone());
+    }
+
+>>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
     pub fn create_engines(&mut self) {
         self.io_rate_limiter = Some(Arc::new(
             self.cfg
@@ -326,6 +372,7 @@ where
                 router,
                 system,
                 &self.resource_manager,
+                &self.force_partition_mgr,
             )?;
             self.group_props.insert(node_id, props);
             self.engines.insert(node_id, engines);
@@ -417,6 +464,7 @@ where
             router,
             system,
             &self.resource_manager,
+            &self.force_partition_mgr,
         )?;
         debug!("node {} started", node_id);
         Ok(())

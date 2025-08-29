@@ -35,11 +35,19 @@ use raftstore::{
     errors::Error as RaftError,
     router::{CdcRaftRouter, LocalReadRouter, RaftStoreRouter, ServerRaftStoreRouter},
     store::{
+<<<<<<< HEAD
         fsm::{store::StoreMeta, ApplyRouter, RaftBatchSystem, RaftRouter},
         msg::RaftCmdExtraOpts,
         AutoSplitController, Callback, CheckLeaderRunner, DiskCheckRunner, LocalReader,
         RegionSnapshot, SnapManager, SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
         StoreMetaDelegate,
+=======
+        AutoSplitController, Callback, CheckLeaderRunner, DiskCheckRunner,
+        ForcePartitionRangeManager, LocalReader, RegionSnapshot, SnapManager, SnapManagerBuilder,
+        SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
+        fsm::{ApplyRouter, RaftBatchSystem, RaftRouter, store::StoreMeta},
+        msg::RaftCmdExtraOpts,
+>>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
     },
     Result,
 };
@@ -270,6 +278,7 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
         router: RaftRouter<EK, RaftTestEngine>,
         system: RaftBatchSystem<EK, RaftTestEngine>,
         resource_manager: &Option<Arc<ResourceGroupManager>>,
+        force_partition_mgr: &ForcePartitionRangeManager,
     ) -> ServerResult<u64> {
         self.encryption = key_manager.clone();
 
@@ -461,6 +470,7 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
             None,
             resource_manager.clone(),
             Arc::new(region_info_accessor.clone()),
+            force_partition_mgr.clone(),
         );
 
         // Create deadlock service.
@@ -696,6 +706,7 @@ impl<EK: KvEngineWithRocks> Simulator<EK> for ServerCluster<EK> {
         router: RaftRouter<EK, RaftTestEngine>,
         system: RaftBatchSystem<EK, RaftTestEngine>,
         resource_manager: &Option<Arc<ResourceGroupManager>>,
+        force_partition_mgr: &ForcePartitionRangeManager,
     ) -> ServerResult<u64> {
         dispatch_api_version!(
             cfg.storage.api_version(),
@@ -708,6 +719,7 @@ impl<EK: KvEngineWithRocks> Simulator<EK> for ServerCluster<EK> {
                 router,
                 system,
                 resource_manager,
+                force_partition_mgr,
             )
         )
     }

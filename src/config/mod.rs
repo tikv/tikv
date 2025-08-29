@@ -56,7 +56,10 @@ use raft_log_engine::{
 };
 use raftstore::{
     coprocessor::{Config as CopConfig, RegionInfoAccessor},
-    store::{CompactionGuardGeneratorFactory, Config as RaftstoreConfig, SplitConfig},
+    store::{
+        CompactionGuardGeneratorFactory, Config as RaftstoreConfig, ForcePartitionRangeManager,
+        SplitConfig,
+    },
 };
 use resource_control::Config as ResourceControlConfig;
 use resource_metering::Config as ResourceMeteringConfig;
@@ -600,7 +603,8 @@ macro_rules! build_cf_opt {
         $cf_name:ident,
         $cache:expr,
         $compaction_limiter:expr,
-        $region_info_provider:ident
+        $region_info_provider:ident,
+        $force_partition_range_mgr:expr,
     ) => {{
         let mut block_base_opts = BlockBasedOptions::new();
         block_base_opts.set_block_size($opt.block_size.0 as usize);
@@ -687,6 +691,7 @@ macro_rules! build_cf_opt {
                     provider.clone(),
                     $opt.compaction_guard_min_output_file_size.0,
                     $opt.max_compaction_bytes.0,
+                    $force_partition_range_mgr,
                 )
                 .unwrap();
                 cf_opts.set_sst_partitioner_factory(factory);
@@ -713,6 +718,7 @@ pub struct CfResources {
     pub cache: Cache,
     pub compaction_thread_limiters: HashMap<&'static str, ConcurrentTaskLimiter>,
     pub write_buffer_managers: HashMap<&'static str, Arc<WriteBufferManager>>,
+    pub force_partition_range_mgr: ForcePartitionRangeManager,
 }
 
 cf_config!(DefaultCfConfig);
@@ -798,7 +804,8 @@ impl DefaultCfConfig {
             CF_DEFAULT,
             &shared.cache,
             shared.compaction_thread_limiters.get(CF_DEFAULT),
-            region_info_accessor
+            region_info_accessor,
+            shared.force_partition_range_mgr.clone(),
         );
         cf_opts.set_memtable_prefix_bloom_size_ratio(bloom_filter_ratio(for_engine));
         let f = RangePropertiesCollectorFactory {
@@ -967,7 +974,8 @@ impl WriteCfConfig {
             CF_WRITE,
             &shared.cache,
             shared.compaction_thread_limiters.get(CF_WRITE),
-            region_info_accessor
+            region_info_accessor,
+            shared.force_partition_range_mgr.clone(),
         );
         // Prefix extractor(trim the timestamp at tail) for write cf.
         cf_opts
@@ -1087,7 +1095,8 @@ impl LockCfConfig {
             CF_LOCK,
             &shared.cache,
             shared.compaction_thread_limiters.get(CF_LOCK),
-            no_region_info_accessor
+            no_region_info_accessor,
+            Default::default(),
         );
         cf_opts
             .set_prefix_extractor("NoopSliceTransform", NoopSliceTransform)
@@ -1180,7 +1189,8 @@ impl RaftCfConfig {
             CF_RAFT,
             &shared.cache,
             shared.compaction_thread_limiters.get(CF_RAFT),
-            no_region_info_accessor
+            no_region_info_accessor,
+            Default::default(),
         );
         cf_opts
             .set_prefix_extractor("NoopSliceTransform", NoopSliceTransform)
@@ -1551,7 +1561,11 @@ impl DbConfig {
         opts
     }
 
-    pub fn build_cf_resources(&self, cache: Cache) -> CfResources {
+    pub fn build_cf_resources(
+        &self,
+        cache: Cache,
+        force_partition_range_mgr: ForcePartitionRangeManager,
+    ) -> CfResources {
         let mut compaction_thread_limiters = HashMap::new();
         if let Some(n) = self.defaultcf.max_compactions
             && n > 0
@@ -1597,6 +1611,7 @@ impl DbConfig {
             cache,
             compaction_thread_limiters,
             write_buffer_managers,
+            force_partition_range_mgr,
         }
     }
 
@@ -1773,7 +1788,8 @@ impl RaftDefaultCfConfig {
             CF_DEFAULT,
             cache,
             limiter.as_ref(),
-            no_region_info_accessor
+            no_region_info_accessor,
+            Default::default(),
         );
         let f = FixedPrefixSliceTransform::new(region_raft_prefix_len());
         cf_opts
@@ -5597,8 +5613,10 @@ mod tests {
             &cfg.infer_kv_engine_path(None).unwrap(),
             Some(cfg.rocksdb.build_opt(&resource, cfg.storage.engine)),
             cfg.rocksdb.build_cf_opts(
-                &cfg.rocksdb
-                    .build_cf_resources(cfg.storage.block_cache.build_shared_cache()),
+                &cfg.rocksdb.build_cf_resources(
+                    cfg.storage.block_cache.build_shared_cache(),
+                    Default::default(),
+                ),
                 None,
                 cfg.storage.api_version(),
                 None,
@@ -6502,7 +6520,14 @@ mod tests {
             ..Default::default()
         };
         let provider = Some(MockRegionInfoProvider::new(vec![]));
-        let cf_opts = build_cf_opt!(config, CF_DEFAULT, &cache, no_limiter.as_ref(), provider);
+        let cf_opts = build_cf_opt!(
+            config,
+            CF_DEFAULT,
+            &cache,
+            no_limiter.as_ref(),
+            provider,
+            Default::default(),
+        );
         assert_eq!(
             config.target_file_size_base(),
             cf_opts.get_target_file_size_base()
@@ -6515,7 +6540,14 @@ mod tests {
             ..Default::default()
         };
         let provider: Option<MockRegionInfoProvider> = None;
-        let cf_opts = build_cf_opt!(config, CF_DEFAULT, &cache, no_limiter.as_ref(), provider);
+        let cf_opts = build_cf_opt!(
+            config,
+            CF_DEFAULT,
+            &cache,
+            no_limiter.as_ref(),
+            provider,
+            Default::default(),
+        );
         assert_eq!(
             config.target_file_size_base(),
             cf_opts.get_target_file_size_base()
@@ -6530,7 +6562,14 @@ mod tests {
             ..Default::default()
         };
         let provider = Some(MockRegionInfoProvider::new(vec![]));
-        let cf_opts = build_cf_opt!(config, CF_DEFAULT, &cache, no_limiter.as_ref(), provider);
+        let cf_opts = build_cf_opt!(
+            config,
+            CF_DEFAULT,
+            &cache,
+            no_limiter.as_ref(),
+            provider,
+            Default::default(),
+        );
         assert_eq!(
             config.compaction_guard_max_output_file_size.0,
             cf_opts.get_target_file_size_base()
