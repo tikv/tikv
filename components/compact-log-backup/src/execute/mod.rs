@@ -129,7 +129,7 @@ pub struct Execution<DB: SstExt = RocksEngine> {
 }
 
 struct ExecuteCtx<'a, H: ExecHooks> {
-    storage: &'a Arc<dyn ExternalStorage>,
+    storage: &'a Arc<dyn ExternalStorage + 'static>,
     hooks: &'a mut H,
 }
 
@@ -171,7 +171,8 @@ impl Execution {
         };
         hooks.before_execution_started(cx).await?;
 
-        let meta = StreamMetaStorage::load_from_ext(storage.as_ref(), ext).await?;
+        let storage = Arc::clone(storage);
+        let meta = StreamMetaStorage::load_from_ext(&storage, ext).await?;
         let stream = meta.flat_map(|file| match file {
             Ok(file) => stream::iter(file.into_logs()).map(Ok).left_stream(),
             Err(err) => stream::once(futures::future::err(err)).right_stream(),
@@ -214,7 +215,7 @@ impl Execution {
             let compact_args = SubcompactionExecArg {
                 out_prefix: Some(Path::new(&self.out_prefix).to_owned()),
                 db: self.db.clone(),
-                storage: Arc::clone(storage) as _,
+                storage: Arc::clone(&storage),
             };
             let compact_worker = SubcompactionExec::from(compact_args);
             let mut ext = SubcompactExt::default();
@@ -247,7 +248,7 @@ impl Execution {
         }
         let cx = AfterFinishCtx {
             async_rt: &Handle::current(),
-            storage: storage.as_ref(),
+            storage: &storage,
         };
         hooks.after_execution_finished(cx).await?;
 
