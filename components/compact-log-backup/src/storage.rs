@@ -232,9 +232,11 @@ pub struct StreamMetaStorage<'a> {
     // NOTE: we want to keep the order of incoming meta files, so calls with the same argument can
     // generate the same compactions.
     prefetch: VecDeque<
-        Prefetch<Pin<Box<dyn Future<Output = Result<(MetaFile, LoadMetaStatistic)>> + 'a>>>,
+        Prefetch<
+            Pin<Box<dyn Future<Output = Result<(MetaFile, LoadMetaStatistic)>> + Send + 'static>>,
+        >,
     >,
-    ext_storage: &'a dyn ExternalStorage,
+    ext_storage: Arc<dyn ExternalStorage>,
     ext: LoadFromExt<'a>,
     stat: LoadMetaStatistic,
 
@@ -350,8 +352,9 @@ impl<'a> StreamMetaStorage<'a> {
                         continue;
                     }
 
-                    let mut fut =
-                        Prefetch::new(MetaFile::load_from(self.ext_storage, load).boxed_local());
+                    let storage = Arc::clone(&self.ext_storage);
+                    let handle = tokio::spawn(MetaFile::load_from_owned(storage, load));
+                    let mut fut = Prefetch::new(async move { handle.await.unwrap() }.boxed());
                     // start the execution of this future.
                     let poll = fut.poll_unpin(cx);
                     if poll.is_ready() {
@@ -396,14 +399,17 @@ impl<'a> StreamMetaStorage<'a> {
     /// Streaming metadata from an external storage.
     /// Defaultly this will fetch metadata from `v1/backupmeta`, you may
     /// override this in `ext`.
-    pub async fn load_from_ext(s: &'a dyn ExternalStorage, ext: LoadFromExt<'a>) -> Result<Self> {
+    pub async fn load_from_ext(
+        s: &'a Arc<dyn ExternalStorage>,
+        ext: LoadFromExt<'a>,
+    ) -> Result<Self> {
         let files = s.iter_prefix(ext.meta_prefix).fuse();
         let mig_ext = MigrationStorageWrapper::new(s);
         let skip_map = MetaEditFilters::from_migrations(mig_ext.load().await?);
         Ok(Self {
             prefetch: VecDeque::new(),
             files,
-            ext_storage: s,
+            ext_storage: Arc::clone(s),
             ext,
             stat: LoadMetaStatistic::default(),
             skip_map,
@@ -423,6 +429,13 @@ impl<'a> StreamMetaStorage<'a> {
 }
 
 impl MetaFile {
+    async fn load_from_owned(
+        s: Arc<dyn ExternalStorage>,
+        blob: BlobObject,
+    ) -> Result<(Self, LoadMetaStatistic)> {
+        Self::load_from(s.as_ref(), blob).await
+    }
+
     #[tracing::instrument(skip_all, fields(blob=%blob))]
     async fn load_from(
         s: &dyn ExternalStorage,
@@ -825,6 +838,9 @@ pub fn hash_meta_edit(meta_edit: &brpb::MetaEdit) -> u64 {
 
 #[cfg(test)]
 mod test {
+    use std::sync::Arc;
+
+    use external_storage::ExternalStorage;
     use futures::stream::TryStreamExt;
     use kvproto::brpb::{DeleteSpansOfFile, MetaEdit, Migration, Span};
 
@@ -880,7 +896,8 @@ mod test {
         let test_for_concurrency = |n| async move {
             let mut ext = LoadFromExt::default();
             ext.max_concurrent_fetch = n;
-            let sst = StreamMetaStorage::load_from_ext(st.storage().as_ref(), ext)
+            let storage = st.storage().clone() as Arc<dyn ExternalStorage>;
+            let sst = StreamMetaStorage::load_from_ext(&storage, ext)
                 .await
                 .unwrap();
             let mut result = sst.try_collect::<Vec<_>>().await.unwrap();
@@ -964,7 +981,8 @@ mod test {
 
         let mut ext = LoadFromExt::default();
         ext.meta_prefix = "my-fantastic-meta-dir";
-        let sst = StreamMetaStorage::load_from_ext(st.storage().as_ref(), ext)
+        let storage = st.storage().clone() as Arc<dyn ExternalStorage>;
+        let sst = StreamMetaStorage::load_from_ext(&storage, ext)
             .await
             .unwrap();
         let mut result = sst.try_collect::<Vec<_>>().await.unwrap();
@@ -1027,7 +1045,8 @@ mod test {
         let s = MigrationStorageWrapper::new(st.storage().as_ref());
         s.write(mig.into()).await.unwrap();
         s.write(mig2.into()).await.unwrap();
-        let mut sst = StreamMetaStorage::load_from_ext(st.storage().as_ref(), Default::default())
+        let storage = st.storage().clone() as Arc<dyn ExternalStorage>;
+        let mut sst = StreamMetaStorage::load_from_ext(&storage, Default::default())
             .await
             .unwrap();
 
