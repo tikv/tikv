@@ -43,7 +43,8 @@ use pd_client::PdClient;
 use protobuf::RepeatedField;
 use raft::eraftpb::ConfChangeType;
 use raftstore::{
-    RaftRouterCompactedEventSender, Result,
+    RaftRouterCompactedEventSender, RegionInfoAccessor, Result,
+    coprocessor::CoprocessorHost,
     store::{fsm::RaftRouter, util::encode_start_ts_into_flag_data, *},
 };
 use rand::{RngCore, seq::SliceRandom};
@@ -725,6 +726,7 @@ pub fn create_test_engine(
     router: Option<RaftRouter<RocksEngine, RaftTestEngine>>,
     limiter: Option<Arc<IoRateLimiter>>,
     cfg: &Config,
+    force_partition_mgr: &ForcePartitionRangeManager,
 ) -> (
     Engines<RocksEngine, RaftTestEngine>,
     Option<Arc<DataKeyManager>>,
@@ -734,7 +736,7 @@ pub fn create_test_engine(
     Option<Arc<RocksStatistics>>,
 ) {
     let dir = test_util::temp_dir("test_cluster", cfg.prefer_mem);
-    start_test_engine(router, limiter, cfg, dir)
+    start_test_engine(router, limiter, cfg, force_partition_mgr, dir)
 }
 
 pub fn start_test_engine(
@@ -742,6 +744,7 @@ pub fn start_test_engine(
     router: Option<RaftRouter<RocksEngine, RaftTestEngine>>,
     limiter: Option<Arc<IoRateLimiter>>,
     cfg: &Config,
+    force_partition_mgr: &ForcePartitionRangeManager,
     dir: TempDir,
 ) -> (
     Engines<RocksEngine, RaftTestEngine>,
@@ -769,8 +772,17 @@ pub fn start_test_engine(
 
     let (raft_engine, raft_statistics) = RaftTestEngine::build(&cfg, &env, &key_manager, &cache);
 
-    let mut builder = KvEngineFactoryBuilder::new(env, &cfg, cache, key_manager.clone())
-        .sst_recovery_sender(Some(scheduler));
+    let mut host: CoprocessorHost<RocksEngine> = CoprocessorHost::default();
+    let accessor = RegionInfoAccessor::new(&mut host, Arc::new(|| true), Box::new(|| 1));
+    let mut builder = KvEngineFactoryBuilder::new(
+        env,
+        &cfg,
+        cache,
+        key_manager.clone(),
+        force_partition_mgr.clone(),
+    )
+    .sst_recovery_sender(Some(scheduler))
+    .region_info_accessor(accessor);
     if let Some(router) = router {
         builder = builder.compaction_event_sender(Arc::new(RaftRouterCompactedEventSender {
             router: Mutex::new(router),
