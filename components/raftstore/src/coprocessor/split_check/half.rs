@@ -162,10 +162,10 @@ mod tests {
             ..Default::default()
         };
         let mut runnable = SplitCheckRunner::new(
-            None,
             engine.clone(),
             tx.clone(),
             CoprocessorHost::new(tx, cfg),
+            None,
         );
 
         // so split key will be z0005
@@ -211,10 +211,10 @@ mod tests {
             ..Default::default()
         };
         let mut runnable = SplitCheckRunner::new(
-            None,
             engine.clone(),
             tx.clone(),
             CoprocessorHost::new(tx, cfg),
+            None,
         );
 
         for i in 0..11 {
@@ -281,7 +281,7 @@ mod tests {
             ..Default::default()
         };
         let cop_host = CoprocessorHost::new(tx.clone(), cfg);
-        let mut runnable = SplitCheckRunner::new(None, engine.clone(), tx, cop_host.clone());
+        let mut runnable = SplitCheckRunner::new(engine.clone(), tx, cop_host.clone(), None);
 
         let key_gen = |k: &[u8], i: u64, mvcc: bool| {
             if !mvcc {
@@ -405,10 +405,10 @@ mod tests {
             ..Default::default()
         };
         let mut runnable = SplitCheckRunner::new(
-            None,
             engine.clone(),
             tx.clone(),
             CoprocessorHost::new(tx, cfg),
+            None,
         );
 
         // so bucket key will be all these keys
