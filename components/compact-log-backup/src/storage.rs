@@ -673,9 +673,9 @@ impl MetaEditFilter {
 
     fn merge_from_meta_edit(&mut self, mut em: MetaEdit) {
         self.destructed_self = self.destructed_self || em.destruct_self;
-        self.all_data_files_compacted =
-            self.all_data_files_compacted || em.all_data_files_compacted;
-        if self.destructed_self || self.all_data_files_compacted {
+        self.no_data_files_to_be_compacted =
+            self.no_data_files_to_be_compacted || em.all_data_files_compacted;
+        if self.destructed_self || self.no_data_files_to_be_compacted {
             // NOTE: the metakv files will be filtered out in
             // `SubcompactionCollector::add_new_file`. Therefore, the
             // self.segments and self.full_files can be clear here.
