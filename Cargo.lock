@@ -948,6 +948,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a4a4ddaa51a5bc52a6948f74c06d20aaaddb71924eab79b8c97a8c556e942d6a"
 
 [[package]]
+name = "base64"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+
+[[package]]
 name = "base64-simd"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2165,6 +2171,7 @@ dependencies = [
  "fail",
  "file_system",
  "keys",
+ "kll-rs",
  "kvproto",
  "lazy_static",
  "log_wrappers",
@@ -2232,6 +2239,7 @@ dependencies = [
  "fail",
  "file_system",
  "keys",
+ "kll-rs",
  "kvproto",
  "log_wrappers",
  "protobuf 2.8.0",
@@ -3748,6 +3756,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "kll-rs"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f437850747eb3c986ca050fb0c732686d14469b79bf60e16dc3839e582eb7f4a"
+dependencies = [
+ "base64 0.22.1",
+ "libc 0.2.151",
+ "libdatasketches_sys",
+ "rmp-serde",
+ "serde",
+]
+
+[[package]]
 name = "kvproto"
 version = "0.0.2"
 source = "git+https://github.com/pingcap/kvproto.git#21e537898f9da31d8cb148f6b7099d6946a99784"
@@ -3782,6 +3803,18 @@ name = "libc"
 version = "0.2.151"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "302d7ab3130588088d277783b1e2d2e10c9e9e4a16dd9050e6ec93fb3e7048f4"
+
+[[package]]
+name = "libdatasketches_sys"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8208e0e4183bb163e7ec9d7d7754ba53cab0f243f669ee491e05fd7024459dc4"
+dependencies = [
+ "bindgen 0.65.1",
+ "cc",
+ "cmake",
+ "libc 0.2.151",
+]
 
 [[package]]
 name = "libfuzzer-sys"
@@ -5830,6 +5863,28 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.103",
+]
+
+[[package]]
+name = "rmp"
+version = "0.8.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "228ed7c16fa39782c3b3468e974aec2795e9089153cd08ee2e9aefb3613334c4"
+dependencies = [
+ "byteorder",
+ "num-traits",
+ "paste",
+]
+
+[[package]]
+name = "rmp-serde"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "938a142ab806f18b88a97b0dea523d39e0fd730a064b035726adcfc58a8a5188"
+dependencies = [
+ "byteorder",
+ "rmp",
+ "serde",
 ]
 
 [[package]]
@@ -8035,7 +8090,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
- "cfg-if 0.1.10",
+ "cfg-if 1.0.0",
  "static_assertions",
 ]
 

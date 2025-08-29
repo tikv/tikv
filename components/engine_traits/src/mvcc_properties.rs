@@ -2,6 +2,7 @@
 
 use std::cmp;
 
+use kll_rs::KllDoubleSketch;
 use txn_types::TimeStamp;
 
 use crate::TtlProperties;
@@ -9,11 +10,13 @@ use crate::TtlProperties;
 /// MVCC properties for estimating discardable versions based on GC safe point.
 ///
 /// These statistics are collected to estimate the number of discardable MVCC
-/// versions using uniform distribution assumption. There are two types of
-///  discardable versions:
+/// versions using KLL sketches for more accurate timestamp distribution
+/// analysis. There are two types of discardable versions:
 /// 1. Stale versions: Redundant versions from row updates that can be
 ///    physically removed
 /// 2. Delete versions: Deleted rows that can be physically removed
+/// Ignore the the versions that should be kept before GC safe point during
+/// estimate.
 ///
 /// Example scenario:
 /// - Each row gets inserted once, updated once, and deleted once
@@ -24,15 +27,13 @@ use crate::TtlProperties;
 ///  {r2_t02, v1}, {r2_t12, v2}, {r2_t22, del},
 ///  {r3_t03, v1}, {r3_t13, v2}, {r3_t23, del}]
 ///
-/// Statistics collected:
-/// - oldest_stale_version_ts: t01, newest_stale_version_ts: t13
-/// - oldest_delete_ts: t21, newest_delete_ts: t23
+/// KLL sketches separately track timestamp distributions for:
+/// - Stale versions (t01, t02, t03, t11, t12, t13)
+/// - Delete versions (t21, t22, t23)
 ///
-/// If GC safe point is t22:
-/// - Discardable stale versions: 2 out of 6 total (versions t01-t13 span, t22
-///   cuts at ~2/3)
-/// - Discardable deletes: 1 out of 3 total (deletes t21-t23 span, t22 cuts at
-///   ~1/3)
+/// This allows for more accurate estimation of discardable entries based on
+/// the actual timestamp distributions rather than uniform distribution
+/// assumptions.
 #[derive(Clone, Debug)]
 pub struct MvccProperties {
     pub min_ts: TimeStamp,     // The minimal timestamp.
@@ -43,17 +44,11 @@ pub struct MvccProperties {
     pub num_versions: u64,     // The number of MVCC versions of all rows.
     pub max_row_versions: u64, // The maximal number of MVCC versions of a single row.
     pub ttl: TtlProperties,    // The ttl properties of all rows, for RawKV only.
-    // Statistics for estimating number of discardable MVCC stale versions.
-    // Stale versions are redundant versions of rows that were updated (not deleted).
-    // These can be physically removed once past GC safe point.
-    pub oldest_stale_version_ts: TimeStamp,
-    pub newest_stale_version_ts: TimeStamp,
-
-    // Statistics for estimating number of discardable TiKV MVCC deletes.
-    // Delete versions represent rows that were deleted and can be physically
-    // removed once past GC safe point.
-    pub oldest_delete_ts: TimeStamp,
-    pub newest_delete_ts: TimeStamp,
+    // KLL sketches for timestamp distribution analysis
+    // Separate sketches for stale versions and delete versions to improve
+    // estimation accuracy since they may have different distributions
+    pub stale_version_kll_sketch: KllDoubleSketch, // For stale MVCC versions
+    pub delete_kll_sketch: KllDoubleSketch,        // For delete MVCC versions
 }
 
 impl MvccProperties {
@@ -67,10 +62,8 @@ impl MvccProperties {
             num_versions: 0,
             max_row_versions: 0,
             ttl: TtlProperties::default(),
-            oldest_stale_version_ts: TimeStamp::max(),
-            newest_stale_version_ts: TimeStamp::zero(),
-            oldest_delete_ts: TimeStamp::max(),
-            newest_delete_ts: TimeStamp::zero(),
+            stale_version_kll_sketch: KllDoubleSketch::new().unwrap_or_default(),
+            delete_kll_sketch: KllDoubleSketch::new().unwrap_or_default(),
         }
     }
 
@@ -83,12 +76,12 @@ impl MvccProperties {
         self.num_versions += other.num_versions;
         self.max_row_versions = cmp::max(self.max_row_versions, other.max_row_versions);
         self.ttl.merge(&other.ttl);
-        self.oldest_stale_version_ts =
-            cmp::min(self.oldest_stale_version_ts, other.oldest_stale_version_ts);
-        self.newest_stale_version_ts =
-            cmp::max(self.newest_stale_version_ts, other.newest_stale_version_ts);
-        self.oldest_delete_ts = cmp::min(self.oldest_delete_ts, other.oldest_delete_ts);
-        self.newest_delete_ts = cmp::max(self.newest_delete_ts, other.newest_delete_ts);
+        self.stale_version_kll_sketch
+            .merge(&other.stale_version_kll_sketch)
+            .unwrap();
+        self.delete_kll_sketch
+            .merge(&other.delete_kll_sketch)
+            .unwrap();
     }
 }
 

@@ -298,6 +298,8 @@ mod mvcc_properties;
 mod sst_partitioner;
 pub use crate::sst_partitioner::*;
 mod range_properties;
+pub use kll_rs::KllDoubleSketch;
+
 pub use crate::{mvcc_properties::*, range_properties::*};
 mod tablet;
 pub use tablet::*;
