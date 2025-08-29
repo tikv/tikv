@@ -48,6 +48,11 @@ fn test_region_meta_endpoint() {
         std::env::temp_dir(),
         None,
         GrpcServiceManager::dummy(),
+<<<<<<< HEAD
+=======
+        None,
+        Default::default(),
+>>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
     )
     .unwrap();
     let addr = format!("127.0.0.1:{}", test_util::alloc_port());
