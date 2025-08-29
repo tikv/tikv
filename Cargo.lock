@@ -649,6 +649,7 @@ dependencies = [
  "http-body 0.4.5",
  "http-body 1.0.0",
  "http-body-util",
+ "hyper",
  "itoa 1.0.1",
  "num-integer",
  "pin-project-lite",
