@@ -256,7 +256,7 @@ pub struct Config {
     pub health_feedback_interval: ReadableDuration,
 
     #[doc(hidden)]
-    #[online_config(skip)]
+    #[online_config(hidden)]
     // Interval to inspect the network latency between tikv and tikv for slow store detection.
     // If it set to 0, it will disable the inspection.
     pub inspect_network_interval: ReadableDuration,

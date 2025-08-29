@@ -20,7 +20,7 @@ out/
 
 # Vscode files
 .vscode/**
-.devcontainer/**
+.devcontainer/
 
 target
 dist
