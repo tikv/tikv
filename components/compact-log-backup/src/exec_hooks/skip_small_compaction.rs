@@ -33,30 +33,40 @@ impl ExecHooks for SkipSmallCompaction {
         } else {
             self.size_threshold_default
         };
+        let buckets: [u64; 17] = [
+            32,
+            64,
+            128,
+            256,
+            512,
+            1024,
+            2048,
+            4096,
+            8192,
+            16384,
+            32768,
+            65536,
+            131072,
+            262144,
+            524288,
+            1048576,
+            107374182400,
+        ];
         if cx.subc.size < size_threshold {
-            let mut hs = [0; 6];
+            const HEADER_SIZE_PER_ENTRY: u64 = std::mem::size_of::<u32>() as u64 * 2;
+            let mut hs = [0; 17];
             for input in &cx.subc.inputs {
-                if input.key_value_size < 128 {
-                    hs[0] += 1;
-                } else if input.key_value_size < 512 {
-                    hs[1] += 1;
-                } else if input.key_value_size < 2048 {
-                    hs[2] += 1;
-                } else if input.key_value_size < 32768 {
-                    hs[3] += 1;
-                } else if input.key_value_size < 524288 {
-                    hs[4] += 1;
-                } else {
-                    hs[5] += 1;
+                let file_real_size =
+                    input.key_value_size + HEADER_SIZE_PER_ENTRY * input.num_of_entries;
+                for (i, bucket_size) in buckets.iter().enumerate() {
+                    if file_real_size < *bucket_size {
+                        hs[i] += 1;
+                        break;
+                    }
                 }
             }
             info!("Skipped a small compaction.";
-                "h1" => hs[0],
-                "h2" => hs[1],
-                "h3" => hs[2],
-                "h4" => hs[3],
-                "h5" => hs[4],
-                "h6" => hs[5],
+               "hs" => hs.map(|v| v.to_string()).join(","),
                 "size" => cx.subc.size,
                 "threshold" => size_threshold);
             cx.skip();

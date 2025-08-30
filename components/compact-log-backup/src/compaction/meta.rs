@@ -19,6 +19,7 @@ use crate::{
         LoadFromExt, LogFile, LogFileId, MetaFile, MigrationStorageWrapper, PhysicalLogFile,
         StreamMetaStorage,
     },
+    util::{cf_name, is_write_cf},
 };
 
 const IGNORE_FILE_SIZE_THRESHOLD: u64 = 512;
@@ -339,7 +340,27 @@ impl CompactionRunInfoBuilder {
         let mut result = ExpiringFilesOfMeta::of(&file.name);
         let mut all_full_covers = true;
         let mut no_data_files_to_be_compacted = true;
-        let mut hs = [0; 6];
+        let buckets: [u64; 17] = [
+            32,
+            64,
+            128,
+            256,
+            512,
+            1024,
+            2048,
+            4096,
+            8192,
+            16384,
+            32768,
+            65536,
+            131072,
+            262144,
+            524288,
+            1048576,
+            107374182400,
+        ];
+        let mut default_hs = [0; 17];
+        let mut write_hs = [0; 17];
         for p in &file.physical_files {
             let full_covers = self.full_covers(p);
             if full_covers {
@@ -356,33 +377,26 @@ impl CompactionRunInfoBuilder {
                 }
                 all_full_covers = false;
 
+                for f in p.files.iter() {
+                    let hs = if is_write_cf(cf_name(f.cf)) {
+                        write_hs.as_mut()
+                    } else {
+                        default_hs.as_mut()
+                    };
+                    for (i, bucket_size) in buckets.iter().enumerate() {
+                        if f.file_real_size < *bucket_size {
+                            hs[i] += 1;
+                            break;
+                        }
+                    }
+                }
                 // Meta KV files and data KV files belong to different physical files.
                 // Therefore, only if this physical file contains no `is_meta` entries
                 // should `all_data_files_full_covers` be set to false.
-                if p.files.iter().any(|f| {
-                    if f.is_meta {
-                        return false;
-                    }
-                    if f.file_real_size >= self.ignore_file_size_threshold {
-                        return true;
-                    }
-                    if f.file_real_size < 32 {
-                        hs[0] += 1;
-                    } else if f.file_real_size < 64 {
-                        hs[1] += 1;
-                    } else if f.file_real_size < 128 {
-                        hs[2] += 1;
-                    } else if f.file_real_size < 256 {
-                        hs[3] += 1;
-                    } else if f.file_real_size < 512 {
-                        hs[4] += 1;
-                    } else {
-                        hs[5] += 1;
-                    }
-                    false
-                    // return !f.is_meta && f.file_real_size >
-                    // self.ignore_file_size_threshold
-                }) {
+                if p.files
+                    .iter()
+                    .any(|f| !f.is_meta && f.file_real_size > self.ignore_file_size_threshold)
+                {
                     no_data_files_to_be_compacted = false;
                 }
             }
@@ -390,12 +404,8 @@ impl CompactionRunInfoBuilder {
         result.destruct_self = all_full_covers;
         result.no_data_files_to_be_compacted = no_data_files_to_be_compacted;
         info!("Expiring a metadata";
-                "h1" => hs[0],
-                "h2" => hs[1],
-                "h3" => hs[2],
-                "h4" => hs[3],
-                "h5" => hs[4],
-                "h6" => hs[5],
+                "default_hs" => default_hs.map(|v| v.to_string()).join(","),
+                "write_hs" => write_hs.map(|v| v.to_string()).join(","),
                 "destruct_self" => result.destruct_self,
                 "no_data_files_to_be_compacted" => result.no_data_files_to_be_compacted);
 
