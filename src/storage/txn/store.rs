@@ -294,6 +294,7 @@ pub struct SnapshotStore<S: Snapshot> {
     check_has_newer_ts_data: bool,
 
     point_getter_cache: Option<PointGetter<S>>,
+    in_memory_engine_hit: bool,
 }
 
 impl<S: Snapshot> Store for SnapshotStore<S> {
@@ -392,6 +393,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
             .isolation_level(self.isolation_level)
             .bypass_locks(self.bypass_locks.clone())
             .access_locks(self.access_locks.clone())
+            .in_memory_engine_hit(self.in_memory_engine_hit)
             .check_has_newer_ts_data(check_has_newer_ts_data)
             .build()?;
 
@@ -440,6 +442,7 @@ impl<S: Snapshot> SnapshotStore<S> {
         bypass_locks: TsSet,
         access_locks: TsSet,
         check_has_newer_ts_data: bool,
+        in_memory_engine_hit: bool,
     ) -> Self {
         SnapshotStore {
             snapshot,
@@ -451,6 +454,7 @@ impl<S: Snapshot> SnapshotStore<S> {
             check_has_newer_ts_data,
 
             point_getter_cache: None,
+            in_memory_engine_hit,
         }
     }
 
@@ -808,6 +812,7 @@ mod tests {
                 Default::default(),
                 Default::default(),
                 false,
+                false,
             )
         }
     }
@@ -1050,6 +1055,7 @@ mod tests {
             Default::default(),
             Default::default(),
             false,
+            false,
         );
         let bound_a = Key::from_encoded(b"a".to_vec());
         let bound_b = Key::from_encoded(b"b".to_vec());
@@ -1102,6 +1108,7 @@ mod tests {
             true,
             Default::default(),
             Default::default(),
+            false,
             false,
         );
         store2.scanner(false, false, false, None, None).unwrap();
