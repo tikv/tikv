@@ -70,7 +70,7 @@ impl ExecHooks for SkipSmallCompaction {
                 .compaction_until_ts
                 .saturating_sub(cx.subc.input_max_ts)
                 > DAY_2_OLDER
-                && cx.subc.size < old_size_threshold
+                && cx.subc.size >= old_size_threshold
             {
                 info!("No skipped the old compaction.";
                     "size" => cx.subc.size,
