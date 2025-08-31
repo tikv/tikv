@@ -270,8 +270,8 @@ impl CompactionRunInfoBuilder {
         &mut self.compaction
     }
 
-    pub async fn write_migration(&self, s: Arc<dyn ExternalStorage>) -> Result<()> {
-        let migration = self.migration_of(self.find_expiring_files(s.clone()).await?);
+    pub async fn write_migration(&self, s: Arc<dyn ExternalStorage>, until_ts: u64) -> Result<()> {
+        let migration = self.migration_of(self.find_expiring_files(s.clone(), until_ts).await?);
         let wrapped_storage = MigrationStorageWrapper::new(s.as_ref());
         wrapped_storage.write(migration.into()).await?;
         Ok(())
@@ -299,15 +299,18 @@ impl CompactionRunInfoBuilder {
     async fn find_expiring_files(
         &self,
         s: Arc<dyn ExternalStorage>,
+        until_ts: u64,
     ) -> Result<Vec<ExpiringFilesOfMeta>> {
         let ext = LoadFromExt::default();
         let mut storage = StreamMetaStorage::load_from_ext(&s, ext).await?;
 
         let mut result = vec![];
         while let Some(item) = storage.try_next().await? {
-            let exp = self.expiring(&item);
-            if !exp.is_empty() {
-                result.push(exp);
+            if item.min_ts <= until_ts {
+                let exp = self.expiring(&item, until_ts);
+                if !exp.is_empty() {
+                    result.push(exp);
+                }
             }
         }
         Ok(result)
@@ -336,7 +339,7 @@ impl CompactionRunInfoBuilder {
         }
     }
 
-    fn expiring(&self, file: &MetaFile) -> ExpiringFilesOfMeta {
+    fn expiring(&self, file: &MetaFile, until_ts: u64) -> ExpiringFilesOfMeta {
         let mut result = ExpiringFilesOfMeta::of(&file.name);
         let mut all_full_covers = true;
         let mut no_data_files_to_be_compacted = true;
@@ -403,6 +406,10 @@ impl CompactionRunInfoBuilder {
         }
         result.destruct_self = all_full_covers;
         result.no_data_files_to_be_compacted = no_data_files_to_be_compacted;
+        const DAY_2_OLDER: u64 = 46000000000000;
+        if until_ts.saturating_sub(file.max_ts) > DAY_2_OLDER {
+            result.no_data_files_to_be_compacted = true;
+        }
         info!("Expiring a metadata";
                 "default_hs" => default_hs.map(|v| v.to_string()).join(","),
                 "write_hs" => write_hs.map(|v| v.to_string()).join(","),
@@ -438,7 +445,7 @@ mod test {
 
     impl CompactionRunInfoBuilder {
         async fn mig(&self, s: Arc<dyn ExternalStorage>) -> crate::Result<brpb::Migration> {
-            Ok(self.migration_of(self.find_expiring_files(s).await?))
+            Ok(self.migration_of(self.find_expiring_files(s, u64::MAX).await?))
         }
     }
 

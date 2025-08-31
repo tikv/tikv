@@ -327,7 +327,7 @@ async fn test_filter_out_small_compactions() {
     let exec = create_compaction(st.backend());
 
     tokio::task::spawn_blocking(move || {
-        exec.run((SkipSmallCompaction::new(27800, 6950), SaveMeta::new(0)))
+        exec.run((SkipSmallCompaction::new(27800, 6950, 27800, 6950, 0), SaveMeta::new(0)))
     })
     .await
     .unwrap()

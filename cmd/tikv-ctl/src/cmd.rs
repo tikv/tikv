@@ -708,12 +708,30 @@ pub enum Cmd {
 
         #[structopt(
             long,
-            default_value = "4M",
+            default_value = "1M",
             help(
                 "specify the minimal compaction size in bytes for write cf, if backup data of a region doesn't reach this threshold, it won't be compacted"
             )
         )]
         minimal_compaction_size_write: ReadableSize,
+
+        #[structopt(
+            long,
+            default_value = "1M",
+            help(
+                "specify the minimal old compaction size in bytes for write cf, if backup data of a region doesn't reach this threshold, it won't be compacted"
+            )
+        )]
+        minimal_old_compaction_size_default: ReadableSize,
+
+        #[structopt(
+            long,
+            default_value = "128K",
+            help(
+                "specify the minimal old compaction size in bytes for write cf, if backup data of a region doesn't reach this threshold, it won't be compacted"
+            )
+        )]
+        minimal_old_compaction_size_write: ReadableSize,
     },
     /// Get the state of a region's RegionReadProgress.
     GetRegionReadProgress {

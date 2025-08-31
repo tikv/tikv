@@ -407,6 +407,8 @@ fn main() {
             force_regenerate,
             minimal_compaction_size_default,
             minimal_compaction_size_write,
+            minimal_old_compaction_size_default,
+            minimal_old_compaction_size_write,
         } => {
             let tmp_engine =
                 TemporaryRocks::new(&cfg).expect("failed to create temp engine for writing SSTs.");
@@ -485,6 +487,9 @@ fn main() {
             let skip_small_compaction = SkipSmallCompaction::new(
                 minimal_compaction_size_default.0,
                 minimal_compaction_size_write.0,
+                minimal_old_compaction_size_default.0,
+                minimal_old_compaction_size_write.0,
+                until_ts,
             );
             let hooks = (
                 (
