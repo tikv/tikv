@@ -53,9 +53,9 @@ pub use types::{LatencyInspector, RaftstoreDuration};
 
 /// Trait for health checker to abstract network latency monitoring
 pub trait HealthCheckerTrait: Send + Sync {
-    /// Get and reset all maximum latencies
+    /// Get all maximum latencies
     /// Returns a HashMap of store_id -> max_latency_ms
-    fn get_and_reset_all_max_latencies(&self) -> HashMap<u64, f64>;
+    fn get_all_max_latencies(&self) -> HashMap<u64, f64>;
 }
 
 struct ServingStatus {
@@ -223,7 +223,7 @@ impl HealthControllerInner {
     fn get_network_latencies(&self) -> HashMap<u64, Duration> {
         if let Some(checker) = self.health_checker.lock().as_ref() {
             checker
-                .get_and_reset_all_max_latencies()
+                .get_all_max_latencies()
                 .into_iter()
                 .map(|(store_id, latency_ms)| (store_id, Duration::from_millis(latency_ms as u64)))
                 .collect()

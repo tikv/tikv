@@ -57,8 +57,8 @@ use crate::server::{
 // Implement HealthCheckerTrait for HealthChecker to bridge with
 // health_controller
 impl health_controller::HealthCheckerTrait for HealthChecker {
-    fn get_and_reset_all_max_latencies(&self) -> HashMap<u64, f64> {
-        self.get_and_reset_all_max_latencies()
+    fn get_all_max_latencies(&self) -> HashMap<u64, f64> {
+        self.get_all_max_latencies()
     }
 }
 
@@ -1549,8 +1549,7 @@ impl HealthChecker {
         let now = Instant::now();
         {
             let mut latencies = max_latencies.lock().unwrap();
-            let entry = latencies.entry(store_id).or_insert((0.0, now));
-            entry.1 = now;
+            latencies.entry(store_id).insert_entry((0.0, now));
         }
         match health_client.check_async_opt(&req, call_opt) {
             Ok(resp_future) => {
@@ -1561,9 +1560,7 @@ impl HealthChecker {
                 {
                     let mut latencies = max_latencies.lock().unwrap();
                     let entry = latencies.entry(store_id).or_insert((0.0, now));
-                    if latency_ms > entry.0 {
-                        entry.0 = latency_ms;
-                    }
+                    entry.0 = latency_ms;
                 }
             }
             Err(e) => {
@@ -1578,48 +1575,6 @@ impl HealthChecker {
         }
     }
 
-    /// Get the maximum latency for a specific store and reset it to 0
-    /// Returns the latency in milliseconds, or None if no latency recorded for
-    /// this store
-    /// This method just for test
-    pub fn get_and_reset_max_latency(&self, store_id: u64) -> Option<f64> {
-        let mut latencies = self.max_latencies.lock().unwrap();
-        let now = Instant::now();
-        if let Some(entry) = latencies.get_mut(&store_id) {
-            let (lat, ts) = entry;
-            let elapsed = now.duration_since(*ts).as_secs_f64() * 1000.;
-            let ret = lat.max(elapsed - *lat);
-            *lat = 0.0; // reset latency, keep timestamp
-            Some(ret)
-        } else {
-            None
-        }
-    }
-
-    /// Get all maximum latencies and reset them
-    /// Returns a HashMap of store_id -> max_latency_ms
-    pub fn get_and_reset_all_max_latencies(&self) -> HashMap<u64, f64> {
-        let mut latencies = self.max_latencies.lock().unwrap();
-        let now = Instant::now();
-        let mut result = HashMap::default();
-        for (k, (lat, ts)) in latencies.iter_mut() {
-            let elapsed = now.duration_since(*ts).as_secs_f64() * 1000.;
-            let mut ret = *lat;
-            // Because each elapsed time is at least the inspect interval.
-            // If take the maximum value directly, the delay that is less
-            // than the inspect_interval will be overwritten.
-            // Note: To make testing easier,
-            // get_and_reset_max_latency/get_max_latency/get_all_max_latencies
-            // do not implement this.
-            if elapsed > self.inspect_interval.as_secs_f64() * 1000. * 1.2 {
-                ret = lat.max(elapsed - *lat);
-            }
-            result.insert(*k, ret);
-            *lat = 0.0; // reset latency, keep timestamp
-        }
-        result
-    }
-
     /// Get the maximum latency for a specific store without resetting
     /// Returns the latency in milliseconds, or None if no latency recorded for
     /// this store
@@ -1628,8 +1583,11 @@ impl HealthChecker {
         let latencies = self.max_latencies.lock().unwrap();
         let now = Instant::now();
         latencies.get(&store_id).map(|(lat, ts)| {
-            let elapsed = now.duration_since(*ts).as_secs_f64() * 1000.;
-            lat.max(elapsed - lat)
+            if *lat == 0.0 {
+                now.duration_since(*ts).as_secs_f64() * 1000.
+            } else {
+                *lat
+            }
         })
     }
 
@@ -1642,8 +1600,12 @@ impl HealthChecker {
         latencies
             .iter()
             .map(|(k, (lat, ts))| {
-                let elapsed = now.duration_since(*ts).as_secs_f64() * 1000.;
-                (*k, lat.max(elapsed - lat))
+                let ret = if *lat == 0.0 {
+                    now.duration_since(*ts).as_secs_f64() * 1000.
+                } else {
+                    *lat
+                };
+                (*k, ret)
             })
             .collect()
     }
@@ -1818,10 +1780,6 @@ mod tests {
 
     #[test]
     fn test_health_checker_latency_management() {
-        let check_latency_reset = |latency: Option<f64>| {
-            assert_gt!(latency, Some(0.));
-            assert_lt!(latency, Some(100.));
-        };
         let self_store_id = 1;
         let pool: Arc<Mutex<ConnectionPool>> = Arc::default();
         let interval = Duration::from_millis(100);
@@ -1839,7 +1797,7 @@ mod tests {
             latencies.insert(3, (300.2, now));
         }
 
-        // Test get without reset
+        // Test get
         assert_eq!(health_checker.get_max_latency(1), Some(100.5));
         assert_eq!(health_checker.get_max_latency(2), Some(200.8));
         assert_eq!(health_checker.get_max_latency(4), None);
@@ -1850,41 +1808,20 @@ mod tests {
         assert_eq!(all_latencies[&2], 200.8);
         assert_eq!(all_latencies[&3], 300.2);
 
-        // latencies should still be there after get_max_latency
-        assert_eq!(health_checker.get_max_latency(1), Some(100.5));
-
-        // Test get and reset single store
-        assert_eq!(health_checker.get_and_reset_max_latency(1), Some(100.5));
-        check_latency_reset(health_checker.get_max_latency(1));
-        assert_eq!(health_checker.get_max_latency(2), Some(200.8)); // Should still be there
-
-        // Test get and reset all
-        let remaining_latencies = health_checker.get_and_reset_all_max_latencies();
-        assert_eq!(remaining_latencies.len(), 3);
-        assert_eq!(remaining_latencies[&2], 200.8);
-        assert_eq!(remaining_latencies[&3], 300.2);
-
-        // All latencies should be reset now
-        check_latency_reset(health_checker.get_max_latency(2));
-        check_latency_reset(health_checker.get_max_latency(3));
-        assert_eq!(health_checker.get_all_max_latencies().len(), 3);
-
+        let now = Instant::now();
         {
             let mut latencies = health_checker.max_latencies.lock().unwrap();
-            latencies.insert(10, (0.0, Instant::now()));
+            latencies.insert(1, (0.0, now));
         }
-        sleep(StdDuration::from_millis(20));
-        let v = health_checker.get_max_latency(10).unwrap();
-        assert!(
-            v >= 20.0,
-            "max_latency should reflect elapsed time if latency is 0, got {}",
-            v
-        );
-        assert!(v < 70.0);
-        sleep(StdDuration::from_millis(50));
+        sleep(StdDuration::from_millis(200));
+        let v = health_checker.get_max_latency(1).unwrap();
+        assert_ge!(v, 200.0);
 
-        let v = health_checker.get_max_latency(10).unwrap();
-        assert!(v >= 70.0);
+        let all_latencies = health_checker.get_all_max_latencies();
+        assert_eq!(all_latencies.len(), 3);
+        assert_ge!(all_latencies[&1], 200.0);
+        assert_eq!(all_latencies[&2], 200.8);
+        assert_eq!(all_latencies[&3], 300.2);
     }
 
     #[tokio::test]
