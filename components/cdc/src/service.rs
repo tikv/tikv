@@ -37,6 +37,7 @@ static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 const CDC_WATCHDOG_CHECK_INTERVAL_SECS: u64 = 2;
 const CDC_IDLE_WARNING_THRESHOLD_SECS: u64 = 60;
 const CDC_IDLE_DEREGISTER_THRESHOLD_SECS: u64 = 60 * 20; // 20 minutes
+const CDC_MEMORY_QUOTA_ABORT_THRESHOLD: f64 = 0.999;
 
 pub fn validate_kv_api(kv_api: ChangeDataRequestKvApi, api_version: ApiVersion) -> bool {
     kv_api == ChangeDataRequestKvApi::TiDb
@@ -599,7 +600,8 @@ impl Service {
                         // To prevent the case that the connection idle since there are a lot of
                         // incremental scan tasks queueing so won't send events, also check on the
                         // memory usage, if the memory quota is almost used up, we abort the connection.
-                        if elapsed > Duration::from_secs(_idle_threshold) && memory_quota.used_ratio() >= 0.999 {
+                        if elapsed > Duration::from_secs(_idle_threshold)
+                            && memory_quota.used_ratio() >= CDC_MEMORY_QUOTA_ABORT_THRESHOLD {
                             error!("cdc connection idle for too long, aborting connection";
                                    "downstream" => peer_clone.clone(),
                                    "conn_id" => ?conn_id,
