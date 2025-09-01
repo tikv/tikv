@@ -231,7 +231,6 @@ fn test_forcely_awaken_hibenrate_regions() {
         tx.send(base_tick_ms).unwrap()
     })
     .unwrap();
-    println!("Try to awaken regions");
     router
         .send_raft_message(create_region_wakeup_msg(
             3,

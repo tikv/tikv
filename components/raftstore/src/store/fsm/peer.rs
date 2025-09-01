@@ -822,7 +822,7 @@ where
             .peer
             .switch_replication_mode(&self.ctx.global_replication_state);
         if self.fsm.peer.is_leader() {
-            self.reset_raft_tick(GroupState::Ordered, 0);
+            self.reset_raft_tick(GroupState::Ordered);
             self.register_pd_heartbeat_tick();
         }
     }
@@ -1281,7 +1281,7 @@ where
             }
             CasualMessage::RenewLease => {
                 self.try_renew_leader_lease("casual message");
-                self.reset_raft_tick(GroupState::Ordered, 0);
+                self.reset_raft_tick(GroupState::Ordered);
             }
             CasualMessage::RejectRaftAppend { peer_id } => {
                 let mut msg = raft::eraftpb::Message::new();
@@ -1717,14 +1717,11 @@ where
                 failed_stores,
                 ticks,
             });
-            self.reset_raft_tick(
-                if self.fsm.peer.is_leader() {
-                    GroupState::Ordered
-                } else {
-                    GroupState::Chaos
-                },
-                0,
-            );
+            self.reset_raft_tick(if self.fsm.peer.is_leader() {
+                GroupState::Ordered
+            } else {
+                GroupState::Chaos
+            });
             self.fsm.has_ready = true;
             return;
         }
@@ -1867,7 +1864,7 @@ where
         self.fsm.peer.raft_group.raft.set_check_quorum(false);
 
         // make sure it's not hibernated
-        self.reset_raft_tick(GroupState::Ordered, 0);
+        self.reset_raft_tick(GroupState::Ordered);
 
         self.fsm.peer.force_leader = Some(ForceLeaderState::ForceLeader {
             time: TiInstant::now_coarse(),
@@ -2845,7 +2842,7 @@ where
                 self.register_raft_base_tick();
             }
         } else if msg.get_from_peer().get_id() == self.fsm.peer.leader_id() {
-            self.reset_raft_tick(GroupState::Ordered, 0);
+            self.reset_raft_tick(GroupState::Ordered);
         }
 
         let from_peer_id = msg.get_from_peer().get_id();
@@ -2897,7 +2894,7 @@ where
         }
 
         if self.fsm.peer.should_wake_up {
-            self.reset_raft_tick(GroupState::Ordered, 0);
+            self.reset_raft_tick(GroupState::Ordered);
         }
 
         self.fsm.has_ready = true;
@@ -3087,7 +3084,7 @@ where
                     // to trigger a new voting in the Raft Group immediately.
                     // Meanwhile, it avoids the peer entering the `PreChaos` state,
                     // which would wait for another long tick to enter the `Chaos` state.
-                    self.reset_raft_tick(
+                    self.reset_raft_tick_with_missing(
                         if !self.fsm.peer.is_leader() {
                             GroupState::Chaos
                         } else {
@@ -3097,7 +3094,7 @@ where
                     );
                 }
                 if self.fsm.hibernate_state.group_state() == GroupState::Idle {
-                    self.reset_raft_tick(GroupState::Ordered, 0);
+                    self.reset_raft_tick(GroupState::Ordered);
                 }
                 if msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp
                     && self.fsm.peer.is_leader()
@@ -3189,7 +3186,7 @@ where
         }
     }
 
-    fn reset_raft_tick(&mut self, state: GroupState, missing_ticks: usize) {
+    fn reset_raft_tick_with_missing(&mut self, state: GroupState, missing_ticks: usize) {
         debug!(
             "reset raft tick to {:?}", state;
             "region_id"=> self.fsm.region_id(),
@@ -3204,6 +3201,10 @@ where
             self.register_report_region_buckets_tick();
             self.register_check_long_uncommitted_tick();
         }
+    }
+
+    fn reset_raft_tick(&mut self, state: GroupState) {
+        self.reset_raft_tick_with_missing(state, 0);
     }
 
     // return false means the message is invalid, and can be ignored.
@@ -5986,7 +5987,7 @@ where
         }
 
         if self.fsm.peer.should_wake_up {
-            self.reset_raft_tick(GroupState::Ordered, 0);
+            self.reset_raft_tick(GroupState::Ordered);
         }
 
         self.register_pd_heartbeat_tick();
