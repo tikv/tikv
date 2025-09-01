@@ -6132,7 +6132,8 @@ where
         // Accumulate interval time
         self.fsm.sampling_interval += self.ctx.cfg.raft_log_gc_tick_interval.0.as_millis() as u64;
         // sample the write rate of each leader peer.
-        if self.fsm.sampling_interval >= self.ctx.cfg.region_sampling_interval.0.as_millis() as u64
+        if self.fsm.sampling_interval
+            >= self.ctx.cfg.peer_stale_state_check_interval.0.as_millis() as u64
         {
             // Calculate write rate (last_index - previous_last_index)
             let write_rate = last_idx.saturating_sub(self.fsm.previous_last_index);

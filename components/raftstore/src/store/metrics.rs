@@ -228,6 +228,7 @@ make_static_metric! {
         peer_msg,
         store_msg,
         raft_engine_force_gc,
+        stale_region_check,
     }
 
     pub label_enum RaftLogGcSkippedReason {

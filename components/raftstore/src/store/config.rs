@@ -103,13 +103,6 @@ pub struct Config {
     pub raft_log_reserve_max_ticks: usize,
     // Old logs in Raft engine needs to be purged peridically.
     pub raft_engine_purge_interval: ReadableDuration,
-    // Interval to check whether to force gc raft logs.
-    #[doc(hidden)]
-    pub raft_log_force_gc_tick_interval: ReadableDuration,
-    // Interval to sample the write rate of each leader peer.
-    // only sample the peer which has a certain amount of log lag.
-    #[doc(hidden)]
-    pub region_sampling_interval: ReadableDuration,
     #[doc(hidden)]
     #[online_config(hidden)]
     pub max_manual_flush_rate: f64,
@@ -540,9 +533,7 @@ impl Default for Config {
             max_apply_unpersisted_log_limit: 1024,
             follower_read_max_log_gap: 100,
             raft_log_reserve_max_ticks: 6,
-            raft_engine_purge_interval: ReadableDuration::secs(10),
-            raft_log_force_gc_tick_interval: ReadableDuration::secs(300),
-            region_sampling_interval: ReadableDuration::secs(300),
+            raft_engine_purge_interval: ReadableDuration::secs(300),
             max_manual_flush_rate: 3.0,
             raft_entry_cache_life_time: ReadableDuration::secs(30),
             raft_reject_transfer_leader_duration: ReadableDuration::secs(3),
@@ -1124,12 +1115,6 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_engine_purge_interval"])
             .set(self.raft_engine_purge_interval.as_secs_f64());
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["raft_log_force_gc_tick_interval"])
-            .set(self.raft_log_force_gc_tick_interval.as_secs_f64());
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["region_sampling_interval"])
-            .set(self.region_sampling_interval.as_secs_f64());
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["max_manual_flush_rate"])
             .set(self.max_manual_flush_rate);

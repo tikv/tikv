@@ -460,7 +460,7 @@ pub enum StoreTick {
     CleanupImportSst,
     PdReportMinResolvedTs,
     RaftEngineForceGc,
-    RegionSampling,
+    StaleRegionCheck,
 }
 
 impl StoreTick {
@@ -477,7 +477,7 @@ impl StoreTick {
             StoreTick::LoadMetricsWindow => RaftEventDurationType::load_metrics_window,
             StoreTick::PdReportMinResolvedTs => RaftEventDurationType::pd_report_min_resolved_ts,
             StoreTick::RaftEngineForceGc => RaftEventDurationType::compact_check,
-            StoreTick::RegionSampling => RaftEventDurationType::compact_check,
+            StoreTick::StaleRegionCheck => RaftEventDurationType::stale_region_check,
         }
     }
 }

@@ -1,13 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-
-/// Region classification for force GC and sampling
-#[derive(Debug, Clone)]
-struct RegionClassification {
-    pinned_regions: Vec<(u64, u64)>,       // (region_id, growth)
-    gc_candidate_regions: Vec<(u64, u64)>, // (region_id, growth)
-}
 use std::{
     cell::Cell,
     cmp::{Ord, Ordering as CmpOrdering},
@@ -753,8 +746,7 @@ struct Store {
     consistency_check_time: HashMap<u64, Instant>,
     store_reachability: HashMap<u64, StoreReachability>,
     // Region leader write rate information for GC decision
-    region_write_rate: HashMap<u64, (u64, Instant)>, /* region_id -> (write_rate,
-                                                      * last_update_time) */
+    region_write_rate: HashMap<u64, (u64, Instant)>, // region_id -> (write_rate, last_update_time)
 }
 
 struct StoreReachability {
@@ -829,7 +821,7 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             StoreTick::CleanupImportSst => self.on_cleanup_import_sst_tick(),
             StoreTick::PdReportMinResolvedTs => self.on_pd_report_min_resolved_ts_tick(),
             StoreTick::RaftEngineForceGc => self.on_raft_engine_force_gc_tick(),
-            StoreTick::RegionSampling => self.on_region_sampling_tick(),
+            StoreTick::StaleRegionCheck => self.on_stale_region_check_tick(),
         }
         let elapsed = timer.saturating_elapsed();
         self.ctx
@@ -981,7 +973,6 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
         self.register_snap_mgr_gc_tick();
         self.register_consistency_check_tick();
         self.register_raft_engine_force_gc_tick();
-        self.register_region_sampling_tick();
     }
 }
 
@@ -3120,7 +3111,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
     fn register_raft_engine_force_gc_tick(&self) {
         self.ctx.schedule_store_tick(
             StoreTick::RaftEngineForceGc,
-            self.ctx.cfg.raft_log_force_gc_tick_interval.0,
+            self.ctx.cfg.raft_engine_purge_interval.0,
         );
     }
 
@@ -3138,44 +3129,36 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
     }
 
     fn send_force_compact_messages(&mut self, over_ratio: f64) {
+        if self.fsm.store.region_write_rate.is_empty() {
+            return;
+        }
         // Create region classification on-demand when force compact is needed
-        let classification = self.create_region_classification(over_ratio);
-
-        let pinned_regions_compacted = classification.pinned_regions.len();
-        let gc_candidates_compacted = classification.gc_candidate_regions.len();
-
+        let gc_candidate_regions = self.create_region_classification(over_ratio);
         // Send force compact messages to GC candidate regions
-        for (region_id, _) in &classification.gc_candidate_regions {
+        for (region_id, _) in &gc_candidate_regions {
             let _ = self.ctx.router.send(
                 *region_id,
                 PeerMsg::CasualMessage(Box::new(CasualMessage::ForceCompactRaftLogs)),
             );
         }
-
-        let regions_compacted = gc_candidates_compacted + pinned_regions_compacted;
-
-        info!(
-            "force GC completed: {} total regions, {} GC candidates, {} pinned regions",
-            regions_compacted, gc_candidates_compacted, pinned_regions_compacted
-        );
     }
 
-    fn register_region_sampling_tick(&self) {
+    fn register_stale_region_check_tick(&self) {
         self.ctx.schedule_store_tick(
-            StoreTick::RegionSampling,
-            self.ctx.cfg.region_sampling_interval.0,
+            StoreTick::StaleRegionCheck,
+            self.ctx.cfg.peer_stale_state_check_interval.0,
         );
     }
 
-    fn on_region_sampling_tick(&mut self) {
-        self.register_region_sampling_tick();
+    fn on_stale_region_check_tick(&mut self) {
+        self.register_stale_region_check_tick();
         // Clean up stale regions
         self.cleanup_stale_region_data();
     }
 
     fn cleanup_stale_region_data(&mut self) {
         // Clean up stale regions based on timeout
-        let timeout_duration = self.ctx.cfg.region_sampling_interval.0 * 2; // 2x sampling interval
+        let timeout_duration = self.ctx.cfg.peer_stale_state_check_interval.0 * 2; // 2x sampling interval
         let now = Instant::now();
         self.fsm
             .store
@@ -3185,20 +3168,12 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
             });
     }
 
-    fn create_region_classification(&self, over_ratio: f64) -> RegionClassification {
+    fn create_region_classification(&mut self, over_ratio: f64) -> Vec<(u64, u64)> {
         // Collect all (region_id, growth) into a vector
         let mut all_growth = Vec::new();
-        for (region_id, (write_rate, _)) in &self.fsm.store.region_write_rate {
+        for (region_id, (write_rate, _last_update_time)) in &self.fsm.store.region_write_rate {
             all_growth.push((*region_id, *write_rate));
         }
-
-        if all_growth.is_empty() {
-            return RegionClassification {
-                pinned_regions: Vec::new(),
-                gc_candidate_regions: Vec::new(),
-            };
-        }
-
         let len = all_growth.len();
 
         // Calculate dynamic pin ratio based on memory pressure
@@ -3216,16 +3191,17 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         // The left part is the GC candidate regions
         let gc_candidate_regions = all_growth;
 
-        info!(
-            "region classification created: {} pinned regions, {} GC candidate regions",
-            pinned_regions.len(),
-            gc_candidate_regions.len()
-        );
-
-        RegionClassification {
-            pinned_regions,
-            gc_candidate_regions,
+        // Remove GC candidate regions from region_write_rate map
+        for (region_id, _) in &gc_candidate_regions {
+            self.fsm.store.region_write_rate.remove(region_id);
         }
+        info!(
+            "create region classification: {} total regions, {} GC candidates, {} pinned regions",
+            len,
+            gc_candidate_regions.len(),
+            pinned_regions.len(),
+        );
+        gc_candidate_regions
     }
 
     fn check_force_gc_needed(&self) -> Option<f64> {

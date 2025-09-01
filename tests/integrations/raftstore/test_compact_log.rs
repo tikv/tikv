@@ -316,11 +316,10 @@ fn check_log_lag<T: Simulator>(cluster: &Cluster<T>, store_id: u64, region_id: u
 fn test_raft_log_force_gc<T: Simulator>(cluster: &mut Cluster<T>) {
     // Configure force GC settings
     cluster.cfg.raft_store.evict_cache_on_memory_ratio = 1.0;
-    cluster.cfg.raft_store.pin_compact_region_ratio = 0.2; // Pin 20% of regions
-    cluster.cfg.raft_store.region_sampling_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.pin_compact_region_ratio = 0.2;
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(50);
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(150);
-    cluster.cfg.raft_store.raft_log_force_gc_tick_interval = ReadableDuration::millis(200);
+    cluster.cfg.raft_store.raft_engine_purge_interval = ReadableDuration::millis(200);
     cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
 
     cluster.run();
