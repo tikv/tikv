@@ -1099,14 +1099,14 @@ where
         });
     }
 
-    /// Get the maximum latency for a specific store without resetting
+    /// Get the maximum latency for a specific store. Just for test
     /// Returns the latency in milliseconds, or None if no latency recorded for
     /// this store
     pub fn get_max_latency(&self, store_id: u64) -> Option<f64> {
         self.health_checker.get_max_latency(store_id)
     }
 
-    /// Get all maximum latencies without resetting
+    /// Get all maximum latencies. Just for test
     /// Returns a HashMap of store_id -> max_latency_ms
     pub fn get_all_max_latencies(&self) -> HashMap<u64, f64> {
         self.health_checker.get_all_max_latencies()
@@ -1575,7 +1575,7 @@ impl HealthChecker {
         }
     }
 
-    /// Get the maximum latency for a specific store without resetting
+    /// Get the maximum latency for a specific store
     /// Returns the latency in milliseconds, or None if no latency recorded for
     /// this store
     /// This method just for test
@@ -1591,7 +1591,7 @@ impl HealthChecker {
         })
     }
 
-    /// Get all maximum latencies without resetting
+    /// Get all maximum latencies
     /// Returns a HashMap of store_id -> max_latency_ms
     pub fn get_all_max_latencies(&self) -> HashMap<u64, f64> {
         let latencies = self.max_latencies.lock().unwrap();
