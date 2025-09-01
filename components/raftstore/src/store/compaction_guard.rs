@@ -1037,6 +1037,11 @@ mod tests {
             (b"jj", b"n", true),
             (b"p", b"q", false),
             (b"q", b"r", false),
+            // following are not overlap because start >= end
+            (b"a", b"a", false),
+            (b"b", b"a", false),
+            (b"f", b"f", false),
+            (b"z", b"a", false),
         ];
         for (i, (start, end, overlap)) in cases.into_iter().enumerate() {
             assert_eq!(overlap_with(&ranges, start, end), overlap, "case: {}", i);
