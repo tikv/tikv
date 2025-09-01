@@ -51,6 +51,9 @@ pub struct ExecutionConfig {
     pub from_ts: u64,
     /// Filter out files doesn't contain any record with TS less than this.
     pub until_ts: u64,
+    /// Filter out metadatas doesn't contain any record with TS larger than or
+    /// equal to this.
+    pub last_snapshot_backup_ts: u64,
     /// The compress algorithm we are going to use for output.
     pub compression: SstCompressionType,
     /// The compress level we are going to use.
@@ -251,6 +254,7 @@ impl Execution {
             async_rt: &Handle::current(),
             storage: &storage,
             until_ts: self.cfg.until_ts,
+            last_snapshot_backup_ts: self.cfg.last_snapshot_backup_ts,
         };
         hooks.after_execution_finished(cx).await?;
 

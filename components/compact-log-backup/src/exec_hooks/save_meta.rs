@@ -63,15 +63,6 @@ impl Default for SaveMeta {
 }
 
 impl SaveMeta {
-    #[cfg(test)]
-    pub fn new(ignore_file_size_threshold: u64) -> Self {
-        Self {
-            collector: CompactionRunInfoBuilder::new(ignore_file_size_threshold),
-            stats: Default::default(),
-            begin: Local::now(),
-        }
-    }
-
     fn comments(&self) -> String {
         let now = Local::now();
         let stat = CompactLogBackupStatistic {
@@ -172,7 +163,11 @@ impl ExecHooks for SaveMeta {
         self.collector.mut_meta().set_comments(comments);
         let begin = Instant::now();
         self.collector
-            .write_migration(Arc::clone(cx.storage), cx.until_ts)
+            .write_migration(
+                Arc::clone(cx.storage),
+                cx.until_ts,
+                cx.last_snapshot_backup_ts,
+            )
             .await?;
         info!("Migration written."; "duration" => ?begin.elapsed());
         Ok(())

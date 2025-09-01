@@ -19,10 +19,7 @@ use crate::{
         LoadFromExt, LogFile, LogFileId, MetaFile, MigrationStorageWrapper, PhysicalLogFile,
         StreamMetaStorage,
     },
-    util::{cf_name, is_write_cf},
 };
-
-const IGNORE_FILE_SIZE_THRESHOLD: u64 = 512;
 
 impl SubcompactionResult {
     pub fn verify_checksum(&self) -> Result<()> {
@@ -170,7 +167,6 @@ impl Ord for SortByOffset {
 pub struct CompactionRunInfoBuilder {
     files: HashMap<Arc<str>, BTreeSet<SortByOffset>>,
     compaction: brpb::LogFileCompaction,
-    ignore_file_size_threshold: u64,
 }
 
 impl Default for CompactionRunInfoBuilder {
@@ -178,7 +174,6 @@ impl Default for CompactionRunInfoBuilder {
         let mut this = Self {
             files: Default::default(),
             compaction: Default::default(),
-            ignore_file_size_threshold: IGNORE_FILE_SIZE_THRESHOLD,
         };
         this.compaction.input_min_ts = u64::MAX;
         this
@@ -239,13 +234,6 @@ impl ExpiringFilesOfMeta {
 }
 
 impl CompactionRunInfoBuilder {
-    #[cfg(test)]
-    pub fn new(ignore_file_size_threshold: u64) -> Self {
-        let mut builder = Self::default();
-        builder.ignore_file_size_threshold = ignore_file_size_threshold;
-        builder
-    }
-
     pub fn is_empty(&self) -> bool {
         self.files.is_empty()
     }
@@ -270,8 +258,16 @@ impl CompactionRunInfoBuilder {
         &mut self.compaction
     }
 
-    pub async fn write_migration(&self, s: Arc<dyn ExternalStorage>, until_ts: u64) -> Result<()> {
-        let migration = self.migration_of(self.find_expiring_files(s.clone(), until_ts).await?);
+    pub async fn write_migration(
+        &self,
+        s: Arc<dyn ExternalStorage>,
+        until_ts: u64,
+        last_snapshot_backup_ts: u64,
+    ) -> Result<()> {
+        let migration = self.migration_of(
+            self.find_expiring_files(s.clone(), until_ts, last_snapshot_backup_ts)
+                .await?,
+        );
         let wrapped_storage = MigrationStorageWrapper::new(s.as_ref());
         wrapped_storage.write(migration.into()).await?;
         Ok(())
@@ -300,6 +296,7 @@ impl CompactionRunInfoBuilder {
         &self,
         s: Arc<dyn ExternalStorage>,
         until_ts: u64,
+        last_snapshot_backup_ts: u64,
     ) -> Result<Vec<ExpiringFilesOfMeta>> {
         let ext = LoadFromExt::default();
         let mut storage = StreamMetaStorage::load_from_ext(&s, ext).await?;
@@ -307,7 +304,7 @@ impl CompactionRunInfoBuilder {
         let mut result = vec![];
         while let Some(item) = storage.try_next().await? {
             if item.min_ts <= until_ts {
-                let exp = self.expiring(&item, until_ts);
+                let exp = self.expiring(&item, last_snapshot_backup_ts);
                 if !exp.is_empty() {
                     result.push(exp);
                 }
@@ -339,31 +336,10 @@ impl CompactionRunInfoBuilder {
         }
     }
 
-    fn expiring(&self, file: &MetaFile, until_ts: u64) -> ExpiringFilesOfMeta {
+    fn expiring(&self, file: &MetaFile, last_snapshot_backup_ts: u64) -> ExpiringFilesOfMeta {
         let mut result = ExpiringFilesOfMeta::of(&file.name);
         let mut all_full_covers = true;
         let mut no_data_files_to_be_compacted = true;
-        let buckets: [u64; 17] = [
-            32,
-            64,
-            128,
-            256,
-            512,
-            1024,
-            2048,
-            4096,
-            8192,
-            16384,
-            32768,
-            65536,
-            131072,
-            262144,
-            524288,
-            1048576,
-            107374182400,
-        ];
-        let mut default_hs = [0; 17];
-        let mut write_hs = [0; 17];
         for p in &file.physical_files {
             let full_covers = self.full_covers(p);
             if full_covers {
@@ -380,39 +356,20 @@ impl CompactionRunInfoBuilder {
                 }
                 all_full_covers = false;
 
-                for f in p.files.iter() {
-                    let hs = if is_write_cf(cf_name(f.cf)) {
-                        write_hs.as_mut()
-                    } else {
-                        default_hs.as_mut()
-                    };
-                    for (i, bucket_size) in buckets.iter().enumerate() {
-                        if f.file_real_size < *bucket_size {
-                            hs[i] += 1;
-                            break;
-                        }
-                    }
-                }
                 // Meta KV files and data KV files belong to different physical files.
                 // Therefore, only if this physical file contains no `is_meta` entries
                 // should `all_data_files_full_covers` be set to false.
-                if p.files
-                    .iter()
-                    .any(|f| !f.is_meta && f.file_real_size > self.ignore_file_size_threshold)
-                {
+                if p.files.iter().any(|f| !f.is_meta) {
                     no_data_files_to_be_compacted = false;
                 }
             }
         }
         result.destruct_self = all_full_covers;
         result.no_data_files_to_be_compacted = no_data_files_to_be_compacted;
-        const DAY_2_OLDER: u64 = 46000000000000;
-        if until_ts.saturating_sub(file.max_ts) > DAY_2_OLDER {
+        if last_snapshot_backup_ts > file.max_ts {
             result.no_data_files_to_be_compacted = true;
         }
         info!("Expiring a metadata";
-                "default_hs" => default_hs.map(|v| v.to_string()).join(","),
-                "write_hs" => write_hs.map(|v| v.to_string()).join(","),
                 "destruct_self" => result.destruct_self,
                 "no_data_files_to_be_compacted" => result.no_data_files_to_be_compacted);
 
@@ -445,7 +402,7 @@ mod test {
 
     impl CompactionRunInfoBuilder {
         async fn mig(&self, s: Arc<dyn ExternalStorage>) -> crate::Result<brpb::Migration> {
-            Ok(self.migration_of(self.find_expiring_files(s, u64::MAX).await?))
+            Ok(self.migration_of(self.find_expiring_files(s, u64::MAX, 0).await?))
         }
     }
 
@@ -465,7 +422,7 @@ mod test {
             .build_flush_logs("v1/1", "v1/backupmeta/1.meta", [[g11, g12], [g21, g22]])
             .await;
 
-        let mut coll1 = CompactionRunInfoBuilder::new(0);
+        let mut coll1 = CompactionRunInfoBuilder::default();
         let cr = SubcompactionExec::default_config(st.storage().clone());
         let subc = Subcompaction::singleton(m.physical_files[0].files[0].clone());
         let res = cr.run(subc, Default::default()).await.unwrap();
@@ -552,7 +509,7 @@ mod test {
             .build_flush("1.log", "v1/backupmeta/1.meta", [g1, g2])
             .await;
 
-        let mut coll = CompactionRunInfoBuilder::new(0);
+        let mut coll = CompactionRunInfoBuilder::default();
         let cr = SubcompactionExec::default_config(st.storage().clone());
         let subc = Subcompaction::singleton(m.physical_files[0].files[0].clone());
         let res = cr.run(subc, Default::default()).await.unwrap();
@@ -561,7 +518,7 @@ mod test {
         assert_eq!(mig.edit_meta.len(), 1);
         assert!(!mig.edit_meta[0].destruct_self);
 
-        let mut coll = CompactionRunInfoBuilder::new(0);
+        let mut coll = CompactionRunInfoBuilder::default();
         let subc = Subcompaction::of_many(m.physical_files[0].files.iter().cloned());
         coll.add_subcompaction(&SubcompactionResult::of(subc));
         let mig = coll.mig(st.storage().clone()).await.unwrap();
@@ -619,7 +576,7 @@ mod test {
         ]);
         let subc3 = Subcompaction::singleton(f2.physical_files[0].files[2].clone());
 
-        let mut coll = CompactionRunInfoBuilder::new(0);
+        let mut coll = CompactionRunInfoBuilder::default();
         coll.add_subcompaction(&SubcompactionResult::of(subc1));
         coll.add_subcompaction(&SubcompactionResult::of(subc2));
         coll.add_subcompaction(&SubcompactionResult::of(subc3));

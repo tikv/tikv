@@ -69,6 +69,7 @@ pub fn create_compaction(st: StorageBackend) -> Execution {
         cfg: ExecutionConfig {
             from_ts: 0,
             until_ts: u64::MAX,
+            last_snapshot_backup_ts: 0,
             compression: engine_traits::SstCompressionType::Lz4,
             compression_level: None,
         },
@@ -97,7 +98,7 @@ async fn test_exec_simple() {
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(16);
     let bg_exec = tokio::task::spawn_blocking(move || {
-        exec.run((SaveMeta::new(0), CompactionSpy(tx))).unwrap()
+        exec.run((SaveMeta::default(), CompactionSpy(tx))).unwrap()
     });
     while let Some(item) = rx.recv().await {
         let rid = item.meta.get_meta().get_region_id() as usize;
@@ -161,7 +162,7 @@ async fn test_checkpointing() {
     );
     let hooks = move || {
         (
-            (SaveMeta::new(0), Checkpoint::default()),
+            (SaveMeta::default(), Checkpoint::default()),
             cloneable_hooks.clone(),
         )
     };
@@ -327,7 +328,7 @@ async fn test_filter_out_small_compactions() {
     let exec = create_compaction(st.backend());
 
     tokio::task::spawn_blocking(move || {
-        exec.run((SkipSmallCompaction::new(27800, 6950, 27800, 6950, 0), SaveMeta::new(0)))
+        exec.run((SkipSmallCompaction::new(27800, 6950), SaveMeta::default()))
     })
     .await
     .unwrap()

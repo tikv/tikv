@@ -46,6 +46,7 @@ pub struct AfterFinishCtx<'a> {
     /// For now, it is always the same as the source storage.
     pub storage: &'a Arc<dyn ExternalStorage>,
     pub until_ts: u64,
+    pub last_snapshot_backup_ts: u64,
 }
 
 #[derive(Clone, Copy)]
