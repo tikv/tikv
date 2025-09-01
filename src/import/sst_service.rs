@@ -744,10 +744,10 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             match handle.await.map_err(|e| Error::Io(e.into())) {
                 Ok(res) => match res {
                     Ok(_) => info!("switch mode"; "mode" => ?req_mode),
-                    Err(ref e) => error!(%*e; "switch mode failed"; "mode" => ?req_mode,),
+                    Err(ref e) => warn!("switch mode failed"; "mode" => ?req_mode, "err" => %e),
                 },
                 Err(ref e) => {
-                    error!(%*e; "joining the background job failed"; "mode" => ?req_mode,)
+                    warn!("joining the background job failed"; "mode" => ?req_mode, "err" => %e)
                 }
             }
             defer! { IMPORT_RPC_COUNT.with_label_values(&[label]).dec() }
