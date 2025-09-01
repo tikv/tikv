@@ -1328,7 +1328,8 @@ pub struct HealthChecker {
     // Store shutdown senders for each store inspection task
     task_handles: Arc<Mutex<HashMap<u64, oneshot::Sender<()>>>>,
     background_worker: Worker,
-    // Store the maximum latency and its timestamp for each store (in milliseconds, Instant)
+    // Store the maximum latency and its timestamp that began to check for each store (in
+    // milliseconds, Instant)
     max_latencies: Arc<Mutex<HashMap<u64, (f64, Instant)>>>,
 }
 
@@ -1527,7 +1528,6 @@ impl HealthChecker {
         channel: Channel,
         max_latencies: Arc<Mutex<HashMap<u64, (f64, Instant)>>>,
     ) {
-        info!("Performing health check for store"; "self_store_id" => self_store_id, "store_id" => store_id, "conn_id" => conn_id);
         let start_time = Instant::now();
 
         let health_client = HealthClient::new(channel);
@@ -1546,20 +1546,24 @@ impl HealthChecker {
         // can be stopped.
         let call_opt = CallOption::default().timeout(Duration::from_secs(5));
 
+        let now = Instant::now();
+        {
+            let mut latencies = max_latencies.lock().unwrap();
+            let entry = latencies.entry(store_id).or_insert((0.0, now));
+            entry.1 = now;
+        }
         match health_client.check_async_opt(&req, call_opt) {
             Ok(resp_future) => {
                 let _ = resp_future.await;
                 let elapsed = start_time.elapsed();
 
                 let latency_ms = elapsed.as_secs_f64() * 1000.0;
-                let now = Instant::now();
                 {
                     let mut latencies = max_latencies.lock().unwrap();
                     let entry = latencies.entry(store_id).or_insert((0.0, now));
                     if latency_ms > entry.0 {
-                        *entry = (latency_ms, now);
+                        entry.0 = latency_ms;
                     }
-                    info!("Health check successful"; "self_store_id" => self_store_id, "store_id" => store_id, "conn_id" => conn_id, "latency_ms" => latency_ms);
                 }
             }
             Err(e) => {
@@ -1584,7 +1588,7 @@ impl HealthChecker {
         if let Some(entry) = latencies.get_mut(&store_id) {
             let (lat, ts) = entry;
             let elapsed = now.duration_since(*ts).as_secs_f64() * 1000.;
-            let ret = lat.max(elapsed);
+            let ret = lat.max(elapsed - *lat);
             *lat = 0.0; // reset latency, keep timestamp
             Some(ret)
         } else {
@@ -1604,12 +1608,14 @@ impl HealthChecker {
             // Because each elapsed time is at least the inspect interval.
             // If take the maximum value directly, the delay that is less
             // than the inspect_interval will be overwritten.
+            // Note: To make testing easier,
+            // get_and_reset_max_latency/get_max_latency/get_all_max_latencies
+            // do not implement this.
             if elapsed > self.inspect_interval.as_secs_f64() * 1000. * 1.2 {
-                ret = lat.max(elapsed);
+                ret = lat.max(elapsed - *lat);
             }
             result.insert(*k, ret);
             *lat = 0.0; // reset latency, keep timestamp
-            info!("Resetting max latency for store"; "store_id" => k, "max_latency_ms" => ret);
         }
         result
     }
@@ -1623,7 +1629,7 @@ impl HealthChecker {
         let now = Instant::now();
         latencies.get(&store_id).map(|(lat, ts)| {
             let elapsed = now.duration_since(*ts).as_secs_f64() * 1000.;
-            lat.max(elapsed)
+            lat.max(elapsed - lat)
         })
     }
 
@@ -1637,7 +1643,7 @@ impl HealthChecker {
             .iter()
             .map(|(k, (lat, ts))| {
                 let elapsed = now.duration_since(*ts).as_secs_f64() * 1000.;
-                (*k, lat.max(elapsed))
+                (*k, lat.max(elapsed - lat))
             })
             .collect()
     }
