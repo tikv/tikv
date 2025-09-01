@@ -187,6 +187,7 @@ where
         health_controller: HealthController,
         resource_manager: Option<Arc<ResourceGroupManager>>,
         raft_message_filter: Arc<dyn RaftGrpcMessageFilter>,
+        background_worker: Worker,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
         let stats_pool = if cfg.value().stats_concurrency > 0 {
@@ -255,7 +256,14 @@ where
             lazy_worker.scheduler(),
             grpc_thread_load.clone(),
         );
-        let raft_client = RaftClient::new(store_id, conn_builder);
+        let raft_client = RaftClient::new(
+            store_id,
+            conn_builder,
+            cfg.value().inspect_network_interval.0,
+            background_worker.clone(),
+        );
+
+        raft_client.start_network_inspection();
 
         let trans = ServerTransport::new(raft_client);
 
@@ -706,6 +714,7 @@ mod tests {
             HealthController::new(),
             None,
             Arc::new(DefaultGrpcMessageFilter::new(0.2)),
+            tikv_util::worker::Worker::new("test-worker"),
         )
         .unwrap();
 

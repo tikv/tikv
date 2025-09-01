@@ -1,6 +1,6 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
-    collections::{BTreeSet, HashMap, HashSet, VecDeque},
+    collections::{BTreeSet, HashMap, HashSet, VecDeque, hash_map::Entry},
     future::Future,
     ops::Not,
     path::Path,
@@ -232,9 +232,11 @@ pub struct StreamMetaStorage<'a> {
     // NOTE: we want to keep the order of incoming meta files, so calls with the same argument can
     // generate the same compactions.
     prefetch: VecDeque<
-        Prefetch<Pin<Box<dyn Future<Output = Result<(MetaFile, LoadMetaStatistic)>> + 'a>>>,
+        Prefetch<
+            Pin<Box<dyn Future<Output = Result<(MetaFile, LoadMetaStatistic)>> + Send + 'static>>,
+        >,
     >,
-    ext_storage: &'a dyn ExternalStorage,
+    ext_storage: Arc<dyn ExternalStorage>,
     ext: LoadFromExt<'a>,
     stat: LoadMetaStatistic,
 
@@ -350,8 +352,9 @@ impl<'a> StreamMetaStorage<'a> {
                         continue;
                     }
 
-                    let mut fut =
-                        Prefetch::new(MetaFile::load_from(self.ext_storage, load).boxed_local());
+                    let storage = Arc::clone(&self.ext_storage);
+                    let handle = tokio::spawn(MetaFile::load_from_owned(storage, load));
+                    let mut fut = Prefetch::new(async move { handle.await.unwrap() }.boxed());
                     // start the execution of this future.
                     let poll = fut.poll_unpin(cx);
                     if poll.is_ready() {
@@ -396,14 +399,17 @@ impl<'a> StreamMetaStorage<'a> {
     /// Streaming metadata from an external storage.
     /// Defaultly this will fetch metadata from `v1/backupmeta`, you may
     /// override this in `ext`.
-    pub async fn load_from_ext(s: &'a dyn ExternalStorage, ext: LoadFromExt<'a>) -> Result<Self> {
+    pub async fn load_from_ext(
+        s: &'a Arc<dyn ExternalStorage>,
+        ext: LoadFromExt<'a>,
+    ) -> Result<Self> {
         let files = s.iter_prefix(ext.meta_prefix).fuse();
         let mig_ext = MigrationStorageWrapper::new(s);
         let skip_map = MetaEditFilters::from_migrations(mig_ext.load().await?);
         Ok(Self {
             prefetch: VecDeque::new(),
             files,
-            ext_storage: s,
+            ext_storage: Arc::clone(s),
             ext,
             stat: LoadMetaStatistic::default(),
             skip_map,
@@ -423,6 +429,13 @@ impl<'a> StreamMetaStorage<'a> {
 }
 
 impl MetaFile {
+    async fn load_from_owned(
+        s: Arc<dyn ExternalStorage>,
+        blob: BlobObject,
+    ) -> Result<(Self, LoadMetaStatistic)> {
+        Self::load_from(s.as_ref(), blob).await
+    }
+
     #[tracing::instrument(skip_all, fields(blob=%blob))]
     async fn load_from(
         s: &dyn ExternalStorage,
@@ -582,12 +595,19 @@ struct MetaEditFilters(HashMap<String, MetaEditFilter>);
 
 impl MetaEditFilters {
     fn from_migrations(migs: impl IntoIterator<Item = Migration>) -> Self {
-        Self(
-            migs.into_iter()
-                .flat_map(|mut m| m.take_edit_meta().into_iter())
-                .map(|em| (em.path.clone(), MetaEditFilter::from_meta_edit(em)))
-                .collect(),
-        )
+        let iter = migs
+            .into_iter()
+            .flat_map(|mut m| m.take_edit_meta().into_iter());
+        let mut m: HashMap<String, MetaEditFilter> = HashMap::with_capacity(iter.size_hint().0);
+        iter.for_each(|em| {
+            match m.entry(em.path.clone()) {
+                Entry::Occupied(mut o) => o.get_mut().merge_from_meta_edit(em),
+                Entry::Vacant(v) => {
+                    v.insert(MetaEditFilter::from_meta_edit(em));
+                }
+            };
+        });
+        Self(m)
     }
 
     fn should_fully_skip(&self, meta: &str) -> bool {
@@ -649,6 +669,37 @@ impl MetaEditFilter {
         }
 
         this
+    }
+
+    fn merge_from_meta_edit(&mut self, mut em: MetaEdit) {
+        self.destructed_self = self.destructed_self || em.destruct_self;
+        self.all_data_files_compacted =
+            self.all_data_files_compacted || em.all_data_files_compacted;
+        if self.destructed_self || self.all_data_files_compacted {
+            // NOTE: the metakv files will be filtered out in
+            // `SubcompactionCollector::add_new_file`. Therefore, the
+            // self.segments and self.full_files can be clear here.
+            self.full_files = Default::default();
+            self.segments = Default::default();
+            return;
+        }
+        self.full_files
+            .extend(em.take_delete_physical_files().into_iter());
+        for deletion in em.get_delete_logical_files() {
+            if !self.segments.contains_key(deletion.get_path()) {
+                self.segments
+                    .insert(deletion.get_path().to_owned(), Default::default());
+            }
+
+            self.segments
+                .get_mut(deletion.get_path())
+                .unwrap()
+                .extend(deletion.get_spans().iter().map(|span| span.offset));
+        }
+        for path in &self.full_files {
+            self.segments.remove(path);
+        }
+        self.segments.shrink_to_fit();
     }
 
     fn should_retain(&self, file: &LogFileId) -> bool {
@@ -787,12 +838,15 @@ pub fn hash_meta_edit(meta_edit: &brpb::MetaEdit) -> u64 {
 
 #[cfg(test)]
 mod test {
+    use std::sync::Arc;
+
+    use external_storage::ExternalStorage;
     use futures::stream::TryStreamExt;
     use kvproto::brpb::{DeleteSpansOfFile, MetaEdit, Migration, Span};
 
     use super::{LoadFromExt, MetaFile, StreamMetaStorage};
     use crate::{
-        storage::MigrationStorageWrapper,
+        storage::{LogFileId, MetaEditFilters, MigrationStorageWrapper},
         test_util::{KvGen, LogFileBuilder, TmpStorage, gen_step},
     };
 
@@ -842,7 +896,8 @@ mod test {
         let test_for_concurrency = |n| async move {
             let mut ext = LoadFromExt::default();
             ext.max_concurrent_fetch = n;
-            let sst = StreamMetaStorage::load_from_ext(st.storage().as_ref(), ext)
+            let storage = st.storage().clone() as Arc<dyn ExternalStorage>;
+            let sst = StreamMetaStorage::load_from_ext(&storage, ext)
                 .await
                 .unwrap();
             let mut result = sst.try_collect::<Vec<_>>().await.unwrap();
@@ -853,6 +908,65 @@ mod test {
         test_for_concurrency(1).await;
         test_for_concurrency(2).await;
         test_for_concurrency(16).await;
+    }
+
+    #[tokio::test]
+    async fn test_merge_meta_edits() {
+        let meta_path = |i| format!("v1/backupmeta/00000000-{i}.meta");
+        let file_path = |i| format!("v1/00000000/00000000-{i}.log");
+        let span = |i, i1, i2, i3| {
+            let mut s = DeleteSpansOfFile::new();
+            s.set_path(file_path(i));
+            let mut s1 = Span::new();
+            s1.set_offset(i1);
+            let mut s2 = Span::new();
+            s2.set_offset(i2);
+            let mut s3 = Span::new();
+            s3.set_offset(i3);
+            s.set_spans(vec![s1, s2, s3].into());
+            s
+        };
+        let mut meta_edit1 = MetaEdit::new();
+        meta_edit1.set_path(meta_path(1));
+        meta_edit1.mut_delete_physical_files().push(file_path(1));
+        meta_edit1.mut_delete_logical_files().push(span(2, 1, 2, 3));
+        meta_edit1.mut_delete_logical_files().push(span(3, 1, 2, 3));
+        let mut meta_edit2 = MetaEdit::new();
+        meta_edit2.set_path(meta_path(1));
+        meta_edit2.mut_delete_physical_files().push(file_path(2));
+        meta_edit2.mut_delete_logical_files().push(span(3, 4, 5, 6));
+        let mut meta_edit3 = MetaEdit::new();
+        meta_edit3.set_path(meta_path(2));
+        meta_edit3.mut_delete_physical_files().push(file_path(4));
+        meta_edit3.mut_delete_logical_files().push(span(5, 1, 2, 3));
+        let mut meta_edit4 = MetaEdit::new();
+        meta_edit4.set_path(meta_path(2));
+        meta_edit4.set_destruct_self(true);
+        let mut mig1 = Migration::new();
+        mig1.mut_edit_meta().push(meta_edit1);
+        mig1.mut_edit_meta().push(meta_edit3);
+        let mut mig2 = Migration::new();
+        mig2.mut_edit_meta().push(meta_edit2);
+        mig2.mut_edit_meta().push(meta_edit4);
+        let migs = vec![mig1, mig2];
+        let mefs = MetaEditFilters::from_migrations(migs);
+        assert!(mefs.should_fully_skip(&meta_path(2)));
+        assert!(!mefs.should_fully_skip(&meta_path(1)));
+        let f1 = mefs.0.get(&meta_path(1)).unwrap();
+        let log_file_id = |name: String, offset: u64| LogFileId {
+            name: std::sync::Arc::from(name.into_boxed_str()),
+            offset,
+            length: offset + 1,
+        };
+        assert!(!f1.should_retain(&log_file_id(file_path(1), 234)));
+        assert!(!f1.should_retain(&log_file_id(file_path(2), 435)));
+        assert!(!f1.should_retain(&log_file_id(file_path(3), 1)));
+        assert!(!f1.should_retain(&log_file_id(file_path(3), 2)));
+        assert!(!f1.should_retain(&log_file_id(file_path(3), 3)));
+        assert!(!f1.should_retain(&log_file_id(file_path(3), 4)));
+        assert!(!f1.should_retain(&log_file_id(file_path(3), 5)));
+        assert!(!f1.should_retain(&log_file_id(file_path(3), 6)));
+        assert!(f1.should_retain(&log_file_id(file_path(3), 7)));
     }
 
     #[tokio::test]
@@ -867,7 +981,8 @@ mod test {
 
         let mut ext = LoadFromExt::default();
         ext.meta_prefix = "my-fantastic-meta-dir";
-        let sst = StreamMetaStorage::load_from_ext(st.storage().as_ref(), ext)
+        let storage = st.storage().clone() as Arc<dyn ExternalStorage>;
+        let sst = StreamMetaStorage::load_from_ext(&storage, ext)
             .await
             .unwrap();
         let mut result = sst.try_collect::<Vec<_>>().await.unwrap();
@@ -930,7 +1045,8 @@ mod test {
         let s = MigrationStorageWrapper::new(st.storage().as_ref());
         s.write(mig.into()).await.unwrap();
         s.write(mig2.into()).await.unwrap();
-        let mut sst = StreamMetaStorage::load_from_ext(st.storage().as_ref(), Default::default())
+        let storage = st.storage().clone() as Arc<dyn ExternalStorage>;
+        let mut sst = StreamMetaStorage::load_from_ext(&storage, Default::default())
             .await
             .unwrap();
 
