@@ -1577,6 +1577,7 @@ impl HealthChecker {
     /// Get the maximum latency for a specific store and reset it to 0
     /// Returns the latency in milliseconds, or None if no latency recorded for
     /// this store
+    /// This method just for test
     pub fn get_and_reset_max_latency(&self, store_id: u64) -> Option<f64> {
         let mut latencies = self.max_latencies.lock().unwrap();
         let now = Instant::now();
@@ -1599,7 +1600,7 @@ impl HealthChecker {
         let mut result = HashMap::default();
         for (k, (lat, ts)) in latencies.iter_mut() {
             let elapsed = now.duration_since(*ts).as_secs_f64() * 1000.;
-            let mut ret = lat.clone();
+            let mut ret = *lat;
             // Because each elapsed time is at least the inspect interval.
             // If take the maximum value directly, the delay that is less
             // than the inspect_interval will be overwritten.
@@ -1616,6 +1617,7 @@ impl HealthChecker {
     /// Get the maximum latency for a specific store without resetting
     /// Returns the latency in milliseconds, or None if no latency recorded for
     /// this store
+    /// This method just for test
     pub fn get_max_latency(&self, store_id: u64) -> Option<f64> {
         let latencies = self.max_latencies.lock().unwrap();
         let now = Instant::now();
@@ -1627,6 +1629,7 @@ impl HealthChecker {
 
     /// Get all maximum latencies without resetting
     /// Returns a HashMap of store_id -> max_latency_ms
+    /// This method just for test
     pub fn get_all_max_latencies(&self) -> HashMap<u64, f64> {
         let latencies = self.max_latencies.lock().unwrap();
         let now = Instant::now();
