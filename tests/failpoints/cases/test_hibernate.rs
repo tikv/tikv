@@ -186,26 +186,65 @@ fn test_forcely_awaken_hibenrate_regions() {
     // Secondly, forcely send `MsgRegionWakeUp` message for awakening hibernated
     // regions.
     let (tx, rx) = mpsc::sync_channel(128);
+    let sender = tx.clone();
     fail::cfg_callback("on_raft_base_tick_chaos", move || {
-        tx.send(base_tick_ms).unwrap()
+        sender.send(base_tick_ms).unwrap()
     })
     .unwrap();
-    let mut message = RaftMessage::default();
-    message.region_id = 1;
-    message.set_from_peer(new_peer(3, 3));
-    message.set_to_peer(new_peer(3, 3));
-    message.mut_region_epoch().version = 1;
-    message.mut_region_epoch().conf_ver = 3;
-    let mut msg = ExtraMessage::default();
-    msg.set_type(ExtraMessageType::MsgRegionWakeUp);
-    msg.forcely_awaken = true;
-    message.set_extra_msg(msg);
-    router.send_raft_message(message).unwrap();
+    let create_region_wakeup_msg =
+        |store_id: u64, peer_id: u64, version: u64, conf_ver: u64| -> RaftMessage {
+            let mut message = RaftMessage::default();
+            message.region_id = 1;
+            message.set_from_peer(new_peer(store_id, peer_id));
+            message.set_to_peer(new_peer(store_id, peer_id));
+            message.mut_region_epoch().version = version;
+            message.mut_region_epoch().conf_ver = conf_ver;
+            let mut msg = ExtraMessage::default();
+            msg.set_type(ExtraMessageType::MsgRegionWakeUp);
+            msg.forcely_awaken = true;
+            message.set_extra_msg(msg);
+            message
+        };
+    router
+        .send_raft_message(create_region_wakeup_msg(3, 3, 1, 3))
+        .unwrap();
     assert_eq!(
         rx.recv_timeout(Duration::from_secs(1)).unwrap(),
         base_tick_ms
     );
     fail::remove("on_raft_base_tick_chaos");
+
+    // Wait until all peers of region 1 hibernate.
+    thread::sleep(Duration::from_millis(base_tick_ms * 30));
+
+    // Again, send `CheckPeerStaleState` message to trigger the check.
+    let router = cluster.sim.rl().get_router(3).unwrap();
+    router
+        .send(1, PeerMsg::Tick(PeerTick::CheckPeerStaleState))
+        .unwrap();
+
+    // Then, forcely send `MsgRegionWakeUp` message for awakening hibernated
+    // regions and check the missing_ticks should larger than
+    // raft_max_election_timeout_ticks,
+    let region_epoch = cluster.get_region_epoch(1);
+    fail::cfg_callback("on_raft_base_tick_check_missing_ticks", move || {
+        tx.send(base_tick_ms).unwrap()
+    })
+    .unwrap();
+    println!("Try to awaken regions");
+    router
+        .send_raft_message(create_region_wakeup_msg(
+            3,
+            3,
+            region_epoch.version + 1,
+            region_epoch.conf_ver,
+        ))
+        .unwrap();
+    assert_eq!(
+        rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+        base_tick_ms
+    );
+    fail::remove("on_raft_base_tick_check_missing_ticks");
 }
 
 // This case creates a cluster with 3 TiKV instances, and then wait all peers

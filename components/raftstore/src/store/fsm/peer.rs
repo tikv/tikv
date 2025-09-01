@@ -2350,6 +2350,11 @@ where
 
         let mut res = None;
         if self.ctx.cfg.hibernate_regions {
+            fail_point!(
+                "on_raft_base_tick_check_missing_ticks",
+                self.fsm.missing_ticks >= self.ctx.cfg.raft_max_election_timeout_ticks,
+                |_| {}
+            );
             if self.fsm.hibernate_state.group_state() == GroupState::Idle {
                 // missing_ticks should be less than election timeout ticks otherwise
                 // follower may tick more than an election timeout in chaos state.
