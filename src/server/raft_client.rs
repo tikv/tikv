@@ -1593,7 +1593,6 @@ impl HealthChecker {
 
     /// Get all maximum latencies without resetting
     /// Returns a HashMap of store_id -> max_latency_ms
-    /// This method just for test
     pub fn get_all_max_latencies(&self) -> HashMap<u64, f64> {
         let latencies = self.max_latencies.lock().unwrap();
         let now = Instant::now();
