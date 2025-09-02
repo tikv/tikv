@@ -32,6 +32,7 @@ use tikv_util::{
     config::ReadableDuration,
     memory::MemoryQuota,
     worker::{Builder, LazyWorker, Runnable},
+    HandyRwLock,
 };
 use txn_types::TimeStamp;
 static INIT: Once = Once::new();
