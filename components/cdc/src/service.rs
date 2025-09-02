@@ -601,8 +601,9 @@ impl Service {
                         // To prevent the case that the connection idle since there are a lot of
                         // incremental scan tasks queueing so won't send events, also check on the
                         // memory usage, if the memory quota is almost used up, we abort the connection.
+                        let used_ratio = memory_quota.in_use() as f64 / memory_quota.capacity() as f64;
                         if elapsed > Duration::from_secs(_idle_threshold)
-                            && memory_quota.used_ratio() >= CDC_MEMORY_QUOTA_ABORT_THRESHOLD {
+                            && used_ratio >= CDC_MEMORY_QUOTA_ABORT_THRESHOLD {
                             error!("cdc connection idle for too long, aborting connection";
                                    "downstream" => peer_clone.clone(),
                                    "conn_id" => ?conn_id,
@@ -640,9 +641,6 @@ impl ChangeData for Service {
 
 #[cfg(feature = "failpoints")]
 async fn sleep_before_drain_change_event() {
-    use std::time::{Duration, Instant};
-
-    use tikv_util::timer::GLOBAL_TIMER_HANDLE;
     let should_sleep = || {
         fail::fail_point!("cdc_sleep_before_drain_change_event", |_| true);
         false
@@ -656,7 +654,7 @@ async fn sleep_before_drain_change_event() {
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, time::Duration};
+    use std::sync::Arc;
 
     use futures::{executor::block_on, SinkExt};
     use grpcio::{self, ChannelBuilder, EnvBuilder, Server, ServerBuilder, WriteFlags};
