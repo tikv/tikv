@@ -7125,7 +7125,7 @@ where
         let (reject_lease_ticks_ttl, reject_lease_ticks) = self.fsm.reject_lease_ticks;
         fail_point!(
             "on_raft_base_tick_check_rejected_lease_ticks",
-            reject_lease_ticks_ttl == 0
+            reject_lease_ticks_ttl == 1
                 && reject_lease_ticks >= self.ctx.cfg.raft_max_election_timeout_ticks,
             |_| { 0 }
         );

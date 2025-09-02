@@ -244,7 +244,7 @@ fn test_forcely_awaken_hibenrate_regions() {
         ))
         .unwrap();
     assert_eq!(
-        rx.recv_timeout(Duration::from_secs(10)).unwrap(),
+        rx.recv_timeout(Duration::from_secs(1)).unwrap(),
         base_tick_ms
     );
     fail::remove("on_raft_base_tick_check_rejected_lease_ticks");
