@@ -53,6 +53,26 @@ pub fn record_network_out_bytes(bytes: u64) {
     })
 }
 
+/// Records how many bytes have been read in the current context.
+pub fn record_logical_read_bytes(bytes: u64) {
+    STORAGE.with(|s| {
+        s.borrow()
+            .summary_cur_record
+            .logical_read_bytes
+            .fetch_add(bytes, Relaxed);
+    })
+}
+
+/// Records how many bytes have been written in the current context.
+pub fn record_logical_write_bytes(bytes: u64) {
+    STORAGE.with(|s| {
+        s.borrow()
+            .summary_cur_record
+            .logical_write_bytes
+            .fetch_add(bytes, Relaxed);
+    })
+}
+
 /// An implementation of [SubRecorder] for collecting summary data.
 ///
 /// `SummaryRecorder` uses some special methods
