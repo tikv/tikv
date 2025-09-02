@@ -329,7 +329,10 @@ impl<P: RegionInfoProvider> CompactionGuardGenerator<P> {
 }
 
 fn overlap_with(ranges: &[TtlRange], last_key: &[u8], next_key: &[u8]) -> bool {
-    assert!(last_key < next_key);
+    // do not partition at the same key.
+    if last_key >= next_key {
+        return false;
+    }
     if ranges.is_empty() {
         return false;
     }
@@ -1034,6 +1037,11 @@ mod tests {
             (b"jj", b"n", true),
             (b"p", b"q", false),
             (b"q", b"r", false),
+            // following are not overlap because start >= end
+            (b"a", b"a", false),
+            (b"b", b"a", false),
+            (b"f", b"f", false),
+            (b"z", b"a", false),
         ];
         for (i, (start, end, overlap)) in cases.into_iter().enumerate() {
             assert_eq!(overlap_with(&ranges, start, end), overlap, "case: {}", i);
