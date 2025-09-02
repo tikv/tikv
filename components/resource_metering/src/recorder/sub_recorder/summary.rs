@@ -33,6 +33,26 @@ pub fn record_write_keys(count: u32) {
     })
 }
 
+/// Records how many bytes have been received in the current context.
+pub fn record_network_in_bytes(bytes: u64) {
+    STORAGE.with(|s| {
+        s.borrow()
+            .summary_cur_record
+            .network_in_bytes
+            .fetch_add(bytes, Relaxed);
+    })
+}
+
+/// Records how many bytes have been sent in the current context.
+pub fn record_network_out_bytes(bytes: u64) {
+    STORAGE.with(|s| {
+        s.borrow()
+            .summary_cur_record
+            .network_out_bytes
+            .fetch_add(bytes, Relaxed);
+    })
+}
+
 /// An implementation of [SubRecorder] for collecting summary data.
 ///
 /// `SummaryRecorder` uses some special methods
