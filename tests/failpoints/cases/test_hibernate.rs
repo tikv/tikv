@@ -164,6 +164,9 @@ fn test_forcely_awaken_hibenrate_regions() {
     // stable.
     cluster.cfg.raft_store.raft_min_election_timeout_ticks = 10;
     cluster.cfg.raft_store.raft_max_election_timeout_ticks = 11;
+    cluster.cfg.raft_store.raft_store_max_leader_lease =
+        cluster.cfg.raft_store.raft_base_tick_interval
+            * (cluster.cfg.raft_store.raft_election_timeout_ticks - 1) as u32;
     configure_for_hibernate(&mut cluster.cfg);
     cluster.pd_client.disable_default_operator();
     let r = cluster.run_conf_change();
@@ -214,6 +217,7 @@ fn test_forcely_awaken_hibenrate_regions() {
     );
     fail::remove("on_raft_base_tick_chaos");
 
+    cluster.must_put(b"k1", b"v10");
     // Wait until all peers of region 1 hibernate.
     thread::sleep(Duration::from_millis(base_tick_ms * 30));
 
@@ -227,7 +231,7 @@ fn test_forcely_awaken_hibenrate_regions() {
     // regions and check the missing_ticks should larger than
     // raft_max_election_timeout_ticks,
     let region_epoch = cluster.get_region_epoch(1);
-    fail::cfg_callback("on_raft_base_tick_check_missing_ticks", move || {
+    fail::cfg_callback("on_raft_base_tick_check_rejected_lease_ticks", move || {
         tx.send(base_tick_ms).unwrap()
     })
     .unwrap();
@@ -235,15 +239,15 @@ fn test_forcely_awaken_hibenrate_regions() {
         .send_raft_message(create_region_wakeup_msg(
             3,
             3,
-            region_epoch.version + 1,
+            region_epoch.version,
             region_epoch.conf_ver,
         ))
         .unwrap();
     assert_eq!(
-        rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+        rx.recv_timeout(Duration::from_secs(10)).unwrap(),
         base_tick_ms
     );
-    fail::remove("on_raft_base_tick_check_missing_ticks");
+    fail::remove("on_raft_base_tick_check_rejected_lease_ticks");
 }
 
 // This case creates a cluster with 3 TiKV instances, and then wait all peers
