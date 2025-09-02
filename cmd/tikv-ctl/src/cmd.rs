@@ -722,6 +722,9 @@ pub enum Cmd {
             )
         )]
         last_snapshot_backup_ts: u64,
+
+        #[structopt(long)]
+        debug_dry_run: bool,
     },
     /// Get the state of a region's RegionReadProgress.
     GetRegionReadProgress {

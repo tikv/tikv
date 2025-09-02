@@ -408,6 +408,7 @@ fn main() {
             minimal_compaction_size_default,
             minimal_compaction_size_write,
             last_snapshot_backup_ts,
+            debug_dry_run,
         } => {
             let tmp_engine =
                 TemporaryRocks::new(&cfg).expect("failed to create temp engine for writing SSTs.");
@@ -445,6 +446,10 @@ fn main() {
                 external_storage,
                 db: Some(tmp_engine.rocks),
             };
+            if debug_dry_run {
+                let _ = exec.dry_run();
+                return;
+            }
 
             use tikv::server::status_server::lite::Server as StatusServerLite;
             struct ExportTiKVInfo {

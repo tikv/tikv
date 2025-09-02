@@ -11,7 +11,7 @@ use engine_rocks::RocksEngine;
 pub use engine_traits::SstCompressionType;
 use engine_traits::SstExt;
 use external_storage::{BackendConfig, ExternalStorage};
-use futures::stream::{self, StreamExt};
+use futures::stream::{self, StreamExt, TryStreamExt};
 use hooking::{
     AfterFinishCtx, BeforeStartCtx, CId, ExecHooks, SubcompactionFinishCtx, SubcompactionStartCtx,
 };
@@ -311,5 +311,29 @@ impl Execution {
         };
         hooks.after_a_subcompaction_end(cid, cx).await?;
         Result::Ok(())
+    }
+
+    pub fn dry_run(self) -> Result<()> {
+        let storage =
+            external_storage::create_storage(&self.external_storage, BackendConfig::default())?;
+        let storage: Arc<dyn ExternalStorage> = Arc::from(storage);
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let guarded = async {
+            let ext = LoadFromExt::default();
+            let mut meta = StreamMetaStorage::load_from_ext(&storage, ext).await?;
+
+            let mut count = 0;
+            while (meta.try_next().await?).is_some() {
+                count += 1;
+            }
+            println!("calculate metadata count: {count}");
+            Ok(())
+        };
+
+        runtime.block_on(frame!(guarded))
     }
 }
