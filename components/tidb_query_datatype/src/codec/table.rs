@@ -597,9 +597,39 @@ impl RowHandle for IntHandle {
         vec: &LazyBatchColumnVec,
         row_offset: usize,
         col_offsets: &[usize],
-        _col_types: &[FieldType],
+        col_types: &[FieldType],
     ) -> Result<Self> {
+        if col_offsets.len() != 1 || col_types.len() != 1 {
+            return Err(box_err!(
+                "The IntHandle columns len should be 1, but got col_offsets: {}, col_types: {}",
+                col_offsets.len(),
+                col_types.len()
+            ));
+        }
+
         let col_offset = col_offsets[0];
+        if col_offset > vec.columns_len() {
+            return Err(box_err!(
+                "The column offset for IntHandle {} is out of range, the column count is {}",
+                col_offset,
+                vec.columns_len()
+            ));
+        }
+
+        if !matches!(
+            col_types[0].tp(),
+            FieldTypeTp::Tiny
+                | FieldTypeTp::Short
+                | FieldTypeTp::Long
+                | FieldTypeTp::LongLong
+                | FieldTypeTp::Int24
+        ) {
+            return Err(box_err!(
+                "The column type for IntHandle should be int types, but got {:?}",
+                col_types[0].tp()
+            ));
+        }
+
         let col = &vec[col_offset];
         if !col.is_decoded() {
             return Err(box_err!("column {} not decoded", col_offsets[0]));
@@ -955,7 +985,7 @@ mod tests {
 
         let vec =
             LazyBatchColumnVec::from(vec![byte_values, int_values1, real_values, int_values2]);
-        let create_handle = move |col_offset, row_offset| {
+        let create_handle = |col_offset, row_offset| {
             IntHandle::from_lazy_batch_column_vec(
                 &EvalContext::default(),
                 &vec,
@@ -972,12 +1002,79 @@ mod tests {
         assert_eq!(create_handle(3, 0).unwrap().as_i64(), 1001);
         assert_eq!(create_handle(3, 1).unwrap().as_i64(), 1002);
 
-        // invalid
+        // invalid data
         create_handle(0, 0).unwrap_err();
         create_handle(1, 1).unwrap_err();
         create_handle(3, 2).unwrap_err();
         create_handle(2, 0).unwrap_err();
         create_handle(3, 3).unwrap_err();
+
+        // test col_offsets and col_types
+        let create_handle = |col_offsets, col_types: &[FieldTypeTp]| {
+            let tps = col_types.iter().map(|tp| (*tp).into()).collect::<Vec<_>>();
+            IntHandle::from_lazy_batch_column_vec(
+                &EvalContext::default(),
+                &vec,
+                0,
+                col_offsets,
+                &tps,
+            )
+        };
+
+        // valid col types
+        for tp in &[
+            FieldTypeTp::Tiny,
+            FieldTypeTp::Short,
+            FieldTypeTp::Long,
+            FieldTypeTp::LongLong,
+            FieldTypeTp::Int24,
+        ] {
+            assert_eq!(create_handle(&[1], &[*tp]).unwrap().as_i64(), 123);
+        }
+
+        // invalid col types
+        for tp in &[
+            FieldTypeTp::Unspecified,
+            FieldTypeTp::Float,
+            FieldTypeTp::Double,
+            FieldTypeTp::String,
+            FieldTypeTp::VarChar,
+            FieldTypeTp::NewDecimal,
+            FieldTypeTp::Json,
+            FieldTypeTp::Duration,
+            FieldTypeTp::Bit,
+            FieldTypeTp::Enum,
+            FieldTypeTp::Set,
+            FieldTypeTp::Date,
+            FieldTypeTp::DateTime,
+            FieldTypeTp::Timestamp,
+            FieldTypeTp::Year,
+            FieldTypeTp::TinyBlob,
+            FieldTypeTp::MediumBlob,
+            FieldTypeTp::Blob,
+            FieldTypeTp::LongBlob,
+            FieldTypeTp::TiDbVectorFloat32,
+        ] {
+            let err = create_handle(&[1], &[*tp]).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("The column type for IntHandle should be int types")
+            );
+        }
+
+        // invalid length of col_offsets or col_types
+        for (offsets, types) in &[
+            (vec![], vec![]),
+            (vec![0, 1], vec![FieldTypeTp::Long]),
+            (vec![1], vec![FieldTypeTp::Long, FieldTypeTp::Long]),
+            (vec![0, 1], vec![FieldTypeTp::Long, FieldTypeTp::Long]),
+        ] {
+            let err = create_handle(offsets, types).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("The IntHandle columns len should be 1")
+            );
+        }
     }
 
     #[test]

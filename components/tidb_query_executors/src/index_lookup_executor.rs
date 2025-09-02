@@ -82,11 +82,11 @@ pub struct IndexLayout {
     pub handle_offsets: Vec<usize>,
 }
 
-pub struct BatchIndexLookUpExecutor<S, Src, Producer, F>
+pub struct BatchIndexLookUpExecutor<S, Src, Builder, F>
 where
     S: Storage,
     Src: BatchExecutor<StorageStats = S::Statistics>,
-    Producer: TableTaskProducer<Iterator: TableTaskIterator<Storage = S>>,
+    Builder: TableTaskIterBuilder<Iterator: TableTaskIterator<Storage = S>>,
     F: KvFormat,
 {
     src: Src,
@@ -96,18 +96,18 @@ where
     output_schema: Vec<FieldType>,
     force_no_index_lookup: bool,
     table_lookup_batch_size: usize,
-    table_task_producer: Option<Producer>,
+    table_task_iter_builder: Option<Builder>,
     table_scan_params: TableScanParams,
 
-    phase: IndexLookUpPhase<Producer::Iterator, F>,
+    phase: IndexLookUpPhase<Builder::Iterator, F>,
     intermediate_results: Vec<BatchExecuteResult>,
 }
 
-impl<S, Src, Producer, F> BatchIndexLookUpExecutor<S, Src, Producer, F>
+impl<S, Src, Builder, F> BatchIndexLookUpExecutor<S, Src, Builder, F>
 where
     S: Storage,
     Src: BatchExecutor<StorageStats = S::Statistics>,
-    Producer: TableTaskProducer<Iterator: TableTaskIterator<Storage = S>>,
+    Builder: TableTaskIterBuilder<Iterator: TableTaskIterator<Storage = S>>,
     F: KvFormat,
 {
     const DEFAULT_INDEX_LOOKUP_BATCH_SIZE: usize = 256;
@@ -119,19 +119,19 @@ where
         config: Arc<EvalConfig>,
         src: Src,
         table_scan_params: TableScanParams,
-        table_task_producer: Option<Producer>,
+        table_task_iter_builder: Option<Builder>,
     ) -> Self {
-        let force_no_index_lookup = if config.paging_size.is_some() || table_task_producer.is_none()
-        {
-            // We did not support index lookup when paging is enabled.
-            // TODO: support paging
-            // some times we do not have table_task_producer, such as
-            // - CommonHandle
-            // TODO: support CommonHandle
-            true
-        } else {
-            false
-        };
+        let force_no_index_lookup =
+            if config.paging_size.is_some() || table_task_iter_builder.is_none() {
+                // We did not support index lookup when paging is enabled.
+                // TODO: support paging
+                // some times we do not have table_task_iter_builder, such as
+                // - CommonHandle
+                // TODO: support CommonHandle
+                true
+            } else {
+                false
+            };
 
         let output_schema = table_scan_params
             .columns_info
@@ -147,7 +147,7 @@ where
             src,
             src_is_drained: BatchExecIsDrain::Remain,
             intermediate_results: vec![],
-            table_task_producer,
+            table_task_iter_builder,
             phase: IndexLookUpPhase::default(),
             table_scan_params,
         }
@@ -177,10 +177,10 @@ where
     fn step_to_table_lookup(&mut self, warnings: &mut EvalWarnings) -> Result<()> {
         let state = self.phase.mut_index_scan_or_err()?;
 
-        let producer = self.table_task_producer.as_ref().map_or_else(
+        let builder = self.table_task_iter_builder.as_ref().map_or_else(
             || {
                 Err(other_err!(
-                    "No table task producer available for index lookup"
+                    "No table task builder available for index lookup"
                 ))
             },
             |p| Ok(p),
@@ -194,7 +194,7 @@ where
         let mut results = vec![];
         mem::swap(&mut state.results, &mut results);
         self.phase = IndexLookUpPhase::TableLookUp(TableLookUpState {
-            table_task_iter: Some(producer.build_iterator(&mut ctx, results)?),
+            table_task_iter: Some(builder.build_iterator(&mut ctx, results)?),
             table_scan: None,
         });
 
@@ -329,11 +329,11 @@ where
 }
 
 #[async_trait]
-impl<S, Src, Producer, F> BatchExecutor for BatchIndexLookUpExecutor<S, Src, Producer, F>
+impl<S, Src, Builder, F> BatchExecutor for BatchIndexLookUpExecutor<S, Src, Builder, F>
 where
     S: Storage,
     Src: BatchExecutor<StorageStats = S::Statistics>,
-    Producer: TableTaskProducer<Iterator: TableTaskIterator<Storage = S>>,
+    Builder: TableTaskIterBuilder<Iterator: TableTaskIterator<Storage = S>>,
     F: KvFormat,
 {
     type StorageStats = Src::StorageStats;
@@ -343,6 +343,8 @@ where
         &self.output_schema
     }
 
+    // TODO: A concurrent execution implementation so that the index-scan and
+    // table-lookup does not block each-other.
     #[inline]
     async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         let result = match self.phase {
@@ -382,7 +384,7 @@ where
 }
 
 /// produce table tasks for the index lookup executor
-pub trait TableTaskProducer: Send {
+pub trait TableTaskIterBuilder: Send {
     type Iterator: TableTaskIterator;
     // builds an iterator to produce table tasks
     fn build_iterator(
@@ -392,7 +394,7 @@ pub trait TableTaskProducer: Send {
     ) -> Result<Self::Iterator>;
 }
 
-pub struct AccessorTableTaskProducer<Accessor, Handle>
+pub struct AccessorTableTaskIterBuilder<Accessor, Handle>
 where
     Accessor: RegionStorageAccessor,
     Handle: RowHandle,
@@ -403,7 +405,7 @@ where
     _phantom: std::marker::PhantomData<Handle>,
 }
 
-impl<Accessor, Handle> AccessorTableTaskProducer<Accessor, Handle>
+impl<Accessor, Handle> AccessorTableTaskIterBuilder<Accessor, Handle>
 where
     Accessor: RegionStorageAccessor<Storage: Storage>,
     Handle: RowHandle,
@@ -412,7 +414,7 @@ where
     #[allow(dead_code)]
     #[inline]
     pub fn new(table_id: i64, accessor: Accessor, index_layout: IndexLayout) -> Self {
-        AccessorTableTaskProducer {
+        AccessorTableTaskIterBuilder {
             table_id,
             accessor,
             index_layout,
@@ -421,7 +423,7 @@ where
     }
 }
 
-impl<Accessor, Handle> TableTaskProducer for AccessorTableTaskProducer<Accessor, Handle>
+impl<Accessor, Handle> TableTaskIterBuilder for AccessorTableTaskIterBuilder<Accessor, Handle>
 where
     Accessor: RegionStorageAccessor<Storage: Storage>,
     Handle: RowHandle,
@@ -543,7 +545,7 @@ where
                 }
                 result.physical_columns[handle_offset].ensure_decoded(
                     ctx,
-                    &index_layout.handle_types[handle_offset],
+                    &index_layout.handle_types[0],
                     LogicalRows::from_slice(&result.logical_rows),
                 )?
             }
@@ -656,7 +658,10 @@ where
         )))
     }
 
-    async fn seek_once(&mut self) -> Option<TableTask<Accessor::Storage>> {
+    // next_task finds the next table task
+    // The return value None does not mean there is no more task, you should use
+    // is_exhausted to determine whether the iterator is exhausted.
+    async fn next_task(&mut self) -> Option<TableTask<Accessor::Storage>> {
         if self.is_exhausted() {
             return None;
         }
@@ -711,11 +716,10 @@ where
 
         if let Some(key_range) = key_ranges.last_mut() {
             // The point_range_end may exceed the region end even if the key is in the
-            // region.
-            // For example, the IntHandle has a point range end of encode_row_key(v + 1),
-            // but the region end may be encode_row_key(v) + b'\0' which is before the point
-            // range end.
-            // To handle this case, just use the region end as the end of the key range to
+            // region. For example, the IntHandle has a point range end of
+            // encode_row_key(v + 1), but the region end may be
+            // encode_row_key(v) + b'\0' which is before the point range end. To
+            // handle this case, just use the region end as the end of the key range to
             // avoid error.
             if !Self::is_key_before_or_eq_region_end(key_range.get_end(), end_exclusive) {
                 key_range.end = end_exclusive.to_vec();
@@ -786,7 +790,7 @@ where
     type Storage = Accessor::Storage;
     async fn next(&mut self) -> Option<TableTask<Self::Storage>> {
         while !self.is_exhausted() {
-            let task = self.seek_once().await;
+            let task = self.next_task().await;
             if task.is_some() {
                 return task;
             }
@@ -1060,11 +1064,17 @@ mod tests {
     fn build_index_result(
         handles: Vec<i64>,
         logical_rows: Vec<usize>,
-        layout: &IndexLayout,
+        layout: (&IndexLayout, &[FieldType]),
     ) -> BatchExecuteResult {
         assert_eq!(
-            layout.handle_types[layout.handle_offsets[0]].get_tp(),
+            layout.0.handle_types[0].get_tp(),
             FieldTypeTp::Long.to_u8().unwrap() as i32
+        );
+        assert_eq!(layout.0.handle_offsets.len(), 1);
+        assert_eq!(layout.0.handle_types.len(), 1);
+        assert_eq!(
+            layout.0.handle_types[0],
+            layout.1[layout.0.handle_offsets[0]]
         );
         let mut dedup = HashSet::new();
         for &i in logical_rows.iter() {
@@ -1078,7 +1088,7 @@ mod tests {
             dedup.insert(i);
         }
         let mut columns = Vec::with_capacity(handles.len());
-        for (i, ft) in layout.handle_types.iter().enumerate() {
+        for (i, ft) in layout.1.iter().enumerate() {
             match FieldTypeTp::from_i32(ft.get_tp()).unwrap() {
                 FieldTypeTp::String => {
                     columns.push(
@@ -1107,7 +1117,7 @@ mod tests {
         index_layout: IndexLayout,
         results: Vec<BatchExecuteResult>,
     ) -> AccessorTableTaskIterator<MockRegionStorageAccessor, IntHandle> {
-        AccessorTableTaskProducer::<MockRegionStorageAccessor, IntHandle>::new(
+        AccessorTableTaskIterBuilder::<MockRegionStorageAccessor, IntHandle>::new(
             TEST_TABLE_ID,
             accessor,
             index_layout,
@@ -1146,13 +1156,18 @@ mod tests {
     #[test]
     fn test_build_table_task_iterator() {
         let index_layout = IndexLayout {
-            handle_types: vec![
+            handle_types: vec![FieldTypeTp::Long.into()],
+            handle_offsets: vec![1],
+        };
+
+        let index_scan_layout: (&IndexLayout, &[FieldType]) = (
+            &index_layout,
+            &[
                 FieldTypeTp::String.into(),
                 FieldTypeTp::Long.into(),
                 FieldTypeTp::String.into(),
             ],
-            handle_offsets: vec![1],
-        };
+        );
 
         let iter = build_table_task_iter(
             MockRegionStorageAccessor::with_expect_mode(),
@@ -1162,14 +1177,14 @@ mod tests {
                 build_index_result(
                     vec![1, 10, 100, 10000, 1000],
                     vec![3, 2, 4, 0],
-                    &index_layout,
+                    index_scan_layout,
                 ),
                 // 4 physical rows, 4 logical rows
-                build_index_result(vec![102, 11, 12, 103], vec![3, 2, 1, 0], &index_layout),
+                build_index_result(vec![102, 11, 12, 103], vec![3, 2, 1, 0], index_scan_layout),
                 // 4 physical rows, 2 logical rows
-                build_index_result(vec![13, 104, 105, 14], vec![0, 3], &index_layout),
+                build_index_result(vec![13, 104, 105, 14], vec![0, 3], index_scan_layout),
                 // empty
-                build_index_result(vec![], vec![], &index_layout),
+                build_index_result(vec![], vec![], index_scan_layout),
             ],
         );
 
@@ -1212,11 +1227,15 @@ mod tests {
     }
 
     #[test]
-    fn test_table_task_iterator_seek_once() {
+    fn test_table_task_iterator_next_task() {
         let index_layout = IndexLayout {
-            handle_types: vec![FieldTypeTp::String.into(), FieldTypeTp::Long.into()],
+            handle_types: vec![FieldTypeTp::Long.into()],
             handle_offsets: vec![1],
         };
+        let index_scan_layout: (&IndexLayout, &[FieldType]) = (
+            &index_layout,
+            &[FieldTypeTp::String.into(), FieldTypeTp::Long.into()],
+        );
 
         let mut iter = build_table_task_iter(
             MockRegionStorageAccessor::with_expect_mode(),
@@ -1224,13 +1243,13 @@ mod tests {
             // order: [6, 11, 12, 13, 14, 15, 19, 50, 60, 61, 63, 70, 71, 100, 101, 200, 300]
             // 22 is mark as removed
             vec![
-                build_index_result(vec![6], vec![0], &index_layout),
+                build_index_result(vec![6], vec![0], index_scan_layout),
                 build_index_result(
                     vec![
                         13, 11, 50, 70, 12, 14, 60, 22, 15, 19, 61, 63, 300, 101, 100, 71, 200,
                     ],
                     vec![4, 6, 13, 3, 2, 12, 5, 1, 0, 16, 14, 15, 8, 10, 9, 11],
-                    &index_layout,
+                    index_scan_layout,
                 ),
             ],
         );
@@ -1242,7 +1261,7 @@ mod tests {
         iter.accessor
             .expect_find_region(encode_cmp_key(6), region.clone(), StateRole::Leader);
         iter.accessor.expect_get_local_region_storage(true);
-        let task = block_on(iter.seek_once()).unwrap();
+        let task = block_on(iter.next_task()).unwrap();
         let expected_ranges = vec![make_scan_key_range(6, 7), make_scan_key_range(11, 13)];
         assert_eq!(task.storage, MockStorage(region, expected_ranges.clone()));
         assert_eq!(task.key_ranges, expected_ranges);
@@ -1261,7 +1280,7 @@ mod tests {
         iter.accessor
             .expect_find_region(encode_cmp_key(13), region.clone(), StateRole::Leader);
         iter.accessor.expect_get_local_region_storage(true);
-        let task = block_on(iter.seek_once()).unwrap();
+        let task = block_on(iter.next_task()).unwrap();
         let mut expected_ranges = vec![make_scan_key_range(13, 15)];
         // The end key of the range should be the region end because the point range end
         // of handle 14 exceeds the region.
@@ -1285,7 +1304,7 @@ mod tests {
         iter.accessor
             .expect_find_region(encode_cmp_key(15), region.clone(), StateRole::Leader);
         iter.accessor.expect_get_local_region_storage(true);
-        let task = block_on(iter.seek_once()).unwrap();
+        let task = block_on(iter.next_task()).unwrap();
         let mut expected_range = make_scan_key_range(15, 16);
         // The end key of the range should be the region end because the point range end
         // of handle 15 exceeds the region.
@@ -1301,7 +1320,7 @@ mod tests {
         let region = make_region(4, encode_cmp_key(17), encode_cmp_key(52));
         iter.accessor
             .expect_find_region(encode_cmp_key(19), region.clone(), StateRole::Follower);
-        assert!(block_on(iter.seek_once()).is_none());
+        assert!(block_on(iter.next_task()).is_none());
         assert_eq!(iter.cursor_in_handle_orders, 8);
         // left rows should be filled with the left physical row indexes
         assert!(iter.left_rows[0].is_none());
@@ -1314,7 +1333,7 @@ mod tests {
         iter.accessor.assert_no_exceptions();
         iter.accessor
             .expect_region_not_found(encode_cmp_key(60), Some(encode_cmp_key(63)));
-        assert!(block_on(iter.seek_once()).is_none());
+        assert!(block_on(iter.next_task()).is_none());
         assert_eq!(iter.cursor_in_handle_orders, 10);
         assert!(iter.left_rows[0].is_none());
         let left_rows = iter.left_rows[1].as_ref().unwrap();
@@ -1328,7 +1347,7 @@ mod tests {
         iter.accessor
             .expect_find_region(encode_cmp_key(63), region, StateRole::Leader);
         iter.accessor.expect_get_local_region_storage(false);
-        assert!(block_on(iter.seek_once()).is_none());
+        assert!(block_on(iter.next_task()).is_none());
         assert_eq!(iter.cursor_in_handle_orders, 14);
         assert!(iter.left_rows[0].is_none());
         let left_rows = iter.left_rows[1].as_ref().unwrap();
@@ -1341,7 +1360,7 @@ mod tests {
         // find region error
         iter.accessor.assert_no_exceptions();
         iter.accessor.expect_find_region_error(encode_cmp_key(101));
-        assert!(block_on(iter.seek_once()).is_none());
+        assert!(block_on(iter.next_task()).is_none());
         assert_eq!(iter.cursor_in_handle_orders, 15);
         assert!(iter.left_rows[0].is_none());
         let left_rows = iter.left_rows[1].as_ref().unwrap();
@@ -1354,7 +1373,7 @@ mod tests {
         iter.accessor
             .expect_find_region(encode_cmp_key(200), region.clone(), StateRole::Leader);
         iter.accessor.expect_get_local_region_storage(true);
-        let task = block_on(iter.seek_once()).unwrap();
+        let task = block_on(iter.next_task()).unwrap();
         let expected_ranges = vec![make_scan_key_range(200, 201), make_scan_key_range(300, 301)];
         assert_eq!(task.storage, MockStorage(region, expected_ranges.clone()));
         assert_eq!(task.key_ranges, expected_ranges);
@@ -1365,7 +1384,7 @@ mod tests {
         // The iterator exhausted, call seek_once again should return None
         iter.accessor.assert_no_exceptions();
         assert!(iter.is_exhausted());
-        assert!(block_on(iter.seek_once()).is_none());
+        assert!(block_on(iter.next_task()).is_none());
         assert_eq!(iter.cursor_in_handle_orders, 17);
         let left_results = iter.take_left_results();
         assert_eq!(left_results.len(), 1);
@@ -1380,6 +1399,8 @@ mod tests {
             handle_types: vec![FieldTypeTp::Long.into()],
             handle_offsets: vec![0],
         };
+        let index_scan_layout: (&IndexLayout, &[FieldType]) =
+            (&index_layout, &[FieldTypeTp::Long.into()]);
 
         let regions = vec![
             (
@@ -1415,7 +1436,7 @@ mod tests {
             vec![build_index_result(
                 handles.clone(),
                 logical_rows.clone(),
-                &index_layout,
+                index_scan_layout,
             )],
         );
 
@@ -1451,6 +1472,8 @@ mod tests {
             handle_types: vec![FieldTypeTp::Long.into()],
             handle_offsets: vec![0],
         };
+        let index_scan_layout: (&IndexLayout, &[FieldType]) =
+            (&index_layout, &[FieldTypeTp::Long.into()]);
 
         // no result left
         let mut iter = build_table_task_iter(
@@ -1460,8 +1483,8 @@ mod tests {
             )]),
             index_layout.clone(),
             vec![
-                build_index_result((0..10).collect(), (0..10).collect(), &index_layout),
-                build_index_result((10..20).collect(), (0..10).collect(), &index_layout),
+                build_index_result((0..10).collect(), (0..10).collect(), index_scan_layout),
+                build_index_result((10..20).collect(), (0..10).collect(), index_scan_layout),
             ],
         );
         assert!(block_on(iter.next()).is_some());
@@ -1470,8 +1493,8 @@ mod tests {
         assert!(iter.take_left_results().is_empty());
 
         // some rows left
-        let r2 = build_index_result((10..20).collect(), (0..10).collect(), &index_layout);
-        let r4 = build_index_result((30..40).collect(), (0..10).collect(), &index_layout);
+        let r2 = build_index_result((10..20).collect(), (0..10).collect(), index_scan_layout);
+        let r4 = build_index_result((30..40).collect(), (0..10).collect(), index_scan_layout);
         let mut iter = build_table_task_iter(
             MockRegionStorageAccessor::with_regions_data(vec![
                 (
@@ -1485,9 +1508,9 @@ mod tests {
             ]),
             index_layout.clone(),
             vec![
-                build_index_result((0..10).collect(), (0..10).collect(), &index_layout),
+                build_index_result((0..10).collect(), (0..10).collect(), index_scan_layout),
                 r2,
-                build_index_result((20..30).collect(), (0..10).collect(), &index_layout),
+                build_index_result((20..30).collect(), (0..10).collect(), index_scan_layout),
                 r4,
             ],
         );
@@ -1661,9 +1684,9 @@ mod tests {
         }
     }
 
-    struct MockTableTaskProducer;
+    struct MockTableTaskIterBuilder;
 
-    impl TableTaskProducer for MockTableTaskProducer {
+    impl TableTaskIterBuilder for MockTableTaskIterBuilder {
         type Iterator = MockTableTaskIterator;
         fn build_iterator(
             &self,
@@ -1688,9 +1711,11 @@ mod tests {
             handle_types: vec![FieldType::from(FieldTypeTp::Long)],
             handle_offsets: vec![0],
         };
+        let index_scan_layout: (&IndexLayout, &[FieldType]) =
+            (&index_layout, &[FieldTypeTp::Long.into()]);
         let mut results = int_results
             .iter()
-            .map(|row| build_index_result(row.clone(), (0..row.len()).collect(), &index_layout))
+            .map(|row| build_index_result(row.clone(), (0..row.len()).collect(), index_scan_layout))
             .collect::<Vec<_>>();
 
         if let Some(r) = results.last_mut() {
@@ -1702,9 +1727,10 @@ mod tests {
     fn new_index_lookup_executor_for_test(
         cfg: EvalConfig,
         src_results: Vec<BatchExecuteResult>,
-        producer: Option<MockTableTaskProducer>,
+        builder: Option<MockTableTaskIterBuilder>,
         table_columns_info: Vec<ColumnInfo>,
-    ) -> BatchIndexLookUpExecutor<FixtureStorage, MockExecutor, MockTableTaskProducer, ApiV1> {
+    ) -> BatchIndexLookUpExecutor<FixtureStorage, MockExecutor, MockTableTaskIterBuilder, ApiV1>
+    {
         let src = MockExecutor::new(vec![FieldType::from(FieldTypeTp::Long)], src_results);
         BatchIndexLookUpExecutor::new(
             Arc::new(cfg),
@@ -1714,7 +1740,7 @@ mod tests {
                 primary_column_ids: vec![],
                 primary_prefix_column_ids: vec![],
             },
-            producer,
+            builder,
         )
     }
 
@@ -1790,7 +1816,7 @@ mod tests {
             e: &mut BatchIndexLookUpExecutor<
                 FixtureStorage,
                 MockExecutor,
-                MockTableTaskProducer,
+                MockTableTaskIterBuilder,
                 ApiV1,
             >,
         ) -> (&mut Vec<BatchExecuteResult>, usize) {
@@ -1806,7 +1832,7 @@ mod tests {
             let mut index_lookup = new_index_lookup_executor_for_test(
                 EvalConfig::default_for_test(),
                 src_results,
-                Some(MockTableTaskProducer),
+                Some(MockTableTaskIterBuilder),
                 int_handle_table_columns(vec![FieldTypeTp::LongLong, FieldTypeTp::String], 0),
             );
             // The first phase should be IndexScan, and it should be empty.
@@ -1856,7 +1882,7 @@ mod tests {
         let mut index_lookup = new_index_lookup_executor_for_test(
             cfg,
             src_results,
-            Some(MockTableTaskProducer),
+            Some(MockTableTaskIterBuilder),
             int_handle_table_columns(vec![FieldTypeTp::LongLong, FieldTypeTp::String], 0),
         );
 
@@ -1910,7 +1936,7 @@ mod tests {
         // trigger batch full, step to TableLookup phase
         index_lookup.table_lookup_batch_size = batch_cnt;
         let mut r = block_on(index_lookup.next_batch(128));
-        // the mock MockTableTaskProducer::build_iterator will produce 1 test warn.
+        // the mock MockTableTaskIterBuilder::build_iterator will produce 1 test warn.
         check_int_column_batch_execute_result(&mut r, vec![], BatchExecIsDrain::Remain, 1);
         let table_lookup = index_lookup.phase.mut_table_lookup_or_err().unwrap();
         assert!(table_lookup.table_scan.is_none());
@@ -1982,7 +2008,7 @@ mod tests {
         let mut index_lookup = new_index_lookup_executor_for_test(
             EvalConfig::default_for_test(),
             src_results,
-            Some(MockTableTaskProducer),
+            Some(MockTableTaskIterBuilder),
             int_handle_table_columns(vec![FieldTypeTp::LongLong, FieldTypeTp::String], 0),
         );
         let mut r = block_on(index_lookup.next_batch(128));
@@ -2011,7 +2037,7 @@ mod tests {
         let mut index_lookup = new_index_lookup_executor_for_test(
             EvalConfig::default_for_test(),
             src_results,
-            Some(MockTableTaskProducer),
+            Some(MockTableTaskIterBuilder),
             columns.clone(),
         );
 
@@ -2097,12 +2123,14 @@ mod tests {
             handle_types: vec![FieldTypeTp::Long.into()],
             handle_offsets: vec![0],
         };
+        let index_scan_layout: (&IndexLayout, &[FieldType]) =
+            (&index_layout, &[FieldTypeTp::Long.into()]);
         let state = index_lookup.phase.mut_table_lookup_or_err().unwrap();
         let iter = state.table_task_iter.as_mut().unwrap();
         iter.expect_next_none();
         iter.expect_take_left_results(vec![
-            build_index_result(vec![7, 8], vec![0, 1], &index_layout),
-            build_index_result(vec![3, 4], vec![0, 1], &index_layout),
+            build_index_result(vec![7, 8], vec![0, 1], index_scan_layout),
+            build_index_result(vec![3, 4], vec![0, 1], index_scan_layout),
         ]);
         assert!(index_lookup.intermediate_results.is_empty());
         let r = block_on(index_lookup.next_batch(2));
@@ -2134,7 +2162,7 @@ mod tests {
         iter.expect_take_left_results(vec![build_index_result(
             vec![200, 300],
             vec![0, 1],
-            &index_layout,
+            index_scan_layout,
         )]);
         let mut r = block_on(index_lookup.next_batch(2));
         check_batch_execute_result(&mut r, vec![], BatchExecIsDrain::Drain, 0);
@@ -2153,7 +2181,7 @@ mod tests {
         let mut index_lookup = new_index_lookup_executor_for_test(
             EvalConfig::default_for_test(),
             src_results,
-            Some(MockTableTaskProducer),
+            Some(MockTableTaskIterBuilder),
             columns.clone(),
         );
         let r = block_on(index_lookup.next_batch(128)).is_drained.unwrap();
@@ -2166,7 +2194,7 @@ mod tests {
         iter.expect_take_left_results(vec![build_index_result(
             vec![100, 101],
             vec![0, 1],
-            &index_layout,
+            index_scan_layout,
         )]);
         let mut r = block_on(index_lookup.next_batch(2));
         check_batch_execute_result(&mut r, vec![], BatchExecIsDrain::PagingDrain, 0);
@@ -2184,7 +2212,7 @@ mod tests {
         let mut index_lookup = new_index_lookup_executor_for_test(
             EvalConfig::default_for_test(),
             src_results,
-            Some(MockTableTaskProducer),
+            Some(MockTableTaskIterBuilder),
             columns.clone(),
         );
         block_on(index_lookup.next_batch(128)).is_drained.unwrap();
@@ -2207,7 +2235,7 @@ mod tests {
         let index_lookup = new_index_lookup_executor_for_test(
             EvalConfig::default_for_test(),
             build_int_array_results(vec![vec![1]]),
-            Some(MockTableTaskProducer),
+            Some(MockTableTaskIterBuilder),
             columns.clone(),
         );
         assert!(!index_lookup.force_no_index_lookup);
@@ -2218,12 +2246,12 @@ mod tests {
         let index_lookup = new_index_lookup_executor_for_test(
             cfg,
             build_int_array_results(vec![vec![1]]),
-            Some(MockTableTaskProducer),
+            Some(MockTableTaskIterBuilder),
             columns.clone(),
         );
         assert!(index_lookup.force_no_index_lookup);
 
-        // When table task producer is not provided, disable index lookup
+        // When table task builder is not provided, disable index lookup
         let mut results = build_int_array_results(vec![vec![123, 456], vec![], vec![789]]);
         results[1].is_drained = Err(other_err!("mock error"));
         let mut index_lookup = new_index_lookup_executor_for_test(
