@@ -16,14 +16,26 @@ use azure_storage::{prelude::*, ConnectionString, ConnectionStringBuilder};
 use azure_storage_blobs::{blob::operations::PutBlockBlobBuilder, prelude::*};
 use cloud::{
     blob::{
+<<<<<<< HEAD
         none_to_empty, read_to_end, unimplemented, BlobConfig, BlobObject, BlobStorage, BucketConf,
         DeletableStorage, IterableStorage, PutResource, StringNonEmpty,
+=======
+        none_to_empty, read_to_end, BlobConfig, BlobStorage, BucketConf, PutResource,
+        StringNonEmpty,
+>>>>>>> 69f275f970 (azblob: use copy to implement read_to_end (#18419) (#18781))
     },
     metrics::AZBLOB_UPLOAD_DURATION,
 };
 use futures::TryFutureExt;
+<<<<<<< HEAD
 use futures_util::{future::FutureExt, io::AsyncRead, stream, stream::StreamExt, TryStreamExt};
 pub use kvproto::brpb::{AzureBlobStorage as InputConfig, AzureCustomerKey};
+=======
+use futures_util::{io::AsyncRead, stream, stream::StreamExt, TryStreamExt};
+pub use kvproto::brpb::{
+    AzureBlobStorage as InputConfig, AzureCustomerKey, Bucket as InputBucket, CloudDynamic,
+};
+>>>>>>> 69f275f970 (azblob: use copy to implement read_to_end (#18419) (#18781))
 use oauth2::{ClientId, ClientSecret};
 use tikv_util::{
     debug, defer,
