@@ -379,26 +379,58 @@ mod tests {
         let record = SummaryRecord {
             read_keys: AtomicU32::new(1),
             write_keys: AtomicU32::new(2),
+            network_in_bytes: AtomicU64::new(10),
+            network_out_bytes: AtomicU64::new(20),
+            logical_read_bytes: AtomicU64::new(100),
+            logical_write_bytes: AtomicU64::new(200),
         };
         assert_eq!(record.read_keys.load(Relaxed), 1);
         assert_eq!(record.write_keys.load(Relaxed), 2);
+        assert_eq!(record.network_in_bytes.load(Relaxed), 10);
+        assert_eq!(record.network_out_bytes.load(Relaxed), 20);
+        assert_eq!(record.logical_read_bytes.load(Relaxed), 100);
+        assert_eq!(record.logical_write_bytes.load(Relaxed), 200);
         let record2 = record.clone();
         assert_eq!(record2.read_keys.load(Relaxed), 1);
         assert_eq!(record2.write_keys.load(Relaxed), 2);
+        assert_eq!(record2.network_in_bytes.load(Relaxed), 10);
+        assert_eq!(record2.network_out_bytes.load(Relaxed), 20);
+        assert_eq!(record2.logical_read_bytes.load(Relaxed), 100);
+        assert_eq!(record2.logical_write_bytes.load(Relaxed), 200);
         record.merge(&SummaryRecord {
             read_keys: AtomicU32::new(3),
             write_keys: AtomicU32::new(4),
+            network_in_bytes: AtomicU64::new(30),
+            network_out_bytes: AtomicU64::new(40),
+            logical_read_bytes: AtomicU64::new(300),
+            logical_write_bytes: AtomicU64::new(400),
         });
         assert_eq!(record.read_keys.load(Relaxed), 4);
         assert_eq!(record.write_keys.load(Relaxed), 6);
+        assert_eq!(record.network_in_bytes.load(Relaxed), 40);
+        assert_eq!(record.network_out_bytes.load(Relaxed), 60);
+        assert_eq!(record.read_keys.load(Relaxed), 400);
+        assert_eq!(record.write_keys.load(Relaxed), 600);
         let record2 = record.take_and_reset();
         assert_eq!(record.read_keys.load(Relaxed), 0);
         assert_eq!(record.write_keys.load(Relaxed), 0);
+        assert_eq!(record.network_in_bytes.load(Relaxed), 0);
+        assert_eq!(record.network_out_bytes.load(Relaxed), 0);
+        assert_eq!(record.logical_read_bytes.load(Relaxed), 0);
+        assert_eq!(record.logical_write_bytes.load(Relaxed), 0);
         assert_eq!(record2.read_keys.load(Relaxed), 4);
         assert_eq!(record2.write_keys.load(Relaxed), 6);
+        assert_eq!(record2.network_in_bytes.load(Relaxed), 40);
+        assert_eq!(record2.network_out_bytes.load(Relaxed), 60);
+        assert_eq!(record2.logical_read_bytes.load(Relaxed), 400);
+        assert_eq!(record2.logical_write_bytes.load(Relaxed), 600);
         record2.reset();
         assert_eq!(record2.read_keys.load(Relaxed), 0);
         assert_eq!(record2.write_keys.load(Relaxed), 0);
+        assert_eq!(record2.network_in_bytes.load(Relaxed), 0);
+        assert_eq!(record2.network_out_bytes.load(Relaxed), 0);
+        assert_eq!(record2.logical_read_bytes.load(Relaxed), 0);
+        assert_eq!(record2.logical_write_bytes.load(Relaxed), 0);        
     }
 
     #[test]
@@ -432,6 +464,10 @@ mod tests {
                 cpu_time: 111,
                 read_keys: 222,
                 write_keys: 333,
+                network_in_bytes: 1111,
+                network_out_bytes: 2222,
+                logical_read_bytes: 3333,
+                logical_write_bytes: 4444,
             },
         );
         raw_map.insert(
@@ -440,6 +476,10 @@ mod tests {
                 cpu_time: 444,
                 read_keys: 555,
                 write_keys: 666,
+                network_in_bytes: 4444,
+                network_out_bytes: 5555,
+                logical_read_bytes: 6666,
+                logical_write_bytes: 7777,
             },
         );
         raw_map.insert(
@@ -448,6 +488,10 @@ mod tests {
                 cpu_time: 777,
                 read_keys: 888,
                 write_keys: 999,
+                network_in_bytes: 7777,
+                network_out_bytes: 8888,
+                logical_read_bytes: 9999,
+                logical_write_bytes: 11110,
             },
         );
         let raw = RawRecords {
@@ -491,6 +535,10 @@ mod tests {
                 cpu_time: 111,
                 read_keys: 222,
                 write_keys: 333,
+                network_in_bytes: 1111,
+                network_out_bytes: 2222,
+                logical_read_bytes: 3333,
+                logical_write_bytes: 4444,
             },
         );
         records.insert(
@@ -499,6 +547,10 @@ mod tests {
                 cpu_time: 444,
                 read_keys: 555,
                 write_keys: 666,
+                network_in_bytes: 4444,
+                network_out_bytes: 5555,
+                logical_read_bytes: 6666,
+                logical_write_bytes: 7777,
             },
         );
         records.insert(
@@ -507,6 +559,10 @@ mod tests {
                 cpu_time: 777,
                 read_keys: 888,
                 write_keys: 999,
+                network_in_bytes: 7777,
+                network_out_bytes: 8888,
+                logical_read_bytes: 9999,
+                logical_write_bytes: 11110,
             },
         );
         let rs = RawRecords {
@@ -531,6 +587,10 @@ mod tests {
         assert_eq!(others.cpu_time, 111);
         assert_eq!(others.read_keys, 222);
         assert_eq!(others.write_keys, 333);
+        assert_eq!(others.network_in_bytes, 1111);
+        assert_eq!(others.network_out_bytes, 2222);
+        assert_eq!(others.logical_read_bytes, 3333);
+        assert_eq!(others.logical_write_bytes, 4444);
 
         let kth = find_kth_cpu_time(agg_map.iter(), 0);
         let (top, evicted) = (
@@ -548,6 +608,10 @@ mod tests {
         assert_eq!(others.cpu_time, 111 + 444 + 777);
         assert_eq!(others.read_keys, 222 + 555 + 888);
         assert_eq!(others.write_keys, 333 + 666 + 999);
+        assert_eq!(others.network_in_bytes, 1111 + 4444 + 7777);
+        assert_eq!(others.network_out_bytes, 2222 + 5555 + 8888);
+        assert_eq!(others.logical_read_bytes, 3333 + 6666 + 9999);
+        assert_eq!(others.logical_write_bytes, 4444 + 7777 + 11110);
     }
 
     // Issue: https://github.com/tikv/tikv/issues/12234
@@ -587,6 +651,10 @@ mod tests {
                 cpu_time: 111,
                 read_keys: 111,
                 write_keys: 111,
+                network_in_bytes: 111,
+                network_out_bytes: 111,
+                logical_read_bytes: 111,
+                logical_write_bytes: 111,
             },
         );
         raw_records.records.insert(
@@ -595,6 +663,10 @@ mod tests {
                 cpu_time: 111,
                 read_keys: 111,
                 write_keys: 111,
+                network_in_bytes: 111,
+                network_out_bytes: 111,
+                logical_read_bytes: 111,
+                logical_write_bytes: 111,
             },
         );
         raw_records.records.insert(
@@ -603,6 +675,10 @@ mod tests {
                 cpu_time: 111,
                 read_keys: 111,
                 write_keys: 111,
+                network_in_bytes: 111,
+                network_out_bytes: 111,
+                logical_read_bytes: 111,
+                logical_write_bytes: 111,
             },
         );
 
@@ -678,6 +754,10 @@ mod tests {
                 cpu_time: 111,
                 read_keys: 222,
                 write_keys: 333,
+                network_in_bytes: 1111,
+                network_out_bytes: 2222,
+                logical_read_bytes: 3333,
+                logical_write_bytes: 4444,
             },
         );
         records.insert(
@@ -686,6 +766,10 @@ mod tests {
                 cpu_time: 444,
                 read_keys: 555,
                 write_keys: 666,
+                network_in_bytes: 4444,
+                network_out_bytes: 5555,
+                logical_read_bytes: 6666,
+                logical_write_bytes: 7777,
             },
         );
         records.insert(
@@ -694,6 +778,10 @@ mod tests {
                 cpu_time: 777,
                 read_keys: 888,
                 write_keys: 999,
+                network_in_bytes: 7777,
+                network_out_bytes: 8888,
+                logical_read_bytes: 9999,
+                logical_write_bytes: 11110,
             },
         );
         records.insert(
@@ -702,6 +790,10 @@ mod tests {
                 cpu_time: 1110,
                 read_keys: 2220,
                 write_keys: 3330,
+                network_in_bytes: 11110,
+                network_out_bytes: 22220,
+                logical_read_bytes: 33330,
+                logical_write_bytes: 44440,
             },
         );
         records.insert(
@@ -710,6 +802,10 @@ mod tests {
                 cpu_time: 4440,
                 read_keys: 5550,
                 write_keys: 6660,
+                network_in_bytes: 44440,
+                network_out_bytes: 55550,
+                logical_read_bytes: 66660,
+                logical_write_bytes: 77770,
             },
         );
         records.insert(
@@ -718,6 +814,10 @@ mod tests {
                 cpu_time: 7770,
                 read_keys: 8880,
                 write_keys: 9990,
+                network_in_bytes: 77770,
+                network_out_bytes: 88880,
+                logical_read_bytes: 99990,
+                logical_write_bytes: 111110,
             },
         );
         let rs = RawRecords {
@@ -731,6 +831,30 @@ mod tests {
         assert_eq!(
             agg_map.get(&tag1.extra_attachment).unwrap().cpu_time,
             111 + 1110 + 4440
+        );
+        assert_eq!(
+            agg_map.get(&tag1.extra_attachment).unwrap().read_keys,
+            222 + 2220 + 5550
+        );
+        assert_eq!(
+            agg_map.get(&tag1.extra_attachment).unwrap().write_keys,
+            333 + 3330 + 6660
+        );
+        assert_eq!(
+            agg_map.get(&tag1.extra_attachment).unwrap().network_in_bytes,
+            1111 + 11110 + 44440
+        );
+        assert_eq!(
+            agg_map.get(&tag1.extra_attachment).unwrap().network_out_bytes,
+            2222 + 22220 + 55550
+        );
+        assert_eq!(
+            agg_map.get(&tag1.extra_attachment).unwrap().logical_read_bytes,
+            3333 + 33330 + 66660
+        );
+        assert_eq!(
+            agg_map.get(&tag1.extra_attachment).unwrap().logical_write_bytes,
+            4444 + 44440 + 77770
         );
         assert_eq!(
             agg_map.get(&tag2.extra_attachment).unwrap().cpu_time,
