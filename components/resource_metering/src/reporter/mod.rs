@@ -295,6 +295,10 @@ mod tests {
                 cpu_time: 1,
                 read_keys: 2,
                 write_keys: 3,
+                network_in_bytes: 4,
+                network_out_bytes: 5,
+                logical_read_bytes: 6,
+                logical_write_bytes: 7,
             },
         );
         r.run(Task::Records(Arc::new(RawRecords {
@@ -341,6 +345,10 @@ mod tests {
                 cpu_time: 1,
                 read_keys: 2,
                 write_keys: 3,
+                network_in_bytes: 4,
+                network_out_bytes: 5,
+                logical_read_bytes: 6,
+                logical_write_bytes: 7,
             },
         );
 
