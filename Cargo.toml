@@ -222,6 +222,8 @@ sysinfo = { git = "https://github.com/tikv/sysinfo", branch = "0.26-fix-cpu" }
 # After the PR to kvproto is merged, remember to comment this out and run `cargo update -p kvproto`.
 # [patch.'https://github.com/pingcap/kvproto']
 # kvproto = { git = "https://github.com/your_github_id/kvproto", branch = "your_branch" }
+[patch.'https://github.com/pingcap/kvproto']
+kvproto = { git = "https://github.com/hujiatao0/kvproto", branch = "master" }
 #
 # After the PR to rust-rocksdb is merged, remember to comment this out and run `cargo update -p rocksdb`.
 # [patch.'https://github.com/tikv/rust-rocksdb']

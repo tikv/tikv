@@ -300,6 +300,13 @@ pub fn overwrite_config_with_cmd_args(config: &mut TikvConfig, matches: &ArgMatc
     if matches.value_of("metrics-addr").is_some() {
         warn!("metrics push is not supported any more.");
     }
+
+    if let Some(graceful_shutdown_timeout) = matches.value_of("graceful-shutdown-timeout") {
+        config.server.graceful_shutdown_timeout =
+            graceful_shutdown_timeout.parse().unwrap_or_else(|e| {
+                fatal!("invalid graceful-shutdown-timeout value: {}", e);
+            });
+    }
 }
 
 pub fn validate_and_persist_config(config: &mut TikvConfig, persist: bool) {
