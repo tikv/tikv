@@ -725,6 +725,12 @@ pub enum Cmd {
 
         #[structopt(long)]
         debug_dry_run: bool,
+
+        #[structopt(long, default_value = "128")]
+        debug_prefetch_running_size: u64,
+
+        #[structopt(long, default_value = "1024")]
+        debug_prefetch_buffer_size: u64,
     },
     /// Get the state of a region's RegionReadProgress.
     GetRegionReadProgress {

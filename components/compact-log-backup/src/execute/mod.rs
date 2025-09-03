@@ -16,7 +16,7 @@ use hooking::{
     AfterFinishCtx, BeforeStartCtx, CId, ExecHooks, SubcompactionFinishCtx, SubcompactionStartCtx,
 };
 use kvproto::brpb::StorageBackend;
-use tikv_util::config::ReadableSize;
+use tikv_util::{config::ReadableSize, info};
 use tokio::runtime::Handle;
 use tracing::{Instrument, trace_span};
 use tracing_active_tree::{frame, root};
@@ -54,6 +54,8 @@ pub struct ExecutionConfig {
     /// Filter out metadatas doesn't contain any record with TS larger than or
     /// equal to this.
     pub last_snapshot_backup_ts: u64,
+    pub debug_prefetch_running_size: u64,
+    pub debug_prefetch_buffer_size: u64,
     /// The compress algorithm we are going to use for output.
     pub compression: SstCompressionType,
     /// The compress level we are going to use.
@@ -330,7 +332,7 @@ impl Execution {
             while (meta.try_next().await?).is_some() {
                 count += 1;
             }
-            println!("calculate metadata count: {count}");
+            info!("calculate metadata count: {count}");
             Ok(())
         };
 

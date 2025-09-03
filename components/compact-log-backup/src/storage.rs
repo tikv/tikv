@@ -206,6 +206,9 @@ pub struct LoadFromExt<'a> {
     /// The prefix of metadata in the external storage.
     /// By default it is `v1/backupmeta`.
     pub meta_prefix: &'a str,
+
+    pub debug_prefetch_running_size: usize,
+    pub debug_prefetch_buffer_size: usize,
 }
 
 impl LoadFromExt<'_> {
@@ -220,6 +223,8 @@ impl Default for LoadFromExt<'_> {
             max_concurrent_fetch: 16,
             loading_content_span: None,
             meta_prefix: METADATA_PREFIX,
+            debug_prefetch_running_size: 128,
+            debug_prefetch_buffer_size: 128,
         }
     }
 }
@@ -243,6 +248,8 @@ pub struct StreamMetaStorage<'a> {
     files: Fuse<Pin<Box<dyn Stream<Item = std::io::Result<BlobObject>> + 'a>>>,
 
     skip_map: MetaEditFilters,
+
+    running_fetch_tasks: usize,
 }
 
 /// A future that stores its result for future use when completed.
@@ -328,7 +335,9 @@ impl<'a> StreamMetaStorage<'a> {
     fn poll_fetch_or_finish(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<MetaFile>>> {
         loop {
             // No more space for prefetching.
-            if self.prefetch.len() >= self.ext.max_concurrent_fetch {
+            if self.running_fetch_tasks >= self.ext.debug_prefetch_running_size
+                || self.prefetch.len() >= self.ext.debug_prefetch_buffer_size
+            {
                 return Poll::Pending;
             }
             if self.files.is_terminated() {
@@ -363,6 +372,7 @@ impl<'a> StreamMetaStorage<'a> {
                     }
                     self.stat.prefetch_task_emitted += 1;
                     self.prefetch.push_back(fut);
+                    self.running_fetch_tasks += 1;
                 }
                 Poll::Ready(None) => continue,
                 Poll::Pending => return Poll::Pending,
@@ -371,9 +381,12 @@ impl<'a> StreamMetaStorage<'a> {
     }
 
     fn poll_first_prefetch(&mut self, cx: &mut Context<'_>) -> Poll<Result<MetaFile>> {
+        self.running_fetch_tasks = 0;
         for fut in &mut self.prefetch {
             if !fut.is_terminated() {
                 let _ = fut.poll_unpin(cx);
+            } else {
+                self.running_fetch_tasks += 1;
             }
         }
         if self.prefetch[0].is_terminated() {
@@ -413,6 +426,7 @@ impl<'a> StreamMetaStorage<'a> {
             ext,
             stat: LoadMetaStatistic::default(),
             skip_map,
+            running_fetch_tasks: 0,
         })
     }
 

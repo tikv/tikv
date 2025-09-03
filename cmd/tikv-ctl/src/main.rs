@@ -409,6 +409,8 @@ fn main() {
             minimal_compaction_size_write,
             last_snapshot_backup_ts,
             debug_dry_run,
+            debug_prefetch_running_size,
+            debug_prefetch_buffer_size,
         } => {
             let tmp_engine =
                 TemporaryRocks::new(&cfg).expect("failed to create temp engine for writing SSTs.");
@@ -436,6 +438,8 @@ fn main() {
                 from_ts,
                 until_ts,
                 last_snapshot_backup_ts,
+                debug_prefetch_running_size,
+                debug_prefetch_buffer_size,
                 compression,
                 compression_level,
             };

@@ -72,6 +72,8 @@ pub fn create_compaction(st: StorageBackend) -> Execution {
             last_snapshot_backup_ts: 0,
             compression: engine_traits::SstCompressionType::Lz4,
             compression_level: None,
+            debug_prefetch_buffer_size: 128,
+            debug_prefetch_running_size: 128,
         },
         max_concurrent_subcompaction: 3,
         external_storage: st,
