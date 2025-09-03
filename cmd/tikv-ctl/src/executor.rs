@@ -108,9 +108,15 @@ pub fn new_debug_executor(
         .build_shared_rocks_env(key_manager.clone(), None /* io_rate_limiter */)
         .unwrap();
 
-    let factory = KvEngineFactoryBuilder::new(env.clone(), cfg, cache, key_manager.clone())
-        .lite(true)
-        .build();
+    let factory = KvEngineFactoryBuilder::new(
+        env.clone(),
+        cfg,
+        cache,
+        key_manager.clone(),
+        Default::default(),
+    )
+    .lite(true)
+    .build();
 
     let cfg_controller = ConfigController::default();
     if !cfg.raft_engine.enable {

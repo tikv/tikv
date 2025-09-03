@@ -130,6 +130,7 @@ fn test_serde_custom_tikv_config() {
         reject_messages_on_memory_ratio: 0.8,
         simplify_metrics: false,
         health_feedback_interval: ReadableDuration::secs(2),
+        inspect_network_interval: ReadableDuration::millis(222),
         ..Default::default()
     };
     value.readpool = ReadPoolConfig {

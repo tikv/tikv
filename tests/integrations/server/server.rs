@@ -9,7 +9,7 @@ use tikv::config::TikvConfig;
 #[test]
 fn test_restart_grpc_service() {
     fail::cfg("mock_force_uninitial_logger", "return").unwrap();
-    let check_heath_api = |max_retry, client: &HealthClient| {
+    let check_health_api = |max_retry, client: &HealthClient| {
         let req = HealthCheckRequest {
             service: "".to_string(),
             ..Default::default()
@@ -53,7 +53,7 @@ fn test_restart_grpc_service() {
         ..Default::default()
     };
     let max_retry = 30;
-    check_heath_api(max_retry, &client);
+    check_health_api(max_retry, &client);
     // PAUSE grpc service and validate.
     {
         let start = std::time::Instant::now();
@@ -74,7 +74,7 @@ fn test_restart_grpc_service() {
     // RESUME grpc service and validate.
     {
         sender.send(ServiceEvent::ResumeGrpc).unwrap();
-        check_heath_api(max_retry, &client);
+        check_health_api(max_retry, &client);
     }
     sender.send(ServiceEvent::Exit).unwrap();
     tikv_thread.join().unwrap();

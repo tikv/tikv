@@ -4806,8 +4806,10 @@ mod tests {
         let engine = {
             let path = "".to_owned();
             let cfg_rocksdb = db_config;
-            let shared =
-                cfg_rocksdb.build_cf_resources(BlockCacheConfig::default().build_shared_cache());
+            let shared = cfg_rocksdb.build_cf_resources(
+                BlockCacheConfig::default().build_shared_cache(),
+                Default::default(),
+            );
             let cfs_opts = vec![
                 (
                     CF_DEFAULT,

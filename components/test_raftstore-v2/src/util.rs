@@ -81,8 +81,14 @@ pub fn create_test_engine(
         bootstrap_store(&raft_engine, cluster_id, store_id).unwrap();
     }
 
-    let builder = KvEngineFactoryBuilder::new(env, &cfg.tikv, cache, key_manager.clone())
-        .sst_recovery_sender(Some(scheduler));
+    let builder = KvEngineFactoryBuilder::new(
+        env,
+        &cfg.tikv,
+        cache,
+        key_manager.clone(),
+        Default::default(),
+    )
+    .sst_recovery_sender(Some(scheduler));
 
     let factory = Box::new(builder.build());
     let rocks_statistics = factory.rocks_statistics();

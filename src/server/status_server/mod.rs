@@ -47,10 +47,11 @@ use openssl::{
 use pin_project::pin_project;
 use profile::*;
 use prometheus::TEXT_FORMAT;
+use raftstore::store::ForcePartitionRangeManager;
 use regex::Regex;
 use resource_control::ResourceGroupManager;
 use security::{self, SecurityConfig};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use service::service_manager::GrpcServiceManager;
 use tikv_kv::RaftExtension;
@@ -100,6 +101,7 @@ pub struct StatusServer<R> {
     resource_manager: Option<Arc<ResourceGroupManager>>,
     grpc_service_mgr: GrpcServiceManager,
     in_memory_engine: Option<RegionCacheMemoryEngine>,
+    force_partition_range_mgr: ForcePartitionRangeManager,
 }
 
 impl<R> StatusServer<R>
@@ -114,6 +116,7 @@ where
         resource_manager: Option<Arc<ResourceGroupManager>>,
         grpc_service_mgr: GrpcServiceManager,
         in_memory_engine: Option<RegionCacheMemoryEngine>,
+        force_partition_range_mgr: ForcePartitionRangeManager,
     ) -> Result<Self> {
         let thread_pool = Builder::new_multi_thread()
             .enable_all()
@@ -137,6 +140,7 @@ where
             resource_manager,
             grpc_service_mgr,
             in_memory_engine,
+            force_partition_range_mgr,
         })
     }
 
@@ -472,6 +476,101 @@ where
         ))
     }
 
+    pub fn dump_partition_ranges(
+        force_partition_range_mgr: &ForcePartitionRangeManager,
+    ) -> hyper::Result<Response<Body>> {
+        let mut ranges = vec![];
+        force_partition_range_mgr.iter_all_ranges(|start, end, ttl| {
+            ranges.push(HexRange {
+                start: hex::encode(keys::origin_key(start)),
+                end: hex::encode(keys::origin_end_key(end)),
+                ttl,
+            });
+        });
+
+        let body = match serde_json::to_vec(&ranges) {
+            Ok(body) => body,
+            Err(err) => {
+                return Ok(make_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("fails to json: {}", err),
+                ));
+            }
+        };
+        match Response::builder()
+            .header("content-type", "application/json")
+            .body(hyper::Body::from(body))
+        {
+            Ok(resp) => Ok(resp),
+            Err(err) => Ok(make_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("fails to build response: {}", err),
+            )),
+        }
+    }
+
+    async fn add_partition_ranges(
+        req: Request<Body>,
+        force_partition_range_mgr: &ForcePartitionRangeManager,
+    ) -> hyper::Result<Response<Body>> {
+        let mut body = Vec::new();
+        req.into_body()
+            .try_for_each(|bytes| {
+                body.extend(bytes);
+                ok(())
+            })
+            .await?;
+
+        let res = || -> std::result::Result<_, String> {
+            let range: HexRange = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
+            let start = hex::decode(&range.start)
+                .map_err(|e| format!("invalie start key, err: {:?}", e))?;
+            let end =
+                hex::decode(&range.end).map_err(|e| format!("invalie end key, err: {:?}", e))?;
+            Ok((range, (keys::data_key(&start), keys::data_end_key(&end))))
+        }();
+
+        match res {
+            Ok((hex_range, range)) => {
+                let added = force_partition_range_mgr.add_range(range.0, range.1, 3600);
+                info!("add force partition range"; "start" => &hex_range.start, "end" => &hex_range.end, "added" => added);
+                Ok(Response::new(Body::empty()))
+            }
+            Err(err) => Ok(make_response(StatusCode::BAD_REQUEST, err)),
+        }
+    }
+
+    async fn remove_partition_ranges(
+        req: Request<Body>,
+        force_partition_range_mgr: &ForcePartitionRangeManager,
+    ) -> hyper::Result<Response<Body>> {
+        let mut body = Vec::new();
+        req.into_body()
+            .try_for_each(|bytes| {
+                body.extend(bytes);
+                ok(())
+            })
+            .await?;
+
+        let res = || -> std::result::Result<_, String> {
+            let range: HexRange = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
+            let start = hex::decode(&range.start)
+                .map_err(|e| format!("invalie start key, err: {:?}", e))?;
+            let end =
+                hex::decode(&range.end).map_err(|e| format!("invalie end key, err: {:?}", e))?;
+            Ok((range, (keys::data_key(&start), keys::data_end_key(&end))))
+        }();
+
+        match res {
+            Ok((hex_range, range)) => {
+                let removed = force_partition_range_mgr.remove_range(&range.0, &range.1);
+                info!("remove force partition range"; "start" => &hex_range.start, "end" => &hex_range.end, "removed" => removed);
+                Ok(Response::new(Body::empty()))
+            }
+            Err(err) => Ok(make_response(StatusCode::BAD_REQUEST, err)),
+        }
+    }
+
     fn metrics_to_resp(req: Request<Body>, should_simplify: bool) -> hyper::Result<Response<Body>> {
         let gz_encoding = client_accept_gzip(&req);
         let metrics = if gz_encoding {
@@ -492,6 +591,13 @@ where
 
         Ok(resp)
     }
+}
+
+#[derive(Serialize, Deserialize)]
+struct HexRange {
+    start: String,
+    end: String,
+    ttl: u64,
 }
 
 impl<R> StatusServer<R>
@@ -645,6 +751,7 @@ where
         let resource_manager = self.resource_manager.clone();
         let grpc_service_mgr = self.grpc_service_mgr.clone();
         let in_memory_engine = self.in_memory_engine.clone();
+        let force_partition_range_mgr = self.force_partition_range_mgr.clone();
         // Start to serve.
         let server = builder.serve(make_service_fn(move |conn: &C| {
             let x509 = conn.get_x509();
@@ -654,6 +761,7 @@ where
             let resource_manager = resource_manager.clone();
             let in_memory_engine = in_memory_engine.clone();
             let grpc_service_mgr = grpc_service_mgr.clone();
+            let force_partition_range_mgr = force_partition_range_mgr.clone();
             async move {
                 // Create a status service.
                 Ok::<_, hyper::Error>(service_fn(move |req: Request<Body>| {
@@ -664,6 +772,7 @@ where
                     let resource_manager = resource_manager.clone();
                     let grpc_service_mgr = grpc_service_mgr.clone();
                     let in_memory_engine = in_memory_engine.clone();
+                    let force_partition_range_mgr = force_partition_range_mgr.clone();
                     async move {
                         let path = req.uri().path().to_owned();
                         let method = req.method().to_owned();
@@ -772,6 +881,9 @@ where
                             }
                             (Method::GET, "/async_tasks") => Self::dump_async_trace(),
                             (Method::GET, "debug/ime/cached_regions") => Self::handle_dumple_cached_regions(in_memory_engine.as_ref()),
+                            (Method::GET, "/force_partition_ranges") => Self::dump_partition_ranges(&force_partition_range_mgr),
+                            (Method::POST, "/force_partition_ranges") => Self::add_partition_ranges(req, &force_partition_range_mgr).await,
+                            (Method::DELETE, "/force_partition_ranges") => Self::remove_partition_ranges(req, &force_partition_range_mgr).await,
                             _ => {
                                 is_unknown_path = true;
                                 Ok(make_response(StatusCode::NOT_FOUND, "path not found"))
@@ -1281,6 +1393,7 @@ mod tests {
             None,
             GrpcServiceManager::dummy(),
             None,
+            Default::default(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1330,6 +1443,7 @@ mod tests {
             None,
             GrpcServiceManager::dummy(),
             None,
+            Default::default(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1383,6 +1497,7 @@ mod tests {
                 None,
                 GrpcServiceManager::dummy(),
                 None,
+                Default::default(),
             )
             .unwrap();
             let addr = "127.0.0.1:0".to_owned();
@@ -1446,6 +1561,7 @@ mod tests {
             None,
             GrpcServiceManager::dummy(),
             None,
+            Default::default(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1563,6 +1679,7 @@ mod tests {
             None,
             GrpcServiceManager::dummy(),
             None,
+            Default::default(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1608,6 +1725,7 @@ mod tests {
             None,
             GrpcServiceManager::dummy(),
             None,
+            Default::default(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1645,6 +1763,7 @@ mod tests {
             None,
             GrpcServiceManager::dummy(),
             None,
+            Default::default(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1718,6 +1837,7 @@ mod tests {
             None,
             GrpcServiceManager::dummy(),
             None,
+            Default::default(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1749,6 +1869,7 @@ mod tests {
             None,
             GrpcServiceManager::dummy(),
             None,
+            Default::default(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1783,6 +1904,7 @@ mod tests {
             None,
             GrpcServiceManager::dummy(),
             None,
+            Default::default(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1835,6 +1957,7 @@ mod tests {
             None,
             GrpcServiceManager::dummy(),
             None,
+            Default::default(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1891,6 +2014,7 @@ mod tests {
             None,
             GrpcServiceManager::dummy(),
             None,
+            Default::default(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1946,6 +2070,7 @@ mod tests {
                 None,
                 GrpcServiceManager::dummy(),
                 None,
+                Default::default(),
             )
             .unwrap();
             let addr = "127.0.0.1:0".to_owned();
@@ -1984,6 +2109,7 @@ mod tests {
                 None,
                 GrpcServiceManager::dummy(),
                 None,
+                Default::default(),
             )
             .unwrap();
             let addr = "127.0.0.1:0".to_owned();
@@ -2021,6 +2147,7 @@ mod tests {
             None,
             GrpcServiceManager::dummy(),
             None,
+            Default::default(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();

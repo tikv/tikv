@@ -44,7 +44,7 @@ fn test_latency_inspect() {
     {
         // Test send LatencyInspect to V1.
         let (tx, rx) = std::sync::mpsc::sync_channel(10);
-        // Inspect different factors.
+        // Inspect different disk_factors.
         for factor in [InspectFactor::RaftDisk, InspectFactor::KvDisk].iter() {
             let cloned_tx = tx.clone();
             let inspector = LatencyInspector::new(
@@ -89,7 +89,7 @@ fn test_sync_latency_inspect() {
     cluster.run();
     let router = cluster.sim.wl().get_router(1).unwrap();
     let (tx, rx) = std::sync::mpsc::sync_channel(10);
-    // Inspect different factors.
+    // Inspect different disk_factors.
     for factor in [InspectFactor::RaftDisk, InspectFactor::KvDisk].iter() {
         let cloned_tx = tx.clone();
         let inspector = LatencyInspector::new(

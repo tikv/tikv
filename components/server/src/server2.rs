@@ -833,6 +833,7 @@ where
             Arc::new(DefaultGrpcMessageFilter::new(
                 server_config.value().reject_messages_on_memory_ratio,
             )),
+            self.core.background_worker.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
         cfg_controller.register(
@@ -1036,6 +1037,7 @@ where
             Some(self.router.as_ref().unwrap().store_meta().clone()),
             self.resource_manager.clone(),
             Arc::new(region_info_accessor),
+            Default::default(),
         );
         let import_cfg_mgr = import_service.get_config_manager();
 
@@ -1385,6 +1387,7 @@ where
                 self.resource_manager.clone(),
                 self.grpc_service_mgr.clone(),
                 None,
+                Default::default(),
             ) {
                 Ok(status_server) => Box::new(status_server),
                 Err(e) => {
@@ -1544,6 +1547,7 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
             &self.core.config,
             block_cache,
             self.core.encryption_key_manager.clone(),
+            Default::default(),
         )
         .sst_recovery_sender(self.init_sst_recovery_sender())
         .flow_listener(flow_listener);
@@ -1686,7 +1690,8 @@ mod test {
         let path = Builder::new().prefix("test-update").tempdir().unwrap();
         let cache = config.storage.block_cache.build_shared_cache();
 
-        let factory = KvEngineFactoryBuilder::new(env, &config, cache, None).build();
+        let factory =
+            KvEngineFactoryBuilder::new(env, &config, cache, None, Default::default()).build();
         let reg = TabletRegistry::new(Box::new(factory), path.path().join("tablets")).unwrap();
 
         for i in 1..6 {

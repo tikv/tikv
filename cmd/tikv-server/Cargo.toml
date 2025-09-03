@@ -40,7 +40,7 @@ tikv = { workspace = true }
 tikv_util = { workspace = true }
 toml = "0.5"
 tracing-active-tree = { workspace = true, optional = true }
-tracing-subscriber = { version = "0.3.17", default-features = false, features = [ "registry", "smallvec" ], optional = true }
+tracing-subscriber = { version = "0.3.20", default-features = false, features = [ "registry", "smallvec" ], optional = true }
 
 [build-dependencies]
 cc = "1.0"

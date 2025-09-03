@@ -1221,12 +1221,11 @@ def table_panel(
     title: str,
     targets: list[Target],
     description=None,
-    data_source=DATASOURCE,
+    dataSource=DATASOURCE,
     overrides=DEFAULT_TABLE_OVERRIDES,
     columns=None,
     filterable=False,
     show_header=True,
-    time_from="1s",
     transformations=DEFAULT_TABLE_TRANSFORMATIONS,
 ) -> Panel:
     """
@@ -1239,10 +1238,8 @@ def table_panel(
         data_source: Data source to use
         overrides: Field overrides for customizing display
         columns: Column configuration
-        sort_by: Default sorting configuration
         filterable: Whether to allow column filtering
         show_header: Whether to show table header
-        time_from: Time from parameter for the panel
         transformations: Grafana transformations for the panel
 
     Returns:
@@ -1250,18 +1247,18 @@ def table_panel(
     """
     for target in targets:
         target.format = "table"
+        target.instant = True
 
     table_args = {
         "title": title,
-        "dataSource": data_source,
         "targets": targets,
+        "description": description,
+        "dataSource": dataSource,
         "overrides": overrides,
         "columns": columns,
         "filterable": filterable,
         "showHeader": show_header,
-        "timeFrom": time_from,
         "transformations": transformations,
-        "description": description,
     }
 
     return Table(**table_args)

@@ -167,7 +167,7 @@ fn test_delete_files_in_range_for_titan() {
         .build_resources(Default::default(), cfg.storage.engine);
     let kv_db_opts = cfg.rocksdb.build_opt(&resource, cfg.storage.engine);
     let kv_cfs_opts = cfg.rocksdb.build_cf_opts(
-        &cfg.rocksdb.build_cf_resources(cache),
+        &cfg.rocksdb.build_cf_resources(cache, Default::default()),
         None,
         cfg.storage.api_version(),
         None,

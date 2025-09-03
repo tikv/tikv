@@ -28,7 +28,8 @@ use tikv::server::{
 use tikv_kv::{FakeExtension, RaftExtension};
 use tikv_util::{
     config::{ReadableDuration, VersionTrack},
-    worker::{Builder as WorkerBuilder, LazyWorker},
+    debug,
+    worker::{Builder as WorkerBuilder, LazyWorker, Worker},
 };
 
 use super::*;
@@ -55,7 +56,12 @@ where
         worker.scheduler(),
         loads,
     );
-    RaftClient::new(0, builder)
+    RaftClient::new(
+        0,
+        builder,
+        Duration::from_millis(50),
+        Worker::new("test-worker"),
+    )
 }
 
 fn get_raft_client_by_port(port: u16) -> RaftClient<resolve::MockStoreAddrResolver, FakeExtension> {
@@ -428,4 +434,150 @@ fn test_store_allowlist() {
     raft_client.flush();
     check_msg_count(500, &msg_count1, 10);
     check_msg_count(500, &msg_count2, 5);
+}
+
+#[tokio::test]
+async fn test_health_checker_lifecycle() {
+    fail::cfg("network_inspection_interval", "return").unwrap();
+    let msg_count = Arc::new(AtomicUsize::new(0));
+    let batch_msg_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
+    let service = MockKvForRaft::new(Arc::clone(&msg_count), Arc::clone(&batch_msg_count), true);
+    let (mock_server, port) = create_mock_server(service, 60600, 60700).unwrap();
+
+    let mut raft_client = get_raft_client_by_port(port);
+
+    // Initially, there should be no stores with latency data
+    let initial_latencies = raft_client.get_all_max_latencies();
+    assert!(
+        initial_latencies.is_empty(),
+        "Initially no stores should have latency data"
+    );
+
+    // Step 1: Send messages to establish connections for stores 1, 2, 3
+    debug!("Establishing connections to stores 1, 2, 3");
+    for store_id in 1..=3 {
+        let mut raft_m = RaftMessage::default();
+        raft_m.mut_to_peer().set_store_id(store_id);
+        raft_m.set_region_id(store_id);
+        let _ = raft_client.send(raft_m);
+    }
+    raft_client.flush();
+
+    // Start network inspection before establishing any connections
+    raft_client.start_network_inspection();
+
+    // Wait for health checker to detect new stores and start inspection tasks
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Check that latencies are being tracked for the connected stores
+    for store_id in 1..=3 {
+        assert!(raft_client.get_max_latency(store_id).is_some())
+    }
+    // Verify that stores 4 and 5 do not have latency data yet
+    for store_id in 4..=5 {
+        assert!(raft_client.get_max_latency(store_id).is_none());
+    }
+
+    // Step 2: Add more stores (4, 5) to test dynamic store detection
+    debug!("Adding connections to stores 4, 5");
+    for store_id in 4..=5 {
+        let mut raft_m = RaftMessage::default();
+        raft_m.mut_to_peer().set_store_id(store_id);
+        raft_m.set_region_id(store_id);
+        let _ = raft_client.send(raft_m);
+    }
+    raft_client.flush();
+
+    // Wait for health checker to detect the new stores
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Verify that stores 4 and 5 might also have latency data
+    for store_id in 4..=5 {
+        assert!(raft_client.get_max_latency(store_id).is_some());
+    }
+
+    drop(mock_server);
+    fail::remove("network_inspection_interval")
+}
+
+#[tokio::test]
+async fn test_network_inspection_with_real_latency() {
+    let msg_count = Arc::new(AtomicUsize::new(0));
+    let batch_msg_count = Arc::new(AtomicUsize::new(0));
+    let service = MockKvForRaft::new(Arc::clone(&msg_count), Arc::clone(&batch_msg_count), true);
+    let (mock_server, port) = create_mock_server(service, 61100, 61200).unwrap();
+
+    let mut raft_client = get_raft_client_by_port(port);
+
+    // Send messages to establish connections for multiple stores
+    for store_id in 1..=3 {
+        let mut raft_m = RaftMessage::default();
+        raft_m.mut_to_peer().set_store_id(store_id);
+        raft_m.set_region_id(store_id);
+        let _ = raft_client.send(raft_m); // Some may fail, which is expected
+    }
+    raft_client.flush();
+
+    // Start network inspection
+    raft_client.start_network_inspection();
+
+    // Wait for inspection to potentially run several cycles
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let check_latency_not_empty = |store_id| {
+        let latency = raft_client.get_max_latency(store_id);
+        assert!(
+            latency.is_some(),
+            "latency for store {} should not be None",
+            store_id
+        );
+        assert_ne!(
+            latency.unwrap(),
+            0.0,
+            "latency for store {} should be greater than 0",
+            store_id
+        );
+    };
+    check_latency_not_empty(1);
+    check_latency_not_empty(2);
+    check_latency_not_empty(3);
+    assert_eq!(raft_client.get_max_latency(99), None);
+
+    drop(mock_server);
+}
+
+#[tokio::test]
+async fn test_network_inspection_with_connection_failures() {
+    fail::cfg("network_inspection_interval", "return").unwrap();
+    let msg_count = Arc::new(AtomicUsize::new(0));
+    let batch_msg_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
+    let service = MockKvForRaft::new(Arc::clone(&msg_count), Arc::clone(&batch_msg_count), true);
+    let (mut mock_server, port) = create_mock_server(service, 61300, 61400).unwrap();
+
+    let mut raft_client = get_raft_client_by_port(port);
+
+    // Send messages to establish connections
+    for store_id in 1..=2 {
+        let mut raft_m = RaftMessage::default();
+        raft_m.mut_to_peer().set_store_id(store_id);
+        raft_m.set_region_id(store_id);
+        let _ = raft_client.send(raft_m);
+    }
+    raft_client.flush();
+
+    // Start network inspection
+    raft_client.start_network_inspection();
+
+    // Wait for initial inspection cycles
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Test that latency tracking API works initially
+    assert!(raft_client.get_max_latency(1).is_some());
+    assert!(raft_client.get_max_latency(2).is_some());
+
+    // Shutdown the mock server to simulate connection failure
+    mock_server.shutdown();
+    drop(mock_server);
+
+    fail::remove("network_inspection_interval")
 }

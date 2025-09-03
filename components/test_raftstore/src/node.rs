@@ -241,6 +241,7 @@ impl Simulator for NodeCluster {
         router: RaftRouter<RocksEngine, RaftTestEngine>,
         system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
         _resource_manager: &Option<Arc<ResourceGroupManager>>,
+        _force_partition_mgr: &ForcePartitionRangeManager,
     ) -> ServerResult<u64> {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
         let pd_worker = LazyWorker::new("test-pd-worker");
