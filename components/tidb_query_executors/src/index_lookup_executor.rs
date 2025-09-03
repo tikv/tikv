@@ -1,6 +1,11 @@
 // Copyright 2025 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp::Ordering, collections::HashSet, mem, sync::Arc};
+use std::{
+    cmp::{Ordering, min},
+    collections::HashSet,
+    mem,
+    sync::Arc,
+};
 
 use api_version::KvFormat;
 use async_trait::async_trait;
@@ -12,7 +17,11 @@ use tidb_query_common::{
     storage::{FindRegionResult, IntervalRange, RegionStorageAccessor, StateRole, Storage},
 };
 use tidb_query_datatype::{
-    codec::{batch::LazyBatchColumnVec, data_type::LogicalRows, table::RowHandle},
+    codec::{
+        batch::LazyBatchColumnVec,
+        data_type::{BATCH_MAX_SIZE, LogicalRows},
+        table::RowHandle,
+    },
     expr::{EvalConfig, EvalContext, EvalWarnings},
 };
 use tikv_util::{
@@ -96,6 +105,7 @@ where
     output_schema: Vec<FieldType>,
     force_no_index_lookup: bool,
     table_lookup_batch_size: usize,
+    table_lookup_max_batch_size: usize,
     table_task_iter_builder: Option<Builder>,
     table_scan_params: TableScanParams,
 
@@ -110,8 +120,6 @@ where
     Builder: TableTaskIterBuilder<Iterator: TableTaskIterator<Storage = S>>,
     F: KvFormat,
 {
-    const DEFAULT_INDEX_LOOKUP_BATCH_SIZE: usize = 256;
-
     // TODO: remove #[allow(dead_code)] after new function is used
     #[allow(dead_code)]
     #[inline]
@@ -143,7 +151,8 @@ where
             output_schema,
             config,
             force_no_index_lookup,
-            table_lookup_batch_size: Self::DEFAULT_INDEX_LOOKUP_BATCH_SIZE,
+            table_lookup_batch_size: 0,
+            table_lookup_max_batch_size: BATCH_MAX_SIZE,
             src,
             src_is_drained: BatchExecIsDrain::Remain,
             intermediate_results: vec![],
@@ -176,9 +185,9 @@ where
     #[inline]
     fn step_to_table_lookup(&mut self, warnings: &mut EvalWarnings) -> Result<()> {
         let state = self.phase.mut_index_scan_or_err()?;
-        let builder = self.table_task_iter_builder.as_ref().ok_or(Err(other_err!(
+        let builder = self.table_task_iter_builder.as_ref().ok_or(other_err!(
             "No table task builder available for index lookup"
-        )))?;
+        ))?;
 
         let mut ctx = EvalContext {
             cfg: self.config.clone(),
@@ -269,7 +278,17 @@ where
             return Ok(output_result);
         }
 
+        if self.table_lookup_batch_size == 0 {
+            self.table_lookup_batch_size = scan_rows
+        }
+
         if src_drained || state.row_count >= self.table_lookup_batch_size {
+            if self.table_lookup_batch_size < self.table_lookup_max_batch_size {
+                self.table_lookup_batch_size = min(
+                    self.table_lookup_batch_size * 2,
+                    self.table_lookup_max_batch_size,
+                );
+            }
             self.step_to_table_lookup(&mut output_result.warnings)?;
             output_result.is_drained = Ok(BatchExecIsDrain::Remain);
         }
@@ -340,6 +359,10 @@ where
     // table-lookup does not block each-other.
     #[inline]
     async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+        if scan_rows == 0 {
+            return Self::err_result(other_err!("scan_rows cannot be 0"));
+        }
+
         let result = match self.phase {
             IndexLookUpPhase::IndexScan(..) => self.on_phase_index_scan(scan_rows).await,
             IndexLookUpPhase::TableLookUp(..) => self.on_phase_table_lookup(scan_rows).await,
@@ -1879,10 +1902,15 @@ mod tests {
             int_handle_table_columns(vec![FieldTypeTp::LongLong, FieldTypeTp::String], 0),
         );
 
+        // scan_rows == 0 not allowed
+        let err = block_on(index_lookup.next_batch(0)).is_drained.unwrap_err();
+        assert!(err.to_string().contains("scan_rows cannot be 0"));
+
         // The first phase should be IndexScan, and it should be empty.
         let index_state = index_lookup.phase.mut_index_scan_or_err().unwrap();
         assert_eq!(index_state.row_count, 0);
         assert!(index_state.results.is_empty());
+        assert_eq!(index_lookup.table_lookup_batch_size, 0);
 
         // if the result is empty, it should be return an empty result with the warnings
         // without adding the result to the batch.
@@ -1891,6 +1919,10 @@ mod tests {
         let (batch, batch_cnt) = get_index_scan_phase_batch(&mut index_lookup);
         assert!(batch.is_empty());
         assert_eq!(batch_cnt, 0);
+
+        // the first result will set the batch size as the first scan rows
+        assert_eq!(index_lookup.table_lookup_batch_size, 128);
+        assert_eq!(index_lookup.table_lookup_max_batch_size, BATCH_MAX_SIZE);
 
         // if the result contains some rows, it should be added to the batch.
         let mut r = block_on(index_lookup.next_batch(128));
@@ -1926,6 +1958,9 @@ mod tests {
         assert_eq!(batch.len(), 2);
         assert_eq!(batch_cnt, 7);
 
+        // if lookup phase not triggered, the index_lookup_batch_size should not change
+        assert_eq!(index_lookup.table_lookup_batch_size, 128);
+
         // trigger batch full, step to TableLookup phase
         index_lookup.table_lookup_batch_size = batch_cnt;
         let mut r = block_on(index_lookup.next_batch(128));
@@ -1945,6 +1980,15 @@ mod tests {
             BatchExecIsDrain::Remain,
             0,
         );
+
+        // index_lookup_batch_size should grow after lookup phase not triggered
+        let batch_size = batch_cnt * 2;
+        assert_eq!(index_lookup.table_lookup_batch_size, batch_size);
+
+        // set index_lookup.table_lookup_batch_max_size to a small value to test growing
+        let max_batch_size = batch_size + 2;
+        assert!(max_batch_size < batch_size * 2);
+        index_lookup.table_lookup_max_batch_size = max_batch_size;
 
         // go back to IndexLookUp and add more results
         index_lookup.phase = IndexLookUpPhase::IndexScan(IndexScanState::default());
@@ -1994,6 +2038,9 @@ mod tests {
             0,
         );
         assert_eq!(index_lookup.src_is_drained, BatchExecIsDrain::Drain);
+
+        // the index_lookup_batch_size should grow to the max value
+        assert_eq!(index_lookup.table_lookup_batch_size, max_batch_size);
 
         // PagingDrain should also trigger the TableLookup phase
         let mut src_results = build_int_array_results(vec![vec![99, 101]]);
