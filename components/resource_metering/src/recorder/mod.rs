@@ -26,7 +26,7 @@ pub use self::{
     localstorage::{LocalStorage, LocalStorageRef, STORAGE},
     sub_recorder::{
         cpu::CpuRecorder,
-        summary::{SummaryRecorder, record_read_keys, record_write_keys},
+        summary::{SummaryRecorder, record_read_keys, record_write_keys, record_network_in_bytes, record_network_out_bytes},
     },
 };
 

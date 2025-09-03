@@ -4,7 +4,7 @@ use std::{
     cell::Cell,
     sync::{
         Arc,
-        atomic::{AtomicU32, Ordering::Relaxed},
+        atomic::{AtomicU32, AtomicU64, Ordering::Relaxed},
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -41,6 +41,10 @@ pub struct RawRecord {
     pub cpu_time: u32, // ms
     pub read_keys: u32,
     pub write_keys: u32,
+    pub logical_read_bytes: u64,
+    pub logical_write_bytes: u64,
+    pub network_in_bytes: u64,
+    pub network_out_bytes: u64,
 }
 
 impl RawRecord {
@@ -48,11 +52,19 @@ impl RawRecord {
         self.cpu_time += other.cpu_time;
         self.read_keys += other.read_keys;
         self.write_keys += other.write_keys;
+        self.logical_read_bytes += other.logical_read_bytes;
+        self.logical_write_bytes += other.logical_write_bytes;
+        self.network_in_bytes += other.network_in_bytes;
+        self.network_out_bytes += other.network_out_bytes;
     }
 
     pub fn merge_summary(&mut self, r: &SummaryRecord) {
         self.read_keys += r.read_keys.load(Relaxed);
         self.write_keys += r.write_keys.load(Relaxed);
+        self.logical_read_bytes += r.logical_read_bytes.load(Relaxed);
+        self.logical_write_bytes += r.logical_write_bytes.load(Relaxed);
+        self.network_in_bytes += r.network_in_bytes.load(Relaxed);
+        self.network_out_bytes += r.network_out_bytes.load(Relaxed);
     }
 }
 
@@ -179,6 +191,10 @@ impl From<Records> for Vec<ResourceUsageRecord> {
                     cpu_time,
                     read_keys,
                     write_keys,
+                    logical_read_bytes: _,
+                    logical_write_bytes: _,
+                    network_in_bytes: _,
+                    network_out_bytes: _,
                 },
             ) in records.others
             {
@@ -283,6 +299,18 @@ pub struct SummaryRecord {
 
     /// Number of keys that have been written.
     pub write_keys: AtomicU32,
+
+    /// Logical read bytes. TableScan executor's total read bytes recorded in execution summary.
+    pub logical_read_bytes: AtomicU64,
+
+    /// Logical write bytes.
+    pub logical_write_bytes: AtomicU64,
+
+    /// Network input bytes.
+    pub network_in_bytes: AtomicU64,
+
+    /// Network output bytes.
+    pub network_out_bytes: AtomicU64,
 }
 
 impl Clone for SummaryRecord {
@@ -290,6 +318,10 @@ impl Clone for SummaryRecord {
         Self {
             read_keys: AtomicU32::new(self.read_keys.load(Relaxed)),
             write_keys: AtomicU32::new(self.write_keys.load(Relaxed)),
+            logical_read_bytes: AtomicU64::new(self.logical_read_bytes.load(Relaxed)),
+            logical_write_bytes: AtomicU64::new(self.logical_write_bytes.load(Relaxed)),
+            network_in_bytes: AtomicU64::new(self.network_in_bytes.load(Relaxed)),
+            network_out_bytes: AtomicU64::new(self.network_out_bytes.load(Relaxed)),
         }
     }
 }
@@ -299,6 +331,10 @@ impl SummaryRecord {
     pub fn reset(&self) {
         self.read_keys.store(0, Relaxed);
         self.write_keys.store(0, Relaxed);
+        self.logical_read_bytes.store(0, Relaxed);
+        self.logical_write_bytes.store(0, Relaxed);
+        self.network_in_bytes.store(0, Relaxed);
+        self.network_out_bytes.store(0, Relaxed);
     }
 
     /// Add two items.
@@ -307,6 +343,14 @@ impl SummaryRecord {
             .fetch_add(other.read_keys.load(Relaxed), Relaxed);
         self.write_keys
             .fetch_add(other.write_keys.load(Relaxed), Relaxed);
+        self.logical_read_bytes
+            .fetch_add(other.logical_read_bytes.load(Relaxed), Relaxed);
+        self.logical_write_bytes
+            .fetch_add(other.logical_write_bytes.load(Relaxed), Relaxed);
+        self.network_in_bytes
+            .fetch_add(other.network_in_bytes.load(Relaxed), Relaxed);
+        self.network_out_bytes
+            .fetch_add(other.network_out_bytes.load(Relaxed), Relaxed);
     }
 
     /// Gets the value and writes it to zero.
@@ -315,6 +359,10 @@ impl SummaryRecord {
         Self {
             read_keys: AtomicU32::new(self.read_keys.swap(0, Relaxed)),
             write_keys: AtomicU32::new(self.write_keys.swap(0, Relaxed)),
+            logical_read_bytes: AtomicU64::new(self.logical_read_bytes.swap(0, Relaxed)),
+            logical_write_bytes: AtomicU64::new(self.logical_write_bytes.swap(0, Relaxed)),
+            network_in_bytes: AtomicU64::new(self.network_in_bytes.swap(0, Relaxed)),
+            network_out_bytes: AtomicU64::new(self.network_out_bytes.swap(0, Relaxed)),
         }
     }
 }

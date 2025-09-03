@@ -22,7 +22,7 @@ use kvproto::{coprocessor as coppb, errorpb, kvrpcpb, kvrpcpb::CommandPri, metap
 use online_config::ConfigManager;
 use protobuf::{CodedInputStream, Message};
 use resource_control::{ResourceGroupManager, ResourceLimiter, TaskMetadata};
-use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
+use resource_metering::{FutureExt, ResourceTagFactory, StreamExt, record_network_in_bytes, record_network_out_bytes};
 use tidb_query_common::{
     error::StorageError,
     execute_stats::ExecSummary,
@@ -103,6 +103,7 @@ pub struct Endpoint<E: Engine> {
 pub struct ParseCopRequestResult<Snap> {
     req_tag: ReqTag,
     req_ctx: ReqContext,
+    req_size: u64,
     handler_builder: RequestHandlerBuilder<Snap>,
 }
 
@@ -112,6 +113,7 @@ impl<Snap> ParseCopRequestResult<Snap> {
         Self {
             req_tag: ReqTag::test,
             req_ctx: ReqContext::default_for_test(),
+            req_size: 0,
             handler_builder,
         }
     }
@@ -241,6 +243,7 @@ impl<E: Engine> Endpoint<E> {
         let req_ctx: ReqContext;
         let handler_builder: RequestHandlerBuilder<E::IMSnap>;
         let req_tag: ReqTag;
+        let req_size: u64 = data.len() as u64;
         match req.get_tp() {
             REQ_TYPE_DAG => {
                 let mut dag = DagRequest::default();
@@ -411,6 +414,7 @@ impl<E: Engine> Endpoint<E> {
         Ok(ParseCopRequestResult {
             req_tag,
             req_ctx,
+            req_size,
             handler_builder,
         })
     }
@@ -460,7 +464,9 @@ impl<E: Engine> Endpoint<E> {
         semaphore: Option<Arc<Semaphore>>,
         mut tracker: Box<Tracker<E>>,
         handler_builder: RequestHandlerBuilder<E::IMSnap>,
+        req_size: u64,
     ) -> Result<MemoryTraceGuard<coppb::Response>> {
+        record_network_in_bytes(req_size);
         // When this function is being executed, it may be queued for a long time, so
         // that deadline may exceed.
         tracker.on_scheduled();
@@ -531,7 +537,9 @@ impl<E: Engine> Endpoint<E> {
 
         let mut resp = match result {
             Ok(resp) => {
-                COPR_RESP_SIZE.inc_by(resp.data.len() as u64);
+                let resp_size = resp.data.len() as u64;
+                COPR_RESP_SIZE.inc_by(resp_size);
+                record_network_out_bytes(resp_size);
                 resp
             }
             Err(e) => {
@@ -590,10 +598,11 @@ impl<E: Engine> Endpoint<E> {
         allocated_bytes += tracker.approximate_mem_size();
 
         let (tx, rx) = oneshot::channel();
+        let req_size = r.req_size;
         let future =
-            Self::handle_unary_request_impl(self.semaphore.clone(), tracker, r.handler_builder)
+            Self::handle_unary_request_impl(self.semaphore.clone(), tracker, r.handler_builder, req_size)
                 .in_resource_metering_tag(resource_tag)
-                .map(|res| {
+                .map(move |res| {
                     let _ = tx.send(res);
                 });
         let res = self.read_pool_spawn_with_memory_quota_check(
