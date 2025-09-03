@@ -236,6 +236,10 @@ where
         self.system.refresh_config_scheduler()
     }
 
+    pub fn pd_scheduler(&self) -> Scheduler<PdTask<EK>> {
+        self.system.pd_scheduler()
+    }
+
     /// Gets a transmission end of a channel which is used to send `Msg` to the
     /// raftstore.
     pub fn get_router(&self) -> RaftRouter<EK, ER> {

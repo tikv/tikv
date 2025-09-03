@@ -24,12 +24,31 @@ mod imp {
         engines: Option<Engines<impl KvEngine, impl RaftEngine>>,
         kv_statistics: Option<Arc<RocksStatistics>>,
         raft_statistics: Option<Arc<RocksStatistics>>,
+        enable_graceful_shutdown: bool,
         service_event_tx: Option<TikvMpsc::Sender<ServiceEvent>>,
     ) {
         let mut signals = Signals::new([SIGTERM, SIGINT, SIGHUP, SIGUSR1, SIGUSR2]).unwrap();
         for signal in &mut signals {
             match signal {
-                SIGTERM | SIGINT | SIGHUP => {
+                SIGTERM => {
+                    if enable_graceful_shutdown {
+                        info!("receive signal {}, starting graceful shutdown...", signal);
+                        if let Some(tx) = service_event_tx {
+                            if let Err(e) = tx.send(ServiceEvent::GracefulShutdown) {
+                                warn!("failed to notify graceful shutdown, {:?}", e);
+                            }
+                        }
+                    } else {
+                        info!("receive signal {}, stopping server...", signal);
+                        if let Some(tx) = service_event_tx {
+                            if let Err(e) = tx.send(ServiceEvent::Exit) {
+                                warn!("failed to notify grpc server exit, {:?}", e);
+                            }
+                        }
+                    }
+                    break;
+                }
+                SIGINT | SIGHUP => {
                     info!("receive signal {}, stopping server...", signal);
                     if let Some(tx) = service_event_tx {
                         if let Err(e) = tx.send(ServiceEvent::Exit) {
