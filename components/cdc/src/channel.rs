@@ -398,7 +398,7 @@ impl<'a> Drain {
         });
         let scaned = (&mut self.bounded_receiver).filter_map(|x| {
             CDC_EVENTS_PENDING_DURATION
-                .with_label_values(&["truncated"])
+                .with_label_values(&["scanned"])
                 .observe(x.created.saturating_elapsed_secs());
             CDC_EVENTS_PENDING_COUNT
                 .with_label_values(&["scanned"])
