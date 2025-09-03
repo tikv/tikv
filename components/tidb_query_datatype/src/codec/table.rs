@@ -566,7 +566,7 @@ pub trait RowHandle: Eq + Ord + Clone + Debug + Send + Sync {
     /// encode the row key for the handle in the give physical table ID.
     /// The return row key is in a raw format without mvcc comparable encoding.
     fn encode_row_key(&self, table_id: i64) -> Vec<u8>;
-    /// encode the pont-range end key for the handle.
+    /// encode the point-range end key for the handle.
     /// The point-range is used to scan a single row in storage, and its start
     /// key is the handle row key.
     /// The return row key is in a raw format without mvcc comparable encoding.

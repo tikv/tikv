@@ -176,23 +176,16 @@ where
     #[inline]
     fn step_to_table_lookup(&mut self, warnings: &mut EvalWarnings) -> Result<()> {
         let state = self.phase.mut_index_scan_or_err()?;
-
-        let builder = self.table_task_iter_builder.as_ref().map_or_else(
-            || {
-                Err(other_err!(
-                    "No table task builder available for index lookup"
-                ))
-            },
-            |p| Ok(p),
-        )?;
+        let builder = self.table_task_iter_builder.as_ref().ok_or(Err(other_err!(
+            "No table task builder available for index lookup"
+        )))?;
 
         let mut ctx = EvalContext {
             cfg: self.config.clone(),
             warnings: EvalWarnings::default(),
         };
 
-        let mut results = vec![];
-        mem::swap(&mut state.results, &mut results);
+        let results = mem::take(&mut state.results);
         self.phase = IndexLookUpPhase::TableLookUp(TableLookUpState {
             table_task_iter: Some(builder.build_iterator(&mut ctx, results)?),
             table_scan: None,
