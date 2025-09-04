@@ -264,6 +264,7 @@ where
         );
 
         raft_client.start_network_inspection();
+        health_controller.set_health_checker(Box::new(raft_client.get_health_checker()));
 
         let trans = ServerTransport::new(raft_client);
 
