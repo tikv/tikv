@@ -301,10 +301,10 @@ where
         let executor = match state.table_scan.as_mut() {
             Some(e) => e,
             _ => {
-                let table_task_iter = state.table_task_iter.as_mut().map_or_else(
-                    || Err(other_err!("table task iter is not valid")),
-                    |iter| Ok(iter),
-                )?;
+                let table_task_iter = state
+                    .table_task_iter
+                    .as_mut()
+                    .ok_or(other_err!("table task iter is not valid"))?;
 
                 match table_task_iter.next().await {
                     Some(task) => {
@@ -547,10 +547,10 @@ where
             // reserve space for the orders
             let logical_rows_len = result.logical_rows.len();
             if logical_rows_len > 0 {
-                orders.reserve(orders.len() + logical_rows_len);
+                orders.reserve(logical_rows_len);
             }
 
-            for &handle_offset in &index_layout.handle_offsets {
+            for (i, &handle_offset) in index_layout.handle_offsets.iter().enumerate() {
                 let columns_len = result.physical_columns.columns_len();
                 if handle_offset >= columns_len {
                     return Err(other_err!(
@@ -561,7 +561,7 @@ where
                 }
                 result.physical_columns[handle_offset].ensure_decoded(
                     ctx,
-                    &index_layout.handle_types[0],
+                    &index_layout.handle_types[i],
                     LogicalRows::from_slice(&result.logical_rows),
                 )?
             }
