@@ -2514,6 +2514,35 @@ dependencies = [
 ]
 
 [[package]]
+<<<<<<< HEAD
+=======
+name = "hashbrown"
+version = "0.15.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a9bfc1af68b1726ea47d3d5109de126281def866b33970e10fbab11b5dafab3"
+dependencies = [
+ "allocator-api2",
+ "equivalent",
+ "foldhash",
+]
+
+[[package]]
+name = "health_controller"
+version = "0.1.0"
+dependencies = [
+ "collections",
+ "grpcio-health",
+ "kvproto",
+ "ordered-float",
+ "parking_lot 0.12.1",
+ "prometheus",
+ "slog",
+ "slog-global",
+ "tikv_util",
+]
+
+[[package]]
+>>>>>>> db90f6b4ba (worker: implement pd_worker get network latency from health_checker (#18715))
 name = "heck"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

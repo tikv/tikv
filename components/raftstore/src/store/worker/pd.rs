@@ -2352,16 +2352,19 @@ where
                     }),
                 ),
                 InspectFactor::Network => {
-                    let duration = std::collections::HashMap::<u64, Duration>::new();
+                    let network_durations = self.health_reporter.record_network_duration(id);
 
-                    for (store_id, network_duration) in &duration {
+                    for (store_id, network_duration) in &network_durations {
                         STORE_INSPECT_NETWORK_DURATION_HISTOGRAM
                             .with_label_values(&[&store_id.to_string()])
                             .observe(tikv_util::time::duration_to_sec(*network_duration));
                     }
+<<<<<<< HEAD
 
                     self.slow_score.record_network(id, duration);
 
+=======
+>>>>>>> db90f6b4ba (worker: implement pd_worker get network latency from health_checker (#18715))
                     return;
                 }
             }
