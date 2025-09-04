@@ -6180,6 +6180,9 @@ where
             return;
         }
 
+        // If RaftEngine's compact idx exceeds the snapshot idx,
+        // means the snapshot idx has already been compacted.
+        // We should cancel the snapshot generating as it is now out of date.
         self.fsm
             .peer
             .raft_group
