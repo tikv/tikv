@@ -44,12 +44,21 @@ use std::{
         atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc,
     },
+    time::Duration,
 };
 
+use collections::HashMap;
 use grpcio_health::HealthService;
 use kvproto::pdpb::SlowTrend as SlowTrendPb;
 use parking_lot::{Mutex, RwLock};
 pub use types::{LatencyInspector, RaftstoreDuration};
+
+/// Trait for health checker to abstract network latency monitoring
+pub trait HealthChecker: Send + Sync {
+    /// Get all maximum latencies
+    /// Returns a HashMap of store_id -> max_latency_ms
+    fn get_all_max_latencies(&self) -> HashMap<u64, f64>;
+}
 
 struct ServingStatus {
     is_serving: bool,
@@ -70,6 +79,9 @@ struct HealthControllerInner {
     // Internally stores a `f64` type.
     raftstore_slow_score: AtomicU64,
     raftstore_slow_trend: RollingRetriever<SlowTrendPb>,
+
+    /// Optional raft client health checker for network latency monitoring
+    health_checker: Mutex<Option<Box<dyn HealthChecker>>>,
 
     /// gRPC's builtin `HealthService`.
     ///
@@ -104,6 +116,7 @@ impl HealthControllerInner {
         Self {
             raftstore_slow_score: AtomicU64::new(f64::to_bits(1.0)),
             raftstore_slow_trend: RollingRetriever::new(),
+            health_checker: Mutex::new(None),
 
             health_service,
             current_serving_status: Mutex::new(ServingStatus {
@@ -201,6 +214,25 @@ impl HealthControllerInner {
     fn shutdown(&self) {
         self.health_service.shutdown();
     }
+
+    /// Set the health checker for network latency monitoring
+    fn set_health_checker(&self, checker: Box<dyn HealthChecker>) {
+        let mut health_checker_guard = self.health_checker.lock();
+        *health_checker_guard = Some(checker);
+    }
+
+    /// Get network latencies from the health checker
+    fn get_network_latencies(&self) -> HashMap<u64, Duration> {
+        if let Some(checker) = self.health_checker.lock().as_ref() {
+            checker
+                .get_all_max_latencies()
+                .into_iter()
+                .map(|(store_id, latency_ms)| (store_id, Duration::from_millis(latency_ms as u64)))
+                .collect()
+        } else {
+            HashMap::default()
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -213,6 +245,11 @@ impl HealthController {
         Self {
             inner: Arc::new(HealthControllerInner::new()),
         }
+    }
+
+    /// Set a health checker that implements HealthChecker
+    pub fn set_health_checker(&self, checker: Box<dyn HealthChecker>) {
+        self.inner.set_health_checker(checker);
     }
 
     pub fn get_raftstore_slow_score(&self) -> f64 {
