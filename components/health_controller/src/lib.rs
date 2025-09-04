@@ -52,7 +52,7 @@ use parking_lot::{Mutex, RwLock};
 pub use types::{LatencyInspector, RaftstoreDuration};
 
 /// Trait for health checker to abstract network latency monitoring
-pub trait HealthCheckerTrait: Send + Sync {
+pub trait HealthChecker: Send + Sync {
     /// Get all maximum latencies
     /// Returns a HashMap of store_id -> max_latency_ms
     fn get_all_max_latencies(&self) -> HashMap<u64, f64>;
@@ -79,7 +79,7 @@ struct HealthControllerInner {
     raftstore_slow_trend: RollingRetriever<SlowTrendPb>,
 
     /// Optional raft client health checker for network latency monitoring
-    health_checker: Mutex<Option<Box<dyn HealthCheckerTrait>>>,
+    health_checker: Mutex<Option<Box<dyn HealthChecker>>>,
 
     /// gRPC's builtin `HealthService`.
     ///
@@ -214,7 +214,7 @@ impl HealthControllerInner {
     }
 
     /// Set the health checker for network latency monitoring
-    fn set_health_checker(&self, checker: Box<dyn HealthCheckerTrait>) {
+    fn set_health_checker(&self, checker: Box<dyn HealthChecker>) {
         let mut health_checker_guard = self.health_checker.lock();
         *health_checker_guard = Some(checker);
     }
@@ -245,8 +245,8 @@ impl HealthController {
         }
     }
 
-    /// Set a health checker that implements HealthCheckerTrait
-    pub fn set_health_checker(&self, checker: Box<dyn HealthCheckerTrait>) {
+    /// Set a health checker that implements HealthChecker
+    pub fn set_health_checker(&self, checker: Box<dyn HealthChecker>) {
         self.inner.set_health_checker(checker);
     }
 

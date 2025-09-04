@@ -54,9 +54,9 @@ use crate::server::{
     snap::Task as SnapTask,
 };
 
-// Implement HealthCheckerTrait for HealthChecker to bridge with
+// Implement health_controller::HealthChecker for HealthChecker to bridge with
 // health_controller
-impl health_controller::HealthCheckerTrait for HealthChecker {
+impl health_controller::HealthChecker for HealthChecker {
     fn get_all_max_latencies(&self) -> HashMap<u64, f64> {
         self.get_all_max_latencies()
     }
