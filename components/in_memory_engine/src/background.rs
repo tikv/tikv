@@ -386,7 +386,7 @@ impl BgWorkManager {
                                 continue 'LOOP;
                             }
                         };
-                        let safe_point = now.physical() - gc_run_interval.as_millis() as u64;
+                        let safe_point = now.physical().saturating_sub(gc_run_interval.as_millis() as u64);
                         let safe_point = TimeStamp::compose(safe_point, 0).into_inner();
                         if let Err(e) = scheduler.schedule(BackgroundTask::Gc(GcTask {safe_point})) {
                             error!(
