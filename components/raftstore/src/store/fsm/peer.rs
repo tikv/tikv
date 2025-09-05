@@ -170,9 +170,6 @@ where
     /// deleted if the skip time reaches this `skip_gc_raft_log_ticks`.
     skip_gc_raft_log_ticks: usize,
 
-    /// Previous last_index for calculating growth rate in sampling tick
-    previous_last_index: u64,
-
     /// Accumulated interval time for region growth sampling
     sampling_interval: u64,
 
@@ -307,7 +304,6 @@ where
                 receiver: rx,
                 skip_split_count: 0,
                 skip_gc_raft_log_ticks: 0,
-                previous_last_index: 0,
                 sampling_interval: 0,
                 reactivate_memory_lock_ticks: 0,
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(),
@@ -371,7 +367,6 @@ where
                 receiver: rx,
                 skip_split_count: 0,
                 skip_gc_raft_log_ticks: 0,
-                previous_last_index: 0,
                 sampling_interval: 0,
                 reactivate_memory_lock_ticks: 0,
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(),
@@ -6135,14 +6130,10 @@ where
         if self.fsm.sampling_interval
             >= self.ctx.cfg.peer_stale_state_check_interval.0.as_millis() as u64
         {
-            // Calculate write rate (last_index - previous_last_index)
-            let write_rate = last_idx.saturating_sub(self.fsm.previous_last_index);
-
             // Only send if has a certain amount of log lag.
             if applied_count > self.ctx.cfg.raft_log_gc_count_limit() / 10 {
-                let store_msg: StoreMsg<EK> = StoreMsg::RegionWriteRate {
+                let store_msg: StoreMsg<EK> = StoreMsg::HighLogLagRegion {
                     region_id: self.fsm.region_id(),
-                    write_rate,
                 };
                 if let Err(e) = self.ctx.router.send_control(store_msg) {
                     warn!(
@@ -6152,10 +6143,6 @@ where
                     );
                 }
             }
-
-            // Update previous_last_index for next write rate calculation
-            self.fsm.previous_last_index = last_idx;
-
             // Reset interval accumulator
             self.fsm.sampling_interval = 0;
         }

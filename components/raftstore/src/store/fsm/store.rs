@@ -746,7 +746,8 @@ struct Store {
     consistency_check_time: HashMap<u64, Instant>,
     store_reachability: HashMap<u64, StoreReachability>,
     // Region leader write rate information for GC decision
-    region_write_rate: HashMap<u64, (u64, Instant)>, // region_id -> (write_rate, last_update_time)
+    high_log_lag_regions: HashMap<u64, Instant>, // region_id -> last_update_time
+    last_pinned_regions: HashSet<u64>,
 }
 
 struct StoreReachability {
@@ -775,7 +776,8 @@ where
                 start_time: None,
                 consistency_check_time: HashMap::default(),
                 store_reachability: HashMap::default(),
-                region_write_rate: HashMap::default(),
+                high_log_lag_regions: HashMap::default(),
+                last_pinned_regions: HashSet::default(),
             },
             receiver: rx,
         });
@@ -932,11 +934,8 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 } => {
                     self.on_wake_up_regions(abnormal_stores, region_ids);
                 }
-                StoreMsg::RegionWriteRate {
-                    region_id,
-                    write_rate,
-                } => {
-                    self.on_receive_region_info_from_peer(region_id, write_rate);
+                StoreMsg::HighLogLagRegion { region_id } => {
+                    self.on_receive_region_info_from_peer(region_id);
                 }
             }
         }
@@ -3074,11 +3073,11 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         }
     }
 
-    fn on_receive_region_info_from_peer(&mut self, region_id: u64, write_rate: u64) {
+    fn on_receive_region_info_from_peer(&mut self, region_id: u64) {
         self.fsm
             .store
-            .region_write_rate
-            .insert(region_id, (write_rate, Instant::now()));
+            .high_log_lag_regions
+            .insert(region_id, Instant::now());
     }
 
     fn register_pd_store_heartbeat_tick(&self) {
@@ -3129,13 +3128,13 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
     }
 
     fn send_force_compact_messages(&mut self, over_ratio: f64) {
-        if self.fsm.store.region_write_rate.is_empty() {
+        if self.fsm.store.high_log_lag_regions.is_empty() {
             return;
         }
         // Create region classification on-demand when force compact is needed
         let gc_candidate_regions = self.create_region_classification(over_ratio);
         // Send force compact messages to GC candidate regions
-        for (region_id, _) in &gc_candidate_regions {
+        for region_id in &gc_candidate_regions {
             let _ = self.ctx.router.send(
                 *region_id,
                 PeerMsg::CasualMessage(Box::new(CasualMessage::ForceCompactRaftLogs)),
@@ -3162,44 +3161,77 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         let now = Instant::now();
         self.fsm
             .store
-            .region_write_rate
-            .retain(|_, (_, last_update_time)| {
-                now.duration_since(*last_update_time) <= timeout_duration
+            .high_log_lag_regions
+            .retain(|region_id, last_update_time| {
+                if now.duration_since(*last_update_time) <= timeout_duration {
+                    if self.fsm.store.last_pinned_regions.contains(&region_id) {
+                        self.fsm.store.last_pinned_regions.remove(region_id);
+                    }
+                    true
+                } else {
+                    false
+                }
             });
     }
 
-    fn create_region_classification(&mut self, over_ratio: f64) -> Vec<(u64, u64)> {
-        // Collect all (region_id, growth) into a vector
-        let mut all_growth = Vec::new();
-        for (region_id, (write_rate, _last_update_time)) in &self.fsm.store.region_write_rate {
-            all_growth.push((*region_id, *write_rate));
+    fn adjust_pinned_regions(&mut self, pin_count: usize) {
+        let current_len = self.fsm.store.last_pinned_regions.len();
+        if pin_count < current_len {
+            let remove_count = current_len - pin_count;
+            let ids_to_remove: Vec<u64> = self
+                .fsm
+                .store
+                .last_pinned_regions
+                .iter()
+                .copied()
+                .take(remove_count)
+                .collect();
+            for id in ids_to_remove {
+                self.fsm.store.last_pinned_regions.remove(&id);
+            }
+        } else {
+            let mut needed = pin_count - current_len;
+            for (&region_id, _) in &self.fsm.store.high_log_lag_regions {
+                if needed == 0 {
+                    break;
+                }
+                if !self.fsm.store.last_pinned_regions.contains(&region_id) {
+                    self.fsm.store.last_pinned_regions.insert(region_id);
+                    needed -= 1;
+                }
+            }
         }
-        let len = all_growth.len();
+    }
 
+    fn create_region_classification(&mut self, over_ratio: f64) -> Vec<u64> {
+        // Collect all (region_id, growth) into a vector
+        let len = self.fsm.store.high_log_lag_regions.len();
         // Calculate dynamic pin ratio based on memory pressure
         let base_pin_ratio = self.ctx.cfg.pin_compact_region_ratio;
         let dynamic_pin_ratio = base_pin_ratio / over_ratio;
 
         // At least pin 1 region to avoid the corner case of pin_count = 0
         let pin_count = std::cmp::max(1, (len as f64 * dynamic_pin_ratio) as usize);
+        self.adjust_pinned_regions(pin_count);
+        // Retain pinned in the map and collect GC candidates at the same time
+        let mut gc_candidate_regions: Vec<u64> = Vec::with_capacity(len);
+        self.fsm
+            .store
+            .high_log_lag_regions
+            .retain(|region_id, _last_update_time| {
+                if self.fsm.store.last_pinned_regions.contains(region_id) {
+                    true
+                } else {
+                    gc_candidate_regions.push(*region_id);
+                    false
+                }
+            });
 
-        // Sort by growth rate in ascending order
-        all_growth.sort_by(|a, b| a.1.cmp(&b.1));
-
-        // Take the largest pin_count elements for pinned regions
-        let pinned_regions = all_growth.split_off(len - pin_count);
-        // The left part is the GC candidate regions
-        let gc_candidate_regions = all_growth;
-
-        // Remove GC candidate regions from region_write_rate map
-        for (region_id, _) in &gc_candidate_regions {
-            self.fsm.store.region_write_rate.remove(region_id);
-        }
         info!(
             "create region classification: {} total regions, {} GC candidates, {} pinned regions",
             len,
             gc_candidate_regions.len(),
-            pinned_regions.len(),
+            self.fsm.store.last_pinned_regions.len(),
         );
         gc_candidate_regions
     }
@@ -3210,7 +3242,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
             Some(1.0) // Return a test over_ratio
         });
         // If there is no region leader growth, no need to check
-        if self.fsm.store.region_write_rate.is_empty() {
+        if self.fsm.store.high_log_lag_regions.is_empty() {
             return None;
         }
         // Get current raft engine memory usage
