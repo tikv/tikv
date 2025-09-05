@@ -26,6 +26,7 @@ pub use tidb_query_expr::function::*;
 #[cfg(test)]
 pub use tidb_query_expr::*;
 mod fast_hash_aggr_executor;
+mod index_lookup_executor;
 mod index_scan_executor;
 pub mod interface;
 mod limit_executor;
