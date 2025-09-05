@@ -645,10 +645,9 @@ where
         *gen_snap_task = Some(task);
     }
 
-    pub fn on_compact_raftlog(&mut self, idx: u64, state: Option<&mut CacheWarmupState>) {
+    pub fn on_compact_raftlog_cache(&mut self, idx: u64, state: Option<&mut CacheWarmupState>) {
         self.entry_storage.compact_entry_cache(idx, state);
         self.entry_storage.compact_term_cache(idx);
-        self.cancel_generating_snap(Some(idx));
     }
 
     // Apply the peer with given snapshot.
