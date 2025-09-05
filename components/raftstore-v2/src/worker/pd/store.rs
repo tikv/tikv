@@ -369,7 +369,7 @@ where
                     }
                 }
                 Err(e) => {
-                    error!(logger, "store heartbeat failed"; "err" => ?e);
+                    warn!(logger, "store heartbeat failed"; "err" => ?e);
                 }
             }
         };
