@@ -405,7 +405,12 @@ fn main() {
             compression_level,
             name,
             force_regenerate,
-            minimal_compaction_size,
+            minimal_compaction_size_default,
+            minimal_compaction_size_write,
+            last_snapshot_backup_ts,
+            debug_dry_run,
+            debug_prefetch_running_size,
+            debug_prefetch_buffer_size,
         } => {
             let tmp_engine =
                 TemporaryRocks::new(&cfg).expect("failed to create temp engine for writing SSTs.");
@@ -432,6 +437,9 @@ fn main() {
             let ccfg = compact_log::ExecutionConfig {
                 from_ts,
                 until_ts,
+                last_snapshot_backup_ts,
+                debug_prefetch_running_size,
+                debug_prefetch_buffer_size,
                 compression,
                 compression_level,
             };
@@ -442,6 +450,10 @@ fn main() {
                 external_storage,
                 db: Some(tmp_engine.rocks),
             };
+            if debug_dry_run {
+                let _ = exec.dry_run();
+                return;
+            }
 
             use tikv::server::status_server::lite::Server as StatusServerLite;
             struct ExportTiKVInfo {
@@ -481,7 +493,10 @@ fn main() {
             } else {
                 Some(compact_log_hooks::checkpoint::Checkpoint::default())
             };
-            let skip_small_compaction = SkipSmallCompaction::new(minimal_compaction_size.0);
+            let skip_small_compaction = SkipSmallCompaction::new(
+                minimal_compaction_size_default.0,
+                minimal_compaction_size_write.0,
+            );
             let hooks = (
                 (
                     (log_to_term, checkpoint),

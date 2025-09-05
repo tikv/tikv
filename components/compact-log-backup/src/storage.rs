@@ -206,6 +206,9 @@ pub struct LoadFromExt<'a> {
     /// The prefix of metadata in the external storage.
     /// By default it is `v1/backupmeta`.
     pub meta_prefix: &'a str,
+
+    pub debug_prefetch_running_size: usize,
+    pub debug_prefetch_buffer_size: usize,
 }
 
 impl LoadFromExt<'_> {
@@ -220,6 +223,8 @@ impl Default for LoadFromExt<'_> {
             max_concurrent_fetch: 16,
             loading_content_span: None,
             meta_prefix: METADATA_PREFIX,
+            debug_prefetch_running_size: 128,
+            debug_prefetch_buffer_size: 128,
         }
     }
 }
@@ -243,6 +248,8 @@ pub struct StreamMetaStorage<'a> {
     files: Fuse<Pin<Box<dyn Stream<Item = std::io::Result<BlobObject>> + 'a>>>,
 
     skip_map: MetaEditFilters,
+
+    running_fetch_tasks: usize,
 }
 
 /// A future that stores its result for future use when completed.
@@ -328,7 +335,9 @@ impl<'a> StreamMetaStorage<'a> {
     fn poll_fetch_or_finish(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<MetaFile>>> {
         loop {
             // No more space for prefetching.
-            if self.prefetch.len() >= self.ext.max_concurrent_fetch {
+            if self.running_fetch_tasks >= self.ext.debug_prefetch_running_size
+                || self.prefetch.len() >= self.ext.debug_prefetch_buffer_size
+            {
                 return Poll::Pending;
             }
             if self.files.is_terminated() {
@@ -363,6 +372,7 @@ impl<'a> StreamMetaStorage<'a> {
                     }
                     self.stat.prefetch_task_emitted += 1;
                     self.prefetch.push_back(fut);
+                    self.running_fetch_tasks += 1;
                 }
                 Poll::Ready(None) => continue,
                 Poll::Pending => return Poll::Pending,
@@ -371,9 +381,12 @@ impl<'a> StreamMetaStorage<'a> {
     }
 
     fn poll_first_prefetch(&mut self, cx: &mut Context<'_>) -> Poll<Result<MetaFile>> {
+        self.running_fetch_tasks = 0;
         for fut in &mut self.prefetch {
             if !fut.is_terminated() {
                 let _ = fut.poll_unpin(cx);
+            } else {
+                self.running_fetch_tasks += 1;
             }
         }
         if self.prefetch[0].is_terminated() {
@@ -413,6 +426,7 @@ impl<'a> StreamMetaStorage<'a> {
             ext,
             stat: LoadMetaStatistic::default(),
             skip_map,
+            running_fetch_tasks: 0,
         })
     }
 
@@ -613,7 +627,7 @@ impl MetaEditFilters {
     fn should_fully_skip(&self, meta: &str) -> bool {
         self.0
             .get(meta)
-            .map(|v| v.all_data_files_compacted || v.destructed_self)
+            .map(|v| v.no_data_files_to_be_compacted || v.destructed_self)
             .unwrap_or(false)
     }
 
@@ -643,7 +657,7 @@ struct MetaEditFilter {
     // FileName -> Offset
     segments: HashMap<String, BTreeSet<u64>>,
     destructed_self: bool,
-    all_data_files_compacted: bool,
+    no_data_files_to_be_compacted: bool,
 }
 
 impl MetaEditFilter {
@@ -652,7 +666,7 @@ impl MetaEditFilter {
             full_files: Default::default(),
             segments: Default::default(),
             destructed_self: em.destruct_self,
-            all_data_files_compacted: em.all_data_files_compacted,
+            no_data_files_to_be_compacted: em.all_data_files_compacted,
         };
         this.full_files
             .extend(em.take_delete_physical_files().into_iter());
@@ -673,9 +687,9 @@ impl MetaEditFilter {
 
     fn merge_from_meta_edit(&mut self, mut em: MetaEdit) {
         self.destructed_self = self.destructed_self || em.destruct_self;
-        self.all_data_files_compacted =
-            self.all_data_files_compacted || em.all_data_files_compacted;
-        if self.destructed_self || self.all_data_files_compacted {
+        self.no_data_files_to_be_compacted =
+            self.no_data_files_to_be_compacted || em.all_data_files_compacted;
+        if self.destructed_self || self.no_data_files_to_be_compacted {
             // NOTE: the metakv files will be filtered out in
             // `SubcompactionCollector::add_new_file`. Therefore, the
             // self.segments and self.full_files can be clear here.

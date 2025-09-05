@@ -11,12 +11,12 @@ use engine_rocks::RocksEngine;
 pub use engine_traits::SstCompressionType;
 use engine_traits::SstExt;
 use external_storage::{BackendConfig, ExternalStorage};
-use futures::stream::{self, StreamExt};
+use futures::stream::{self, StreamExt, TryStreamExt};
 use hooking::{
     AfterFinishCtx, BeforeStartCtx, CId, ExecHooks, SubcompactionFinishCtx, SubcompactionStartCtx,
 };
 use kvproto::brpb::StorageBackend;
-use tikv_util::config::ReadableSize;
+use tikv_util::{config::ReadableSize, info};
 use tokio::runtime::Handle;
 use tracing::{Instrument, trace_span};
 use tracing_active_tree::{frame, root};
@@ -51,6 +51,11 @@ pub struct ExecutionConfig {
     pub from_ts: u64,
     /// Filter out files doesn't contain any record with TS less than this.
     pub until_ts: u64,
+    /// Filter out metadatas doesn't contain any record with TS larger than or
+    /// equal to this.
+    pub last_snapshot_backup_ts: u64,
+    pub debug_prefetch_running_size: u64,
+    pub debug_prefetch_buffer_size: u64,
     /// The compress algorithm we are going to use for output.
     pub compression: SstCompressionType,
     /// The compress level we are going to use.
@@ -250,6 +255,8 @@ impl Execution {
         let cx = AfterFinishCtx {
             async_rt: &Handle::current(),
             storage: &storage,
+            until_ts: self.cfg.until_ts,
+            last_snapshot_backup_ts: self.cfg.last_snapshot_backup_ts,
         };
         hooks.after_execution_finished(cx).await?;
 
@@ -306,5 +313,29 @@ impl Execution {
         };
         hooks.after_a_subcompaction_end(cid, cx).await?;
         Result::Ok(())
+    }
+
+    pub fn dry_run(self) -> Result<()> {
+        let storage =
+            external_storage::create_storage(&self.external_storage, BackendConfig::default())?;
+        let storage: Arc<dyn ExternalStorage> = Arc::from(storage);
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let guarded = async {
+            let ext = LoadFromExt::default();
+            let mut meta = StreamMetaStorage::load_from_ext(&storage, ext).await?;
+
+            let mut count = 0;
+            while (meta.try_next().await?).is_some() {
+                count += 1;
+            }
+            info!("calculate metadata count: {count}");
+            Ok(())
+        };
+
+        runtime.block_on(frame!(guarded))
     }
 }
