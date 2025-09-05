@@ -816,6 +816,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             self.logger.clone(),
             self.shutdown.clone(),
             cfg.clone(),
+            Arc::new(AtomicBool::new(false)),
         )?);
 
         let split_check_scheduler = workers.background.start(
@@ -937,6 +938,11 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             .unwrap()
             .refresh_config_worker
             .scheduler()
+    }
+
+    pub fn pd_scheduler(&self) -> Scheduler<pd::Task> {
+        assert!(self.workers.is_some());
+        self.workers.as_ref().unwrap().pd.scheduler()
     }
 
     pub fn shutdown(&mut self) {

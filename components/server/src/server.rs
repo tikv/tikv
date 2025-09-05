@@ -72,9 +72,12 @@ use raftstore::{
         LocalReader, SnapManager, SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
         StoreMetaDelegate,
         config::RaftstoreConfigManager,
-        fsm,
-        fsm::store::{
-            MULTI_FILES_SNAPSHOT_FEATURE, PENDING_MSG_CAP, RaftBatchSystem, RaftRouter, StoreMeta,
+        fsm::{
+            self,
+            store::{
+                MULTI_FILES_SNAPSHOT_FEATURE, PENDING_MSG_CAP, RaftBatchSystem, RaftRouter,
+                StoreMeta,
+            },
         },
         memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE,
         snapshot_backup::PrepareDiskSnapObserver,
@@ -188,11 +191,13 @@ fn run_impl<CER, F>(
         let engines = tikv.engines.take().unwrap().engines;
         let kv_statistics = tikv.kv_statistics.clone();
         let raft_statistics = tikv.raft_statistics.clone();
+        let enable_graceful_shutdown = tikv.core.config.server.enable_graceful_shutdown;
         std::thread::spawn(move || {
             signal_handler::wait_for_signal(
                 Some(engines),
                 kv_statistics,
                 raft_statistics,
+                enable_graceful_shutdown,
                 Some(service_event_tx),
             )
         });
@@ -205,6 +210,10 @@ fn run_impl<CER, F>(
                 }
                 ServiceEvent::ResumeGrpc => {
                     tikv.resume();
+                }
+                ServiceEvent::GracefulShutdown => {
+                    tikv.graceful_shutdown();
+                    break;
                 }
                 ServiceEvent::Exit => {
                     break;
@@ -1669,6 +1678,53 @@ where
                 "failed to resume the server";
                 "err" => ?e
             );
+        }
+    }
+
+    fn graceful_shutdown(&mut self) {
+        let now = Instant::now();
+        self.set_state(true);
+        self.wait_for_leader_eviction(now);
+        self.set_state(false);
+        std::thread::sleep(Duration::from_millis(200));
+        info!("Graceful shutdown completed");
+    }
+
+    fn wait_for_leader_eviction(&self, now: Instant) {
+        let timeout = self.core.config.server.evict_leader_timeout.0;
+        let region_info_accessor = self.region_info_accessor.as_ref().unwrap();
+        let check_interval = Duration::from_secs(1);
+
+        loop {
+            let leaders_count = region_info_accessor.region_leaders().read().unwrap().len();
+
+            if leaders_count == 0 {
+                info!("All leaders evicted, completing graceful shutdown");
+                break;
+            }
+
+            if now.saturating_elapsed() >= timeout {
+                warn!(
+                    "Graceful shutdown timeout reached with {} leaders remaining",
+                    leaders_count
+                );
+                break;
+            }
+
+            info!("Waiting for leader eviction"; 
+                  "leaders_count" => leaders_count, 
+                  "elapsed" => ?now.saturating_elapsed());
+            std::thread::sleep(check_interval);
+        }
+    }
+
+    fn set_state(&self, state: bool) {
+        if let Some(server) = &self.servers {
+            let scheduler = server.raft_server.pd_scheduler();
+            let task = raftstore::store::PdTask::GracefulShutdownState { state };
+            if let Err(e) = scheduler.schedule(task) {
+                warn!("Failed to set graceful shutdown state for PD worker"; "error" => ?e);
+            }
         }
     }
 }
