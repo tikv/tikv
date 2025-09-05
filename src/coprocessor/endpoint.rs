@@ -534,7 +534,7 @@ impl<E: Engine> Endpoint<E> {
         tracker.collect_storage_statistics(storage_stats);
         let (exec_details, exec_details_v2) = tracker.get_exec_details();
         tracker.on_finish_all_items();
-
+        resource_metering::record_logical_read_bytes(exec_details_v2.get_scan_detail_v2().processed_versions_size);
         let mut resp = match result {
             Ok(resp) => {
                 let resp_size = resp.data.len() as u64;
