@@ -7314,6 +7314,7 @@ dependencies = [
  "tikv_util",
  "tipb",
  "tipb_helper",
+ "txn_types",
 ]
 
 [[package]]
