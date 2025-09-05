@@ -12,6 +12,7 @@
 #![feature(proc_macro_hygiene)]
 #![feature(specialization)]
 #![feature(const_mut_refs)]
+#![feature(associated_type_bounds)]
 
 #[macro_use(box_try, warn)]
 extern crate tikv_util;
@@ -26,6 +27,7 @@ pub use tidb_query_expr::function::*;
 #[cfg(test)]
 pub use tidb_query_expr::*;
 mod fast_hash_aggr_executor;
+mod index_lookup_executor;
 mod index_scan_executor;
 pub mod interface;
 mod limit_executor;

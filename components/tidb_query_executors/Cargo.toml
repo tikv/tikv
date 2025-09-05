@@ -27,6 +27,7 @@ tidb_query_datatype = { workspace = true }
 tidb_query_expr = { workspace = true }
 tikv_util = { workspace = true }
 tipb = { workspace = true }
+txn_types = { workspace = true }
 
 [dev-dependencies]
 anyhow = "1.0"

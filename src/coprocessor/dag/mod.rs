@@ -35,7 +35,7 @@ where
     req: DagRequest,
     ranges: Vec<KeyRange>,
     store: S,
-    secondary_storage_accessor: Option<R>,
+    extra_storage_accessor: Option<R>,
     data_version: Option<u64>,
     deadline: Deadline,
     batch_row_limit: usize,
@@ -56,7 +56,7 @@ where
         req: DagRequest,
         ranges: Vec<KeyRange>,
         store: S,
-        secondary_storage_accessor: Option<R>,
+        extra_storage_accessor: Option<R>,
         deadline: Deadline,
         batch_row_limit: usize,
         is_streaming: bool,
@@ -68,7 +68,7 @@ where
             req,
             ranges,
             store,
-            secondary_storage_accessor,
+            extra_storage_accessor,
             data_version: None,
             deadline,
             batch_row_limit,
@@ -92,7 +92,7 @@ where
             self.req,
             self.ranges,
             self.store,
-            self.secondary_storage_accessor,
+            self.extra_storage_accessor,
             self.data_version,
             self.deadline,
             self.is_cache_enabled,
@@ -107,6 +107,7 @@ where
 
 /// Wraps the internal accessor to provide the accessor for the secondary
 /// TikvStorage.
+#[derive(Clone, Debug)]
 pub struct SecondaryTiKVStorageAccessor<R> {
     store_accessor: R,
 }
@@ -155,7 +156,7 @@ impl BatchDagHandler {
         req: DagRequest,
         ranges: Vec<KeyRange>,
         store: S,
-        secondary_storage_accessor: Option<impl RegionStorageAccessor<Storage = S>>,
+        extra_storage_accessor: Option<impl RegionStorageAccessor<Storage = S>>,
         data_version: Option<u64>,
         deadline: Deadline,
         is_cache_enabled: bool,
@@ -164,14 +165,14 @@ impl BatchDagHandler {
         paging_size: Option<u64>,
         quota_limiter: Arc<QuotaLimiter>,
     ) -> Result<Self> {
-        let secondary_storage_accessor =
-            secondary_storage_accessor.map(SecondaryTiKVStorageAccessor::from_store_accessor);
+        let extra_storage_accessor =
+            extra_storage_accessor.map(SecondaryTiKVStorageAccessor::from_store_accessor);
         Ok(Self {
             runner: tidb_query_executors::runner::BatchExecutorsRunner::from_request::<_, F>(
                 req,
                 ranges,
                 TikvStorage::new(store, is_cache_enabled),
-                secondary_storage_accessor,
+                extra_storage_accessor,
                 deadline,
                 streaming_batch_limit,
                 is_streaming,
