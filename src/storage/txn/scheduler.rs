@@ -313,6 +313,7 @@ impl<L: LockManager> TxnSchedulerInner<L> {
         let running_write_bytes = self
             .running_write_bytes
             .fetch_add(tctx.write_bytes, Ordering::AcqRel) as i64;
+        resource_metering::record_logical_write_bytes(tctx.write_bytes as u64);
         SCHED_WRITING_BYTES_GAUGE.set(running_write_bytes + tctx.write_bytes as i64);
         SCHED_CONTEX_GAUGE.inc();
         tctx
@@ -1243,8 +1244,10 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             fail_point!("scheduler_process");
             if task.cmd().readonly() {
                 self.process_read(snapshot, task, &mut sched_details);
+                resource_metering::record_logical_read_bytes(sched_details.stat.processed_size as u64);
             } else {
                 self.process_write(snapshot, task, &mut sched_details).await;
+                resource_metering::record_logical_write_bytes(sched_details.stat.processed_size as u64);
             };
             tls_collect_scan_details(tag.get_str(), &sched_details.stat);
             let elapsed = timer.saturating_elapsed();

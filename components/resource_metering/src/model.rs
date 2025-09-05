@@ -12,6 +12,7 @@ use std::{
 use collections::HashMap;
 use kvproto::resource_usage_agent::{GroupTagRecord, GroupTagRecordItem, ResourceUsageRecord};
 use tikv_util::warn;
+use tikv_util::info;
 
 use crate::TagInfos;
 
@@ -250,6 +251,7 @@ impl Records {
             if tag.is_empty() {
                 continue;
             }
+            info!("RawRecord values"; "LogicalRead" => ?raw_record.logical_read_bytes, "LogicalWrite" => ?raw_record.logical_write_bytes, "NetworkIn" => ?raw_record.network_in_bytes, "NetworkOut" => ?raw_record.network_out_bytes, "ReadKeys" => ?raw_record.read_keys, "WriteKeys" => ?raw_record.write_keys, "CpuTime" => ?raw_record.cpu_time);
             let record_value = self.records.get_mut(tag);
             if record_value.is_none() {
                 self.records.insert(
