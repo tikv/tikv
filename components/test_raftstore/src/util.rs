@@ -42,14 +42,9 @@ use pd_client::PdClient;
 use protobuf::RepeatedField;
 use raft::eraftpb::ConfChangeType;
 use raftstore::{
-<<<<<<< HEAD
-    store::{fsm::RaftRouter, *},
-    RaftRouterCompactedEventSender, Result,
-=======
-    RaftRouterCompactedEventSender, RegionInfoAccessor, Result,
     coprocessor::CoprocessorHost,
-    store::{fsm::RaftRouter, util::encode_start_ts_into_flag_data, *},
->>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
+    store::{fsm::RaftRouter, *},
+    RaftRouterCompactedEventSender, RegionInfoAccessor, Result,
 };
 use rand::{seq::SliceRandom, RngCore};
 use server::common::ConfiguredRaftEngine;

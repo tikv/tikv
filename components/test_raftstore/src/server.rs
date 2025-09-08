@@ -40,19 +40,11 @@ use raftstore::{
     errors::Error as RaftError,
     router::{CdcRaftRouter, LocalReadRouter, RaftStoreRouter, ReadContext, ServerRaftStoreRouter},
     store::{
-<<<<<<< HEAD
         fsm::{store::StoreMeta, ApplyRouter, RaftBatchSystem, RaftRouter},
         msg::RaftCmdExtraOpts,
-        AutoSplitController, Callback, CheckLeaderRunner, DiskCheckRunner, LocalReader,
-        RegionSnapshot, SnapManager, SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
-        StoreMetaDelegate,
-=======
         AutoSplitController, Callback, CheckLeaderRunner, DiskCheckRunner,
         ForcePartitionRangeManager, LocalReader, RegionSnapshot, SnapManager, SnapManagerBuilder,
         SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
-        fsm::{ApplyRouter, RaftBatchSystem, RaftRouter, store::StoreMeta},
-        msg::RaftCmdExtraOpts,
->>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
     },
     Result,
 };

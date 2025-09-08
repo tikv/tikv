@@ -478,8 +478,6 @@ where
         ))
     }
 
-<<<<<<< HEAD
-=======
     pub fn dump_partition_ranges(
         force_partition_range_mgr: &ForcePartitionRangeManager,
     ) -> hyper::Result<Response<Body>> {
@@ -574,27 +572,6 @@ where
             Err(err) => Ok(make_response(StatusCode::BAD_REQUEST, err)),
         }
     }
-
-    fn metrics_to_resp(req: Request<Body>, should_simplify: bool) -> hyper::Result<Response<Body>> {
-        let gz_encoding = client_accept_gzip(&req);
-        let metrics = if gz_encoding {
-            // gzip can reduce the body size to less than 1/10.
-            let mut encoder = GzEncoder::new(vec![], Compression::default());
-            dump_to(&mut encoder, should_simplify);
-            encoder.finish().unwrap()
-        } else {
-            dump(should_simplify).into_bytes()
-        };
-        let mut resp = Response::new(metrics.into());
-        resp.headers_mut()
-            .insert(CONTENT_TYPE, HeaderValue::from_static(TEXT_FORMAT));
-        if gz_encoding {
-            resp.headers_mut()
-                .insert(CONTENT_ENCODING, HeaderValue::from_static("gzip"));
-        }
-
-        Ok(resp)
-    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -608,7 +585,6 @@ impl<R> StatusServer<R>
 where
     R: 'static + Send + RaftExtension + Clone,
 {
->>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
     fn handle_pause_grpc(
         mut grpc_service_mgr: GrpcServiceManager,
     ) -> hyper::Result<Response<Body>> {
@@ -2130,66 +2106,4 @@ mod tests {
             status_server.stop();
         }
     }
-<<<<<<< HEAD
-=======
-
-    #[test]
-    fn test_ready_endpoint() {
-        let mut status_server = StatusServer::new(
-            1,
-            ConfigController::default(),
-            Arc::new(SecurityConfig::default()),
-            MockRouter,
-            None,
-            GrpcServiceManager::dummy(),
-            None,
-            Default::default(),
-        )
-        .unwrap();
-        let addr = "127.0.0.1:0".to_owned();
-        let _ = status_server.start(addr);
-        let client = Client::new();
-        let uri = Uri::builder()
-            .scheme("http")
-            .authority(status_server.listening_addr().to_string().as_str())
-            .path_and_query("/ready?verbose")
-            .build()
-            .unwrap();
-        let uri2 = uri.clone();
-        // Set one readiness condition to true.
-        GLOBAL_SERVER_READINESS
-            .connected_to_pd
-            .store(true, Ordering::Relaxed);
-        let handle = status_server.thread_pool.spawn(async move {
-            let resp = client.get(uri).await.unwrap();
-            assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
-
-            let body_bytes = hyper::body::to_bytes(resp.into_body()).await.unwrap();
-            let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
-            assert_eq!(
-                json["connected_to_pd"], true,
-                "connected_to_pd should be false"
-            );
-            assert_eq!(
-                json["raft_peers_caught_up"], false,
-                "raft_peers_caught_up should be false"
-            );
-        });
-        block_on(handle).unwrap();
-
-        // Set the remaining readiness conditions to true.
-        GLOBAL_SERVER_READINESS
-            .raft_peers_caught_up
-            .store(true, Ordering::Relaxed);
-
-        let client = Client::new();
-        let handle2 = status_server.thread_pool.spawn(async move {
-            let resp = client.get(uri2).await.unwrap();
-            assert_eq!(resp.status(), StatusCode::OK);
-        });
-        block_on(handle2).unwrap();
-
-        status_server.stop();
-    }
->>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
 }

@@ -3689,11 +3689,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-<<<<<<< HEAD
-source = "git+https://github.com/pingcap/kvproto.git#b6a98c6bf02d1864e74029f31ff99951719d96c1"
-=======
-source = "git+https://github.com/pingcap/kvproto.git#21e537898f9da31d8cb148f6b7099d6946a99784"
->>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
+source = "git+https://github.com/pingcap/kvproto.git?branch=release-8.5#97d984880071228de123095a1550a9236e92d224"
 dependencies = [
  "futures 0.3.15",
  "grpcio",

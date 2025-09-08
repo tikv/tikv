@@ -71,12 +71,6 @@ use raftstore::{
     },
     router::{CdcRaftRouter, ServerRaftStoreRouter},
     store::{
-<<<<<<< HEAD
-=======
-        AutoSplitController, CheckLeaderRunner, DiskCheckRunner, ForcePartitionRangeManager,
-        LocalReader, SnapManager, SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
-        StoreMetaDelegate,
->>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
         config::RaftstoreConfigManager,
         fsm,
         fsm::store::{
@@ -84,8 +78,9 @@ use raftstore::{
         },
         memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE,
         snapshot_backup::PrepareDiskSnapObserver,
-        AutoSplitController, CheckLeaderRunner, DiskCheckRunner, LocalReader, SnapManager,
-        SnapManagerBuilder, SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
+        AutoSplitController, CheckLeaderRunner, DiskCheckRunner, ForcePartitionRangeManager,
+        LocalReader, SnapManager, SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
+        StoreMetaDelegate,
     },
     RaftRouterCompactedEventSender,
 };

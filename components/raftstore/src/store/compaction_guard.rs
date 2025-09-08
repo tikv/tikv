@@ -1046,7 +1046,14 @@ mod tests {
 
         mgr.add_range(b"h".to_vec(), b"n".to_vec(), 10);
         mgr.add_range(b"b".to_vec(), b"f".to_vec(), 10);
-        assert!(mgr.force_partition_ranges.read().unwrap().is_sorted());
+
+        {
+            // Vec::is_sorted is unstable.
+            let ranges = mgr.force_partition_ranges.read().unwrap();
+            for i in 0..ranges.len() - 1 {
+                assert!(ranges[i] < ranges[i + 1]);
+            }
+        }
 
         #[track_caller]
         fn check_overlap(

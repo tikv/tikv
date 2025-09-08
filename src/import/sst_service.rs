@@ -7,15 +7,9 @@ use std::{
     time::Duration,
 };
 
-<<<<<<< HEAD
-use engine_traits::{CompactExt, CF_DEFAULT, CF_WRITE};
+use engine_traits::{CompactExt, ManualCompactionOptions, CF_DEFAULT, CF_WRITE};
 use file_system::{set_io_type, IoType};
 use futures::{sink::SinkExt, stream::TryStreamExt, FutureExt, TryFutureExt};
-=======
-use engine_traits::{CF_DEFAULT, CF_WRITE, CompactExt, ManualCompactionOptions};
-use file_system::{IoType, set_io_type};
-use futures::{FutureExt, TryFutureExt, sink::SinkExt, stream::TryStreamExt};
->>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
 use grpcio::{
     ClientStreamingSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink,
     UnarySink, WriteFlags,
@@ -31,12 +25,8 @@ use kvproto::{
 };
 use raftstore::{
     coprocessor::{RegionInfo, RegionInfoProvider},
-<<<<<<< HEAD
-    store::util::is_epoch_stale,
+    store::{util::is_epoch_stale, ForcePartitionRangeManager},
     RegionInfoAccessor,
-=======
-    store::{ForcePartitionRangeManager, util::is_epoch_stale},
->>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
 };
 use raftstore_v2::StoreMeta;
 use resource_control::{with_resource_limiter, ResourceGroupManager};
@@ -102,71 +92,11 @@ const WRITER_GC_INTERVAL: Duration = Duration::from_secs(300);
 const SUSPEND_REQUEST_MAX_SECS: u64 = // 6h
     6 * 60 * 60;
 
-<<<<<<< HEAD
-=======
-const REJECT_SERVE_MEMORY_USAGE: u64 = 1024 * 1024 * 1024; //1G
-// consider block cache and raft store. the memory usage will be
-const HIGH_IMPORT_MEMORY_WATER_RATIO: f64 = 0.95;
-
 // the default TTL seconds of force partition range.
 // the TTL is to ensure all force partition ranges can be
 // cleaned up eventually.
 const DEFAULT_FORCE_PARTITION_RANGE_TTL_SECONDS: u64 = 3600;
 
-/// Check if the system has enough resources for import tasks
-async fn check_import_resources(mem_limit: u64) -> Result<()> {
-    #[cfg(feature = "failpoints")]
-    let mem_limit = (|| {
-        fail_point!("mock_memory_limit", |t| {
-            t.unwrap().parse::<u64>().unwrap()
-        });
-        mem_limit
-    })();
-    #[cfg(not(feature = "failpoints"))]
-    let mem_limit = mem_limit;
-
-    // these error(memory or disk) cannot be recover at a short time,
-    // in case client retry immediately, sleep for a while
-    async fn sleep_with_jitter() {
-        let jitter = rand::thread_rng().gen_range(1000, 2000);
-        tokio::time::sleep(Duration::from_millis(jitter)).await;
-    }
-    // Check disk space first
-    if get_disk_status(0) != DiskUsage::Normal {
-        sleep_with_jitter().await;
-        return Err(Error::DiskSpaceNotEnough);
-    }
-
-    let usage = get_global_memory_usage();
-    if mem_limit == 0 || mem_limit < usage {
-        // make it through when cannot get correct memory
-        warn!(
-            "Memory limit isn't correct. skip next check, limit is {} bytes, usage is {} bytes",
-            mem_limit, usage
-        );
-        return Ok(());
-    }
-
-    let available_memory = mem_limit - usage;
-    let min_required_memory = std::cmp::min(
-        REJECT_SERVE_MEMORY_USAGE,
-        ((1.0 - HIGH_IMPORT_MEMORY_WATER_RATIO) * mem_limit as f64) as u64,
-    );
-
-    // Reject ONLY if BOTH:
-    // - Available memory is below REJECT_SERVE_MEMORY_USAGE
-    // - Memory usage ratio is 95%+
-    if available_memory < min_required_memory {
-        sleep_with_jitter().await;
-        return Err(Error::ResourceNotEnough(format!(
-            "Memory usage too high, usage: {} bytes, mem limit {} bytes",
-            usage, mem_limit
-        )));
-    }
-    Ok(())
-}
-
->>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
 fn transfer_error(err: storage::Error) -> ImportPbError {
     let mut e = ImportPbError::default();
     if let Some(region_error) = extract_region_error_from_error(&err) {
@@ -215,12 +145,8 @@ pub struct ImportSstService<E: Engine> {
 
     // When less than now, don't accept any requests.
     suspend: Arc<SuspendDeadline>,
-<<<<<<< HEAD
-=======
 
-    mem_limit: u64,
     force_partition_range_mgr: ForcePartitionRangeManager,
->>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
 }
 
 struct RequestCollector {
@@ -474,11 +400,7 @@ impl<E: Engine> ImportSstService<E> {
             store_meta,
             resource_manager,
             suspend: Arc::default(),
-<<<<<<< HEAD
-=======
-            mem_limit,
             force_partition_range_mgr,
->>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
         }
     }
 
