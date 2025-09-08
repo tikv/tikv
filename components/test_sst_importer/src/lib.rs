@@ -10,6 +10,7 @@ use engine_rocks::{
 pub use engine_rocks::{RocksEngine as TestEngine, RocksSstWriter};
 use engine_traits::{KvEngine, SstWriter, SstWriterBuilder};
 use kvproto::import_sstpb::*;
+use txn_types::Key;
 use uuid::Uuid;
 
 mod util;
@@ -108,6 +109,28 @@ pub fn gen_sst_file_by_db<P: AsRef<Path>>(
     w.finish().unwrap();
 
     read_sst_file(path, (&[range.0], &[range.1]))
+}
+
+pub fn gen_sst_file_with_tidb_kvs<P: AsRef<Path>>(
+    path: P,
+    raw_kvs: &[(&[u8], &[u8])],
+    db: Option<&RocksEngine>,
+) -> (SstMeta, Vec<u8>) {
+    let mut builder = RocksSstWriterBuilder::new();
+    if let Some(db) = db {
+        builder = builder.set_db(db);
+    }
+    let mut w = builder.build(path.as_ref().to_str().unwrap()).unwrap();
+    for (k, v) in raw_kvs {
+        let k = keys::data_key(Key::from_raw(k).as_encoded());
+        w.put(&k, v).unwrap();
+    }
+    w.finish().unwrap();
+
+    // set end to the `next_key` of the largest key.
+    let mut end = raw_kvs[raw_kvs.len() - 1].0.to_vec();
+    end.push(0);
+    read_sst_file(path, (raw_kvs[0].0, &end))
 }
 
 pub fn gen_sst_file<P: AsRef<Path>>(path: P, range: (u8, u8)) -> (SstMeta, Vec<u8>) {

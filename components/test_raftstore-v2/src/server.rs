@@ -582,6 +582,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
             Some(store_meta),
             resource_manager.clone(),
             Arc::new(region_info_accessor.clone()),
+            Default::default(),
         );
 
         // Create deadlock service.

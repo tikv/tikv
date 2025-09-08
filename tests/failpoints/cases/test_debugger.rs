@@ -36,7 +36,7 @@ fn prepare_data_on_disk(path: &Path) {
     let cache = cfg.storage.block_cache.build_shared_cache();
     let env = cfg.build_shared_rocks_env(None, None).unwrap();
 
-    let factory = KvEngineFactoryBuilder::new(env, &cfg, cache, None).build();
+    let factory = KvEngineFactoryBuilder::new(env, &cfg, cache, None, Default::default()).build();
     let reg = TabletRegistry::new(Box::new(factory), path).unwrap();
 
     let raft_engine = RaftLogEngine::new(cfg.raft_engine.config(), None, None).unwrap();
