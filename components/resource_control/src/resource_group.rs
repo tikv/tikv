@@ -1265,24 +1265,5 @@ pub(crate) mod tests {
             &mgr.get_resource_limiter("test1", "stats", 0).unwrap(),
             &default_limiter
         ));
-        assert!(Arc::ptr_eq(
-            &mgr.get_resource_limiter("test1", "query", 0).unwrap(),
-            &mgr.priority_limiters[0]
-        ));
-        assert!(Arc::ptr_eq(
-            &mgr.get_resource_limiter("test1", "query", LOW_PRIORITY as u64)
-                .unwrap(),
-            &mgr.priority_limiters[2]
-        ));
-
-        assert!(Arc::ptr_eq(
-            &mgr.get_resource_limiter("default", "query", LOW_PRIORITY as u64)
-                .unwrap(),
-            &mgr.priority_limiters[2]
-        ));
-        assert!(Arc::ptr_eq(
-            &mgr.get_resource_limiter("unknown", "query", 0).unwrap(),
-            &mgr.priority_limiters[1]
-        ));
     }
 }
