@@ -277,7 +277,9 @@ impl ResourceGroupManager {
     // resource group.
     #[inline]
     fn enable_priority_limiter(&self) -> bool {
-        self.get_group_count() > 1
+        // TODO: reenable it once when we fix https://github.com/tikv/tikv/issues/18939
+        // self.get_group_count() > 1
+        false
     }
 
     // Always return the background resource limiter if any;
