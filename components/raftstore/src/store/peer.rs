@@ -1379,15 +1379,20 @@ where
     ///
     /// If the scheduling is abnormal due to `region-worker` is exited, it
     /// will redirect to directly destroy the peer synchronously.
+    ///
+    /// The return value:
+    /// - `None` represents that the destroy task is scheduled successfully.
+    /// - `Some(...)` represents that the destroy task is executed
+    ///   synchronously.
     pub fn destroy(
         &mut self,
         engines: &Engines<EK, ER>,
         keep_data: bool,
         store_meta: Arc<Mutex<StoreMeta>>,
         pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
-    ) -> PeerClearMetaStat {
+    ) -> Option<PeerClearMetaStat> {
         fail_point!("raft_store_skip_destroy_peer", |_| {
-            PeerClearMetaStat::default()
+            Some(PeerClearMetaStat::default())
         });
 
         let peer = self.peer.clone();
@@ -1438,12 +1443,12 @@ where
                     // data too.
                     panic!("{} prepare to destroy err {:?}", self.tag, e);
                 }
-                Ok(stat) => stat,
+                Ok(stat) => Some(stat),
             }
         } else {
-            // Uses default value to reresent that the destroy task is successfully
+            // Returns `None` to represent that the destroy task is successfully
             // scheduled.
-            PeerClearMetaStat::default()
+            None
         };
 
         info!(

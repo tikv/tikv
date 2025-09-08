@@ -4183,7 +4183,7 @@ where
         // If clear_stat is valid, it means the destroy task above was executed
         // synchronously. In this case, we should immediately perform the
         // follow-up steps required to complete the peer destruction process.
-        if !clear_stat.is_zero() {
+        if let Some(clear_stat) = clear_stat {
             self.on_ready_destroy_peer(merged_by_target, clear_stat);
         }
 
