@@ -1080,6 +1080,48 @@ fn read_fail_file(path: &str) -> Vec<(String, String)> {
     list
 }
 
+<<<<<<< HEAD
+=======
+/// A temporary RocksDB instance.
+/// Its content will be saved at a temp dir, so don't put too many stuffs into
+/// it. The configurations are loaded to this instance, so it can be used for
+/// constructing / reading SST files.
+struct TemporaryRocks {
+    rocks: RocksEngine,
+    #[allow(dead_code)]
+    tmp: TempDir,
+}
+
+impl TemporaryRocks {
+    fn new(cfg: &TikvConfig) -> Result<Self, String> {
+        let tmp = TempDir::new().map_err(|v| format!("failed to create tmp dir: {}", v))?;
+        let opt = build_rocks_opts(cfg);
+        let cf_opts = cfg.rocksdb.build_cf_opts(
+            &cfg.rocksdb.build_cf_resources(
+                cfg.storage.block_cache.build_shared_cache(),
+                Default::default(),
+            ),
+            None,
+            cfg.storage.api_version(),
+            None,
+            cfg.storage.engine,
+        );
+        let rocks = new_engine_opt(
+            tmp.path().to_str().ok_or_else(|| {
+                format!(
+                    "temp path isn't valid utf-8 string: {}",
+                    tmp.path().display()
+                )
+            })?,
+            opt,
+            cf_opts,
+        )
+        .map_err(|v| format!("failed to build engine: {}", v))?;
+        Ok(Self { rocks, tmp })
+    }
+}
+
+>>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
 fn build_rocks_opts(cfg: &TikvConfig) -> engine_rocks::RocksDbOptions {
     let key_manager = data_key_manager_from_config(&cfg.security.encryption, &cfg.storage.data_dir)
         .unwrap()
@@ -1337,10 +1379,11 @@ fn read_cluster_id(config: &TikvConfig) -> Result<u64, String> {
             .map(Arc::new);
     let env = get_env(key_manager.clone(), None /* io_rate_limiter */).unwrap();
     let cache = config.storage.block_cache.build_shared_cache();
-    let kv_engine = KvEngineFactoryBuilder::new(env, config, cache, key_manager)
-        .build()
-        .create_shared_db(&config.storage.data_dir)
-        .map_err(|e| format!("create_shared_db fail: {}", e))?;
+    let kv_engine =
+        KvEngineFactoryBuilder::new(env, config, cache, key_manager, Default::default())
+            .build()
+            .create_shared_db(&config.storage.data_dir)
+            .map_err(|e| format!("create_shared_db fail: {}", e))?;
     let ident = kv_engine
         .get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
         .unwrap()
