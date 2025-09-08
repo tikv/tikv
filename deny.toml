@@ -88,6 +88,10 @@ ignore = [
     # Ignore RUSTSEC-2024-0436, as there is no widely used replacement of 
     # package 'paste', and the package itself is very stable.
     "RUSTSEC-2024-0436",
+    # Ignore RUSTSEC-2025-0057 temporarily. We are evaluating alternatives to
+    # replace FxHash. Currently, this package is stable and there are no known
+    # exploitable vulnerabilities affecting our use case.
+    "RUSTSEC-2025-0057",
 ]
 
 # TiKV is licensed under Apache 2.0, according to ASF 3RD PARTY LICENSE POLICY,
@@ -114,3 +118,4 @@ exceptions = [
 unknown-git = "deny"
 unknown-registry = "deny"
 allow-org = { github = ["tikv", "pingcap", "rust-lang"] }
+
