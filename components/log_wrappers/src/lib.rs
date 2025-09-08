@@ -97,6 +97,7 @@ pub fn set_redact_info_log(v: bool) {
     proto_set_redact_bytes(v);
 }
 
+#[derive(Clone, Copy)]
 pub struct Value<'a>(pub &'a [u8]);
 
 impl<'a> Value<'a> {

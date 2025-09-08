@@ -43,10 +43,11 @@ use pin_project::pin_project;
 pub use profile::HEAP_PROFILE_ACTIVE;
 use profile::*;
 use prometheus::TEXT_FORMAT;
+use raftstore::store::ForcePartitionRangeManager;
 use regex::Regex;
 use resource_control::ResourceGroupManager;
 use security::{self, SecurityConfig};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use service::service_manager::GrpcServiceManager;
 use tikv_kv::RaftExtension;
@@ -94,6 +95,11 @@ pub struct StatusServer<R> {
     store_path: PathBuf,
     resource_manager: Option<Arc<ResourceGroupManager>>,
     grpc_service_mgr: GrpcServiceManager,
+<<<<<<< HEAD
+=======
+    in_memory_engine: Option<RegionCacheMemoryEngine>,
+    force_partition_range_mgr: ForcePartitionRangeManager,
+>>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
 }
 
 impl<R> StatusServer<R>
@@ -108,6 +114,11 @@ where
         store_path: PathBuf,
         resource_manager: Option<Arc<ResourceGroupManager>>,
         grpc_service_mgr: GrpcServiceManager,
+<<<<<<< HEAD
+=======
+        in_memory_engine: Option<RegionCacheMemoryEngine>,
+        force_partition_range_mgr: ForcePartitionRangeManager,
+>>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
     ) -> Result<Self> {
         let thread_pool = Builder::new_multi_thread()
             .enable_all()
@@ -131,6 +142,11 @@ where
             store_path,
             resource_manager,
             grpc_service_mgr,
+<<<<<<< HEAD
+=======
+            in_memory_engine,
+            force_partition_range_mgr,
+>>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
         })
     }
 
@@ -545,6 +561,143 @@ where
     pub fn listening_addr(&self) -> SocketAddr {
         self.addr.unwrap()
     }
+<<<<<<< HEAD
+=======
+
+    pub fn dump_async_trace() -> hyper::Result<Response<Body>> {
+        Ok(make_response(
+            StatusCode::OK,
+            tracing_active_tree::layer::global().fmt_bytes_with(|t, buf| {
+                t.traverse_with(FormatFlat::new(buf)).unwrap_or_else(|err| {
+                    error!("failed to format tree, unreachable!"; "err" => %err);
+                })
+            }),
+        ))
+    }
+
+    pub fn dump_partition_ranges(
+        force_partition_range_mgr: &ForcePartitionRangeManager,
+    ) -> hyper::Result<Response<Body>> {
+        let mut ranges = vec![];
+        force_partition_range_mgr.iter_all_ranges(|start, end, ttl| {
+            ranges.push(HexRange {
+                start: hex::encode(keys::origin_key(start)),
+                end: hex::encode(keys::origin_end_key(end)),
+                ttl,
+            });
+        });
+
+        let body = match serde_json::to_vec(&ranges) {
+            Ok(body) => body,
+            Err(err) => {
+                return Ok(make_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("fails to json: {}", err),
+                ));
+            }
+        };
+        match Response::builder()
+            .header("content-type", "application/json")
+            .body(hyper::Body::from(body))
+        {
+            Ok(resp) => Ok(resp),
+            Err(err) => Ok(make_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("fails to build response: {}", err),
+            )),
+        }
+    }
+
+    async fn add_partition_ranges(
+        req: Request<Body>,
+        force_partition_range_mgr: &ForcePartitionRangeManager,
+    ) -> hyper::Result<Response<Body>> {
+        let mut body = Vec::new();
+        req.into_body()
+            .try_for_each(|bytes| {
+                body.extend(bytes);
+                ok(())
+            })
+            .await?;
+
+        let res = || -> std::result::Result<_, String> {
+            let range: HexRange = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
+            let start = hex::decode(&range.start)
+                .map_err(|e| format!("invalie start key, err: {:?}", e))?;
+            let end =
+                hex::decode(&range.end).map_err(|e| format!("invalie end key, err: {:?}", e))?;
+            Ok((range, (keys::data_key(&start), keys::data_end_key(&end))))
+        }();
+
+        match res {
+            Ok((hex_range, range)) => {
+                let added = force_partition_range_mgr.add_range(range.0, range.1, 3600);
+                info!("add force partition range"; "start" => &hex_range.start, "end" => &hex_range.end, "added" => added);
+                Ok(Response::new(Body::empty()))
+            }
+            Err(err) => Ok(make_response(StatusCode::BAD_REQUEST, err)),
+        }
+    }
+
+    async fn remove_partition_ranges(
+        req: Request<Body>,
+        force_partition_range_mgr: &ForcePartitionRangeManager,
+    ) -> hyper::Result<Response<Body>> {
+        let mut body = Vec::new();
+        req.into_body()
+            .try_for_each(|bytes| {
+                body.extend(bytes);
+                ok(())
+            })
+            .await?;
+
+        let res = || -> std::result::Result<_, String> {
+            let range: HexRange = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
+            let start = hex::decode(&range.start)
+                .map_err(|e| format!("invalie start key, err: {:?}", e))?;
+            let end =
+                hex::decode(&range.end).map_err(|e| format!("invalie end key, err: {:?}", e))?;
+            Ok((range, (keys::data_key(&start), keys::data_end_key(&end))))
+        }();
+
+        match res {
+            Ok((hex_range, range)) => {
+                let removed = force_partition_range_mgr.remove_range(&range.0, &range.1);
+                info!("remove force partition range"; "start" => &hex_range.start, "end" => &hex_range.end, "removed" => removed);
+                Ok(Response::new(Body::empty()))
+            }
+            Err(err) => Ok(make_response(StatusCode::BAD_REQUEST, err)),
+        }
+    }
+
+    fn metrics_to_resp(req: Request<Body>, should_simplify: bool) -> hyper::Result<Response<Body>> {
+        let gz_encoding = client_accept_gzip(&req);
+        let metrics = if gz_encoding {
+            // gzip can reduce the body size to less than 1/10.
+            let mut encoder = GzEncoder::new(vec![], Compression::default());
+            dump_to(&mut encoder, should_simplify);
+            encoder.finish().unwrap()
+        } else {
+            dump(should_simplify).into_bytes()
+        };
+        let mut resp = Response::new(metrics.into());
+        resp.headers_mut()
+            .insert(CONTENT_TYPE, HeaderValue::from_static(TEXT_FORMAT));
+        if gz_encoding {
+            resp.headers_mut()
+                .insert(CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+        }
+
+        Ok(resp)
+    }
+>>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
+}
+
+#[derive(Serialize, Deserialize)]
+struct HexRange {
+    start: String,
+    end: String,
+    ttl: u64,
 }
 
 impl<R> StatusServer<R>
@@ -695,6 +848,11 @@ where
         let store_path = self.store_path.clone();
         let resource_manager = self.resource_manager.clone();
         let grpc_service_mgr = self.grpc_service_mgr.clone();
+<<<<<<< HEAD
+=======
+        let in_memory_engine = self.in_memory_engine.clone();
+        let force_partition_range_mgr = self.force_partition_range_mgr.clone();
+>>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
         // Start to serve.
         let server = builder.serve(make_service_fn(move |conn: &C| {
             let x509 = conn.get_x509();
@@ -704,6 +862,7 @@ where
             let store_path = store_path.clone();
             let resource_manager = resource_manager.clone();
             let grpc_service_mgr = grpc_service_mgr.clone();
+            let force_partition_range_mgr = force_partition_range_mgr.clone();
             async move {
                 // Create a status service.
                 Ok::<_, hyper::Error>(service_fn(move |req: Request<Body>| {
@@ -714,6 +873,11 @@ where
                     let store_path = store_path.clone();
                     let resource_manager = resource_manager.clone();
                     let grpc_service_mgr = grpc_service_mgr.clone();
+<<<<<<< HEAD
+=======
+                    let in_memory_engine = in_memory_engine.clone();
+                    let force_partition_range_mgr = force_partition_range_mgr.clone();
+>>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
                     async move {
                         let path = req.uri().path().to_owned();
                         let method = req.method().to_owned();
@@ -805,8 +969,31 @@ where
                             (Method::PUT, "/resume_grpc") => {
                                 Self::handle_resume_grpc(grpc_service_mgr).await
                             }
+<<<<<<< HEAD
                             _ => Ok(make_response(StatusCode::NOT_FOUND, "path not found")),
                         }
+=======
+                            (Method::GET, "/async_tasks") => Self::dump_async_trace(),
+                            (Method::GET, "debug/ime/cached_regions") => Self::handle_dumple_cached_regions(in_memory_engine.as_ref()),
+                            (Method::GET, "/force_partition_ranges") => Self::dump_partition_ranges(&force_partition_range_mgr),
+                            (Method::POST, "/force_partition_ranges") => Self::add_partition_ranges(req, &force_partition_range_mgr).await,
+                            (Method::DELETE, "/force_partition_ranges") => Self::remove_partition_ranges(req, &force_partition_range_mgr).await,
+                            _ => {
+                                is_unknown_path = true;
+                                Ok(make_response(StatusCode::NOT_FOUND, "path not found"))
+                            },
+                        };
+                        // Using "unknown" for unknown paths to void creating high cardinality.
+                        let path_label = if is_unknown_path {
+                            "unknown".to_owned()
+                        } else {
+                            path
+                        };
+                        STATUS_REQUEST_DURATION
+                            .with_label_values(&[method.as_str(), &path_label])
+                            .observe(start.elapsed().as_secs_f64());
+                        res
+>>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
                     }
                 }))
             }
@@ -1230,6 +1417,11 @@ mod tests {
             temp_dir.path().to_path_buf(),
             None,
             GrpcServiceManager::dummy(),
+<<<<<<< HEAD
+=======
+            None,
+            Default::default(),
+>>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1280,6 +1472,11 @@ mod tests {
             temp_dir.path().to_path_buf(),
             None,
             GrpcServiceManager::dummy(),
+<<<<<<< HEAD
+=======
+            None,
+            Default::default(),
+>>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1333,6 +1530,11 @@ mod tests {
                 temp_dir.path().to_path_buf(),
                 None,
                 GrpcServiceManager::dummy(),
+<<<<<<< HEAD
+=======
+                None,
+                Default::default(),
+>>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
             )
             .unwrap();
             let addr = "127.0.0.1:0".to_owned();
@@ -1397,6 +1599,11 @@ mod tests {
             temp_dir.path().to_path_buf(),
             None,
             GrpcServiceManager::dummy(),
+<<<<<<< HEAD
+=======
+            None,
+            Default::default(),
+>>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1515,6 +1722,11 @@ mod tests {
             temp_dir.path().to_path_buf(),
             None,
             GrpcServiceManager::dummy(),
+<<<<<<< HEAD
+=======
+            None,
+            Default::default(),
+>>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1561,6 +1773,11 @@ mod tests {
             temp_dir.path().to_path_buf(),
             None,
             GrpcServiceManager::dummy(),
+<<<<<<< HEAD
+=======
+            None,
+            Default::default(),
+>>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1599,6 +1816,11 @@ mod tests {
             temp_dir.path().to_path_buf(),
             None,
             GrpcServiceManager::dummy(),
+<<<<<<< HEAD
+=======
+            None,
+            Default::default(),
+>>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1674,6 +1896,11 @@ mod tests {
             temp_dir.path().to_path_buf(),
             None,
             GrpcServiceManager::dummy(),
+<<<<<<< HEAD
+=======
+            None,
+            Default::default(),
+>>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1706,6 +1933,11 @@ mod tests {
             temp_dir.path().to_path_buf(),
             None,
             GrpcServiceManager::dummy(),
+<<<<<<< HEAD
+=======
+            None,
+            Default::default(),
+>>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1741,6 +1973,11 @@ mod tests {
             temp_dir.path().to_path_buf(),
             None,
             GrpcServiceManager::dummy(),
+<<<<<<< HEAD
+=======
+            None,
+            Default::default(),
+>>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1794,6 +2031,11 @@ mod tests {
             temp_dir.path().to_path_buf(),
             None,
             GrpcServiceManager::dummy(),
+<<<<<<< HEAD
+=======
+            None,
+            Default::default(),
+>>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1851,6 +2093,11 @@ mod tests {
             temp_dir.path().to_path_buf(),
             None,
             GrpcServiceManager::dummy(),
+<<<<<<< HEAD
+=======
+            None,
+            Default::default(),
+>>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1907,6 +2154,11 @@ mod tests {
                 temp_dir.path().to_path_buf(),
                 None,
                 GrpcServiceManager::dummy(),
+<<<<<<< HEAD
+=======
+                None,
+                Default::default(),
+>>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
             )
             .unwrap();
             let addr = "127.0.0.1:0".to_owned();
@@ -1946,6 +2198,11 @@ mod tests {
                 temp_dir.path().to_path_buf(),
                 None,
                 GrpcServiceManager::dummy(),
+<<<<<<< HEAD
+=======
+                None,
+                Default::default(),
+>>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
             )
             .unwrap();
             let addr = "127.0.0.1:0".to_owned();
@@ -1972,4 +2229,66 @@ mod tests {
             status_server.stop();
         }
     }
+<<<<<<< HEAD
+=======
+
+    #[test]
+    fn test_ready_endpoint() {
+        let mut status_server = StatusServer::new(
+            1,
+            ConfigController::default(),
+            Arc::new(SecurityConfig::default()),
+            MockRouter,
+            None,
+            GrpcServiceManager::dummy(),
+            None,
+            Default::default(),
+        )
+        .unwrap();
+        let addr = "127.0.0.1:0".to_owned();
+        let _ = status_server.start(addr);
+        let client = Client::new();
+        let uri = Uri::builder()
+            .scheme("http")
+            .authority(status_server.listening_addr().to_string().as_str())
+            .path_and_query("/ready?verbose")
+            .build()
+            .unwrap();
+        let uri2 = uri.clone();
+        // Set one readiness condition to true.
+        GLOBAL_SERVER_READINESS
+            .connected_to_pd
+            .store(true, Ordering::Relaxed);
+        let handle = status_server.thread_pool.spawn(async move {
+            let resp = client.get(uri).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+            let body_bytes = hyper::body::to_bytes(resp.into_body()).await.unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+            assert_eq!(
+                json["connected_to_pd"], true,
+                "connected_to_pd should be false"
+            );
+            assert_eq!(
+                json["raft_peers_caught_up"], false,
+                "raft_peers_caught_up should be false"
+            );
+        });
+        block_on(handle).unwrap();
+
+        // Set the remaining readiness conditions to true.
+        GLOBAL_SERVER_READINESS
+            .raft_peers_caught_up
+            .store(true, Ordering::Relaxed);
+
+        let client = Client::new();
+        let handle2 = status_server.thread_pool.spawn(async move {
+            let resp = client.get(uri2).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+        });
+        block_on(handle2).unwrap();
+
+        status_server.stop();
+    }
+>>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
 }
