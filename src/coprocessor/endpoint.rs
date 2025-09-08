@@ -29,7 +29,7 @@ use tidb_query_common::{
     storage::{FindRegionResult, RegionStorageAccessor, Result as StorageResult},
 };
 use tikv_alloc::trace::MemoryTraceGuard;
-use tikv_kv::{SecondaryRegionOverride, SnapshotExt};
+use tikv_kv::{ExtraRegionOverride, SnapshotExt};
 use tikv_util::{
     deadline::set_deadline_exceeded_busy_error,
     memory::{MemoryQuota, OwnedAllocated},
@@ -303,7 +303,7 @@ impl<E: Engine> Endpoint<E> {
                         dag,
                         req_ctx.ranges.clone(),
                         store,
-                        SecondarySnapStoreAccessor::<E>::new(req_ctx.clone()),
+                        ExtraSnapStoreAccessor::<E>::new(req_ctx.clone()),
                         req_ctx.deadline,
                         batch_row_limit,
                         is_streaming,
@@ -1006,20 +1006,21 @@ fn make_error_response(e: Error) -> coppb::Response {
     resp
 }
 
-/// SecondarySnapStoreAccessor is used to get the snapshot stores for the
-/// secondary regions.
-/// The "secondary region" means the regions that are not the source region in a
+/// ExtraSnapStoreAccessor is used to get the snapshot stores for the
+/// extra regions.
+/// The "extra region" means the regions that are not the source region in a
 /// request.
 /// For example, if a cop-task contains a `IndexLookUp` executor which needs to
 /// access look up the primary rows, it will use this accessor to locate and get
 /// the snapshot of the regions which these primary rows located.
-pub struct SecondarySnapStoreAccessor<E> {
+#[derive(Clone, Debug)]
+pub struct ExtraSnapStoreAccessor<E> {
     store_id: u64,
     req_ctx: ReqContext,
     _phantom: PhantomData<fn() -> E>,
 }
 
-impl<E: Engine> SecondarySnapStoreAccessor<E> {
+impl<E: Engine> ExtraSnapStoreAccessor<E> {
     /// new creates an Optional EngineSnapshotStoreAccessor.
     /// Please note that not all scenes are supported.
     /// If the current request is not supported, a `None` value will be
@@ -1056,7 +1057,7 @@ impl<E: Engine> SecondarySnapStoreAccessor<E> {
 }
 
 #[async_trait]
-impl<E: Engine> RegionStorageAccessor for SecondarySnapStoreAccessor<E> {
+impl<E: Engine> RegionStorageAccessor for ExtraSnapStoreAccessor<E> {
     type Storage = SnapshotStore<E::IMSnap>;
 
     /// find the region by the specified key.
@@ -1125,7 +1126,7 @@ impl<E: Engine> RegionStorageAccessor for SecondarySnapStoreAccessor<E> {
             // TODO: check the locks for the input key_ranges for replica-read if
             // it is supported in the future.
             key_ranges: Vec::default(),
-            secondary_region_override: Some(SecondaryRegionOverride {
+            extra_region_override: Some(ExtraRegionOverride {
                 region_id: region.get_id(),
                 region_epoch: region.get_region_epoch().clone(),
                 peer,
@@ -2458,7 +2459,7 @@ mod tests {
 
     #[test]
     fn test_secondary_snap_store_accessor_new() {
-        type StoreAccessor = SecondarySnapStoreAccessor<RocksEngine>;
+        type StoreAccessor = ExtraSnapStoreAccessor<RocksEngine>;
         // construct a ReqContext that support to access another snapshot in a request
         let req_ctx = default_req_ctx_support_snap_accessor();
 
@@ -2519,7 +2520,7 @@ mod tests {
             with_tls_engine(|e: &mut RocksEngine| e.set_region_info_provider(provider))
         }
 
-        type StoreAccessor = SecondarySnapStoreAccessor<RocksEngine>;
+        type StoreAccessor = ExtraSnapStoreAccessor<RocksEngine>;
         let accessor = StoreAccessor::new(default_req_ctx_support_snap_accessor().into()).unwrap();
 
         // key is before any region, not found
@@ -2590,7 +2591,7 @@ mod tests {
 
     #[test]
     fn test_secondary_snap_store_accessor_get_local_region_storage() {
-        type StoreAccessor = SecondarySnapStoreAccessor<MockEngine>;
+        type StoreAccessor = ExtraSnapStoreAccessor<MockEngine>;
         #[derive(Clone)]
         struct TestCtx {
             store_id: u64,
@@ -2706,8 +2707,8 @@ mod tests {
                     assert_eq!(snap_ctx.pb_ctx.clone(), check_ctx.context.clone());
                     // snap_ctx.extra_snap_override should be present with the correct region info
                     assert_eq!(
-                        snap_ctx.secondary_region_override,
-                        Some(SecondaryRegionOverride {
+                        snap_ctx.extra_region_override,
+                        Some(ExtraRegionOverride {
                             region_id: check_region.id,
                             region_epoch: check_region.get_region_epoch().clone(),
                             peer: check_region.get_peers()[1].clone(),
@@ -2716,7 +2717,7 @@ mod tests {
                     );
                     // should select a peer with the right store_id.
                     assert_eq!(
-                        snap_ctx.secondary_region_override.as_ref().unwrap().peer.store_id,
+                        snap_ctx.extra_region_override.as_ref().unwrap().peer.store_id,
                         test_ctx.store_id
                     );
                     // snapshot cache is not supported currently, so snap_ctx.read_id is always None.
@@ -2796,10 +2797,9 @@ mod tests {
         }
         let def_req = default_req_ctx_support_snap_accessor();
         let store_id = def_req.context.get_peer().get_store_id();
-        let store_accessor =
-            SecondarySnapStoreAccessor::<RocksEngine>::new(def_req.into()).unwrap();
+        let store_accessor = ExtraSnapStoreAccessor::<RocksEngine>::new(def_req.into()).unwrap();
         let storage_accessor = dag::SecondaryTiKVStorageAccessor::<
-            SecondarySnapStoreAccessor<RocksEngine>,
+            ExtraSnapStoreAccessor<RocksEngine>,
         >::from_store_accessor(store_accessor);
 
         let storage = block_on(

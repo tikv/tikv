@@ -7,7 +7,7 @@ pub mod test_fixture;
 
 use async_trait::async_trait;
 use kvproto::{coprocessor::KeyRange, metapb::Region};
-use raft::StateRole;
+use raft;
 
 pub use self::range::*;
 
@@ -69,6 +69,8 @@ impl<T: Storage + ?Sized> Storage for Box<T> {
     }
 }
 
+pub type StateRole = raft::StateRole;
+
 /// The result of find_region_by_key
 #[derive(Debug, Clone, PartialEq)]
 pub enum FindRegionResult {
@@ -92,27 +94,30 @@ pub enum FindRegionResult {
 
 impl FindRegionResult {
     /// Creates a `FindRegionResult` with the found region and its role.
+    #[inline]
     pub fn with_found(region: Region, role: StateRole) -> Self {
         FindRegionResult::Found { region, role }
     }
 
     /// Creates a `FindRegionResult` with no region found; the next region start
     /// key is attached.
+    #[inline]
     pub fn with_not_found(next_region_start: Option<Vec<u8>>) -> Self {
         FindRegionResult::NotFound { next_region_start }
     }
 
+    #[inline]
     pub fn is_found(&self) -> bool {
         matches!(self, FindRegionResult::Found { .. })
     }
 }
 
-/// The abstract interface for accessing some secondary region storages in the
+/// The abstract interface for accessing some extra region storages in the
 /// cop-task.
 /// For example, in the `IndexLookUp` executor can use it to find the regions
 /// and storages where the primary keys are located.
 #[async_trait]
-pub trait RegionStorageAccessor: Sync {
+pub trait RegionStorageAccessor: Sync + Send + Clone {
     type Storage;
 
     /// Find the region that contains the specified key.
@@ -134,6 +139,7 @@ pub trait RegionStorageAccessor: Sync {
 /// StubAccessor is only a placeholder that does not provide any real
 /// functionality.
 /// It should not be instantiated.
+#[derive(Debug)]
 pub struct StubAccessor<S> {
     _phantom: std::marker::PhantomData<fn() -> S>,
 }
@@ -141,6 +147,14 @@ pub struct StubAccessor<S> {
 impl<S> StubAccessor<S> {
     pub fn none() -> Option<Self> {
         None
+    }
+}
+
+impl<S> Clone for StubAccessor<S> {
+    fn clone(&self) -> Self {
+        StubAccessor {
+            _phantom: std::marker::PhantomData,
+        }
     }
 }
 
