@@ -301,6 +301,7 @@ def Cluster() -> RowPanel:
                             label_selectors=['job=~".*tikv"'],
                         ),
                         legend_format=r"quota-{{instance}}",
+                        hide=True,
                     ),
                 ],
             ),
@@ -321,6 +322,7 @@ def Cluster() -> RowPanel:
                             label_selectors=['job=~".*tikv"'],
                         ),
                         legend_format=r"quota-{{instance}}",
+                        hide=True,
                     ),
                 ],
             ),
@@ -9804,7 +9806,7 @@ def BackupLog() -> RowPanel:
                 ],
             ),
             graph_panel(
-                title="Abnormal Checkpoint TS Lag",
+                title="Checkpoint TS Lag",
                 description=None,
                 yaxes=yaxes(left_format=UNITS.MILLI_SECONDS),
                 targets=[
@@ -9927,11 +9929,10 @@ def BackupLog() -> RowPanel:
                 label_selectors=['stage=~"to_stream_event"'],
             ),
             heatmap_panel(
-                title="Wait for Lock Duration",
-                description="The duration of waiting the mutex of the controller.",
+                title="Resolve Region TS duration",
+                description="The duration of calculating the next resolved TS of observed regions.",
                 yaxis=yaxis(format=UNITS.SECONDS),
-                metric="tikv_log_backup_event_handle_duration_sec_bucket",
-                label_selectors=['stage=~"get_router_lock"'],
+                metric="tikv_log_backup_resolve_duration_sec_bucket",
             ),
         ]
     )
@@ -10072,16 +10073,44 @@ def BackupLog() -> RowPanel:
                     )
                 ],
             ),
+        ]
+    )
+    layout.row(
+        [
             graph_panel(
-                title="Region Checkpoint Key Putting",
-                description="",
-                yaxes=yaxes(left_format=UNITS.COUNTS_PER_SEC),
+                title="Buffer File Cache Mem Usage",
+                description="The memory usage of buffer file (stores logs about to be flushed to external storage) cache.",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_log_backup_temp_file_memory_usage",
+                            by_labels=["instance"],
+                        )
+                    )
+                ],
+            ),
+            graph_panel(
+                title="Buffer File Count",
+                description="The number of temporary buffer files.",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_log_backup_temp_file_count", by_labels=["instance"]
+                        )
+                    )
+                ],
+            ),
+            graph_panel(
+                title="Buffer File Swap out Bytes",
+                description="The total size of buffer files that are swapped out to disk.",
+                yaxes=yaxes(left_format=UNITS.BYTES_SEC_IEC),
                 targets=[
                     target(
                         expr=expr_sum_rate(
-                            "tikv_log_backup_metadata_key_operation",
-                            by_labels=["type"],
-                        ),
+                            "tikv_log_backup_in_disk_temp_file_size_sum",
+                            by_labels=["instance"],
+                        )
                     )
                 ],
             ),
@@ -10150,17 +10179,61 @@ def BackupLog() -> RowPanel:
                 ],
             ),
             graph_panel(
-                title="Tick Duration (P90)",
-                description="The internal handling message duration.",
-                yaxes=yaxes(left_format=UNITS.SECONDS),
+                title="Current Last Region ID",
+                description="The region with minimal checkpoint.",
                 targets=[
                     target(
-                        expr=expr_histogram_quantile(
-                            0.9,
-                            "tidb_log_backup_advancer_tick_duration_sec",
-                            by_labels=["step"],
+                        expr=expr_simple("tidb_log_backup_current_last_region_id"),
+                        legend_format="{{ instance }}",
+                    )
+                ],
+            ),
+            graph_panel(
+                title="Current Last Region Leader Store ID",
+                description="The leader of the region with minimal checkpoint.",
+                targets=[
+                    target(
+                        expr=expr_simple(
+                            "tikv_log_backup_store_last_checkpoint_ts"
+                        ).extra("/ 262144"),
+                        legend_format="{{ instance }}",
+                    )
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Current Last Region ID per Store",
+                description="The region with minimal checkpoint of each store.",
+                targets=[
+                    target(
+                        expr=expr_simple(
+                            "tikv_log_backup_store_last_checkpoint_region_id"
                         ),
-                        legend_format="{{ step }}",
+                        legend_format="{{ instance }}",
+                    )
+                ],
+            ),
+            graph_panel(
+                title="Current Last Checkpoint TS per Store",
+                yaxes=yaxes(left_format=UNITS.MILLI_SECONDS),
+                description="The minimal checkpoint TS of each store.",
+                targets=[
+                    target(
+                        expr=expr_simple("tikv_log_backup_store_last_checkpoint_ts"),
+                        legend_format="{{ instance }}",
+                    )
+                ],
+            ),
+            graph_panel(
+                title="Active Progress Subscrption Per Store",
+                description="The active progress subscription from each store",
+                targets=[
+                    target(
+                        expr=expr_simple("tikv_log_backup_active_subscription_number"),
+                        legend_format="{{instance}}",
                     )
                 ],
             ),
@@ -10369,47 +10442,8 @@ def TikvConfig() -> RowPanel:
                     target(
                         expr=expr_simple(
                             "tikv_config_rocksdb_db",
-                            label_selectors=[
-                                'k8s_cluster="$k8s_cluster"',
-                                'tidb_cluster="$tidb_cluster"',
-                                'instance=~"$instance"',
-                            ],
                         ),
-                        legend_format="",
                     ),
-                ],
-                overrides=[
-                    {
-                        "matcher": {"id": "byName", "options": "Field"},
-                        "properties": [
-                            {"id": "displayName", "value": "Option"},
-                            {"id": "custom.align", "value": None},
-                        ],
-                    },
-                    {
-                        "matcher": {"id": "byName", "options": "Last (not null)"},
-                        "properties": [{"id": "displayName", "value": "Value"}],
-                    },
-                ],
-                time_from="1s",
-                transformations=[
-                    {
-                        "id": "organize",
-                        "options": {
-                            "excludeByName": {
-                                "Time": True,
-                                "__name__": True,
-                                "job": True,
-                            },
-                            "indexByName": {},
-                            "renameByName": {
-                                "Time": "",
-                                "Value #A": "Value",
-                                "name": "Option",
-                                "job": "",
-                            },
-                        },
-                    }
                 ],
             ),
         ]
@@ -10424,11 +10458,6 @@ def TikvConfig() -> RowPanel:
                     target(
                         expr=expr_simple(
                             "tikv_config_rocksdb_cf",
-                            label_selectors=[
-                                'k8s_cluster="$k8s_cluster"',
-                                'tidb_cluster="$tidb_cluster"',
-                                'instance=~"$instance"',
-                            ],
                         ).extra(
                             " or (tikv_config_rocksdb unless tikv_config_rocksdb_cf)"
                         ),
@@ -10437,7 +10466,6 @@ def TikvConfig() -> RowPanel:
             ),
         ]
     )
-
     # Flow Control Configuration Table
     layout.row(
         [
@@ -10448,11 +10476,6 @@ def TikvConfig() -> RowPanel:
                     target(
                         expr=expr_simple(
                             "tikv_config_flow_control",
-                            label_selectors=[
-                                'k8s_cluster="$k8s_cluster"',
-                                'tidb_cluster="$tidb_cluster"',
-                                'instance=~"$instance"',
-                            ],
                         ),
                     ),
                 ],
@@ -10469,31 +10492,12 @@ def TikvConfig() -> RowPanel:
                     target(
                         expr=expr_simple(
                             "tikv_config_raftstore",
-                            label_selectors=[
-                                'k8s_cluster="$k8s_cluster"',
-                                'tidb_cluster="$tidb_cluster"',
-                                'instance=~"$instance"',
-                            ],
                         ),
                     ),
-                ],
-                overrides=[
-                    {
-                        "matcher": {"id": "byName", "options": "Field"},
-                        "properties": [
-                            {"id": "displayName", "value": "Option"},
-                            {"id": "custom.align", "value": None},
-                        ],
-                    },
-                    {
-                        "matcher": {"id": "byName", "options": "Last (not null)"},
-                        "properties": [{"id": "displayName", "value": "Value"}],
-                    },
                 ],
             ),
         ]
     )
-
     return layout.row_panel
 
 
