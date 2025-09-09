@@ -717,6 +717,7 @@ pub enum Cmd {
 
         #[structopt(
             long,
+            default_value = "0",
             help(
                 "specify the last snapshot backup ts, and the compaction will skip the metadata whose max_ts is less than it"
             )

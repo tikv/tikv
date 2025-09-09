@@ -45,7 +45,9 @@ pub struct AfterFinishCtx<'a> {
     ///
     /// For now, it is always the same as the source storage.
     pub storage: &'a Arc<dyn ExternalStorage>,
+    /// The compaction until ts. skip...
     pub until_ts: u64,
+    /// The last snapshot backup ts. skip...
     pub last_snapshot_backup_ts: u64,
 }
 
