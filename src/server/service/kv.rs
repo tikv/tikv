@@ -1797,6 +1797,9 @@ fn future_buffer_batch_get<E: Engine, L: LockManager, F: KvFormat>(
         req.get_version(),
     )));
     set_tls_tracker_token(tracker);
+    with_tls_tracker(|tracker| {
+        tracker.metrics.grpc_req_size = req.compute_size() as u64;
+    });
     let start = Instant::now();
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
     let v = storage.buffer_batch_get(req.take_context(), keys, req.get_version().into());
@@ -2407,6 +2410,9 @@ macro_rules! txn_command_future {
                 0,
             )));
             set_tls_tracker_token($tracker);
+            with_tls_tracker(|tracker| {
+                tracker.metrics.grpc_req_size = $req.compute_size() as u64;
+            });
             let (cb, f) = paired_future_callback();
             let res = storage.sched_txn_command($req.into(), cb);
 

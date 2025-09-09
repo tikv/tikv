@@ -1059,6 +1059,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     key_ranges,
                     QueryKind::Get,
                 );
+                with_tls_tracker(|tracker| {
+                    record_network_in_bytes(tracker.metrics.grpc_req_size);
+                });
 
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                 SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
@@ -1142,6 +1145,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                 pair.map(|r| r.map_err(|e| Error::from(TxnError::from(e))))
                             })
                             .collect();
+                        record_network_out_bytes(
+                            result
+                                .iter()
+                                .map(|r| r.as_ref().map_or(0, |(k, v)| (k.len() + v.len()) as u64))
+                                .sum(),
+                        );
                         (result, reader.statistics)
                     });
                     metrics::tls_collect_scan_details(CMD, &stats);
