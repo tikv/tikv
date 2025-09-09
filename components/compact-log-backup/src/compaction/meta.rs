@@ -7,6 +7,7 @@ use std::{
 use external_storage::ExternalStorage;
 use futures::stream::TryStreamExt;
 use kvproto::brpb::{self, DeleteSpansOfFile};
+use protobuf::Chars;
 use tikv_util::info;
 
 use super::{
@@ -165,7 +166,7 @@ impl Ord for SortByOffset {
 /// Finally, it calculates which files can be deleted.
 #[derive(Debug)]
 pub struct CompactionRunInfoBuilder {
-    files: HashMap<Arc<str>, BTreeSet<SortByOffset>>,
+    files: HashMap<Chars, BTreeSet<SortByOffset>>,
     compaction: brpb::LogFileCompaction,
 }
 
@@ -183,7 +184,7 @@ impl Default for CompactionRunInfoBuilder {
 /// A set of deletable log files from the same metadata.
 pub struct ExpiringFilesOfMeta {
     meta_path: Arc<str>,
-    logs: Vec<Arc<str>>,
+    logs: Vec<Chars>,
     /// Whether the log file is still needed.
     ///
     /// When we are going to delete every log files recoreded in a log file, the
@@ -194,7 +195,7 @@ pub struct ExpiringFilesOfMeta {
     // Since we are not handle meta kv files. the destruct_self may not work here.
     no_data_files_to_be_compacted: bool,
     /// The logical log files that can be removed.
-    spans_of_file: HashMap<Arc<str>, (Vec<brpb::Span>, /* physical file size */ u64)>,
+    spans_of_file: HashMap<Chars, (Vec<brpb::Span>, /* physical file size */ u64)>,
 }
 
 impl ExpiringFilesOfMeta {
@@ -241,8 +242,7 @@ impl CompactionRunInfoBuilder {
     pub fn add_subcompaction(&mut self, c: &SubcompactionResult) {
         for file in &c.origin.inputs {
             if !self.files.contains_key(&file.id.name) {
-                self.files
-                    .insert(Arc::clone(&file.id.name), Default::default());
+                self.files.insert(file.id.name.clone(), Default::default());
             }
             self.files
                 .get_mut(&file.id.name)
@@ -343,12 +343,12 @@ impl CompactionRunInfoBuilder {
         for p in &file.physical_files {
             let full_covers = self.full_covers(p);
             if full_covers {
-                result.logs.push(Arc::clone(&p.name))
+                result.logs.push(p.name.clone());
             } else {
                 if let Some(vs) = self.files.get(&p.name) {
                     let segs = result
                         .spans_of_file
-                        .entry(Arc::clone(&p.name))
+                        .entry(p.name.clone())
                         .or_insert_with(|| (vec![], p.size));
                     for f in vs {
                         segs.0.push(f.0.span());

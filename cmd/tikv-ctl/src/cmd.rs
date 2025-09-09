@@ -723,6 +723,15 @@ pub enum Cmd {
             )
         )]
         last_snapshot_backup_ts: u64,
+
+        #[structopt(long)]
+        debug_dry_run: bool,
+
+        #[structopt(long, default_value = "128")]
+        prefetch_running_count: u64,
+
+        #[structopt(long, default_value = "1024")]
+        prefetch_buffer_count: u64,
     },
     /// Get the state of a region's RegionReadProgress.
     GetRegionReadProgress {

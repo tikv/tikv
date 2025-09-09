@@ -8,6 +8,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use bytes::Bytes;
 use engine_rocks::RocksEngine;
 use engine_traits::{IterOptions, Iterator as _, RefIterable, SstExt};
 use external_storage::ExternalStorage;
@@ -17,8 +18,8 @@ use futures::{
     stream::StreamExt,
 };
 use keys::origin_key;
-use kvproto::brpb::{self, Metadata};
-use protobuf::{Message, parse_from_bytes};
+use kvproto::{brpb, brpb2};
+use protobuf::{Chars, Message, parse_from_bytes};
 use tempdir::TempDir;
 use tidb_query_datatype::codec::table::encode_row_key;
 use tikv_util::codec::stream_event::EventEncoder;
@@ -324,26 +325,22 @@ impl LogFileBuilder {
 
             min_ts: self.min_ts,
             max_ts: self.max_ts,
-            min_key: Arc::from(self.min_key.into_boxed_slice()),
-            max_key: Arc::from(self.max_key.into_boxed_slice()),
+            min_key: Bytes::from(self.min_key),
+            max_key: Bytes::from(self.max_key),
             number_of_entries: self.number_of_entries as i64,
             crc64xor: self.crc64xor,
             compression: self.compression,
             file_real_size: self.file_real_size,
 
             id: LogFileId {
-                name: Arc::from(self.name.into_boxed_str()),
+                name: Chars::from(self.name),
                 offset: 0,
                 length: cnt.get_ref().len() as u64,
             },
             min_start_ts: 0,
             table_id: 0,
             resolved_ts: 0,
-            sha256: Arc::from(
-                sha256(cnt.get_ref())
-                    .expect("cannot calculate sha256 for file")
-                    .into_boxed_slice(),
-            ),
+            sha256: Bytes::from(sha256(cnt.get_ref()).expect("cannot calculate sha256 for file")),
             region_start_key: self.region_start_key.map(|v| v.into_boxed_slice().into()),
             region_end_key: self.region_end_key.map(|v| v.into_boxed_slice().into()),
             region_epoches: self
@@ -384,13 +381,20 @@ pub fn build_many_log_files(
     Ok(md)
 }
 
+pub fn metadata_brpb_to_brpb2(md: &brpb::Metadata) -> brpb2::Metadata {
+    let content = md.write_to_bytes().unwrap();
+    let mut md2 = brpb2::Metadata::new();
+    md2.merge_from_bytes(content.as_slice()).unwrap();
+    md2
+}
+
 /// Simulating a flush: save all log files and generate a metadata by them.
 /// Then save the generated metadata.
 pub async fn save_many_log_files(
     name: &str,
     log_files: impl IntoIterator<Item = LogFileBuilder>,
     st: &dyn ExternalStorage,
-) -> std::io::Result<Metadata> {
+) -> std::io::Result<brpb::Metadata> {
     let mut w = vec![];
     let mut md = build_many_log_files(log_files, &mut w)?;
     let cl = w.len() as u64;
@@ -406,7 +410,7 @@ pub async fn save_many_logs_files(
     name: &str,
     logs_files: impl IntoIterator<Item = impl IntoIterator<Item = LogFileBuilder>>,
     st: &dyn ExternalStorage,
-) -> std::io::Result<Metadata> {
+) -> std::io::Result<brpb::Metadata> {
     let mut md = brpb::Metadata::new();
     md.set_meta_version(brpb::MetaVersion::V2);
     for logs in logs_files {
@@ -590,6 +594,8 @@ impl TmpStorage {
             result.file_groups.push(meta_result.file_groups[0].clone());
         }
         let content = result.write_to_bytes().unwrap();
+        let mut result2 = brpb2::Metadata::new();
+        result2.merge_from_bytes(content.as_slice()).unwrap();
         self.storage
             .write(
                 meta_path,
@@ -598,7 +604,7 @@ impl TmpStorage {
             )
             .await
             .unwrap();
-        MetaFile::from_file(Arc::from(meta_path), result)
+        MetaFile::from_file(Arc::from(meta_path), result2)
     }
 
     pub async fn build_flush(
@@ -636,6 +642,8 @@ impl TmpStorage {
             result.file_groups.push(meta_result.file_groups[0].clone());
         }
         let content = result.write_to_bytes().unwrap();
+        let mut result2 = brpb2::Metadata::new();
+        result2.merge_from_bytes(content.as_slice()).unwrap();
         self.storage
             .write(
                 meta_path,
@@ -644,7 +652,7 @@ impl TmpStorage {
             )
             .await
             .unwrap();
-        MetaFile::from_file(Arc::from(meta_path), result)
+        MetaFile::from_file(Arc::from(meta_path), result2)
     }
 
     pub async fn load_migrations(&self) -> crate::Result<Vec<(u64, brpb::Migration)>> {

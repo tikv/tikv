@@ -11,12 +11,12 @@ use engine_rocks::RocksEngine;
 pub use engine_traits::SstCompressionType;
 use engine_traits::SstExt;
 use external_storage::{BackendConfig, ExternalStorage};
-use futures::stream::{self, StreamExt};
+use futures::stream::{self, StreamExt, TryStreamExt};
 use hooking::{
     AfterFinishCtx, BeforeStartCtx, CId, ExecHooks, SubcompactionFinishCtx, SubcompactionStartCtx,
 };
 use kvproto::brpb::StorageBackend;
-use tikv_util::config::ReadableSize;
+use tikv_util::{config::ReadableSize, info};
 use tokio::runtime::Handle;
 use tracing::{Instrument, trace_span};
 use tracing_active_tree::{frame, root};
@@ -54,6 +54,10 @@ pub struct ExecutionConfig {
     /// Filter out metadatas doesn't contain any record with TS larger than or
     /// equal to this.
     pub last_snapshot_backup_ts: u64,
+    /// The max count of running prefetch tasks.
+    pub prefetch_running_count: u64,
+    /// The max count of saved prefetch tasks in the queue.
+    pub prefetch_buffer_count: u64,
     /// The compress algorithm we are going to use for output.
     pub compression: SstCompressionType,
     /// The compress level we are going to use.
@@ -311,5 +315,31 @@ impl Execution {
         };
         hooks.after_a_subcompaction_end(cid, cx).await?;
         Result::Ok(())
+    }
+
+    pub fn dry_run(self) -> Result<()> {
+        let storage =
+            external_storage::create_storage(&self.external_storage, BackendConfig::default())?;
+        let storage: Arc<dyn ExternalStorage> = Arc::from(storage);
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let guarded = async {
+            let mut ext = LoadFromExt::default();
+            ext.prefetch_buffer_count = self.cfg.prefetch_buffer_count as usize;
+            ext.prefetch_running_count = self.cfg.prefetch_running_count as usize;
+            let mut meta = StreamMetaStorage::load_from_ext(&storage, ext).await?;
+
+            let mut count = 0;
+            while meta.try_next().await?.is_some() {
+                count += 1;
+            }
+            info!("calculate metadata count: {count}");
+            Ok(())
+        };
+
+        runtime.block_on(frame!(guarded))
     }
 }
