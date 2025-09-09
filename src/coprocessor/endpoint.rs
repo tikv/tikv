@@ -103,7 +103,6 @@ pub struct Endpoint<E: Engine> {
 pub struct ParseCopRequestResult<Snap> {
     req_tag: ReqTag,
     req_ctx: ReqContext,
-    req_size: u64,
     handler_builder: RequestHandlerBuilder<Snap>,
 }
 
@@ -113,7 +112,6 @@ impl<Snap> ParseCopRequestResult<Snap> {
         Self {
             req_tag: ReqTag::test,
             req_ctx: ReqContext::default_for_test(),
-            req_size: 0,
             handler_builder,
         }
     }
@@ -243,7 +241,6 @@ impl<E: Engine> Endpoint<E> {
         let req_ctx: ReqContext;
         let handler_builder: RequestHandlerBuilder<E::IMSnap>;
         let req_tag: ReqTag;
-        let req_size: u64 = data.len() as u64;
         match req.get_tp() {
             REQ_TYPE_DAG => {
                 let mut dag = DagRequest::default();
@@ -414,7 +411,6 @@ impl<E: Engine> Endpoint<E> {
         Ok(ParseCopRequestResult {
             req_tag,
             req_ctx,
-            req_size,
             handler_builder,
         })
     }
@@ -464,9 +460,11 @@ impl<E: Engine> Endpoint<E> {
         semaphore: Option<Arc<Semaphore>>,
         mut tracker: Box<Tracker<E>>,
         handler_builder: RequestHandlerBuilder<E::IMSnap>,
-        req_size: u64,
     ) -> Result<MemoryTraceGuard<coppb::Response>> {
-        record_network_in_bytes(req_size);
+        with_tls_tracker(|tracker1| {
+            record_network_in_bytes(tracker1.metrics.grpc_req_size);
+            info!("Check coprocessor resource group tag"; "ResourceGroupTagLen"=>tracker1.req_info.resource_group_tag.len(), "GlobalTracker==LocalTracker"=>(tracker1.req_info.resource_group_tag == tracker.req_ctx.context.resource_group_tag));
+        });
         // When this function is being executed, it may be queued for a long time, so
         // that deadline may exceed.
         tracker.on_scheduled();
@@ -598,9 +596,8 @@ impl<E: Engine> Endpoint<E> {
         allocated_bytes += tracker.approximate_mem_size();
 
         let (tx, rx) = oneshot::channel();
-        let req_size = r.req_size;
         let future =
-            Self::handle_unary_request_impl(self.semaphore.clone(), tracker, r.handler_builder, req_size)
+            Self::handle_unary_request_impl(self.semaphore.clone(), tracker, r.handler_builder)
                 .in_resource_metering_tag(resource_tag)
                 .map(move |res| {
                     let _ = tx.send(res);
@@ -646,6 +643,10 @@ impl<E: Engine> Endpoint<E> {
 
         let result_of_batch = self.process_batch_tasks(&mut req, &peer);
         set_tls_tracker_token(tracker);
+        with_tls_tracker(|tracker| {
+            tracker.metrics.grpc_req_size = req.data.len() as u64;
+        });
+        info!("receive cop request"; "req" => ?req, "peer" => ?peer);
         let result_of_future = self
             .parse_request_and_check_memory_locks(req, peer, false)
             .map(|r| self.handle_unary_request(r));
@@ -697,11 +698,13 @@ impl<E: Engine> Endpoint<E> {
                 // Disable the coprocessor cache path for the batched tasks, the
                 // coprocessor cache related fields are not passed in the "task" by now.
                 new_req.is_cache_enabled = false;
+                info!("process batched coprocessor task"; "OldRegionID" => new_req.get_context().get_region_id());
                 new_req.ranges = task.take_ranges();
                 let new_context = new_req.mut_context();
                 new_context.set_region_id(task.get_region_id());
                 new_context.set_region_epoch(task.take_region_epoch());
                 new_context.set_peer(task.take_peer());
+                info!("process batched coprocessor task"; "BatchedRegionID" => new_req.get_context().get_region_id());
                 (new_req, task.get_task_id())
             })
             .collect();
@@ -775,6 +778,9 @@ impl<E: Engine> Endpoint<E> {
                 None
             };
 
+            with_tls_tracker(|tracker| {
+                record_network_in_bytes(tracker.metrics.grpc_req_size);
+            });
             // When this function is being executed, it may be queued for a long time, so that
             // deadline may exceed.
             tracker.on_scheduled();
@@ -819,9 +825,11 @@ impl<E: Engine> Endpoint<E> {
                     },
                     Ok((None, _)) => break,
                     Ok((Some(mut resp), finished)) => {
-                        COPR_RESP_SIZE.inc_by(resp.data.len() as u64);
+                        let resp_size = resp.data.len() as u64;
+                        COPR_RESP_SIZE.inc_by(resp_size);
                         resp.set_exec_details(exec_details);
                         resp.set_exec_details_v2(exec_details_v2);
+                        record_network_out_bytes(resp_size);
                         yield resp;
                         if finished {
                             break;
@@ -902,6 +910,15 @@ impl<E: Engine> Endpoint<E> {
         req: coppb::Request,
         peer: Option<String>,
     ) -> impl futures::stream::Stream<Item = coppb::Response> {
+        let tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(RequestInfo::new(
+            req.get_context(),
+            RequestType::Unknown,
+            req.start_ts,
+        )));
+        set_tls_tracker_token(tracker);
+        with_tls_tracker(|tracker| {
+            tracker.metrics.grpc_req_size = req.data.len() as u64;
+        });        
         let result_of_stream = self
             .parse_request_and_check_memory_locks(req, peer, true)
             .and_then(|r| self.handle_stream_request(r)); // Result<Stream<Resp, Error>, Error>
@@ -1383,7 +1400,6 @@ mod tests {
         block_on(copr.handle_unary_request(ParseCopRequestResult {
             req_ctx: outdated_req_ctx,
             req_tag: ReqTag::test,
-            req_size: 0,
             handler_builder,
         }))
         .unwrap_err();
@@ -1872,7 +1888,6 @@ mod tests {
             let resp_future_1 = copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: req_with_exec_detail.clone(),
-                req_size: 0,
                 handler_builder,
             });
             let sender = tx.clone();
@@ -1890,7 +1905,6 @@ mod tests {
             let resp_future_2 = copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: req_with_exec_detail.clone(),
-                req_size: 0,
                 handler_builder,
             });
             let sender = tx.clone();
@@ -2000,7 +2014,6 @@ mod tests {
             let resp_future_1 = copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: req_with_exec_detail.clone(),
-                req_size: 0,
                 handler_builder,
             });
             let sender = tx.clone();
@@ -2018,7 +2031,6 @@ mod tests {
             let resp_future_2 = copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: req_with_exec_detail.clone(),
-                req_size: 0,
                 handler_builder,
             });
             let sender = tx.clone();
@@ -2085,7 +2097,6 @@ mod tests {
             let resp_future_1 = copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: req_with_exec_detail.clone(),
-                req_size: 0,
                 handler_builder,
             });
             let sender = tx.clone();
@@ -2109,7 +2120,6 @@ mod tests {
                 .handle_stream_request(ParseCopRequestResult {
                     req_tag: ReqTag::test,
                     req_ctx: req_with_exec_detail.clone(),
-                    req_size: 0,
                     handler_builder,
                 })
                 .unwrap()
@@ -2271,7 +2281,6 @@ mod tests {
             let resp = block_on(copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: config,
-                req_size: 0,
                 handler_builder,
             }))
             .unwrap();
@@ -2299,7 +2308,6 @@ mod tests {
             let resp = block_on(copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: config,
-                req_size: 0,
                 handler_builder,
             }))
             .unwrap();
@@ -2405,7 +2413,6 @@ mod tests {
             let resp = block_on(copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: config,
-                req_size: 0,
                 handler_builder,
             }))
             .unwrap();
@@ -2426,7 +2433,6 @@ mod tests {
             let res = block_on(copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: config,
-                req_size: 0,
                 handler_builder,
             }));
             assert!(res.is_err(), "{:?}", res);

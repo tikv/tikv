@@ -199,4 +199,7 @@ pub struct RequestMetrics {
     pub apply_thread_wait_nanos: u64,
     pub apply_write_wal_nanos: u64,
     pub apply_write_memtable_nanos: u64,
+
+    // recorded outside the read_pool thread, accessed inside the read_pool thread for topsql usage
+    pub grpc_req_size: u64,
 }

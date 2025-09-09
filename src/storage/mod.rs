@@ -630,9 +630,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
         let quota_limiter = self.quota_limiter.clone();
         let mut sample = quota_limiter.new_sample(true);
+        let mut process_nanos = 0u64;
         with_tls_tracker(|tracker| {
             tracker.metrics.grpc_process_nanos =
                 tracker.req_info.begin.saturating_elapsed().as_nanos() as u64;
+            process_nanos = tracker.metrics.grpc_process_nanos;
         });
 
         let stage_begin_ts = Instant::now();
