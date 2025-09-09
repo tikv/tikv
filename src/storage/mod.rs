@@ -90,10 +90,11 @@ use kvproto::{
     pdpb::QueryKind,
 };
 use pd_client::FeatureGate;
+use protobuf::Message;
 use raftstore::store::{ReadStats, TxnExt, WriteStats, util::build_key_range};
 use rand::prelude::*;
 use resource_control::{ResourceController, ResourceGroupManager, ResourceLimiter, TaskMetadata};
-use resource_metering::{FutureExt, ResourceTagFactory};
+use resource_metering::{FutureExt, ResourceTagFactory, record_network_in_bytes, record_network_out_bytes};
 use tikv_kv::{OnAppliedCb, SnapshotExt};
 use tikv_util::{
     deadline::Deadline,
@@ -650,6 +651,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     false,
                     QueryKind::Get,
                 );
+                with_tls_tracker(|tracker| {
+                    record_network_in_bytes(tracker.metrics.grpc_req_size);
+                });                
 
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                 SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
@@ -732,12 +736,13 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         now.saturating_duration_since(command_duration),
                     ));
 
-                    let read_bytes = key.len()
-                        + result
-                            .as_ref()
-                            .unwrap_or(&None)
-                            .as_ref()
-                            .map_or(0, |v| v.len());
+                    let result_len = result
+                        .as_ref()
+                        .unwrap_or(&None)
+                        .as_ref()
+                        .map_or(0, |v| v.len());
+                    record_network_out_bytes(result_len as u64);
+                    let read_bytes = key.len() + result_len;
                     sample.add_read_bytes(read_bytes);
                     let quota_delay = quota_limiter.consume_sample(sample, true).await;
                     if !quota_delay.is_zero() {
@@ -862,6 +867,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         false,
                         QueryKind::Get,
                     );
+                    record_network_in_bytes(req.get_key().len() as u64);
 
                     Self::check_api_version(api_version, ctx.api_version, CMD, [key.as_encoded()])?;
 
@@ -960,6 +966,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                         buckets.as_ref(),
                                     );
                                     statistics.add(&stat);
+                                    let value_size = v.as_ref().map_or(0, |v| v.as_ref().map_or(0, |v1| v1.len() ) as u64);
+                                    record_network_out_bytes(value_size);
                                     consumer.consume(
                                         id,
                                         v.map_err(|e| Error::from(txn::Error::from(e)))
@@ -1245,6 +1253,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     key_ranges,
                     QueryKind::Get,
                 );
+                with_tls_tracker(|tracker| {
+                    record_network_in_bytes(tracker.metrics.grpc_req_size);
+                });
 
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                 SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
@@ -1322,6 +1333,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                 KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
                                     .get(CMD)
                                     .observe(kv_pairs.len() as f64);
+                                record_network_out_bytes(
+                                    kv_pairs
+                                        .iter()
+                                        .map(|r| r.as_ref().map_or(0, |(k, v)| (k.len() + v.len()) as u64))
+                                        .sum(),
+                                );
                                 kv_pairs
                             });
                         (result, stats)
@@ -1453,6 +1470,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         reverse_scan,
                         QueryKind::Scan,
                     );
+                    with_tls_tracker(|tracker| {
+                        record_network_in_bytes(tracker.metrics.grpc_req_size);
+                    });
                 }
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                 SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
@@ -1568,6 +1588,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
                             .get(CMD)
                             .observe(results.len() as f64);
+                        record_network_out_bytes(
+                            results
+                                .iter()
+                                .map(|r| r.as_ref().map_or(0, |(k, v)| (k.len() + v.len()) as u64))
+                                .sum(),
+                        );
                         results
                             .into_iter()
                             .map(|x| x.map_err(Error::from))
@@ -1634,6 +1660,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         false,
                         QueryKind::Scan,
                     );
+                    with_tls_tracker(|tracker| {
+                        record_network_in_bytes(tracker.metrics.grpc_req_size);
+                    });
                 }
 
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
@@ -1729,7 +1758,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     SCHED_HISTOGRAM_VEC_STATIC.get(CMD).observe(duration_to_sec(
                         now.saturating_duration_since(command_duration),
                     ));
-
+                    record_network_out_bytes(
+                        locks.iter().map(|l| l.compute_size()).sum::<u32>() as u64
+                    );
                     Ok(locks)
                 })
             }

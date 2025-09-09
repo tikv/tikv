@@ -644,9 +644,8 @@ impl<E: Engine> Endpoint<E> {
         let result_of_batch = self.process_batch_tasks(&mut req, &peer);
         set_tls_tracker_token(tracker);
         with_tls_tracker(|tracker| {
-            tracker.metrics.grpc_req_size = req.data.len() as u64;
+            tracker.metrics.grpc_req_size = req.compute_size() as u64;
         });
-        info!("receive cop request"; "req" => ?req, "peer" => ?peer);
         let result_of_future = self
             .parse_request_and_check_memory_locks(req, peer, false)
             .map(|r| self.handle_unary_request(r));
@@ -917,7 +916,7 @@ impl<E: Engine> Endpoint<E> {
         )));
         set_tls_tracker_token(tracker);
         with_tls_tracker(|tracker| {
-            tracker.metrics.grpc_req_size = req.data.len() as u64;
+            tracker.metrics.grpc_req_size = req.compute_size() as u64;
         });        
         let result_of_stream = self
             .parse_request_and_check_memory_locks(req, peer, true)
