@@ -7,6 +7,7 @@ use std::{
 use external_storage::ExternalStorage;
 use futures::stream::TryStreamExt;
 use kvproto::brpb::{self, DeleteSpansOfFile};
+use tikv_util::info;
 
 use super::{
     EpochHint, Subcompaction, SubcompactionCollectKey, SubcompactionResult, UnformedSubcompaction,
@@ -191,7 +192,7 @@ pub struct ExpiringFilesOfMeta {
 
     // Whether the data kv files has been compcated before. so we can skip it quickly.
     // Since we are not handle meta kv files. the destruct_self may not work here.
-    all_data_files_compacted: bool,
+    no_data_files_to_be_compacted: bool,
     /// The logical log files that can be removed.
     spans_of_file: HashMap<Arc<str>, (Vec<brpb::Span>, /* physical file size */ u64)>,
 }
@@ -203,14 +204,17 @@ impl ExpiringFilesOfMeta {
             meta_path: Arc::clone(path),
             logs: vec![],
             destruct_self: false,
-            all_data_files_compacted: false,
+            no_data_files_to_be_compacted: false,
             spans_of_file: Default::default(),
         }
     }
 
     /// Whether we are going to delete nothing.
     pub fn is_empty(&self) -> bool {
-        self.logs.is_empty() && self.spans_of_file.is_empty() && !self.destruct_self
+        self.logs.is_empty()
+            && self.spans_of_file.is_empty()
+            && !self.destruct_self
+            && !self.no_data_files_to_be_compacted
     }
 
     /// Get the list of physical files that can be deleted.
@@ -254,8 +258,16 @@ impl CompactionRunInfoBuilder {
         &mut self.compaction
     }
 
-    pub async fn write_migration(&self, s: Arc<dyn ExternalStorage>) -> Result<()> {
-        let migration = self.migration_of(self.find_expiring_files(s.clone()).await?);
+    pub async fn write_migration(
+        &self,
+        s: Arc<dyn ExternalStorage>,
+        until_ts: u64,
+        last_snapshot_backup_ts: u64,
+    ) -> Result<()> {
+        let migration = self.migration_of(
+            self.find_expiring_files(s.clone(), until_ts, last_snapshot_backup_ts)
+                .await?,
+        );
         let wrapped_storage = MigrationStorageWrapper::new(s.as_ref());
         wrapped_storage.write(migration.into()).await?;
         Ok(())
@@ -273,7 +285,7 @@ impl CompactionRunInfoBuilder {
                 medit.delete_logical_files.push(span)
             }
             medit.destruct_self = files.destruct_self;
-            medit.all_data_files_compacted = files.all_data_files_compacted;
+            medit.all_data_files_compacted = files.no_data_files_to_be_compacted;
             migration.edit_meta.push(medit);
         }
         migration.mut_compactions().push(self.compaction.clone());
@@ -283,15 +295,19 @@ impl CompactionRunInfoBuilder {
     async fn find_expiring_files(
         &self,
         s: Arc<dyn ExternalStorage>,
+        until_ts: u64,
+        last_snapshot_backup_ts: u64,
     ) -> Result<Vec<ExpiringFilesOfMeta>> {
         let ext = LoadFromExt::default();
         let mut storage = StreamMetaStorage::load_from_ext(&s, ext).await?;
 
         let mut result = vec![];
         while let Some(item) = storage.try_next().await? {
-            let exp = self.expiring(&item);
-            if !exp.is_empty() {
-                result.push(exp);
+            if item.min_ts <= until_ts {
+                let exp = self.expiring(&item, last_snapshot_backup_ts);
+                if !exp.is_empty() {
+                    result.push(exp);
+                }
             }
         }
         Ok(result)
@@ -320,10 +336,10 @@ impl CompactionRunInfoBuilder {
         }
     }
 
-    fn expiring(&self, file: &MetaFile) -> ExpiringFilesOfMeta {
+    fn expiring(&self, file: &MetaFile, last_snapshot_backup_ts: u64) -> ExpiringFilesOfMeta {
         let mut result = ExpiringFilesOfMeta::of(&file.name);
         let mut all_full_covers = true;
-        let mut all_data_files_full_covers = true;
+        let mut no_data_files_to_be_compacted = true;
         for p in &file.physical_files {
             let full_covers = self.full_covers(p);
             if full_covers {
@@ -344,12 +360,18 @@ impl CompactionRunInfoBuilder {
                 // Therefore, only if this physical file contains no `is_meta` entries
                 // should `all_data_files_full_covers` be set to false.
                 if p.files.iter().any(|f| !f.is_meta) {
-                    all_data_files_full_covers = false;
+                    no_data_files_to_be_compacted = false;
                 }
             }
         }
         result.destruct_self = all_full_covers;
-        result.all_data_files_compacted = all_data_files_full_covers;
+        result.no_data_files_to_be_compacted = no_data_files_to_be_compacted;
+        if last_snapshot_backup_ts > file.max_ts {
+            result.no_data_files_to_be_compacted = true;
+        }
+        info!("Expiring a metadata";
+                "destruct_self" => result.destruct_self,
+                "no_data_files_to_be_compacted" => result.no_data_files_to_be_compacted);
 
         result
     }
@@ -380,8 +402,99 @@ mod test {
 
     impl CompactionRunInfoBuilder {
         async fn mig(&self, s: Arc<dyn ExternalStorage>) -> crate::Result<brpb::Migration> {
-            Ok(self.migration_of(self.find_expiring_files(s).await?))
+            Ok(self.migration_of(self.find_expiring_files(s, u64::MAX, 0).await?))
         }
+    }
+
+    #[tokio::test]
+    async fn test_ignore_small_files() {
+        let const_val = |_| b"fiolvit".to_vec();
+        let g11 =
+            LogFileBuilder::from_iter(KvGen::new(gen_min_max(1, 1, 2, 10, 20), const_val), |_| {});
+        let g12 =
+            LogFileBuilder::from_iter(KvGen::new(gen_min_max(1, 3, 4, 15, 25), const_val), |_| {});
+        let g21 =
+            LogFileBuilder::from_iter(KvGen::new(gen_min_max(3, 5, 6, 30, 40), const_val), |_| {});
+        let g22 =
+            LogFileBuilder::from_iter(KvGen::new(gen_min_max(4, 7, 8, 45, 55), const_val), |_| {});
+        let st = TmpStorage::create();
+        let m = st
+            .build_flush_logs("v1/1", "v1/backupmeta/1.meta", [[g11, g12], [g21, g22]])
+            .await;
+
+        let mut coll1 = CompactionRunInfoBuilder::default();
+        let cr = SubcompactionExec::default_config(st.storage().clone());
+        let subc = Subcompaction::singleton(m.physical_files[0].files[0].clone());
+        let res = cr.run(subc, Default::default()).await.unwrap();
+        coll1.add_subcompaction(&res);
+        let mig = coll1.mig(st.storage().clone()).await.unwrap();
+        assert_eq!(mig.edit_meta.len(), 1);
+        assert!(!mig.edit_meta[0].destruct_self);
+        assert!(!mig.edit_meta[0].all_data_files_compacted);
+        assert_eq!(mig.edit_meta[0].delete_physical_files.len(), 0);
+        assert_eq!(mig.edit_meta[0].delete_logical_files.len(), 1);
+        let mut coll2 = CompactionRunInfoBuilder::default();
+        coll2.add_subcompaction(&res);
+        let mig = coll2.mig(st.storage().clone()).await.unwrap();
+        assert_eq!(mig.edit_meta.len(), 1);
+        assert!(!mig.edit_meta[0].destruct_self);
+        assert!(mig.edit_meta[0].all_data_files_compacted);
+        assert_eq!(mig.edit_meta[0].delete_physical_files.len(), 0);
+        assert_eq!(mig.edit_meta[0].delete_logical_files.len(), 1);
+
+        let subc = Subcompaction::singleton(m.physical_files[0].files[1].clone());
+        let cr = SubcompactionExec::default_config(st.storage().clone());
+        let res2 = cr.run(subc, Default::default()).await.unwrap();
+        coll1.add_subcompaction(&res2);
+        let mig = coll1.mig(st.storage().clone()).await.unwrap();
+        assert_eq!(mig.edit_meta.len(), 1);
+        assert!(!mig.edit_meta[0].destruct_self);
+        assert!(!mig.edit_meta[0].all_data_files_compacted);
+        assert_eq!(mig.edit_meta[0].delete_physical_files.len(), 1);
+        assert_eq!(mig.edit_meta[0].delete_logical_files.len(), 0);
+        coll2.add_subcompaction(&res2);
+        let mig = coll2.mig(st.storage().clone()).await.unwrap();
+        assert_eq!(mig.edit_meta.len(), 1);
+        assert!(!mig.edit_meta[0].destruct_self);
+        assert!(mig.edit_meta[0].all_data_files_compacted);
+        assert_eq!(mig.edit_meta[0].delete_physical_files.len(), 1);
+        assert_eq!(mig.edit_meta[0].delete_logical_files.len(), 0);
+
+        let subc = Subcompaction::singleton(m.physical_files[1].files[0].clone());
+        let cr = SubcompactionExec::default_config(st.storage().clone());
+        let res3 = cr.run(subc, Default::default()).await.unwrap();
+        coll1.add_subcompaction(&res3);
+        let mig = coll1.mig(st.storage().clone()).await.unwrap();
+        assert_eq!(mig.edit_meta.len(), 1);
+        assert!(!mig.edit_meta[0].destruct_self);
+        assert!(!mig.edit_meta[0].all_data_files_compacted);
+        assert_eq!(mig.edit_meta[0].delete_physical_files.len(), 1);
+        assert_eq!(mig.edit_meta[0].delete_logical_files.len(), 1);
+        coll2.add_subcompaction(&res3);
+        let mig = coll2.mig(st.storage().clone()).await.unwrap();
+        assert_eq!(mig.edit_meta.len(), 1);
+        assert!(!mig.edit_meta[0].destruct_self);
+        assert!(mig.edit_meta[0].all_data_files_compacted);
+        assert_eq!(mig.edit_meta[0].delete_physical_files.len(), 1);
+        assert_eq!(mig.edit_meta[0].delete_logical_files.len(), 1);
+
+        let subc = Subcompaction::singleton(m.physical_files[1].files[1].clone());
+        let cr = SubcompactionExec::default_config(st.storage().clone());
+        let res4 = cr.run(subc, Default::default()).await.unwrap();
+        coll1.add_subcompaction(&res4);
+        let mig = coll1.mig(st.storage().clone()).await.unwrap();
+        assert_eq!(mig.edit_meta.len(), 1);
+        assert!(mig.edit_meta[0].destruct_self);
+        assert!(mig.edit_meta[0].all_data_files_compacted);
+        assert_eq!(mig.edit_meta[0].delete_physical_files.len(), 2);
+        assert_eq!(mig.edit_meta[0].delete_logical_files.len(), 0);
+        coll2.add_subcompaction(&res4);
+        let mig = coll2.mig(st.storage().clone()).await.unwrap();
+        assert_eq!(mig.edit_meta.len(), 1);
+        assert!(mig.edit_meta[0].destruct_self);
+        assert!(mig.edit_meta[0].all_data_files_compacted);
+        assert_eq!(mig.edit_meta[0].delete_physical_files.len(), 2);
+        assert_eq!(mig.edit_meta[0].delete_logical_files.len(), 0);
     }
 
     #[tokio::test]
