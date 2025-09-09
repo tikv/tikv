@@ -402,6 +402,31 @@ impl PessimisticLockResults {
             _ => unreachable!(),
         }
     }
+
+    pub fn estimate_resp_size(&self) -> u64 {
+        AsRef::<Vec<PessimisticLockKeyResult>>::as_ref(&self.0)
+            .into_iter()
+            .map(|res| {
+                match res {
+                    PessimisticLockKeyResult::Empty => {
+                        1
+                    }
+                    PessimisticLockKeyResult::Value(v) => {
+                        v.as_ref().map_or(0, |v| v.len() as u64)
+                    }
+                    PessimisticLockKeyResult::Existence(_) => {
+                        2 // type + bool
+                    }
+                    PessimisticLockKeyResult::LockedWithConflict { value, conflict_ts: _ } => {
+                        10 + value.as_ref().map_or(0, |v| v.len() as u64) // 10 stands for type + bool + ts
+                    }
+                    PessimisticLockKeyResult::Waiting => unreachable!(),
+                    PessimisticLockKeyResult::Failed(_) => {
+                        1 // type, ignoring error message
+                    }
+                }
+            }).sum::<u64>()
+    }
 }
 
 #[derive(Debug, PartialEq)]
