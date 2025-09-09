@@ -166,6 +166,7 @@ fn run_impl<CER, F>(
     // Must be called after `TikvServer::init`.
     let memory_limit = tikv.core.config.memory_usage_limit.unwrap().0;
     let high_water = (tikv.core.config.memory_usage_high_water * memory_limit as f64) as u64;
+    let config_controller = tikv.cfg_controller.clone().unwrap();
     register_memory_usage_high_water(high_water);
 
     tikv.core.check_conflict_addr();
@@ -191,13 +192,12 @@ fn run_impl<CER, F>(
         let engines = tikv.engines.take().unwrap().engines;
         let kv_statistics = tikv.kv_statistics.clone();
         let raft_statistics = tikv.raft_statistics.clone();
-        let enable_graceful_shutdown = tikv.core.config.server.enable_graceful_shutdown;
         std::thread::spawn(move || {
             signal_handler::wait_for_signal(
                 Some(engines),
                 kv_statistics,
                 raft_statistics,
-                enable_graceful_shutdown,
+                config_controller,
                 Some(service_event_tx),
             )
         });
@@ -1691,7 +1691,7 @@ where
     }
 
     fn wait_for_leader_eviction(&self, now: Instant) {
-        let timeout = self.core.config.server.evict_leader_timeout.0;
+        let timeout = self.core.config.server.graceful_shutdown_timeout.0;
         let region_info_accessor = self.region_info_accessor.as_ref().unwrap();
         let check_interval = Duration::from_secs(1);
 

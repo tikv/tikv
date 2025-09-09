@@ -301,17 +301,11 @@ pub fn overwrite_config_with_cmd_args(config: &mut TikvConfig, matches: &ArgMatc
         warn!("metrics push is not supported any more.");
     }
 
-    if let Some(enable_graceful_shutdown) = matches.value_of("enable-graceful-shutdown") {
-        config.server.enable_graceful_shutdown =
-            enable_graceful_shutdown.parse().unwrap_or_else(|e| {
-                fatal!("invalid enable-graceful-shutdown value: {}", e);
+    if let Some(graceful_shutdown_timeout) = matches.value_of("graceful-shutdown-timeout") {
+        config.server.graceful_shutdown_timeout =
+            graceful_shutdown_timeout.parse().unwrap_or_else(|e| {
+                fatal!("invalid graceful-shutdown-timeout value: {}", e);
             });
-    }
-
-    if let Some(evict_leader_timeout) = matches.value_of("evict-leader-timeout") {
-        config.server.evict_leader_timeout = evict_leader_timeout.parse().unwrap_or_else(|e| {
-            fatal!("invalid evict-leader-timeout value: {}", e);
-        });
     }
 }
 

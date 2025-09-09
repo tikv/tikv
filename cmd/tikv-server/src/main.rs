@@ -161,29 +161,6 @@ fn main() {
                      leaves it empty will disable Prometheus push",
                 ),
         )
-        .arg(
-            Arg::with_name("enable-graceful-shutdown")
-                .long("enable-graceful-shutdown")
-                .takes_value(true)
-                .value_name("BOOL")
-                .help("Enable graceful shutdown for TiKV server")
-                .long_help(
-                    "Enable graceful shutdown operations like leader eviction before terminating. \
-                     Defaults to true unless explicitly set to false.",
-                ),
-        )
-        .arg(
-            Arg::with_name("evict-leader-timeout")
-                .long("evict-leader-timeout")
-                .takes_value(true)
-                .value_name("DURATION")
-                .help("Timeout for leader eviction during graceful shutdown")
-                .long_help(
-                    "Timeout for leader eviction during graceful shutdown. \
-                     After this timeout, TiKV will proceed with shutdown even if some regions \
-                     haven't completed leader transfer. Defaults to 20s.",
-                ),
-        )
         .get_matches();
 
     if matches.is_present("print-sample-config") {

@@ -9,12 +9,15 @@ pub use self::imp::wait_for_signal;
 
 #[cfg(unix)]
 mod imp {
+    use std::time::Duration;
+
     use engine_traits::MiscExt;
     use service::service_event::ServiceEvent;
     use signal_hook::{
         consts::{SIGHUP, SIGINT, SIGTERM, SIGUSR1, SIGUSR2},
         iterator::Signals,
     };
+    use tikv::config::ConfigController;
     use tikv_util::{metrics, mpsc as TikvMpsc};
 
     use super::*;
@@ -24,11 +27,17 @@ mod imp {
         engines: Option<Engines<impl KvEngine, impl RaftEngine>>,
         kv_statistics: Option<Arc<RocksStatistics>>,
         raft_statistics: Option<Arc<RocksStatistics>>,
-        enable_graceful_shutdown: bool,
+        config_controller: ConfigController,
         service_event_tx: Option<TikvMpsc::Sender<ServiceEvent>>,
     ) {
         let mut signals = Signals::new([SIGTERM, SIGINT, SIGHUP, SIGUSR1, SIGUSR2]).unwrap();
         for signal in &mut signals {
+            let enable_graceful_shutdown = config_controller
+                .get_current()
+                .server
+                .graceful_shutdown_timeout
+                .0
+                != Duration::ZERO;
             match signal {
                 SIGTERM => {
                     if enable_graceful_shutdown {

@@ -260,17 +260,11 @@ pub struct Config {
     // Interval to inspect the network latency between tikv and tikv for slow store detection.
     // If it set to 0, it will disable the inspection.
     pub inspect_network_interval: ReadableDuration,
-    /// Enable graceful shutdown for TiKV server.
-    /// When enabled, TiKV will perform graceful shutdown operations like
-    /// leader eviction before terminating.
-    #[online_config(skip)]
-    pub enable_graceful_shutdown: bool,
 
     /// Timeout for leader eviction during graceful shutdown.
     /// After this timeout, TiKV will proceed with shutdown even if
     /// some regions haven't completed leader transfer.
-    #[online_config(skip)]
-    pub evict_leader_timeout: ReadableDuration,
+    pub graceful_shutdown_timeout: ReadableDuration,
 
     // Server labels to specify some attributes about this server.
     #[online_config(skip)]
@@ -304,8 +298,7 @@ impl Default for Config {
             cluster_id: DEFAULT_CLUSTER_ID,
             addr: DEFAULT_LISTENING_ADDR.to_owned(),
             labels: HashMap::default(),
-            enable_graceful_shutdown: true,
-            evict_leader_timeout: ReadableDuration::secs(20),
+            graceful_shutdown_timeout: ReadableDuration::secs(20),
             advertise_addr: DEFAULT_ADVERTISE_LISTENING_ADDR.to_owned(),
             status_addr: DEFAULT_STATUS_ADDR.to_owned(),
             advertise_status_addr: DEFAULT_ADVERTISE_LISTENING_ADDR.to_owned(),
@@ -503,6 +496,10 @@ impl Config {
             return Err(box_err!(
                 "server.inspect-network-interval can't be less than 10ms."
             ));
+        }
+
+        if self.graceful_shutdown_timeout.0.as_secs() == 0 {
+            warn!("graceful shutdown timeout is disabled");
         }
 
         Ok(())
