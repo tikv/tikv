@@ -105,6 +105,9 @@ impl RawRecords {
         let mut raw_map: HashMap<Arc<Vec<u8>>, RawRecord> = HashMap::default();
         for (tag_info, record) in self.records.iter() {
             let tag = &tag_info.extra_attachment;
+            if record.logical_write_bytes != 0 {
+                info!("RawRecord with logical write bytes {} {} {:X?}", record.logical_write_bytes, record.network_in_bytes, tag);
+            }
             if tag.is_empty() {
                 continue;
             }

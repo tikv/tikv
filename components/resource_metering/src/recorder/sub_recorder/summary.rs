@@ -4,6 +4,7 @@ use std::sync::atomic::Ordering::{Relaxed, SeqCst};
 
 use collections::HashMap;
 use tikv_util::sys::thread::Pid;
+use tikv_util::info;
 
 use crate::{
     RawRecords,
@@ -65,6 +66,7 @@ pub fn record_logical_read_bytes(bytes: u64) {
 
 /// Records how many bytes have been written in the current context.
 pub fn record_logical_write_bytes(bytes: u64) {
+    info!("record_logical_write_bytes {}", bytes);
     STORAGE.with(|s| {
         s.borrow()
             .summary_cur_record

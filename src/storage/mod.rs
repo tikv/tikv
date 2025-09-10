@@ -94,7 +94,7 @@ use protobuf::Message;
 use raftstore::store::{ReadStats, TxnExt, WriteStats, util::build_key_range};
 use rand::prelude::*;
 use resource_control::{ResourceController, ResourceGroupManager, ResourceLimiter, TaskMetadata};
-use resource_metering::{FutureExt, ResourceTagFactory, record_network_in_bytes, record_network_out_bytes, record_logical_read_bytes};
+use resource_metering::{record_logical_read_bytes, record_network_in_bytes, record_network_out_bytes, FutureExt, ResourceTagFactory};
 use tikv_kv::{OnAppliedCb, SnapshotExt};
 use tikv_util::{
     deadline::Deadline,

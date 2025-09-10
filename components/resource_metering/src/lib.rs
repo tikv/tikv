@@ -147,7 +147,9 @@ impl Drop for Guard {
                 return;
             }
             let cur_record = ls.summary_cur_record.take_and_reset();
-            if cur_record.read_keys.load(Relaxed) == 0 && cur_record.write_keys.load(Relaxed) == 0 {
+            if cur_record.read_keys.load(Relaxed) == 0 && cur_record.write_keys.load(Relaxed) == 0 
+                && cur_record.logical_read_bytes.load(Relaxed) == 0 && cur_record.logical_write_bytes.load(Relaxed) == 0
+            {
                 return;
             }
             let mut records = ls.summary_records.lock().unwrap();

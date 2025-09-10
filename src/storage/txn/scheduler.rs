@@ -53,6 +53,7 @@ use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData, WriteEvent};
 use tikv_util::{
     memory::MemoryQuota, quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE,
 };
+use resource_metering::record_network_in_bytes;
 use tracker::{GLOBAL_TRACKERS, TrackerToken, TrackerTokenArray, set_tls_tracker_token, track};
 use txn_types::TimeStamp;
 
@@ -1244,12 +1245,13 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             }
 
             fail_point!("scheduler_process");
+            GLOBAL_TRACKERS.with_tracker(task.tracker_token(), |tracker| {
+                record_network_in_bytes(tracker.metrics.grpc_req_size);
+            });
             if task.cmd().readonly() {
                 self.process_read(snapshot, task, &mut sched_details);
-                resource_metering::record_logical_read_bytes(sched_details.stat.processed_size as u64);
             } else {
                 self.process_write(snapshot, task, &mut sched_details).await;
-                resource_metering::record_logical_write_bytes(sched_details.stat.processed_size as u64);
             };
             tls_collect_scan_details(tag.get_str(), &sched_details.stat);
             let elapsed = timer.saturating_elapsed();
