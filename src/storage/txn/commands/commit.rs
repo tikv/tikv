@@ -1,5 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use resource_metering::record_logical_write_bytes;
+use tracker::with_tls_tracker;
 // #[PerformanceCriticalPath]
 use txn_types::{CommitRole, Key};
 
@@ -82,6 +84,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Commit {
         let new_acquired_locks = txn.take_new_locks();
         let mut write_data = WriteData::from_modifies(txn.into_modifies());
         write_data.set_allowed_on_disk_almost_full();
+        with_tls_tracker(|tracker| {
+            record_logical_write_bytes(tracker.metrics.logical_write_bytes);
+        });
         Ok(WriteResult {
             ctx: self.ctx,
             to_be_write: write_data,

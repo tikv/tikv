@@ -5,6 +5,8 @@ use std::mem;
 use kvproto::kvrpcpb::{AssertionLevel, ExtraOp, PrewriteRequestPessimisticAction};
 // #[PerformanceCriticalPath]
 use txn_types::{Mutation, OldValues, TimeStamp, TxnExtra, insert_old_value_if_resolved};
+use resource_metering::record_logical_write_bytes;
+use tracker::with_tls_tracker;
 
 use crate::storage::{
     Command, ProcessResult, Result as StorageResult, Snapshot, TypedCommand,
@@ -92,6 +94,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Flush {
         let new_locks = txn.take_new_locks();
         let guards = txn.take_guards();
         assert!(guards.is_empty());
+        with_tls_tracker(|tracker| {
+            record_logical_write_bytes(tracker.metrics.logical_write_bytes);
+        });
         Ok(WriteResult {
             ctx: self.ctx,
             to_be_write: WriteData::new(txn.into_modifies(), extra),
