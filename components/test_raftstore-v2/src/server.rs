@@ -80,7 +80,7 @@ use tikv_util::{
     quota_limiter::QuotaLimiter,
     sys::thread::ThreadBuildWrapper,
     thd_name,
-    worker::{Builder as WorkerBuilder, LazyWorker},
+    worker::{Builder as WorkerBuilder, LazyWorker, Worker},
 };
 use tokio::runtime::{Builder as TokioBuilder, Handle};
 use txn_types::TxnExtraScheduler;
@@ -580,6 +580,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
             Some(store_meta),
             resource_manager.clone(),
             Arc::new(region_info_accessor.clone()),
+            Default::default(),
         );
 
         // Create deadlock service.
@@ -645,6 +646,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
                 Arc::new(DefaultGrpcMessageFilter::new(
                     server_cfg.value().reject_messages_on_memory_ratio,
                 )),
+                Worker::new("test-background-worker"),
             )
             .unwrap();
             svr.register_service(create_diagnostics(diag_service.clone()));
@@ -746,7 +748,12 @@ impl<EK: KvEngine> ServerCluster<EK> {
         self.concurrency_managers
             .insert(node_id, concurrency_manager);
 
-        let client = RaftClient::new(node_id, self.conn_builder.clone());
+        let client = RaftClient::new(
+            node_id,
+            self.conn_builder.clone(),
+            Duration::from_millis(10),
+            Worker::new("test-worker"),
+        );
         self.raft_clients.insert(node_id, client);
         Ok(node_id)
     }

@@ -4473,10 +4473,19 @@ where
         self.fsm.peer.schedule_raftlog_gc(self.ctx, compact_to);
         self.fsm.peer.last_compacted_idx = compact_to;
         let transfer_leader_state = &mut self.fsm.peer.transfer_leader_state;
-        self.fsm.peer.raft_group.mut_store().on_compact_raftlog(
-            compact_to,
-            transfer_leader_state.cache_warmup_state.as_mut(),
-        );
+        self.fsm
+            .peer
+            .raft_group
+            .mut_store()
+            .on_compact_raftlog_cache(
+                compact_to,
+                transfer_leader_state.cache_warmup_state.as_mut(),
+            );
+        self.fsm
+            .peer
+            .raft_group
+            .mut_store()
+            .cancel_generating_snap(Some(compact_to));
         if self.fsm.peer.is_witness() {
             self.fsm.peer.last_compacted_time = Instant::now();
         }
@@ -6133,10 +6142,14 @@ where
         // leader may call `get_term()` on the latest replicated index, so compact
         // entries before `alive_cache_idx` instead of `alive_cache_idx + 1`.
         let transfer_leader_state = &mut self.fsm.peer.transfer_leader_state;
-        self.fsm.peer.raft_group.mut_store().on_compact_raftlog(
-            std::cmp::min(alive_cache_idx, applied_idx + 1),
-            transfer_leader_state.cache_warmup_state.as_mut(),
-        );
+        self.fsm
+            .peer
+            .raft_group
+            .mut_store()
+            .on_compact_raftlog_cache(
+                std::cmp::min(alive_cache_idx, applied_idx + 1),
+                transfer_leader_state.cache_warmup_state.as_mut(),
+            );
         if needs_evict_entry_cache(self.ctx.cfg.evict_cache_on_memory_ratio) {
             self.fsm.peer.mut_store().evict_entry_cache(true);
             if !self.fsm.peer.get_store().is_entry_cache_empty() {
@@ -6192,6 +6205,15 @@ where
                 .inc();
             return;
         }
+
+        // If RaftEngine's compact idx exceeds the snapshot idx,
+        // means the snapshot idx has already been compacted.
+        // We should cancel the snapshot generating as it is now out of date.
+        self.fsm
+            .peer
+            .raft_group
+            .mut_store()
+            .cancel_generating_snap(Some(compact_idx));
 
         // Create a compact log request and notify directly.
         let region_id = self.fsm.peer.region().get_id();

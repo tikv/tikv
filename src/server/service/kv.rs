@@ -1560,6 +1560,7 @@ fn handle_measures_for_batch_commands(measures: &mut MeasuredBatchResponse) {
             .get(label)
             .get(resource_priority)
             .observe(elapsed.as_secs_f64());
+        GRPC_BATCH_COMMANDS_WAIT_HISTOGRAM.observe(wait.as_secs_f64());
         record_request_source_metrics(source, elapsed);
         let exec_details = resp.cmd.as_mut().and_then(|cmd| match cmd {
             Get(resp) => Some(resp.mut_exec_details_v2()),
@@ -2752,6 +2753,7 @@ impl HealthFeedbackAttacher {
         feedback.set_store_id(self.store_id);
         feedback.set_feedback_seq_no(self.seq.fetch_add(1, Ordering::Relaxed));
         feedback.set_slow_score(self.health_controller.get_raftstore_slow_score() as i32);
+        // TODO: set network slow score?
         feedback
     }
 }

@@ -295,7 +295,7 @@ pub struct TagInfos {
     pub peer_id: u64,
     // Only a read request contains the key ranges.
     pub key_ranges: Vec<(Vec<u8>, Vec<u8>)>,
-    pub extra_attachment: Vec<u8>,
+    pub extra_attachment: Arc<Vec<u8>>,
 }
 
 impl TagInfos {
@@ -306,7 +306,7 @@ impl TagInfos {
             peer_id: peer.get_id(),
             region_id: context.get_region_id(),
             key_ranges: vec![],
-            extra_attachment: Vec::from(context.get_resource_group_tag()),
+            extra_attachment: Arc::new(Vec::from(context.get_resource_group_tag())),
         }
     }
 
@@ -321,7 +321,7 @@ impl TagInfos {
             peer_id: peer.get_id(),
             region_id: context.get_region_id(),
             key_ranges,
-            extra_attachment: Vec::from(context.get_resource_group_tag()),
+            extra_attachment: Arc::new(Vec::from(context.get_resource_group_tag())),
         }
     }
 }
@@ -348,7 +348,7 @@ mod tests {
                     region_id: 2,
                     peer_id: 3,
                     key_ranges: vec![],
-                    extra_attachment: b"12345".to_vec(),
+                    extra_attachment: Arc::new(b"12345".to_vec()),
                 }),
                 resource_tag_factory,
             };
