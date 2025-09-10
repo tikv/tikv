@@ -2270,7 +2270,7 @@ fn test_destroy_race_during_atomic_snapshot_after_merge() {
     cluster.must_put(b"k4", b"v4");
 }
 
-// `test_raft_log_gc_after_merge` tests when a region is destoryed, e.g. due to
+// `test_raft_log_gc_after_merge` tests when a region is destroyed, e.g. due to
 // region merge, PeerFsm can still handle pending raft messages correctly.
 #[test]
 fn test_raft_log_gc_after_merge() {
