@@ -2,7 +2,8 @@
 
 // #[PerformanceCriticalPath]
 use protobuf::Message;
-use resource_metering::record_network_out_bytes;
+use resource_metering::{record_logical_write_bytes, record_network_out_bytes};
+use tracker::with_tls_tracker;
 use txn_types::{Key, Lock, WriteType};
 use crate::storage::{
     ProcessResult, Snapshot,
@@ -212,6 +213,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
         }
 
         record_network_out_bytes(result_size);
+        with_tls_tracker(|tracker| {
+            record_logical_write_bytes(tracker.metrics.logical_write_bytes);
+        });
         let write_result_known_txn_status =
             if let SecondaryLocksStatus::Committed(commit_ts) = &result {
                 vec![(self.start_ts, *commit_ts)]

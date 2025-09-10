@@ -2,8 +2,9 @@
 
 // #[PerformanceCriticalPath]
 use kvproto::kvrpcpb::ExtraOp;
-use resource_metering::record_network_out_bytes;
+use resource_metering::{record_logical_write_bytes, record_network_out_bytes};
 use tikv_kv::Modify;
+use tracker::with_tls_tracker;
 use txn_types::{Key, OldValues, TimeStamp, TxnExtra, insert_old_value_if_resolved};
 
 use crate::storage::{
@@ -177,6 +178,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
         let rows = if res.is_ok() { total_keys } else { 0 };
 
         record_network_out_bytes(res.as_ref().map_or(0, |v| v.estimate_resp_size() as u64));
+        with_tls_tracker(|tracker| {
+            record_logical_write_bytes(tracker.metrics.logical_write_bytes);
+        });
         let pr = ProcessResult::PessimisticLockRes { res };
 
         let to_be_write = make_write_data(modifies, old_values);

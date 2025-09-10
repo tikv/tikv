@@ -309,11 +309,14 @@ impl<L: LockManager> TxnSchedulerInner<L> {
         callback: SchedulerTaskCallback,
         prepared_latches: Option<Lock>,
     ) -> TaskContext {
+        let track_token = task.tracker_token();
         let tctx = TaskContext::new(task, callback, prepared_latches);
         let running_write_bytes = self
             .running_write_bytes
             .fetch_add(tctx.write_bytes, Ordering::AcqRel) as i64;
-        resource_metering::record_logical_write_bytes(tctx.write_bytes as u64);
+        GLOBAL_TRACKERS.with_tracker(track_token, |tracker| {
+            tracker.metrics.logical_write_bytes = tctx.write_bytes as u64;
+        });
         SCHED_WRITING_BYTES_GAUGE.set(running_write_bytes + tctx.write_bytes as i64);
         SCHED_CONTEX_GAUGE.inc();
         tctx
@@ -321,7 +324,6 @@ impl<L: LockManager> TxnSchedulerInner<L> {
 
     fn dequeue_task_context(&self, cid: u64) -> TaskContext {
         let tctx = self.get_task_slot(cid).remove(&cid).unwrap();
-
         let running_write_bytes = self
             .running_write_bytes
             .fetch_sub(tctx.write_bytes, Ordering::AcqRel) as i64;

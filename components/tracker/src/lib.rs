@@ -202,4 +202,5 @@ pub struct RequestMetrics {
 
     // recorded outside the read_pool thread, accessed inside the read_pool thread for topsql usage
     pub grpc_req_size: u64,
+    pub logical_write_bytes: u64,
 }
