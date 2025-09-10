@@ -705,7 +705,7 @@ fn test_split_continue_when_destroy_peer_after_mem_check() {
     let left_peer_2 = find_peer(&left, 2).cloned().unwrap();
     pd_client.must_remove_peer(left.get_id(), left_peer_2);
 
-    // Make sure it finish mem check before destorying.
+    // Make sure it finish mem check before destroying.
     let (mem_check_tx, mem_check_rx) = crossbeam::channel::bounded(0);
     let on_handle_apply_split_2_fp = "on_handle_apply_split_2_after_mem_check";
     fail::cfg_callback(on_handle_apply_split_2_fp, move || {
