@@ -22,7 +22,7 @@ use kvproto::{coprocessor as coppb, errorpb, kvrpcpb, kvrpcpb::CommandPri, metap
 use online_config::ConfigManager;
 use protobuf::{CodedInputStream, Message};
 use resource_control::{ResourceGroupManager, ResourceLimiter, TaskMetadata};
-use resource_metering::{FutureExt, ResourceTagFactory, StreamExt, record_network_in_bytes, record_network_out_bytes};
+use resource_metering::{FutureExt, ResourceTagFactory, StreamExt, record_network_in_bytes, record_network_out_bytes, record_logical_read_bytes};
 use tidb_query_common::{
     error::StorageError,
     execute_stats::ExecSummary,
@@ -532,7 +532,7 @@ impl<E: Engine> Endpoint<E> {
         tracker.collect_storage_statistics(storage_stats);
         let (exec_details, exec_details_v2) = tracker.get_exec_details();
         tracker.on_finish_all_items();
-        resource_metering::record_logical_read_bytes(exec_details_v2.get_scan_detail_v2().processed_versions_size);
+        record_logical_read_bytes(exec_details_v2.get_scan_detail_v2().processed_versions_size);
         let mut resp = match result {
             Ok(resp) => {
                 let resp_size = resp.data.len() as u64;
@@ -826,9 +826,10 @@ impl<E: Engine> Endpoint<E> {
                     Ok((Some(mut resp), finished)) => {
                         let resp_size = resp.data.len() as u64;
                         COPR_RESP_SIZE.inc_by(resp_size);
+                        record_network_out_bytes(resp_size);
+                        record_logical_read_bytes(exec_details_v2.get_scan_detail_v2().processed_versions_size);
                         resp.set_exec_details(exec_details);
                         resp.set_exec_details_v2(exec_details_v2);
-                        record_network_out_bytes(resp_size);
                         yield resp;
                         if finished {
                             break;

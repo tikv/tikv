@@ -94,7 +94,7 @@ use protobuf::Message;
 use raftstore::store::{ReadStats, TxnExt, WriteStats, util::build_key_range};
 use rand::prelude::*;
 use resource_control::{ResourceController, ResourceGroupManager, ResourceLimiter, TaskMetadata};
-use resource_metering::{FutureExt, ResourceTagFactory, record_network_in_bytes, record_network_out_bytes};
+use resource_metering::{FutureExt, ResourceTagFactory, record_network_in_bytes, record_network_out_bytes, record_logical_read_bytes};
 use tikv_kv::{OnAppliedCb, SnapshotExt};
 use tikv_util::{
     deadline::Deadline,
@@ -770,6 +770,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         tracker.metrics.read_pool_schedule_wait_nanos =
                             schedule_wait_time.as_nanos() as u64;
                     });
+                    record_logical_read_bytes(statistics.processed_size as u64);
                     Ok((
                         result?,
                         KvGetStatistics {
@@ -968,6 +969,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                     statistics.add(&stat);
                                     let value_size = v.as_ref().map_or(0, |v| v.as_ref().map_or(0, |v1| v1.len() ) as u64);
                                     record_network_out_bytes(value_size);
+                                    record_logical_read_bytes(statistics.processed_size as u64);
                                     consumer.consume(
                                         id,
                                         v.map_err(|e| Error::from(txn::Error::from(e)))
@@ -1151,6 +1153,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                 .map(|r| r.as_ref().map_or(0, |(k, v)| (k.len() + v.len()) as u64))
                                 .sum(),
                         );
+                        record_logical_read_bytes(reader.statistics.processed_size as u64);
                         (result, reader.statistics)
                     });
                     metrics::tls_collect_scan_details(CMD, &stats);
@@ -1404,6 +1407,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         wait_wall_time_ns: duration_to_ms(wait_wall_time),
                         process_wall_time_ns: duration_to_ms(process_wall_time),
                     };
+                    record_logical_read_bytes(stats.processed_size as u64);
                     Ok((
                         result?,
                         KvGetStatistics {
@@ -1603,6 +1607,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                 .map(|r| r.as_ref().map_or(0, |(k, v)| (k.len() + v.len()) as u64))
                                 .sum(),
                         );
+                        record_logical_read_bytes(statistics.processed_size as u64);
                         results
                             .into_iter()
                             .map(|x| x.map_err(Error::from))
@@ -1770,6 +1775,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     record_network_out_bytes(
                         locks.iter().map(|l| l.compute_size()).sum::<u32>() as u64
                     );
+                    record_logical_read_bytes(statistics.processed_size as u64);
                     Ok(locks)
                 })
             }
