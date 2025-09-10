@@ -45,6 +45,7 @@ use kvproto::{
     raft_serverpb::{ExtraMessage, ExtraMessageType, PeerState, RaftMessage, RegionLocalState},
     replication_modepb::{ReplicationMode, ReplicationStatus},
 };
+use linked_hash_map::LinkedHashMap;
 use pd_client::{Feature, FeatureGate, PdClient};
 use protobuf::Message;
 use raft::StateRole;
@@ -738,6 +739,77 @@ where
     }
 }
 
+/// A time-ordered region tracker using LinkedHashMap for efficient cleanup of
+/// stale entries. LinkedHashMap maintains insertion order, allowing O(1)
+/// updates and O(k) cleanup where k is the number of stale entries.
+struct RegionTracker {
+    regions: LinkedHashMap<u64, Instant>,
+}
+
+impl RegionTracker {
+    fn new() -> Self {
+        Self {
+            regions: LinkedHashMap::new(),
+        }
+    }
+
+    /// Update or insert a region with current timestamp.
+    /// If the region already exists, it will be moved to the end (most recent
+    /// position).
+    fn on_update(&mut self, region_id: u64) {
+        let now = Instant::now();
+        // Remove and re-insert to move to end (most recent)
+        self.regions.remove(&region_id);
+        self.regions.insert(region_id, now);
+    }
+
+    /// Remove a region from the tracker.
+    fn remove(&mut self, region_id: u64) -> bool {
+        self.regions.remove(&region_id).is_some()
+    }
+
+    fn len(&self) -> usize {
+        self.regions.len()
+    }
+
+    /// Check if the tracker is empty.
+    fn is_empty(&self) -> bool {
+        self.regions.is_empty()
+    }
+
+    /// Clean up stale regions based on timeout duration.
+    /// Also cleans up corresponding pinned regions.
+    /// Since LinkedHashMap maintains insertion order and regions are inserted
+    /// with increasing timestamps, we can efficiently remove stale regions
+    /// from the front (oldest entries) and stop when we find a non-stale entry.
+    fn cleanup_stale(&mut self, timeout: Duration, pinned_regions: &mut HashSet<u64>) {
+        let now = Instant::now();
+        // Remove stale regions from the front (oldest entries)
+        while let Some((&region_id, &timestamp)) = self.regions.front() {
+            if now.duration_since(timestamp) > timeout {
+                // This entry is stale, remove it
+                self.regions.pop_front();
+                // Also remove from pinned regions if it exists there
+                pinned_regions.remove(&region_id);
+            } else {
+                // This entry is not stale, stop here since remaining entries are newer
+                break;
+            }
+        }
+    }
+
+    /// Get all region IDs in the tracker (for iteration purposes).
+    fn region_ids(&self) -> impl Iterator<Item = u64> + '_ {
+        self.regions.keys().copied()
+    }
+}
+
+impl Default for RegionTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 struct Store {
     // store id, before start the id is 0.
     id: u64,
@@ -746,7 +818,8 @@ struct Store {
     consistency_check_time: HashMap<u64, Instant>,
     store_reachability: HashMap<u64, StoreReachability>,
     // Region leader write rate information for GC decision
-    high_log_lag_regions: HashMap<u64, Instant>, // region_id -> last_update_time
+    // Using time-ordered structure for efficient cleanup of stale regions
+    high_log_lag_regions: RegionTracker,
     last_pinned_regions: HashSet<u64>,
 }
 
@@ -776,7 +849,7 @@ where
                 start_time: None,
                 consistency_check_time: HashMap::default(),
                 store_reachability: HashMap::default(),
-                high_log_lag_regions: HashMap::default(),
+                high_log_lag_regions: RegionTracker::new(),
                 last_pinned_regions: HashSet::default(),
             },
             receiver: rx,
@@ -3074,10 +3147,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
     }
 
     fn on_receive_region_info_from_peer(&mut self, region_id: u64) {
-        self.fsm
-            .store
-            .high_log_lag_regions
-            .insert(region_id, Instant::now());
+        self.fsm.store.high_log_lag_regions.on_update(region_id);
     }
 
     fn register_pd_store_heartbeat_tick(&self) {
@@ -3158,20 +3228,12 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
     fn cleanup_stale_region_data(&mut self) {
         // Clean up stale regions based on timeout
         let timeout_duration = self.ctx.cfg.peer_stale_state_check_interval.0 * 2; // 2x sampling interval
-        let now = Instant::now();
+
+        // Clean up stale regions and pinned regions in one pass
         self.fsm
             .store
             .high_log_lag_regions
-            .retain(|region_id, last_update_time| {
-                if now.duration_since(*last_update_time) <= timeout_duration {
-                    if self.fsm.store.last_pinned_regions.contains(&region_id) {
-                        self.fsm.store.last_pinned_regions.remove(region_id);
-                    }
-                    true
-                } else {
-                    false
-                }
-            });
+            .cleanup_stale(timeout_duration, &mut self.fsm.store.last_pinned_regions);
     }
 
     fn adjust_pinned_regions(&mut self, pin_count: usize) {
@@ -3191,7 +3253,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
             }
         } else {
             let mut needed = pin_count - current_len;
-            for (&region_id, _) in &self.fsm.store.high_log_lag_regions {
+            for region_id in self.fsm.store.high_log_lag_regions.region_ids() {
                 if needed == 0 {
                     break;
                 }
@@ -3213,19 +3275,28 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         // At least pin 1 region to avoid the corner case of pin_count = 0
         let pin_count = std::cmp::max(1, (len as f64 * dynamic_pin_ratio) as usize);
         self.adjust_pinned_regions(pin_count);
-        // Retain pinned in the map and collect GC candidates at the same time
+
+        // Collect GC candidates and remove non-pinned regions
         let mut gc_candidate_regions: Vec<u64> = Vec::with_capacity(len);
-        self.fsm
+        let regions_to_remove: Vec<u64> = self
+            .fsm
             .store
             .high_log_lag_regions
-            .retain(|region_id, _last_update_time| {
+            .region_ids()
+            .filter(|region_id| {
                 if self.fsm.store.last_pinned_regions.contains(region_id) {
-                    true
+                    false // Keep pinned regions
                 } else {
                     gc_candidate_regions.push(*region_id);
-                    false
+                    true // Remove non-pinned regions
                 }
-            });
+            })
+            .collect();
+
+        // Remove non-pinned regions
+        for region_id in regions_to_remove {
+            self.fsm.store.high_log_lag_regions.remove(region_id);
+        }
 
         info!(
             "create region classification: {} total regions, {} GC candidates, {} pinned regions",

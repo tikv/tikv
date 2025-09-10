@@ -5336,6 +5336,7 @@ dependencies = [
  "keys",
  "kvproto",
  "lazy_static",
+ "linked-hash-map",
  "log_wrappers",
  "memory_trace_macros",
  "online_config",
