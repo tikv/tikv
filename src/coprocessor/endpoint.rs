@@ -463,7 +463,6 @@ impl<E: Engine> Endpoint<E> {
     ) -> Result<MemoryTraceGuard<coppb::Response>> {
         with_tls_tracker(|tracker1| {
             record_network_in_bytes(tracker1.metrics.grpc_req_size);
-            info!("Check coprocessor resource group tag"; "ResourceGroupTagLen"=>tracker1.req_info.resource_group_tag.len(), "GlobalTracker==LocalTracker"=>(tracker1.req_info.resource_group_tag == tracker.req_ctx.context.resource_group_tag));
         });
         // When this function is being executed, it may be queued for a long time, so
         // that deadline may exceed.
@@ -697,13 +696,11 @@ impl<E: Engine> Endpoint<E> {
                 // Disable the coprocessor cache path for the batched tasks, the
                 // coprocessor cache related fields are not passed in the "task" by now.
                 new_req.is_cache_enabled = false;
-                info!("process batched coprocessor task"; "OldRegionID" => new_req.get_context().get_region_id());
                 new_req.ranges = task.take_ranges();
                 let new_context = new_req.mut_context();
                 new_context.set_region_id(task.get_region_id());
                 new_context.set_region_epoch(task.take_region_epoch());
                 new_context.set_peer(task.take_peer());
-                info!("process batched coprocessor task"; "BatchedRegionID" => new_req.get_context().get_region_id());
                 (new_req, task.get_task_id())
             })
             .collect();
