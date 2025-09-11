@@ -740,8 +740,7 @@ where
 }
 
 /// A time-ordered region tracker using LinkedHashMap for efficient cleanup of
-/// stale entries. LinkedHashMap maintains insertion order, allowing O(1)
-/// updates and O(k) cleanup where k is the number of stale entries.
+/// stale entries.
 struct RegionTracker {
     regions: LinkedHashMap<u64, Instant>,
 }
@@ -821,11 +820,25 @@ struct Store {
     // Using time-ordered structure for efficient cleanup of stale regions
     high_log_lag_regions: RegionTracker,
     last_pinned_regions: HashSet<u64>,
+    // Batch GC state management
+    batch_gc_state: Option<BatchGcState>,
 }
 
 struct StoreReachability {
     last_broadcast: Instant,
     received_message_count: u64,
+}
+
+/// State for managing batch GC operations
+struct BatchGcState {
+    /// Regions to be GC'd in batches
+    gc_candidate_regions: Vec<u64>,
+    /// Current batch index
+    current_batch: usize,
+    /// Total number of batches
+    total_batches: usize,
+    /// Number of regions per batch
+    batch_size: usize,
 }
 
 pub struct StoreFsm<EK>
@@ -851,6 +864,7 @@ where
                 store_reachability: HashMap::default(),
                 high_log_lag_regions: RegionTracker::new(),
                 last_pinned_regions: HashSet::default(),
+                batch_gc_state: None,
             },
             receiver: rx,
         });
@@ -3176,53 +3190,11 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         )
     }
 
-    // Force GC tick registration is no longer needed
-    fn register_raft_engine_force_gc_tick(&self) {
-        self.ctx.schedule_store_tick(
-            StoreTick::RaftEngineForceGc,
-            self.ctx.cfg.raft_engine_purge_interval.0,
-        );
-    }
-
-    fn on_raft_engine_force_gc_tick(&mut self) {
-        self.register_raft_engine_force_gc_tick();
-
-        // Check if force GC is needed and execute it
-        if let Some(over_ratio) = self.check_force_gc_needed() {
-            info!(
-                "force GC needed based on memory pressure, over_ratio: {}",
-                over_ratio
-            );
-            self.send_force_compact_messages(over_ratio);
-        }
-    }
-
-    fn send_force_compact_messages(&mut self, over_ratio: f64) {
-        if self.fsm.store.high_log_lag_regions.is_empty() {
-            return;
-        }
-        // Create region classification on-demand when force compact is needed
-        let gc_candidate_regions = self.create_region_classification(over_ratio);
-        // Send force compact messages to GC candidate regions
-        for region_id in &gc_candidate_regions {
-            let _ = self.ctx.router.send(
-                *region_id,
-                PeerMsg::CasualMessage(Box::new(CasualMessage::ForceCompactRaftLogs)),
-            );
-        }
-    }
-
     fn register_stale_region_check_tick(&self) {
         self.ctx.schedule_store_tick(
             StoreTick::StaleRegionCheck,
             self.ctx.cfg.peer_stale_state_check_interval.0,
         );
-    }
-
-    fn on_stale_region_check_tick(&mut self) {
-        self.register_stale_region_check_tick();
-        // Clean up stale regions
-        self.cleanup_stale_region_data();
     }
 
     fn cleanup_stale_region_data(&mut self) {
@@ -3234,6 +3206,73 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
             .store
             .high_log_lag_regions
             .cleanup_stale(timeout_duration, &mut self.fsm.store.last_pinned_regions);
+    }
+
+    fn on_stale_region_check_tick(&mut self) {
+        self.register_stale_region_check_tick();
+        // Clean up stale regions
+        self.cleanup_stale_region_data();
+    }
+    // Force GC tick registration is no longer needed
+    fn register_raft_engine_force_gc_tick(&self) {
+        self.ctx.schedule_store_tick(
+            StoreTick::RaftEngineForceGc,
+            self.ctx.cfg.raft_engine_purge_interval.0,
+        );
+    }
+
+    fn check_force_gc_needed(&self) -> Option<f64> {
+        fail_point!("needs_force_compact", |_| {
+            info!("force GC triggered by failpoint for testing");
+            Some(1.0) // Return a test over_ratio
+        });
+        // If there is no region leader growth, no need to check
+        if self.fsm.store.high_log_lag_regions.is_empty() {
+            return None;
+        }
+        // Get current raft engine memory usage
+        let raftengine_memory_usage = self.ctx.engines.raft.get_memory_usage().unwrap() as f64;
+        let mut over_ratio = 0.0;
+        // If raft engine memory usage exceeds threshold, we need to shrink pinned
+        // regions to release more memory
+        if needs_force_compact(
+            &mut over_ratio,
+            raftengine_memory_usage,
+            self.ctx.cfg.evict_cache_on_memory_ratio,
+        ) {
+            info!(
+                "force GC needed based on memory pressure, over_ratio: {}",
+                over_ratio
+            );
+            return Some(over_ratio);
+        }
+        None
+    }
+
+    fn send_force_compact_messages(&mut self, over_ratio: f64) {
+        if self.fsm.store.high_log_lag_regions.is_empty() {
+            return;
+        }
+        self.start_batch_gc(over_ratio);
+    }
+
+    fn on_raft_engine_force_gc_tick(&mut self) {
+        self.register_raft_engine_force_gc_tick();
+
+        // Check if we're in batch processing mode
+        if self.fsm.store.batch_gc_state.is_some() {
+            self.process_batch_gc();
+            return;
+        }
+
+        // Check if force GC is needed and execute it
+        if let Some(over_ratio) = self.check_force_gc_needed() {
+            info!(
+                "force GC needed based on memory pressure, over_ratio: {}",
+                over_ratio
+            );
+            self.send_force_compact_messages(over_ratio);
+        }
     }
 
     fn adjust_pinned_regions(&mut self, pin_count: usize) {
@@ -3266,13 +3305,11 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
     }
 
     fn create_region_classification(&mut self, over_ratio: f64) -> Vec<u64> {
-        // Collect all (region_id, growth) into a vector
         let len = self.fsm.store.high_log_lag_regions.len();
+
         // Calculate dynamic pin ratio based on memory pressure
         let base_pin_ratio = self.ctx.cfg.pin_compact_region_ratio;
         let dynamic_pin_ratio = base_pin_ratio / over_ratio;
-
-        // At least pin 1 region to avoid the corner case of pin_count = 0
         let pin_count = std::cmp::max(1, (len as f64 * dynamic_pin_ratio) as usize);
         self.adjust_pinned_regions(pin_count);
 
@@ -3299,40 +3336,97 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         }
 
         info!(
-            "create region classification: {} total regions, {} GC candidates, {} pinned regions",
+            "Region classification: {} total, {} GC candidates, {} pinned",
             len,
             gc_candidate_regions.len(),
-            self.fsm.store.last_pinned_regions.len(),
+            self.fsm.store.last_pinned_regions.len()
         );
         gc_candidate_regions
     }
 
-    fn check_force_gc_needed(&self) -> Option<f64> {
-        fail_point!("needs_force_compact", |_| {
-            info!("force GC triggered by failpoint for testing");
-            Some(1.0) // Return a test over_ratio
+    fn start_batch_gc(&mut self, over_ratio: f64) {
+        // Create region classification
+        let gc_candidate_regions = self.create_region_classification(over_ratio);
+        if gc_candidate_regions.is_empty() {
+            return;
+        }
+
+        // Calculate total batches: 1 batch if < 100 regions, otherwise
+        // sqrt(gc_candidates / 10)
+        let total_batches = if gc_candidate_regions.len() < 100 {
+            1
+        } else {
+            (gc_candidate_regions.len() as f64 / 10.0).sqrt().ceil() as usize
+        };
+        let batch_size = (gc_candidate_regions.len() + total_batches - 1) / total_batches;
+
+        self.fsm.store.batch_gc_state = Some(BatchGcState {
+            gc_candidate_regions,
+            current_batch: 0,
+            total_batches,
+            batch_size,
         });
-        // If there is no region leader growth, no need to check
-        if self.fsm.store.high_log_lag_regions.is_empty() {
-            return None;
-        }
-        // Get current raft engine memory usage
-        let raftengine_memory_usage = self.ctx.engines.raft.get_memory_usage().unwrap() as f64;
-        let mut over_ratio = 0.0;
-        // If raft engine memory usage exceeds threshold, we need to shrink pinned
-        // regions to release more memory
-        if needs_force_compact(
-            &mut over_ratio,
-            raftengine_memory_usage,
-            self.ctx.cfg.evict_cache_on_memory_ratio,
-        ) {
-            info!(
-                "force GC needed based on memory pressure, over_ratio: {}",
-                over_ratio
+
+        info!(
+            "Starting batch GC: {} regions, {} batches, {} per batch",
+            self.fsm.store.high_log_lag_regions.len(),
+            total_batches,
+            batch_size
+        );
+        // After 5 seconds, start the first batch
+        self.ctx
+            .schedule_store_tick(StoreTick::RaftEngineForceGc, Duration::from_secs(5));
+    }
+
+    fn process_batch_gc(&mut self) {
+        let mut batch_state = match self.fsm.store.batch_gc_state.take() {
+            Some(state) => state,
+            None => return,
+        };
+
+        // Process current batch
+        let start_idx = batch_state.current_batch * batch_state.batch_size;
+        let end_idx = std::cmp::min(
+            start_idx + batch_state.batch_size,
+            batch_state.gc_candidate_regions.len(),
+        );
+        let current_batch_regions = &batch_state.gc_candidate_regions[start_idx..end_idx];
+
+        // Send force compact messages
+        for &region_id in current_batch_regions {
+            let _ = self.ctx.router.send(
+                region_id,
+                PeerMsg::CasualMessage(Box::new(CasualMessage::ForceCompactRaftLogs)),
             );
-            return Some(over_ratio);
         }
-        None
+
+        // Remove processed regions from high_log_lag_regions
+        for &region_id in current_batch_regions {
+            self.fsm.store.high_log_lag_regions.remove(region_id);
+        }
+
+        info!(
+            "Processed batch {}/{}: {} regions",
+            batch_state.current_batch + 1,
+            batch_state.total_batches,
+            current_batch_regions.len()
+        );
+        batch_state.current_batch += 1;
+
+        if batch_state.current_batch >= batch_state.total_batches {
+            info!(
+                "Batch GC completed: {} regions in {} batches",
+                batch_state.gc_candidate_regions.len(),
+                batch_state.total_batches
+            );
+        } else {
+            let interval_per_batch =
+                self.ctx.cfg.raft_engine_purge_interval.0 / batch_state.total_batches as u32;
+            let interval = interval_per_batch.max(Duration::from_secs(5));
+            self.fsm.store.batch_gc_state = Some(batch_state);
+            self.ctx
+                .schedule_store_tick(StoreTick::RaftEngineForceGc, interval);
+        }
     }
 }
 
