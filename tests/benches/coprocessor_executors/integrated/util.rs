@@ -75,6 +75,7 @@ where
         crate::util::bencher::BatchNextAllBencher::new(|| {
             tidb_query_executors::runner::build_executors::<_, ApiV1>(
                 black_box(executors.to_vec()),
+                &[],
                 black_box(TikvStorage::new(ToTxnStore::<T>::to_store(store), false)),
                 StubAccessor::none(),
                 black_box(ranges.to_vec()),

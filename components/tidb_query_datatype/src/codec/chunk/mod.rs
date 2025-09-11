@@ -4,7 +4,7 @@ mod chunk;
 mod column;
 
 pub use self::{
-    chunk::{Chunk, ChunkEncoder},
+    chunk::{Chunk, ChunkEncoder, RowIterator},
     column::{ChunkColumnEncoder, Column},
 };
 pub use crate::codec::{Error, Result};
