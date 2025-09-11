@@ -2,6 +2,7 @@
 
 // #[PerformanceCriticalPath]
 use txn_types::{Key, TimeStamp};
+
 use crate::storage::{
     ProcessResult, Snapshot,
     kv::WriteData,
@@ -72,7 +73,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Cleanup {
 
         let new_acquired_locks = txn.take_new_locks();
         let mut write_data = WriteData::from_modifies(txn.into_modifies());
-        write_data.set_allowed_on_disk_almost_full();     
+        write_data.set_allowed_on_disk_almost_full();
         Ok(WriteResult {
             ctx: self.ctx,
             to_be_write: write_data,

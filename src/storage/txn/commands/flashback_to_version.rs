@@ -2,6 +2,7 @@
 
 // #[PerformanceCriticalPath]
 use std::mem;
+
 use tikv_kv::ScanMode;
 use txn_types::{Key, TimeStamp};
 
