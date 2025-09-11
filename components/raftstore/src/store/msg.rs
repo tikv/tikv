@@ -638,7 +638,8 @@ pub enum CasualMessage<EK: KvEngine> {
     RegionOverlapped,
     /// Notifies that a new snapshot has been generated.
     SnapshotGenerated,
-    /// Force compact raft logs
+    /// Generally Raft leader keeps as more as possible logs for followers,
+    /// however `ForceCompactRaftLogs` only cares the leader itself.
     ForceCompactRaftLogs,
     /// Purge need to gc logs
     RaftEnginePurge,
@@ -997,7 +998,7 @@ where
         region_ids: Vec<u64>,
     },
 
-    /// Region leader write rate update (only sent by leaders)
+    /// High log lag region (only sent by leaders)
     HighLogLagRegion {
         region_id: u64,
     },

@@ -87,7 +87,6 @@ pub struct Config {
     // When the approximate size of raft log entries exceed this value,
     // gc will be forced trigger.
     pub raft_log_gc_size_limit: Option<ReadableSize>,
-
     /// The maximum raft log numbers that applied_index can be ahead of
     /// persisted_index.
     pub max_apply_unpersisted_log_limit: u64,

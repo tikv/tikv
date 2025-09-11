@@ -835,20 +835,6 @@ where
         matches!(*self.snap_state.borrow(), SnapState::Generating { .. })
     }
 
-    /// Return the index of the snapshot that is currently being generated, if
-    /// any.
-    ///
-    /// This is useful to avoid over-aggressive raft log compaction that may
-    /// abort an ongoing snapshot generation. Callers can clamp compaction
-    /// index to `snap_index + 1` to keep the snapshot valid.
-    #[inline]
-    pub fn get_generating_snap_index(&self) -> Option<u64> {
-        match &*self.snap_state.borrow() {
-            SnapState::Generating { index, .. } => Some(index.load(Ordering::SeqCst)),
-            _ => None,
-        }
-    }
-
     /// Check if the storage is applying a snapshot.
     #[inline]
     pub fn check_applying_snap(&mut self) -> CheckApplyingSnapStatus {

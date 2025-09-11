@@ -170,7 +170,7 @@ where
     /// deleted if the skip time reaches this `skip_gc_raft_log_ticks`.
     skip_gc_raft_log_ticks: usize,
 
-    /// Accumulated interval time for region growth sampling
+    /// Accumulated interval time for high log lag region sampling
     sampling_interval: u64,
 
     reactivate_memory_lock_ticks: usize,
@@ -6055,7 +6055,6 @@ where
             // when the role becomes follower.
             return;
         }
-
         if !self.fsm.peer.get_store().is_entry_cache_empty() || !self.ctx.cfg.hibernate_regions {
             self.register_raft_gc_log_tick();
         }
