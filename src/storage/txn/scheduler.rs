@@ -310,14 +310,10 @@ impl<L: LockManager> TxnSchedulerInner<L> {
         callback: SchedulerTaskCallback,
         prepared_latches: Option<Lock>,
     ) -> TaskContext {
-        let track_token = task.tracker_token();
         let tctx = TaskContext::new(task, callback, prepared_latches);
         let running_write_bytes = self
             .running_write_bytes
             .fetch_add(tctx.write_bytes, Ordering::AcqRel) as i64;
-        GLOBAL_TRACKERS.with_tracker(track_token, |tracker| {
-            tracker.metrics.logical_write_bytes = tctx.write_bytes as u64;
-        });
         SCHED_WRITING_BYTES_GAUGE.set(running_write_bytes + tctx.write_bytes as i64);
         SCHED_CONTEX_GAUGE.inc();
         tctx
