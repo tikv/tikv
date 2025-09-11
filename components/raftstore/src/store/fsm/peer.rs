@@ -6133,6 +6133,7 @@ where
             if applied_count > self.ctx.cfg.raft_log_gc_count_limit() / 10 {
                 let store_msg: StoreMsg<EK> = StoreMsg::HighLogLagRegion {
                     region_id: self.fsm.region_id(),
+                    timestamp: std::time::Instant::now(),
                 };
                 if let Err(e) = self.ctx.router.send_control(store_msg) {
                     warn!(

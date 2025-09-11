@@ -752,14 +752,13 @@ impl RegionTracker {
         }
     }
 
-    /// Update or insert a region with current timestamp.
+    /// Update or insert a region with provided timestamp.
     /// If the region already exists, it will be moved to the end (most recent
     /// position).
-    fn on_update(&mut self, region_id: u64) {
-        let now = Instant::now();
+    fn on_update(&mut self, region_id: u64, timestamp: Instant) {
         // Remove and re-insert to move to end (most recent)
         self.regions.remove(&region_id);
-        self.regions.insert(region_id, now);
+        self.regions.insert(region_id, timestamp);
     }
 
     /// Remove a region from the tracker.
@@ -1021,8 +1020,11 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 } => {
                     self.on_wake_up_regions(abnormal_stores, region_ids);
                 }
-                StoreMsg::HighLogLagRegion { region_id } => {
-                    self.on_receive_region_info_from_peer(region_id);
+                StoreMsg::HighLogLagRegion {
+                    region_id,
+                    timestamp,
+                } => {
+                    self.on_receive_region_info_from_peer(region_id, timestamp);
                 }
             }
         }
@@ -3160,8 +3162,11 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         }
     }
 
-    fn on_receive_region_info_from_peer(&mut self, region_id: u64) {
-        self.fsm.store.high_log_lag_regions.on_update(region_id);
+    fn on_receive_region_info_from_peer(&mut self, region_id: u64, timestamp: std::time::Instant) {
+        self.fsm
+            .store
+            .high_log_lag_regions
+            .on_update(region_id, timestamp);
     }
 
     fn register_pd_store_heartbeat_tick(&self) {

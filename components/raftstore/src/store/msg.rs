@@ -1001,6 +1001,7 @@ where
     /// High log lag region (only sent by leaders)
     HighLogLagRegion {
         region_id: u64,
+        timestamp: std::time::Instant,
     },
 
     /// Message only used for test.
