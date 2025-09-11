@@ -280,6 +280,7 @@ mod tests {
             report_receiver_interval: ReadableDuration::minutes(2),
             max_resource_groups: 3000,
             precision: ReadableDuration::secs(2),
+            enable_network_io_collection: false,
         }));
         assert_eq!(r.get_interval(), Duration::from_secs(120));
         let mut records = HashMap::default();

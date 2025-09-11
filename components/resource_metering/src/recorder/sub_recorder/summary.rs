@@ -33,7 +33,7 @@ pub fn record_write_keys(count: u32) {
 
 /// Records how many bytes have been received in the current context.
 pub fn record_network_in_bytes(bytes: u64) {
-    if ENABLE_NETWORK_IO_COLLECTION.load(Relaxed) == false {
+    if !ENABLE_NETWORK_IO_COLLECTION.load(Relaxed) {
         return;
     }
     STORAGE.with(|s| {
@@ -46,7 +46,7 @@ pub fn record_network_in_bytes(bytes: u64) {
 
 /// Records how many bytes have been sent in the current context.
 pub fn record_network_out_bytes(bytes: u64) {
-    if ENABLE_NETWORK_IO_COLLECTION.load(Relaxed) == false {
+    if !ENABLE_NETWORK_IO_COLLECTION.load(Relaxed) {
         return;
     }
     STORAGE.with(|s| {
@@ -59,7 +59,7 @@ pub fn record_network_out_bytes(bytes: u64) {
 
 /// Records how many bytes have been read in the current context.
 pub fn record_logical_read_bytes(bytes: u64) {
-    if ENABLE_NETWORK_IO_COLLECTION.load(Relaxed) == false {
+    if !ENABLE_NETWORK_IO_COLLECTION.load(Relaxed) {
         return;
     }
     STORAGE.with(|s| {
@@ -72,7 +72,7 @@ pub fn record_logical_read_bytes(bytes: u64) {
 
 /// Records how many bytes have been written in the current context.
 pub fn record_logical_write_bytes(bytes: u64) {
-    if ENABLE_NETWORK_IO_COLLECTION.load(Relaxed) == false {
+    if !ENABLE_NETWORK_IO_COLLECTION.load(Relaxed) {
         return;
     }
     STORAGE.with(|s| {
