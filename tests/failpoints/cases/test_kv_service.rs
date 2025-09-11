@@ -375,12 +375,18 @@ fn test_scan_locks_with_in_progress_transfer_leader() {
 #[test]
 fn test_dup_key_debug() {
     init_log_for_test();
-    let (cluster, leader, ctx) = must_new_cluster_mul(1);
+    let (mut cluster, _, mut ctx) = must_new_cluster_and_kv_client_mul(1);
+    cluster.pd_client.disable_default_operator();
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    let leader_peer = cluster.leader_of_region(1).unwrap();
+    ctx.set_peer(leader_peer.clone());
+    let key = b"k";
+    let leader_region = cluster.get_region(key);
+    ctx.set_region_epoch(leader_region.get_region_epoch().clone());
     let env = Arc::new(Environment::new(1));
-    let channel = ChannelBuilder::new(env)
-        .keepalive_time(Duration::from_millis(500))
-        .keepalive_timeout(Duration::from_millis(500))
-        .connect(&cluster.sim.read().unwrap().get_addr(leader.get_store_id()));
+    let channel =
+        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader_peer.get_store_id()));
     let client = TikvClient::new(channel);
 
     let mut mutation = Mutation::default();
