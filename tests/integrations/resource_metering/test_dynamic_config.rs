@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{iter, thread::sleep, time::Duration};
-
+use resource_metering::ENABLE_NETWORK_IO_COLLECTION;
 use rand::prelude::SliceRandom;
 use test_util::alloc_port;
 use tikv_util::config::ReadableDuration;
