@@ -88,7 +88,10 @@ use crate::{
         local_metrics::{RaftMetrics, TimeTracker},
         memory::*,
         metrics::*,
-        msg::{Callback, CampaignType, ExtCallback, InspectedRaftMessage, PeerClearMetaStat, RaftLogGcAction},
+        msg::{
+            Callback, CampaignType, ExtCallback, InspectedRaftMessage, PeerClearMetaStat,
+            RaftLogGcAction,
+        },
         peer::{ConsistencyState, Peer, PersistSnapshotResult, StaleState, TransferLeaderContext},
         region_meta::RegionMeta,
         snapshot_backup::{AbortReason, SnapshotBrState, SnapshotBrWaitApplyRequest},
