@@ -405,7 +405,7 @@ impl PessimisticLockResults {
 
     pub fn estimate_resp_size(&self) -> u64 {
         AsRef::<Vec<PessimisticLockKeyResult>>::as_ref(&self.0)
-            .into_iter()
+            .iter()
             .map(|res| {
                 match res {
                     PessimisticLockKeyResult::Empty => {
