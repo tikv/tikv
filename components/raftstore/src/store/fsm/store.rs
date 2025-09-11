@@ -3220,9 +3220,8 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
             (region_count * 10).isqrt()
         };
 
-        // Clean up stale regions based on timeout
         let timeout_duration = self.ctx.cfg.peer_stale_state_check_interval.0 * 2; // 2x sampling interval
-        // Clean up stale regions and pinned regions in one pass
+        // If a region is stale, it will also be removed from last_pinned_regions
         self.fsm.store.high_log_lag_regions.cleanup_stale(
             timeout_duration,
             &mut self.fsm.store.last_pinned_regions,
@@ -3295,7 +3294,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
             self.send_force_compact_messages(over_ratio);
         }
     }
-
+    // adjust the pinned regions to the target pin count
     fn adjust_pinned_regions(&mut self, pin_count: usize) {
         let current_len = self.fsm.store.last_pinned_regions.len();
         if pin_count < current_len {
@@ -3336,26 +3335,6 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
 
         // Collect GC candidates and remove non-pinned regions
         let mut gc_candidate_regions: Vec<u64> = Vec::with_capacity(len);
-        let regions_to_remove: Vec<u64> = self
-            .fsm
-            .store
-            .high_log_lag_regions
-            .region_ids()
-            .filter(|region_id| {
-                if self.fsm.store.last_pinned_regions.contains(region_id) {
-                    false // Keep pinned regions
-                } else {
-                    gc_candidate_regions.push(*region_id);
-                    true // Remove non-pinned regions
-                }
-            })
-            .collect();
-
-        // Remove non-pinned regions
-        for region_id in regions_to_remove {
-            self.fsm.store.high_log_lag_regions.remove(region_id);
-        }
-
         info!(
             "Region classification: {} total, {} GC candidates, {} pinned",
             len,
@@ -3433,7 +3412,9 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
             current_batch_regions.len()
         );
         batch_state.current_batch += 1;
-
+        let interval = (self.ctx.cfg.raft_engine_purge_interval.0
+            / batch_state.total_batches as u32)
+            .max(Duration::from_secs(5));
         if batch_state.current_batch >= batch_state.total_batches {
             info!(
                 "Batch GC completed: {} regions in {} batches",
@@ -3441,13 +3422,10 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
                 batch_state.total_batches
             );
         } else {
-            let interval = (self.ctx.cfg.raft_engine_purge_interval.0
-                / batch_state.total_batches as u32)
-                .max(Duration::from_secs(5));
             self.fsm.store.batch_gc_state = Some(batch_state);
-            self.ctx
-                .schedule_store_tick(StoreTick::RaftEngineForceGc, interval);
         }
+        self.ctx
+            .schedule_store_tick(StoreTick::RaftEngineForceGc, interval);
     }
 }
 
