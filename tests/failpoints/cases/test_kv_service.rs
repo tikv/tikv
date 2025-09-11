@@ -14,6 +14,7 @@ use test_raftstore::{
     must_new_cluster_mul, new_server_cluster, try_kv_prewrite_with, try_kv_prewrite_with_impl,
 };
 use test_raftstore_macro::test_case;
+use test_util::init_log_for_test;
 use tikv_util::{config::ReadableDuration, store::new_peer, HandyRwLock};
 use txn_types::Key;
 
@@ -369,4 +370,34 @@ fn test_scan_locks_with_in_progress_transfer_leader() {
     assert_eq!(scan_lock_resp.locks.to_vec()[0].key, k1);
     assert_eq!(scan_lock_resp.locks.to_vec()[1].lock_version, start_ts);
     assert_eq!(scan_lock_resp.locks.to_vec()[1].key, k2);
+}
+
+#[test]
+fn test_dup_key_debug() {
+    init_log_for_test();
+    let (cluster, leader, ctx) = must_new_cluster_mul(1);
+    let env = Arc::new(Environment::new(1));
+    let channel = ChannelBuilder::new(env)
+        .keepalive_time(Duration::from_millis(500))
+        .keepalive_timeout(Duration::from_millis(500))
+        .connect(&cluster.sim.read().unwrap().get_addr(leader.get_store_id()));
+    let client = TikvClient::new(channel);
+
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(b"k".to_vec());
+    mutation.set_value(b"v".to_vec());
+
+    let mut mutation2 = Mutation::default();
+    mutation2.set_op(Op::Put);
+    mutation2.set_key(b"k".to_vec());
+    mutation2.set_value(b"v2".to_vec());
+    // ERROR logs should be printed.
+    must_kv_prewrite(
+        &client,
+        ctx.clone(),
+        vec![mutation.clone(), mutation2.clone()],
+        b"k".to_vec(),
+        10,
+    );
 }

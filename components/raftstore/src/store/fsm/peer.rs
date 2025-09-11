@@ -496,7 +496,7 @@ where
                     let key = req.get_put().get_key();
                     if !self.lock_cf_keys.insert(key.to_vec()) {
                         error!(
-                            "found duplicate key in Lock CF PUT request between batched requests. \
+                            "[for debug] found duplicate key in Lock CF PUT request between batched requests. \
                             key: {:?}, existing batch request: {:?}, new request to add: {:?}",
                             key, self.request, request
                         );
@@ -730,7 +730,7 @@ where
                                 let key = req.get_put().get_key();
                                 if !keys_set.insert(key.to_vec()) {
                                     error!(
-                                        "found duplicate key in Lock CF PUT request, key: {:?}, cmd: {:?}",
+                                        "[for debug] found duplicate key in Lock CF PUT request, key: {:?}, cmd: {:?}",
                                         key, cmd
                                     );
                                 }

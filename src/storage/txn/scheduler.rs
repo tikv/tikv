@@ -1845,7 +1845,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                                 std::collections::hash_map::Entry::Occupied(e) => {
                                     let existing_value = e.get();
                                     error!(
-                                        "duplicate key in CF_LOCK PUT";
+                                        "[for debug] duplicate key in CF_LOCK PUT";
                                         "key" => ?key,
                                         "existing_value" => ?existing_value,
                                         "new_value" => ?value,
