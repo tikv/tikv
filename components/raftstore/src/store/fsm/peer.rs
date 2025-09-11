@@ -88,7 +88,7 @@ use crate::{
         local_metrics::{RaftMetrics, TimeTracker},
         memory::*,
         metrics::*,
-        msg::{Callback, CampaignType, ExtCallback, InspectedRaftMessage, RaftLogGcAction},
+        msg::{Callback, CampaignType, ExtCallback, InspectedRaftMessage, PeerClearMetaStat, RaftLogGcAction},
         peer::{ConsistencyState, Peer, PersistSnapshotResult, StaleState, TransferLeaderContext},
         region_meta::RegionMeta,
         snapshot_backup::{AbortReason, SnapshotBrState, SnapshotBrWaitApplyRequest},
@@ -1639,6 +1639,13 @@ where
             // for snapshot recovery (safe recovery)
             SignificantMsg::SnapshotBrWaitApply(syncer) => self.on_snapshot_br_wait_apply(syncer),
             SignificantMsg::CheckPendingAdmin(ch) => self.on_check_pending_admin(ch),
+            SignificantMsg::ReadyToDestroyPeer {
+                merged_by_target,
+                clear_stat,
+            } => {
+                assert!(self.fsm.peer.pending_remove);
+                self.on_ready_destroy_peer(merged_by_target, clear_stat);
+            }
         }
     }
 
@@ -4037,7 +4044,6 @@ where
         self.destroy_peer(delay.merged_by_target);
     }
 
-    // [PerformanceCriticalPath] TODO: spin off the I/O code (self.fsm.peer.destroy)
     fn destroy_peer(&mut self, merged_by_target: bool) -> bool {
         self.ctx.coprocessor_host.on_destroy_peer(self.region());
         fail_point!("destroy_peer");
@@ -4172,20 +4178,40 @@ where
                 "err" => %e,
             );
         }
-        if let Err(e) = self.fsm.peer.destroy(
+
+        // Drop the `StoreMeta` lock here to ensure that the asynchronous destroy task
+        // can execute safely without blocking other threads.
+        drop(meta);
+
+        let clear_stat = self.fsm.peer.destroy(
             &self.ctx.engines,
-            &mut self.ctx.raft_perf_context,
             merged_by_target,
-            &self.ctx.pending_create_peers,
-            &self.ctx.raft_metrics,
-        ) {
-            // If not panic here, the peer will be recreated in the next restart,
-            // then it will be gc again. But if some overlap region is created
-            // before restarting, the gc action will delete the overlap region's
-            // data too.
-            panic!("{} destroy err {:?}", self.fsm.peer.tag, e);
+            self.ctx.store_meta.clone(),
+            self.ctx.pending_create_peers.clone(),
+        );
+        // If clear_stat is valid, it means the destroy task above was executed
+        // synchronously. In this case, we should immediately perform the
+        // follow-up steps required to complete the peer destruction process.
+        if let Some(clear_stat) = clear_stat {
+            self.on_ready_destroy_peer(merged_by_target, clear_stat);
         }
 
+        true
+    }
+
+    fn on_ready_destroy_peer(
+        &mut self,
+        merged_by_target: bool,
+        clear_stat: PeerClearMetaStat,
+    ) -> bool {
+        // Clean remains if needs and notify all pending requests to exit.
+        self.fsm
+            .peer
+            .ready_to_destroy(merged_by_target, clear_stat, &self.ctx.raft_metrics);
+
+        let region_id = self.region_id();
+        let is_peer_initialized = self.fsm.peer.is_initialized();
+        let mut meta = self.ctx.store_meta.lock().unwrap();
         // Some places use `force_send().unwrap()` if the StoreMeta lock is held.
         // So in here, it's necessary to held the StoreMeta lock when closing the
         // router.
@@ -6247,6 +6273,9 @@ where
                 .inc();
             return;
         }
+        // If RaftEngine's compact idx exceeds the snapshot idx,
+        // means the snapshot idx has already been compacted.
+        // We should cancel the snapshot generating as it is now out of date.
         self.fsm
             .peer
             .raft_group

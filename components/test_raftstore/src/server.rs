@@ -40,9 +40,9 @@ use raftstore::{
     errors::Error as RaftError,
     router::{CdcRaftRouter, LocalReadRouter, RaftStoreRouter, ReadContext, ServerRaftStoreRouter},
     store::{
-        AutoSplitController, Callback, CheckLeaderRunner, DiskCheckRunner, LocalReader,
-        RegionSnapshot, SnapManager, SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
-        StoreMetaDelegate,
+        AutoSplitController, Callback, CheckLeaderRunner, DiskCheckRunner,
+        ForcePartitionRangeManager, LocalReader, RegionSnapshot, SnapManager, SnapManagerBuilder,
+        SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
         fsm::{ApplyRouter, RaftBatchSystem, RaftRouter, store::StoreMeta},
         msg::RaftCmdExtraOpts,
     },
@@ -86,7 +86,7 @@ use tikv_util::{
     quota_limiter::QuotaLimiter,
     sys::thread::ThreadBuildWrapper,
     time::ThreadReadId,
-    worker::{Builder as WorkerBuilder, LazyWorker, Scheduler},
+    worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
 };
 use tokio::runtime::Builder as TokioBuilder;
 use txn_types::TxnExtraScheduler;
@@ -283,6 +283,7 @@ impl ServerCluster {
         router: RaftRouter<RocksEngine, RaftTestEngine>,
         system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
         resource_manager: &Option<Arc<ResourceGroupManager>>,
+        force_partition_mgr: &ForcePartitionRangeManager,
     ) -> ServerResult<u64> {
         self.encryption = key_manager.clone();
 
@@ -523,6 +524,7 @@ impl ServerCluster {
             None,
             resource_manager.clone(),
             Arc::new(region_info_accessor.clone()),
+            force_partition_mgr.clone(),
         );
 
         // Create deadlock service.
@@ -629,6 +631,7 @@ impl ServerCluster {
                 Arc::new(DefaultGrpcMessageFilter::new(
                     server_cfg.value().reject_messages_on_memory_ratio,
                 )),
+                Worker::new("test-background-worker"),
             )
             .unwrap();
             svr.register_service(create_import_sst(import_service.clone()));
@@ -745,7 +748,12 @@ impl ServerCluster {
         self.concurrency_managers
             .insert(node_id, concurrency_manager);
 
-        let client = RaftClient::new(node_id, self.conn_builder.clone());
+        let client = RaftClient::new(
+            node_id,
+            self.conn_builder.clone(),
+            Duration::from_millis(10),
+            Worker::new("test-worker"),
+        );
         self.raft_clients.insert(node_id, client);
         Ok(node_id)
     }
@@ -778,6 +786,7 @@ impl Simulator for ServerCluster {
         router: RaftRouter<RocksEngine, RaftTestEngine>,
         system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
         resource_manager: &Option<Arc<ResourceGroupManager>>,
+        force_partition_mgr: &ForcePartitionRangeManager,
     ) -> ServerResult<u64> {
         dispatch_api_version!(
             cfg.storage.api_version(),
@@ -790,6 +799,7 @@ impl Simulator for ServerCluster {
                 router,
                 system,
                 resource_manager,
+                force_partition_mgr,
             )
         )
     }

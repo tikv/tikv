@@ -21,9 +21,7 @@ use codec::{
 };
 use collections::{HashMap, HashSet};
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
-use engine_traits::{
-    CF_LOCK, Engines, KvEngine, PerfContext, RaftEngine, Snapshot, WriteBatch, WriteOptions,
-};
+use engine_traits::{CF_LOCK, Engines, KvEngine, RaftEngine, Snapshot};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use getset::{Getters, MutGetters};
@@ -36,9 +34,7 @@ use kvproto::{
         self, AdminCmdType, AdminResponse, CmdType, CommitMergeRequest, PutRequest, RaftCmdRequest,
         RaftCmdResponse, Request, TransferLeaderRequest, TransferLeaderResponse,
     },
-    raft_serverpb::{
-        ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
-    },
+    raft_serverpb::{ExtraMessage, ExtraMessageType, MergeState, RaftApplyState, RaftMessage},
     replication_modepb::{
         DrAutoSyncState, RegionReplicationState, RegionReplicationStatus, ReplicationMode,
     },
@@ -73,10 +69,7 @@ use super::{
     DestroyPeerJob, LocalReadContext, cmd_resp,
     local_metrics::{IoType, RaftMetrics},
     metrics::*,
-    peer_storage::{
-        CheckApplyingSnapStatus, HandleReadyResult, PeerStorage, RAFT_INIT_LOG_TERM,
-        write_peer_state,
-    },
+    peer_storage::{CheckApplyingSnapStatus, HandleReadyResult, PeerStorage, RAFT_INIT_LOG_TERM},
     read_queue::{ReadIndexQueue, ReadIndexRequest},
     transport::Transport,
     util::{
@@ -99,14 +92,14 @@ use crate::{
         async_io::{read::ReadTask, write::WriteMsg, write_router::WriteRouter},
         entry_storage::CacheWarmupState,
         fsm::{
-            Apply, ApplyMetrics, ApplyTask, Proposal,
+            Apply, ApplyMetrics, ApplyTask, Proposal, StoreMeta,
             apply::{self, CatchUpLogs},
             store::PollContext,
         },
         hibernate_state::GroupState,
         memory::{MEMTRACE_RAFT_ENTRIES, needs_evict_entry_cache},
-        msg::{CampaignType, CasualMessage, ErrorCallback, RaftCommand},
-        peer_storage::HandleSnapshotResult,
+        msg::{CampaignType, CasualMessage, ErrorCallback, PeerClearMetaStat, RaftCommand},
+        peer_storage::{HandleSnapshotResult, clear_meta_in_kv_and_raft},
         snapshot_backup::{AbortReason, SnapshotBrState},
         txn_ext::LocksStatus,
         unsafe_recovery::{ForceLeaderState, UnsafeRecoveryState},
@@ -478,7 +471,7 @@ pub struct ApplySnapshotContext {
     /// Destroy the peer after apply task finished or aborted
     /// This flag is set to true when the peer destroy is skipped because of
     /// running snapshot task.
-    /// This is to accelerate peer destroy without waiting for extra destory
+    /// This is to accelerate peer destroy without waiting for extra destroy
     /// peer message.
     pub destroy_peer_after_apply: bool,
 }
@@ -1381,115 +1374,112 @@ where
         })
     }
 
-    /// Does the real destroy task which includes:
-    /// 1. Set the region to tombstone;
-    /// 2. Clear data;
-    /// 3. Notify all pending requests.
+    /// Destroys the peer by scheduling an asychronous task to the region
+    /// worker by default.
+    ///
+    /// If the scheduling is abnormal due to `region-worker` is exited, it
+    /// will redirect to directly destroy the peer synchronously.
+    ///
+    /// The return value:
+    /// - `None` represents that the destroy task is scheduled successfully.
+    /// - `Some(...)` represents that the destroy task is executed
+    ///   synchronously.
     pub fn destroy(
         &mut self,
         engines: &Engines<EK, ER>,
-        perf_context: &mut ER::PerfContext,
         keep_data: bool,
-        pending_create_peers: &Mutex<HashMap<u64, (u64, bool)>>,
-        raft_metrics: &RaftMetrics,
-    ) -> Result<()> {
-        fail_point!("raft_store_skip_destroy_peer", |_| Ok(()));
-        let t = TiInstant::now();
+        store_meta: Arc<Mutex<StoreMeta>>,
+        pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
+    ) -> Option<PeerClearMetaStat> {
+        fail_point!("raft_store_skip_destroy_peer", |_| {
+            Some(PeerClearMetaStat::default())
+        });
 
-        let mut region = self.region().clone();
-        info!(
-            "begin to destroy";
-            "region_id" => self.region_id,
-            "peer_id" => self.peer.get_id(),
-        );
+        let peer = self.peer.clone();
+        let region = self.region().clone();
+        // Raft log gc should be flushed before being destroyed, so last_compacted_idx
+        // has to be the minimal index that may still have logs.
+        let last_compacted_idx = self.last_compacted_idx;
+        let local_first_replicate = self.local_first_replicate;
+        let merge_state = if keep_data {
+            self.pending_merge_state.clone()
+        } else {
+            None
+        };
 
-        let (pending_create_peers, clean) = if self.local_first_replicate {
-            let mut pending = pending_create_peers.lock().unwrap();
-            if self.get_store().is_initialized() {
-                assert_eq!(pending.get(&region.get_id()), None);
-                (None, true)
-            } else if let Some(status) = pending.get(&region.get_id()) {
-                if *status == (self.peer.get_id(), false) {
-                    pending.remove(&region.get_id());
-                    // Hold the lock to avoid apply worker applies split.
-                    (Some(pending), true)
-                } else if *status == (self.peer.get_id(), true) {
-                    // It's already marked to split by apply worker, skip delete.
-                    (None, false)
-                } else {
-                    // Peer id can't be different as router should exist all the time, their is no
-                    // chance for store to insert a different peer id. And apply worker should skip
-                    // split when meeting a different id.
-                    let status = *status;
-                    // Avoid panic with lock.
-                    drop(pending);
-                    panic!("{} unexpected pending states {:?}", self.tag, status);
+        // Asynchronously destroy the peer by triggering a task to background worker,
+        // and the corresponding worker will finish the preparations for destroying.
+        let async_failed = self
+            .mut_store()
+            .schedule_destroy_peer(
+                peer.clone(),
+                region.clone(),
+                keep_data,
+                local_first_replicate,
+                last_compacted_idx,
+                merge_state.clone(),
+                pending_create_peers.clone(),
+            )
+            .is_err();
+        // Failed to asynchronously destroy the peer (channel is closed),
+        // redirecting to synchronously destroy the peer.
+        let clear_stat = if async_failed {
+            match clear_meta_in_kv_and_raft(
+                engines,
+                peer,
+                region,
+                self.get_store().raft_state().clone(),
+                merge_state,
+                self.get_store().is_initialized(),
+                local_first_replicate,
+                last_compacted_idx,
+                store_meta.clone(),
+                pending_create_peers,
+            ) {
+                Err(e) => {
+                    // If not panic here, the peer will be recreated in the next restart,
+                    // then it will be gc again. But if some overlap region is created
+                    // before restarting, the gc action will delete the overlap region's
+                    // data too.
+                    panic!("{} prepare to destroy err {:?}", self.tag, e);
                 }
-            } else {
-                // The status is inserted when it's created. It will be removed in following
-                // cases:
-                // - By apply worker as it fails to split due to region state key. This is
-                //   impossible to reach this code path because the delete write batch is not
-                //   persisted yet.
-                // - By store fsm as it fails to create peer, which is also invalid obviously.
-                // - By peer fsm after persisting snapshot, then it should be initialized.
-                // - By peer fsm after split.
-                // - By peer fsm when destroy, which should go the above branch instead.
-                (None, false)
+                Ok(stat) => Some(stat),
             }
         } else {
-            (None, true)
+            // Returns `None` to represent that the destroy task is successfully
+            // scheduled.
+            None
         };
+
+        info!(
+            "trigger destroy peer task";
+            "region_id" => self.region_id,
+            "peer_id" => self.peer.get_id(),
+            "async" => !async_failed,
+        );
+        clear_stat
+    }
+
+    /// Does the final destroy task which includes:
+    /// 1. Clear data if needs (async mode).
+    /// 2. Notify all pending requests.
+    pub fn ready_to_destroy(
+        &mut self,
+        keep_data: bool,
+        clear_stat: PeerClearMetaStat,
+        raft_metrics: &RaftMetrics,
+    ) {
+        let t = TiInstant::now();
+        let region_id = self.region_id;
+        let clean = !clear_stat.is_zero();
+
         if clean {
-            // Set Tombstone state explicitly
-            let mut kv_wb = engines.kv.write_batch();
-            let mut raft_wb = engines.raft.log_batch(1024);
-            // Raft log gc should be flushed before being destroyed, so last_compacted_idx
-            // has to be the minimal index that may still have logs.
-            let last_compacted_idx = self.last_compacted_idx;
-            self.mut_store()
-                .clear_meta(last_compacted_idx, &mut kv_wb, &mut raft_wb)?;
-
-            // StoreFsmDelegate::check_msg use both epoch and region peer list to check
-            // whether a message is targeting a staled peer. But for an uninitialized peer,
-            // both epoch and peer list are empty, so a removed peer will be created again.
-            // Saving current peer into the peer list of region will fix this problem.
-            if !self.get_store().is_initialized() {
-                region.mut_peers().push(self.peer.clone());
-            }
-
-            write_peer_state(
-                &mut kv_wb,
-                &region,
-                PeerState::Tombstone,
-                // Only persist the `merge_state` if the merge is known to be succeeded
-                // which is determined by the `keep_data` flag
-                if keep_data {
-                    self.pending_merge_state.clone()
-                } else {
-                    None
-                },
-            )?;
-
-            let start = Instant::now();
-            // write kv rocksdb first in case of restart happen between two write
-            let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(true);
-            kv_wb.write_opt(&write_opts)?;
-            raft_metrics
-                .io_write_peer_destroy_kv
-                .observe(start.saturating_elapsed().as_secs_f64());
-
-            drop(pending_create_peers);
-
-            let start = Instant::now();
-            perf_context.start_observe();
-            engines.raft.consume(&mut raft_wb, true)?;
-            perf_context.report_metrics(&[]);
             raft_metrics
                 .io_write_peer_destroy_raft
-                .observe(start.saturating_elapsed().as_secs_f64());
-
+                .observe(clear_stat.raft_duration.as_secs_f64());
+            raft_metrics
+                .io_write_peer_destroy_kv
+                .observe(clear_stat.kvdb_duration.as_secs_f64());
             if self.get_store().is_initialized() && !keep_data {
                 // If we meet panic when deleting data and raft log, the dirty data
                 // will be cleared by a newer snapshot applying or restart.
@@ -1503,24 +1493,22 @@ where
             }
         }
 
-        self.pending_reads.clear_all(Some(region.get_id()));
+        self.pending_reads.clear_all(Some(region_id));
 
         for Proposal { cb, .. } in self.proposals.queue.drain(..) {
-            apply::notify_req_region_removed(region.get_id(), cb);
+            apply::notify_req_region_removed(region_id, cb);
         }
 
         info!(
             "peer destroy itself";
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
-            "takes" => ?t.saturating_elapsed(),
+            "takes" => ?(t.saturating_elapsed() + clear_stat.duration()),
             "clean" => clean,
             "keep_data" => keep_data,
         );
 
         fail_point!("raft_store_after_destroy_peer");
-
-        Ok(())
     }
 
     #[inline]

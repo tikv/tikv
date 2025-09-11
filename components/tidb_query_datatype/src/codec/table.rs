@@ -1,20 +1,26 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp, convert::TryInto, io::Write, sync::Arc};
+use std::{cmp, convert::TryInto, fmt::Debug, io::Write, sync::Arc};
 
 use api_version::KvFormat;
 use codec::prelude::*;
 use collections::{HashMap, HashSet};
 use kvproto::coprocessor::KeyRange;
+use tidb_query_common::util::convert_to_prefix_next;
 use tikv_util::codec::BytesSlice;
-use tipb::ColumnInfo;
+use tipb::{ColumnInfo, FieldType};
 
 use super::{
     Datum, Error, Result, datum,
     datum::DatumDecoder,
     mysql::{Duration, Time},
 };
-use crate::{FieldTypeTp, expr::EvalContext, prelude::*};
+use crate::{
+    FieldTypeTp,
+    codec::{batch::LazyBatchColumnVec, data_type::ScalarValueRef},
+    expr::EvalContext,
+    prelude::*,
+};
 
 // handle or index id
 pub const ID_LEN: usize = 8;
@@ -546,16 +552,131 @@ pub fn generate_index_data_for_test(
     (expect_row, idx_key)
 }
 
+/// RowHandle is trait to provide a common interface for different types of row
+/// handles.
+pub trait RowHandle: Eq + Ord + Clone + Debug + Send + Sync {
+    /// creates a new handle from LazyBatchColumnVec
+    fn from_lazy_batch_column_vec(
+        ctx: &EvalContext,
+        rows: &LazyBatchColumnVec,
+        row_offset: usize,
+        col_offsets: &[usize],
+        col_types: &[FieldType],
+    ) -> Result<Self>;
+    /// encode the row key for the handle in the give physical table ID.
+    /// The return row key is in a raw format without mvcc comparable encoding.
+    fn encode_row_key(&self, table_id: i64) -> Vec<u8>;
+    /// encode the point-range end key for the handle.
+    /// The point-range is used to scan a single row in storage, and its start
+    /// key is the handle row key.
+    /// The return row key is in a raw format without mvcc comparable encoding.
+    fn encode_point_range_end(&self, table_id: i64) -> Vec<u8>;
+    /// checks if the current handle is the next of the previous handle.
+    fn is_next_of(&self, prev: &Self) -> bool;
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct IntHandle(i64);
+
+impl IntHandle {
+    pub fn as_i64(&self) -> i64 {
+        self.0
+    }
+}
+
+impl From<i64> for IntHandle {
+    fn from(value: i64) -> Self {
+        IntHandle(value)
+    }
+}
+
+impl RowHandle for IntHandle {
+    #[inline]
+    fn from_lazy_batch_column_vec(
+        _ctx: &EvalContext,
+        vec: &LazyBatchColumnVec,
+        row_offset: usize,
+        col_offsets: &[usize],
+        col_types: &[FieldType],
+    ) -> Result<Self> {
+        if col_offsets.len() != 1 || col_types.len() != 1 {
+            return Err(box_err!(
+                "The IntHandle columns len should be 1, but got col_offsets: {}, col_types: {}",
+                col_offsets.len(),
+                col_types.len()
+            ));
+        }
+
+        let col_offset = col_offsets[0];
+        if col_offset > vec.columns_len() {
+            return Err(box_err!(
+                "The column offset for IntHandle {} is out of range, the column count is {}",
+                col_offset,
+                vec.columns_len()
+            ));
+        }
+
+        if !matches!(
+            col_types[0].tp(),
+            FieldTypeTp::Tiny
+                | FieldTypeTp::Short
+                | FieldTypeTp::Long
+                | FieldTypeTp::LongLong
+                | FieldTypeTp::Int24
+        ) {
+            return Err(box_err!(
+                "The column type for IntHandle should be int types, but got {:?}",
+                col_types[0].tp()
+            ));
+        }
+
+        let col = &vec[col_offset];
+        if !col.is_decoded() {
+            return Err(box_err!("column {} not decoded", col_offsets[0]));
+        }
+        match col.decoded().get_scalar_ref(row_offset) {
+            ScalarValueRef::Int(Some(&val)) => Ok(IntHandle(val)),
+            scalar => Err(box_err!(
+                "column {} at row {} is not valid, col_type: {:?}, expect Int, but is other type or None",
+                col_offset,
+                row_offset,
+                scalar.eval_type()
+            )),
+        }
+    }
+
+    #[inline]
+    fn encode_row_key(&self, table_id: i64) -> Vec<u8> {
+        encode_row_key(table_id, self.0)
+    }
+
+    #[inline]
+    fn encode_point_range_end(&self, table_id: i64) -> Vec<u8> {
+        let mut key = self.encode_row_key(table_id);
+        convert_to_prefix_next(&mut key);
+        key
+    }
+
+    #[inline]
+    fn is_next_of(&self, prev: &Self) -> bool {
+        self.0 == prev.0 + 1
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::iter::FromIterator;
 
     use api_version::ApiV1;
     use collections::{HashMap, HashSet};
+    use tidb_query_common::util::is_prefix_next;
     use tipb::ColumnInfo;
 
     use super::*;
-    use crate::codec::datum::{self, Datum};
+    use crate::codec::{
+        data_type::{Real, VectorValue},
+        datum::{self, Datum},
+    };
 
     const TABLE_ID: i64 = 1;
     const INDEX_ID: i64 = 1;
@@ -837,5 +958,150 @@ mod tests {
         let too_small_key = vec![0];
         check_key_type(too_small_key.as_slice(), RECORD_PREFIX_SEP).unwrap_err();
         check_key_type(too_small_key.as_slice(), INDEX_PREFIX_SEP).unwrap_err();
+    }
+
+    #[test]
+    fn test_int_handle_from_lazy_batch_column_vec() {
+        let int_values1 = VectorValue::Int(vec![Some(123), None, Some(234), Some(567)].into());
+        let int_values2 = VectorValue::Int(vec![Some(1001), Some(1002), None, None].into());
+        let byte_values = VectorValue::Bytes(
+            vec![
+                Some("a".as_bytes().to_vec()),
+                Some("b".as_bytes().to_vec()),
+                None,
+                Some(b"c".to_vec()),
+            ]
+            .into(),
+        );
+        let real_values = VectorValue::Real(
+            vec![
+                Real::new(5.0).ok(),
+                Real::new(7.0).ok(),
+                Real::new(4.0).ok(),
+                None,
+            ]
+            .into(),
+        );
+
+        let vec =
+            LazyBatchColumnVec::from(vec![byte_values, int_values1, real_values, int_values2]);
+        let create_handle = |col_offset, row_offset| {
+            IntHandle::from_lazy_batch_column_vec(
+                &EvalContext::default(),
+                &vec,
+                row_offset,
+                &[col_offset],
+                &[FieldTypeTp::Long.into()],
+            )
+        };
+
+        // valid
+        assert_eq!(create_handle(1, 0).unwrap().as_i64(), 123);
+        assert_eq!(create_handle(1, 2).unwrap().as_i64(), 234);
+        assert_eq!(create_handle(1, 3).unwrap().as_i64(), 567);
+        assert_eq!(create_handle(3, 0).unwrap().as_i64(), 1001);
+        assert_eq!(create_handle(3, 1).unwrap().as_i64(), 1002);
+
+        // invalid data
+        create_handle(0, 0).unwrap_err();
+        create_handle(1, 1).unwrap_err();
+        create_handle(3, 2).unwrap_err();
+        create_handle(2, 0).unwrap_err();
+        create_handle(3, 3).unwrap_err();
+
+        // test col_offsets and col_types
+        let create_handle = |col_offsets, col_types: &[FieldTypeTp]| {
+            let tps = col_types.iter().map(|tp| (*tp).into()).collect::<Vec<_>>();
+            IntHandle::from_lazy_batch_column_vec(
+                &EvalContext::default(),
+                &vec,
+                0,
+                col_offsets,
+                &tps,
+            )
+        };
+
+        // valid col types
+        for tp in &[
+            FieldTypeTp::Tiny,
+            FieldTypeTp::Short,
+            FieldTypeTp::Long,
+            FieldTypeTp::LongLong,
+            FieldTypeTp::Int24,
+        ] {
+            assert_eq!(create_handle(&[1], &[*tp]).unwrap().as_i64(), 123);
+        }
+
+        // invalid col types
+        for tp in &[
+            FieldTypeTp::Unspecified,
+            FieldTypeTp::Float,
+            FieldTypeTp::Double,
+            FieldTypeTp::String,
+            FieldTypeTp::VarChar,
+            FieldTypeTp::NewDecimal,
+            FieldTypeTp::Json,
+            FieldTypeTp::Duration,
+            FieldTypeTp::Bit,
+            FieldTypeTp::Enum,
+            FieldTypeTp::Set,
+            FieldTypeTp::Date,
+            FieldTypeTp::DateTime,
+            FieldTypeTp::Timestamp,
+            FieldTypeTp::Year,
+            FieldTypeTp::TinyBlob,
+            FieldTypeTp::MediumBlob,
+            FieldTypeTp::Blob,
+            FieldTypeTp::LongBlob,
+            FieldTypeTp::TiDbVectorFloat32,
+        ] {
+            let err = create_handle(&[1], &[*tp]).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("The column type for IntHandle should be int types")
+            );
+        }
+
+        // invalid length of col_offsets or col_types
+        for (offsets, types) in &[
+            (vec![], vec![]),
+            (vec![0, 1], vec![FieldTypeTp::Long]),
+            (vec![1], vec![FieldTypeTp::Long, FieldTypeTp::Long]),
+            (vec![0, 1], vec![FieldTypeTp::Long, FieldTypeTp::Long]),
+        ] {
+            let err = create_handle(offsets, types).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("The IntHandle columns len should be 1")
+            );
+        }
+    }
+
+    #[test]
+    fn test_int_handle_methods() {
+        // test encode_row_key and encode_point_range_end
+        for (table_id, id) in [
+            (123, 456),
+            (789, i64::MAX),
+            (1024, i64::MIN),
+            (999, -1),
+            (100, 0),
+        ] {
+            let h = IntHandle::from(id);
+            let key = h.encode_row_key(table_id);
+            assert_eq!(decode_table_id(&key).unwrap(), table_id);
+            assert_eq!(decode_int_handle(&key).unwrap(), id);
+            let point_range_end = h.encode_point_range_end(table_id);
+            assert!(is_prefix_next(&key, &point_range_end));
+        }
+
+        // test is_next_of
+        assert!(IntHandle::from(1).is_next_of(&IntHandle::from(0)));
+        assert!(IntHandle::from(0).is_next_of(&IntHandle::from(-1)));
+        assert!(IntHandle::from(4).is_next_of(&IntHandle::from(3)));
+        assert!(!IntHandle::from(1).is_next_of(&IntHandle::from(1)));
+        assert!(!IntHandle::from(2).is_next_of(&IntHandle::from(3)));
+        assert!(!IntHandle::from(3).is_next_of(&IntHandle::from(1)));
+        assert!(!IntHandle::from(4).is_next_of(&IntHandle::from(6)));
     }
 }

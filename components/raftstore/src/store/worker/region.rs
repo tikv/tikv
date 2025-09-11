@@ -8,17 +8,22 @@ use std::{
     },
     fmt::{self, Display, Formatter},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
 };
 
+use collections::HashMap;
 use engine_traits::{
-    CF_LOCK, CF_RAFT, DeleteStrategy, KvEngine, Mutable, Range, WriteBatch, WriteOptions,
+    CF_LOCK, CF_RAFT, DeleteStrategy, Engines, KvEngine, Mutable, RaftEngine, Range, WriteBatch,
+    WriteOptions,
 };
 use fail::fail_point;
-use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
+use kvproto::{
+    metapb::{Peer, Region},
+    raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftLocalState, RegionLocalState},
+};
 use tikv_util::{
     box_err, box_try,
     config::VersionTrack,
@@ -31,14 +36,18 @@ use tikv_util::{
 use super::metrics::*;
 use crate::{
     coprocessor::CoprocessorHost,
+    errors::Result as RaftstoreResult,
+    router::RaftStoreRouter,
     store::{
-        ApplyOptions, CasualMessage, Config, SnapEntry, SnapKey, SnapManager, check_abort,
+        ApplyOptions, CasualMessage, Config, SignificantMsg, SnapEntry, SnapKey, SnapManager,
+        check_abort,
+        fsm::StoreMeta,
+        msg::PeerClearMetaStat,
         peer_storage::{
             JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING, JOB_STATUS_FAILED, JOB_STATUS_FINISHED,
-            JOB_STATUS_PENDING, JOB_STATUS_RUNNING,
+            JOB_STATUS_PENDING, JOB_STATUS_RUNNING, clear_meta_in_kv_and_raft,
         },
         snap::{Error, Result, SNAPSHOT_CFS, plain_file_used},
-        transport::CasualRouter,
     },
 };
 
@@ -62,10 +71,24 @@ pub enum Task {
         start_key: Vec<u8>,
         end_key: Vec<u8>,
     },
+    /// Clears metadata belonging to the corresponding peer.
+    ClearPeerMeta {
+        peer: Peer,
+        region: Region,
+        raft_state: RaftLocalState,
+        merge_state: Option<MergeState>,
+        keep_data: bool,
+        initialized: bool,
+        local_first_replicate: bool,
+        first_index: u64,
+        /// Holds a lock to prevent the apply worker from processing split
+        /// operations during peer destruction to maintain consistency.
+        pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
+    },
 }
 
 impl Task {
-    pub fn destroy(region_id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Task {
+    pub fn destroy(region_id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Self {
         Task::Destroy {
             region_id,
             start_key,
@@ -89,6 +112,13 @@ impl Display for Task {
                 log_wrappers::Value::key(start_key),
                 log_wrappers::Value::key(end_key)
             ),
+            Task::ClearPeerMeta {
+                ref peer,
+                ref region,
+                ..
+            } => {
+                write!(f, "Destroy peer {} for {}", peer.get_id(), region.get_id())
+            }
         }
     }
 }
@@ -216,9 +246,10 @@ impl PendingDeleteRanges {
     }
 }
 
-pub struct Runner<EK, R>
+pub struct Runner<EK, ER, R>
 where
     EK: KvEngine,
+    ER: RaftEngine,
 {
     batch_size: usize,
     use_delete_range: bool,
@@ -240,24 +271,27 @@ where
     // whenever we can. Errors while processing them can be ignored.
     pending_delete_ranges: PendingDeleteRanges,
 
-    engine: EK,
+    engines: Engines<EK, ER>,
+    store_meta: Arc<Mutex<StoreMeta>>,
     mgr: SnapManager,
     coprocessor_host: CoprocessorHost<EK>,
     router: R,
 }
 
-impl<EK, R> Runner<EK, R>
+impl<EK, ER, R> Runner<EK, ER, R>
 where
     EK: KvEngine,
-    R: CasualRouter<EK>,
+    ER: RaftEngine,
+    R: RaftStoreRouter<EK>,
 {
     pub fn new(
-        engine: EK,
+        engines: Engines<EK, ER>,
+        store_meta: Arc<Mutex<StoreMeta>>,
         mgr: SnapManager,
         cfg: Arc<VersionTrack<Config>>,
         coprocessor_host: CoprocessorHost<EK>,
         router: R,
-    ) -> Runner<EK, R> {
+    ) -> Runner<EK, ER, R> {
         Runner {
             batch_size: cfg.value().snap_apply_batch_size.0 as usize,
             use_delete_range: cfg.value().use_delete_range,
@@ -269,7 +303,8 @@ where
             clean_stale_ranges_tick: cfg.value().clean_stale_ranges_tick,
             pending_applies: VecDeque::new(),
             pending_delete_ranges: PendingDeleteRanges::default(),
-            engine,
+            engines,
+            store_meta,
             mgr,
             coprocessor_host,
             router,
@@ -279,7 +314,7 @@ where
     fn region_state(&self, region_id: u64) -> Result<RegionLocalState> {
         let region_key = keys::region_state_key(region_id);
         let region_state: RegionLocalState =
-            match box_try!(self.engine.get_msg_cf(CF_RAFT, &region_key)) {
+            match box_try!(self.engines.kv.get_msg_cf(CF_RAFT, &region_key)) {
                 Some(state) => state,
                 None => {
                     return Err(box_err!(
@@ -294,7 +329,7 @@ where
     fn apply_state(&self, region_id: u64) -> Result<RaftApplyState> {
         let state_key = keys::apply_state_key(region_id);
         let apply_state: RaftApplyState =
-            match box_try!(self.engine.get_msg_cf(CF_RAFT, &state_key)) {
+            match box_try!(self.engines.kv.get_msg_cf(CF_RAFT, &state_key)) {
                 Some(state) => state,
                 None => {
                     return Err(box_err!(
@@ -341,7 +376,7 @@ where
         check_abort(&abort)?;
         let timer = Instant::now();
         let options = ApplyOptions {
-            db: self.engine.clone(),
+            db: self.engines.kv.clone(),
             region: region.clone(),
             abort: Arc::clone(&abort),
             write_batch_size: self.batch_size,
@@ -356,7 +391,7 @@ where
         // Delete snapshot state and assure the relative region state and snapshot state
         // is updated and flushed into kvdb.
         region_state.set_state(PeerState::Normal);
-        let mut wb = self.engine.write_batch();
+        let mut wb = self.engines.kv.write_batch();
         box_try!(wb.put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &region_state));
         box_try!(wb.delete_cf(CF_RAFT, &keys::snapshot_raft_state_key(region_id)));
         let mut wopts = WriteOptions::default();
@@ -423,7 +458,7 @@ where
         SNAP_HISTOGRAM
             .apply
             .observe(start.saturating_elapsed_secs());
-        let _ = self.router.send(
+        let _ = self.router.send_casual_msg(
             region_id,
             CasualMessage::SnapshotApplied { peer_id, tombstone },
         );
@@ -446,7 +481,8 @@ where
         }
         CLEAN_COUNTER_VEC.with_label_values(&["overlap"]).inc();
         let oldest_sequence = self
-            .engine
+            .engines
+            .kv
             .get_oldest_snapshot_sequence_number()
             .unwrap_or(u64::MAX);
         let df_ranges: Vec<_> = overlap_ranges
@@ -473,7 +509,8 @@ where
                 }
             })
             .collect();
-        self.engine
+        self.engines
+            .kv
             .delete_ranges_cfs(
                 &WriteOptions::default(),
                 DeleteStrategy::DeleteFiles,
@@ -516,7 +553,7 @@ where
             "start_key" => log_wrappers::Value::key(&start_key),
             "end_key" => log_wrappers::Value::key(&end_key),
         );
-        let seq = self.engine.get_latest_sequence_number();
+        let seq = self.engines.kv.get_latest_sequence_number();
         self.pending_delete_ranges
             .insert(region_id, start_key, end_key, seq);
     }
@@ -533,7 +570,8 @@ where
             return;
         }
         let oldest_sequence = self
-            .engine
+            .engines
+            .kv
             .get_oldest_snapshot_sequence_number()
             .unwrap_or(u64::MAX);
         let mut region_ranges: Vec<(u64, Vec<u8>, Vec<u8>)> = self
@@ -557,7 +595,8 @@ where
             })
             .collect();
         // Clear sst files belonging to the given range directly.
-        self.engine
+        self.engines
+            .kv
             .delete_ranges_cfs(
                 &WriteOptions::default(),
                 DeleteStrategy::DeleteFiles,
@@ -575,7 +614,8 @@ where
         }
         // Clear related blob files belonging to the given range directly after clearing
         // all stale keys in sst files.
-        self.engine
+        self.engines
+            .kv
             .delete_ranges_cfs(
                 &WriteOptions::default(),
                 DeleteStrategy::DeleteBlobs,
@@ -603,7 +643,12 @@ where
             if plain_file_used(cf) {
                 continue;
             }
-            if self.engine.ingest_maybe_slowdown_writes(cf, 0).expect("cf") {
+            if self
+                .engines
+                .kv
+                .ingest_maybe_slowdown_writes(cf, 0)
+                .expect("cf")
+            {
                 return true;
             }
         }
@@ -617,7 +662,7 @@ where
         allow_write_during_ingestion: bool,
     ) -> Result<()> {
         let wopts = WriteOptions::default();
-        for cf in self.engine.cf_names() {
+        for cf in self.engines.kv.cf_names() {
             // CF_LOCK usually contains fewer keys than other CFs, so we delete them by key.
             let (strategy, observer) = if cf == CF_LOCK {
                 (
@@ -650,7 +695,11 @@ where
                 )
             };
             let start = Instant::now();
-            box_try!(self.engine.delete_ranges_cf(&wopts, cf, strategy, ranges));
+            box_try!(
+                self.engines
+                    .kv
+                    .delete_ranges_cf(&wopts, cf, strategy, ranges)
+            );
             observer.observe(start.saturating_elapsed_secs());
         }
 
@@ -712,7 +761,7 @@ where
             }
             if let Some(Task::Apply { region_id, .. }) = self.pending_applies.front() {
                 fail_point!("handle_new_pending_applies", |_| {});
-                if !self.engine.can_apply_snapshot(
+                if !self.engines.kv.can_apply_snapshot(
                     is_timeout,
                     new_batch,
                     *region_id,
@@ -739,12 +788,44 @@ where
         }
         SNAP_PENDING_APPLIES_GAUGE.set(self.pending_applies.len() as i64);
     }
+
+    fn handle_clear_peer_meta(
+        &mut self,
+        peer: Peer,
+        region: Region,
+        raft_state: RaftLocalState,
+        merge_state: Option<MergeState>,
+        initialized: bool,
+        local_first_replicate: bool,
+        first_index: u64,
+        // Holding lock to avoid apply worker applies split.
+        pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
+    ) -> RaftstoreResult<PeerClearMetaStat> {
+        info!(
+            "handle destroy peer in async mode";
+            "peer_id" => peer.get_id(),
+            "region_id" => region.get_id(),
+        );
+        clear_meta_in_kv_and_raft(
+            &self.engines,
+            peer,
+            region,
+            raft_state,
+            merge_state,
+            initialized,
+            local_first_replicate,
+            first_index,
+            self.store_meta.clone(),
+            pending_create_peers,
+        )
+    }
 }
 
-impl<EK, R> Runnable for Runner<EK, R>
+impl<EK, ER, R> Runnable for Runner<EK, ER, R>
 where
     EK: KvEngine,
-    R: CasualRouter<EK> + Send + Clone + 'static,
+    ER: RaftEngine,
+    R: RaftStoreRouter<EK> + 'static,
 {
     type Task = Task;
 
@@ -777,14 +858,59 @@ where
                 self.clean_stale_ranges();
                 fail_point!("after_region_worker_destroy");
             }
+            Task::ClearPeerMeta {
+                peer,
+                region,
+                raft_state,
+                merge_state,
+                keep_data,
+                initialized,
+                local_first_replicate,
+                first_index,
+                pending_create_peers,
+            } => {
+                let peer_id = peer.get_id();
+                let region_id = region.get_id();
+                match self.handle_clear_peer_meta(
+                    peer,
+                    region,
+                    raft_state,
+                    merge_state,
+                    initialized,
+                    local_first_replicate,
+                    first_index,
+                    pending_create_peers,
+                ) {
+                    Err(e) => {
+                        // If not panic here, the peer will be recreated in the next restart,
+                        // then it will be gc again. But if some overlap region is created
+                        // before restarting, the gc action will delete the overlap region's
+                        // data too.
+                        panic!(
+                            "peer_id: {}, region_id: {} failed to destroy err {:?}",
+                            peer_id, region_id, e
+                        );
+                    }
+                    Ok(clear_stat) => {
+                        let _ = self.router.significant_send(
+                            region_id,
+                            SignificantMsg::ReadyToDestroyPeer {
+                                merged_by_target: keep_data,
+                                clear_stat,
+                            },
+                        );
+                    }
+                }
+            }
         }
     }
 }
 
-impl<EK, R> RunnableWithTimer for Runner<EK, R>
+impl<EK, ER, R> RunnableWithTimer for Runner<EK, ER, R>
 where
     EK: KvEngine,
-    R: CasualRouter<EK> + Send + Clone + 'static,
+    ER: RaftEngine,
+    R: RaftStoreRouter<EK> + 'static,
 {
     fn on_timeout(&mut self) {
         self.handle_pending_applies(true);
@@ -807,19 +933,25 @@ pub(crate) mod tests {
         sync::{
             Arc,
             atomic::{AtomicBool, AtomicUsize},
-            mpsc,
+            mpsc::{self, SyncSender},
         },
         thread,
         time::Duration,
     };
 
-    use engine_test::{ctor::CfOptions, kv::KvTestEngine};
+    use crossbeam::channel::TrySendError;
+    use engine_test::{
+        ctor::CfOptions,
+        kv::{KvTestEngine, KvTestSnapshot},
+    };
     use engine_traits::{
         CF_DEFAULT, CF_WRITE, CompactExt, FlowControlFactorsExt, KvEngine, MiscExt, Mutable,
         Peekable, RaftEngineReadOnly, SyncMutable, WriteBatch, WriteBatchExt,
     };
     use keys::data_key;
-    use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftSnapshotData, RegionLocalState};
+    use kvproto::raft_serverpb::{
+        PeerState, RaftApplyState, RaftMessage, RaftSnapshotData, RegionLocalState,
+    };
     use pd_client::RpcClient;
     use protobuf::Message;
     use tempfile::Builder;
@@ -835,12 +967,72 @@ pub(crate) mod tests {
             ObserverContext,
         },
         store::{
-            CasualMessage, SnapKey, SnapManager,
+            CasualMessage, CasualRouter, PeerMsg, ProposalRouter, RaftCommand, SignificantRouter,
+            SnapKey, SnapManager, StoreMsg, StoreRouter,
             peer_storage::JOB_STATUS_PENDING,
             snap::tests::get_test_db_for_regions,
             worker::{RegionRunner, SnapGenRunner, SnapGenTask},
         },
     };
+
+    #[derive(Clone)]
+    pub struct TestRaftStoreRouter {
+        casual_msg_sender: SyncSender<(u64, CasualMessage<KvTestEngine>)>,
+        significant_msg_sender: SyncSender<SignificantMsg<KvTestSnapshot>>,
+    }
+
+    impl TestRaftStoreRouter {
+        pub fn new(
+            casual_msg_sender: SyncSender<(u64, CasualMessage<KvTestEngine>)>,
+            significant_msg_sender: SyncSender<SignificantMsg<KvTestSnapshot>>,
+        ) -> TestRaftStoreRouter {
+            TestRaftStoreRouter {
+                casual_msg_sender,
+                significant_msg_sender,
+            }
+        }
+    }
+
+    impl CasualRouter<KvTestEngine> for TestRaftStoreRouter {
+        fn send(&self, id: u64, msg: CasualMessage<KvTestEngine>) -> RaftstoreResult<()> {
+            let _ = self.casual_msg_sender.send((id, msg));
+            Ok(())
+        }
+    }
+
+    impl SignificantRouter<KvTestEngine> for TestRaftStoreRouter {
+        fn significant_send(
+            &self,
+            _: u64,
+            msg: SignificantMsg<KvTestSnapshot>,
+        ) -> RaftstoreResult<()> {
+            let _ = self.significant_msg_sender.send(msg);
+            Ok(())
+        }
+    }
+
+    impl ProposalRouter<KvTestSnapshot> for TestRaftStoreRouter {
+        fn send(
+            &self,
+            _: RaftCommand<KvTestSnapshot>,
+        ) -> std::result::Result<(), TrySendError<RaftCommand<KvTestSnapshot>>> {
+            Ok(())
+        }
+    }
+
+    impl StoreRouter<KvTestEngine> for TestRaftStoreRouter {
+        fn send(&self, _: StoreMsg<KvTestEngine>) -> RaftstoreResult<()> {
+            Ok(())
+        }
+    }
+
+    impl RaftStoreRouter<KvTestEngine> for TestRaftStoreRouter {
+        fn send_raft_msg(&self, _: RaftMessage) -> RaftstoreResult<()> {
+            Ok(())
+        }
+
+        fn broadcast_normal(&self, _: impl FnMut() -> PeerMsg<KvTestEngine>) {}
+    }
 
     const PENDING_APPLY_CHECK_INTERVAL: Duration = Duration::from_millis(200);
     const STALE_PEER_CHECK_TICK: usize = 1;
@@ -949,10 +1141,13 @@ pub(crate) mod tests {
         let bg_worker = Worker::new("region-worker");
         let mut worker: LazyWorker<Task> = bg_worker.lazy_build("region-worker");
         let sched = worker.scheduler();
-        let (router, _) = mpsc::sync_channel(11);
+        let (casual_tx, _) = mpsc::sync_channel(11);
+        let (significant_tx, _) = mpsc::sync_channel(11);
+        let router = TestRaftStoreRouter::new(casual_tx, significant_tx);
         let cfg = make_raftstore_cfg(false);
         let mut runner = RegionRunner::new(
-            engine.kv.clone(),
+            engine.clone(),
+            Arc::new(Mutex::new(StoreMeta::new(1))),
             mgr,
             cfg,
             CoprocessorHost::<KvTestEngine>::default(),
@@ -1056,10 +1251,13 @@ pub(crate) mod tests {
         let bg_worker = Worker::new("snap-manager");
         let mut worker = bg_worker.lazy_build("snap-manager");
         let sched = worker.scheduler();
-        let (router, receiver) = mpsc::sync_channel(1);
+        let (casual_sender, casual_receiver) = mpsc::sync_channel(1);
+        let (significant_tx, _) = mpsc::sync_channel(1);
+        let router = TestRaftStoreRouter::new(casual_sender, significant_tx);
         let cfg = make_raftstore_cfg(true);
         let runner = RegionRunner::new(
-            engine.kv.clone(),
+            engine.clone(),
+            Arc::new(Mutex::new(StoreMeta::new(1))),
             mgr.clone(),
             cfg.clone(),
             host,
@@ -1101,7 +1299,7 @@ pub(crate) mod tests {
                 })
                 .unwrap();
             let s1 = rx.recv().unwrap();
-            match receiver.recv() {
+            match casual_receiver.recv() {
                 Ok((region_id, CasualMessage::SnapshotGenerated)) => {
                     assert_eq!(region_id, id);
                 }
@@ -1162,7 +1360,7 @@ pub(crate) mod tests {
 
         let wait_apply_finish = |ids: &[u64]| {
             for id in ids {
-                match receiver.recv_timeout(Duration::from_secs(5)) {
+                match casual_receiver.recv_timeout(Duration::from_secs(5)) {
                     Ok((region_id, CasualMessage::SnapshotApplied { .. })) => {
                         assert_eq!(region_id, *id);
                     }
