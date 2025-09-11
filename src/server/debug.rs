@@ -1638,8 +1638,8 @@ pub async fn handle_dup_key_debug(req: Request<Body>) -> hyper::Result<Response<
 
     match (method, path) {
         (&Method::GET, "/debug/dup-key/check") => handle_check().await,
-        (&Method::GET, "/debug/dup-key/enable") => handle_enable_debug(true).await,
-        (&Method::GET, "/debug/dup-key/disable") => handle_enable_debug(false).await,
+        (&Method::POST, "/debug/dup-key/enable") => handle_enable_debug(true).await,
+        (&Method::POST, "/debug/dup-key/disable") => handle_enable_debug(false).await,
         _ => Ok(Response::builder()
             .status(StatusCode::NOT_FOUND)
             .body(Body::from("Not Found"))
