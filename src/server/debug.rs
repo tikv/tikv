@@ -22,6 +22,7 @@ use engine_traits::{
     SyncMutable, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use futures::future::Future;
+use hyper::{Body, Method, Request, Response, StatusCode};
 use kvproto::{
     debugpb::{self, Db as DbType},
     kvrpcpb::{self, Context, MvccInfo},
@@ -1628,6 +1629,70 @@ fn divide_db(db: &RocksEngine, parts: usize) -> raftstore::Result<Vec<Vec<u8>>> 
     Ok(box_try!(
         db.get_range_approximate_split_keys(range, parts - 1)
     ))
+}
+
+/// Main handler for debug dup key.
+pub async fn handle_dup_key_debug(req: Request<Body>) -> hyper::Result<Response<Body>> {
+    let path = req.uri().path();
+    let method = req.method();
+
+    match (method, path) {
+        (&Method::GET, "/debug/dup-key/check") => handle_check().await,
+        (&Method::GET, "/debug/dup-key/enable") => handle_enable_debug(true).await,
+        (&Method::GET, "/debug/dup-key/disable") => handle_enable_debug(false).await,
+        _ => Ok(Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(Body::from("Not Found"))
+            .unwrap()),
+    }
+}
+
+/// Handle /debug/debug-dup-key/check endpoint (GET method to get current
+/// config)
+async fn handle_check() -> hyper::Result<Response<Body>> {
+    let result = txn_types::ENABLE_DUP_KEY_DEBUG
+        .load(std::sync::atomic::Ordering::Relaxed)
+        .to_string();
+    let json = match serde_json::to_string_pretty(&result) {
+        Ok(json) => json,
+        Err(e) => {
+            return Ok(Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from(format!("JSON serialization error: {}", e)))
+                .unwrap());
+        }
+    };
+
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "application/json")
+        .body(Body::from(json))
+        .unwrap())
+}
+
+/// Handle /debug/tracked-arc/clear endpoint (POST method to clear registry)
+async fn handle_enable_debug(operation: bool) -> hyper::Result<Response<Body>> {
+    txn_types::ENABLE_DUP_KEY_DEBUG.store(operation, std::sync::atomic::Ordering::Relaxed);
+    let response = serde_json::json!({
+        "status": "success",
+        "message": format!("set to operation={:?} successfully", operation),
+    });
+
+    let json = match serde_json::to_string_pretty(&response) {
+        Ok(json) => json,
+        Err(e) => {
+            return Ok(Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from(format!("JSON serialization error: {}", e)))
+                .unwrap());
+        }
+    };
+
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "application/json")
+        .body(Body::from(json))
+        .unwrap())
 }
 
 #[cfg(test)]
