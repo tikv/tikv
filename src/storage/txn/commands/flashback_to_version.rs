@@ -2,8 +2,6 @@
 
 // #[PerformanceCriticalPath]
 use std::mem;
-use tracker::with_tls_tracker;
-use resource_metering::record_logical_write_bytes;
 use tikv_kv::ScanMode;
 use txn_types::{Key, TimeStamp};
 
@@ -156,9 +154,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
             write_data.extra.one_pc = true;
         }
         context.statistics.add(&reader.statistics);
-        with_tls_tracker(|tracker| {
-            record_logical_write_bytes(tracker.metrics.logical_write_bytes);
-        });
         Ok(WriteResult {
             ctx: self.ctx.clone(),
             to_be_write: write_data,

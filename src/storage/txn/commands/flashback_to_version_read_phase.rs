@@ -4,7 +4,6 @@
 use std::ops::Bound;
 
 use txn_types::{Key, Lock, TimeStamp};
-use resource_metering::record_logical_read_bytes;
 use crate::storage::{
     Context, ScanMode, Snapshot, Statistics,
     metrics::{CommandKind, KV_COMMAND_COUNTER_VEC_STATIC},
@@ -284,7 +283,6 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
             _ => unreachable!(),
         };
         statistics.add(&reader.statistics);
-        record_logical_read_bytes(statistics.processed_size as u64);
         Ok(ProcessResult::NextCommand {
             cmd: Command::FlashbackToVersion(FlashbackToVersion {
                 ctx: self.ctx,

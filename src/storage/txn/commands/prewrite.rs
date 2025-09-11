@@ -14,8 +14,6 @@ use kvproto::kvrpcpb::{
     PrewriteRequestPessimisticAction::{self, *},
 };
 use tikv_kv::SnapshotExt;
-use resource_metering::record_logical_write_bytes;
-use tracker::with_tls_tracker;
 use txn_types::{
     Key, Mutation, OldValues, TimeStamp, TxnExtra, Write, WriteType, insert_old_value_if_resolved,
 };
@@ -549,10 +547,6 @@ impl<K: PrewriteKind> Prewriter<K> {
         let rows = self.mutations.len();
         let res = self.prewrite(&mut txn, &mut reader, context.extra_op);
         let (locks, final_min_commit_ts) = res?;
-
-        with_tls_tracker(|tracker| {
-            record_logical_write_bytes(tracker.metrics.logical_write_bytes);
-        });
         Ok(self.write_result(
             locks,
             txn,

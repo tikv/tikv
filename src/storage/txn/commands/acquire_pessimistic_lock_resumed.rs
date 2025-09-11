@@ -7,8 +7,6 @@ use std::{
 
 // #[PerformanceCriticalPath]
 use kvproto::kvrpcpb::ExtraOp;
-use resource_metering::record_logical_write_bytes;
-use tracker::with_tls_tracker;
 use txn_types::{Key, OldValues, insert_old_value_if_resolved};
 
 use crate::storage::{
@@ -193,9 +191,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLockR
 
         let pr = ProcessResult::PessimisticLockRes { res: Ok(res) };
         let to_be_write = make_write_data(modifies, old_values);
-        with_tls_tracker(|tracker| {
-            record_logical_write_bytes(tracker.metrics.logical_write_bytes);
-        });
         Ok(WriteResult {
             ctx: self.ctx,
             to_be_write,
