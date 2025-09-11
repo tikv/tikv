@@ -495,10 +495,11 @@ where
                 if req.has_put() && req.get_put().get_cf() == CF_LOCK {
                     let key = req.get_put().get_key();
                     if !self.lock_cf_keys.insert(key.to_vec()) {
+                        let wrapped_key = log_wrappers::Value::key(key);
                         error!(
                             "[for debug] found duplicate key in Lock CF PUT request between batched requests. \
                             key: {:?}, existing batch request: {:?}, new request to add: {:?}",
-                            key, self.request, request
+                            wrapped_key, self.request, request
                         );
                         self.duplicate_put_on_lock_cf_detected = true;
                     }
@@ -729,9 +730,10 @@ where
                             if req.has_put() && req.get_put().get_cf() == CF_LOCK {
                                 let key = req.get_put().get_key();
                                 if !keys_set.insert(key.to_vec()) {
+                                    let wrapped_key = log_wrappers::Value::key(key);
                                     error!(
                                         "[for debug] found duplicate key in Lock CF PUT request, key: {:?}, cmd: {:?}",
-                                        key, cmd
+                                        wrapped_key, cmd
                                     );
                                 }
                             }
