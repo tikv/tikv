@@ -265,7 +265,7 @@ impl Write {
     }
 }
 
-#[derive(PartialEq, Clone)]
+#[derive(PartialEq, Clone, Debug)]
 pub struct WriteRef<'a> {
     pub write_type: WriteType,
     pub start_ts: TimeStamp,
@@ -534,11 +534,11 @@ mod tests {
         }
 
         // Test `Write::parse()` handles incorrect input.
-        assert!(WriteRef::parse(b"").is_err());
+        WriteRef::parse(b"").unwrap_err();
 
         let lock = Write::new(WriteType::Lock, 1.into(), Some(b"short_value".to_vec()));
         let mut v = lock.as_ref().to_bytes();
-        assert!(WriteRef::parse(&v[..1]).is_err());
+        WriteRef::parse(&v[..1]).unwrap_err();
         assert_eq!(Write::parse_type(&v).unwrap(), lock.write_type);
         // Test `Write::parse()` ignores unknown bytes.
         v.extend(b"unknown");

@@ -252,6 +252,7 @@ pub struct WriteData {
     pub deadline: Option<Deadline>,
     pub disk_full_opt: DiskFullOpt,
     pub avoid_batch: bool,
+    pub cid: Option<u64>,
 }
 
 impl WriteData {
@@ -262,6 +263,7 @@ impl WriteData {
             deadline: None,
             disk_full_opt: DiskFullOpt::NotAllowedOnFull,
             avoid_batch: false,
+            cid: None,
         }
     }
 
@@ -532,6 +534,10 @@ pub trait Snapshot: Sync + Send + Clone {
     }
 
     fn ext(&self) -> Self::Ext<'_>;
+
+    fn sequence_number(&self) -> u64 {
+        0
+    }
 }
 
 pub trait SnapshotExt {
