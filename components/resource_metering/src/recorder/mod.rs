@@ -3,6 +3,7 @@
 use std::{
     fmt::{self, Display, Formatter},
     sync::Arc,
+    sync::atomic::Ordering::Relaxed,
     time::Duration,
 };
 
@@ -15,8 +16,7 @@ use tikv_util::{
 };
 
 use self::{collector_reg::CollectorReg, sub_recorder::SubRecorder};
-use crate::{Config, RawRecords, ResourceTagFactory, collector::Collector};
-
+use crate::{Config, RawRecords, ResourceTagFactory, collector::Collector, config::ENABLE_NETWORK_IO_COLLECTION};
 mod collector_reg;
 mod localstorage;
 mod sub_recorder;
@@ -126,6 +126,7 @@ impl Recorder {
 
     fn handle_config_change(&mut self, config: Config) {
         self.precision_ms = config.precision.as_millis();
+        ENABLE_NETWORK_IO_COLLECTION.store(config.enable_network_io_collection, Relaxed);
     }
 
     fn tick(&mut self) {

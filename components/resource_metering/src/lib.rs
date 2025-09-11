@@ -16,7 +16,7 @@ use std::{
 };
 
 pub use collector::Collector;
-pub use config::{Config, ConfigManager};
+pub use config::{Config, ConfigManager, ENABLE_NETWORK_IO_COLLECTION};
 pub use model::*;
 pub use recorder::{
     CollectorGuard, CollectorId, CollectorRegHandle,

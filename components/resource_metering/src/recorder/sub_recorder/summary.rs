@@ -4,14 +4,11 @@ use std::sync::atomic::Ordering::{Relaxed, SeqCst};
 
 use collections::HashMap;
 use tikv_util::sys::thread::Pid;
-use tikv_util::info;
 
 use crate::{
-    RawRecords,
     recorder::{
-        SubRecorder,
-        localstorage::{LocalStorage, STORAGE},
-    },
+        localstorage::{LocalStorage, STORAGE}, SubRecorder
+    }, RawRecords, ENABLE_NETWORK_IO_COLLECTION
 };
 
 /// Records how many keys have been read in the current context.
@@ -36,6 +33,9 @@ pub fn record_write_keys(count: u32) {
 
 /// Records how many bytes have been received in the current context.
 pub fn record_network_in_bytes(bytes: u64) {
+    if ENABLE_NETWORK_IO_COLLECTION.load(Relaxed) == false {
+        return;
+    }
     STORAGE.with(|s| {
         s.borrow()
             .summary_cur_record
@@ -46,6 +46,9 @@ pub fn record_network_in_bytes(bytes: u64) {
 
 /// Records how many bytes have been sent in the current context.
 pub fn record_network_out_bytes(bytes: u64) {
+    if ENABLE_NETWORK_IO_COLLECTION.load(Relaxed) == false {
+        return;
+    }
     STORAGE.with(|s| {
         s.borrow()
             .summary_cur_record
@@ -56,6 +59,9 @@ pub fn record_network_out_bytes(bytes: u64) {
 
 /// Records how many bytes have been read in the current context.
 pub fn record_logical_read_bytes(bytes: u64) {
+    if ENABLE_NETWORK_IO_COLLECTION.load(Relaxed) == false {
+        return;
+    }
     STORAGE.with(|s| {
         s.borrow()
             .summary_cur_record
@@ -66,7 +72,9 @@ pub fn record_logical_read_bytes(bytes: u64) {
 
 /// Records how many bytes have been written in the current context.
 pub fn record_logical_write_bytes(bytes: u64) {
-    info!("record_logical_write_bytes {}", bytes);
+    if ENABLE_NETWORK_IO_COLLECTION.load(Relaxed) == false {
+        return;
+    }
     STORAGE.with(|s| {
         s.borrow()
             .summary_cur_record
