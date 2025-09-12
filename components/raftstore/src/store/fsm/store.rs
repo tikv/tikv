@@ -800,23 +800,24 @@ impl RegionTracker {
         &mut self,
         timeout: Duration,
         pinned_regions: &mut HashSet<u64>,
-        max_remove_count: usize,
-    ) {
+        mut remove_count: usize,
+    ) -> usize {
         let now = Instant::now();
-        let mut removed_count = 0;
         // Remove stale regions from the front (oldest entries)
         while let Some((&region_id, &timestamp)) = self.regions.front() {
-            if now.duration_since(timestamp) > timeout && removed_count < max_remove_count {
+            if now.duration_since(timestamp) > timeout && remove_count > 0 {
                 // This entry is stale, remove it
                 self.regions.pop_front();
                 // Also remove from pinned regions if it exists there
                 pinned_regions.remove(&region_id);
-                removed_count += 1;
+                remove_count -= 1;
             } else {
                 // This entry is not stale or we've hit the limit, stop here
                 break;
             }
         }
+        // Return remaining count in this batch that still needs to be processed
+        remove_count
     }
 
     fn region_ids(&self) -> impl Iterator<Item = u64> + '_ {
@@ -851,6 +852,8 @@ struct RegionGcManager {
     last_pinned_regions: HashSet<u64>,
     /// Batch GC state management
     batch_gc_state: Option<BatchGcState>,
+    /// Interval for stale region batch check
+    stale_batch_check_interval: Option<Duration>,
 }
 
 impl Default for RegionGcManager {
@@ -859,6 +862,7 @@ impl Default for RegionGcManager {
             high_log_lag_regions: RegionTracker::new(),
             last_pinned_regions: HashSet::default(),
             batch_gc_state: None,
+            stale_batch_check_interval: None,
         }
     }
 }
@@ -3221,26 +3225,35 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
     }
 
     fn register_stale_region_check_tick(&self) {
-        self.ctx.schedule_store_tick(
-            StoreTick::StaleRegionCheck,
-            self.ctx.cfg.peer_stale_state_check_interval.0,
-        );
+        let interval = self
+            .fsm
+            .store
+            .gc_manager
+            .stale_batch_check_interval
+            .unwrap_or(self.ctx.cfg.peer_stale_state_check_interval.0);
+        self.ctx
+            .schedule_store_tick(StoreTick::StaleRegionCheck, interval);
     }
 
     fn on_stale_region_check_tick(&mut self) {
         let region_count = self.fsm.store.gc_manager.high_log_lag_regions.len();
         if region_count == 0 {
+            // Reset to default interval when no regions
+            self.fsm.store.gc_manager.stale_batch_check_interval = None;
+            self.register_stale_region_check_tick();
             return;
         }
+
         let remove_count = if region_count < 100 {
             region_count
         } else {
-            (region_count * 10).isqrt()
+            100 + ((region_count - 100) * 10).isqrt()
         };
 
         let timeout_duration = self.ctx.cfg.peer_stale_state_check_interval.0 * 2; // 2x sampling interval
         // If a region is stale, it will also be removed from last_pinned_regions
-        self.fsm
+        let remaining_count = self
+            .fsm
             .store
             .gc_manager
             .high_log_lag_regions
@@ -3249,18 +3262,36 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
                 &mut self.fsm.store.gc_manager.last_pinned_regions,
                 remove_count,
             );
-        let batch_num = region_count / remove_count;
-        let interval = (self.ctx.cfg.raft_engine_purge_interval.0 / batch_num as u32)
-            .max(Duration::from_secs(5));
-        self.ctx
-            .schedule_store_tick(StoreTick::StaleRegionCheck, interval);
-    }
-    // Force GC tick registration is no longer needed
-    fn register_raft_engine_force_gc_tick(&self) {
-        self.ctx.schedule_store_tick(
-            StoreTick::RaftEngineForceGc,
-            self.ctx.cfg.raft_engine_purge_interval.0,
+
+        let stale_removed = remove_count - remaining_count;
+        info!(
+            "stale region check: {} regions checked, {} stale regions removed, {} remaining non-stale",
+            remove_count, stale_removed, remaining_count
         );
+
+        if remaining_count > 0 {
+            // Remaining regions are not stale, no work to do, reset to default interval
+            self.fsm.store.gc_manager.stale_batch_check_interval = None;
+        } else {
+            // All planned regions were stale and removed, continue next batch
+            let batch_num = region_count / remove_count;
+            let dynamic_interval = (self.ctx.cfg.peer_stale_state_check_interval.0
+                / batch_num as u32)
+                .max(Duration::from_secs(5));
+            self.fsm.store.gc_manager.stale_batch_check_interval = Some(dynamic_interval);
+        }
+
+        self.register_stale_region_check_tick();
+    }
+    // Force GC tick registration with dynamic interval based on batch state
+    fn register_raft_engine_force_gc_tick(&self) {
+        let interval = if let Some(ref batch_state) = self.fsm.store.gc_manager.batch_gc_state {
+            batch_state.interval
+        } else {
+            self.ctx.cfg.raft_engine_purge_interval.0
+        };
+        self.ctx
+            .schedule_store_tick(StoreTick::RaftEngineForceGc, interval);
     }
 
     fn check_force_gc_needed(&self) -> Option<f64> {
@@ -3298,11 +3329,9 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         // Check if we're in batch processing mode
         if self.fsm.store.gc_manager.batch_gc_state.is_some() {
             self.process_batch_gc();
+            self.register_raft_engine_force_gc_tick();
             return;
         }
-        // Only register next tick if not in batch mode
-        self.register_raft_engine_force_gc_tick();
-
         // Check if force GC is needed and execute it
         if let Some(over_ratio) = self.check_force_gc_needed() {
             info!(
@@ -3311,6 +3340,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
             );
             self.send_force_compact_messages(over_ratio);
         }
+        self.register_raft_engine_force_gc_tick();
     }
     // adjust the pinned regions to the target pin count
     fn adjust_pinned_regions(&mut self, pin_count: usize) {
@@ -3365,12 +3395,11 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         let pin_count = std::cmp::max(1, (total_regions as f64 * dynamic_pin_ratio) as usize);
         self.adjust_pinned_regions(pin_count);
 
-        // Calculate total batches: 1 batch if < 100 regions, otherwise
-        // isqrt(total_regions / 10)
+        // Calculate total batches
         let total_batches = if total_regions < 100 {
             1
         } else {
-            (total_regions / 10).isqrt()
+            1 + ((total_regions - 100) * 10).isqrt()
         };
         let batch_size = (total_regions + total_batches - 1) / total_batches;
         let interval = (self.ctx.cfg.raft_engine_purge_interval.0 / total_batches as u32)
@@ -3451,7 +3480,6 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         // If we collected fewer regions than batch_size, it means we've traversed all
         // GC candidates
         let remaining_regions = self.fsm.store.gc_manager.high_log_lag_regions.len();
-        let interval = batch_state.interval;
         if batch_state.current_batch >= batch_state.total_batches
             || regions_to_gc.len() < batch_state.batch_size
         {
@@ -3462,8 +3490,6 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         } else {
             self.fsm.store.gc_manager.batch_gc_state = Some(batch_state);
         }
-        self.ctx
-            .schedule_store_tick(StoreTick::RaftEngineForceGc, interval);
     }
 }
 
