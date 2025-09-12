@@ -1637,9 +1637,9 @@ pub async fn handle_dup_key_debug(req: Request<Body>) -> hyper::Result<Response<
     let method = req.method();
 
     match (method, path) {
-        (&Method::GET, "/debug/dup-key/check") => handle_check().await,
-        (&Method::POST, "/debug/dup-key/enable") => handle_enable_debug(true).await,
-        (&Method::POST, "/debug/dup-key/disable") => handle_enable_debug(false).await,
+        (&Method::GET, "/debug/dup-key/check") => handle_check(),
+        (&Method::POST, "/debug/dup-key/enable") => handle_enable_debug(true),
+        (&Method::POST, "/debug/dup-key/disable") => handle_enable_debug(false),
         _ => Ok(Response::builder()
             .status(StatusCode::NOT_FOUND)
             .body(Body::from("Not Found"))
@@ -1649,7 +1649,7 @@ pub async fn handle_dup_key_debug(req: Request<Body>) -> hyper::Result<Response<
 
 /// Handle /debug/debug-dup-key/check endpoint (GET method to get current
 /// config)
-async fn handle_check() -> hyper::Result<Response<Body>> {
+fn handle_check() -> hyper::Result<Response<Body>> {
     let result = txn_types::ENABLE_DUP_KEY_DEBUG
         .load(std::sync::atomic::Ordering::Relaxed)
         .to_string();
@@ -1671,7 +1671,7 @@ async fn handle_check() -> hyper::Result<Response<Body>> {
 }
 
 /// Handle /debug/tracked-arc/clear endpoint (POST method to clear registry)
-async fn handle_enable_debug(operation: bool) -> hyper::Result<Response<Body>> {
+fn handle_enable_debug(operation: bool) -> hyper::Result<Response<Body>> {
     txn_types::ENABLE_DUP_KEY_DEBUG.store(operation, std::sync::atomic::Ordering::Relaxed);
     let response = serde_json::json!({
         "status": "success",
