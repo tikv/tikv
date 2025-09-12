@@ -743,7 +743,7 @@ where
                             (Method::GET, "/async_tasks") => Self::dump_async_trace(),
                             (Method::GET, "debug/ime/cached_regions") => Self::handle_dumple_cached_regions(in_memory_engine.as_ref()),
                             (_, path) if path.starts_with("/debug/dup-key") => {
-                                debug::handle_dup_key_debug(req).await
+                                debug::handle_dup_key_debug(req)
                             }
                             _ => {
                                 is_unknown_path = true;

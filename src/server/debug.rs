@@ -1632,7 +1632,7 @@ fn divide_db(db: &RocksEngine, parts: usize) -> raftstore::Result<Vec<Vec<u8>>> 
 }
 
 /// Main handler for debug dup key.
-pub async fn handle_dup_key_debug(req: Request<Body>) -> hyper::Result<Response<Body>> {
+pub fn handle_dup_key_debug(req: Request<Body>) -> hyper::Result<Response<Body>> {
     let path = req.uri().path();
     let method = req.method();
 
