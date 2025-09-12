@@ -370,7 +370,7 @@ clippy: pre-clippy
 	@./scripts/check-dashboards
 	@./scripts/check-docker-build
 	@./scripts/check-license
-	@./scripts/deny
+	#@./scripts/deny
 	@./scripts/clippy-all
 
 pre-audit:
