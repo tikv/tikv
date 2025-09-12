@@ -803,7 +803,6 @@ impl RegionTracker {
         }
     }
 
-    /// Get all region IDs in the tracker (for iteration purposes).
     fn region_ids(&self) -> impl Iterator<Item = u64> + '_ {
         self.regions.keys().copied()
     }
@@ -837,8 +836,6 @@ struct StoreReachability {
 
 /// State for managing batch GC operations
 struct BatchGcState {
-    /// Regions to be GC'd in batches
-    gc_candidate_regions: Vec<u64>,
     /// Current batch index
     current_batch: usize,
     /// Total number of batches
@@ -3214,6 +3211,9 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
 
     fn on_stale_region_check_tick(&mut self) {
         let region_count = self.fsm.store.high_log_lag_regions.len();
+        if region_count == 0 {
+            return;
+        }
         let remove_count = if region_count < 100 {
             region_count
         } else {
@@ -3324,49 +3324,28 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         }
     }
 
-    fn create_region_classification(&mut self, over_ratio: f64) -> Vec<u64> {
-        let len = self.fsm.store.high_log_lag_regions.len();
+    fn start_batch_gc(&mut self, over_ratio: f64) {
+        let total_regions = self.fsm.store.high_log_lag_regions.len();
+        if total_regions == 0 {
+            return;
+        }
 
         // Calculate dynamic pin ratio based on memory pressure
         let base_pin_ratio = self.ctx.cfg.pin_compact_region_ratio;
         let dynamic_pin_ratio = base_pin_ratio / over_ratio;
-        let pin_count = std::cmp::max(1, (len as f64 * dynamic_pin_ratio) as usize);
+        let pin_count = std::cmp::max(1, (total_regions as f64 * dynamic_pin_ratio) as usize);
         self.adjust_pinned_regions(pin_count);
 
-        // Collect GC candidates and remove non-pinned regions
-        let mut gc_candidate_regions: Vec<u64> = Vec::with_capacity(len - pin_count);
-        for region_id in self.fsm.store.high_log_lag_regions.region_ids() {
-            if !self.fsm.store.last_pinned_regions.contains(&region_id) {
-                gc_candidate_regions.push(region_id);
-            }
-        }
-        info!(
-            "Region classification: {} total, {} GC candidates, {} pinned",
-            len,
-            gc_candidate_regions.len(),
-            self.fsm.store.last_pinned_regions.len()
-        );
-        gc_candidate_regions
-    }
-
-    fn start_batch_gc(&mut self, over_ratio: f64) {
-        // Create region classification
-        let gc_candidate_regions = self.create_region_classification(over_ratio);
-        if gc_candidate_regions.is_empty() {
-            return;
-        }
-
         // Calculate total batches: 1 batch if < 100 regions, otherwise
-        // isqrt(gc_candidates / 10)
-        let total_batches = if gc_candidate_regions.len() < 100 {
+        // isqrt(total_regions / 10)
+        let total_batches = if total_regions < 100 {
             1
         } else {
-            (gc_candidate_regions.len() / 10).isqrt()
+            (total_regions / 10).isqrt()
         };
-        let batch_size = (gc_candidate_regions.len() + total_batches - 1) / total_batches;
+        let batch_size = (total_regions + total_batches - 1) / total_batches;
 
         self.fsm.store.batch_gc_state = Some(BatchGcState {
-            gc_candidate_regions,
             current_batch: 0,
             total_batches,
             batch_size,
@@ -3374,9 +3353,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
 
         info!(
             "Starting batch GC: {} regions, {} batches, {} per batch",
-            self.fsm.store.high_log_lag_regions.len(),
-            total_batches,
-            batch_size
+            total_regions, total_batches, batch_size
         );
         // After 5 seconds, start the first batch
         self.ctx
@@ -3389,46 +3366,63 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
             None => return,
         };
 
-        // Process current batch
-        let start_idx = batch_state.current_batch * batch_state.batch_size;
-        let end_idx = std::cmp::min(
-            start_idx + batch_state.batch_size,
-            batch_state.gc_candidate_regions.len(),
-        );
-        let current_batch_regions = &batch_state.gc_candidate_regions[start_idx..end_idx];
+        // Collect regions to process in this batch
+        let mut regions_to_gc = Vec::new();
+        let mut processed_count = 0;
 
-        // Send force compact messages
-        for &region_id in current_batch_regions {
+        // Iterate through high_log_lag_regions and collect non-pinned regions
+        for region_id in self.fsm.store.high_log_lag_regions.region_ids() {
+            if processed_count >= batch_state.batch_size {
+                break;
+            }
+
+            // Skip pinned regions
+            if !self.fsm.store.last_pinned_regions.contains(&region_id) {
+                regions_to_gc.push(region_id);
+                processed_count += 1;
+            }
+        }
+
+        // Send force compact messages for collected regions
+        for region_id in &regions_to_gc {
             let _ = self.ctx.router.send(
-                region_id,
+                *region_id,
                 PeerMsg::CasualMessage(Box::new(CasualMessage::ForceCompactRaftLogs)),
             );
         }
 
         // Remove processed regions from high_log_lag_regions
-        for &region_id in current_batch_regions {
-            self.fsm.store.high_log_lag_regions.remove(region_id);
+        for region_id in &regions_to_gc {
+            self.fsm.store.high_log_lag_regions.remove(*region_id);
         }
 
         info!(
             "Processed batch {}/{}: {} regions",
             batch_state.current_batch + 1,
             batch_state.total_batches,
-            current_batch_regions.len()
+            regions_to_gc.len()
         );
+
         batch_state.current_batch += 1;
         let interval = (self.ctx.cfg.raft_engine_purge_interval.0
             / batch_state.total_batches as u32)
             .max(Duration::from_secs(5));
-        if batch_state.current_batch >= batch_state.total_batches {
+
+        // Check if we should continue or finish
+        // If we collected fewer regions than batch_size, it means we've traversed all
+        // GC candidates
+        let remaining_regions = self.fsm.store.high_log_lag_regions.len();
+        if batch_state.current_batch >= batch_state.total_batches
+            || regions_to_gc.len() < batch_state.batch_size
+        {
             info!(
-                "Batch GC completed: {} regions in {} batches",
-                batch_state.gc_candidate_regions.len(),
-                batch_state.total_batches
+                "Batch GC completed: {} batches processed, {} regions remaining",
+                batch_state.current_batch, remaining_regions
             );
         } else {
             self.fsm.store.batch_gc_state = Some(batch_state);
         }
+
         self.ctx
             .schedule_store_tick(StoreTick::RaftEngineForceGc, interval);
     }
