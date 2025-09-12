@@ -2940,6 +2940,17 @@ def RaftLog() -> RowPanel:
                     ),
                 ],
             ),
+            graph_panel(
+                title="Raft log gc forced",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_raft_log_force_gc",
+                            by_labels=["instance", "reason"],
+                        ),
+                    ),
+                ],
+            ),
         ]
     )
     layout.row(
