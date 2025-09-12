@@ -684,9 +684,9 @@ where
                             if let Some(existing_value) = lock_cf_map.get(key) {
                                 error!(
                                     "[for debug] found duplicate PUT on lock cf: key={:?}, existing_value={:?}, new_value={:?} during apply",
-                                    log_wrappers::Value::key(&key),
+                                    log_wrappers::Value::key(key),
                                     log_wrappers::Value::value(existing_value),
-                                    log_wrappers::Value::value(&value)
+                                    log_wrappers::Value::value(value)
                                 );
                             } else {
                                 lock_cf_map.insert(key.to_vec(), value.to_vec());
