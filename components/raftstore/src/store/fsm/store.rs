@@ -3282,10 +3282,6 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
             raftengine_memory_usage,
             self.ctx.cfg.evict_cache_on_memory_ratio,
         ) {
-            info!(
-                "force GC needed based on memory pressure, over_ratio: {}",
-                over_ratio
-            );
             return Some(over_ratio);
         }
         None
