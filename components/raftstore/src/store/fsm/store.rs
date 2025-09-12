@@ -3334,7 +3334,12 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         self.adjust_pinned_regions(pin_count);
 
         // Collect GC candidates and remove non-pinned regions
-        let mut gc_candidate_regions: Vec<u64> = Vec::with_capacity(len);
+        let mut gc_candidate_regions: Vec<u64> = Vec::with_capacity(len - pin_count);
+        for region_id in self.fsm.store.high_log_lag_regions.region_ids() {
+            if !self.fsm.store.last_pinned_regions.contains(&region_id) {
+                gc_candidate_regions.push(region_id);
+            }
+        }
         info!(
             "Region classification: {} total, {} GC candidates, {} pinned",
             len,
