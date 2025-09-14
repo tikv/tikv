@@ -3244,12 +3244,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
             return;
         }
 
-        let remove_count = if region_count < 100 {
-            region_count
-        } else {
-            100 + ((region_count - 100) * 10).isqrt()
-        };
-
+        let remove_count = 500;
         let timeout_duration = self.ctx.cfg.peer_stale_state_check_interval.0 * 2; // 2x sampling interval
         // If a region is stale, it will also be removed from last_pinned_regions
         let remaining_count = self
@@ -3280,7 +3275,6 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
                 .max(Duration::from_secs(5));
             self.fsm.store.gc_manager.stale_batch_check_interval = Some(dynamic_interval);
         }
-
         self.register_stale_region_check_tick();
     }
     // Force GC tick registration with dynamic interval based on batch state
@@ -3396,10 +3390,10 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         self.adjust_pinned_regions(pin_count);
 
         // Calculate total batches
-        let total_batches = if total_regions < 100 {
+        let total_batches = if total_regions < 200 {
             1
         } else {
-            1 + ((total_regions - 100) * 10).isqrt()
+            total_regions / 100
         };
         let batch_size = (total_regions + total_batches - 1) / total_batches;
         let interval = (self.ctx.cfg.raft_engine_purge_interval.0 / total_batches as u32)
