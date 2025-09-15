@@ -492,12 +492,6 @@ impl Config {
                 "server.inspect-network-interval can't be less than 10ms and not zero."
             ));
         }
-
-        if self.inspect_network_interval.gt(&ReadableDuration::secs(3)) {
-            return Err(box_err!(
-                "server.inspect-network-interval can't be greater than 3s."
-            ));
-        }
         Ok(())
     }
 
