@@ -486,12 +486,12 @@ impl Config {
         if self
             .inspect_network_interval
             .lt(&ReadableDuration::millis(10))
+            && self.inspect_network_interval.0 != Duration::from_millis(0)
         {
             return Err(box_err!(
-                "server.inspect-network-interval can't be less than 10ms."
+                "server.inspect-network-interval can't be less than 10ms and not zero."
             ));
         }
-
         Ok(())
     }
 
