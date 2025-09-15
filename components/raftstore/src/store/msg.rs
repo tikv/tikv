@@ -485,7 +485,7 @@ pub enum StoreTick {
     ConsistencyCheck,
     CleanupImportSst,
     PdReportMinResolvedTs,
-    RaftEngineForceGc,
+    RaftEngineForcelyPurge,
     StaleRegionCheck,
 }
 
@@ -502,7 +502,7 @@ impl StoreTick {
             StoreTick::CleanupImportSst => RaftEventDurationType::cleanup_import_sst,
             StoreTick::LoadMetricsWindow => RaftEventDurationType::load_metrics_window,
             StoreTick::PdReportMinResolvedTs => RaftEventDurationType::pd_report_min_resolved_ts,
-            StoreTick::RaftEngineForceGc => RaftEventDurationType::compact_check,
+            StoreTick::RaftEngineForcelyPurge => RaftEventDurationType::compact_check,
             StoreTick::StaleRegionCheck => RaftEventDurationType::stale_region_check,
         }
     }

@@ -746,8 +746,8 @@ struct Store {
     start_time: Option<Timespec>,
     consistency_check_time: HashMap<u64, Instant>,
     store_reachability: HashMap<u64, StoreReachability>,
-    // Unified region GC management
-    gc_manager: RegionGcManager,
+    // Region purge management
+    purge_manager: RaftLogPurgeManager,
 }
 
 struct StoreReachability {
@@ -831,8 +831,8 @@ impl Default for RegionTracker {
     }
 }
 
-/// State for managing batch GC operations
-struct BatchGcState {
+/// State for managing batch purge operations
+struct BatchPurgeState {
     /// Current batch index
     current_batch: usize,
     /// Total number of batches
@@ -843,25 +843,25 @@ struct BatchGcState {
     interval: Duration,
 }
 
-/// Unified state for managing region GC operations
-struct RegionGcManager {
-    /// High log lag regions information for GC decision
+/// Unified state for managing Raft log purge operations
+struct RaftLogPurgeManager {
+    /// High log lag regions information for purge decision
     /// Using time-ordered structure for efficient cleanup of stale regions
     high_log_lag_regions: RegionTracker,
-    /// Regions that are pinned and should not be GC'd
+    /// Regions that are pinned and should not be purged
     last_pinned_regions: HashSet<u64>,
-    /// Batch GC state management
-    batch_gc_state: Option<BatchGcState>,
+    /// Batch purge state management
+    batch_purge_state: Option<BatchPurgeState>,
     /// Interval for stale region batch check
     stale_batch_check_interval: Option<Duration>,
 }
 
-impl Default for RegionGcManager {
+impl Default for RaftLogPurgeManager {
     fn default() -> Self {
         Self {
             high_log_lag_regions: RegionTracker::new(),
             last_pinned_regions: HashSet::default(),
-            batch_gc_state: None,
+            batch_purge_state: None,
             stale_batch_check_interval: None,
         }
     }
@@ -888,7 +888,7 @@ where
                 start_time: None,
                 consistency_check_time: HashMap::default(),
                 store_reachability: HashMap::default(),
-                gc_manager: RegionGcManager::default(),
+                purge_manager: RaftLogPurgeManager::default(),
             },
             receiver: rx,
         });
@@ -933,7 +933,7 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             StoreTick::ConsistencyCheck => self.on_consistency_check_tick(),
             StoreTick::CleanupImportSst => self.on_cleanup_import_sst_tick(),
             StoreTick::PdReportMinResolvedTs => self.on_pd_report_min_resolved_ts_tick(),
-            StoreTick::RaftEngineForceGc => self.on_raft_engine_force_gc_tick(),
+            StoreTick::RaftEngineForcelyPurge => self.on_raft_engine_forcely_purge_tick(),
             StoreTick::StaleRegionCheck => self.on_stale_region_check_tick(),
         }
         let elapsed = timer.saturating_elapsed();
@@ -1086,7 +1086,7 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
         self.register_compact_lock_cf_tick();
         self.register_snap_mgr_gc_tick();
         self.register_consistency_check_tick();
-        self.register_raft_engine_force_gc_tick();
+        self.register_raft_engine_forcely_purge_tick();
         self.register_stale_region_check_tick();
     }
 }
@@ -3193,7 +3193,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
     fn on_receive_region_info_from_peer(&mut self, region_id: u64, timestamp: std::time::Instant) {
         self.fsm
             .store
-            .gc_manager
+            .purge_manager
             .high_log_lag_regions
             .on_update(region_id, timestamp);
     }
@@ -3228,7 +3228,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         let interval = self
             .fsm
             .store
-            .gc_manager
+            .purge_manager
             .stale_batch_check_interval
             .unwrap_or(self.ctx.cfg.peer_stale_state_check_interval.0);
         self.ctx
@@ -3236,10 +3236,10 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
     }
 
     fn on_stale_region_check_tick(&mut self) {
-        let region_count = self.fsm.store.gc_manager.high_log_lag_regions.len();
+        let region_count = self.fsm.store.purge_manager.high_log_lag_regions.len();
         if region_count == 0 {
             // Reset to default interval when no regions
-            self.fsm.store.gc_manager.stale_batch_check_interval = None;
+            self.fsm.store.purge_manager.stale_batch_check_interval = None;
             self.register_stale_region_check_tick();
             return;
         }
@@ -3250,47 +3250,49 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         let remaining_count = self
             .fsm
             .store
-            .gc_manager
+            .purge_manager
             .high_log_lag_regions
             .cleanup_stale(
                 timeout_duration,
-                &mut self.fsm.store.gc_manager.last_pinned_regions,
+                &mut self.fsm.store.purge_manager.last_pinned_regions,
                 remove_count,
             );
 
-        let stale_removed = remove_count - remaining_count;
         info!(
-            "stale region check: {} regions checked, {} stale regions removed, {} remaining non-stale",
-            remove_count, stale_removed, remaining_count
+            "stale region check, {} stale regions removed, {} remaining non-stale",
+            remove_count - remaining_count,
+            remaining_count
         );
 
         if remaining_count > 0 {
             // Remaining regions are not stale, no work to do, reset to default interval
-            self.fsm.store.gc_manager.stale_batch_check_interval = None;
+            self.fsm.store.purge_manager.stale_batch_check_interval = None;
         } else {
             // All planned regions were stale and removed, continue next batch
             let batch_num = region_count / remove_count;
             let dynamic_interval = (self.ctx.cfg.peer_stale_state_check_interval.0
                 / batch_num as u32)
                 .max(Duration::from_secs(5));
-            self.fsm.store.gc_manager.stale_batch_check_interval = Some(dynamic_interval);
+            self.fsm.store.purge_manager.stale_batch_check_interval = Some(dynamic_interval);
         }
         self.register_stale_region_check_tick();
     }
-    // Force GC tick registration with dynamic interval based on batch state
-    fn register_raft_engine_force_gc_tick(&self) {
-        let interval = if let Some(ref batch_state) = self.fsm.store.gc_manager.batch_gc_state {
+
+    // Forcely purge tick registration with dynamic interval based on batch state
+    fn register_raft_engine_forcely_purge_tick(&self) {
+        let interval = if let Some(ref batch_state) = self.fsm.store.purge_manager.batch_purge_state
+        {
             batch_state.interval
         } else {
             self.ctx.cfg.raft_engine_purge_interval.0
         };
         self.ctx
-            .schedule_store_tick(StoreTick::RaftEngineForceGc, interval);
+            .schedule_store_tick(StoreTick::RaftEngineForcelyPurge, interval);
     }
 
-    fn check_force_gc_needed(&self) -> Option<f64> {
-        fail_point!("needs_force_compact", |_| {
-            info!("force GC triggered by failpoint for testing");
+    fn check_forcely_purge_needed(&self) -> Option<f64> {
+        fail_point!("needs_forcely_purge", |_| {
+            info!("forcely purge triggered by failpoint for testing");
             Some(1.0) // Return a test over_ratio
         });
         // Get current raft engine memory usage
@@ -3308,60 +3310,66 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         None
     }
 
-    fn on_raft_engine_force_gc_tick(&mut self) {
+    fn on_raft_engine_forcely_purge_tick(&mut self) {
         // If there is no high log lag regions, no need to check
-        if self.fsm.store.gc_manager.high_log_lag_regions.is_empty() {
+        if self.fsm.store.purge_manager.high_log_lag_regions.is_empty() {
             return;
         }
         // Check if we're in batch processing mode
-        if self.fsm.store.gc_manager.batch_gc_state.is_some() {
-            self.process_batch_gc();
-            self.register_raft_engine_force_gc_tick();
+        if self.fsm.store.purge_manager.batch_purge_state.is_some() {
+            self.process_batch_purge();
+            self.register_raft_engine_forcely_purge_tick();
             return;
         }
-        // Check if force GC is needed and execute it
-        if let Some(over_ratio) = self.check_force_gc_needed() {
+        // Check if forcely purge is needed and execute it
+        if let Some(over_ratio) = self.check_forcely_purge_needed() {
             info!(
-                "force GC needed based on memory pressure, over_ratio: {}",
+                "forcely purge needed based on memory pressure, over_ratio: {}",
                 over_ratio
             );
-            self.start_batch_gc(over_ratio);
+            self.start_batch_purge(over_ratio);
         }
-        self.register_raft_engine_force_gc_tick();
+        self.register_raft_engine_forcely_purge_tick();
     }
     // adjust the pinned regions to the target pin count
     fn adjust_pinned_regions(&mut self, pin_count: usize) {
-        let current_len = self.fsm.store.gc_manager.last_pinned_regions.len();
+        let current_len = self.fsm.store.purge_manager.last_pinned_regions.len();
         if pin_count < current_len {
             let remove_count = current_len - pin_count;
             let ids_to_remove: Vec<u64> = self
                 .fsm
                 .store
-                .gc_manager
+                .purge_manager
                 .last_pinned_regions
                 .iter()
                 .copied()
                 .take(remove_count)
                 .collect();
             for id in ids_to_remove {
-                self.fsm.store.gc_manager.last_pinned_regions.remove(&id);
+                self.fsm.store.purge_manager.last_pinned_regions.remove(&id);
             }
         } else {
             let mut needed = pin_count - current_len;
-            for region_id in self.fsm.store.gc_manager.high_log_lag_regions.region_ids() {
+            for region_id in self
+                .fsm
+                .store
+                .purge_manager
+                .high_log_lag_regions
+                .region_ids()
+            {
                 if needed == 0 {
                     break;
                 }
                 if !self
                     .fsm
                     .store
-                    .gc_manager
+                    .purge_manager
                     .last_pinned_regions
                     .contains(&region_id)
                 {
                     self.fsm
                         .store
-                        .gc_manager
+                        .purge_manager
                         .last_pinned_regions
                         .insert(region_id);
                     needed -= 1;
@@ -3370,8 +3378,8 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         }
     }
 
-    fn start_batch_gc(&mut self, over_ratio: f64) {
-        let total_regions = self.fsm.store.gc_manager.high_log_lag_regions.len();
+    fn start_batch_purge(&mut self, over_ratio: f64) {
+        let total_regions = self.fsm.store.purge_manager.high_log_lag_regions.len();
         if total_regions == 0 {
             return;
         }
@@ -3392,7 +3400,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         let interval = (self.ctx.cfg.raft_engine_purge_interval.0 / total_batches as u32)
             .max(Duration::from_secs(5));
 
-        self.fsm.store.gc_manager.batch_gc_state = Some(BatchGcState {
+        self.fsm.store.purge_manager.batch_purge_state = Some(BatchPurgeState {
             current_batch: 0,
             total_batches,
             batch_size,
@@ -3400,26 +3408,32 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         });
 
         info!(
-            "Starting batch GC: {} regions, {} batches, {} per batch",
+            "starting batch purge: {} regions, {} batches, {} per batch",
             total_regions, total_batches, batch_size
         );
         // After 5 seconds, start the first batch
         self.ctx
-            .schedule_store_tick(StoreTick::RaftEngineForceGc, Duration::from_secs(5));
+            .schedule_store_tick(StoreTick::RaftEngineForcelyPurge, Duration::from_secs(5));
     }
 
-    fn process_batch_gc(&mut self) {
-        let mut batch_state = match self.fsm.store.gc_manager.batch_gc_state.take() {
+    fn process_batch_purge(&mut self) {
+        let mut batch_state = match self.fsm.store.purge_manager.batch_purge_state.take() {
             Some(state) => state,
             None => return,
         };
 
         // Collect regions to process in this batch
-        let mut regions_to_gc = Vec::new();
+        let mut regions_to_purge = Vec::new();
         let mut processed_count = 0;
 
         // Iterate through high_log_lag_regions and collect non-pinned regions
-        for region_id in self.fsm.store.gc_manager.high_log_lag_regions.region_ids() {
+        for region_id in self
+            .fsm
+            .store
+            .purge_manager
+            .high_log_lag_regions
+            .region_ids()
+        {
             if processed_count >= batch_state.batch_size {
                 break;
             }
@@ -3428,17 +3442,17 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
             if !self
                 .fsm
                 .store
-                .gc_manager
+                .purge_manager
                 .last_pinned_regions
                 .contains(&region_id)
             {
-                regions_to_gc.push(region_id);
+                regions_to_purge.push(region_id);
                 processed_count += 1;
             }
         }
 
-        // Send force compact messages for collected regions
-        for region_id in &regions_to_gc {
+        // Send forcely purge messages for collected regions
+        for region_id in &regions_to_purge {
             let _ = self.ctx.router.send(
                 *region_id,
                 PeerMsg::CasualMessage(Box::new(CasualMessage::ForceCompactRaftLogs)),
@@ -3446,36 +3460,36 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         }
 
         // Remove processed regions from high_log_lag_regions
-        for region_id in &regions_to_gc {
+        for region_id in &regions_to_purge {
             self.fsm
                 .store
-                .gc_manager
+                .purge_manager
                 .high_log_lag_regions
                 .remove(*region_id);
         }
 
         info!(
-            "Processed batch {}/{}: {} regions",
+            "Processed batch purge {}/{}: {} regions",
             batch_state.current_batch + 1,
             batch_state.total_batches,
-            regions_to_gc.len()
+            regions_to_purge.len()
         );
 
         batch_state.current_batch += 1;
 
         // Check if we should continue or finish
-        // If we collected fewer regions than batch_size, it means we've traversed all
-        // GC candidates
-        let remaining_regions = self.fsm.store.gc_manager.high_log_lag_regions.len();
+        // If we collected fewer regions than batch_size,
+        // it means we've traversed all purge candidates.
+        let remaining_regions = self.fsm.store.purge_manager.high_log_lag_regions.len();
         if batch_state.current_batch >= batch_state.total_batches
-            || regions_to_gc.len() < batch_state.batch_size
+            || regions_to_purge.len() < batch_state.batch_size
         {
             info!(
-                "Batch GC completed: {} batches processed, {} regions remaining",
+                "Batch purge completed: {} batches processed, {} regions remaining",
                 batch_state.current_batch, remaining_regions
             );
         } else {
-            self.fsm.store.gc_manager.batch_gc_state = Some(batch_state);
+            self.fsm.store.purge_manager.batch_purge_state = Some(batch_state);
         }
     }
 }
