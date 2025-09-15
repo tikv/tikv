@@ -127,8 +127,11 @@ impl<S: Storage, F: KvFormat> BatchExecutor for BatchTableScanExecutor<S, F> {
     }
 
     #[inline]
-    fn take_intermediate_results(&mut self, results: &mut [Vec<BatchExecuteResult>]) -> Result<()> {
-        self.0.take_intermediate_results(results)
+    fn consume_and_fill_intermediate_results(
+        &mut self,
+        results: &mut [Vec<BatchExecuteResult>],
+    ) -> Result<()> {
+        self.0.consume_and_fill_intermediate_results(results)
     }
 
     #[inline]

@@ -244,6 +244,17 @@ impl DagSelect {
     }
 
     #[must_use]
+    pub fn projection(mut self, exprs: Vec<Expr>) -> DagSelect {
+        let mut exec = Executor::default();
+        exec.set_tp(ExecType::TypeProjection);
+        let mut projection = tipb::Projection::default();
+        projection.set_exprs(exprs.into());
+        exec.set_projection(projection);
+        self.execs.push(exec);
+        self
+    }
+
+    #[must_use]
     pub fn desc(mut self, desc: bool) -> DagSelect {
         self.execs[0].mut_tbl_scan().set_desc(desc);
         self

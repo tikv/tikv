@@ -42,8 +42,11 @@ pub trait BatchExecutor: Send {
     /// Gets the schema of intermediate result
     fn intermediate_schema(&self, index: usize) -> Result<&[FieldType]>;
 
-    /// Takes intermediate results from executors
-    fn take_intermediate_results(&mut self, results: &mut [Vec<BatchExecuteResult>]) -> Result<()>;
+    /// Consumes the inner intermediate results and fills the arguments vector.
+    fn consume_and_fill_intermediate_results(
+        &mut self,
+        results: &mut [Vec<BatchExecuteResult>],
+    ) -> Result<()>;
 
     /// Pulls next several rows of data (stored by column).
     ///
@@ -107,8 +110,11 @@ impl<T: BatchExecutor + ?Sized> BatchExecutor for Box<T> {
     }
 
     #[inline]
-    fn take_intermediate_results(&mut self, results: &mut [Vec<BatchExecuteResult>]) -> Result<()> {
-        (**self).take_intermediate_results(results)
+    fn consume_and_fill_intermediate_results(
+        &mut self,
+        results: &mut [Vec<BatchExecuteResult>],
+    ) -> Result<()> {
+        (**self).consume_and_fill_intermediate_results(results)
     }
 
     async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
@@ -148,8 +154,11 @@ impl<C: ExecSummaryCollector + Send, T: BatchExecutor> BatchExecutor
     }
 
     #[inline]
-    fn take_intermediate_results(&mut self, results: &mut [Vec<BatchExecuteResult>]) -> Result<()> {
-        self.inner.take_intermediate_results(results)
+    fn consume_and_fill_intermediate_results(
+        &mut self,
+        results: &mut [Vec<BatchExecuteResult>],
+    ) -> Result<()> {
+        self.inner.consume_and_fill_intermediate_results(results)
     }
 
     async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {

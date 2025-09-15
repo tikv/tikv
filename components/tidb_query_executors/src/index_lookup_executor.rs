@@ -462,13 +462,16 @@ where
     }
 
     #[inline]
-    fn take_intermediate_results(&mut self, results: &mut [Vec<BatchExecuteResult>]) -> Result<()> {
+    fn consume_and_fill_intermediate_results(
+        &mut self,
+        results: &mut [Vec<BatchExecuteResult>],
+    ) -> Result<()> {
         match results.get_mut(self.intermediate_channel_index) {
             Some(v) => {
                 if !self.intermediate_results.is_empty() {
                     v.append(&mut self.intermediate_results);
                 }
-                self.src.take_intermediate_results(results)
+                self.src.consume_and_fill_intermediate_results(results)
             }
             _ => Err(other_err!(
                 "intermediate_channel_index {} exceeds the bound: {}",
@@ -2288,7 +2291,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_take_intermediate_results() {
+    fn test_consume_and_fill_intermediate_results() {
         let mut index_lookup = new_index_lookup_executor_for_test(
             EvalConfig::default_for_test(),
             build_int_array_results(vec![vec![]]),
@@ -2303,14 +2306,14 @@ pub mod tests {
 
         // when the channel len does not match, return error
         let err = index_lookup
-            .take_intermediate_results(&mut [vec![], vec![]])
+            .consume_and_fill_intermediate_results(&mut [vec![], vec![]])
             .unwrap_err();
         assert!(err.to_string().contains("exceeds the bound"));
 
         // take results successfully
-        let mut channels = vec![vec![], vec![], vec![], vec![]];
+        let mut channels = iter::repeat_with(Vec::new).take(4).collect::<Vec<_>>();
         index_lookup
-            .take_intermediate_results(&mut channels)
+            .consume_and_fill_intermediate_results(&mut channels)
             .unwrap();
         assert!(index_lookup.intermediate_results.is_empty());
         assert!(channels[0].is_empty());
@@ -2329,7 +2332,7 @@ pub mod tests {
         // take results should append to existing results
         index_lookup.intermediate_results = build_int_array_results(vec![vec![7, 4]]);
         index_lookup
-            .take_intermediate_results(&mut channels)
+            .consume_and_fill_intermediate_results(&mut channels)
             .unwrap();
         assert!(index_lookup.intermediate_results.is_empty());
         assert!(channels[0].is_empty());
@@ -2351,7 +2354,7 @@ pub mod tests {
             .src
             .set_next_intermediate_results(build_int_array_results(vec![vec![100]]));
         index_lookup
-            .take_intermediate_results(&mut channels)
+            .consume_and_fill_intermediate_results(&mut channels)
             .unwrap();
         assert!(channels[0].is_empty());
         assert!(channels[3].is_empty());
@@ -2371,7 +2374,7 @@ pub mod tests {
             .src
             .set_next_intermediate_results(build_int_array_results(vec![vec![200]]));
         index_lookup
-            .take_intermediate_results(&mut channels)
+            .consume_and_fill_intermediate_results(&mut channels)
             .unwrap();
         assert!(channels[0].is_empty());
         assert!(channels[3].is_empty());

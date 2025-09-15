@@ -299,7 +299,7 @@ impl BatchExecutor for BatchFixtureExecutor {
     }
 
     #[inline]
-    fn take_intermediate_results(
+    fn consume_and_fill_intermediate_results(
         &mut self,
         _results: &mut [Vec<BatchExecuteResult>],
     ) -> Result<()> {

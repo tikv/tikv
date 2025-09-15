@@ -87,14 +87,17 @@ impl BatchExecutor for MockExecutor {
         Err(box_err!("no intermediate schema for index {}", index))
     }
 
-    fn take_intermediate_results(&mut self, results: &mut [Vec<BatchExecuteResult>]) -> Result<()> {
+    fn consume_and_fill_intermediate_results(
+        &mut self,
+        results: &mut [Vec<BatchExecuteResult>],
+    ) -> Result<()> {
         if let Some((idx, _)) = &self.intermediate_schema {
             if let Some(mut next) = self.intermediate_results.next() {
                 results[*idx].append(&mut next);
             }
         }
         if let Some(child) = &mut self.child {
-            child.take_intermediate_results(results)?
+            child.consume_and_fill_intermediate_results(results)?
         }
         Ok(())
     }
@@ -154,7 +157,7 @@ impl BatchExecutor for MockScanExecutor {
         unreachable!()
     }
 
-    fn take_intermediate_results(
+    fn consume_and_fill_intermediate_results(
         &mut self,
         _results: &mut [Vec<BatchExecuteResult>],
     ) -> Result<()> {

@@ -186,8 +186,11 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
     }
 
     #[inline]
-    fn take_intermediate_results(&mut self, results: &mut [Vec<BatchExecuteResult>]) -> Result<()> {
-        self.src.take_intermediate_results(results)
+    fn consume_and_fill_intermediate_results(
+        &mut self,
+        results: &mut [Vec<BatchExecuteResult>],
+    ) -> Result<()> {
+        self.src.consume_and_fill_intermediate_results(results)
     }
 
     #[inline]

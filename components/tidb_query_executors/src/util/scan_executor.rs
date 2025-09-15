@@ -179,7 +179,7 @@ impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> BatchExecutor for ScanExecuto
     }
 
     #[inline]
-    fn take_intermediate_results(
+    fn consume_and_fill_intermediate_results(
         &mut self,
         _results: &mut [Vec<BatchExecuteResult>],
     ) -> Result<()> {

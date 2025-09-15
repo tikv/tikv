@@ -858,7 +858,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let mut intermediate_record_len = 0;
         let mut chk_byte_size = 0;
         self.out_most_executor
-            .take_intermediate_results(&mut self.reserved_intermediate_results)?;
+            .consume_and_fill_intermediate_results(&mut self.reserved_intermediate_results)?;
         for (i, results) in self.reserved_intermediate_results.iter_mut().enumerate() {
             if results.is_empty() {
                 continue;
