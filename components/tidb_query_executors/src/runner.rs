@@ -843,7 +843,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
     }
 
     #[inline]
-    fn take_and_encode_intermediate_results(
+    fn consume_and_encode_intermediate_results(
         &mut self,
         chunks: &mut [Vec<Chunk>],
         ctx: &mut EvalContext,
@@ -929,8 +929,11 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
         warnings.merge(&mut result.warnings);
         if !self.intermediate_channels.is_empty() {
-            let (r_len, bytes_len) =
-                self.take_and_encode_intermediate_results(intermediate_chunks, ctx, is_streaming)?;
+            let (r_len, bytes_len) = self.consume_and_encode_intermediate_results(
+                intermediate_chunks,
+                ctx,
+                is_streaming,
+            )?;
             record_len += r_len;
             read_bytes_len += bytes_len;
         }
@@ -1670,7 +1673,7 @@ mod tests {
     }
 
     #[test]
-    fn test_take_and_encode_intermediate_results() {
+    fn test_consume_and_encode_intermediate_results() {
         let mut runner = build_simple_runner_for_test();
         runner.intermediate_channels = vec![
             runner::IntermediateOutputChannel {
@@ -1779,7 +1782,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         let mut chunks = vec![vec![exist_chk], vec![]];
         let (record_len, bytes_len) = runner
-            .take_and_encode_intermediate_results(&mut chunks, &mut ctx, false)
+            .consume_and_encode_intermediate_results(&mut chunks, &mut ctx, false)
             .unwrap();
 
         assert_eq!(record_len, 9);
