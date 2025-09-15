@@ -1185,6 +1185,17 @@ mod tests {
         exec
     }
 
+    type ProjectionExecutor = BatchProjectionExecutor<BoxedExecutor>;
+
+    fn projection_descriptor(exprs: Vec<Expr>) -> Executor {
+        let mut exec = Executor::default();
+        exec.set_tp(ExecType::TypeProjection);
+        let mut projection = Projection::default();
+        projection.set_exprs(exprs.into());
+        exec.set_projection(projection);
+        exec
+    }
+
     fn column_with_type(col_id: i64, tp: FieldTypeTp) -> ColumnInfo {
         let mut col = ColumnInfo::default();
         col.set_column_id(col_id);
@@ -1276,6 +1287,9 @@ mod tests {
             table_scan_descriptor(456, table_columns.clone()),
             index_lookup_descriptor(vec![1]),
             selection_descriptor(vec![
+                ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong).build(),
+            ]),
+            projection_descriptor(vec![
                 ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong).build(),
             ]),
         ];
@@ -1385,7 +1399,10 @@ mod tests {
         };
 
         // check the executors from top to down:
-        // Selection <- IndexLookUp <- Limit <- IndexScan
+        // Projection <- Selection <- IndexLookUp <- Limit <- IndexScan
+        let summary = cast_as_summary::<ProjectionExecutor>(executor);
+        assert_eq!(5, summary.summary_collector.get_output_index());
+        executor = summary.into_inner().into_child();
         let summary = cast_as_summary::<SelectionExecutor>(executor);
         assert_eq!(4, summary.summary_collector.get_output_index());
         executor = summary.into_inner().into_child();

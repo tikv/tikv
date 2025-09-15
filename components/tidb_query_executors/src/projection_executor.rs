@@ -54,6 +54,11 @@ fn get_schema_from_exprs(child_schema: &[FieldType], exprs: &[RpnExpression]) ->
 
 impl<Src: BatchExecutor> BatchProjectionExecutor<Src> {
     #[cfg(test)]
+    pub fn into_child(self) -> Src {
+        self.src
+    }
+
+    #[cfg(test)]
     pub fn new_for_test(src: Src, exprs: Vec<RpnExpression>) -> Self {
         let schema = get_schema_from_exprs(src.schema(), &exprs);
         let exprs_len = exprs.len();
