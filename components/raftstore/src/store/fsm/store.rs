@@ -3293,15 +3293,11 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
             info!("force GC triggered by failpoint for testing");
             Some(1.0) // Return a test over_ratio
         });
-        // If there is no region leader growth, no need to check
-        if self.fsm.store.gc_manager.high_log_lag_regions.is_empty() {
-            return None;
-        }
         // Get current raft engine memory usage
         let raftengine_memory_usage = self.ctx.engines.raft.get_memory_usage().unwrap() as f64;
-        let mut over_ratio = 0.0;
         // If raft engine memory usage exceeds threshold, we need to shrink pinned
         // regions to release more memory
+        let mut over_ratio = 0.0;
         if needs_force_compact(
             &mut over_ratio,
             raftengine_memory_usage,
@@ -3312,14 +3308,11 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         None
     }
 
-    fn send_force_compact_messages(&mut self, over_ratio: f64) {
+    fn on_raft_engine_force_gc_tick(&mut self) {
+        // If there is no high log lag regions, no need to check
         if self.fsm.store.gc_manager.high_log_lag_regions.is_empty() {
             return;
         }
-        self.start_batch_gc(over_ratio);
-    }
-
-    fn on_raft_engine_force_gc_tick(&mut self) {
         // Check if we're in batch processing mode
         if self.fsm.store.gc_manager.batch_gc_state.is_some() {
             self.process_batch_gc();
@@ -3332,7 +3325,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
                 "force GC needed based on memory pressure, over_ratio: {}",
                 over_ratio
             );
-            self.send_force_compact_messages(over_ratio);
+            self.start_batch_gc(over_ratio);
         }
         self.register_raft_engine_force_gc_tick();
     }
