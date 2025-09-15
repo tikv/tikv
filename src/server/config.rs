@@ -474,6 +474,18 @@ impl Config {
             self.heavy_load_threshold = 75;
         }
 
+<<<<<<< HEAD
+=======
+        if self
+            .inspect_network_interval
+            .lt(&ReadableDuration::millis(10))
+            && self.inspect_network_interval.0 != Duration::from_millis(0)
+        {
+            return Err(box_err!(
+                "server.inspect-network-interval can't be less than 10ms and not zero."
+            ));
+        }
+>>>>>>> bf4d574d43 (config: add more check for inspect_network_interval (#18947))
         Ok(())
     }
 
