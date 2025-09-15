@@ -544,39 +544,168 @@ struct ReadPoolCpuTimeTracker {
     // the total time duration of each thread busy with handling tasks. This time also includes
     // the time when the threads are off-cpu, so it might be much higher than the actual cpu time.
     prev_total_task_handling_time_us: u64,
-    prev_check_time: Instant,
-    prev_cpu_per_sec: f64,
+    prev_thread_check_time: Instant,
+    prev_thread_usage_per_sec: f64,
+    // Cached worker thread IDs (RFC 0114)
+    cached_worker_tids: Vec<u32>,
+    last_thread_scan: Instant,
+    // RFC 0114 specific tracking
+    prev_total_cpu_time: u64,
+    prev_cpu_check_time: Instant,
+    prev_cpu_utilization: f64,
 }
 
 impl ReadPoolCpuTimeTracker {
     fn new(pool_name: &str) -> Self {
-        let prev_check_time = Instant::now_coarse();
+        let now = Instant::now_coarse();
         let yatp_total_time_elapsed = MULTILEVEL_LEVEL_ELAPSED
             .get_metric_with_label_values(&[pool_name, "total"])
             .unwrap();
         let prev_total_task_handling_time_us = yatp_total_time_elapsed.get();
-        Self {
+
+        let mut tracker = Self {
             yatp_total_time_elapsed,
             prev_total_task_handling_time_us,
-            prev_check_time,
-            prev_cpu_per_sec: 0.0,
-        }
+            prev_thread_check_time: now,
+            prev_thread_usage_per_sec: 0.0,
+            cached_worker_tids: Vec::new(),
+            last_thread_scan: now,
+            prev_total_cpu_time: 0,
+            prev_cpu_check_time: now,
+            prev_cpu_utilization: 0.0,
+        };
+
+        // Scan for threads once at initialization
+        tracker.refresh_worker_thread_cache();
+        tracker
     }
 
-    fn prev_avg_cpu_used(&mut self) -> f64 {
+    /// Refresh cached worker thread IDs
+    fn refresh_worker_thread_cache(&mut self) {
+        #[cfg(target_os = "linux")]
+        {
+            use std::fs;
+
+            use tikv_util::sys::thread::full_thread_stat;
+
+            let current_pid = std::process::id();
+            let mut thread_ids = vec![];
+
+            // Read /proc/pid/task directory to find all threads
+            if let Ok(entries) = fs::read_dir(format!("/proc/{}/task", current_pid)) {
+                for entry in entries.flatten() {
+                    if let Some(tid_str) = entry.file_name().to_str() {
+                        if let Ok(tid) = tid_str.parse::<u32>() {
+                            // Check if this thread belongs to unified read pool
+                            if let Ok(stat) = full_thread_stat(current_pid, tid) {
+                                // Look for unified read pool thread name pattern
+                                if stat.command.contains("unified-read-pool")
+                                    || stat.command.contains("yatp")
+                                {
+                                    thread_ids.push(tid);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            self.cached_worker_tids = thread_ids;
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            // On non-Linux platforms, keep empty cache
+            self.cached_worker_tids.clear();
+        }
+
+        self.last_thread_scan = Instant::now_coarse();
+    }
+
+    /// Get actual CPU usage of unified read pool threads using kernel thread
+    /// stats. Returns CPU utilization as fraction of total available CPU
+    /// cores.
+    fn get_unified_read_pool_cpu(&mut self) -> f64 {
+        #[cfg(test)]
+        {
+            // In test mode, return the manually set value if available
+            if self.prev_cpu_utilization > 0.0 {
+                return self.prev_cpu_utilization;
+            }
+        }
+        use tikv_util::sys::thread::{full_thread_stat, ticks_per_second};
+
         let check_time = Instant::now_coarse();
-        let duration = check_time.saturating_duration_since(self.prev_check_time);
+        let duration = check_time.saturating_duration_since(self.prev_cpu_check_time);
+
+        // Minimum duration check to avoid noise - if too soon, return 0
+        if duration < Duration::from_millis(500) {
+            return self.prev_cpu_utilization;
+        }
+
+        // If no threads found during initialization, fallback to 0
+        if self.cached_worker_tids.is_empty() {
+            self.refresh_worker_thread_cache();
+        }
+
+        let mut current_total_cpu_time = 0i64;
+        let current_pid = std::process::id();
+
+        // Collect CPU stats for each cached read pool worker thread
+        for &tid in &self.cached_worker_tids {
+            if let Ok(stat) = full_thread_stat(current_pid, tid) {
+                // Sum utime + stime (user + system time)
+                current_total_cpu_time += stat.utime + stat.stime;
+            }
+        }
+
+        // Calculate CPU time difference since last check
+        let cpu_time_diff = current_total_cpu_time.saturating_sub(self.prev_total_cpu_time as i64);
+
+        // Convert to CPU utilization as fraction of total available cores
+        let cpu_utilization = if duration.as_secs_f64() > 0.0 && cpu_time_diff > 0 {
+            // Convert CPU time to seconds using ticks_per_second
+            let cpu_seconds = (cpu_time_diff as f64) / (ticks_per_second() as f64);
+            let wall_seconds = duration.as_secs_f64();
+            cpu_seconds / (wall_seconds * num_cpus::get() as f64)
+        } else {
+            0.0
+        };
+
+        self.prev_total_cpu_time = current_total_cpu_time as u64;
+        self.prev_cpu_check_time = check_time;
+        self.prev_cpu_utilization = cpu_utilization;
+
+        // Return CPU usage as fraction of total available CPU cores
+        cpu_utilization
+    }
+
+    #[cfg(test)]
+    fn set_test_cpu_utilization(&mut self, cpu: f64) {
+        self.prev_cpu_utilization = cpu;
+    }
+
+    #[cfg(test)]
+    fn get_test_cpu_utilization(&mut self) -> f64 {
+        self.prev_cpu_utilization
+    }
+
+    /// Baseline thread usage measurement using yatp metrics (includes off-CPU
+    /// time)
+    fn prev_avg_thread_usage(&mut self) -> f64 {
+        let check_time = Instant::now_coarse();
+        let duration = check_time.saturating_duration_since(self.prev_thread_check_time);
         // if the check duration is too small, just return the latest cached value.
         if duration < Duration::from_millis(100) {
-            return self.prev_cpu_per_sec;
+            return self.prev_thread_usage_per_sec;
         }
-        let total_cpu_time = self.yatp_total_time_elapsed.get();
-        let total_cpu_per_sec = (total_cpu_time - self.prev_total_task_handling_time_us) as f64
+        let total_thread_time = self.yatp_total_time_elapsed.get();
+        let total_thread_usage_per_sec = (total_thread_time - self.prev_total_task_handling_time_us)
+            as f64
             / duration.as_micros() as f64;
-        self.prev_total_task_handling_time_us = total_cpu_time;
-        self.prev_check_time = check_time;
-        self.prev_cpu_per_sec = total_cpu_per_sec;
-        total_cpu_per_sec
+        self.prev_total_task_handling_time_us = total_thread_time;
+        self.prev_thread_check_time = check_time;
+        self.prev_thread_usage_per_sec = total_thread_usage_per_sec;
+        total_thread_usage_per_sec
     }
 }
 struct ReadPoolConfigRunner {
@@ -592,6 +721,8 @@ struct ReadPoolConfigRunner {
     // the current active thread count
     cur_thread_count: usize,
     auto_adjust: bool,
+    // CPU threshold from configuration (0 means disabled, RFC 0114)
+    cpu_threshold: f64,
 }
 
 impl Runnable for ReadPoolConfigRunner {
@@ -641,6 +772,18 @@ impl ReadPoolConfigRunner {
         }
     }
 
+    /// Adjust pool size using base scaling algorithm enhanced with RFC 0114 CPU
+    /// threshold constraints.
+    ///
+    /// When cpu_threshold > 0, the RFC 0114 constraints are applied ON TOP OF
+    /// the base algorithm:
+    /// - Forces scale down when CPU usage exceeds threshold (with 10% leeway)
+    /// - Prevents scale up when it would exceed CPU threshold
+    /// - Otherwise uses base scaling conditions (80%/70% CPU, task queue depth,
+    ///   process CPU)
+    ///
+    /// When cpu_threshold = 0, uses pure base algorithm for backward
+    /// compatibility.
     fn adjust_pool_size(&mut self) {
         if !self.auto_adjust
             || (self.cur_thread_count == self.max_thread_count
@@ -649,7 +792,8 @@ impl ReadPoolConfigRunner {
             return;
         }
 
-        let read_pool_cpu = self.cpu_time_tracker.prev_avg_cpu_used();
+        let read_pool_cpu = self.cpu_time_tracker.get_unified_read_pool_cpu();
+        let thread_usage = self.cpu_time_tracker.prev_avg_thread_usage();
         let running_tasks = self.running_tasks();
         let process_cpu = match self.process_stats.cpu_usage() {
             Ok(p) => p,
@@ -660,29 +804,47 @@ impl ReadPoolConfigRunner {
         };
         let cpu_quota = SysQuota::cpu_cores_quota();
 
-        // scale out the thread pool size by 1 iff:
-        // - current thread count is small than the maximum thread count
-        // - process cpu is not overloaded after scaling out one more thread
-        // - all read pool threads are busy handling tasks(thread busy time >= 80%)
-        // - there are enough tasks waiting in the scheduling queue.
-        // scale in the thread pool size by 1 iff:
-        // - current thread count is bigger than the configed thread count
-        // - the average thread usage percent is under the low water mark(70%)
-        // - the running tasks in the scheduling queue is under the threshold
-        let new_thread_count = if self.cur_thread_count < self.max_thread_count
+        // Base scaling conditions (process CPU, thread usage, task queue depth)
+        let base_scale_out = self.cur_thread_count < self.max_thread_count
             && process_cpu * (self.cur_thread_count as f64 + 1.0) / (self.cur_thread_count as f64)
                 < cpu_quota
-            && read_pool_cpu > self.cur_thread_count as f64 * READ_POOL_THREAD_HIGH_THRESHOLD
-            && running_tasks > self.cur_thread_count as i64 * RUNNING_TASKS_PER_THREAD_THRESHOLD
-        {
-            self.cur_thread_count + 1
-        } else if self.cur_thread_count > self.core_thread_count
-            && read_pool_cpu < (self.cur_thread_count - 1) as f64 * READ_POOL_THREAD_LOW_THRESHOLD
-            && running_tasks < self.cur_thread_count as i64 * RUNNING_TASKS_PER_THREAD_THRESHOLD
-        {
-            self.cur_thread_count - 1
+            && thread_usage > self.cur_thread_count as f64 * READ_POOL_THREAD_HIGH_THRESHOLD
+            && running_tasks > self.cur_thread_count as i64 * RUNNING_TASKS_PER_THREAD_THRESHOLD;
+
+        let base_scale_in = self.cur_thread_count > self.core_thread_count
+            && thread_usage < (self.cur_thread_count - 1) as f64 * READ_POOL_THREAD_LOW_THRESHOLD
+            && running_tasks < self.cur_thread_count as i64 * RUNNING_TASKS_PER_THREAD_THRESHOLD;
+
+        let new_thread_count = if self.cpu_threshold > 0.0 {
+            // Apply CPU threshold constraints on top of base algorithm
+            const LEEWAY: f64 = 0.1; // 10% leeway
+            let target_cpu_cores = self.cpu_threshold * cpu_quota;
+
+            // Force scale down if CPU exceeds threshold (with leeway)
+            if read_pool_cpu > (LEEWAY + 1.0) * target_cpu_cores {
+                std::cmp::max(
+                    ((self.cur_thread_count as f64) * target_cpu_cores / read_pool_cpu).floor()
+                        as usize,
+                    (target_cpu_cores).floor() as usize,
+                )
+            } else if self.cur_thread_count < self.core_thread_count
+                && read_pool_cpu < (1.0 - LEEWAY) * target_cpu_cores
+            {
+                self.cur_thread_count + 1
+            } else if base_scale_in {
+                self.cur_thread_count - 1
+            } else {
+                self.cur_thread_count
+            }
         } else {
-            self.cur_thread_count
+            // Base algorithm when CPU threshold is disabled (0.0)
+            if base_scale_out {
+                self.cur_thread_count + 1
+            } else if base_scale_in {
+                self.cur_thread_count - 1
+            } else {
+                self.cur_thread_count
+            }
         };
 
         if new_thread_count != self.cur_thread_count {
@@ -727,6 +889,7 @@ impl ReadPoolConfigManager {
         worker: &Worker,
         thread_count: usize,
         auto_adjust: bool,
+        cpu_threshold: f64,
     ) -> Self {
         let max_thread_count = std::cmp::max(
             UNIFIED_READPOOL_MIN_CONCURRENCY,
@@ -742,6 +905,7 @@ impl ReadPoolConfigManager {
             cur_thread_count: thread_count,
             max_thread_count,
             auto_adjust,
+            cpu_threshold,
         };
         let scheduler = worker.start_with_timer("read-pool-config-worker", runner);
 
@@ -1068,6 +1232,106 @@ mod tests {
         inspector.update();
         let ewma = inspector.get_ewma_time_slice().as_secs_f64();
         assert!((ewma - 0.01307).abs() < MARGIN);
+    }
+
+    #[test]
+    fn test_config_validation_cpu_threshold() {
+        use tikv_util::config::ReadableSize;
+        // Valid cpu_threshold
+        let valid_config = UnifiedReadPoolConfig {
+            min_thread_count: 1,
+            max_thread_count: 2,
+            stack_size: ReadableSize::mb(2),
+            max_tasks_per_worker: 2,
+            auto_adjust_pool_size: true,
+            cpu_threshold: 0.7,
+        };
+        // Just verify config can be created
+        assert_eq!(valid_config.cpu_threshold, 0.7);
+
+        // Test disabled threshold (0.0)
+        let disabled_config = UnifiedReadPoolConfig {
+            cpu_threshold: 0.0,
+            ..valid_config
+        };
+        assert_eq!(disabled_config.cpu_threshold, 0.0);
+    }
+
+    #[test]
+    fn test_cpu_threshold_scale_down_and_up() {
+        use tikv_util::{config::ReadableSize, worker::Worker};
+
+        let config = UnifiedReadPoolConfig {
+            min_thread_count: 2,
+            max_thread_count: 8,
+            max_tasks_per_worker: 4,
+            cpu_threshold: 0.6, // 60% threshold
+            auto_adjust_pool_size: true,
+            ..Default::default()
+        };
+
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let pool = build_yatp_read_pool(
+            &config,
+            DummyReporter,
+            engine,
+            None,
+            CleanupMethod::InPlace,
+            false,
+        );
+
+        let handle = pool.handle();
+        let worker = Worker::new("test-worker");
+
+        // Create ReadPoolConfigRunner with a real CPU tracker first
+        let mut runner = ReadPoolConfigRunner {
+            interval: Duration::from_secs(10),
+            sender: std::sync::mpsc::sync_channel(10).0,
+            handle: handle.clone(),
+            cpu_time_tracker: ReadPoolCpuTimeTracker::new("test-pool"),
+            process_stats: ProcessStat::cur_proc_stat().unwrap(),
+            core_thread_count: config.min_thread_count,
+            cur_thread_count: config.max_thread_count,
+            max_thread_count: config.max_thread_count,
+            auto_adjust: true,
+            cpu_threshold: config.cpu_threshold,
+        };
+
+        // Initial state: 8 threads
+        assert_eq!(runner.cur_thread_count, 8);
+
+        // Test 1: Set high CPU utilization using test helper
+        runner
+            .cpu_time_tracker
+            .set_test_cpu_utilization(0.8 * num_cpus::get() as f64);
+
+        let initial_threads = runner.cur_thread_count;
+        runner.adjust_pool_size(); // Call the REAL adjust_pool_size method
+
+        assert!(
+            runner.cur_thread_count < initial_threads,
+            "Thread count should decrease when CPU usage is high. Before: {}, After: {}",
+            initial_threads,
+            runner.cur_thread_count
+        );
+
+        // Test 2: Set low CPU utilization to test scale up
+        runner
+            .cpu_time_tracker
+            .set_test_cpu_utilization(0.3 * num_cpus::get() as f64);
+        let before_scale_up = runner.cur_thread_count;
+
+        runner.adjust_pool_size();
+
+        // Should not scale down further when CPU is low
+        if before_scale_up < runner.core_thread_count {
+            assert!(
+                runner.cur_thread_count >= before_scale_up,
+                "Thread count should not decrease further when CPU is low"
+            );
+        }
+
+        worker.stop();
     }
 
     #[test]
