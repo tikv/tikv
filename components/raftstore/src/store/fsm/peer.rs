@@ -6152,28 +6152,8 @@ where
         }
         let applied_count = applied_idx - first_idx;
 
-        // Accumulate interval time
-        self.fsm.sampling_interval += self.ctx.cfg.raft_log_gc_tick_interval.0.as_millis() as u64;
-        if self.fsm.sampling_interval
-            >= self.ctx.cfg.peer_stale_state_check_interval.0.as_millis() as u64
-        {
-            // Only send if has a certain amount of log lag.
-            if applied_count > self.ctx.cfg.raft_log_gc_count_limit() / 10 {
-                let store_msg: StoreMsg<EK> = StoreMsg::HighLogLagRegion {
-                    region_id: self.fsm.region_id(),
-                    timestamp: std::time::Instant::now(),
-                };
-                if let Err(e) = self.ctx.router.send_control(store_msg) {
-                    warn!(
-                        "failed to send region write rate info to store";
-                        "region_id" => self.fsm.region_id(),
-                        "err" => %e,
-                    );
-                }
-            }
-            // Reset interval accumulator
-            self.fsm.sampling_interval = 0;
-        }
+        // Check and report status to store if high log lag
+        self.on_check_high_log_lag(applied_count);
 
         // leader may call `get_term()` on the latest replicated index, so compact
         // entries before `alive_cache_idx` instead of `alive_cache_idx + 1`.
@@ -6194,70 +6174,17 @@ where
             }
         }
 
-        let mut compact_idx = match action {
-            RaftLogGcAction::ForceCompact => {
-                let should_force_compact =
-                    applied_count > self.ctx.cfg.raft_log_gc_count_limit() / 10;
-                if should_force_compact {
-                    self.ctx
-                        .raft_metrics
-                        .raft_log_force_gc
-                        .raft_engine_memory_limit
-                        .inc();
-                    applied_idx
-                } else {
-                    if replicated_idx < first_idx {
-                        self.ctx.raft_metrics.raft_log_gc_skipped.reserve_log.inc();
-                        return;
-                    }
-                    applied_idx
-                }
-            }
-            RaftLogGcAction::Normal => {
-                if applied_count >= self.ctx.cfg.raft_log_gc_count_limit() {
-                    self.ctx
-                        .raft_metrics
-                        .raft_log_force_gc
-                        .log_force_gc_count_limit
-                        .inc();
-                    applied_idx
-                } else if self.fsm.peer.raft_log_size_hint
-                    >= self.ctx.cfg.raft_log_gc_size_limit().0
-                {
-                    self.ctx
-                        .raft_metrics
-                        .raft_log_force_gc
-                        .log_force_gc_size_limit
-                        .inc();
-                    applied_idx
-                } else if replicated_idx < first_idx || last_idx - first_idx < 3 {
-                    // In the current implementation one compaction can't delete all stale Raft
-                    // logs. There will be at least 3 entries left after one compaction:
-                    // ```
-                    // |------------- entries needs to be compacted ----------|
-                    // [entries...][the entry at `compact_idx`][the last entry][new compaction entry]
-                    //             |-------------------- entries will be left ----------------------|
-                    // ```
-                    self.ctx.raft_metrics.raft_log_gc_skipped.reserve_log.inc();
-                    return;
-                } else if replicated_idx - first_idx < self.ctx.cfg.raft_log_gc_threshold
-                    && self.fsm.skip_gc_raft_log_ticks < self.ctx.cfg.raft_log_reserve_max_ticks
-                {
-                    self.ctx
-                        .raft_metrics
-                        .raft_log_gc_skipped
-                        .threshold_limit
-                        .inc();
-                    // Logs will only be kept `max_ticks` * `raft_log_gc_tick_interval`.
-                    self.fsm.skip_gc_raft_log_ticks += 1;
-                    self.register_raft_gc_log_tick();
-                    return;
-                } else {
-                    self.ctx.raft_metrics.raft_log_force_gc.max_ticks.inc();
-                    replicated_idx
-                }
-            }
-            RaftLogGcAction::RaftEnginePurge => std::cmp::max(replicated_idx, first_idx),
+        // Calculate compact index
+        let mut compact_idx = match self.calculate_compact_index(
+            action,
+            applied_count,
+            applied_idx,
+            replicated_idx,
+            first_idx,
+            last_idx,
+        ) {
+            Some(idx) => idx,
+            None => return,
         };
         // Avoid compacting unpersisted raft logs when persist is far behind apply.
         if compact_idx > self.fsm.peer.raft_group.raft.raft_log.persisted {
@@ -7432,6 +7359,111 @@ where
         self.fsm.peer.consistency_state.index = expected_index;
         self.fsm.peer.consistency_state.hash = expected_hash;
         true
+    }
+
+    /// Check and report high log lag to store if necessary
+    fn on_check_high_log_lag(&mut self, applied_count: u64) {
+        // Accumulate interval time
+        self.fsm.sampling_interval += self.ctx.cfg.raft_log_gc_tick_interval.0.as_millis() as u64;
+        if self.fsm.sampling_interval
+            >= self.ctx.cfg.peer_stale_state_check_interval.0.as_millis() as u64
+        {
+            // Only send if has a certain amount of log lag.
+            if applied_count > self.ctx.cfg.raft_log_gc_count_limit() / 10 {
+                let store_msg: StoreMsg<EK> = StoreMsg::HighLogLagRegion {
+                    region_id: self.fsm.region_id(),
+                    timestamp: std::time::Instant::now(),
+                };
+                if let Err(e) = self.ctx.router.send_control(store_msg) {
+                    warn!(
+                        "failed to send region write rate info to store";
+                        "region_id" => self.fsm.region_id(),
+                        "err" => %e,
+                    );
+                }
+            }
+            // Reset interval accumulator
+            self.fsm.sampling_interval = 0;
+        }
+    }
+
+    /// Calculate compact index based on the given action and parameters
+    /// Returns Some(compact_idx) if compaction should proceed, None if it
+    /// should be skipped
+    fn calculate_compact_index(
+        &mut self,
+        action: RaftLogGcAction,
+        applied_count: u64,
+        applied_idx: u64,
+        replicated_idx: u64,
+        first_idx: u64,
+        last_idx: u64,
+    ) -> Option<u64> {
+        match action {
+            RaftLogGcAction::ForceCompact => {
+                let should_force_compact =
+                    applied_count > self.ctx.cfg.raft_log_gc_count_limit() / 10;
+                if should_force_compact {
+                    self.ctx
+                        .raft_metrics
+                        .raft_log_force_gc
+                        .raft_engine_memory_limit
+                        .inc();
+                    Some(applied_idx)
+                } else {
+                    if replicated_idx < first_idx {
+                        self.ctx.raft_metrics.raft_log_gc_skipped.reserve_log.inc();
+                        return None;
+                    }
+                    Some(applied_idx)
+                }
+            }
+            RaftLogGcAction::Normal => {
+                if applied_count >= self.ctx.cfg.raft_log_gc_count_limit() {
+                    self.ctx
+                        .raft_metrics
+                        .raft_log_force_gc
+                        .log_force_gc_count_limit
+                        .inc();
+                    Some(applied_idx)
+                } else if self.fsm.peer.raft_log_size_hint
+                    >= self.ctx.cfg.raft_log_gc_size_limit().0
+                {
+                    self.ctx
+                        .raft_metrics
+                        .raft_log_force_gc
+                        .log_force_gc_size_limit
+                        .inc();
+                    Some(applied_idx)
+                } else if replicated_idx < first_idx || last_idx - first_idx < 3 {
+                    // In the current implementation one compaction can't delete all stale Raft
+                    // logs. There will be at least 3 entries left after one compaction:
+                    // ```
+                    // |------------- entries needs to be compacted ----------|
+                    // [entries...][the entry at `compact_idx`][the last entry][new compaction entry]
+                    //             |-------------------- entries will be left ----------------------|
+                    // ```
+                    self.ctx.raft_metrics.raft_log_gc_skipped.reserve_log.inc();
+                    None
+                } else if replicated_idx - first_idx < self.ctx.cfg.raft_log_gc_threshold
+                    && self.fsm.skip_gc_raft_log_ticks < self.ctx.cfg.raft_log_reserve_max_ticks
+                {
+                    self.ctx
+                        .raft_metrics
+                        .raft_log_gc_skipped
+                        .threshold_limit
+                        .inc();
+                    // Logs will only be kept `max_ticks` * `raft_log_gc_tick_interval`.
+                    self.fsm.skip_gc_raft_log_ticks += 1;
+                    self.register_raft_gc_log_tick();
+                    None
+                } else {
+                    self.ctx.raft_metrics.raft_log_force_gc.max_ticks.inc();
+                    Some(replicated_idx)
+                }
+            }
+            RaftLogGcAction::RaftEnginePurge => Some(std::cmp::max(replicated_idx, first_idx)),
+        }
     }
 }
 
