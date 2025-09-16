@@ -560,7 +560,7 @@ impl ReadPoolCpuTimeTracker {
             .unwrap();
         let prev_total_task_handling_time_us = yatp_total_time_elapsed.get();
 
-        let mut tracker = Self {
+        let tracker = Self {
             yatp_total_time_elapsed,
             prev_total_task_handling_time_us,
             prev_thread_check_time: now,
@@ -595,13 +595,11 @@ impl ReadPoolCpuTimeTracker {
         }
 
         let mut current_total_cpu_time = 0i64;
-        let current_pid = std::process::id();
-
         let pid = tikv_util::sys::thread::process_id();
         let tids: Vec<_> = tikv_util::sys::thread::thread_ids(pid).unwrap();
         // Collect CPU stats for each cached read pool worker thread
         for &tid in &tids {
-            if let Ok(stat) = full_thread_stat(current_pid, tid) {
+            if let Ok(stat) = full_thread_stat(pid, tid) {
                 // Look for unified read pool thread name pattern
                 if stat.command.contains("unified-read-pool") || stat.command.contains("yatp") {
                     // Sum utime + stime (user + system time)
@@ -740,10 +738,7 @@ impl ReadPoolConfigRunner {
     /// When cpu_threshold = 0, uses pure base algorithm for backward
     /// compatibility.
     fn adjust_pool_size(&mut self) {
-        if !self.auto_adjust
-            || (self.cur_thread_count == self.max_thread_count
-                && self.core_thread_count == self.max_thread_count)
-        {
+        if !self.auto_adjust {
             return;
         }
 
@@ -1197,7 +1192,6 @@ mod tests {
 
     #[test]
     fn test_config_validation_cpu_threshold() {
-        use tikv_util::config::ReadableSize;
         // Valid cpu_threshold
         let valid_config = UnifiedReadPoolConfig {
             min_thread_count: 1,
