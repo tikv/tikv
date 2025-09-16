@@ -560,7 +560,7 @@ impl ReadPoolCpuTimeTracker {
             .unwrap();
         let prev_total_task_handling_time_us = yatp_total_time_elapsed.get();
 
-        let tracker = Self {
+        Self {
             yatp_total_time_elapsed,
             prev_total_task_handling_time_us,
             prev_thread_check_time: now,
@@ -568,9 +568,7 @@ impl ReadPoolCpuTimeTracker {
             prev_total_cpu_time: 0,
             prev_cpu_check_time: now,
             prev_cpu_utilization: 0.0,
-        };
-
-        tracker
+        }
     }
 
     /// Get actual CPU usage of unified read pool threads using kernel thread
@@ -1192,6 +1190,7 @@ mod tests {
 
     #[test]
     fn test_config_validation_cpu_threshold() {
+        use tikv_util::config::ReadableSize;
         // Valid cpu_threshold
         let valid_config = UnifiedReadPoolConfig {
             min_thread_count: 1,
@@ -1214,7 +1213,7 @@ mod tests {
 
     #[test]
     fn test_cpu_threshold_scale_down_and_up() {
-        use tikv_util::{config::ReadableSize, worker::Worker};
+        use tikv_util::worker::Worker;
 
         let config = UnifiedReadPoolConfig {
             min_thread_count: 2,
