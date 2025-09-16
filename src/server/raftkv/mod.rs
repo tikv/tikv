@@ -22,7 +22,7 @@ use std::{
 
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot};
+use engine_traits::{CF_LOCK, CfName, KvEngine, MvccProperties, Snapshot};
 use futures::{Future, Stream, StreamExt, TryFutureExt, future::BoxFuture, task::AtomicWaker};
 use hybrid_engine::HybridEngineSnapshot;
 use in_memory_engine::RegionCacheMemoryEngine;
@@ -535,6 +535,32 @@ where
         }
 
         let reqs: Vec<Request> = batch.modifies.into_iter().map(Into::into).collect();
+
+        if txn_types::ENABLE_DUP_KEY_DEBUG.load(Ordering::Relaxed) {
+            // Ref: https://github.com/tikv/tikv/issues/18498.
+            // Check for duplicate key entries before proposing commands.
+            // TODO: remove this check when the cause of issue 18498 is located.
+            let mut keys_set = std::collections::HashSet::new();
+            for req in &reqs {
+                if req.has_put() && req.get_put().get_cf() == CF_LOCK {
+                    let key = req.get_put().get_key();
+                    if !keys_set.insert(key.to_vec()) {
+                        let wrapped_key = log_wrappers::Value::key(key);
+                        error!(
+                            "[for debug] found duplicate key in Lock CF PUT request, key: {:?}, \
+                        extra: {:?}, ctx: {:?}, reqs: {:?}, avoid_batch:{:?}",
+                            wrapped_key, batch.extra, ctx, reqs, batch.avoid_batch
+                        );
+                        // TODO: remove this in production or new release.
+                        panic!(
+                            "[for debug] found duplicate key in Lock CF PUT request, key: {:?}, \
+                        extra: {:?}, ctx: {:?}, reqs: {:?}, avoid_batch:{:?}",
+                            wrapped_key, batch.extra, ctx, reqs, batch.avoid_batch
+                        );
+                    }
+                }
+            }
+        }
         let txn_extra = batch.extra;
         let mut header = new_request_header(ctx, None);
         if batch.avoid_batch {
