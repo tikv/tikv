@@ -95,7 +95,9 @@ pub struct BatchExecutorsRunner<SS> {
     /// results if the primary rows cannot be founded in the local store.
     intermediate_channels: Vec<IntermediateOutputChannel>,
     /// Reserved for intermediate results, used to avoid re-allocation.
-    reserved_intermediate_results: Vec<Vec<BatchExecuteResult>>,
+    /// It is None when BatchExecutorsRunner is created
+    /// and will be set to Some by the inner code by demand
+    reserved_intermediate_results: Option<Vec<Vec<BatchExecuteResult>>>,
 }
 
 // We assign a dummy type `()` so that we can omit the type when calling
@@ -638,7 +640,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             paging_size,
             quota_limiter,
             intermediate_channels,
-            reserved_intermediate_results: vec![],
+            reserved_intermediate_results: None,
         })
     }
 
@@ -849,17 +851,20 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         ctx: &mut EvalContext,
         is_streaming: bool,
     ) -> Result<(usize, usize)> {
-        if self.reserved_intermediate_results.is_empty() {
-            self.reserved_intermediate_results = iter::repeat_with(Vec::new)
-                .take(self.intermediate_channels.len())
-                .collect();
+        if self.reserved_intermediate_results.is_none() {
+            self.reserved_intermediate_results = Some(
+                iter::repeat_with(Vec::new)
+                    .take(self.intermediate_channels.len())
+                    .collect(),
+            );
         }
 
+        let reserved_intermediate_results = self.reserved_intermediate_results.as_mut().unwrap();
         let mut intermediate_record_len = 0;
         let mut chk_byte_size = 0;
         self.out_most_executor
-            .consume_and_fill_intermediate_results(&mut self.reserved_intermediate_results)?;
-        for (i, results) in self.reserved_intermediate_results.iter_mut().enumerate() {
+            .consume_and_fill_intermediate_results(reserved_intermediate_results)?;
+        for (i, results) in reserved_intermediate_results.iter_mut().enumerate() {
             if results.is_empty() {
                 continue;
             }
@@ -1541,7 +1546,7 @@ mod tests {
                 .collect(),
         }];
         assert_eq!(runner.intermediate_channels, expected_intermediate_channels);
-        assert_eq!(0, runner.reserved_intermediate_results.len());
+        assert!(runner.reserved_intermediate_results.is_none());
 
         // main output falls back to default encode
         req.set_output_offsets(vec![0, 4]);
@@ -1549,7 +1554,7 @@ mod tests {
         assert_eq!(runner.encode_type, EncodeType::TypeDefault);
         assert_eq!(runner.output_offsets, vec![0, 4]);
         assert_eq!(runner.intermediate_channels, expected_intermediate_channels);
-        assert_eq!(0, runner.reserved_intermediate_results.len());
+        assert!(runner.reserved_intermediate_results.is_none());
 
         // intermediate output falls back to default encode
         req.set_output_offsets(vec![0, 3]);
@@ -1563,7 +1568,7 @@ mod tests {
         expected_intermediate_channels[0].encode_type = EncodeType::TypeDefault;
         expected_intermediate_channels[0].output_offsets = vec![2, 0];
         assert_eq!(runner.intermediate_channels, expected_intermediate_channels);
-        assert_eq!(0, runner.reserved_intermediate_results.len());
+        assert!(runner.reserved_intermediate_results.is_none());
 
         // both fall back to default encode
         req.set_output_offsets(vec![0, 4]);
@@ -1571,7 +1576,7 @@ mod tests {
         assert_eq!(runner.encode_type, EncodeType::TypeDefault);
         assert_eq!(runner.output_offsets, vec![0, 4]);
         assert_eq!(runner.intermediate_channels, expected_intermediate_channels);
-        assert_eq!(0, runner.reserved_intermediate_results.len());
+        assert!(runner.reserved_intermediate_results.is_none());
 
         // an intermediate channel doesn't refer to any executor
         req.mut_intermediate_output_channels().push({
@@ -1857,9 +1862,13 @@ mod tests {
             runner.intermediate_channels[1].encode_type,
         );
         // reserved_intermediate_results should be cleared
-        runner.reserved_intermediate_results.iter().for_each(|r| {
-            assert!(r.is_empty());
-        });
+        runner
+            .reserved_intermediate_results
+            .unwrap()
+            .iter()
+            .for_each(|r| {
+                assert!(r.is_empty());
+            });
     }
 
     #[test]
