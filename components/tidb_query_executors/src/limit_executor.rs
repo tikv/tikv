@@ -22,6 +22,11 @@ impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
             is_src_scan_executor,
         })
     }
+
+    #[cfg(test)]
+    pub fn into_child(self) -> Src {
+        self.src
+    }
 }
 
 #[async_trait]
@@ -31,6 +36,19 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.src.schema()
+    }
+
+    #[inline]
+    fn intermediate_schema(&self, index: usize) -> Result<&[FieldType]> {
+        self.src.intermediate_schema(index)
+    }
+
+    #[inline]
+    fn consume_and_fill_intermediate_results(
+        &mut self,
+        results: &mut [Vec<BatchExecuteResult>],
+    ) -> Result<()> {
+        self.src.consume_and_fill_intermediate_results(results)
     }
 
     #[inline]
