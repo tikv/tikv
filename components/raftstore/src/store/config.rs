@@ -601,7 +601,7 @@ impl Default for Config {
             apply_yield_duration: ReadableDuration::millis(500),
             apply_yield_write_size: ReadableSize::kb(32),
             perf_level: PerfLevel::Uninitialized,
-            evict_cache_on_memory_ratio: 0.05,
+            evict_cache_on_memory_ratio: 0.1,
             pin_compact_region_ratio: 0.1,
             cmd_batch: true,
             cmd_batch_concurrent_ready_max_count: 1,

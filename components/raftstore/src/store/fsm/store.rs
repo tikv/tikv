@@ -68,7 +68,7 @@ use tikv_util::{
         self as sys_util,
         cpu_time::ProcessStat,
         disk::{DiskUsage, get_disk_status},
-        needs_force_compact,
+        needs_forcely_purge_raftlog,
     },
     time::{Instant as TiInstant, SlowTimer, duration_to_sec, monotonic_raw_now},
     timer::SteadyTimer,
@@ -796,28 +796,29 @@ impl RegionTracker {
     /// Since LinkedHashMap maintains insertion order and regions are inserted
     /// with increasing timestamps, we can efficiently remove stale regions
     /// from the front (oldest entries) and stop when we find a non-stale entry.
-    fn cleanup_stale(
+    fn cleanup_stale_regions(
         &mut self,
         timeout: Duration,
         pinned_regions: &mut HashSet<u64>,
-        mut remove_count: usize,
+        max_rm_count: usize,
     ) -> usize {
         let now = Instant::now();
+        let mut real_rm_count = 0;
         // Remove stale regions from the front (oldest entries)
         while let Some((&region_id, &timestamp)) = self.regions.front() {
-            if now.duration_since(timestamp) > timeout && remove_count > 0 {
+            if now.duration_since(timestamp) > timeout && real_rm_count < max_rm_count {
                 // This entry is stale, remove it
                 self.regions.pop_front();
                 // Also remove from pinned regions if it exists there
                 pinned_regions.remove(&region_id);
-                remove_count -= 1;
+                real_rm_count += 1;
             } else {
                 // This entry is not stale or we've hit the limit, stop here
                 break;
             }
         }
         // Return remaining count in this batch that still needs to be processed
-        remove_count
+        real_rm_count
     }
 
     fn region_ids(&self) -> impl Iterator<Item = u64> + '_ {
@@ -3244,32 +3245,31 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
             return;
         }
 
-        let remove_count = 500;
+        let max_rm_count = 500;
         let timeout_duration = self.ctx.cfg.peer_stale_state_check_interval.0 * 2; // 2x sampling interval
         // If a region is stale, it will also be removed from last_pinned_regions
-        let remaining_count = self
+        let real_rm_count = self
             .fsm
             .store
             .purge_manager
             .high_log_lag_regions
-            .cleanup_stale(
+            .cleanup_stale_regions(
                 timeout_duration,
                 &mut self.fsm.store.purge_manager.last_pinned_regions,
-                remove_count,
+                max_rm_count,
             );
 
         info!(
-            "stale region check, {} stale regions removed, {} remaining non-stale",
-            remove_count - remaining_count,
-            remaining_count
+            "stale region check, {} stale regions removed",
+            real_rm_count
         );
 
-        if remaining_count > 0 {
+        if real_rm_count < max_rm_count {
             // Remaining regions are not stale, no work to do, reset to default interval
             self.fsm.store.purge_manager.stale_batch_check_interval = None;
         } else {
             // All planned regions were stale and removed, continue next batch
-            let batch_num = region_count / remove_count;
+            let batch_num = region_count / max_rm_count;
             let dynamic_interval = (self.ctx.cfg.peer_stale_state_check_interval.0
                 / batch_num as u32)
                 .max(Duration::from_secs(5));
@@ -3295,16 +3295,16 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
             info!("forcely purge triggered by failpoint for testing");
             Some(1.0) // Return a test over_ratio
         });
-        // Get current raft engine memory usage
+        if self.ctx.cfg.evict_cache_on_memory_ratio < f64::EPSILON {
+            return None;
+        }
         let raftengine_memory_usage = self.ctx.engines.raft.get_memory_usage().unwrap() as f64;
-        // If raft engine memory usage exceeds threshold, we need to shrink pinned
-        // regions to release more memory
-        let mut over_ratio = 0.0;
-        if needs_force_compact(
-            &mut over_ratio,
-            raftengine_memory_usage,
-            self.ctx.cfg.evict_cache_on_memory_ratio,
-        ) {
+        let purge_raftengine_on_memory_ratio = self.ctx.cfg.evict_cache_on_memory_ratio / 2.0;
+        // if raft engine memory usage exceeds threshold, we need to shrink
+        // pinned regions to release more memory
+        let over_ratio =
+            needs_forcely_purge_raftlog(raftengine_memory_usage, purge_raftengine_on_memory_ratio);
+        if over_ratio >= 1.0 {
             return Some(over_ratio);
         }
         None
@@ -3334,8 +3334,13 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
     // adjust the pinned regions to the target pin count
     fn adjust_pinned_regions(&mut self, pin_count: usize) {
         let current_len = self.fsm.store.purge_manager.last_pinned_regions.len();
-        if pin_count < current_len {
-            let remove_count = current_len - pin_count;
+        let mut diff = current_len - pin_count;
+        if diff == 0 {
+            // pinned regions is already the target count
+            return;
+        } else if diff > 0 {
+            // pinned regions is more than the target count
+            // we need to remove some pinned regions
             let ids_to_remove: Vec<u64> = self
                 .fsm
                 .store
@@ -3343,13 +3348,14 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
                 .last_pinned_regions
                 .iter()
                 .copied()
-                .take(remove_count)
+                .take(diff)
                 .collect();
             for id in ids_to_remove {
                 self.fsm.store.purge_manager.last_pinned_regions.remove(&id);
             }
         } else {
-            let mut needed = pin_count - current_len;
+            // pinned regions is less than the target count
+            // we need to add more pinned regions
             for region_id in self
                 .fsm
                 .store
@@ -3357,9 +3363,6 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
                 .high_log_lag_regions
                 .region_ids()
             {
-                if needed == 0 {
-                    break;
-                }
                 if !self
                     .fsm
                     .store
@@ -3372,7 +3375,10 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
                         .purge_manager
                         .last_pinned_regions
                         .insert(region_id);
-                    needed -= 1;
+                    diff += 1;
+                }
+                if diff == 0 {
+                    break;
                 }
             }
         }
@@ -3383,7 +3389,6 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         if total_regions == 0 {
             return;
         }
-
         // Calculate dynamic pin ratio based on memory pressure
         let base_pin_ratio = self.ctx.cfg.pin_compact_region_ratio;
         let dynamic_pin_ratio = base_pin_ratio / over_ratio;
@@ -3451,7 +3456,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
             }
         }
 
-        // Send forcely purge messages for collected regions
+        // Send forcely compact messages for collected regions
         for region_id in &regions_to_purge {
             let _ = self.ctx.router.send(
                 *region_id,
