@@ -632,11 +632,6 @@ impl ReadPoolCpuTimeTracker {
         self.prev_cpu_utilization = cpu;
     }
 
-    #[cfg(test)]
-    fn get_test_cpu_utilization(&mut self) -> f64 {
-        self.prev_cpu_utilization
-    }
-
     /// Baseline thread usage measurement using yatp metrics (includes off-CPU
     /// time)
     fn prev_avg_thread_usage(&mut self) -> f64 {
