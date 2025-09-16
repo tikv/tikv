@@ -2487,7 +2487,7 @@ mod tests {
     }
 
     #[test]
-    fn test_secondary_snap_store_accessor_locate_region_by_key() {
+    fn test_extra_snap_store_accessor_locate_region_by_key() {
         set_tls_engine(TestEngineBuilder::new().build().unwrap());
         defer! {
             unsafe {destroy_tls_engine::<RocksEngine>()}
@@ -2798,7 +2798,7 @@ mod tests {
         let def_req = default_req_ctx_support_snap_accessor();
         let store_id = def_req.context.get_peer().get_store_id();
         let store_accessor = ExtraSnapStoreAccessor::<RocksEngine>::new(def_req.into()).unwrap();
-        let storage_accessor = dag::SecondaryTiKVStorageAccessor::<
+        let storage_accessor = dag::ExtraTiKVStorageAccessor::<
             ExtraSnapStoreAccessor<RocksEngine>,
         >::from_store_accessor(store_accessor);
 
