@@ -35,6 +35,19 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSimpleAggregationExecutor<Src> {
     }
 
     #[inline]
+    fn intermediate_schema(&self, index: usize) -> Result<&[FieldType]> {
+        self.0.intermediate_schema(index)
+    }
+
+    #[inline]
+    fn consume_and_fill_intermediate_results(
+        &mut self,
+        results: &mut [Vec<BatchExecuteResult>],
+    ) -> Result<()> {
+        self.0.consume_and_fill_intermediate_results(results)
+    }
+
+    #[inline]
     async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         self.0.next_batch(scan_rows).await
     }
