@@ -1,23 +1,25 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::{
-    Bound::{Excluded, Unbounded},
-    HashSet,
-};
-
 use collections::HashMap;
 use crossbeam::channel::TrySendError;
+<<<<<<< HEAD
 use engine_traits::{KvEngine, RaftEngine, CF_DEFAULT, CF_WRITE};
 use raftstore::{
     store::{CompactThreshold, TabletSnapKey},
     Result,
 };
 use slog::{debug, error, info};
+=======
+use engine_traits::{KvEngine, RaftEngine};
+use raftstore::{Result, store::TabletSnapKey};
+use slog::error;
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
 
 use crate::{
     batch::StoreContext,
     fsm::{Store, StoreFsmDelegate},
     router::{PeerMsg, StoreTick},
+<<<<<<< HEAD
     worker::{
         cleanup::{self},
         tablet,
@@ -114,6 +116,12 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
         }
     }
 
+=======
+    worker::tablet,
+};
+
+impl<EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'_, EK, ER, T> {
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
     #[inline]
     pub fn on_snapshot_gc(&mut self) {
         if let Err(e) = self.fsm.store.on_snapshot_gc(self.store_ctx) {
