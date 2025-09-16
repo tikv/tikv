@@ -422,16 +422,18 @@ impl Delegate {
                             "key" => ?key,
                             "region_id" => self.region_id,
                         );
-                        // TODO: remove this in production or new release, ref https://github.com/tikv/tikv/issues/18498.
-                        panic!(
-                            "[for debug] cdc pop_lock found lock with same key but different start_ts, \
+                        if txn_types::ENABLE_DUP_KEY_DEBUG.load(Ordering::Relaxed) {
+                            // TODO: remove this in production or new release, ref https://github.com/tikv/tikv/issues/18498.
+                            panic!(
+                                "[for debug] cdc pop_lock found lock with same key but different start_ts, \
                         generation={:?}, old_start_ts={:?}, new_start_ts={:?}, key={:?}, region_id={:?}",
-                            x.get().generation,
-                            x.get().ts,
-                            start_ts,
-                            key,
-                            self.region_id,
-                        );
+                                x.get().generation,
+                                x.get().ts,
+                                start_ts,
+                                key,
+                                self.region_id,
+                            );
+                        }
                     }
                 }
             }
