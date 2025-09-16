@@ -1477,15 +1477,11 @@ impl StreamTaskHandler {
                 .collect::<Vec<_>>();
 
             // flush meta file to storage.
-<<<<<<< HEAD
             self.fill_region_info(cx, &mut backup_metadata);
             // flush backup metadata to external storage.
             self.flush_backup_metadata(backup_metadata, cx.flush_ts)
                 .await?;
-=======
-            self.flush_meta(metadata_info).await?;
             let save_files_dur = sw.lap();
->>>>>>> 69f275f970 (azblob: use copy to implement read_to_end (#18419) (#18781))
             crate::metrics::FLUSH_DURATION
                 .with_label_values(&["save_files"])
                 .observe(save_files_dur.as_secs_f64());

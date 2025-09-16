@@ -22,9 +22,6 @@ url = "2.0"
 uuid = { version = "0.8", features = ["v4"] }
 
 [dev-dependencies]
-<<<<<<< HEAD
-=======
 fail = "0.5"
->>>>>>> 69f275f970 (azblob: use copy to implement read_to_end (#18419) (#18781))
 pin-project = "1"
 tokio = { version = "1.5", features = ["rt"] }
