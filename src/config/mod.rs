@@ -2482,8 +2482,8 @@ pub struct UnifiedReadPoolConfig {
     /// algorithm:
     /// - Forces scale down when CPU exceeds threshold + 10% leeway
     /// - Prevents scale up when it would exceed threshold - 10% leeway
-    /// Example: 0.8 means read pool should not use more than 80% of available
-    /// CPU cores.
+    ///   Example: 0.8 means read pool should not use more than 80% of available
+    ///   CPU cores.
     pub cpu_threshold: f64,
     // FIXME: Add more configs when they are effective in yatp
 }
