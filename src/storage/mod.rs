@@ -1409,6 +1409,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         start_ts: TimeStamp,
         key_only: bool,
         reverse_scan: bool,
+	skip_newer_change: bool,
     ) -> impl Future<Output = Result<Vec<Result<KvPair>>>> {
         const CMD: CommandKind = CommandKind::scan;
         let priority = ctx.get_priority();
@@ -1540,7 +1541,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     );
 
                     let mut scanner =
-                        snap_store.scanner(reverse_scan, key_only, false, start_key, end_key)?;
+                        snap_store.scanner(reverse_scan, key_only, false, skip_newer_change, start_key, end_key)?;
                     let res = scanner.scan(limit, sample_step);
 
                     let statistics = scanner.take_statistics();
@@ -4446,6 +4447,7 @@ mod tests {
                 1000,
                 0,
                 1.into(),
+		false,
                 false,
                 false,
             )),
@@ -4517,6 +4519,7 @@ mod tests {
                 1000,
                 0,
                 5.into(),
+		false,
                 false,
                 false,
             ))
@@ -4532,6 +4535,7 @@ mod tests {
                 1000,
                 0,
                 5.into(),
+		false,
                 false,
                 true,
             ))
@@ -4547,6 +4551,7 @@ mod tests {
                 1000,
                 0,
                 5.into(),
+		false,
                 false,
                 false,
             ))
@@ -4564,6 +4569,7 @@ mod tests {
                 5.into(),
                 false,
                 true,
+		false,
             ))
             .unwrap(),
         );
@@ -4579,6 +4585,7 @@ mod tests {
                 5.into(),
                 false,
                 false,
+		false,
             ))
             .unwrap(),
         );
@@ -4594,6 +4601,7 @@ mod tests {
                 5.into(),
                 false,
                 true,
+		false,
             ))
             .unwrap(),
         );
@@ -4631,6 +4639,7 @@ mod tests {
                 5.into(),
                 false,
                 false,
+		false,
             ))
             .unwrap(),
         );
@@ -4650,6 +4659,7 @@ mod tests {
                 5.into(),
                 false,
                 true,
+		false,
             ))
             .unwrap(),
         );
@@ -4668,6 +4678,7 @@ mod tests {
                 5.into(),
                 false,
                 false,
+		false,
             ))
             .unwrap(),
         );
@@ -4686,6 +4697,7 @@ mod tests {
                 5.into(),
                 false,
                 true,
+		false,
             ))
             .unwrap(),
         );
@@ -4701,6 +4713,7 @@ mod tests {
                 5.into(),
                 false,
                 false,
+		false,
             ))
             .unwrap(),
         );
@@ -4716,6 +4729,7 @@ mod tests {
                 5.into(),
                 false,
                 true,
+		false,
             ))
             .unwrap(),
         );
@@ -4734,6 +4748,7 @@ mod tests {
                 5.into(),
                 false,
                 false,
+		false,
             ))
             .unwrap(),
         );
@@ -4752,6 +4767,7 @@ mod tests {
                 5.into(),
                 false,
                 true,
+		false,
             ))
             .unwrap(),
         );
@@ -4771,6 +4787,7 @@ mod tests {
                 5.into(),
                 false,
                 false,
+		false,
             ))
             .unwrap(),
         );
@@ -4789,6 +4806,7 @@ mod tests {
                 5.into(),
                 false,
                 true,
+		false,
             ))
             .unwrap(),
         );
@@ -4872,6 +4890,7 @@ mod tests {
                 5.into(),
                 true,
                 false,
+		false,
             ))
             .unwrap(),
         );
@@ -4887,6 +4906,7 @@ mod tests {
                 5.into(),
                 true,
                 true,
+		false,
             ))
             .unwrap(),
         );
@@ -4902,6 +4922,7 @@ mod tests {
                 5.into(),
                 true,
                 false,
+		false,
             ))
             .unwrap(),
         );
@@ -4917,6 +4938,7 @@ mod tests {
                 5.into(),
                 true,
                 true,
+		false,
             ))
             .unwrap(),
         );
@@ -4932,6 +4954,7 @@ mod tests {
                 5.into(),
                 true,
                 false,
+		false,
             ))
             .unwrap(),
         );
@@ -4947,6 +4970,7 @@ mod tests {
                 5.into(),
                 true,
                 true,
+		false,
             ))
             .unwrap(),
         );
@@ -4984,6 +5008,7 @@ mod tests {
                 5.into(),
                 true,
                 false,
+		false,
             ))
             .unwrap(),
         );
@@ -5003,6 +5028,7 @@ mod tests {
                 5.into(),
                 true,
                 true,
+		false,
             ))
             .unwrap(),
         );
@@ -5018,6 +5044,7 @@ mod tests {
                 5.into(),
                 true,
                 false,
+		false,
             ))
             .unwrap(),
         );
@@ -5033,6 +5060,7 @@ mod tests {
                 5.into(),
                 true,
                 true,
+		false,
             ))
             .unwrap(),
         );
@@ -5049,6 +5077,7 @@ mod tests {
                 5.into(),
                 true,
                 false,
+		false,
             ))
             .unwrap(),
         );
@@ -5064,6 +5093,7 @@ mod tests {
                 5.into(),
                 true,
                 true,
+		false,
             ))
             .unwrap(),
         );
@@ -10187,7 +10217,7 @@ mod tests {
 
         // Test scan
         let scan = |ctx, start_key, end_key, reverse| {
-            block_on(storage.scan(ctx, start_key, end_key, 10, 0, 100.into(), false, reverse))
+            block_on(storage.scan(ctx, start_key, end_key, 10, 0, 100.into(), false, reverse, false))
         };
         let key_error =
             extract_key_error(&scan(ctx.clone(), Key::from_raw(b"a"), None, false).unwrap_err());
@@ -10315,7 +10345,7 @@ mod tests {
             }
             expect_multi_values(
                 values,
-                block_on(storage.scan(ctx.clone(), key, None, 1000, 0, 110.into(), false, *desc))
+                block_on(storage.scan(ctx.clone(), key, None, 1000, 0, 110.into(), false, *desc, false))
                     .unwrap(),
             );
         }
