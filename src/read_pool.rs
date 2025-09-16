@@ -546,9 +546,6 @@ struct ReadPoolCpuTimeTracker {
     prev_total_task_handling_time_us: u64,
     prev_thread_check_time: Instant,
     prev_thread_usage_per_sec: f64,
-    // Cached worker thread IDs (RFC 0114)
-    cached_worker_tids: Vec<u32>,
-    last_thread_scan: Instant,
     // RFC 0114 specific tracking
     prev_total_cpu_time: u64,
     prev_cpu_check_time: Instant,
@@ -568,57 +565,12 @@ impl ReadPoolCpuTimeTracker {
             prev_total_task_handling_time_us,
             prev_thread_check_time: now,
             prev_thread_usage_per_sec: 0.0,
-            cached_worker_tids: Vec::new(),
-            last_thread_scan: now,
             prev_total_cpu_time: 0,
             prev_cpu_check_time: now,
             prev_cpu_utilization: 0.0,
         };
 
-        // Scan for threads once at initialization
-        tracker.refresh_worker_thread_cache();
         tracker
-    }
-
-    /// Refresh cached worker thread IDs
-    fn refresh_worker_thread_cache(&mut self) {
-        #[cfg(target_os = "linux")]
-        {
-            use std::fs;
-
-            use tikv_util::sys::thread::full_thread_stat;
-
-            let current_pid = std::process::id();
-            let mut thread_ids = vec![];
-
-            // Read /proc/pid/task directory to find all threads
-            if let Ok(entries) = fs::read_dir(format!("/proc/{}/task", current_pid)) {
-                for entry in entries.flatten() {
-                    if let Some(tid_str) = entry.file_name().to_str() {
-                        if let Ok(tid) = tid_str.parse::<u32>() {
-                            // Check if this thread belongs to unified read pool
-                            if let Ok(stat) = full_thread_stat(current_pid, tid) {
-                                // Look for unified read pool thread name pattern
-                                if stat.command.contains("unified-read-pool")
-                                    || stat.command.contains("yatp")
-                                {
-                                    thread_ids.push(tid);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            self.cached_worker_tids = thread_ids;
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            // On non-Linux platforms, keep empty cache
-            self.cached_worker_tids.clear();
-        }
-
-        self.last_thread_scan = Instant::now_coarse();
     }
 
     /// Get actual CPU usage of unified read pool threads using kernel thread
@@ -637,24 +589,24 @@ impl ReadPoolCpuTimeTracker {
         let check_time = Instant::now_coarse();
         let duration = check_time.saturating_duration_since(self.prev_cpu_check_time);
 
-        // Minimum duration check to avoid noise - if too soon, return 0
+        // Minimum duration check to avoid noise - if too soon, return prev value
         if duration < Duration::from_millis(500) {
             return self.prev_cpu_utilization;
-        }
-
-        // If no threads found during initialization, fallback to 0
-        if self.cached_worker_tids.is_empty() {
-            self.refresh_worker_thread_cache();
         }
 
         let mut current_total_cpu_time = 0i64;
         let current_pid = std::process::id();
 
+        let pid = tikv_util::sys::thread::process_id();
+        let tids: Vec<_> = tikv_util::sys::thread::thread_ids(pid).unwrap();
         // Collect CPU stats for each cached read pool worker thread
-        for &tid in &self.cached_worker_tids {
+        for &tid in &tids {
             if let Ok(stat) = full_thread_stat(current_pid, tid) {
-                // Sum utime + stime (user + system time)
-                current_total_cpu_time += stat.utime + stat.stime;
+                // Look for unified read pool thread name pattern
+                if stat.command.contains("unified-read-pool") || stat.command.contains("yatp") {
+                    // Sum utime + stime (user + system time)
+                    current_total_cpu_time += stat.utime + stat.stime;
+                }
             }
         }
 
@@ -747,6 +699,9 @@ impl Runnable for ReadPoolConfigRunner {
             }
             Task::MaxTasksPerWorker(s) => {
                 self.handle.set_max_tasks_per_worker(s);
+            }
+            Task::CpuThreshold(s) => {
+                self.cpu_threshold = s;
             }
         }
     }
@@ -866,6 +821,7 @@ enum Task {
     PoolSize(usize),
     AutoAdjust(bool),
     MaxTasksPerWorker(usize),
+    CpuThreshold(f64),
 }
 
 impl std::fmt::Display for Task {
@@ -874,6 +830,7 @@ impl std::fmt::Display for Task {
             Task::PoolSize(s) => write!(f, "PoolSize({})", *s),
             Task::AutoAdjust(s) => write!(f, "AutoAdjust({})", *s),
             Task::MaxTasksPerWorker(s) => write!(f, "MaxTasksPerWorker({})", *s),
+            Task::CpuThreshold(s) => write!(f, "CpuThreshold({})", *s),
         }
     }
 }
@@ -931,6 +888,10 @@ impl ConfigManager for ReadPoolConfigManager {
             if let Some(ConfigValue::Usize(max_tasks)) = unified.get("max_tasks_per_worker") {
                 self.scheduler
                     .schedule(Task::MaxTasksPerWorker(*max_tasks))?;
+            }
+            if let Some(ConfigValue::F64(cpu_threshold)) = unified.get("cpu_threshold") {
+                self.scheduler
+                    .schedule(Task::CpuThreshold(*cpu_threshold))?;
             }
         }
         info!(
