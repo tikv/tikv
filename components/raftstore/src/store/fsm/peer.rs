@@ -797,6 +797,7 @@ where
                     }
                 }
                 self.fsm.batch_req_builder.request = Some(cmd);
+<<<<<<< HEAD
             }
             if self.fsm.batch_req_builder.request.is_some() {
                 self.ctx.raft_metrics.ready.propose_delay.inc();
@@ -804,6 +805,12 @@ where
         }
         if self.fsm.peer.maybe_ack_transfer_leader_msg(self.ctx) {
             self.fsm.has_ready = true;
+=======
+            }
+            if self.fsm.batch_req_builder.request.is_some() {
+                self.ctx.raft_metrics.ready.propose_delay.inc();
+            }
+>>>>>>> f51e8489e2 (batch_system: Add fsm schedule related metrics (#17723))
         }
     }
 
