@@ -708,7 +708,7 @@ pub enum Cmd {
 
         #[structopt(
             long,
-            default_value = "1M",
+            default_value = "2M",
             help(
                 "specify the minimal compaction size in bytes for write cf, if backup data of a region doesn't reach this threshold, it won't be compacted"
             )
@@ -724,13 +724,22 @@ pub enum Cmd {
         )]
         last_snapshot_backup_ts: u64,
 
-        #[structopt(long)]
-        debug_dry_run: bool,
-
-        #[structopt(long, default_value = "128")]
+        #[structopt(
+            long, 
+            default_value = "128",
+            help(
+                "specify the maximum count of running tasks to download a metadata"
+            )
+        )]
         prefetch_running_count: u64,
 
-        #[structopt(long, default_value = "1024")]
+        #[structopt(
+            long,
+            default_value = "1024",
+            help(
+                "specify the maximum count of spawning tasks to download a metadata"
+            )
+        )]
         prefetch_buffer_count: u64,
     },
     /// Get the state of a region's RegionReadProgress.

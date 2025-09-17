@@ -1515,6 +1515,7 @@ dependencies = [
  "async-compression",
  "bytes",
  "chrono",
+ "cloud",
  "codec",
  "crc64fast",
  "dashmap",

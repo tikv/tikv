@@ -9,11 +9,12 @@ use std::{
     task::{Context, Poll, ready},
 };
 
+use cloud::blob::read_to_end;
 use derive_more::Display;
 use external_storage::{BlobObject, ExternalStorage, UnpinReader};
 use futures::{
     future::{FusedFuture, FutureExt, TryFutureExt},
-    io::{AsyncReadExt, Cursor},
+    io::Cursor,
     stream::{Fuse, FusedStream, StreamExt, TryStreamExt},
 };
 use kvproto::{
@@ -319,12 +320,16 @@ impl Stream for StreamMetaStorage<'_> {
 
         let first_result = self.poll_first_prefetch(cx);
         match first_result {
-            Poll::Ready(item) => Poll::Ready(Some(item.map(|mut meta| {
-                let sm = &self.skip_map;
-                let skipped = sm.apply_to(&mut meta);
-                self.stat.log_filtered_out_by_migration += skipped as u64;
-                meta
-            }))),
+            Poll::Ready(item) => {
+                let result = item.map(|mut meta| {
+                    let sm = &self.skip_map;
+                    let skipped = sm.apply_to(&mut meta);
+                    self.stat.log_filtered_out_by_migration += skipped as u64;
+                    meta
+                });
+                let _ = self.poll_fetch_or_finish(cx);
+                Poll::Ready(Some(result))
+            }
             Poll::Pending => self.poll_fetch_or_finish(cx),
         }
     }
@@ -470,7 +475,7 @@ impl MetaFile {
         let loading_file = tikv_util::stream::retry_all_ext(
             || async {
                 let mut content = vec![];
-                let n = s.read(&blob.key).read_to_end(&mut content).await?;
+                let n = read_to_end(s.read(&blob.key), &mut content).await?;
                 std::io::Result::Ok((n, content))
             },
             ext,
@@ -481,14 +486,11 @@ impl MetaFile {
         stat.physical_bytes_loaded += n as u64;
         stat.error_during_downloading += error_cnt2.get();
 
-        let result = tokio::task::spawn_blocking(move || -> Result<MetaFile> {
-            let mut meta_file = kvproto::brpb2::Metadata::new();
-            meta_file.merge_from_bytes(&content)?;
-            let name = Arc::from(blob.key.into_boxed_str());
-            Ok(Self::from_file(name, meta_file))
-        })
-        .await
-        .map_err(|err| ErrorKind::Other(format!("joining the background `done` job: {err}")))??;
+        let mut meta_file = kvproto::brpb2::Metadata::new();
+        meta_file.merge_from_bytes(&content)?;
+        let name = Arc::from(blob.key.into_boxed_str());
+        let result = Self::from_file(name, meta_file);
+
         stat.physical_data_files_in += result.physical_files.len() as u64;
         stat.logical_data_files_in += result
             .physical_files
@@ -753,10 +755,7 @@ impl<'a> MigrationStorageWrapper<'a> {
             .err_into()
             .and_then(|item| async move {
                 let mut content = vec![];
-                self.storage
-                    .read(&item.key)
-                    .read_to_end(&mut content)
-                    .await?;
+                read_to_end(self.storage.read(&item.key), &mut content).await?;
                 protobuf::parse_from_bytes(&content).adapt_err()
             })
             .try_collect()

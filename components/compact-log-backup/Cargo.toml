@@ -15,6 +15,7 @@ async-compression = { version = "0.4.27", features = [
 ] }
 bytes = "1"
 chrono = { workspace = true }
+cloud = { workspace = true }
 codec = { workspace = true }
 crc64fast = "0.1"
 dashmap = "5"
