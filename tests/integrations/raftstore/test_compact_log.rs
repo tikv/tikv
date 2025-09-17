@@ -313,7 +313,7 @@ fn check_log_lag<T: Simulator>(cluster: &Cluster<T>, store_id: u64, region_id: u
     log_lag
 }
 
-fn test_raft_log_force_gc<T: Simulator>(cluster: &mut Cluster<T>) {
+fn test_raft_log_forcely_purge<T: Simulator>(cluster: &mut Cluster<T>) {
     // Configure force GC settings
     cluster.cfg.raft_store.evict_cache_on_memory_ratio = 1.0;
     cluster.cfg.raft_store.pin_compact_region_ratio = 0.2;
@@ -321,6 +321,9 @@ fn test_raft_log_force_gc<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(150);
     cluster.cfg.raft_store.raft_engine_purge_interval = ReadableDuration::millis(200);
     cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 5;
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(40);
+    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::millis(200);
 
     cluster.run();
 
@@ -411,8 +414,8 @@ fn test_raft_log_force_gc<T: Simulator>(cluster: &mut Cluster<T>) {
     );
 
     // Enable force GC failpoint to ensure it triggers
-    fail::cfg("needs_force_compact", "return(1.0)").unwrap();
-    sleep_ms(400);
+    fail::cfg("needs_forcely_purge", "return(1.0)").unwrap();
+    sleep_ms(1000);
 
     // Check log lag after force GC on the same healthy store
     let mut total_log_lag_after = 0;
@@ -449,8 +452,8 @@ fn test_raft_log_force_gc<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 #[test]
-fn test_node_raft_log_force_gc() {
+fn test_node_raft_log_forcely_purge() {
     let count = 3;
     let mut cluster = new_node_cluster(0, count);
-    test_raft_log_force_gc(&mut cluster);
+    test_raft_log_forcely_purge(&mut cluster);
 }

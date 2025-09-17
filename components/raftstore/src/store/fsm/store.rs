@@ -3313,6 +3313,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
     fn on_raft_engine_forcely_purge_tick(&mut self) {
         // If there is no high log lag regions, no need to check
         if self.fsm.store.purge_manager.high_log_lag_regions.is_empty() {
+            self.register_raft_engine_forcely_purge_tick();
             return;
         }
         // Check if we're in batch processing mode
@@ -3331,16 +3332,15 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         }
         self.register_raft_engine_forcely_purge_tick();
     }
+
     // adjust the pinned regions to the target pin count
     fn adjust_pinned_regions(&mut self, pin_count: usize) {
         let current_len = self.fsm.store.purge_manager.last_pinned_regions.len();
-        let mut diff = current_len - pin_count;
-        if diff == 0 {
-            // pinned regions is already the target count
+        if pin_count == current_len {
             return;
-        } else if diff > 0 {
-            // pinned regions is more than the target count
+        } else if pin_count < current_len {
             // we need to remove some pinned regions
+            let rm_count = current_len - pin_count;
             let ids_to_remove: Vec<u64> = self
                 .fsm
                 .store
@@ -3348,14 +3348,14 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
                 .last_pinned_regions
                 .iter()
                 .copied()
-                .take(diff)
+                .take(rm_count)
                 .collect();
             for id in ids_to_remove {
                 self.fsm.store.purge_manager.last_pinned_regions.remove(&id);
             }
         } else {
-            // pinned regions is less than the target count
             // we need to add more pinned regions
+            let mut needed = pin_count - current_len;
             for region_id in self
                 .fsm
                 .store
@@ -3375,9 +3375,9 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
                         .purge_manager
                         .last_pinned_regions
                         .insert(region_id);
-                    diff += 1;
+                    needed -= 1;
                 }
-                if diff == 0 {
+                if needed == 0 {
                     break;
                 }
             }
@@ -3402,8 +3402,12 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
             total_regions / 100
         };
         let batch_size = (total_regions + total_batches - 1) / total_batches;
+        // wwe need to make sure the interval can be adjusted by configuration
+        // when raft_engine_purge_interval is smaller than 5s
+        // (e.g., 200ms in unit tests),
         let interval = (self.ctx.cfg.raft_engine_purge_interval.0 / total_batches as u32)
-            .max(Duration::from_secs(5));
+            .max(Duration::from_secs(5))
+            .min(self.ctx.cfg.raft_engine_purge_interval.0);
 
         self.fsm.store.purge_manager.batch_purge_state = Some(BatchPurgeState {
             current_batch: 0,
@@ -3416,9 +3420,9 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
             "starting batch purge: {} regions, {} batches, {} per batch",
             total_regions, total_batches, batch_size
         );
-        // After 5 seconds, start the first batch
+        // start the first batch
         self.ctx
-            .schedule_store_tick(StoreTick::RaftEngineForcelyPurge, Duration::from_secs(5));
+            .schedule_store_tick(StoreTick::RaftEngineForcelyPurge, interval);
     }
 
     fn process_batch_purge(&mut self) {
