@@ -11,15 +11,10 @@ use rocksdb::{
     DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType, HistogramData,
 };
 
-<<<<<<< HEAD
-use crate::{engine::RocksEngine, rocks_metrics_defs::*, RocksStatistics};
-=======
 use crate::{
-    RocksStatistics, TITAN_COMPRESSION_FACTOR, TITAN_COMPRESSION_FACTOR_SMOOTHER,
-    TITAN_MAX_BLOB_SIZE_SEEN, TITAN_MAX_COMPACTION_FACTOR, engine::RocksEngine,
-    rocks_metrics_defs::*,
+    engine::RocksEngine, rocks_metrics_defs::*, RocksStatistics, TITAN_COMPRESSION_FACTOR,
+    TITAN_COMPRESSION_FACTOR_SMOOTHER, TITAN_MAX_BLOB_SIZE_SEEN, TITAN_MAX_COMPACTION_FACTOR,
 };
->>>>>>> 91d7ad3b7d (titan: Estimate raw blob size based on Titan metrics (#18628))
 
 make_auto_flush_static_metric! {
     pub label_enum TickerName {

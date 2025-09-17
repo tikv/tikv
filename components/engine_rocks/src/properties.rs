@@ -5,23 +5,16 @@ use std::{
     collections::HashMap,
     io::Read,
     ops::{Deref, DerefMut},
-<<<<<<< HEAD
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Mutex,
+    },
     u64,
 };
 
 use api_version::{ApiV2, KeyMode, KvFormat};
 use engine_traits::{raw_ttl::ttl_current_ts, MvccProperties, Range, RangeStats};
-=======
-    sync::{
-        Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
-};
-
-use api_version::{ApiV2, KeyMode, KvFormat};
-use engine_traits::{MvccProperties, Range, RangeStats, raw_ttl::ttl_current_ts};
 use lazy_static::lazy_static;
->>>>>>> 91d7ad3b7d (titan: Estimate raw blob size based on Titan metrics (#18628))
 use rocksdb::{
     DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex,
     UserCollectedProperties,
