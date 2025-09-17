@@ -198,8 +198,6 @@ impl std::fmt::Debug for LogFileId {
 
 /// Extra config for loading metadata.
 pub struct LoadFromExt<'a> {
-    /// Max number of concurrent fetching from remote tasks.
-    pub max_concurrent_fetch: usize,
     /// The [`tracing::Span`] of loading remote tasks.
     /// This span will be entered when fetching the remote tasks.
     /// This span will be closed when all metadata loaded.
@@ -207,8 +205,9 @@ pub struct LoadFromExt<'a> {
     /// The prefix of metadata in the external storage.
     /// By default it is `v1/backupmeta`.
     pub meta_prefix: &'a str,
-
+    /// Max number of running tasks to fetch metadatas
     pub prefetch_running_count: usize,
+    /// Max number of spawning tasks to fetch metadatas
     pub prefetch_buffer_count: usize,
 }
 
@@ -221,7 +220,6 @@ impl LoadFromExt<'_> {
 impl Default for LoadFromExt<'_> {
     fn default() -> Self {
         Self {
-            max_concurrent_fetch: 16,
             loading_content_span: None,
             meta_prefix: METADATA_PREFIX,
             prefetch_running_count: 128,
@@ -293,7 +291,7 @@ impl<F: Future> Future for Prefetch<F> {
                 }
                 ().into()
             }
-            ProjPrefetch::Ready(_) => panic!("pending after ready"),
+            ProjPrefetch::Ready(_) => std::task::Poll::Pending,
         }
     }
 }
@@ -911,7 +909,7 @@ mod test {
         let st = &st;
         let test_for_concurrency = |n| async move {
             let mut ext = LoadFromExt::default();
-            ext.max_concurrent_fetch = n;
+            ext.prefetch_running_count = n;
             let storage = st.storage().clone() as Arc<dyn ExternalStorage>;
             let sst = StreamMetaStorage::load_from_ext(&storage, ext)
                 .await

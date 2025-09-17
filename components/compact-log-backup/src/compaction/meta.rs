@@ -8,7 +8,6 @@ use external_storage::ExternalStorage;
 use futures::stream::TryStreamExt;
 use kvproto::brpb::{self, DeleteSpansOfFile};
 use protobuf::Chars;
-use tikv_util::info;
 
 use super::{
     EpochHint, Subcompaction, SubcompactionCollectKey, SubcompactionResult, UnformedSubcompaction,
@@ -369,9 +368,6 @@ impl CompactionRunInfoBuilder {
         if last_snapshot_backup_ts > file.max_ts {
             result.no_data_files_to_be_compacted = true;
         }
-        info!("Expiring a metadata";
-                "destruct_self" => result.destruct_self,
-                "no_data_files_to_be_compacted" => result.no_data_files_to_be_compacted);
 
         result
     }
