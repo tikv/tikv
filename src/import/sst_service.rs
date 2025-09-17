@@ -1341,10 +1341,19 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
     ) {
         let label = "add_force_partition_range";
         let timer = Instant::now_coarse();
-        let engine = self.engine.kv_engine().unwrap();
+        let kv_engine = self.engine.kv_engine();
         let force_partition_range_mgr = self.force_partition_range_mgr.clone();
 
         let handle_task = async move {
+            let resp = AddPartitionRangeResponse::default();
+            let engine = if let Some(eng) = kv_engine {
+                eng
+            } else {
+                info!("ignore add_force_partition_range request on raftstore-v2 cluster");
+                // engine is none means this is raftstore-v2, then we can just return.
+                send_rpc_response!(Ok(resp), sink, label, timer);
+                return;
+            };
             let start = keys::data_key(Key::from_raw(req.get_range().get_start()).as_encoded());
             let end = keys::data_end_key(Key::from_raw(req.get_range().get_end()).as_encoded());
             let mut ttl_seconds = req.get_ttl_seconds();
@@ -1403,8 +1412,6 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
 
             info!("add force_partition range"; "start" => ?log_wrappers::Value::key(req.get_range().get_start()),
                     "end" => ?log_wrappers::Value::key(req.get_range().get_end()), "ttl" => ttl_seconds, "added" => added);
-
-            let resp = AddPartitionRangeResponse::default();
             send_rpc_response!(Ok(resp), sink, label, timer);
         };
 
