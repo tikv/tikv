@@ -483,7 +483,7 @@ impl MetaFile {
         let (n, content) = frame!(loading_file)
             .await
             .map_err(|err| Error::from(err).message(format_args!("reading {}", blob.key)))?;
-        stat.physical_bytes_loaded += n as u64;
+        stat.physical_bytes_loaded += n;
         stat.error_during_downloading += error_cnt2.get();
 
         let mut meta_file = kvproto::brpb2::Metadata::new();

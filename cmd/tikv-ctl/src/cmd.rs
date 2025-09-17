@@ -725,20 +725,16 @@ pub enum Cmd {
         last_snapshot_backup_ts: u64,
 
         #[structopt(
-            long, 
+            long,
             default_value = "128",
-            help(
-                "specify the maximum count of running tasks to download a metadata"
-            )
+            help("specify the maximum count of running tasks to download a metadata")
         )]
         prefetch_running_count: u64,
 
         #[structopt(
             long,
             default_value = "1024",
-            help(
-                "specify the maximum count of spawning tasks to download a metadata"
-            )
+            help("specify the maximum count of spawning tasks to download a metadata")
         )]
         prefetch_buffer_count: u64,
     },
