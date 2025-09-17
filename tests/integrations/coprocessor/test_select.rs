@@ -6,15 +6,17 @@ use engine_traits::CF_LOCK;
 use kvproto::{
     coprocessor::{Request, Response, StoreBatchTask, StoreBatchTaskResponse},
     kvrpcpb::{Context, IsolationLevel},
+    metapb::{Peer, Region},
 };
 use protobuf::Message;
-use raftstore::store::Bucket;
+use raftstore::{coprocessor::region_info_accessor::MockRegionInfoProvider, store::Bucket};
 use test_coprocessor::*;
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
 use test_storage::*;
 use tidb_query_datatype::{
-    codec::{Datum, datum},
+    FieldTypeTp,
+    codec::{Datum, datum, table::encode_row_key},
     expr::EvalContext,
 };
 use tikv::{
@@ -22,6 +24,7 @@ use tikv::{
     server::Config,
     storage::TestEngineBuilder,
 };
+use tikv_kv::{RocksEngine, destroy_tls_engine, set_tls_engine, with_tls_engine};
 use tikv_util::{
     HandyRwLock,
     codec::number::*,
@@ -31,6 +34,7 @@ use tipb::{
     AnalyzeColumnsReq, AnalyzeReq, AnalyzeType, ChecksumRequest, Chunk, Expr, ExprType,
     ScalarFuncSig, SelectResponse,
 };
+use tipb_helper::ExprDefBuilder;
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
 const FLAG_IGNORE_TRUNCATE: u64 = 1;
@@ -2391,4 +2395,143 @@ fn test_select_time_details() {
 
     let time_details_v2 = resp.get_exec_details_v2().get_time_detail_v2();
     assert!(time_details_v2.process_wall_time_ns != 0, "{:?}", resp);
+}
+
+#[test]
+fn test_index_lookup_select() {
+    set_tls_engine(TestEngineBuilder::new().build().unwrap());
+    defer! {
+         unsafe {destroy_tls_engine::<RocksEngine>()}
+    }
+
+    let product = ProductTable::new();
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (3, Some("name:2"), 5),
+        (4, Some("name:3"), 1),
+        (5, Some("name:7"), 6),
+        (15, Some("name:1"), 4),
+    ];
+    let index_scan_peer = {
+        let mut peer = Peer::default();
+        peer.set_id(1);
+        peer.set_store_id(1);
+        peer
+    };
+
+    let region = {
+        let mut peer = index_scan_peer.clone();
+        peer.set_id(10);
+        let mut r = Region::default();
+        r.set_id(10);
+        // only handle [2, 4] can be found in the local region.
+        r.set_start_key(Key::from_raw(&encode_row_key(product.table_id(), 2)).into_encoded());
+        r.set_end_key(Key::from_raw(&encode_row_key(product.table_id(), 15)).into_encoded());
+        r.set_peers(vec![peer].into());
+        r
+    };
+
+    let (_, endpoint, _) = unsafe {
+        with_tls_engine(|e: &mut RocksEngine| {
+            e.set_region_info_provider(MockRegionInfoProvider::new(vec![region]));
+            init_data_with_details(
+                Context::default(),
+                e.clone(),
+                &product,
+                &data,
+                true,
+                &Config::default(),
+            )
+        })
+    };
+    let mut ctx = Context::default();
+    ctx.set_peer(index_scan_peer);
+    let req = DagSelect::from_index(&product, &product["name"])
+        .index_lookup(&product, vec![2])
+        // id < 5
+        .where_expr({
+            let mut cond =
+                ExprDefBuilder::scalar_func(ScalarFuncSig::LtInt, FieldTypeTp::LongLong).build();
+            cond.mut_children().push(
+                ExprDefBuilder::column_ref(
+                    offset_for_column(&product.columns_info(), product["id"].id) as usize,
+                    FieldTypeTp::Long,
+                )
+                .build(),
+            );
+            cond.mut_children()
+                .push(ExprDefBuilder::constant_int(5).build());
+            cond
+        }).projection(vec![
+            ExprDefBuilder::column_ref(
+                offset_for_column(&product.columns_info(), product["id"].id) as usize,
+                FieldTypeTp::Long,
+            ).build(),
+            ExprDefBuilder::column_ref(
+                offset_for_column(&product.columns_info(), product["name"].id) as usize,
+                FieldTypeTp::Long,
+            ).build(),
+            {
+                let mut expr =
+                ExprDefBuilder::scalar_func(ScalarFuncSig::MultiplyInt, FieldTypeTp::LongLong).build();
+                expr.mut_children().push(
+                    ExprDefBuilder::column_ref(
+                        offset_for_column(&product.columns_info(), product["count"].id) as usize,
+                        FieldTypeTp::Long,
+                    )
+                    .build(),
+                );
+                expr.mut_children().push(
+                    ExprDefBuilder::constant_int(100).build(),
+                );
+                expr
+            },
+        ])
+        .build_with(ctx, &[0]);
+    let mut resp = handle_select(&endpoint, req);
+    // check the primary row results that can be found locally.
+    let chunks = resp.take_chunks().to_vec();
+    let rows: Vec<_> = DagChunkSpliter::new(chunks, 3).collect();
+    assert_eq!(
+        vec![
+            vec![
+                Datum::I64(2),
+                Datum::Bytes(b"name:4".to_vec()),
+                Datum::I64(300),
+            ],
+            vec![
+                Datum::I64(3),
+                Datum::Bytes(b"name:2".to_vec()),
+                Datum::I64(500),
+            ],
+            vec![
+                Datum::I64(4),
+                Datum::Bytes(b"name:3".to_vec()),
+                Datum::I64(100),
+            ]
+        ],
+        rows
+    );
+
+    // check the index results that cannot perform index-lookup locally.
+    let mut intermediate_outputs = resp.take_intermediate_outputs();
+    assert_eq!(1, intermediate_outputs.len());
+    let intermediate_chunks = intermediate_outputs[0].take_chunks().to_vec();
+    let intermediate_rows: Vec<_> = DagChunkSpliter::new(intermediate_chunks, 3).collect();
+    assert_eq!(
+        vec![
+            vec![
+                Datum::Bytes(b"name:0".to_vec()),
+                Datum::I64(2),
+                Datum::I64(1)
+            ],
+            vec![
+                Datum::Bytes(b"name:1".to_vec()),
+                Datum::I64(4),
+                Datum::I64(15)
+            ],
+        ],
+        intermediate_rows
+    );
 }

@@ -2123,16 +2123,13 @@ where
                     }),
                 ),
                 InspectFactor::Network => {
-                    let duration = std::collections::HashMap::<u64, Duration>::new();
+                    let network_durations = self.health_reporter.record_network_duration(id);
 
-                    for (store_id, network_duration) in &duration {
+                    for (store_id, network_duration) in &network_durations {
                         STORE_INSPECT_NETWORK_DURATION_HISTOGRAM
                             .with_label_values(&[&store_id.to_string()])
                             .observe(tikv_util::time::duration_to_sec(*network_duration));
                     }
-
-                    self.health_reporter.record_network_duration(id, duration);
-
                     return;
                 }
             }

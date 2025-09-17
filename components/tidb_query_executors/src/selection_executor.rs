@@ -45,6 +45,11 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
         }
     }
 
+    #[cfg(test)]
+    pub fn into_child(self) -> Src {
+        self.src
+    }
+
     pub fn new(config: Arc<EvalConfig>, src: Src, conditions_def: Vec<Expr>) -> Result<Self> {
         let mut conditions = Vec::with_capacity(conditions_def.len());
         let mut ctx = EvalContext::new(config);
@@ -173,6 +178,19 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
     fn schema(&self) -> &[FieldType] {
         // The selection executor's schema comes from its child.
         self.src.schema()
+    }
+
+    #[inline]
+    fn intermediate_schema(&self, index: usize) -> Result<&[FieldType]> {
+        self.src.intermediate_schema(index)
+    }
+
+    #[inline]
+    fn consume_and_fill_intermediate_results(
+        &mut self,
+        results: &mut [Vec<BatchExecuteResult>],
+    ) -> Result<()> {
+        self.src.consume_and_fill_intermediate_results(results)
     }
 
     #[inline]
