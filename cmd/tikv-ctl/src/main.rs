@@ -1337,10 +1337,11 @@ fn read_cluster_id(config: &TikvConfig) -> Result<u64, String> {
             .map(Arc::new);
     let env = get_env(key_manager.clone(), None /* io_rate_limiter */).unwrap();
     let cache = config.storage.block_cache.build_shared_cache();
-    let kv_engine = KvEngineFactoryBuilder::new(env, config, cache, key_manager)
-        .build()
-        .create_shared_db(&config.storage.data_dir)
-        .map_err(|e| format!("create_shared_db fail: {}", e))?;
+    let kv_engine =
+        KvEngineFactoryBuilder::new(env, config, cache, key_manager, Default::default())
+            .build()
+            .create_shared_db(&config.storage.data_dir)
+            .map_err(|e| format!("create_shared_db fail: {}", e))?;
     let ident = kv_engine
         .get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
         .unwrap()
