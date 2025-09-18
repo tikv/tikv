@@ -181,6 +181,7 @@ impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
                 req.get_max_commit_ts().into(),
                 secondary_keys,
                 req.get_try_one_pc(),
+		req.get_skip_newer_change(),
                 req.get_assertion_level(),
                 req.take_context(),
             )
@@ -905,21 +906,31 @@ pub mod test_util {
             raw_ext: None,
             txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
         };
+	let skip_newer_change = match &cmd.cmd {
+	    Command::Prewrite(Prewrite {
+		skip_newer_change,
+		..
+	    }) if *skip_newer_change => true,
+	    _ => false,
+	};
         let ret = cmd.cmd.process_write(snap, context)?;
         let res = match ret.pr {
             ProcessResult::PrewriteResult {
                 result: PrewriteResult { locks, .. },
-            } if !locks.is_empty() => {
-                let info = LockInfo::default();
-                return Err(Error::from(ErrorInner::Mvcc(MvccError::from(
-                    MvccErrorInner::KeyIsLocked(info),
-                ))));
-            }
+	    } if !locks.is_empty() && !skip_newer_change => {
+		let info = LockInfo::default();
+		return Err(Error::from(ErrorInner::Mvcc(MvccError::from(
+		    MvccErrorInner::KeyIsLocked(info),
+		))));
+	    }
             ProcessResult::PrewriteResult { result } => result,
             _ => unreachable!(),
         };
         let ctx = Context::default();
         if !ret.to_be_write.modifies.is_empty() {
+	    for m in &ret.to_be_write.modifies {
+		println!("write modifies !!!! {:?}", m);
+	    }
             engine.write(&ctx, ret.to_be_write).unwrap();
         }
         Ok(res)
@@ -941,7 +952,7 @@ pub mod test_util {
             mutations,
             primary,
             start_ts,
-            one_pc_max_commit_ts,
+	    one_pc_max_commit_ts,
         )
     }
 
@@ -965,6 +976,16 @@ pub mod test_util {
             Prewrite::with_defaults(mutations, primary, TimeStamp::from(start_ts))
         };
         prewrite_command(engine, cm, statistics, cmd)
+    }
+
+    pub fn prewrite_with_cmd<E: Engine> (
+        engine: &mut E,
+        statistics: &mut Statistics,
+	start_ts: u64,
+	cmd: TypedCommand<PrewriteResult>,
+    ) -> Result<PrewriteResult> {
+        let cm = ConcurrencyManager::new_for_test(TimeStamp::from(start_ts));
+	prewrite_command(engine, cm, statistics, cmd)
     }
 
     pub fn pessimistic_prewrite<E: Engine>(
