@@ -248,6 +248,8 @@ pub fn run_tikv(
 
 const DEFAULT_METRICS_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
 const DEFAULT_MEMTRACE_FLUSH_INTERVAL: Duration = Duration::from_millis(1_000);
+// Collecting storage stats requires reading SST properties, which can be
+// expensive in case of many SSTs. So we use a larger interval for it.
 const DEFAULT_STORAGE_STATS_INTERVAL: Duration = Duration::from_secs(60);
 const DEFAULT_CGROUP_MONITOR_INTERVAL: Duration = Duration::from_secs(10);
 
