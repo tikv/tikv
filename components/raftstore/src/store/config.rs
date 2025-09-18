@@ -610,7 +610,7 @@ impl Default for Config {
             unsafe_disable_check_quorum: false,
             min_pending_apply_region_count: 10,
             check_then_compact_force_bottommost_level: true,
-            check_then_compact_top_n: 10,
+            check_then_compact_top_n: 20,
             compaction_filter_enabled: true,
         }
     }
