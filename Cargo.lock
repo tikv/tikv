@@ -3762,11 +3762,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-<<<<<<< HEAD
-source = "git+https://github.com/tikv/rust-rocksdb.git#755d152ec4eb443039296ceecf9a072a1142e014"
-=======
 source = "git+https://github.com/tikv/rust-rocksdb.git#995b1f22af7a252ac35c2f90d007ddeee201aca6"
->>>>>>> ee657ca4ce (rocksdb: Optimize async snapshot and write tail latency with many SSTs (#18967))
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -3785,11 +3781,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-<<<<<<< HEAD
-source = "git+https://github.com/tikv/rust-rocksdb.git#755d152ec4eb443039296ceecf9a072a1142e014"
-=======
 source = "git+https://github.com/tikv/rust-rocksdb.git#995b1f22af7a252ac35c2f90d007ddeee201aca6"
->>>>>>> ee657ca4ce (rocksdb: Optimize async snapshot and write tail latency with many SSTs (#18967))
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -5773,11 +5765,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-<<<<<<< HEAD
-source = "git+https://github.com/tikv/rust-rocksdb.git#755d152ec4eb443039296ceecf9a072a1142e014"
-=======
 source = "git+https://github.com/tikv/rust-rocksdb.git#995b1f22af7a252ac35c2f90d007ddeee201aca6"
->>>>>>> ee657ca4ce (rocksdb: Optimize async snapshot and write tail latency with many SSTs (#18967))
 dependencies = [
  "libc 0.2.151",
  "librocksdb_sys",
