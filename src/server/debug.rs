@@ -1646,7 +1646,7 @@ pub fn handle_dup_key_debug(req: Request<Body>) -> hyper::Result<Response<Body>>
     }
 }
 
-/// Handle /debug/debug-dup-key/check endpoint (GET method to get current
+/// Handle /debug/debug-dup/check endpoint (GET method to get current
 /// config)
 fn handle_check() -> hyper::Result<Response<Body>> {
     let result = txn_types::ENABLE_DUP_KEY_DEBUG
@@ -1669,7 +1669,8 @@ fn handle_check() -> hyper::Result<Response<Body>> {
         .unwrap())
 }
 
-/// Handle /debug/tracked-arc/clear endpoint (POST method to clear registry)
+/// Handle /debug/dup-key/enable or disable endpoint (POST method to clear
+/// registry)
 fn handle_enable_debug(operation: bool) -> hyper::Result<Response<Body>> {
     txn_types::ENABLE_DUP_KEY_DEBUG.store(operation, std::sync::atomic::Ordering::Relaxed);
     let response = serde_json::json!({
