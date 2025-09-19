@@ -193,6 +193,12 @@ where
     propose_checked: Option<bool>,
     request: Option<RaftCmdRequest>,
     callbacks: Vec<Callback<E::Snapshot>>,
+
+    // Ref: https://github.com/tikv/tikv/issues/18498.
+    // Check for duplicate key entries batching proposed commands.
+    // TODO: remove this field when the cause of issue 18498 is located.
+    lock_cf_keys: HashSet<Vec<u8>>,
+    duplicate_put_on_lock_cf_detected: bool,
 }
 
 impl<EK, ER> Drop for PeerFsm<EK, ER>
@@ -435,6 +441,8 @@ where
             propose_checked: None,
             request: None,
             callbacks: vec![],
+            lock_cf_keys: HashSet::default(),
+            duplicate_put_on_lock_cf_detected: false,
         }
     }
 
@@ -475,6 +483,31 @@ where
             mut callback,
             ..
         } = cmd;
+        if txn_types::ENABLE_DUP_KEY_DEBUG.load(Ordering::Relaxed) {
+            // Ref: https://github.com/tikv/tikv/issues/18498.
+            // Check for duplicate key entries batching proposed commands.
+            // TODO: remove this check when the cause of issue 18498 is located.
+            for req in request.get_requests() {
+                if req.has_put() && req.get_put().get_cf() == CF_LOCK {
+                    let key = req.get_put().get_key();
+                    if !self.lock_cf_keys.insert(key.to_vec()) {
+                        let wrapped_key = log_wrappers::Value::key(key);
+                        error!(
+                            "[for debug] found duplicate key in Lock CF PUT request between batched requests. \
+                            key: {:?}, existing batch request: {:?}, new request to add: {:?}",
+                            wrapped_key, self.request, request
+                        );
+                        self.duplicate_put_on_lock_cf_detected = true;
+                        // TODO: remove this in production or new release.
+                        panic!(
+                            "[for debug] found duplicate key in Lock CF PUT request between batched requests. \
+                            key: {:?}, existing batch request: {:?}, new request to add: {:?}",
+                            wrapped_key, self.request, request
+                        );
+                    }
+                }
+            }
+        }
         if let Some(batch_req) = self.request.as_mut() {
             let requests: Vec<_> = request.take_requests().into();
             for q in requests {
@@ -517,6 +550,7 @@ where
             self.batch_req_size = 0;
             self.has_proposed_cb = false;
             self.propose_checked = None;
+            self.lock_cf_keys = HashSet::default();
             if self.callbacks.len() == 1 {
                 let cb = self.callbacks.pop().unwrap();
                 return Some((req, cb));
@@ -687,6 +721,30 @@ where
                     if let Some(Err(e)) = cmd.extra_opts.deadline.map(|deadline| deadline.check()) {
                         cmd.callback.invoke_with_response(new_error(e.into()));
                         continue;
+                    }
+
+                    if txn_types::ENABLE_DUP_KEY_DEBUG.load(Ordering::Relaxed) {
+                        // Ref: https://github.com/tikv/tikv/issues/18498.
+                        // Check for duplicate key entries within the to be proposed raft cmd.
+                        // TODO: remove this check when the cause of issue 18498 is located.
+                        let mut keys_set = std::collections::HashSet::new();
+                        for req in cmd.request.get_requests() {
+                            if req.has_put() && req.get_put().get_cf() == CF_LOCK {
+                                let key = req.get_put().get_key();
+                                if !keys_set.insert(key.to_vec()) {
+                                    let wrapped_key = log_wrappers::Value::key(key);
+                                    error!(
+                                        "[for debug] found duplicate key in Lock CF PUT request, key: {:?}, cmd: {:?}",
+                                        wrapped_key, cmd
+                                    );
+                                    // TODO: remove this in production or new release.
+                                    panic!(
+                                        "[for debug] found duplicate key in Lock CF PUT request, key: {:?}, cmd: {:?}",
+                                        wrapped_key, cmd
+                                    );
+                                }
+                            }
+                        }
                     }
 
                     let req_size = cmd.request.compute_size();
@@ -7727,5 +7785,40 @@ mod tests {
         let _ = q.take_put();
         let req_size = req.compute_size();
         assert!(!builder.can_batch(&cfg, &req, req_size));
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_batch_build_with_duplicate_lock_cf_keys() {
+        let mut builder = BatchRaftCmdRequestBuilder::<KvTestEngine>::new();
+
+        // Create first request.
+        let mut req1 = RaftCmdRequest::default();
+        let mut put1 = Request::default();
+        let mut put_req1 = PutRequest::default();
+        put_req1.set_cf(CF_LOCK.to_string());
+        put_req1.set_key(b"key1".to_vec());
+        put_req1.set_value(b"value1".to_vec());
+        put1.set_cmd_type(CmdType::Put);
+        put1.set_put(put_req1);
+        req1.mut_requests().push(put1);
+
+        // Create second request with same key in Lock CF.
+        let mut req2 = RaftCmdRequest::default();
+        let mut put2 = Request::default();
+        let mut put_req2 = PutRequest::default();
+        put_req2.set_cf(CF_LOCK.to_string());
+        put_req2.set_key(b"key1".to_vec());
+        put_req2.set_value(b"value2".to_vec());
+        put2.set_cmd_type(CmdType::Put);
+        put2.set_put(put_req2);
+        req2.mut_requests().push(put2);
+
+        // Add both requests to batch builder, should cause panic.
+        let size = req1.compute_size();
+        builder.add(RaftCommand::new(req1, Callback::None), size);
+        let size = req2.compute_size();
+        builder.add(RaftCommand::new(req2, Callback::None), size);
+        assert!(builder.duplicate_put_on_lock_cf_detected);
     }
 }
