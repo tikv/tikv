@@ -732,8 +732,9 @@ where
             gc_msg.set_is_tombstone(true);
         }
         if let Err(e) = self.trans.send(gc_msg) {
-            error!(?e;
+            warn!(
                 "send gc message failed";
+                "err" => ?e,
                 "region_id" => region_id,
                 "to_peer_id" => ?from_peer.get_id(),
                 "to_peer_store_id" => ?from_peer.get_store_id(),
@@ -2200,8 +2201,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                     extra_msg.set_type(ExtraMessageType::MsgCheckStalePeerResponse);
                     extra_msg.set_check_peers(region.get_peers().into());
                     if let Err(e) = self.ctx.trans.send(send_msg) {
-                        error!(?e;
+                        warn!(
                             "send check stale peer response message failed";
+                            "err" => ?e,
                             "region_id" => region_id,
                         );
                     }
@@ -2282,7 +2284,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         }
 
         if !msg.has_region_epoch() {
-            error!(
+            warn!(
                 "missing epoch in raft message, ignore it";
                 "region_id" => region_id,
             );
@@ -3362,9 +3364,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 
     fn on_cleanup_import_sst_tick(&mut self) {
         if let Err(e) = self.on_cleanup_import_sst() {
-            error!(?e;
+            warn!(
                 "cleanup import sst failed";
                 "store_id" => self.fsm.store.id,
+                "err" => ?e,
             );
         }
         self.register_cleanup_import_sst_tick();
