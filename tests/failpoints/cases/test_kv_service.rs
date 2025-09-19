@@ -370,3 +370,45 @@ fn test_scan_locks_with_in_progress_transfer_leader() {
     assert_eq!(scan_lock_resp.locks.to_vec()[1].lock_version, start_ts);
     assert_eq!(scan_lock_resp.locks.to_vec()[1].key, k2);
 }
+
+#[test]
+fn test_dup_key_debug() {
+    let (mut cluster, _, mut ctx) = must_new_cluster_and_kv_client_mul(1);
+    cluster.pd_client.disable_default_operator();
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    let leader_peer = cluster.leader_of_region(1).unwrap();
+    ctx.set_peer(leader_peer.clone());
+    let key = b"k";
+    let leader_region = cluster.get_region(key);
+    ctx.set_region_epoch(leader_region.get_region_epoch().clone());
+    let env = Arc::new(Environment::new(1));
+    let channel =
+        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader_peer.get_store_id()));
+    let client = TikvClient::new(channel);
+
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(b"k".to_vec());
+    mutation.set_value(b"v".to_vec());
+
+    let mut mutation2 = Mutation::default();
+    mutation2.set_op(Op::Put);
+    mutation2.set_key(b"k".to_vec());
+    mutation2.set_value(b"v2".to_vec());
+    // ERROR would be returned with failpoint.
+    fail::cfg("scheduler_dup_key_check", "return").unwrap();
+    let mut prewrite_req = PrewriteRequest::default();
+    prewrite_req.set_context(ctx);
+    prewrite_req.set_mutations(vec![mutation.clone(), mutation2.clone()].into());
+    prewrite_req.primary_lock = b"k".to_vec();
+    prewrite_req.start_version = 10;
+    prewrite_req.lock_ttl = 3000;
+    prewrite_req.min_commit_ts = prewrite_req.start_version + 1;
+    prewrite_req.use_async_commit = false;
+    prewrite_req.try_one_pc = false;
+    let prewrite_resp = client.kv_prewrite(&prewrite_req).unwrap();
+    assert!(!prewrite_resp.get_errors().is_empty());
+
+    fail::remove("scheduler_dup_key_check");
+}
