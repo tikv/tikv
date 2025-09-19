@@ -79,6 +79,17 @@ impl<S: Snapshot> ScannerBuilder<S> {
         self
     }
 
+
+    /// Set the skip_newer_change.
+    ///
+    /// Default is 'false'.
+    #[inline]
+    #[must_use]
+    pub fn skip_newer_change(mut self, skip_newer_change: bool) -> Self {
+        self.0.skip_newer_change = skip_newer_change;
+        self
+    }
+
     /// Limit the range to `[lower_bound, upper_bound)` in which the
     /// `ForwardKvScanner` should scan. `None` means unbounded.
     ///
@@ -275,6 +286,7 @@ pub struct ScannerConfig<S: Snapshot> {
     access_locks: TsSet,
 
     check_has_newer_ts_data: bool,
+    skip_newer_change: bool,
 }
 
 impl<S: Snapshot> ScannerConfig<S> {
@@ -293,6 +305,7 @@ impl<S: Snapshot> ScannerConfig<S> {
             bypass_locks: Default::default(),
             access_locks: Default::default(),
             check_has_newer_ts_data: false,
+            skip_newer_change: false,
         }
     }
 
@@ -983,6 +996,54 @@ mod tests {
         test_met_newer_ts_data_impl(false, true);
         test_met_newer_ts_data_impl(true, false);
         test_met_newer_ts_data_impl(true, true);
+    }
+
+    #[test]
+    fn test_skip_newer_change() {
+        test_skip_newer_change_impl(false);
+        // test_skip_newer_change_impl(true);
+    }
+
+    fn test_skip_newer_change_impl(desc: bool) {
+	let mut engine = TestEngineBuilder::new().build().unwrap();
+	let (key1, val1, val12) = (b"foo1", b"bar1", b"bar12");
+	let (key2, val2) = (b"foo2", b"bar2");
+	let (key3, val3) = (b"foo3", b"bar3");
+	let mut expected = vec![(key2, val2), (key3, val3)];
+	// let mut expected = vec![(key1, val1), (key2, val2), (key3, val3)];
+	if desc {
+	    expected.reverse();
+	}
+
+        must_prewrite_put(&mut engine, key1, val1, key1, 10);
+        must_commit(&mut engine, key1, 10, 20);
+
+        must_prewrite_put(&mut engine, key2, val2, key2, 30);
+        must_commit(&mut engine, key2, 30, 40);
+
+        must_prewrite_put(&mut engine, key3, val3, key3, 30);
+        must_commit(&mut engine, key3, 30, 40);
+
+        must_prewrite_put(&mut engine, key1, val12, key1, 50);
+        must_commit(&mut engine, key1, 50, 60);
+
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, 45.into())
+            .fill_cache(false)
+            .range(Some(Key::from_raw(key1)), None)
+            .desc(desc)
+            .skip_newer_change(true)
+            .build()
+            .unwrap();
+
+        for e in expected {
+            let (k, v) = scanner.next().unwrap().unwrap();
+            assert_eq!(k, Key::from_raw(e.0));
+            assert_eq!(v, e.1);
+        }
+
+        assert!(scanner.next().unwrap().is_none());
+        // assert_eq!(scanner.take_statistics().lock.total_op_count(), 0);
     }
 
     #[test]

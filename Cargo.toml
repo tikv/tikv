@@ -420,7 +420,7 @@ opt-level = 1
 
 [profile.dev]
 opt-level = 0
-debug = 0
+debug = true
 codegen-units = 4
 lto = false
 incremental = true
@@ -464,3 +464,7 @@ incremental = false
 debug-assertions = false
 overflow-checks = false
 rpath = false
+
+[patch."https://github.com/pingcap/kvproto"]
+kvproto = { git = "https://github.com/tiancaiamao/kvproto", branch = "skip-newer-change" }
+# kvproto = { path = "../kvproto" }
