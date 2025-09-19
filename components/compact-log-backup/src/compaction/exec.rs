@@ -410,7 +410,8 @@ mod test {
         compaction::Subcompaction,
         storage::{Epoch, MetaFile},
         test_util::{
-            CompactInMem, KvGen, LogFileBuilder, TmpStorage, gen_step, save_many_log_files,
+            CompactInMem, KvGen, LogFileBuilder, TmpStorage, gen_step, metadata_brpb_to_brpb2,
+            save_many_log_files,
         },
     };
 
@@ -468,7 +469,7 @@ mod test {
         let meta = save_many_log_files("data.log", [i1, i2], st.storage().as_ref())
             .await
             .unwrap();
-        let ml = MetaFile::from(meta);
+        let ml = MetaFile::from(metadata_brpb_to_brpb2(&meta));
         let c = Subcompaction::of_many(ml.into_logs());
         let res = st.run_subcompaction(c).await;
         st.verify_result(res, cm);
@@ -495,7 +496,7 @@ mod test {
         let meta = save_many_log_files("data.log", [i1], st.storage().as_ref())
             .await
             .unwrap();
-        let ml = MetaFile::from(meta);
+        let ml = MetaFile::from(metadata_brpb_to_brpb2(&meta));
         let c = Subcompaction::of_many(ml.into_logs());
         let res = st.run_subcompaction(c).await;
         let sst_out = &res.meta.get_region_meta_hints()[0];
@@ -533,7 +534,7 @@ mod test {
         let meta = save_many_log_files("data.log", [i1, i2], st.storage().as_ref())
             .await
             .unwrap();
-        let ml = MetaFile::from(meta);
+        let ml = MetaFile::from(metadata_brpb_to_brpb2(&meta));
         let logs = ml.into_logs().collect::<Vec<_>>();
         assert_eq!(logs.len(), 2, "{:?}", logs);
 

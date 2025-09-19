@@ -16,7 +16,7 @@ use hooking::{
     AfterFinishCtx, BeforeStartCtx, CId, ExecHooks, SubcompactionFinishCtx, SubcompactionStartCtx,
 };
 use kvproto::brpb::StorageBackend;
-use tikv_util::config::ReadableSize;
+use tikv_util::{self, config::ReadableSize};
 use tokio::runtime::Handle;
 use tracing::{Instrument, trace_span};
 use tracing_active_tree::{frame, root};
@@ -51,6 +51,13 @@ pub struct ExecutionConfig {
     pub from_ts: u64,
     /// Filter out files doesn't contain any record with TS less than this.
     pub until_ts: u64,
+    /// Filter out metadatas doesn't contain any record with TS larger than or
+    /// equal to this.
+    pub last_snapshot_backup_ts: u64,
+    /// The max count of running prefetch tasks.
+    pub prefetch_running_count: u64,
+    /// The max count of saved prefetch tasks in the queue.
+    pub prefetch_buffer_count: u64,
     /// The compress algorithm we are going to use for output.
     pub compression: SstCompressionType,
     /// The compress level we are going to use.
@@ -153,11 +160,12 @@ impl Execution {
     async fn run_prepared(&self, cx: &mut ExecuteCtx<'_, impl ExecHooks>) -> Result<()> {
         let mut ext = LoadFromExt::default();
         let next_compaction = trace_span!("next_compaction");
-        ext.max_concurrent_fetch = 128;
         ext.loading_content_span = Some(trace_span!(
             parent: next_compaction.clone(),
             "load_meta_file_names"
         ));
+        ext.prefetch_running_count = self.cfg.prefetch_running_count as usize;
+        ext.prefetch_buffer_count = self.cfg.prefetch_buffer_count as usize;
 
         let ExecuteCtx {
             ref storage,
@@ -250,6 +258,8 @@ impl Execution {
         let cx = AfterFinishCtx {
             async_rt: &Handle::current(),
             storage: &storage,
+            until_ts: self.cfg.until_ts,
+            last_snapshot_backup_ts: self.cfg.last_snapshot_backup_ts,
         };
         hooks.after_execution_finished(cx).await?;
 
