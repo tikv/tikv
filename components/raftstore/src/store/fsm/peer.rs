@@ -6066,7 +6066,15 @@ where
 
     #[allow(clippy::if_same_then_else)]
     fn on_raft_gc_log_tick(&mut self, force_compact: bool) {
-        if !self.fsm.peer.is_leader() {
+        fail_point!(
+            "check_state_on_raft_gc_log_tick",
+            self.fsm.stopped || self.fsm.peer.pending_remove,
+            |_| {}
+        );
+        if self.fsm.stopped || self.fsm.peer.pending_remove || !self.fsm.peer.is_leader() {
+            // If the peer is marked as `pending_remove`, it means the clearing might be
+            // executed by the region worker, or this peer is already stopped. In both
+            // scenarios, there is no need to execute log gc.
             // `compact_cache_to` is called when apply, there is no need to call
             // `compact_to` here, snapshot generating has already been cancelled
             // when the role becomes follower.
@@ -6268,7 +6276,7 @@ where
         fail_point!("ignore request snapshot", |_| {
             self.schedule_tick(PeerTick::RequestSnapshot);
         });
-        if !self.fsm.peer.wait_data {
+        if !self.fsm.peer.wait_data || self.fsm.peer.pending_remove {
             return;
         }
         if self.fsm.peer.is_leader()
@@ -6345,7 +6353,7 @@ where
     }
 
     fn on_split_region_check_tick(&mut self) {
-        if !self.fsm.peer.is_leader() {
+        if !self.fsm.peer.is_leader() || self.fsm.peer.pending_remove {
             return;
         }
 
