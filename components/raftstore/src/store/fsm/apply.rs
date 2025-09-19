@@ -668,6 +668,40 @@ where
             ),
             "cmd_batch" => ?cmd_batch.len(),
         );
+        // TODO: remove this field when the cause of issue 18498 is located.
+        if txn_types::ENABLE_DUP_KEY_DEBUG.load(Ordering::Relaxed) {
+            use std::collections::HashMap;
+            let mut lock_cf_map: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
+            for batch in &cmd_batch {
+                for cmd in &batch.cmds {
+                    for r in cmd.request.get_requests() {
+                        if r.get_cmd_type() == CmdType::Put && r.get_put().get_cf() == CF_LOCK {
+                            let key = r.get_put().get_key();
+                            let value = r.get_put().get_value();
+                            if let Some(existing_value) = lock_cf_map.get(key) {
+                                error!(
+                                    "[for debug] found duplicate PUT on lock cf: key={:?}, existing_value={:?}, new_value={:?} during apply",
+                                    log_wrappers::Value::key(key),
+                                    log_wrappers::Value::value(existing_value),
+                                    log_wrappers::Value::value(value)
+                                );
+
+                                // TODO: remove this in production or new release.
+                                panic!(
+                                    "[for debug] found duplicate PUT on lock cf: key={:?}, existing_value={:?}, new_value={:?} during apply",
+                                    log_wrappers::Value::key(key),
+                                    log_wrappers::Value::value(existing_value),
+                                    log_wrappers::Value::value(value)
+                                );
+                            } else {
+                                lock_cf_map.insert(key.to_vec(), value.to_vec());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         self.host
             .on_flush_applied_cmd_batch(batch_max_level, cmd_batch, &self.engine);
         // Invoke callbacks
