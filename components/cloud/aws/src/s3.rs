@@ -10,12 +10,7 @@ use async_trait::async_trait;
 use aws_config::{sts::AssumeRoleProvider, BehaviorVersion, Region, SdkConfig};
 use aws_credential_types::{provider::ProvideCredentials, Credentials};
 use aws_sdk_s3::{
-<<<<<<< HEAD
-    config::HttpClient,
-=======
-    Client,
     config::{HttpClient, StalledStreamProtectionConfig},
->>>>>>> 219816571a (aws: disable stalled stream protection for S3Storage (#18875))
     operation::get_object::GetObjectError,
     types::{CompletedMultipartUpload, CompletedPart},
     Client,
@@ -1151,8 +1146,6 @@ mod tests {
         client.assert_requests_match(&[]);
     }
 
-<<<<<<< HEAD
-=======
     /// Ensures that stalled stream protection does not kick in to kill a
     /// rate-limited connection.
     ///
@@ -1208,7 +1201,6 @@ mod tests {
     }
 
     #[ignore = "s3 test env is unavailable"]
->>>>>>> 219816571a (aws: disable stalled stream protection for S3Storage (#18875))
     #[tokio::test]
     #[cfg(FALSE)]
     // FIXME: enable this (or move this to an integration test) if we've got a
