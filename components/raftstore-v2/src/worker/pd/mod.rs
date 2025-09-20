@@ -99,6 +99,9 @@ pub enum Task {
         tick_id: u64,
         duration: RaftstoreDuration,
     },
+    GracefulShutdownState {
+        state: bool,
+    },
 }
 
 impl Display for Task {
@@ -179,6 +182,9 @@ impl Display for Task {
                 "update slowness statistics: tick_id {}, duration {:?}",
                 tick_id, duration
             ),
+            Task::GracefulShutdownState { state } => {
+                write!(f, "graceful shutdown state: {}", state)
+            }
         }
     }
 }
@@ -227,6 +233,8 @@ where
     shutdown: Arc<AtomicBool>,
     #[allow(dead_code)]
     cfg: Arc<VersionTrack<Config>>,
+
+    graceful_shutdown_state: Arc<AtomicBool>,
 }
 
 impl<EK, ER, T> Runner<EK, ER, T>
@@ -252,6 +260,7 @@ where
         logger: Logger,
         shutdown: Arc<AtomicBool>,
         cfg: Arc<VersionTrack<Config>>,
+        graceful_shutdown_state: Arc<AtomicBool>,
     ) -> Result<Self, std::io::Error> {
         let store_heartbeat_interval = cfg.value().pd_store_heartbeat_tick_interval.0;
         let mut stats_monitor = PdStatsMonitor::new(
@@ -286,6 +295,7 @@ where
             logger,
             shutdown,
             cfg,
+            graceful_shutdown_state,
         })
     }
 }
@@ -349,6 +359,7 @@ where
             Task::UpdateSlownessStats { tick_id, duration } => {
                 self.handle_update_slowness_stats(tick_id, duration)
             }
+            Task::GracefulShutdownState { state } => self.handle_graceful_shutdown_state(state),
         }
     }
 }
