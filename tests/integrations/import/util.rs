@@ -63,14 +63,6 @@ pub fn open_cluster_and_tikv_import_client(
         config.server.grpc_concurrency = 1;
         config.rocksdb.defaultcf.enable_compaction_guard = Some(true);
         config.rocksdb.writecf.enable_compaction_guard = Some(true);
-        // `ingest_maybe_slowdown_writes` uses `stop_writes_trigger` to check if ingest
-        // may cause a write stall. We also set `slowdown_writes_trigger` because
-        // RocksDB ignores `stop_writes_trigger` when it is smaller than
-        // `slowdown_writes_trigger`
-        config.rocksdb.defaultcf.level0_slowdown_writes_trigger = 4;
-        config.rocksdb.writecf.level0_slowdown_writes_trigger = 4;
-        config.rocksdb.defaultcf.level0_stop_writes_trigger = Some(4);
-        config.rocksdb.writecf.level0_stop_writes_trigger = Some(4);
         config
     });
 
