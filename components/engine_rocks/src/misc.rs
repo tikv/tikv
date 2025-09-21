@@ -325,15 +325,12 @@ impl MiscExt for RocksEngine {
         let handle = util::get_cf_handle(self.as_inner(), cf)?;
         if let Some(n) = util::get_cf_num_files_at_level(self.as_inner(), handle, 0) {
             let options = self.as_inner().get_options_cf(handle);
-            // Use level0_stop_writes_trigger instead of level0_slowdown_writes_trigger
-            // to integrate with flow control while preserving RocksDB's compaction speed-up
-            // mechanism
-            let stop_trigger = options.get_level_zero_stop_writes_trigger();
+            let slowdown_trigger = options.get_level_zero_slowdown_writes_trigger();
             let compaction_trigger = options.get_level_zero_file_num_compaction_trigger() as u64;
             // Leave enough buffer to tolerate heavy write workload,
             // which may flush some memtables in a short time.
             let worse_case_l0_file_count = n + inflight_ingest_cnt;
-            if worse_case_l0_file_count > u64::from(stop_trigger) / 2
+            if worse_case_l0_file_count > u64::from(slowdown_trigger) / 2
                 && worse_case_l0_file_count >= compaction_trigger
             {
                 return Ok(true);
