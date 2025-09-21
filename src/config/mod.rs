@@ -367,6 +367,7 @@ macro_rules! cf_config {
             pub max_bytes_for_level_base: ReadableSize,
             pub target_file_size_base: Option<ReadableSize>,
             pub level0_file_num_compaction_trigger: i32,
+            // See `fill_cf_opts` for detailed comments on the following two fields.
             pub level0_slowdown_writes_trigger: i32,
             pub level0_stop_writes_trigger: Option<i32>,
             pub max_compaction_bytes: ReadableSize,
