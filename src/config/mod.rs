@@ -4016,7 +4016,8 @@ impl TikvConfig {
                     );
                     $cf_opts.level0_slowdown_writes_trigger = $cfg.l0_files_threshold as i32;
                 }
-                // Keep override for level0_stop_writes_trigger to ensure ingest_maybe_stall
+                // If unset, `level0_stop_writes_trigger` defaults to `l0_files_threshold`
+                // (unlike `level0_slowdown_writes_trigger`, which defaults to 20)  to ensure ingest_maybe_stall
                 // integrates properly with flow control for correctness on SST ingestion
                 if let Some(v) = &mut $cf_opts.level0_stop_writes_trigger {
                     if $cfg.enable && *v > $cfg.l0_files_threshold as i32 {
