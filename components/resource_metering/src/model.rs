@@ -409,8 +409,8 @@ mod tests {
         assert_eq!(record.write_keys.load(Relaxed), 6);
         assert_eq!(record.network_in_bytes.load(Relaxed), 40);
         assert_eq!(record.network_out_bytes.load(Relaxed), 60);
-        assert_eq!(record.read_keys.load(Relaxed), 400);
-        assert_eq!(record.write_keys.load(Relaxed), 600);
+        assert_eq!(record.logical_read_bytes.load(Relaxed), 400);
+        assert_eq!(record.logical_write_bytes.load(Relaxed), 600);
         let record2 = record.take_and_reset();
         assert_eq!(record.read_keys.load(Relaxed), 0);
         assert_eq!(record.write_keys.load(Relaxed), 0);
