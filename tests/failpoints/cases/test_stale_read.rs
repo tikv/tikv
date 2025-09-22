@@ -465,6 +465,19 @@ fn test_read_after_peer_destroyed() {
     sleep_ms(200);
     fail::remove(destroy_peer_fp);
 
+    // Validate the async destroy progress.
+    let check_state_on_raft_gc_log_tick = "check_state_on_raft_gc_log_tick";
+    let (gc_tx, gc_rx) = mpsc::sync_channel(1);
+    fail::cfg_callback(check_state_on_raft_gc_log_tick, move || {
+        gc_tx.send(check_state_on_raft_gc_log_tick).unwrap();
+    })
+    .unwrap();
+    assert_eq!(
+        gc_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+        check_state_on_raft_gc_log_tick
+    );
+    fail::remove(check_state_on_raft_gc_log_tick);
+
     let resp = rx.recv_timeout(Duration::from_millis(200)).unwrap();
     assert!(
         resp.get_header().get_error().has_region_not_found(),
