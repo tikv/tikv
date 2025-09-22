@@ -49,6 +49,7 @@ itertools = "0.10"
 keys = { workspace = true }
 kvproto = { workspace = true }
 lazy_static = "1.3"
+linked-hash-map = "0.5"
 log_wrappers = { workspace = true }
 memory_trace_macros = { workspace = true }
 online_config = { workspace = true }
