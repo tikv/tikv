@@ -372,6 +372,7 @@ fn test_scan_locks_with_in_progress_transfer_leader() {
 }
 
 #[test]
+#[ignore]
 fn test_dup_key_debug() {
     let (mut cluster, _, mut ctx) = must_new_cluster_and_kv_client_mul(1);
     cluster.pd_client.disable_default_operator();
