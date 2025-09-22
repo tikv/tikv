@@ -79,6 +79,11 @@ impl ErrorInner {
     }
 }
 
+<<<<<<< HEAD
+=======
+pub static ENABLE_DUP_KEY_DEBUG: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+>>>>>>> dc45ee928e (*: Disable ENABLE_DUP_KEY_DEBUG by default (#18993))
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct Error(#[from] pub Box<ErrorInner>);
