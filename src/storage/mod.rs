@@ -1148,10 +1148,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             })
                             .collect();
                         record_network_out_bytes(
-                            result
-                                .iter()
-                                .map(|r| r.as_ref().map_or(0, |(k, v)| (k.len() + v.len()) as u64))
-                                .sum(),
+                            result.iter().fold(0u64, |acc, r| {
+                                acc + r.as_ref().map_or(0, |(k, v)| k.len() + v.len()) as u64
+                            })
                         );
                         record_logical_read_bytes(reader.statistics.processed_size as u64);
                         (result, reader.statistics)
@@ -1346,10 +1345,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                     .get(CMD)
                                     .observe(kv_pairs.len() as f64);
                                 record_network_out_bytes(
-                                    kv_pairs
-                                        .iter()
-                                        .map(|r| r.as_ref().map_or(0, |(k, v)| (k.len() + v.len()) as u64))
-                                        .sum(),
+                                    kv_pairs.iter().fold(0u64, |acc, r| {
+                                        acc + r.as_ref().map_or(0, |(k, v)| k.len() + v.len()) as u64
+                                    })
                                 );
                                 kv_pairs
                             });
@@ -1602,10 +1600,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             .get(CMD)
                             .observe(results.len() as f64);
                         record_network_out_bytes(
-                            results
-                                .iter()
-                                .map(|r| r.as_ref().map_or(0, |(k, v)| (k.len() + v.len()) as u64))
-                                .sum(),
+                            results.iter().fold(0u64, |acc, r| {
+                                acc + r.as_ref().map_or(0, |(k, v)| k.len() + v.len()) as u64
+                            })
                         );
                         record_logical_read_bytes(statistics.processed_size as u64);
                         results

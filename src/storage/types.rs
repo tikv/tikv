@@ -418,7 +418,7 @@ impl PessimisticLockResults {
                         2 // type + bool
                     }
                     PessimisticLockKeyResult::LockedWithConflict { value, conflict_ts: _ } => {
-                        10 + value.as_ref().map_or(0, |v| v.len() as u64) // 10 stands for type + bool + ts
+                        10 + value.as_ref().map_or(0, |v| v.len() as u64) // 10 stands for type + bool + conflict_ts
                     }
                     PessimisticLockKeyResult::Waiting => unreachable!(),
                     PessimisticLockKeyResult::Failed(_) => {
