@@ -2524,12 +2524,12 @@ where
                     "peer_id" => self.fsm.peer_id(),
                     "res" => ?res,
                 );
-                if self.fsm.peer.wait_data || self.fsm.peer.pending_remove {
-                    // Extra: no needs to apply if the peer is already pending on removing.
+                if self.fsm.peer.wait_data {
                     return;
                 }
                 self.on_ready_result(&mut res.exec_res, &res.metrics);
-                if self.fsm.stopped {
+                if self.fsm.stopped || self.fsm.peer.pending_remove {
+                    // Extra: no needs to apply if the peer is already pending on removing.
                     return;
                 }
                 let applied_index = res.apply_state.applied_index;
