@@ -547,7 +547,7 @@ impl<K: PrewriteKind> Prewriter<K> {
         let rows = self.mutations.len();
         let res = self.prewrite(&mut txn, &mut reader, context.extra_op);
         let (locks, final_min_commit_ts) = res?;
-        
+
         Ok(self.write_result(
             locks,
             txn,

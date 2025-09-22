@@ -24,8 +24,7 @@ use grpcio::{
 };
 use health_controller::HealthController;
 use kvproto::{coprocessor::*, kvrpcpb::*, mpp::*, raft_serverpb::*, tikvpb::*};
-use protobuf::RepeatedField;
-use protobuf::Message;
+use protobuf::{Message, RepeatedField};
 use raft::eraftpb::MessageType;
 use raftstore::{
     Error as RaftStoreError, Result as RaftStoreResult,
@@ -45,7 +44,9 @@ use tikv_util::{
     time::{Instant, nanos_to_secs},
     worker::Scheduler,
 };
-use tracker::{set_tls_tracker_token, with_tls_tracker, RequestInfo, RequestType, Tracker, GLOBAL_TRACKERS};
+use tracker::{
+    GLOBAL_TRACKERS, RequestInfo, RequestType, Tracker, set_tls_tracker_token, with_tls_tracker,
+};
 use txn_types::{self, Key};
 
 use super::batch::{BatcherBuilder, ReqBatcher};

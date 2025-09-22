@@ -300,7 +300,8 @@ pub struct SummaryRecord {
     /// Number of keys that have been written.
     pub write_keys: AtomicU32,
 
-    /// Logical read bytes. TableScan executor's total read bytes recorded in execution summary.
+    /// Logical read bytes. TableScan executor's total read bytes recorded in
+    /// execution summary.
     pub logical_read_bytes: AtomicU64,
 
     /// Logical write bytes.
@@ -430,7 +431,7 @@ mod tests {
         assert_eq!(record2.network_in_bytes.load(Relaxed), 0);
         assert_eq!(record2.network_out_bytes.load(Relaxed), 0);
         assert_eq!(record2.logical_read_bytes.load(Relaxed), 0);
-        assert_eq!(record2.logical_write_bytes.load(Relaxed), 0);        
+        assert_eq!(record2.logical_write_bytes.load(Relaxed), 0);
     }
 
     #[test]
@@ -841,19 +842,31 @@ mod tests {
             333 + 3330 + 6660
         );
         assert_eq!(
-            agg_map.get(&tag1.extra_attachment).unwrap().network_in_bytes,
+            agg_map
+                .get(&tag1.extra_attachment)
+                .unwrap()
+                .network_in_bytes,
             1111 + 11110 + 44440
         );
         assert_eq!(
-            agg_map.get(&tag1.extra_attachment).unwrap().network_out_bytes,
+            agg_map
+                .get(&tag1.extra_attachment)
+                .unwrap()
+                .network_out_bytes,
             2222 + 22220 + 55550
         );
         assert_eq!(
-            agg_map.get(&tag1.extra_attachment).unwrap().logical_read_bytes,
+            agg_map
+                .get(&tag1.extra_attachment)
+                .unwrap()
+                .logical_read_bytes,
             3333 + 33330 + 66660
         );
         assert_eq!(
-            agg_map.get(&tag1.extra_attachment).unwrap().logical_write_bytes,
+            agg_map
+                .get(&tag1.extra_attachment)
+                .unwrap()
+                .logical_write_bytes,
             4444 + 44440 + 77770
         );
         assert_eq!(

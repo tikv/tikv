@@ -1,8 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{iter, thread::sleep, time::Duration};
-use resource_metering::ENABLE_NETWORK_IO_COLLECTION;
+
 use rand::prelude::SliceRandom;
+use resource_metering::ENABLE_NETWORK_IO_COLLECTION;
 use test_util::alloc_port;
 use tikv_util::config::ReadableDuration;
 use tokio::time::Instant;
@@ -197,6 +198,6 @@ pub fn test_enable_network_io_collection() {
 
     test_suite.cfg_enable_network_io_collection("true");
     test_suite.flush_receiver();
-    let res = test_suite.block_receive_one();    
+    let res = test_suite.block_receive_one();
     assert!(ENABLE_NETWORK_IO_COLLECTION.load(std::sync::atomic::Ordering::Relaxed));
 }

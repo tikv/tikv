@@ -191,7 +191,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLockR
 
         let pr = ProcessResult::PessimisticLockRes { res: Ok(res) };
         let to_be_write = make_write_data(modifies, old_values);
-        
+
         Ok(WriteResult {
             ctx: self.ctx,
             to_be_write,

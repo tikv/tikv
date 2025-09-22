@@ -1,7 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::error::Error;
-use std::sync::atomic::AtomicBool;
+use std::{error::Error, sync::atomic::AtomicBool};
 
 use online_config::{ConfigChange, OnlineConfig};
 use serde_derive::{Deserialize, Serialize};
@@ -18,7 +17,8 @@ const MAX_MAX_RESOURCE_GROUPS: usize = 5_000;
 const MIN_REPORT_RECEIVER_INTERVAL: ReadableDuration = ReadableDuration::millis(500);
 const DEFAULT_ENABLE_NETWORK_IO_COLLECTION: bool = false;
 
-pub static ENABLE_NETWORK_IO_COLLECTION: AtomicBool = AtomicBool::new(DEFAULT_ENABLE_NETWORK_IO_COLLECTION);
+pub static ENABLE_NETWORK_IO_COLLECTION: AtomicBool =
+    AtomicBool::new(DEFAULT_ENABLE_NETWORK_IO_COLLECTION);
 
 /// Public configuration of resource metering module.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
@@ -39,7 +39,7 @@ pub struct Config {
     /// Sampling window. (only for cpu module)
     pub precision: ReadableDuration,
 
-    /// Whether to collect network traffic and logical io 
+    /// Whether to collect network traffic and logical io
     pub enable_network_io_collection: bool,
 }
 

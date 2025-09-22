@@ -22,7 +22,10 @@ use kvproto::{coprocessor as coppb, errorpb, kvrpcpb, kvrpcpb::CommandPri, metap
 use online_config::ConfigManager;
 use protobuf::{CodedInputStream, Message};
 use resource_control::{ResourceGroupManager, ResourceLimiter, TaskMetadata};
-use resource_metering::{FutureExt, ResourceTagFactory, StreamExt, record_network_in_bytes, record_network_out_bytes, record_logical_read_bytes};
+use resource_metering::{
+    FutureExt, ResourceTagFactory, StreamExt, record_logical_read_bytes, record_network_in_bytes,
+    record_network_out_bytes,
+};
 use tidb_query_common::{
     error::StorageError,
     execute_stats::ExecSummary,
@@ -915,7 +918,7 @@ impl<E: Engine> Endpoint<E> {
         set_tls_tracker_token(tracker);
         with_tls_tracker(|tracker| {
             tracker.metrics.grpc_req_size = req.compute_size() as u64;
-        });        
+        });
         let result_of_stream = self
             .parse_request_and_check_memory_locks(req, peer, true)
             .and_then(|r| self.handle_stream_request(r)); // Result<Stream<Resp, Error>, Error>

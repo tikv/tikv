@@ -47,13 +47,15 @@ use parking_lot::{Mutex, MutexGuard, RwLockWriteGuard};
 use pd_client::{Feature, FeatureGate};
 use raftstore::store::TxnExt;
 use resource_control::{ResourceController, ResourceGroupManager, TaskMetadata};
-use resource_metering::{FutureExt, ResourceTagFactory};
+use resource_metering::{
+    FutureExt, ResourceTagFactory, record_logical_read_bytes, record_logical_write_bytes,
+    record_network_in_bytes,
+};
 use smallvec::{SmallVec, smallvec};
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData, WriteEvent};
 use tikv_util::{
     memory::MemoryQuota, quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE,
 };
-use resource_metering::{record_network_in_bytes, record_logical_read_bytes, record_logical_write_bytes};
 use tracker::{GLOBAL_TRACKERS, TrackerToken, TrackerTokenArray, set_tls_tracker_token, track};
 use txn_types::TimeStamp;
 
@@ -1244,7 +1246,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             GLOBAL_TRACKERS.with_tracker(task.tracker_token(), |tracker| {
                 record_network_in_bytes(tracker.metrics.grpc_req_size);
             });
-            
+
             if task.cmd().readonly() {
                 self.process_read(snapshot, task, &mut sched_details);
                 record_logical_read_bytes(sched_details.stat.processed_size as u64);

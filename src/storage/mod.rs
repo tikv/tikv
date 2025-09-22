@@ -94,7 +94,10 @@ use protobuf::Message;
 use raftstore::store::{ReadStats, TxnExt, WriteStats, util::build_key_range};
 use rand::prelude::*;
 use resource_control::{ResourceController, ResourceGroupManager, ResourceLimiter, TaskMetadata};
-use resource_metering::{record_logical_read_bytes, record_network_in_bytes, record_network_out_bytes, FutureExt, ResourceTagFactory};
+use resource_metering::{
+    FutureExt, ResourceTagFactory, record_logical_read_bytes, record_network_in_bytes,
+    record_network_out_bytes,
+};
 use tikv_kv::{OnAppliedCb, SnapshotExt};
 use tikv_util::{
     deadline::Deadline,
@@ -653,7 +656,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 );
                 with_tls_tracker(|tracker| {
                     record_network_in_bytes(tracker.metrics.grpc_req_size);
-                });                
+                });
 
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                 SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
@@ -967,7 +970,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                         buckets.as_ref(),
                                     );
                                     statistics.add(&stat);
-                                    let value_size = v.as_ref().map_or(0, |v| v.as_ref().map_or(0, |v1| v1.len() ) as u64);
+                                    let value_size = v
+                                        .as_ref()
+                                        .map_or(0, |v| v.as_ref().map_or(0, |v1| v1.len()) as u64);
                                     record_network_out_bytes(value_size);
                                     record_logical_read_bytes(statistics.processed_size as u64);
                                     consumer.consume(
@@ -1344,11 +1349,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                 KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
                                     .get(CMD)
                                     .observe(kv_pairs.len() as f64);
-                                record_network_out_bytes(
-                                    kv_pairs.iter().fold(0u64, |acc, r| {
-                                        acc + r.as_ref().map_or(0, |(k, v)| k.len() + v.len()) as u64
-                                    })
-                                );
+                                record_network_out_bytes(kv_pairs.iter().fold(0u64, |acc, r| {
+                                    acc + r.as_ref().map_or(0, |(k, v)| k.len() + v.len()) as u64
+                                }));
                                 kv_pairs
                             });
                         (result, stats)
@@ -1599,11 +1602,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
                             .get(CMD)
                             .observe(results.len() as f64);
-                        record_network_out_bytes(
-                            results.iter().fold(0u64, |acc, r| {
-                                acc + r.as_ref().map_or(0, |(k, v)| k.len() + v.len()) as u64
-                            })
-                        );
+                        record_network_out_bytes(results.iter().fold(0u64, |acc, r| {
+                            acc + r.as_ref().map_or(0, |(k, v)| k.len() + v.len()) as u64
+                        }));
                         record_logical_read_bytes(statistics.processed_size as u64);
                         results
                             .into_iter()

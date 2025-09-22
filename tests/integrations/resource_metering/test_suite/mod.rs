@@ -163,7 +163,7 @@ impl TestSuite {
         self.cfg_controller
             .update_config("resource-metering.enable-network-io-collection", &flag)
             .unwrap();
-    }    
+    }
 
     pub fn cfg_report_receiver_interval(&self, interval: impl Into<String>) {
         let interval = interval.into();
