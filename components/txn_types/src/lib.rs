@@ -80,7 +80,7 @@ impl ErrorInner {
 }
 
 pub static ENABLE_DUP_KEY_DEBUG: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(true);
+    std::sync::atomic::AtomicBool::new(false);
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct Error(#[from] pub Box<ErrorInner>);
