@@ -9445,6 +9445,11 @@ def BackupImport() -> RowPanel:
                 metric="tikv_import_ingest_duration_bucket",
                 label_selectors=['type=~"ingest"'],
             ),
+            heatmap_panel(
+                title="Import Ingest SST Bytes",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_import_ingest_byte_bucket",
+            ),
             graph_panel(
                 title="Import Download SST Throughput",
                 yaxes=yaxes(left_format=UNITS.BYTES_SEC_IEC),
