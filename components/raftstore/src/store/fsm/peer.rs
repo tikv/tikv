@@ -1540,15 +1540,6 @@ where
     }
 
     fn on_significant_msg(&mut self, msg: Box<SignificantMsg<EK::Snapshot>>) {
-        if self.fsm.peer.pending_remove
-            && !matches!(msg, box SignificantMsg::ReadyToDestroyPeer { .. })
-        {
-            // If this peer is marked for removal, skip handling other SignificantMsg
-            // variants, except for SignificantMsg::ReadyToDestroyPeer, which is
-            // responsible for executing the final cleanup steps of peer
-            // destruction.
-            return;
-        }
         match *msg {
             SignificantMsg::SnapshotStatus {
                 to_peer_id, status, ..
