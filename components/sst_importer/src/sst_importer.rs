@@ -542,11 +542,6 @@ impl<E: KvEngine> SstImporter<E> {
 
         // Clean up temporary file if download failed
         if let Err(ref err) = result {
-            // Record download failure metric
-            IMPORTER_DOWNLOAD_FAILURE_COUNT
-                .with_label_values(&["external_storage"])
-                .inc();
-
             warn!("download failed, cleaning up temporary file";
                 "src_file" => src_file_name,
                 "dst_file" => %dst_file.display(),

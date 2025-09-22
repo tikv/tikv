@@ -72674,7 +72674,7 @@
           },
           "gridPos": {
             "h": 7,
-            "w": 6,
+            "w": 4,
             "x": 0,
             "y": 56
           },
@@ -72779,8 +72779,8 @@
           },
           "gridPos": {
             "h": 7,
-            "w": 6,
-            "x": 6,
+            "w": 4,
+            "x": 4,
             "y": 56
           },
           "heatmap": {},
@@ -72855,21 +72855,9 @@
           "yBucketSize": null
         },
         {
+          "aliasColors": {},
+          "bars": false,
           "cacheTimeout": null,
-          "cards": {
-            "cardPadding": null,
-            "cardRound": null
-          },
-          "color": {
-            "cardColor": "#b4ff00",
-            "colorScale": "sqrt",
-            "colorScheme": "interpolateSpectral",
-            "exponent": 0.5,
-            "max": null,
-            "min": null,
-            "mode": "spectrum"
-          },
-          "dataFormat": "tsbuckets",
           "datasource": "${DS_TEST-CLUSTER}",
           "description": null,
           "editable": true,
@@ -72882,82 +72870,137 @@
               }
             }
           },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
           "gridPos": {
             "h": 7,
-            "w": 6,
-            "x": 12,
+            "w": 4,
+            "x": 8,
             "y": 56
           },
-          "heatmap": {},
           "height": null,
           "hideTimeOverride": false,
-          "hideZeroBuckets": true,
-          "highlightCards": true,
           "id": 525,
           "interval": null,
+          "isNew": true,
           "legend": {
-            "show": false
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
           },
+          "lines": true,
+          "linewidth": 1,
           "links": [],
-          "maxDataPoints": 512,
+          "maxDataPoints": null,
           "maxPerRow": null,
           "minSpan": null,
-          "options": {},
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
           "repeat": null,
           "repeatDirection": null,
-          "reverseYBuckets": false,
+          "seriesOverrides": [],
           "span": null,
+          "stack": false,
+          "steppedLine": false,
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(increase(\n    tikv_import_ingest_byte_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
-              "format": "heatmap",
+              "expr": "sum(rate(\n    tikv_import_ingest_bytes_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance) ",
+              "format": "time_series",
               "hide": false,
               "instant": false,
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "{{le}}",
+              "legendFormat": "{{instance}}",
               "metric": "",
-              "query": "sum(increase(\n    tikv_import_ingest_byte_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(rate(\n    tikv_import_ingest_bytes_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_import_ingest_bytes_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n))  ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "total",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_import_ingest_bytes_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n))  ",
               "refId": "",
               "step": 10,
               "target": ""
             }
           ],
+          "thresholds": [],
           "timeFrom": null,
           "timeShift": null,
-          "title": "Import Ingest SST Bytes",
+          "title": "Import Ingest SST Bytes Rate",
           "tooltip": {
             "msResolution": true,
             "shared": true,
-            "show": true,
-            "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
           },
           "transformations": [],
           "transparent": false,
-          "type": "heatmap",
-          "xAxis": {
+          "type": "graph",
+          "xaxis": {
             "mode": "time",
             "name": null,
             "show": true,
             "values": []
           },
-          "xBucketNumber": null,
-          "xBucketSize": null,
-          "yAxis": {
-            "decimals": 1,
-            "format": "s",
-            "label": null,
-            "logBase": 1,
-            "max": null,
-            "min": null,
-            "show": true
-          },
-          "yBucketBound": "upper",
-          "yBucketNumber": null,
-          "yBucketSize": null
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "binBps",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
         },
         {
           "aliasColors": {},
@@ -72985,8 +73028,8 @@
           },
           "gridPos": {
             "h": 7,
-            "w": 6,
-            "x": 18,
+            "w": 4,
+            "x": 12,
             "y": 56
           },
           "height": null,
@@ -73133,13 +73176,161 @@
           },
           "gridPos": {
             "h": 7,
-            "w": 12,
-            "x": 0,
-            "y": 63
+            "w": 8,
+            "x": 16,
+            "y": 56
           },
           "height": null,
           "hideTimeOverride": false,
           "id": 527,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_import_download_failure_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, instance) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{type}}-{{instance}}",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_import_download_failure_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, instance) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_import_download_failure_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{type}} total",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_import_download_failure_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Import Download Failure Rate",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "ops",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": null,
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 20,
+            "y": 63
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 528,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -73267,12 +73458,12 @@
           "gridPos": {
             "h": 7,
             "w": 12,
-            "x": 12,
+            "x": 32,
             "y": 63
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 528,
+          "id": 529,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -73400,12 +73591,12 @@
           "gridPos": {
             "h": 7,
             "w": 12,
-            "x": 0,
+            "x": 20,
             "y": 70
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 529,
+          "id": 530,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -73548,12 +73739,12 @@
           "gridPos": {
             "h": 7,
             "w": 12,
-            "x": 12,
+            "x": 32,
             "y": 70
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 530,
+          "id": 531,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -73689,7 +73880,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 531,
+      "id": 532,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -73740,7 +73931,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 532,
+          "id": 533,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -73836,7 +74027,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 533,
+          "id": 534,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -73911,7 +74102,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 534,
+          "id": 535,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -73986,7 +74177,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 535,
+          "id": 536,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -74061,7 +74252,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 536,
+          "id": 537,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -74136,7 +74327,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 537,
+          "id": 538,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -74211,7 +74402,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 538,
+          "id": 539,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -74286,7 +74477,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 539,
+          "id": 540,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -74365,7 +74556,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 540,
+          "id": 541,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -74498,7 +74689,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 541,
+          "id": 542,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -74631,7 +74822,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 542,
+          "id": 543,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -74764,7 +74955,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 543,
+          "id": 544,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -74897,7 +75088,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 544,
+          "id": 545,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -75030,7 +75221,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 545,
+          "id": 546,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -75178,7 +75369,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 546,
+          "id": 547,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -75311,7 +75502,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 547,
+          "id": 548,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -75444,7 +75635,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 548,
+          "id": 549,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -75610,7 +75801,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 549,
+          "id": 550,
           "interval": null,
           "legend": {
             "show": false
@@ -75715,7 +75906,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 550,
+          "id": 551,
           "interval": null,
           "legend": {
             "show": false
@@ -75820,7 +76011,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 551,
+          "id": 552,
           "interval": null,
           "legend": {
             "show": false
@@ -75925,7 +76116,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 552,
+          "id": 553,
           "interval": null,
           "legend": {
             "show": false
@@ -76030,7 +76221,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 553,
+          "id": 554,
           "interval": null,
           "legend": {
             "show": false
@@ -76135,7 +76326,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 554,
+          "id": 555,
           "interval": null,
           "legend": {
             "show": false
@@ -76240,7 +76431,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 555,
+          "id": 556,
           "interval": null,
           "legend": {
             "show": false
@@ -76345,7 +76536,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 556,
+          "id": 557,
           "interval": null,
           "legend": {
             "show": false
@@ -76443,7 +76634,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 557,
+          "id": 558,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -76576,7 +76767,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 558,
+          "id": 559,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -76709,7 +76900,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 559,
+          "id": 560,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -76842,7 +77033,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 560,
+          "id": 561,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -76975,7 +77166,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 561,
+          "id": 562,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -77108,7 +77299,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 562,
+          "id": 563,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -77241,7 +77432,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 563,
+          "id": 564,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -77374,7 +77565,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 564,
+          "id": 565,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -77507,7 +77698,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 565,
+          "id": 566,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -77640,7 +77831,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 566,
+          "id": 567,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -77780,7 +77971,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 567,
+          "id": 568,
           "interval": null,
           "legend": {
             "show": false
@@ -77885,7 +78076,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 568,
+          "id": 569,
           "interval": null,
           "legend": {
             "show": false
@@ -77983,7 +78174,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 569,
+          "id": 570,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78116,7 +78307,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 570,
+          "id": 571,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78249,7 +78440,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 571,
+          "id": 572,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78382,7 +78573,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 572,
+          "id": 573,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78515,7 +78706,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 573,
+          "id": 574,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78648,7 +78839,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 574,
+          "id": 575,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78781,7 +78972,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 575,
+          "id": 576,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78914,7 +79105,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 576,
+          "id": 577,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79047,7 +79238,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 577,
+          "id": 578,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79180,7 +79371,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 578,
+          "id": 579,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79316,7 +79507,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 579,
+      "id": 580,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -79355,7 +79546,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 580,
+          "id": 581,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79503,7 +79694,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 581,
+          "id": 582,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79636,7 +79827,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 582,
+          "id": 583,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79769,7 +79960,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 583,
+          "id": 584,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79905,7 +80096,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 584,
+      "id": 585,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -79944,7 +80135,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 585,
+          "id": 586,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80077,7 +80268,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 586,
+          "id": 587,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80210,7 +80401,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 587,
+          "id": 588,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80343,7 +80534,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 588,
+          "id": 589,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80476,7 +80667,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 589,
+          "id": 590,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80609,7 +80800,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 590,
+          "id": 591,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80745,7 +80936,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 591,
+      "id": 592,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -80784,7 +80975,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 592,
+          "id": 593,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80917,7 +81108,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 593,
+          "id": 594,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81053,7 +81244,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 594,
+      "id": 595,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -81092,7 +81283,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 595,
+          "id": 596,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81293,7 +81484,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 596,
+          "id": 597,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81429,7 +81620,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 597,
+      "id": 598,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -81468,7 +81659,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 598,
+          "id": 599,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81601,7 +81792,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 599,
+          "id": 600,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81734,7 +81925,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 600,
+          "id": 601,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81867,7 +82058,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 601,
+          "id": 602,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82000,7 +82191,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 602,
+          "id": 603,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82148,7 +82339,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 603,
+          "id": 604,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82352,7 +82543,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 604,
+      "id": 605,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -82391,7 +82582,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 605,
+          "id": 606,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82524,7 +82715,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 606,
+          "id": 607,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82657,7 +82848,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 607,
+          "id": 608,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82790,7 +82981,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 608,
+          "id": 609,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82923,7 +83114,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 609,
+          "id": 610,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -83120,7 +83311,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 610,
+          "id": 611,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -83202,7 +83393,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 611,
+      "id": 612,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -83271,7 +83462,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 612,
+          "id": 613,
           "interval": null,
           "links": [],
           "mappings": [],
@@ -83388,7 +83579,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 613,
+          "id": 614,
           "interval": null,
           "links": [],
           "mappings": [],
@@ -83505,7 +83696,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 614,
+          "id": 615,
           "interval": null,
           "links": [],
           "mappings": [],
@@ -83622,7 +83813,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 615,
+          "id": 616,
           "interval": null,
           "links": [],
           "mappings": [],

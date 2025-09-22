@@ -64,11 +64,6 @@ lazy_static! {
         "Bucketed histogram of importer download bytes",
         exponential_buckets(16.0, 2.0, 20).unwrap()
     ).unwrap();
-    pub static ref IMPORTER_DOWNLOAD_FAILURE_COUNT: IntCounterVec = register_int_counter_vec!(
-        "tikv_import_download_failure_count",
-        "Total number of importer download failures",
-        &["type"]
-    ).unwrap();
     pub static ref IMPORTER_APPLY_BYTES: Histogram = register_histogram!(
         "tikv_import_apply_bytes",
         "Bucketed histogram of importer apply bytes",
