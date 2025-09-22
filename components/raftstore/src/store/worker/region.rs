@@ -1205,7 +1205,12 @@ pub(crate) mod tests {
             .register_apply_snapshot_observer(1, BoxApplySnapshotObserver::new(obs.clone()));
 
         let mut cf_opts = CfOptions::new();
+        // `ingest_maybe_slowdown_writes` uses `stop_writes_trigger` to check if ingest
+        // may cause a write stall. We also set `slowdown_writes_trigger` because
+        // RocksDB ignores `stop_writes_trigger` when it is smaller than
+        // `slowdown_writes_trigger`
         cf_opts.set_level_zero_slowdown_writes_trigger(5);
+        cf_opts.set_level_zero_stop_writes_trigger(5);
         cf_opts.set_disable_auto_compactions(true);
         let kv_cfs_opts = vec![
             (CF_DEFAULT, cf_opts.clone()),
