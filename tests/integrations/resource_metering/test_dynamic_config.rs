@@ -195,6 +195,9 @@ pub fn test_enable_network_io_collection() {
         enable_network_io_collection: false,
     });
     test_suite.start_receiver_at(port);
+    // Workload
+    // [req-1]
+    test_suite.setup_workload(vec!["req-1"]);    
 
     test_suite.cfg_enable_network_io_collection("true");
     test_suite.flush_receiver();
