@@ -31,7 +31,7 @@ fn error_to_status(e: Error) -> RpcStatus {
 }
 
 fn on_grpc_error(tag: &'static str, e: &GrpcError) {
-    error!("{} failed: {:?}", tag, e);
+    warn!("{} failed: {:?}", tag, e);
 }
 
 fn error_to_grpc_error(tag: &'static str, e: Error) -> GrpcError {
