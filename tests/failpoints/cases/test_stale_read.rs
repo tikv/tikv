@@ -468,7 +468,7 @@ fn test_read_after_peer_destroyed() {
     // Validate the async destroy progress.
     let check_state_on_raft_gc_log_tick = "check_state_on_raft_gc_log_tick";
     let (gc_tx, gc_rx) = mpsc::sync_channel(1);
-    fail::cfg_callback(destroy_peer_fp, move || {
+    fail::cfg_callback(check_state_on_raft_gc_log_tick, move || {
         gc_tx.send(check_state_on_raft_gc_log_tick).unwrap();
     })
     .unwrap();
