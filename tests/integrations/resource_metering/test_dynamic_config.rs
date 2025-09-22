@@ -198,6 +198,6 @@ pub fn test_enable_network_io_collection() {
 
     test_suite.cfg_enable_network_io_collection("true");
     test_suite.flush_receiver();
-    let res = test_suite.block_receive_one();
+    let _res = test_suite.block_receive_one();
     assert!(ENABLE_NETWORK_IO_COLLECTION.load(std::sync::atomic::Ordering::Relaxed));
 }
