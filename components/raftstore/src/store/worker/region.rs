@@ -693,7 +693,7 @@ where
             })
             .unwrap();
         if let Err(e) = self.delete_all_in_range(&ranges) {
-            error!("failed to cleanup stale range"; "err" => %e);
+            warn!("failed to cleanup stale range"; "err" => %e);
             return;
         }
         self.engine
