@@ -29,13 +29,7 @@ pub mod config;
 mod resource_limiter;
 pub use resource_limiter::ResourceLimiter;
 use tikv_util::worker::Worker;
-<<<<<<< HEAD
-use worker::{
-    GroupQuotaAdjustWorker, PriorityLimiterAdjustWorker, BACKGROUND_LIMIT_ADJUST_DURATION,
-};
-=======
-use worker::{BACKGROUND_LIMIT_ADJUST_DURATION, GroupQuotaAdjustWorker};
->>>>>>> c00d341c50 (resource_control: disable the buggy auto priority quota limiter (#18940))
+use worker::{GroupQuotaAdjustWorker, BACKGROUND_LIMIT_ADJUST_DURATION};
 
 mod metrics;
 pub mod worker;
