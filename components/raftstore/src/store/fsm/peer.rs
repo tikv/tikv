@@ -1153,6 +1153,11 @@ where
     }
 
     fn on_casual_msg(&mut self, msg: Box<CasualMessage<EK>>) {
+        if self.fsm.peer.pending_remove {
+            // It means that the peer will be asynchronously removed, it's no
+            // need to execute the consequentail CasualMessages.
+            return;
+        }
         match *msg {
             CasualMessage::SplitRegion {
                 region_epoch,
@@ -1535,6 +1540,15 @@ where
     }
 
     fn on_significant_msg(&mut self, msg: Box<SignificantMsg<EK::Snapshot>>) {
+        if self.fsm.peer.pending_remove
+            && !matches!(msg, box SignificantMsg::ReadyToDestroyPeer { .. })
+        {
+            // If this peer is marked for removal, skip handling other SignificantMsg
+            // variants, except for SignificantMsg::ReadyToDestroyPeer, which is
+            // responsible for executing the final cleanup steps of peer
+            // destruction.
+            return;
+        }
         match *msg {
             SignificantMsg::SnapshotStatus {
                 to_peer_id, status, ..
@@ -2510,7 +2524,8 @@ where
                     "peer_id" => self.fsm.peer_id(),
                     "res" => ?res,
                 );
-                if self.fsm.peer.wait_data {
+                if self.fsm.peer.wait_data || self.fsm.peer.pending_remove {
+                    // Extra: no needs to apply if the peer is already pending on removing.
                     return;
                 }
                 self.on_ready_result(&mut res.exec_res, &res.metrics);
