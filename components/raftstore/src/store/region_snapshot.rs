@@ -157,6 +157,10 @@ where
         }
     }
 
+    pub fn sequence_number(&self) -> u64 {
+        self.snap.sequence_number()
+    }
+
     #[inline]
     pub fn set_apply_index(&self, apply_index: u64) {
         self.apply_index.store(apply_index, Ordering::SeqCst);

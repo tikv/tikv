@@ -45,6 +45,7 @@ fn table_lookup_gen_data() -> (SnapshotStore<Arc<RocksSnapshot>>, Vec<Key>) {
         Default::default(),
         Default::default(),
         false,
+        false,
     );
 
     // Keys are given in order, and are far away from each other to simulate a
