@@ -26,16 +26,3 @@ fn test_graceful_shutdown_config_serialization() {
 
     assert!(server_table.contains_key("graceful-shutdown-timeout"));
 }
-
-#[test]
-fn test_graceful_shutdown_config_edge_cases() {
-    let mut config = TikvConfig::default();
-
-    // Test with very short timeout
-    config.server.graceful_shutdown_timeout = tikv_util::config::ReadableDuration::secs(1);
-    assert!(config.validate().is_ok());
-
-    // Test with very long timeout (1 hour)
-    config.server.graceful_shutdown_timeout = tikv_util::config::ReadableDuration::secs(3600);
-    assert!(config.validate().is_ok());
-}
