@@ -572,7 +572,10 @@ where
         // There may be put and delete requests after ingest request in the same fsm.
         // To guarantee the correct order, we must ingest the pending_sst first, and
         // then persist the kv write batch to engine.
+        let start_first = Instant::now();
+        let mut write_flag = 0;
         if !self.pending_ssts.is_empty() {
+            write_flag += 1;
             let tag = self.tag.clone();
             self.importer
                 .ingest(&self.pending_ssts, &self.engine)
@@ -584,7 +587,11 @@ where
                 });
             self.pending_ssts = vec![];
         }
+        let ingest_take = start_first.saturating_elapsed();
+        let mut data_size = 0;
+        let start = Instant::now();
         if !self.kv_wb_mut().is_empty() {
+            write_flag += 10;
             self.perf_context.start_observe();
             let mut write_opts = engine_traits::WriteOptions::new();
             write_opts.set_sync(need_sync);
@@ -608,7 +615,7 @@ where
                 .collect();
             self.perf_context.report_metrics(&trackers);
             self.sync_log_hint = false;
-            let data_size = self.kv_wb().data_size();
+            data_size = self.kv_wb().data_size();
             if data_size > APPLY_WB_SHRINK_SIZE {
                 // Control the memory usage for the WriteBatch.
                 self.kv_wb = self.engine.write_batch_with_cap(DEFAULT_APPLY_WB_SIZE);
@@ -620,7 +627,10 @@ where
             self.kv_wb_last_bytes = 0;
             self.kv_wb_last_keys = 0;
         }
+        let kv_take = start.saturating_elapsed();
+        let start = Instant::now();
         if !self.delete_ssts.is_empty() {
+            write_flag += 100;
             let tag = self.tag.clone();
             for sst in self.delete_ssts.drain(..) {
                 self.importer.delete(&sst.meta).unwrap_or_else(|e| {
@@ -628,6 +638,7 @@ where
                 });
             }
         }
+        let delete_take = start.saturating_elapsed();
         // Take the applied commands and their callback
         let ApplyCallbackBatch {
             cmd_batch,
@@ -654,6 +665,18 @@ where
             for res in self.apply_res.iter_mut().rev().take(res_count) {
                 res.write_seqno.push(seqno);
             }
+        }
+        let total_take = start_first.saturating_elapsed();
+        if total_take.as_secs() > 10 {
+            info!("slow write to db"; 
+                "write_flag"=>?write_flag, 
+                "ingest_take"=>?ingest_take, 
+                "kv_take"=>?kv_take, 
+                "delete_take"=>?delete_take,
+                "total_take"=>?total_take,
+                "data_size"=>data_size,
+                "priority"=>?self.priority,
+            );
         }
         (need_sync, seqno)
     }
