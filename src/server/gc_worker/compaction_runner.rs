@@ -292,7 +292,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
         let mut current_key = b"".to_vec();
         let mut regions_meeting_threshold = 0;
 
-        while let Some(region) = self.get_next_region_context(&current_key) {
+        while let Some(region) = self.get_next_region_context(&current_key)? {
             // Evaluate this region as a compaction candidate
             let evaluation_start = Instant::now();
             match self.evaluate_range_candidate(&region, gc_safe_point, config) {
@@ -487,7 +487,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
     }
 
     /// Gets the next region for compaction evaluation
-    fn get_next_region_context(&self, key: &[u8]) -> Option<Region> {
+    fn get_next_region_context(&self, key: &[u8]) -> Result<Option<Region>> {
         let (tx, rx) = mpsc::channel();
 
         let res = self.region_info_provider.seek_region(
@@ -503,17 +503,13 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
         );
 
         if let Err(e) = res {
-            error!("failed to get next region information: {:?}", e);
-            return None;
+            return Err(box_err!("failed to get next region information: {:?}", e));
         }
 
         match rx.recv() {
-            Ok(Some(region)) => Some(region),
-            Ok(None) => None,
-            Err(e) => {
-                error!("failed to receive region information: {:?}", e);
-                None
-            }
+            Ok(Some(region)) => Ok(Some(region)),
+            Ok(None) => Ok(None),
+            Err(e) => Err(box_err!("failed to receive region information: {:?}", e)),
         }
     }
 
