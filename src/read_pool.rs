@@ -1248,12 +1248,12 @@ mod tests {
 
         // Initial state: 8 threads
         assert_eq!(runner.cur_thread_count, 8);
-        print!("number of cpus: {}", num_cpus::get());
+        print!("number of cpus: {}", SysQuota::cpu_cores_quota());
 
         // Test 1: Set high CPU utilization using test helper
         runner
             .cpu_time_tracker
-            .set_test_cpu_utilization(0.8 * num_cpus::get() as f64);
+            .set_test_cpu_utilization(0.8 * SysQuota::cpu_cores_quota() as f64);
 
         let initial_threads = runner.cur_thread_count;
         runner.adjust_pool_size(); // Call the REAL adjust_pool_size method
