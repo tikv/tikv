@@ -1257,6 +1257,7 @@ impl StreamTaskHandler {
         metadata: &mut MetadataInfo,
         is_meta: bool,
     ) -> Result<()> {
+        let start = Instant::now();
         let mut data_files_open = Vec::new();
         let mut data_file_infos = Vec::new();
         let mut merged_file_info = DataFileGroup::new();
@@ -1318,8 +1319,9 @@ impl StreamTaskHandler {
 
         match ret {
             Ok(_) => {
-                debug!(
+                info!(
                     "backup stream flush success";
+                    "duration" => ?start.saturating_elapsed(),
                     "storage_file" => ?filepath,
                     "est_len" => ?stat_length,
                 );
@@ -1453,9 +1455,10 @@ impl StreamTaskHandler {
                 .await?;
 
             fail::fail_point!("after_moving_to_flushing_files");
+            let generate_meta_dur = sw.lap();
             crate::metrics::FLUSH_DURATION
                 .with_label_values(&["generate_metadata"])
-                .observe(sw.lap().as_secs_f64());
+                .observe(generate_meta_dur.as_secs_f64());
 
             // flush log file to storage.
             self.flush_log(&mut backup_metadata).await?;
@@ -1478,15 +1481,17 @@ impl StreamTaskHandler {
             // flush backup metadata to external storage.
             self.flush_backup_metadata(backup_metadata, cx.flush_ts)
                 .await?;
+            let save_files_dur = sw.lap();
             crate::metrics::FLUSH_DURATION
                 .with_label_values(&["save_files"])
-                .observe(sw.lap().as_secs_f64());
+                .observe(save_files_dur.as_secs_f64());
 
             // clear flushing files
             self.clear_flushing_files().await;
+            let remove_tmp_dur = sw.lap();
             crate::metrics::FLUSH_DURATION
                 .with_label_values(&["clear_temp_files"])
-                .observe(sw.lap().as_secs_f64());
+                .observe(remove_tmp_dur.as_secs_f64());
             file_size_vec
                 .iter()
                 .for_each(|(size, _)| crate::metrics::FLUSH_FILE_SIZE.observe(*size as _));
@@ -1495,6 +1500,9 @@ impl StreamTaskHandler {
                 "files" => %file_size_vec.iter().map(|(_, v)| v).sum::<usize>(),
                 "total_size" => %file_size_vec.iter().map(|(v, _)| v).sum::<u64>(), // the size of the merged files after compressed
                 "take" => ?begin.saturating_elapsed(),
+                "generate_meta_takes" => ?generate_meta_dur,
+                "save_files_takes" => ?save_files_dur,
+                "remove_tmp_takes" => ?remove_tmp_dur,
             );
             Ok(rts)
         }
