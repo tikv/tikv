@@ -425,7 +425,7 @@ impl<E: KvEngine> SstImporter<E> {
                     "download failed";
                     "meta" => ?meta,
                     "name" => name,
-                    "err" => ?e,
+                    "err" => %e,
                 );
                 Err(e)
             }
