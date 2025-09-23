@@ -1253,7 +1253,7 @@ mod tests {
         // Test 1: Set high CPU utilization using test helper
         runner
             .cpu_time_tracker
-            .set_test_cpu_utilization(0.8 * SysQuota::cpu_cores_quota() as f64);
+            .set_test_cpu_utilization(0.8 * SysQuota::cpu_cores_quota());
 
         let initial_threads = runner.cur_thread_count;
         runner.adjust_pool_size(); // Call the REAL adjust_pool_size method
