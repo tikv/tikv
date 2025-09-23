@@ -549,7 +549,7 @@ struct ReadPoolCpuTimeTracker {
     // RFC 0114 specific tracking
     prev_total_cpu_time: u64,
     prev_cpu_check_time: Instant,
-    prev_cpu_utilization: f64,
+    cpu_usage_per_second: f64,
 }
 
 impl ReadPoolCpuTimeTracker {
@@ -567,7 +567,7 @@ impl ReadPoolCpuTimeTracker {
             prev_thread_usage_per_sec: 0.0,
             prev_total_cpu_time: 0,
             prev_cpu_check_time: now,
-            prev_cpu_utilization: 0.0,
+            cpu_usage_per_second: 0.0,
         }
     }
 
@@ -578,8 +578,8 @@ impl ReadPoolCpuTimeTracker {
         #[cfg(test)]
         {
             // In test mode, return the manually set value if available
-            if self.prev_cpu_utilization > 0.0 {
-                return self.prev_cpu_utilization;
+            if self.cpu_usage_per_second > 0.0 {
+                return self.cpu_usage_per_second;
             }
         }
         use tikv_util::sys::thread::{full_thread_stat, ticks_per_second};
@@ -589,7 +589,7 @@ impl ReadPoolCpuTimeTracker {
 
         // Minimum duration check to avoid noise - if too soon, return prev value
         if duration < Duration::from_millis(500) {
-            return self.prev_cpu_utilization;
+            return self.cpu_usage_per_second;
         }
 
         let mut current_total_cpu_time = 0i64;
@@ -614,14 +614,14 @@ impl ReadPoolCpuTimeTracker {
             // Convert CPU time to seconds using ticks_per_second
             let cpu_seconds = (cpu_time_diff as f64) / (ticks_per_second() as f64);
             let wall_seconds = duration.as_secs_f64();
-            cpu_seconds / (wall_seconds * num_cpus::get() as f64)
+            cpu_seconds / (wall_seconds as f64)
         } else {
             0.0
         };
 
         self.prev_total_cpu_time = current_total_cpu_time as u64;
         self.prev_cpu_check_time = check_time;
-        self.prev_cpu_utilization = cpu_utilization;
+        self.cpu_usage_per_second = cpu_utilization;
 
         // Return CPU usage as fraction of total available CPU cores
         cpu_utilization
@@ -629,7 +629,7 @@ impl ReadPoolCpuTimeTracker {
 
     #[cfg(test)]
     fn set_test_cpu_utilization(&mut self, cpu: f64) {
-        self.prev_cpu_utilization = cpu;
+        self.cpu_usage_per_second = cpu;
     }
 
     /// Baseline thread usage measurement using yatp metrics (includes off-CPU
@@ -1253,7 +1253,7 @@ mod tests {
         // Test 1: Set high CPU utilization using test helper
         runner
             .cpu_time_tracker
-            .set_test_cpu_utilization(0.8);
+            .set_test_cpu_utilization(0.8 * num_cpus::get() as f64);
 
         let initial_threads = runner.cur_thread_count;
         runner.adjust_pool_size(); // Call the REAL adjust_pool_size method
