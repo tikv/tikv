@@ -614,7 +614,7 @@ impl ReadPoolCpuTimeTracker {
             // Convert CPU time to seconds using ticks_per_second
             let cpu_seconds = (cpu_time_diff as f64) / (ticks_per_second() as f64);
             let wall_seconds = duration.as_secs_f64();
-            cpu_seconds / (wall_seconds as f64)
+            cpu_seconds / wall_seconds
         } else {
             0.0
         };
