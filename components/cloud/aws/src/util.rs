@@ -23,8 +23,6 @@ use tikv_util::{
     warn,
 };
 
-const READ_BUF_SIZE: usize = 1024 * 1024 * 2;
-
 const DEFAULT_REGION: &str = "us-east-1";
 
 pub(crate) type SdkError<E, R = HttpResponse> =
@@ -52,8 +50,7 @@ impl RetryError for CredentialsErrorWrapper {
 }
 
 pub fn new_http_client() -> SharedHttpClient {
-    let mut hyper_builder = Client::builder();
-    hyper_builder.http1_read_buf_exact_size(READ_BUF_SIZE);
+    let hyper_builder = Client::builder();
 
     HyperClientBuilder::new()
         .hyper_builder(hyper_builder)

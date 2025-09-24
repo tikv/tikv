@@ -203,8 +203,8 @@ zipf = "6.1.0"
 # TODO: remove this when new raft-rs is published.
 raft = { git = "https://github.com/tikv/raft-rs", branch = "master" }
 raft-proto = { git = "https://github.com/tikv/raft-rs", branch = "master" }
-protobuf = { git = "https://github.com/pingcap/rust-protobuf", branch = "v2.8" }
-protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", branch = "v2.8" }
+protobuf = { git = "https://github.com/pingcap/rust-protobuf", rev = "71fcd1df3cad6b83176448533a6f81276b8595ee" }
+protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", rev = "71fcd1df3cad6b83176448533a6f81276b8595ee" }
 
 snappy-sys = { git = "https://github.com/tikv/rust-snappy.git", branch = "static-link" }
 # NOTICE: use openssl for signature to support fips 140
@@ -375,7 +375,7 @@ grpcio-health = { version = "0.10.4", default-features = false, features = [
   "protobuf-codec",
 ] }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { git = "https://github.com/leavrth/kvproto.git", branch = "brpb_with_bytes" }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 tokio-executor = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }

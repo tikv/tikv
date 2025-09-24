@@ -2,31 +2,33 @@
 use std::{
     collections::{BTreeSet, HashMap, HashSet, VecDeque, hash_map::Entry},
     future::Future,
-    ops::Not,
+    ops::{Deref, Not},
     path::Path,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll, ready},
 };
 
+use cloud::blob::read_to_end;
 use derive_more::Display;
 use external_storage::{BlobObject, ExternalStorage, UnpinReader};
 use futures::{
     future::{FusedFuture, FutureExt, TryFutureExt},
-    io::{AsyncReadExt, Cursor},
+    io::Cursor,
     stream::{Fuse, FusedStream, StreamExt, TryStreamExt},
 };
 use kvproto::{
     brpb::{self, FileType, MetaEdit, Migration},
+    brpb2,
     metapb::RegionEpoch,
 };
 use prometheus::core::{Atomic, AtomicU64};
-use protobuf::ProtobufEnum;
+use protobuf::{Chars, ProtobufEnum};
 use tikv_util::{
     info, retry_expr,
     stream::{JustRetry, RetryExt},
-    time::Instant,
 };
+use tokio::time::Instant;
 use tokio_stream::Stream;
 use tracing::{Span, span::Entered};
 use tracing_active_tree::frame;
@@ -51,28 +53,27 @@ pub struct MetaFile {
     pub max_ts: u64,
 }
 
-impl From<brpb::Metadata> for MetaFile {
-    fn from(value: brpb::Metadata) -> Self {
+impl From<brpb2::Metadata> for MetaFile {
+    fn from(value: brpb2::Metadata) -> Self {
         Self::from_file(Arc::from(":memory:"), value)
     }
 }
 
 impl MetaFile {
-    pub fn from_file(name: Arc<str>, mut meta_file: brpb::Metadata) -> Self {
+    pub fn from_file(name: Arc<str>, mut meta_file: brpb2::Metadata) -> Self {
         let mut log_files = vec![];
         let min_ts = meta_file.min_ts;
         let max_ts = meta_file.max_ts;
 
         // NOTE: perhaps we also need consider non-grouped backup meta here?
         for mut group in meta_file.take_file_groups().into_iter() {
-            let name = Arc::from(group.path.clone().into_boxed_str());
             let mut g = PhysicalLogFile {
                 size: group.length,
-                name: Arc::clone(&name),
-                files: vec![],
+                name: group.path.clone(),
+                files: Vec::with_capacity(group.data_files_info.len()),
             };
             for log_file in group.take_data_files_info().into_iter() {
-                g.files.push(LogFile::from_pb(Arc::clone(&name), log_file))
+                g.files.push(LogFile::from_pb(group.path.clone(), log_file))
             }
             log_files.push(g);
         }
@@ -98,7 +99,7 @@ impl MetaFile {
 #[derive(Debug, PartialEq, Eq)]
 pub struct PhysicalLogFile {
     pub size: u64,
-    pub name: Arc<str>,
+    pub name: Chars,
     pub files: Vec<LogFile>,
 }
 
@@ -142,17 +143,17 @@ pub struct LogFile {
     pub min_ts: u64,
     pub max_ts: u64,
     pub min_start_ts: u64,
-    pub min_key: Arc<[u8]>,
-    pub max_key: Arc<[u8]>,
-    pub region_start_key: Option<Arc<[u8]>>,
-    pub region_end_key: Option<Arc<[u8]>>,
+    pub min_key: bytes::Bytes,
+    pub max_key: bytes::Bytes,
+    pub region_start_key: Option<bytes::Bytes>,
+    pub region_end_key: Option<bytes::Bytes>,
     pub region_epoches: Option<Arc<[Epoch]>>,
     pub is_meta: bool,
     pub ty: FileType,
     pub compression: brpb::CompressionType,
     pub table_id: i64,
     pub resolved_ts: u64,
-    pub sha256: Arc<[u8]>,
+    pub sha256: bytes::Bytes,
 }
 
 impl LogFile {
@@ -167,8 +168,8 @@ impl LogFile {
                 self.region_end_key.iter().flat_map(|ek| {
                     epoches.iter().map(|v| EpochHint {
                         region_epoch: *v,
-                        start_key: Arc::clone(sk),
-                        end_key: Arc::clone(ek),
+                        start_key: sk.clone(),
+                        end_key: ek.clone(),
                     })
                 })
             })
@@ -181,7 +182,7 @@ impl LogFile {
 #[derive(Clone, Display, Eq, PartialEq, Hash)]
 #[display(fmt = "{}@{}+{}", name, offset, length)]
 pub struct LogFileId {
-    pub name: Arc<str>,
+    pub name: Chars,
     pub offset: u64,
     pub length: u64,
 }
@@ -197,8 +198,6 @@ impl std::fmt::Debug for LogFileId {
 
 /// Extra config for loading metadata.
 pub struct LoadFromExt<'a> {
-    /// Max number of concurrent fetching from remote tasks.
-    pub max_concurrent_fetch: usize,
     /// The [`tracing::Span`] of loading remote tasks.
     /// This span will be entered when fetching the remote tasks.
     /// This span will be closed when all metadata loaded.
@@ -206,6 +205,10 @@ pub struct LoadFromExt<'a> {
     /// The prefix of metadata in the external storage.
     /// By default it is `v1/backupmeta`.
     pub meta_prefix: &'a str,
+    /// Max number of running tasks to fetch metadatas
+    pub prefetch_running_count: usize,
+    /// Max number of spawning tasks to fetch metadatas
+    pub prefetch_buffer_count: usize,
 }
 
 impl LoadFromExt<'_> {
@@ -217,9 +220,10 @@ impl LoadFromExt<'_> {
 impl Default for LoadFromExt<'_> {
     fn default() -> Self {
         Self {
-            max_concurrent_fetch: 16,
             loading_content_span: None,
             meta_prefix: METADATA_PREFIX,
+            prefetch_running_count: 128,
+            prefetch_buffer_count: 1024,
         }
     }
 }
@@ -243,6 +247,8 @@ pub struct StreamMetaStorage<'a> {
     files: Fuse<Pin<Box<dyn Stream<Item = std::io::Result<BlobObject>> + 'a>>>,
 
     skip_map: MetaEditFilters,
+
+    running_fetch_tasks: usize,
 }
 
 /// A future that stores its result for future use when completed.
@@ -312,12 +318,16 @@ impl Stream for StreamMetaStorage<'_> {
 
         let first_result = self.poll_first_prefetch(cx);
         match first_result {
-            Poll::Ready(item) => Poll::Ready(Some(item.map(|mut meta| {
-                let sm = &self.skip_map;
-                let skipped = sm.apply_to(&mut meta);
-                self.stat.log_filtered_out_by_migration += skipped as u64;
-                meta
-            }))),
+            Poll::Ready(item) => {
+                let result = item.map(|mut meta| {
+                    let sm = &self.skip_map;
+                    let skipped = sm.apply_to(&mut meta);
+                    self.stat.log_filtered_out_by_migration += skipped as u64;
+                    meta
+                });
+                let _ = self.poll_fetch_or_finish(cx);
+                Poll::Ready(Some(result))
+            }
             Poll::Pending => self.poll_fetch_or_finish(cx),
         }
     }
@@ -328,7 +338,9 @@ impl<'a> StreamMetaStorage<'a> {
     fn poll_fetch_or_finish(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<MetaFile>>> {
         loop {
             // No more space for prefetching.
-            if self.prefetch.len() >= self.ext.max_concurrent_fetch {
+            if self.running_fetch_tasks >= self.ext.prefetch_running_count
+                || self.prefetch.len() >= self.ext.prefetch_buffer_count
+            {
                 return Poll::Pending;
             }
             if self.files.is_terminated() {
@@ -363,6 +375,7 @@ impl<'a> StreamMetaStorage<'a> {
                     }
                     self.stat.prefetch_task_emitted += 1;
                     self.prefetch.push_back(fut);
+                    self.running_fetch_tasks += 1;
                 }
                 Poll::Ready(None) => continue,
                 Poll::Pending => return Poll::Pending,
@@ -371,9 +384,11 @@ impl<'a> StreamMetaStorage<'a> {
     }
 
     fn poll_first_prefetch(&mut self, cx: &mut Context<'_>) -> Poll<Result<MetaFile>> {
+        self.running_fetch_tasks = 0;
         for fut in &mut self.prefetch {
             if !fut.is_terminated() {
                 let _ = fut.poll_unpin(cx);
+                self.running_fetch_tasks += 1;
             }
         }
         if self.prefetch[0].is_terminated() {
@@ -413,6 +428,7 @@ impl<'a> StreamMetaStorage<'a> {
             ext,
             stat: LoadMetaStatistic::default(),
             skip_map,
+            running_fetch_tasks: 0,
         })
     }
 
@@ -457,7 +473,7 @@ impl MetaFile {
         let loading_file = tikv_util::stream::retry_all_ext(
             || async {
                 let mut content = vec![];
-                let n = s.read(&blob.key).read_to_end(&mut content).await?;
+                let n = read_to_end(s.read(&blob.key), &mut content).await?;
                 std::io::Result::Ok((n, content))
             },
             ext,
@@ -465,10 +481,10 @@ impl MetaFile {
         let (n, content) = frame!(loading_file)
             .await
             .map_err(|err| Error::from(err).message(format_args!("reading {}", blob.key)))?;
-        stat.physical_bytes_loaded += n as u64;
+        stat.physical_bytes_loaded += n;
         stat.error_during_downloading += error_cnt2.get();
 
-        let mut meta_file = kvproto::brpb::Metadata::new();
+        let mut meta_file = kvproto::brpb2::Metadata::new();
         meta_file.merge_from_bytes(&content)?;
         let name = Arc::from(blob.key.into_boxed_str());
         let result = Self::from_file(name, meta_file);
@@ -479,14 +495,14 @@ impl MetaFile {
             .iter()
             .map(|v| v.files.len() as u64)
             .sum::<u64>();
-        stat.load_file_duration += begin.saturating_elapsed();
+        stat.load_file_duration += begin.elapsed();
 
         Ok((result, stat))
     }
 }
 
 impl LogFile {
-    fn from_pb(host_file: Arc<str>, mut pb_info: brpb::DataFileInfo) -> Self {
+    fn from_pb(host_file: Chars, mut pb_info: brpb2::DataFileInfo) -> Self {
         let region_epoches = pb_info.region_epoch.is_empty().not().then(|| {
             pb_info
                 .region_epoch
@@ -506,24 +522,24 @@ impl LogFile {
             cf: util::cf_name(&pb_info.cf),
             max_ts: pb_info.max_ts,
             min_ts: pb_info.min_ts,
-            max_key: Arc::from(pb_info.take_end_key().into_boxed_slice()),
-            min_key: Arc::from(pb_info.take_start_key().into_boxed_slice()),
+            max_key: pb_info.take_end_key(),
+            min_key: pb_info.take_start_key(),
             region_start_key: pb_info
                 .region_epoch
                 .is_empty()
                 .not()
-                .then(|| Arc::from(pb_info.take_region_start_key().into_boxed_slice())),
+                .then(|| pb_info.take_region_start_key()),
             region_end_key: pb_info
                 .region_epoch
                 .is_empty()
                 .not()
-                .then(|| Arc::from(pb_info.take_region_end_key().into_boxed_slice())),
+                .then(|| pb_info.take_region_end_key()),
             is_meta: pb_info.is_meta,
             min_start_ts: pb_info.min_begin_ts_in_default_cf,
             ty: pb_info.r_type,
             crc64xor: pb_info.crc64xor,
             number_of_entries: pb_info.number_of_entries,
-            sha256: Arc::from(pb_info.take_sha256().into_boxed_slice()),
+            sha256: pb_info.take_sha256(),
             resolved_ts: pb_info.resolved_ts,
             table_id: pb_info.table_id,
             compression: pb_info.compression_type,
@@ -613,7 +629,7 @@ impl MetaEditFilters {
     fn should_fully_skip(&self, meta: &str) -> bool {
         self.0
             .get(meta)
-            .map(|v| v.all_data_files_compacted || v.destructed_self)
+            .map(|v| v.no_data_files_to_be_compacted || v.destructed_self)
             .unwrap_or(false)
     }
 
@@ -643,7 +659,7 @@ struct MetaEditFilter {
     // FileName -> Offset
     segments: HashMap<String, BTreeSet<u64>>,
     destructed_self: bool,
-    all_data_files_compacted: bool,
+    no_data_files_to_be_compacted: bool,
 }
 
 impl MetaEditFilter {
@@ -652,7 +668,7 @@ impl MetaEditFilter {
             full_files: Default::default(),
             segments: Default::default(),
             destructed_self: em.destruct_self,
-            all_data_files_compacted: em.all_data_files_compacted,
+            no_data_files_to_be_compacted: em.all_data_files_compacted,
         };
         this.full_files
             .extend(em.take_delete_physical_files().into_iter());
@@ -673,9 +689,9 @@ impl MetaEditFilter {
 
     fn merge_from_meta_edit(&mut self, mut em: MetaEdit) {
         self.destructed_self = self.destructed_self || em.destruct_self;
-        self.all_data_files_compacted =
-            self.all_data_files_compacted || em.all_data_files_compacted;
-        if self.destructed_self || self.all_data_files_compacted {
+        self.no_data_files_to_be_compacted =
+            self.no_data_files_to_be_compacted || em.all_data_files_compacted;
+        if self.destructed_self || self.no_data_files_to_be_compacted {
             // NOTE: the metakv files will be filtered out in
             // `SubcompactionCollector::add_new_file`. Therefore, the
             // self.segments and self.full_files can be clear here.
@@ -703,12 +719,12 @@ impl MetaEditFilter {
     }
 
     fn should_retain(&self, file: &LogFileId) -> bool {
-        if self.full_files.contains(file.name.as_ref()) {
+        if self.full_files.contains(file.name.deref()) {
             return false;
         }
         if self
             .segments
-            .get(file.name.as_ref())
+            .get(file.name.deref())
             .is_some_and(|map| map.contains(&file.offset))
         {
             return false;
@@ -737,10 +753,7 @@ impl<'a> MigrationStorageWrapper<'a> {
             .err_into()
             .and_then(|item| async move {
                 let mut content = vec![];
-                self.storage
-                    .read(&item.key)
-                    .read_to_end(&mut content)
-                    .await?;
+                read_to_end(self.storage.read(&item.key), &mut content).await?;
                 protobuf::parse_from_bytes(&content).adapt_err()
             })
             .try_collect()
@@ -843,6 +856,7 @@ mod test {
     use external_storage::ExternalStorage;
     use futures::stream::TryStreamExt;
     use kvproto::brpb::{DeleteSpansOfFile, MetaEdit, Migration, Span};
+    use protobuf::Chars;
 
     use super::{LoadFromExt, MetaFile, StreamMetaStorage};
     use crate::{
@@ -895,7 +909,7 @@ mod test {
         let st = &st;
         let test_for_concurrency = |n| async move {
             let mut ext = LoadFromExt::default();
-            ext.max_concurrent_fetch = n;
+            ext.prefetch_running_count = n;
             let storage = st.storage().clone() as Arc<dyn ExternalStorage>;
             let sst = StreamMetaStorage::load_from_ext(&storage, ext)
                 .await
@@ -954,7 +968,7 @@ mod test {
         assert!(!mefs.should_fully_skip(&meta_path(1)));
         let f1 = mefs.0.get(&meta_path(1)).unwrap();
         let log_file_id = |name: String, offset: u64| LogFileId {
-            name: std::sync::Arc::from(name.into_boxed_str()),
+            name: Chars::from(name),
             offset,
             length: offset + 1,
         };
