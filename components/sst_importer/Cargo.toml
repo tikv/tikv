@@ -32,6 +32,7 @@ engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
 error_code = { workspace = true }
 external_storage ={ workspace = true }
+fail = "0.5"
 file_system = { workspace = true }
 futures = { version = "0.3", features = ["thread-pool"] }
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
