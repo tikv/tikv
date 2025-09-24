@@ -488,6 +488,10 @@ impl<E: KvEngine> SstImporter<E> {
         backend: &StorageBackend,
         cache_id: &str,
     ) -> Result<Arc<dyn ExternalStorage>> {
+        // The `DashMap` locks the entry to ensure that only one thread loads the
+        // credentials at a time. However, if the thread gets blocked during the
+        // loading process, it can lead to a deadlock. To avoid this, blocking
+        // operations must be performed outside of the `DashMap`.
         tokio::task::block_in_place(|| self.external_storage_or_cache_internal(backend, cache_id))
     }
 
@@ -529,10 +533,6 @@ impl<E: KvEngine> SstImporter<E> {
             })?;
         }
 
-        // The `DashMap` locks the entry to ensure that only one thread loads the
-        // credentials at a time. However, if the thread gets blocked during the
-        // loading process, it can lead to a deadlock. To avoid this, blocking
-        // operations must be performed outside of the `DashMap`.
         let ext_storage = self.external_storage_or_cache(backend, cache_key)?;
         let ext_storage = self.auto_encrypt_local_file_if_needed(ext_storage);
 
@@ -3984,8 +3984,13 @@ mod tests {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn test_download_stuck() {
+    #[test]
+    fn test_download_stuck() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(4)
+            .enable_all()
+            .build()
+            .unwrap();
         let importer = SstImporter::<TestEngine>::new(
             &Config::default(),
             tempfile::tempdir().unwrap(),
@@ -3999,16 +4004,18 @@ mod tests {
         let mut joins = Vec::new();
         for _ in 0..10 {
             let importer_cloned = importer.clone();
-            let j = tokio::spawn(async move {
+            let j = rt.spawn(async move {
                 let mut backend = StorageBackend::new();
                 backend.set_noop(Default::default());
                 importer_cloned.external_storage_or_cache(&backend, "test")
             });
             joins.push(j);
         }
-        for j in joins {
-            let _ = j.await.unwrap();
-        }
+        rt.block_on(async {
+            for j in joins {
+                let _ = j.await.unwrap();
+            }
+        });
         fail::remove("create_storage_slowly");
     }
 }
