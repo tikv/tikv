@@ -546,7 +546,6 @@ struct ReadPoolCpuTimeTracker {
     prev_total_task_handling_time_us: u64,
     prev_thread_check_time: Instant,
     prev_thread_usage_per_sec: f64,
-    // RFC 0114 specific tracking
     prev_total_cpu_time: u64,
     prev_cpu_check_time: Instant,
     cpu_usage_per_second: f64,
@@ -718,18 +717,7 @@ impl ReadPoolConfigRunner {
         }
     }
 
-    /// Adjust pool size using base scaling algorithm enhanced with RFC 0114 CPU
-    /// threshold constraints.
-    ///
-    /// When cpu_threshold > 0, the RFC 0114 constraints are applied ON TOP OF
-    /// the base algorithm:
-    /// - Forces scale down when CPU usage exceeds threshold (with 10% leeway)
-    /// - Prevents scale up when it would exceed CPU threshold
-    /// - Otherwise uses base scaling conditions (80%/70% CPU, task queue depth,
-    ///   process CPU)
-    ///
-    /// When cpu_threshold = 0, uses pure base algorithm for backward
-    /// compatibility.
+    // Adjust pool size using based on thread utilization or cpu utilization.
     fn adjust_pool_size(&mut self) {
         if !self.auto_adjust {
             return;
@@ -745,23 +733,26 @@ impl ReadPoolConfigRunner {
                 return;
             }
         };
-        let cpu_quota = SysQuota::cpu_cores_quota();
+        let target_cpu_cores = if self.cpu_threshold > 0.0 {
+            self.cpu_threshold * SysQuota::cpu_cores_quota()
+        } else {
+            SysQuota::cpu_cores_quota()
+        };
 
         // Base scaling conditions (process CPU, thread usage, task queue depth)
-        let base_scale_out = self.cur_thread_count < self.max_thread_count
+        let busy_thread_scale_out = self.cur_thread_count < self.max_thread_count
             && process_cpu * (self.cur_thread_count as f64 + 1.0) / (self.cur_thread_count as f64)
-                < cpu_quota
+                < target_cpu_cores
             && thread_usage > self.cur_thread_count as f64 * READ_POOL_THREAD_HIGH_THRESHOLD
             && running_tasks > self.cur_thread_count as i64 * RUNNING_TASKS_PER_THREAD_THRESHOLD;
 
-        let base_scale_in = self.cur_thread_count > self.core_thread_count
+        let busy_thread_scale_in = self.cur_thread_count > self.core_thread_count
             && thread_usage < (self.cur_thread_count - 1) as f64 * READ_POOL_THREAD_LOW_THRESHOLD
             && running_tasks < self.cur_thread_count as i64 * RUNNING_TASKS_PER_THREAD_THRESHOLD;
 
         let new_thread_count = if self.cpu_threshold > 0.0 {
-            // Apply CPU threshold constraints on top of base algorithm
+            // CPU threshold takes precedence over busy thread scaling conditions
             const LEEWAY: f64 = 0.1; // 10% leeway
-            let target_cpu_cores = self.cpu_threshold * cpu_quota;
 
             // Force scale down if CPU exceeds threshold (with leeway)
             if read_pool_cpu > (LEEWAY + 1.0) * target_cpu_cores {
@@ -774,16 +765,15 @@ impl ReadPoolConfigRunner {
                 && read_pool_cpu < (1.0 - LEEWAY) * target_cpu_cores
             {
                 self.cur_thread_count + 1
-            } else if base_scale_in {
+            } else if busy_thread_scale_in {
                 self.cur_thread_count - 1
             } else {
                 self.cur_thread_count
             }
         } else {
-            // Base algorithm when CPU threshold is disabled (0.0)
-            if base_scale_out {
+            if busy_thread_scale_out {
                 self.cur_thread_count + 1
-            } else if base_scale_in {
+            } else if busy_thread_scale_in {
                 self.cur_thread_count - 1
             } else {
                 self.cur_thread_count
@@ -1249,7 +1239,6 @@ mod tests {
         };
 
         assert_eq!(runner.cur_thread_count, min_thread_count);
-        print!("number of cpus: {}", SysQuota::cpu_cores_quota());
 
         // Test 1: Set high CPU utilization using test helper
         runner
