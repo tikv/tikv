@@ -2490,7 +2490,7 @@ pub struct UnifiedReadPoolConfig {
     pub max_tasks_per_worker: usize,
     pub auto_adjust_pool_size: bool,
     /// Maximum CPU usage percentage for the unified read pool (0.0-1.0).
-    /// When set to 0, uses the original scaling algorithm only.
+    /// When set to 0, uses the busy thread scaling algorithm only.
     /// When > 0, CPU threshold constraints ON TOP OF the busy thread scaling
     /// algorithm:
     /// - Forces scale down when CPU exceeds threshold + 10% leeway

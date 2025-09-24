@@ -571,8 +571,7 @@ impl ReadPoolCpuTimeTracker {
     }
 
     /// Get actual CPU usage of unified read pool threads using kernel thread
-    /// stats. Returns CPU utilization as fraction of total available CPU
-    /// cores.
+    /// stats.
     fn get_unified_read_pool_cpu(&mut self) -> f64 {
         #[cfg(test)]
         {
@@ -622,7 +621,6 @@ impl ReadPoolCpuTimeTracker {
         self.prev_cpu_check_time = check_time;
         self.cpu_usage_per_second = cpu_utilization;
 
-        // Return CPU usage as fraction of total available CPU cores
         cpu_utilization
     }
 
@@ -750,34 +748,27 @@ impl ReadPoolConfigRunner {
             && thread_usage < (self.cur_thread_count - 1) as f64 * READ_POOL_THREAD_LOW_THRESHOLD
             && running_tasks < self.cur_thread_count as i64 * RUNNING_TASKS_PER_THREAD_THRESHOLD;
 
-        let new_thread_count = if self.cpu_threshold > 0.0 {
-            // CPU threshold takes precedence over busy thread scaling conditions
-            const LEEWAY: f64 = 0.1; // 10% leeway
+        let leeway = 0.1;
+        let busy_cpu_scale_in =
+            self.cpu_threshold > 0.0 && read_pool_cpu > (leeway + 1.0) * target_cpu_cores;
+        let busy_cpu_scale_out =
+            self.cpu_threshold > 0.0 && read_pool_cpu < (1.0 - leeway) * target_cpu_cores;
 
-            // Force scale down if CPU exceeds threshold (with leeway)
-            if read_pool_cpu > (LEEWAY + 1.0) * target_cpu_cores {
-                std::cmp::max(
-                    ((self.cur_thread_count as f64) * target_cpu_cores / read_pool_cpu).floor()
-                        as usize,
-                    (target_cpu_cores).floor() as usize,
-                )
-            } else if self.cur_thread_count < self.core_thread_count
-                && read_pool_cpu < (1.0 - LEEWAY) * target_cpu_cores
-            {
-                self.cur_thread_count + 1
-            } else if busy_thread_scale_in {
-                self.cur_thread_count - 1
-            } else {
-                self.cur_thread_count
-            }
+        let new_thread_count = if busy_cpu_scale_in {
+            // CPU threshold takes precedence over busy thread scaling conditions
+            std::cmp::max(
+                ((self.cur_thread_count as f64) * target_cpu_cores / read_pool_cpu).floor()
+                    as usize,
+                (target_cpu_cores).floor() as usize,
+            )
+        } else if busy_cpu_scale_out {
+            self.cur_thread_count + 1
+        } else if busy_thread_scale_in {
+            self.cur_thread_count - 1
+        } else if busy_thread_scale_out {
+            self.cur_thread_count + 1
         } else {
-            if busy_thread_scale_out {
-                self.cur_thread_count + 1
-            } else if busy_thread_scale_in {
-                self.cur_thread_count - 1
-            } else {
-                self.cur_thread_count
-            }
+            self.cur_thread_count
         };
 
         if new_thread_count != self.cur_thread_count {
