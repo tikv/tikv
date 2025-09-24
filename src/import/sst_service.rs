@@ -497,11 +497,13 @@ impl<E: Engine> ImportSstService<E> {
             metas.push(req.take_meta());
             rules.push(req.take_rewrite_rule());
         }
-        let ext_storage = importer.auto_encrypt_local_file_if_needed(
-            tokio::task::block_in_place(|| {
-                importer.external_storage_or_cache(req.get_storage_backend(), req.get_storage_cache_id())
-            })?,
-        );
+        let ext_storage =
+            importer.auto_encrypt_local_file_if_needed(tokio::task::block_in_place(|| {
+                importer.external_storage_or_cache(
+                    req.get_storage_backend(),
+                    req.get_storage_cache_id(),
+                )
+            })?);
 
         let mut inflight_futures = VecDeque::new();
 
