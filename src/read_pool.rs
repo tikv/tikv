@@ -1210,9 +1210,11 @@ mod tests {
     fn test_cpu_threshold_scale_down_and_up() {
         use tikv_util::worker::Worker;
 
+        let min_thread_count = (0.8 * SysQuota::cpu_cores_quota()) as usize;
+        let max_thread_count = SysQuota::cpu_cores_quota() as usize;
         let config = UnifiedReadPoolConfig {
-            min_thread_count: 2,
-            max_thread_count: 8,
+            min_thread_count,
+            max_thread_count,
             max_tasks_per_worker: 4,
             cpu_threshold: 0.6, // 60% threshold
             auto_adjust_pool_size: true,
@@ -1240,14 +1242,13 @@ mod tests {
             cpu_time_tracker: ReadPoolCpuTimeTracker::new("test-pool"),
             process_stats: ProcessStat::cur_proc_stat().unwrap(),
             core_thread_count: config.min_thread_count,
-            cur_thread_count: config.max_thread_count,
+            cur_thread_count: config.min_thread_count,
             max_thread_count: config.max_thread_count,
             auto_adjust: true,
             cpu_threshold: config.cpu_threshold,
         };
 
-        // Initial state: 8 threads
-        assert_eq!(runner.cur_thread_count, 8);
+        assert_eq!(runner.cur_thread_count, min_thread_count);
         print!("number of cpus: {}", SysQuota::cpu_cores_quota());
 
         // Test 1: Set high CPU utilization using test helper
