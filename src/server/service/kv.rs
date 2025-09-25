@@ -1708,6 +1708,7 @@ fn future_scan<E: Engine, L: LockManager, F: KvFormat>(
         req.get_version().into(),
         req.get_key_only(),
         req.get_reverse(),
+	req.skip_newer_change,
     );
 
     async move {

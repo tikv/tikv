@@ -57,6 +57,7 @@ impl<S: Store> Storage for TikvStorage<S> {
                     is_backward_scan,
                     is_key_only,
                     self.met_newer_ts_data_backlog == NewerTsCheckState::NotMetYet,
+		    false,
                     lower,
                     upper,
                 )

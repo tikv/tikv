@@ -287,7 +287,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
             }
             if has_write {
                 let is_current_user_key = self.move_write_cursor_to_ts(&current_user_key)?;
-                if is_current_user_key {
+		if is_current_user_key {
                     if let HandleRes::Return(output) = self.scan_policy.handle_write(
                         current_user_key,
                         &mut self.cfg,
@@ -337,6 +337,19 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                 } else if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
                     self.met_newer_ts_data = NewerTsCheckState::Met;
                 }
+
+		// Handle skip_newer_change flag.
+		if self.cfg.skip_newer_change {
+		    while self.cursors.write.valid()? {
+			let current_key = self.cursors.write.key(&mut self.statistics.write);
+			if !Key::is_user_key_eq(current_key, user_key.as_encoded().as_slice()) {
+			    // Meet another key.
+			    break;
+			}
+			self.cursors.write.next(&mut self.statistics.write);
+		    }
+		    return Ok(false);
+		}
 
                 // Report error if there's a more recent version if the isolation level is
                 // RcCheckTs.

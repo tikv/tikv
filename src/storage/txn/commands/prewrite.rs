@@ -20,7 +20,7 @@ use txn_types::{
 
 use super::ReaderWithStats;
 use crate::storage::{
-    Context, Error as StorageError, ProcessResult, Snapshot,
+    Context, Error as StorageError, ErrorInner as StorageErrorInner, ProcessResult, Snapshot,
     kv::WriteData,
     lock_manager::LockManager,
     mvcc::{
@@ -28,7 +28,7 @@ use crate::storage::{
         has_data_in_range, metrics::*,
     },
     txn::{
-        Error, ErrorInner, Result,
+        Error as TxnError, ErrorInner, Result,
         actions::{
             common::check_committed_record_on_err,
             prewrite::{CommitKind, TransactionKind, TransactionProperties, prewrite},
@@ -71,6 +71,8 @@ command! {
             /// When the transaction involves only one region, it's possible to commit the
             /// transaction directly with 1PC protocol.
             try_one_pc: bool,
+	    /// 
+	    skip_newer_change: bool,
             /// Controls how strict the assertions should be.
             /// Assertions is a mechanism to check the constraint on the previous version of data
             /// that must be satisfied as long as data is consistent.
@@ -126,6 +128,29 @@ impl Prewrite {
             TimeStamp::default(),
             None,
             false,
+	    false,
+            AssertionLevel::Off,
+            Context::default(),
+        )
+    }
+
+    pub fn with_skip_newer_change(
+        mutations: Vec<Mutation>,
+        primary: Vec<u8>,
+        start_ts: TimeStamp,
+    ) -> TypedCommand<PrewriteResult> {
+        Prewrite::new(
+            mutations,
+            primary,
+            start_ts,
+            0,
+            false,
+            0,
+            TimeStamp::default(),
+            TimeStamp::default(),
+            None,
+            false,
+	    true,
             AssertionLevel::Off,
             Context::default(),
         )
@@ -149,6 +174,7 @@ impl Prewrite {
             max_commit_ts,
             None,
             true,
+	    false,
             AssertionLevel::Off,
             Context::default(),
         )
@@ -172,6 +198,7 @@ impl Prewrite {
             TimeStamp::default(),
             None,
             false,
+	    false,
             AssertionLevel::Off,
             Context::default(),
         )
@@ -194,6 +221,7 @@ impl Prewrite {
             TimeStamp::default(),
             None,
             false,
+	    false,
             AssertionLevel::Off,
             ctx,
         )
@@ -219,6 +247,7 @@ impl Prewrite {
 
             ctx: self.ctx,
             old_values: OldValues::default(),
+	    skip_newer_change: self.skip_newer_change,
         }
     }
 }
@@ -436,6 +465,7 @@ impl PrewritePessimistic {
 
             ctx: self.ctx,
             old_values: OldValues::default(),
+	    skip_newer_change: false,
         })
     }
 }
@@ -488,6 +518,7 @@ struct Prewriter<K: PrewriteKind> {
     old_values: OldValues,
     try_one_pc: bool,
     assertion_level: AssertionLevel,
+    skip_newer_change: bool,
 
     ctx: Context,
 }
@@ -639,6 +670,8 @@ impl<K: PrewriteKind> Prewriter<K> {
                 pessimistic_action,
                 expected_for_update_ts,
             );
+
+	    // println!(" handle mutation == {}", key);
             match prewrite_result {
                 Ok((ts, old_value)) if !(need_min_commit_ts && ts.is_zero()) => {
                     if need_min_commit_ts && final_min_commit_ts < ts {
@@ -670,7 +703,19 @@ impl<K: PrewriteKind> Prewriter<K> {
                     conflict_commit_ts,
                     ..
                 })) if conflict_commit_ts > start_ts => {
-                    return check_committed_record_on_err(prewrite_result, txn, reader, &key);
+		    match check_committed_record_on_err(prewrite_result, txn, reader, &key) {
+                        Ok(res) => return Ok(res),
+			Err(e) => {
+			    if self.skip_newer_change {
+				println!(" skip conflict == {} {}", key, e);
+				// Ignore the committed record directly, this is not taken as conflict.
+				// But the conflict should be collected, so the 2PC commit phase know which keys can be skipped.
+				locks.push(Err(e.into()));
+				continue;
+			    }
+			    return Err(e);
+			},
+		    }
                 }
                 Err(MvccError(box MvccErrorInner::PessimisticLockNotFound { .. })) => {
                     return check_committed_record_on_err(prewrite_result, txn, reader, &key);
@@ -704,13 +749,20 @@ impl<K: PrewriteKind> Prewriter<K> {
                         assertion_failure = Some(e);
                     }
                 }
-                Err(e) => return Err(Error::from(e)),
+                Err(e) => return Err(TxnError::from(e)),
             }
         }
 
         if let Some(e) = assertion_failure {
-            return Err(Error::from(e));
+            return Err(TxnError::from(e));
         }
+
+	for lock in &locks {
+	    match lock {
+		Ok(_) => println!(" lock locks null"),
+		Err(v) => println!(" here locks err == {}", v),
+	    }
+	}
         Ok((locks, final_min_commit_ts))
     }
 
@@ -729,13 +781,45 @@ impl<K: PrewriteKind> Prewriter<K> {
             TimeStamp::zero()
         };
 
-        let mut result = if locks.is_empty() {
-            let (one_pc_commit_ts, released_locks) =
-                one_pc_commit(self.try_one_pc, &mut txn, final_min_commit_ts);
+	let mut skip_newer_change = false;
+	let mut lock_keys: Vec<Vec<u8>> = Vec::default();
+	if self.skip_newer_change {
+	    let mut locks_are_all_conflict = true;
+	    let mut pk_conflict = false;
+	    for lock in &locks {
+		match lock {
+		    Ok(_) => {locks_are_all_conflict = false},
+		    Err(StorageError(box StorageErrorInner::Txn(TxnError(box ErrorInner::Mvcc(MvccError(
+			box MvccErrorInner::WriteConflict {
+			    key,
+			    ..
+			},
+		    )))))) => {
+			if self.primary == *key {
+			    println!("pk conflict!! {:?}", key);
+			    pk_conflict = true;
+			    break;
+			} else {
+			    lock_keys.push(key.clone());
+			    println!("neet a conflict err which is expected {:?}", key)
+			}
+		    },
+		    Err(_) => {
+			locks_are_all_conflict = false;
+		    },
+		}
+	    }
+	    if locks_are_all_conflict && !pk_conflict {
+		skip_newer_change = true;
+	    }
+	};
 
+        let mut result = if locks.is_empty() || skip_newer_change {
+            let (one_pc_commit_ts, released_locks) =
+		one_pc_commit(self.try_one_pc, &mut txn, final_min_commit_ts);
             let pr = ProcessResult::PrewriteResult {
                 result: PrewriteResult {
-                    locks: vec![],
+                    locks: locks,
                     min_commit_ts: async_commit_ts,
                     one_pc_commit_ts,
                 },
@@ -751,7 +835,14 @@ impl<K: PrewriteKind> Prewriter<K> {
             // are dropped along with `txn` automatically.
             let lock_guards = txn.take_guards();
             let new_acquired_locks = txn.take_new_locks();
-            let mut to_be_write = WriteData::new(txn.into_modifies(), extra);
+            let mut to_be_write = if skip_newer_change {
+		let modifies = txn.into_modifies().into_iter()
+		    .filter(|x| !lock_keys.contains(&x.key().to_raw().unwrap()))
+		    .collect();
+		WriteData::new(modifies, extra)
+	    } else {
+		WriteData::new(txn.into_modifies(), extra)
+	    };
             to_be_write.set_disk_full_opt(self.ctx.get_disk_full_opt());
 
             WriteResult {
@@ -1022,7 +1113,7 @@ mod tests {
                 check_txn_status::tests::must_success as must_check_txn_status,
                 test_util::{
                     commit, pessimistic_prewrite_check_for_update_ts, pessimistic_prewrite_with_cm,
-                    prewrite, prewrite_command, prewrite_with_cm, rollback,
+                    prewrite, prewrite_command, prewrite_with_cm, prewrite_with_cmd, rollback,
                 },
             },
             tests::{
@@ -1153,6 +1244,62 @@ mod tests {
     }
 
     #[test]
+    fn test_prewrite_skip_newer_change() {
+	let mut statistic = Statistics::default();
+	let mut engine = TestEngineBuilder::new().build().unwrap();
+
+	let kvs = vec![(b"aaa", b"a1"), (b"bbb", b"b1"), (b"ccc", b"c1")];
+	for (key, val) in kvs {
+	    must_prewrite_put(&mut engine, key, val, key, 3);
+	    must_commit(&mut engine, key, 3, 5);
+	}
+
+	let (key, val) = (b"aaa", b"a2");
+	must_prewrite_put(&mut engine, key, val, key, 7);
+	must_commit(&mut engine, key, 7, 9);
+
+	let mutations = vec![Mutation::make_put(Key::from_raw(b"aaa"), b"zzz".to_vec()),
+		 Mutation::make_put(Key::from_raw(b"bbb"), b"zzz".to_vec()),
+		 Mutation::make_put(Key::from_raw(b"ccc"), b"zzz".to_vec())];
+
+        let keys: Vec<Key> = mutations.iter().map(|m| m.key().clone()).collect();
+
+	let res = prewrite_with_cmd(
+	    &mut engine,
+	    &mut statistic,
+	    6,
+	    Prewrite::with_skip_newer_change(
+	    // Prewrite::with_defaults(
+		mutations,
+		b"bbb".to_vec(),
+		TimeStamp::from(6),
+	    ),
+	).unwrap();
+	assert_eq!(res.min_commit_ts, 0.into());
+	assert_eq!(res.one_pc_commit_ts, 0.into());
+	assert_eq!(res.locks.len(), 1);
+
+	// println!("except a lock here = {}", res.locks[0]);
+
+	commit(
+	    &mut engine,
+	    &mut statistic,
+	    // keys,
+	    keys[1..].to_vec(),
+	    6,
+	    8,
+	).unwrap();
+
+
+	// check the result, aaa has newer change and is skipped
+        must_get(&mut engine, b"aaa", 12, b"a2");
+        must_get(&mut engine, b"bbb", 12, b"zzz");
+        must_get(&mut engine, b"ccc", 12, b"zzz");
+
+
+    }
+
+    #[test]
     fn test_prewrite_skip_too_many_tombstone() {
         use engine_rocks::{PerfLevel, set_perf_level};
 
@@ -1228,6 +1375,7 @@ mod tests {
             TimeStamp::from(15),
             None,
             true,
+	    false,
             AssertionLevel::Off,
             ctx,
         );
@@ -1498,6 +1646,7 @@ mod tests {
             TimeStamp::default(),
             Some(vec![]),
             false,
+	    false,
             AssertionLevel::Off,
             Context::default(),
         );
@@ -1531,6 +1680,7 @@ mod tests {
                 40.into(),
                 Some(vec![k2.to_vec()]),
                 false,
+		false,
                 AssertionLevel::Off,
                 Context::default(),
             );
@@ -1834,6 +1984,7 @@ mod tests {
                     TimeStamp::default(),
                     secondary_keys,
                     case.one_pc,
+		    false,
                     AssertionLevel::Off,
                     Context::default(),
                 )
@@ -1946,6 +2097,7 @@ mod tests {
             TimeStamp::default(),
             Some(vec![]),
             false,
+	    false,
             AssertionLevel::Off,
             Context::default(),
         );
@@ -2363,6 +2515,7 @@ mod tests {
             10.into(),
             Some(vec![]),
             false,
+	    false,
             AssertionLevel::Off,
             Context::default(),
         );
@@ -2595,6 +2748,7 @@ mod tests {
             1000.into(),
             Some(vec![]),
             false,
+	    false,
             AssertionLevel::Off,
             Context::default(),
         );
