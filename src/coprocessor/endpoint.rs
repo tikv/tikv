@@ -22,7 +22,10 @@ use kvproto::{coprocessor as coppb, errorpb, kvrpcpb, kvrpcpb::CommandPri, metap
 use online_config::ConfigManager;
 use protobuf::{CodedInputStream, Message};
 use resource_control::{ResourceGroupManager, ResourceLimiter, TaskMetadata};
-use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
+use resource_metering::{
+    FutureExt, ResourceTagFactory, StreamExt, record_logical_read_bytes, record_network_in_bytes,
+    record_network_out_bytes,
+};
 use tidb_query_common::{
     error::StorageError,
     execute_stats::ExecSummary,
@@ -461,6 +464,9 @@ impl<E: Engine> Endpoint<E> {
         mut tracker: Box<Tracker<E>>,
         handler_builder: RequestHandlerBuilder<E::IMSnap>,
     ) -> Result<MemoryTraceGuard<coppb::Response>> {
+        with_tls_tracker(|tracker1| {
+            record_network_in_bytes(tracker1.metrics.grpc_req_size);
+        });
         // When this function is being executed, it may be queued for a long time, so
         // that deadline may exceed.
         tracker.on_scheduled();
@@ -528,10 +534,12 @@ impl<E: Engine> Endpoint<E> {
         tracker.collect_storage_statistics(storage_stats);
         let (exec_details, exec_details_v2) = tracker.get_exec_details();
         tracker.on_finish_all_items();
-
+        record_logical_read_bytes(exec_details_v2.get_scan_detail_v2().processed_versions_size);
         let mut resp = match result {
             Ok(resp) => {
-                COPR_RESP_SIZE.inc_by(resp.data.len() as u64);
+                let resp_size = resp.data.len() as u64;
+                COPR_RESP_SIZE.inc_by(resp_size);
+                record_network_out_bytes(resp_size);
                 resp
             }
             Err(e) => {
@@ -593,7 +601,7 @@ impl<E: Engine> Endpoint<E> {
         let future =
             Self::handle_unary_request_impl(self.semaphore.clone(), tracker, r.handler_builder)
                 .in_resource_metering_tag(resource_tag)
-                .map(|res| {
+                .map(move |res| {
                     let _ = tx.send(res);
                 });
         let res = self.read_pool_spawn_with_memory_quota_check(
@@ -637,6 +645,9 @@ impl<E: Engine> Endpoint<E> {
 
         let result_of_batch = self.process_batch_tasks(&mut req, &peer);
         set_tls_tracker_token(tracker);
+        with_tls_tracker(|tracker| {
+            tracker.metrics.grpc_req_size = req.compute_size() as u64;
+        });
         let result_of_future = self
             .parse_request_and_check_memory_locks(req, peer, false)
             .map(|r| self.handle_unary_request(r));
@@ -766,6 +777,9 @@ impl<E: Engine> Endpoint<E> {
                 None
             };
 
+            with_tls_tracker(|tracker| {
+                record_network_in_bytes(tracker.metrics.grpc_req_size);
+            });
             // When this function is being executed, it may be queued for a long time, so that
             // deadline may exceed.
             tracker.on_scheduled();
@@ -810,7 +824,10 @@ impl<E: Engine> Endpoint<E> {
                     },
                     Ok((None, _)) => break,
                     Ok((Some(mut resp), finished)) => {
-                        COPR_RESP_SIZE.inc_by(resp.data.len() as u64);
+                        let resp_size = resp.data.len() as u64;
+                        COPR_RESP_SIZE.inc_by(resp_size);
+                        record_network_out_bytes(resp_size);
+                        record_logical_read_bytes(exec_details_v2.get_scan_detail_v2().processed_versions_size);
                         resp.set_exec_details(exec_details);
                         resp.set_exec_details_v2(exec_details_v2);
                         yield resp;
@@ -893,6 +910,15 @@ impl<E: Engine> Endpoint<E> {
         req: coppb::Request,
         peer: Option<String>,
     ) -> impl futures::stream::Stream<Item = coppb::Response> {
+        let tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(RequestInfo::new(
+            req.get_context(),
+            RequestType::Unknown,
+            req.start_ts,
+        )));
+        set_tls_tracker_token(tracker);
+        with_tls_tracker(|tracker| {
+            tracker.metrics.grpc_req_size = req.compute_size() as u64;
+        });
         let result_of_stream = self
             .parse_request_and_check_memory_locks(req, peer, true)
             .and_then(|r| self.handle_stream_request(r)); // Result<Stream<Resp, Error>, Error>
