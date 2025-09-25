@@ -11,10 +11,7 @@ use azure_core::{
     auth::{TokenCredential, TokenResponse},
     new_http_client,
 };
-use azure_identity::{
-    AutoRefreshingTokenCredential, ClientSecretCredential, DefaultAzureCredential,
-    TokenCredentialOptions,
-};
+use azure_identity::{ClientSecretCredential, DefaultAzureCredential};
 use azure_storage::{ConnectionString, ConnectionStringBuilder, prelude::*};
 use azure_storage_blobs::{blob::operations::PutBlockBlobBuilder, prelude::*};
 use cloud::{
@@ -388,14 +385,14 @@ trait ContainerBuilder: 'static + Send + Sync {
 /// Also see [`DefaultAzureCredential`].
 struct DefaultContainerBuilder {
     config: Config,
-    cred: AutoRefreshingTokenCredential,
+    cred: Arc<DefaultAzureCredential>,
 }
 
 impl DefaultContainerBuilder {
     fn new(config: Config) -> Self {
         Self {
             config,
-            cred: AutoRefreshingTokenCredential::new(Arc::<DefaultAzureCredential>::default()),
+            cred: Arc::<DefaultAzureCredential>::default(),
         }
     }
 }
@@ -637,11 +634,9 @@ impl AzureStorage {
         } else if let Some(credential_info) = config.credential_info.as_ref() {
             let token_resource = format!("https://{}.blob.core.windows.net", &account_name);
             let cred = ClientSecretCredential::new(
-                new_http_client(),
                 credential_info.tenant_id.clone(),
                 credential_info.client_id.to_string(),
                 credential_info.client_secret.secret().clone(),
-                TokenCredentialOptions::default(),
             );
 
             let client_builder = Arc::new(TokenCredContainerBuilder::new(
