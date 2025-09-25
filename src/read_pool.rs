@@ -751,15 +751,18 @@ impl ReadPoolConfigRunner {
         let leeway = 0.1;
         let busy_cpu_scale_in =
             self.cpu_threshold > 0.0 && read_pool_cpu > (leeway + 1.0) * target_cpu_cores;
-        let busy_cpu_scale_out =
-            self.cpu_threshold > 0.0 && read_pool_cpu < (1.0 - leeway) * target_cpu_cores;
+        let busy_cpu_scale_out = read_pool_cpu < (1.0 - leeway) * target_cpu_cores
+            && self.cur_thread_count < self.core_thread_count;
 
         let new_thread_count = if busy_cpu_scale_in {
             // CPU threshold takes precedence over busy thread scaling conditions
             std::cmp::max(
-                ((self.cur_thread_count as f64) * target_cpu_cores / read_pool_cpu).floor()
-                    as usize,
-                (target_cpu_cores).floor() as usize,
+                std::cmp::max(
+                    (target_cpu_cores).floor() as usize,
+                    ((self.cur_thread_count as f64) * target_cpu_cores / read_pool_cpu).floor()
+                        as usize,
+                ),
+                1, // minimum 1 running thread
             )
         } else if busy_cpu_scale_out {
             self.cur_thread_count + 1
