@@ -201,28 +201,6 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
 
     let mut executor: Box<dyn BatchExecutor<StorageStats = S::Statistics>> = match first_ed.get_tp()
     {
-        ExecType::TypeVersionedLookup => {
-            EXECUTOR_COUNT_METRICS.versioned_lookup.inc();
-
-            let mut descriptor = first_ed.take_versioned_lookup();
-            let columns_info = descriptor.take_columns().into();
-            let primary_column_ids = descriptor.take_primary_column_ids();
-            let versions_vec =
-                versions.ok_or_else(|| other_err!("VersionedLookup requires versions"))?;
-
-            Box::new(
-                BatchVersionedLookupExecutor::<_, F>::new(
-                    storage,
-                    config.clone(),
-                    columns_info,
-                    ranges,
-                    primary_column_ids,
-                    versions_vec,
-                    is_scanned_range_aware,
-                )?
-                .collect_summary(summary_slot_index),
-            )
-        }
         ExecType::TypeTableScan => {
             EXECUTOR_COUNT_METRICS.batch_table_scan.inc();
 
@@ -231,19 +209,33 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
             let primary_column_ids = descriptor.take_primary_column_ids();
             let primary_prefix_column_ids = descriptor.take_primary_prefix_column_ids();
 
-            Box::new(
-                BatchTableScanExecutor::<_, F>::new(
-                    storage,
-                    config.clone(),
-                    columns_info,
-                    ranges,
-                    primary_column_ids,
-                    descriptor.get_desc(),
-                    is_scanned_range_aware,
-                    primary_prefix_column_ids,
-                )?
-                .collect_summary(summary_slot_index),
-            )
+            match versions {
+                Some(versions_vec) => Box::new(
+                    BatchVersionedLookupExecutor::<_, F>::new(
+                        storage,
+                        config.clone(),
+                        columns_info,
+                        ranges,
+                        primary_column_ids,
+                        versions_vec,
+                        is_scanned_range_aware,
+                    )?
+                    .collect_summary(summary_slot_index),
+                ),
+                None => Box::new(
+                    BatchTableScanExecutor::<_, F>::new(
+                        storage,
+                        config.clone(),
+                        columns_info,
+                        ranges,
+                        primary_column_ids,
+                        descriptor.get_desc(),
+                        is_scanned_range_aware,
+                        primary_prefix_column_ids,
+                    )?
+                    .collect_summary(summary_slot_index),
+                ),
+            }
         }
         ExecType::TypeIndexScan => {
             EXECUTOR_COUNT_METRICS.batch_index_scan.inc();

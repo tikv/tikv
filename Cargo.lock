@@ -3750,7 +3750,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/windtalker/kvproto?branch=add_versioned_lookup#a0f62de4d35f317fbba3f3892a98809066f9d7bb"
+source = "git+https://github.com/windtalker/kvproto?branch=add_versioned_lookup#6c9084a09bc91ad194dcd8e4e2bd79bbfd2001ce"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
