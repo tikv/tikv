@@ -7,11 +7,11 @@ license = "Apache-2.0"
 
 [dependencies]
 async-trait = "0.1"
-azure_core = "0.20"
-azure_identity = "0.20"
-azure_security_keyvault = { version = "0.20", default-features = false }
-azure_storage = { version = "0.20", default-features = false }
-azure_storage_blobs = "0.20"
+azure_core = "0.18"
+azure_identity = "0.18"
+azure_security_keyvault = { version = "0.18", default-features = false }
+azure_storage = { version = "0.18", default-features = false }
+azure_storage_blobs = "0.18"
 base64 = "0.13"
 cloud = { workspace = true }
 futures = "0.3"
