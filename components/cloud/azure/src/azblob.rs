@@ -9,7 +9,6 @@ use std::{
 use async_trait::async_trait;
 use azure_core::{
     auth::{TokenCredential, TokenResponse},
-    new_http_client,
 };
 use azure_identity::{ClientSecretCredential, DefaultAzureCredential};
 use azure_storage::{ConnectionString, ConnectionStringBuilder, prelude::*};

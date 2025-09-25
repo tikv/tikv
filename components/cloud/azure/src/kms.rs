@@ -3,7 +3,7 @@
 use std::{ops::Deref, sync::Arc};
 
 use async_trait::async_trait;
-use azure_core::{Error as AzureError, auth::TokenCredential, new_http_client};
+use azure_core::{Error as AzureError, auth::TokenCredential};
 use azure_identity::ClientSecretCredential;
 use azure_security_keyvault::{KeyClient, prelude::*};
 use cloud::{
