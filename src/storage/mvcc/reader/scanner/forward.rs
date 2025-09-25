@@ -341,12 +341,12 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
 		// Handle skip_newer_change flag.
 		if self.cfg.skip_newer_change {
 		    while self.cursors.write.valid()? {
-			self.cursors.write.next(&mut self.statistics.write);
 			let current_key = self.cursors.write.key(&mut self.statistics.write);
 			if !Key::is_user_key_eq(current_key, user_key.as_encoded().as_slice()) {
 			    // Meet another key.
 			    break;
 			}
+			self.cursors.write.next(&mut self.statistics.write);
 		    }
 		    return Ok(false);
 		}
