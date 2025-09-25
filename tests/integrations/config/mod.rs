@@ -45,6 +45,7 @@ use tikv::{
 use tikv_util::config::{LogFormat, ReadableDuration, ReadableSchedule, ReadableSize};
 
 mod dynamic;
+mod graceful_shutdown_config;
 mod test_config_client;
 
 #[test]
