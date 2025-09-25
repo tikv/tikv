@@ -24,7 +24,7 @@ use grpcio::{
 };
 use health_controller::HealthController;
 use kvproto::{coprocessor::*, kvrpcpb::*, mpp::*, raft_serverpb::*, tikvpb::*};
-use protobuf::RepeatedField;
+use protobuf::{Message, RepeatedField};
 use raft::eraftpb::MessageType;
 use raftstore::{
     store::{
@@ -45,7 +45,13 @@ use tikv_util::{
     time::Instant,
     worker::Scheduler,
 };
+<<<<<<< HEAD
 use tracker::{set_tls_tracker_token, RequestInfo, RequestType, Tracker, GLOBAL_TRACKERS};
+=======
+use tracker::{
+    GLOBAL_TRACKERS, RequestInfo, RequestType, Tracker, set_tls_tracker_token, with_tls_tracker,
+};
+>>>>>>> df964f90b0 (resource_metering: collect network/io info for coprocessor in TopSQL (#18923))
 use txn_types::{self, Key};
 
 use super::batch::{BatcherBuilder, ReqBatcher};
@@ -1560,6 +1566,9 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
         req.get_version(),
     )));
     set_tls_tracker_token(tracker);
+    with_tls_tracker(|tracker| {
+        tracker.metrics.grpc_req_size = req.compute_size() as u64;
+    });
     let start = Instant::now();
     let v = storage.get_entry(
         req.take_context(),
@@ -1637,6 +1646,9 @@ fn future_scan<E: Engine, L: LockManager, F: KvFormat>(
         req.get_version(),
     )));
     set_tls_tracker_token(tracker);
+    with_tls_tracker(|tracker| {
+        tracker.metrics.grpc_req_size = req.compute_size() as u64;
+    });
     let end_key = Key::from_raw_maybe_unbounded(req.get_end_key());
 
     let v = storage.scan(
@@ -1686,6 +1698,9 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
     )));
     set_tls_tracker_token(tracker);
     let start = Instant::now();
+    with_tls_tracker(|tracker| {
+        tracker.metrics.grpc_req_size = req.compute_size() as u64;
+    });
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
     let v = storage.batch_get(
         req.take_context(),
@@ -1740,6 +1755,9 @@ fn future_buffer_batch_get<E: Engine, L: LockManager, F: KvFormat>(
         req.get_version(),
     )));
     set_tls_tracker_token(tracker);
+    with_tls_tracker(|tracker| {
+        tracker.metrics.grpc_req_size = req.compute_size() as u64;
+    });
     let start = Instant::now();
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
     let v = storage.buffer_batch_get(req.take_context(), keys, req.get_version().into());
@@ -1784,6 +1802,9 @@ fn future_scan_lock<E: Engine, L: LockManager, F: KvFormat>(
         req.get_max_version(),
     )));
     set_tls_tracker_token(tracker);
+    with_tls_tracker(|tracker| {
+        tracker.metrics.grpc_req_size = req.compute_size() as u64;
+    });
     let start_key = Key::from_raw_maybe_unbounded(req.get_start_key());
     let end_key = Key::from_raw_maybe_unbounded(req.get_end_key());
 
@@ -2346,6 +2367,9 @@ macro_rules! txn_command_future {
                 0,
             )));
             set_tls_tracker_token($tracker);
+            with_tls_tracker(|tracker| {
+                tracker.metrics.grpc_req_size = $req.compute_size() as u64;
+            });
             let (cb, f) = paired_future_callback();
             let res = storage.sched_txn_command($req.into(), cb);
 

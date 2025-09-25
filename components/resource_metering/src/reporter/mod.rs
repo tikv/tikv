@@ -281,6 +281,7 @@ mod tests {
             report_receiver_interval: ReadableDuration::minutes(2),
             max_resource_groups: 3000,
             precision: ReadableDuration::secs(2),
+            enable_network_io_collection: false,
         }));
         assert_eq!(r.get_interval(), Duration::from_secs(120));
         let mut records = HashMap::default();
@@ -296,6 +297,10 @@ mod tests {
                 cpu_time: 1,
                 read_keys: 2,
                 write_keys: 3,
+                network_in_bytes: 4,
+                network_out_bytes: 5,
+                logical_read_bytes: 6,
+                logical_write_bytes: 7,
             },
         );
         r.run(Task::Records(Arc::new(RawRecords {
@@ -342,6 +347,10 @@ mod tests {
                 cpu_time: 1,
                 read_keys: 2,
                 write_keys: 3,
+                network_in_bytes: 4,
+                network_out_bytes: 5,
+                logical_read_bytes: 6,
+                logical_write_bytes: 7,
             },
         );
 
