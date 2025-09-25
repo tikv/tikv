@@ -4,12 +4,11 @@ use std::{str, sync::Arc, time::Duration};
 
 use azure_core::{
     HttpClient, Method, Request,
-    auth::{AccessToken, TokenCredential, TokenResponse},
+    auth::{AccessToken, TokenCredential},
     base64, content_type,
     error::{Error, ErrorKind},
     headers, new_http_client,
 };
-use azure_identity::authority_hosts::AZURE_PUBLIC_CLOUD;
 use openssl::{
     error::ErrorStack,
     hash::{DigestBytes, MessageDigest, hash},
@@ -36,7 +35,7 @@ struct CertificateCredentialOptions {
 impl Default for CertificateCredentialOptions {
     fn default() -> Self {
         Self {
-            authority_host: AZURE_PUBLIC_CLOUD.to_owned(),
+            authority_host: "https://login.microsoftonline.com/".to_owned(),
             send_certificate_chain: true,
         }
     }
@@ -67,6 +66,7 @@ struct AadTokenResponse {
 /// TODO: make `ClientCertificateCredentialExt` directly extended from
 /// `ClientCertificateCredential` if `ClientCertificateCredential` is nightly
 /// released.
+#[derive(Debug)]
 pub struct ClientCertificateCredentialExt {
     http_client: Arc<dyn HttpClient>,
 
@@ -151,11 +151,14 @@ fn openssl_error(err: ErrorStack) -> azure_core::error::Error {
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 impl TokenCredential for ClientCertificateCredentialExt {
+    async fn clear_cache(&self) -> azure_core::Result<()> {
+        Ok(())
+    }
     // As previous [TODO] shows, following operations in `get_token` is just
     // extended from `ClientCertificateCredential::get_token()` as a special
     // version with caching feature and stable feature.
     // Reference of the REST API: https://learn.microsoft.com/en-us/azure/key-vault/general/common-parameters-and-headers.
-    async fn get_token(&self, resource: &str) -> azure_core::Result<TokenResponse> {
+    async fn get_token(&self, scopes: &[&str]) -> azure_core::Result<AccessToken> {
         let options = self.options();
         let url = &format!(
             "{}/{}/oauth2/v2.0/token",
@@ -232,7 +235,7 @@ impl TokenCredential for ClientCertificateCredentialExt {
             let mut encoded = &mut form_urlencoded::Serializer::new(String::new());
             encoded = encoded
                 .append_pair("client_id", self.client_id.as_str())
-                .append_pair("scope", format!("{}/.default", resource).as_str())
+                .append_pair("scope", &scopes.join(" "))
                 .append_pair(
                     "client_assertion_type",
                     "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
@@ -259,8 +262,8 @@ impl TokenCredential for ClientCertificateCredentialExt {
         }
 
         let response: AadTokenResponse = serde_json::from_slice(&rsp_body)?;
-        let token = TokenResponse::new(
-            AccessToken::new(response.access_token.to_string()),
+        let token = AccessToken::new(
+            response.access_token.to_string(),
             OffsetDateTime::now_utc() + Duration::from_secs(response.expires_in),
         );
         Ok(token)

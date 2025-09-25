@@ -121,14 +121,18 @@ impl AzureKms {
             // Client secret to access KeyVault.
             let (keyvault_credential, hsm_credential) = (
                 ClientSecretCredential::new(
-                    azure_cfg.tenant_id.clone(),
+                    azure_core::new_http_client(),
                     azure_cfg.client_id.clone(),
                     client_secret.clone(),
+                    azure_cfg.tenant_id.clone(),
+                    Default::default(),
                 ),
                 ClientSecretCredential::new(
-                    azure_cfg.tenant_id.clone(),
+                    azure_core::new_http_client(),
                     azure_cfg.client_id,
                     client_secret,
+                    azure_cfg.tenant_id.clone(),
+                    Default::default(),
                 ),
             );
             Self::new_with_credentials(config, keyvault_credential, hsm_credential)
