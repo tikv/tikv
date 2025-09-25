@@ -1,6 +1,9 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::time::{Duration, Instant};
+use std::{
+    sync::atomic::Ordering,
+    time::{Duration, Instant},
+};
 
 use engine_traits::{KvEngine, RaftEngine};
 use fail::fail_point;
@@ -11,8 +14,10 @@ use health_controller::{
 use kvproto::pdpb;
 use pd_client::PdClient;
 use raftstore::store::{Config, metrics::*};
+use slog::warn;
 
 use super::Runner;
+use crate::router::{StoreMsg, StoreTick};
 pub struct SlownessStatistics {
     /// Detector to detect NetIo&DiskIo jitters.
     slow_cause: Trend,
@@ -82,6 +87,15 @@ where
             tikv_util::time::duration_to_us(duration.sum()),
             Instant::now(),
         );
+    }
+
+    pub fn handle_graceful_shutdown_state(&mut self, state: bool) {
+        self.graceful_shutdown_state.store(state, Ordering::SeqCst);
+        let msg = StoreMsg::Tick(StoreTick::PdStoreHeartbeat);
+        if let Err(e) = self.router.send_control(msg) {
+            warn!(self.logger, "pd worker send graceful shutdown state failed";
+                    "err" => ?e);
+        }
     }
 
     pub fn handle_slowness_stats_tick(&mut self) {
