@@ -4740,7 +4740,7 @@ where
             fsm.delegate.update_memory_trace(&mut self.trace_event);
         }
         MEMTRACE_APPLYS.trace(mem::take(&mut self.trace_event));
-        APPLY_COMMIT_COUNTER.inc();
+        APPLY_COMMIT_COUNTER.observe(self.apply_ctx.commit_count as f64);
     }
 
     fn get_priority(&self) -> Priority {

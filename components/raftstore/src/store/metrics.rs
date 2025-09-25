@@ -550,10 +550,11 @@ lazy_static! {
             "Total number of apply snapshot"
         ).unwrap();
 
-    pub static ref APPLY_COMMIT_COUNTER: IntCounter =
-        register_int_counter!(
+    pub static ref APPLY_COMMIT_COUNTER: Histogram =
+        register_histogram!(
             "tikv_raftstore_apply_commit_total",
-            "Total number of apply commit"
+            "Total number of apply commit",
+            linear_buckets(0.0, 1.0, 100).unwrap()
         ).unwrap();
 
     pub static ref APPLY_COMMIT_COUNTER_VEC: IntCounterVec =
