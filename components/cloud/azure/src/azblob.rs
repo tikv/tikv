@@ -8,7 +8,7 @@ use std::{
 
 use async_trait::async_trait;
 use azure_core::{
-    auth::{TokenCredential, TokenResponse},
+    auth::{AccessToken, TokenCredential},
 };
 use azure_identity::{ClientSecretCredential, DefaultAzureCredential};
 use azure_storage::{ConnectionString, ConnectionStringBuilder, prelude::*};
@@ -403,9 +403,10 @@ impl ContainerBuilder for DefaultContainerBuilder {
         let bucket = (*self.config.bucket.bucket).to_owned();
 
         let token_resource = format!("https://{}.blob.core.windows.net", &account_name);
+        let scopes = vec![&token_resource as &str];
         let token = self
             .cred
-            .get_token(&token_resource)
+            .get_token(&scopes)
             .await
             .map_err(|e| {
                 io::Error::new(
@@ -483,7 +484,7 @@ impl ContainerBuilder for TokenCredContainerBuilder {
         {
             let token_response = self.token_cache.read().unwrap();
             if let Some(ref t) = *token_response {
-                let interval = (t.0.expires_on - OffsetDateTime::now_utc()).whole_minutes();
+                let interval = (t.expires_on - OffsetDateTime::now_utc()).whole_minutes();
                 // keep token updated 5 minutes before it expires
                 if interval > TOKEN_UPDATE_LEFT_TIME_MINS {
                     return Ok(t.1.clone());
@@ -512,7 +513,7 @@ impl ContainerBuilder for TokenCredContainerBuilder {
             {
                 let token_response = self.token_cache.read().unwrap();
                 if let Some(ref t) = *token_response {
-                    let interval = (t.0.expires_on - OffsetDateTime::now_utc()).whole_minutes();
+                    let interval = (t.expires_on - OffsetDateTime::now_utc()).whole_minutes();
                     // token is already updated
                     if interval > TOKEN_UPDATE_LEFT_TIME_MINS {
                         return Ok(t.1.clone());
@@ -521,14 +522,15 @@ impl ContainerBuilder for TokenCredContainerBuilder {
             }
             // release read lock, the thread still have modify lock,
             // so no other threads can write the token_cache, so read lock is not blocked.
+            let scopes = vec![&self.token_resource as &str];
             let token = self
                 .token_cred
-                .get_token(&self.token_resource)
+                .get_token(&scopes)
                 .await
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{:?}", &e)))?;
             let blob_service = BlobServiceClient::new(
                 self.account_name.clone(),
-                StorageCredentials::BearerToken(token.token.secret().into()),
+                StorageCredentials::bearer_token(token.token.secret().into()),
             );
             let storage_client =
                 Arc::new(blob_service.container_client(self.container_name.clone()));
@@ -633,9 +635,11 @@ impl AzureStorage {
         } else if let Some(credential_info) = config.credential_info.as_ref() {
             let token_resource = format!("https://{}.blob.core.windows.net", &account_name);
             let cred = ClientSecretCredential::new(
-                credential_info.tenant_id.clone(),
+                azure_core::new_http_client(),
                 credential_info.client_id.to_string(),
                 credential_info.client_secret.secret().clone(),
+                credential_info.tenant_id.clone(),
+                Default::default(),
             );
 
             let client_builder = Arc::new(TokenCredContainerBuilder::new(
