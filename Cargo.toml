@@ -220,9 +220,6 @@ sysinfo = { git = "https://github.com/tikv/sysinfo", branch = "0.26-fix-cpu" }
 # When you modify TiKV cooperatively with kvproto, this will be useful to submit the PR to TiKV and the PR to
 # kvproto at the same time.
 # After the PR to kvproto is merged, remember to comment this out and run `cargo update -p kvproto`.
-[patch.'https://github.com/pingcap/tipb']
-tipb = { git = "https://github.com/windtalker/tipb", branch = "add_versioned_lookup" }
-
 [patch.'https://github.com/pingcap/kvproto']
 kvproto = { git = "https://github.com/windtalker/kvproto", branch = "add_versioned_lookup" }
 #

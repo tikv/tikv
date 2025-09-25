@@ -18,7 +18,7 @@ use tidb_query_datatype::{
     codec::batch::LazyBatchColumnVec,
     expr::{EvalConfig, EvalContext},
 };
-use tipb::{ColumnInfo, FieldType, VersionedLookup};
+use tipb::{ColumnInfo, FieldType, TableScan};
 
 use crate::{
     interface::*,
@@ -57,7 +57,7 @@ pub struct BatchVersionedLookupExecutor<S: Storage, F: KvFormat> {
 impl BatchVersionedLookupExecutor<Box<dyn Storage<Statistics = ()>>, ApiV1> {
     /// Checks whether this executor can be used.
     #[inline]
-    pub fn check_supported(descriptor: &VersionedLookup) -> Result<()> {
+    pub fn check_supported(descriptor: &TableScan) -> Result<()> {
         check_columns_info_supported(descriptor.get_columns())
     }
 }

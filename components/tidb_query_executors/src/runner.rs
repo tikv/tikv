@@ -6,9 +6,9 @@ use api_version::KvFormat;
 use fail::fail_point;
 use itertools::Itertools;
 use kvproto::coprocessor::KeyRange;
-use protobuf::{Message, descriptor};
+use protobuf::Message;
 use tidb_query_common::{
-    Result, error,
+    Result,
     execute_stats::ExecSummary,
     metrics::*,
     storage::{IntervalRange, Storage},
@@ -89,11 +89,6 @@ impl BatchExecutorsRunner<()> {
     pub fn check_supported(exec_descriptors: &[tipb::Executor]) -> Result<()> {
         for ed in exec_descriptors {
             match ed.get_tp() {
-                ExecType::TypeVersionedLookup => {
-                    let descriptor = ed.get_versioned_lookup();
-                    BatchVersionedLookupExecutor::check_supported(descriptor)
-                        .map_err(|e| other_err!("BatchVersionedLookupExecutor: {}", e))?;
-                }
                 ExecType::TypeTableScan => {
                     let descriptor = ed.get_tbl_scan();
                     BatchTableScanExecutor::check_supported(descriptor)
