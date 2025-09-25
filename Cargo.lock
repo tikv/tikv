@@ -3692,7 +3692,11 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
+<<<<<<< HEAD
 source = "git+https://github.com/pingcap/kvproto.git?branch=release-8.5#97d984880071228de123095a1550a9236e92d224"
+=======
+source = "git+https://github.com/pingcap/kvproto.git#d79d11002599aa56a89dac801547d7d81d6ba40e"
+>>>>>>> 2870bdebf1 (server: graceful shutdown tikv-impl (#18930))
 dependencies = [
  "futures 0.3.15",
  "grpcio",

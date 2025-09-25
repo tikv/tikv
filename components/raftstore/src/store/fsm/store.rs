@@ -11,8 +11,13 @@ use std::{
     mem,
     ops::{Deref, DerefMut},
     sync::{
+<<<<<<< HEAD
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
+=======
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+>>>>>>> 2870bdebf1 (server: graceful shutdown tikv-impl (#18930))
     },
     time::{Duration, Instant, SystemTime},
     u64,
@@ -1671,6 +1676,11 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             .scheduler()
     }
 
+    pub fn pd_scheduler(&self) -> Scheduler<PdTask<EK>> {
+        assert!(self.workers.is_some());
+        self.workers.as_ref().unwrap().pd_worker.scheduler()
+    }
+
     // TODO: reduce arguments
     pub fn spawn<T: Transport + 'static, C: PdClient + 'static>(
         &mut self,
@@ -1992,6 +2002,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             coprocessor_host,
             causal_ts_provider,
             grpc_service_mgr,
+            Arc::new(AtomicBool::new(false)),
         );
         assert!(workers.pd_worker.start(pd_runner));
 

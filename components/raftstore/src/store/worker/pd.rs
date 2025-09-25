@@ -1,12 +1,16 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cmp,
-    cmp::Ordering as CmpOrdering,
+    cmp::{self, Ordering as CmpOrdering},
     fmt::{self, Display, Formatter},
     io, mem,
     sync::{
+<<<<<<< HEAD
         atomic::Ordering,
+=======
+        Arc, Mutex, RwLock,
+        atomic::{AtomicBool, Ordering},
+>>>>>>> 2870bdebf1 (server: graceful shutdown tikv-impl (#18930))
         mpsc::{self, Receiver, Sender, SyncSender},
         Arc, Mutex, RwLock,
     },
@@ -59,6 +63,11 @@ use crate::{
     coprocessor::CoprocessorHost,
     router::RaftStoreRouter,
     store::{
+<<<<<<< HEAD
+=======
+        Callback, CasualMessage, Config, PeerMsg, RaftCmdExtraOpts, RaftCommand, RaftRouter,
+        SnapManager, StoreMsg, StoreTick, TxnExt,
+>>>>>>> 2870bdebf1 (server: graceful shutdown tikv-impl (#18930))
         cmd_resp::new_error,
         metrics::*,
         unsafe_recovery::{
@@ -209,6 +218,9 @@ where
     ControlGrpcServer(pdpb::ControlGrpcEvent),
     InspectLatency {
         factor: InspectFactor,
+    },
+    GracefulShutdownState {
+        state: bool,
     },
 }
 
@@ -480,6 +492,9 @@ where
             }
             Task::InspectLatency { factor } => {
                 write!(f, "inspect raftstore latency: {:?}", factor)
+            }
+            Task::GracefulShutdownState { state } => {
+                write!(f, "graceful shutdown state: {:?}", state)
             }
         }
     }
@@ -944,6 +959,9 @@ where
 
     // Service manager for grpc service.
     grpc_service_manager: GrpcServiceManager,
+
+    // Graceful shutdown state for evict leader during shutdown
+    graceful_shutdown_state: Arc<AtomicBool>,
 }
 
 impl<EK, ER, T> Runner<EK, ER, T>
@@ -967,6 +985,7 @@ where
         coprocessor_host: CoprocessorHost<EK>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         grpc_service_manager: GrpcServiceManager,
+        graceful_shutdown_state: Arc<std::sync::atomic::AtomicBool>,
     ) -> Runner<EK, ER, T> {
         let mut store_stat = StoreStat::default();
         store_stat.set_cpu_quota(SysQuota::cpu_cores_quota(), cfg.inspect_cpu_util_thd);
@@ -1031,6 +1050,7 @@ where
             coprocessor_host,
             causal_ts_provider,
             grpc_service_manager,
+            graceful_shutdown_state,
         }
     }
 
@@ -1326,6 +1346,11 @@ where
         stats.set_slow_trend(slow_trend_pb);
 
         stats.set_is_grpc_paused(self.grpc_service_manager.is_paused());
+
+        stats.set_is_stopping(
+            self.graceful_shutdown_state
+                .load(std::sync::atomic::Ordering::SeqCst),
+        );
 
         let scheduler = self.scheduler.clone();
         let router = self.router.clone();
@@ -1757,6 +1782,15 @@ where
         match self.region_peers.write().unwrap().remove(&region_id) {
             None => {}
             Some(_) => info!("remove peer statistic record in pd"; "region_id" => region_id),
+        }
+    }
+
+    fn handle_graceful_shutdown(&mut self, state: bool) {
+        self.graceful_shutdown_state.store(state, Ordering::SeqCst);
+        info!("handle graceful shutdown"; "state" => state);
+        let msg = StoreMsg::Tick(StoreTick::PdStoreHeartbeat);
+        if let Err(e) = self.router.send_control(msg) {
+            warn!("handle graceful shutdown failed"; "err" => ?e);
         }
     }
 
@@ -2379,6 +2413,9 @@ where
             }
             Task::InspectLatency { factor } => {
                 self.handle_inspect_latency(factor);
+            }
+            Task::GracefulShutdownState { state } => {
+                self.handle_graceful_shutdown(state);
             }
         };
     }
