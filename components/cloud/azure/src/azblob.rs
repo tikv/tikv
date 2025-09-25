@@ -7,9 +7,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use azure_core::{
-    auth::{AccessToken, TokenCredential},
-};
+use azure_core::auth::{AccessToken, TokenCredential};
 use azure_identity::{ClientSecretCredential, DefaultAzureCredential};
 use azure_storage::{ConnectionString, ConnectionStringBuilder, prelude::*};
 use azure_storage_blobs::{blob::operations::PutBlockBlobBuilder, prelude::*};
@@ -418,7 +416,7 @@ impl ContainerBuilder for DefaultContainerBuilder {
 
         let client = BlobServiceClient::new(
             account_name,
-            StorageCredentials::bearer_token(token.secret()),
+            StorageCredentials::bearer_token(token.secret().to_string()),
         )
         .container_client(bucket);
         Ok(Arc::new(client))
@@ -436,7 +434,7 @@ impl ContainerBuilder for SharedKeyContainerBuilder {
     }
 }
 
-type TokenCacheType = Arc<RwLock<Option<(TokenResponse, Arc<ContainerClient>)>>>;
+type TokenCacheType = Arc<RwLock<Option<(AccessToken, Arc<ContainerClient>)>>>;
 struct TokenCredContainerBuilder {
     account_name: String,
     container_name: String,
@@ -484,7 +482,7 @@ impl ContainerBuilder for TokenCredContainerBuilder {
         {
             let token_response = self.token_cache.read().unwrap();
             if let Some(ref t) = *token_response {
-                let interval = (t.expires_on - OffsetDateTime::now_utc()).whole_minutes();
+                let interval = (t.0.expires_on - OffsetDateTime::now_utc()).whole_minutes();
                 // keep token updated 5 minutes before it expires
                 if interval > TOKEN_UPDATE_LEFT_TIME_MINS {
                     return Ok(t.1.clone());
@@ -513,7 +511,7 @@ impl ContainerBuilder for TokenCredContainerBuilder {
             {
                 let token_response = self.token_cache.read().unwrap();
                 if let Some(ref t) = *token_response {
-                    let interval = (t.expires_on - OffsetDateTime::now_utc()).whole_minutes();
+                    let interval = (t.0.expires_on - OffsetDateTime::now_utc()).whole_minutes();
                     // token is already updated
                     if interval > TOKEN_UPDATE_LEFT_TIME_MINS {
                         return Ok(t.1.clone());
@@ -530,7 +528,7 @@ impl ContainerBuilder for TokenCredContainerBuilder {
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{:?}", &e)))?;
             let blob_service = BlobServiceClient::new(
                 self.account_name.clone(),
-                StorageCredentials::bearer_token(token.token.secret().into()),
+                StorageCredentials::bearer_token(token.token.secret().to_string()),
             );
             let storage_client =
                 Arc::new(blob_service.container_client(self.container_name.clone()));
