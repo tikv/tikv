@@ -338,7 +338,7 @@ impl Sink {
         }
         self.memory_quota.alloc(total_bytes as _)?;
 
-        let now: Instant = Instant::now_coarse();
+        let now = Instant::now_coarse();
         for event in scaned_events {
             let bytes = event.size() as usize;
             let sc_event = ScanedEvent::new(now, event, bytes, truncated.clone());
