@@ -358,13 +358,12 @@ impl<E: KvEngine> Initializer<E> {
                 scan_long_time.store(true, Ordering::SeqCst);
                 warn!(
                     "cdc incremental scan takes too long";
-                    "scanned_entries" => total_scanned_entries,
-                    "takes" => ?start.saturating_elapsed(),
-                    "downstream_id" => ?self.downstream_id,
+                    "scanned_bytes" => scan_stat.emit, "scanned_entries" => total_scanned_entries,
+                    "sink_takes" => ?sink_time, "takes" => ?start.saturating_elapsed(),
+                    "downstream_id" => ?self.downstream_id, "request_id" => ?self.request_id,
                     "region_id" => region_id, "conn_id" => ?self.conn_id,
                 );
             }
-
             // When downstream_state is Stopped, it means the corresponding
             // delegate is stopped. The initialization can be safely canceled.
             if self.downstream_state.load() == DownstreamState::Stopped {
@@ -399,8 +398,9 @@ impl<E: KvEngine> Initializer<E> {
             "sink_takes" => ?sink_time,
             "takes" => ?takes,
             "observe_id" => ?observe_id,
-            "region_id" => region_id,
             "downstream_id" => ?downstream_id,
+            "request_id" => ?self.request_id,
+            "region_id" => region_id,
             "conn_id" => ?conn_id,
         );
 
@@ -534,7 +534,7 @@ impl<E: KvEngine> Initializer<E> {
             .send_all(events, self.scan_truncated.clone())
             .await
         {
-            warn!("cdc send scan event failed"; "err" => ?e, "req_id" => ?self.request_id,
+            warn!("cdc send scan event failed"; "err" => ?e, "request_id" => ?self.request_id,
                 "downstream_id" => ?self.downstream_id, "region_id" => self.region_id, "conn_id" => ?self.conn_id);
             return Err(Error::Sink(e));
         }
