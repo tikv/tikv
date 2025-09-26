@@ -14,7 +14,7 @@ use kvproto::{metapb, pdpb};
 use pd_client::{BucketStat, PdClient};
 use raftstore::store::{
     AutoSplitController, Config, FlowStatsReporter, NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
-    PdStatsMonitor, ReadStats, SplitInfo, StoreStatsReporter, TabletSnapManager, TxnExt,
+    PdStatsMonitor, ReadStats, SplitAuditor, SplitInfo, StoreStatsReporter, TabletSnapManager, TxnExt,
     WriteStats, metrics::STORE_INSPECT_DURATION_HISTOGRAM, util::KeysInfoFormatter,
 };
 use resource_metering::{Collector, CollectorRegHandle, RawRecords};
@@ -261,7 +261,7 @@ where
             cfg.value().inspect_network_interval.0,
             PdReporter::new(pd_scheduler, logger.clone()),
         );
-        stats_monitor.start(auto_split_controller, collector_reg_handle)?;
+        stats_monitor.start(auto_split_controller, collector_reg_handle, SplitAuditor::new())?;
         let slowness_stats = slowness::SlownessStatistics::new(&cfg.value());
         Ok(Self {
             store_id,
