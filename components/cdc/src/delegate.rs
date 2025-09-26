@@ -223,9 +223,6 @@ impl Downstream {
     /// events or ResolvedTs will be sent to the downstream after
     /// `sink_error_event` is called.
     pub fn sink_error_event(&self, region_id: u64, err_event: EventError) -> Result<()> {
-        info!("cdc downstream meets region error";
-            "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => ?self.req_id);
-
         self.scan_truncated.store(true, Ordering::Release);
         let mut change_data_event = Event::default();
         change_data_event.event = Some(Event_oneof_event::Error(err_event));
@@ -492,8 +489,8 @@ impl Delegate {
             Error::MemoryQuotaExceeded(tikv_util::memory::MemoryQuotaExceeded)
         ));
 
-        info!("cdc region is ready"; "region_id" => self.region_id);
         self.finish_prepare_lock_tracker(region, locks)?;
+        info!("cdc region is ready"; "region_id" => self.region_id);
 
         let region = match &self.lock_tracker {
             LockTracker::Prepared { region, .. } => region,
@@ -565,6 +562,10 @@ impl Delegate {
         let region_id = self.region_id;
         if let Some(d) = self.remove_downstream(id) {
             if let Some(error_event) = error_event {
+                info!("cdc downstream unsubscribes with error";
+                    "origin_error" => ?error_event, "downstream" => ?d.peer,
+                    "downstream_id" => ?d.id, "request_id" => ?d.req_id,
+                    "region_id" => region_id, "conn_id" => ?d.conn_id);
                 if let Err(err) = d.sink_error_event(region_id, error_event.clone()) {
                     warn!("cdc send unsubscribe failed";
                         "region_id" => region_id, "error" => ?err, "origin_error" => ?error_event,
@@ -963,6 +964,7 @@ impl Delegate {
             } in &mut entries
             {
                 if !downstream.observed_range.contains_raw_key(&v.key) {
+                    CDC_DROPPED_ENTRY_COUNT.inc();
                     continue;
                 }
                 if let Some(read_old_ts) = needs_old_value {
@@ -1264,6 +1266,7 @@ fn decode_write(
     false
 }
 
+// decode the lock and return true that the caller should skip the record
 fn decode_lock(key: Vec<u8>, mut lock: Lock, row: &mut EventRow, has_value: &mut bool) -> bool {
     let key = Key::from_encoded(key);
     let op_type = match lock.lock_type {

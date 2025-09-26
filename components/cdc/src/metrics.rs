@@ -91,8 +91,10 @@ lazy_static! {
     pub static ref CDC_SCAN_SINK_DURATION_HISTOGRAM: Histogram = register_histogram!(
         "tikv_cdc_scan_sink_duration_seconds",
         "Bucketed histogram of cdc async scan sink time duration",
+        exponential_buckets(0.005, 2.0, 20).unwrap()
     )
     .unwrap();
+
     pub static ref CDC_SCAN_LONG_DURATION_REGIONS : IntGauge = register_int_gauge!(
         "tikv_cdc_scan_long_duration_region",
         "The number of regions that take a long time to scan"
@@ -102,6 +104,36 @@ lazy_static! {
         "Total fetched bytes of CDC incremental scan"
     )
     .unwrap();
+
+    pub static ref CDC_CONNECTION_COUNT: IntGauge = register_int_gauge!(
+        "tikv_cdc_connection_count",
+        "Total number of CDC connections"
+    ).unwrap();
+
+    pub static ref CDC_OBSERVED_BATCH_SIZE: Histogram = register_histogram!(
+        "tikv_cdc_observed_batch_size",
+        "The size of the last batch of events observed",
+        exponential_buckets(1.0, 2.0, 15).unwrap()
+    ).unwrap();
+
+    pub static ref CDC_HANDLED_TASKS_COUNT: IntCounterVec = register_int_counter_vec!(
+        "tikv_cdc_handled_tasks",
+        "Total number of handled tasks in CDC",
+        &["type"]
+    ).unwrap();
+
+    pub static ref CDC_TASKS_HANDLING_DURATION: HistogramVec = register_histogram_vec!(
+        "tikv_cdc_task_handling_duration_seconds",
+        "Bucketed histogram of CDC task handling duration",
+        &["type"],
+        exponential_buckets(0.001, 2.0, 24).unwrap()
+    ).unwrap();
+
+    pub static ref CDC_DROPPED_ENTRY_COUNT: IntCounter = register_int_counter!(
+        "tikv_cdc_dropped_entry_count",
+        "Total count of dropped entries",
+    ).unwrap();
+
 
     pub static ref CDC_DROP_TXN_EXTRA_TASKS_COUNT:IntCounter = register_int_counter!(
         "tikv_cdc_drop_txn_extra_task_count",
