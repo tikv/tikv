@@ -1805,6 +1805,7 @@ impl PdClient for TestPdClient {
         &self,
         region: metapb::Region,
         count: usize,
+        _reason: pdpb::AutoSplitReason,
     ) -> PdFuture<pdpb::AskBatchSplitResponse> {
         if self.is_incompatible {
             return Box::pin(err(Error::Incompatible));
