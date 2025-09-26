@@ -338,8 +338,7 @@ impl Sink {
         }
         self.memory_quota.alloc(total_bytes as _)?;
 
-        let count = scaned_events.len();
-        let now = Instant::now_coarse();
+        let now: Instant = Instant::now_coarse();
         for event in scaned_events {
             let bytes = event.size() as usize;
             let sc_event = ScanedEvent::new(now, event, bytes, truncated.clone());
@@ -354,10 +353,6 @@ impl Sink {
             self.memory_quota.free(total_bytes as _);
             return Err(SendError::from(e));
         }
-        CDC_SCAN_SINK_FLUSH_DURATION_HISTOGRAM.observe(now.saturating_elapsed_secs());
-        CDC_EVENTS_PENDING_COUNT
-            .with_label_values(&["scanned"])
-            .add(count as _);
         Ok(())
     }
 }
@@ -405,6 +400,7 @@ impl<'a> Drain {
         let total_event_bytes = CDC_GRPC_ACCUMULATE_MESSAGE_BYTES.with_label_values(&["event"]);
         let total_resolved_ts_bytes =
             CDC_GRPC_ACCUMULATE_MESSAGE_BYTES.with_label_values(&["resolved_ts"]);
+
         let memory_quota = self.memory_quota.clone();
         let mut chunks = self.drain().ready_chunks(CDC_EVENT_MAX_COUNT);
         while let Some(events) = chunks.next().await {
@@ -419,7 +415,6 @@ impl<'a> Drain {
             let resps_len = resps.len();
             // Events are about to be sent, free pending events memory counter.
             memory_quota.free(bytes as _);
-
             for (i, e) in resps.into_iter().enumerate() {
                 // Buffer messages and flush them at once.
                 let write_flags = WriteFlags::default().buffer_hint(i + 1 != resps_len);

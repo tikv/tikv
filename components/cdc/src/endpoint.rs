@@ -405,10 +405,6 @@ impl Advance {
             resolved_ts.request_id = req_id.0;
             *resolved_ts.mut_regions() = regions;
 
-            CDC_EVENTS_PENDING_COUNT
-                .with_label_values(&["resolved-ts"])
-                .inc();
-
             let res = conn
                 .get_sink()
                 .unbounded_send(CdcEvent::ResolvedTs(resolved_ts), false);
@@ -1189,7 +1185,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     Ok(_) | Err(ScheduleError::Stopped(_)) => (),
                     // Must schedule `MinTS` event otherwise resolved ts can not
                     // advance normally.
-                    Err(e) => panic!("cdc failed to schedule min ts event, {:?}", e),
+                    Err(err) => panic!("cdc failed to schedule min ts event, error: {:?}", err),
                 }
             }
         };

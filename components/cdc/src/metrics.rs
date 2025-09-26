@@ -95,25 +95,6 @@ lazy_static! {
     )
     .unwrap();
 
-    pub static ref CDC_EVENTS_PENDING_COUNT: IntGaugeVec = register_int_gauge_vec!(
-        "tikv_cdc_events_pending_count",
-        "The number of pending events in cdc",
-        &["type"]
-    ).unwrap();
-
-    pub static ref CDC_SCAN_SINK_FLUSH_DURATION_HISTOGRAM: Histogram = register_histogram!(
-        "tikv_cdc_scan_sink_flush_duration_seconds",
-        "Bucketed histogram of cdc sink flush time duration",
-        exponential_buckets(0.005, 2.0, 20).unwrap()
-    ).unwrap();
-
-    pub static ref CDC_SCAN_DRAIN_DURATION_HISTOGRAM: HistogramVec = register_histogram_vec!(
-        "tikv_cdc_scan_drain_flush_duration_seconds",
-        "Bucketed histogram of cdc sink flush time duration",
-        &["phase"],
-        exponential_buckets(0.005, 2.0, 20).unwrap()
-    ).unwrap();
-
     pub static ref CDC_SCAN_LONG_DURATION_REGIONS : IntGauge = register_int_gauge!(
         "tikv_cdc_scan_long_duration_region",
         "The number of regions that take a long time to scan"
