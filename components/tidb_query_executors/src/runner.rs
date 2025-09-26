@@ -459,6 +459,7 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
                 }
             }
             ExecType::TypeIndexLookUp => {
+                EXECUTOR_COUNT_METRICS.batch_index_lookup.inc();
                 if children.len() != 1 {
                     return Err(other_err!(
                         "IndexLookUp should have one child executor, but got {}",
@@ -501,6 +502,7 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
                         tbl_scan,
                         extra_storage_accessor.clone(),
                         channel_ids[0],
+                        summary_slot_index - 1,
                     )?;
                     Box::new(e.collect_summary(summary_slot_index))
                 }
@@ -1361,47 +1363,53 @@ mod tests {
                 .contains("The intermediate schema is not found until root executor, index: 2")
         );
 
-        let check_index_lookup_executor = |executor: &IndexLookupExecutor| {
-            // schema should use the table scan's schema
-            assert_eq!(
-                executor.schema(),
-                table_columns
-                    .iter()
-                    .map(field_type_from_column_info)
-                    .collect_vec()
-                    .as_slice()
-            );
+        let check_index_lookup_executor =
+            |executor: &IndexLookupExecutor, table_scan_child_idx: usize| {
+                // schema should use the table scan's schema
+                assert_eq!(
+                    executor.schema(),
+                    table_columns
+                        .iter()
+                        .map(field_type_from_column_info)
+                        .collect_vec()
+                        .as_slice()
+                );
 
-            // cfg should equal
-            let config = executor.config();
-            assert_eq!(config.flag, cfg.flag);
-            assert_eq!(config.div_precision_increment, cfg.div_precision_increment);
-            assert_eq!(config.sql_mode, cfg.sql_mode);
+                // cfg should equal
+                let config = executor.config();
+                assert_eq!(config.flag, cfg.flag);
+                assert_eq!(config.div_precision_increment, cfg.div_precision_increment);
+                assert_eq!(config.sql_mode, cfg.sql_mode);
 
-            // check table scan params
-            assert_eq!(
-                &TableScanParams {
-                    columns_info: table_columns.clone(),
-                    primary_column_ids: vec![],
-                    primary_prefix_column_ids: vec![],
-                },
-                executor.get_table_scan_params()
-            );
+                // check table scan params
+                assert_eq!(
+                    &TableScanParams {
+                        columns_info: table_columns.clone(),
+                        primary_column_ids: vec![],
+                        primary_prefix_column_ids: vec![],
+                    },
+                    executor.get_table_scan_params()
+                );
 
-            // check table task iter builder
-            let builder = executor.get_table_task_builder().unwrap();
-            assert_eq!(456, builder.table_id());
-            assert_eq!(
-                &IndexLayout {
-                    handle_types: vec![field_type_from_column_info(index_columns.get(1).unwrap())],
-                    handle_offsets: vec![1],
-                },
-                builder.get_index_layout()
-            );
+                // check table task iter builder
+                let builder = executor.get_table_task_builder().unwrap();
+                assert_eq!(456, builder.table_id());
+                assert_eq!(
+                    &IndexLayout {
+                        handle_types: vec![field_type_from_column_info(
+                            index_columns.get(1).unwrap()
+                        )],
+                        handle_offsets: vec![1],
+                    },
+                    builder.get_index_layout()
+                );
 
-            // check intermediate channel index
-            assert_eq!(1, executor.intermediate_channel_index());
-        };
+                // check intermediate channel index
+                assert_eq!(1, executor.intermediate_channel_index());
+
+                // check the lookup executor's index
+                assert_eq!(table_scan_child_idx, executor.table_scan_child_index());
+            };
 
         // check the executors from top to down:
         // Projection <- Selection <- IndexLookUp <- Limit <- IndexScan
@@ -1414,7 +1422,7 @@ mod tests {
         let summary = cast_as_summary::<IndexLookupExecutor>(executor);
         assert_eq!(3, summary.summary_collector.get_output_index());
         let index_lookup = summary.into_inner();
-        check_index_lookup_executor(&index_lookup);
+        check_index_lookup_executor(&index_lookup, 2);
         executor = index_lookup.into_index_child();
         let summary = cast_as_summary::<LimitExecutor>(executor);
         assert_eq!(1, summary.summary_collector.get_output_index());
