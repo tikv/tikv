@@ -999,6 +999,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         fail_point!("cdc_before_handle_multi_batch", |_| {});
         let size = multi.iter().map(|b| b.size()).sum();
         self.sink_memory_quota.free(size);
+        CDC_OBSERVED_BATCH_SIZE.observe(multi.len() as f64);
+
         let mut statistics = Statistics::default();
         for batch in multi {
             let region_id = batch.region_id;

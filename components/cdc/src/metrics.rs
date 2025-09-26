@@ -110,6 +110,12 @@ lazy_static! {
         "Total number of CDC connections"
     ).unwrap();
 
+    pub static ref CDC_OBSERVED_BATCH_SIZE: Histogram = register_histogram!(
+        "tikv_cdc_observed_batch_size",
+        "The size of the last batch of events observed",
+        exponential_buckets(1.0, 2.0, 15).unwrap()
+    ).unwrap();
+
     pub static ref CDC_DROP_TXN_EXTRA_TASKS_COUNT:IntCounter = register_int_counter!(
         "tikv_cdc_drop_txn_extra_task_count",
         "Total count of dropped txn extra tasks"
