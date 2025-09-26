@@ -159,38 +159,7 @@ impl<E: Engine> Endpoint<E> {
     }
 
     fn check_memory_locks(&self, req_ctx: &ReqContext) -> Result<()> {
-        let start_ts = req_ctx.txn_start_ts;
-        if !req_ctx.context.get_stale_read() {
-            self.concurrency_manager
-                .update_max_ts(start_ts, || format!("coprocessor-{}", start_ts))?;
-        }
-        if need_check_locks(req_ctx.context.get_isolation_level()) {
-            let begin_instant = Instant::now();
-            for range in &req_ctx.ranges {
-                let start_key = txn_types::Key::from_raw_maybe_unbounded(range.get_start());
-                let end_key = txn_types::Key::from_raw_maybe_unbounded(range.get_end());
-                self.concurrency_manager
-                    .read_range_check(start_key.as_ref(), end_key.as_ref(), |key, lock| {
-                        Lock::check_ts_conflict(
-                            Cow::Borrowed(lock),
-                            key,
-                            start_ts,
-                            &req_ctx.bypass_locks,
-                            req_ctx.context.get_isolation_level(),
-                        )
-                    })
-                    .map_err(|e| {
-                        MEM_LOCK_CHECK_HISTOGRAM_VEC_STATIC
-                            .locked
-                            .observe(begin_instant.saturating_elapsed().as_secs_f64());
-                        MvccError::from(e)
-                    })?;
-            }
-            MEM_LOCK_CHECK_HISTOGRAM_VEC_STATIC
-                .unlocked
-                .observe(begin_instant.saturating_elapsed().as_secs_f64());
-        }
-        Ok(())
+        check_memory_locks_for_ranges(&self.concurrency_manager, req_ctx, &req_ctx.ranges)
     }
 
     /// Parse the raw `Request` to create `RequestHandlerBuilder` and
@@ -283,6 +252,7 @@ impl<E: Engine> Endpoint<E> {
 
                 let batch_row_limit = self.get_batch_row_limit(is_streaming);
                 let quota_limiter = self.quota_limiter.clone();
+                let concurrency_manager = self.concurrency_manager.clone();
                 handler_builder = Box::new(move |snap, req_ctx| {
                     let data_version = snap.ext().get_data_version();
                     let store = SnapshotStore::new(
@@ -298,11 +268,14 @@ impl<E: Engine> Endpoint<E> {
                         0 => None,
                         i => Some(i),
                     };
+
+                    let extra_store_accessor =
+                        ExtraSnapStoreAccessor::<E>::new(req_ctx.clone(), concurrency_manager);
                     dag::DagHandlerBuilder::<_, _, F>::new(
                         dag,
                         req_ctx.ranges.clone(),
                         store,
-                        ExtraSnapStoreAccessor::<E>::new(req_ctx.clone()),
+                        extra_store_accessor,
                         req_ctx.deadline,
                         batch_row_limit,
                         is_streaming,
@@ -919,6 +892,44 @@ impl<E: Engine> Endpoint<E> {
     }
 }
 
+fn check_memory_locks_for_ranges(
+    concurrency_manager: &ConcurrencyManager,
+    req_ctx: &ReqContext,
+    key_ranges: &[coppb::KeyRange],
+) -> Result<()> {
+    let start_ts = req_ctx.txn_start_ts;
+    if !req_ctx.context.get_stale_read() {
+        concurrency_manager.update_max_ts(start_ts, || format!("coprocessor-{}", start_ts))?;
+    }
+    if need_check_locks(req_ctx.context.get_isolation_level()) {
+        let begin_instant = Instant::now();
+        for range in key_ranges {
+            let start_key = txn_types::Key::from_raw_maybe_unbounded(range.get_start());
+            let end_key = txn_types::Key::from_raw_maybe_unbounded(range.get_end());
+            concurrency_manager
+                .read_range_check(start_key.as_ref(), end_key.as_ref(), |key, lock| {
+                    Lock::check_ts_conflict(
+                        Cow::Borrowed(lock),
+                        key,
+                        start_ts,
+                        &req_ctx.bypass_locks,
+                        req_ctx.context.get_isolation_level(),
+                    )
+                })
+                .map_err(|e| {
+                    MEM_LOCK_CHECK_HISTOGRAM_VEC_STATIC
+                        .locked
+                        .observe(begin_instant.saturating_elapsed().as_secs_f64());
+                    MvccError::from(e)
+                })?;
+        }
+        MEM_LOCK_CHECK_HISTOGRAM_VEC_STATIC
+            .unlocked
+            .observe(begin_instant.saturating_elapsed().as_secs_f64());
+    }
+    Ok(())
+}
+
 macro_rules! make_error_response_common {
     ($resp:expr, $tag:expr, $e:expr) => {{
         match $e {
@@ -1000,10 +1011,11 @@ fn make_error_response(e: Error) -> coppb::Response {
 /// For example, if a cop-task contains a `IndexLookUp` executor which needs to
 /// access look up the primary rows, it will use this accessor to locate and get
 /// the snapshot of the regions which these primary rows located.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ExtraSnapStoreAccessor<E> {
     store_id: u64,
     req_ctx: ReqContext,
+    concurrency_manager: ConcurrencyManager,
     _phantom: PhantomData<fn() -> E>,
 }
 
@@ -1012,7 +1024,7 @@ impl<E: Engine> ExtraSnapStoreAccessor<E> {
     /// Please note that not all scenes are supported.
     /// If the current request is not supported, a `None` value will be
     /// returned to force the request to access the source region only.
-    pub fn new(req_ctx: ReqContext) -> Option<Self> {
+    pub fn new(req_ctx: ReqContext, concurrency_manager: ConcurrencyManager) -> Option<Self> {
         let pb_ctx = &req_ctx.context;
         let store_id = match pb_ctx.peer.as_ref() {
             // Though it is possible that the request carries a wrong store_id, we can still use
@@ -1031,6 +1043,7 @@ impl<E: Engine> ExtraSnapStoreAccessor<E> {
             return Some(Self {
                 store_id,
                 req_ctx,
+                concurrency_manager,
                 _phantom: PhantomData,
             });
         }
@@ -1085,7 +1098,7 @@ impl<E: Engine> RegionStorageAccessor for ExtraSnapStoreAccessor<E> {
     async fn get_local_region_storage(
         &self,
         region: &metapb::Region,
-        _key_range: &[coppb::KeyRange],
+        key_range: &[coppb::KeyRange],
     ) -> StorageResult<Self::Storage> {
         let peer = match find_peer(region, self.store_id) {
             Some(peer) => peer.clone(),
@@ -1098,6 +1111,7 @@ impl<E: Engine> RegionStorageAccessor for ExtraSnapStoreAccessor<E> {
             }
         };
 
+        check_memory_locks_for_ranges(&self.concurrency_manager, &self.req_ctx, key_range)?;
         let pb_ctx = &self.req_ctx.context;
         let start_ts = self.req_ctx.txn_start_ts;
         let snap_ctx = SnapContext {
@@ -1149,12 +1163,13 @@ impl<E: Engine> RegionStorageAccessor for ExtraSnapStoreAccessor<E> {
 #[cfg(test)]
 mod tests {
     use std::{
+        assert_matches::assert_matches,
         sync::{atomic, mpsc, Mutex},
         thread, vec,
     };
 
     use futures::executor::{block_on, block_on_stream};
-    use kvproto::kvrpcpb::IsolationLevel;
+    use kvproto::kvrpcpb::{IsolationLevel, LockInfo};
     use protobuf::Message;
     use raft::StateRole;
     use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
@@ -2449,28 +2464,29 @@ mod tests {
         type StoreAccessor = ExtraSnapStoreAccessor<RocksEngine>;
         // construct a ReqContext that support to access another snapshot in a request
         let req_ctx = default_req_ctx_support_snap_accessor();
+        let cm = ConcurrencyManager::new_for_test(1.into());
 
         // accessor support case
         let mut ctx = req_ctx.clone();
-        assert!(StoreAccessor::new(ctx.into()).is_some());
+        assert!(StoreAccessor::new(ctx.into(), cm.clone()).is_some());
 
         // does not support Rc / RcCheckTs
         ctx = req_ctx.clone();
         ctx.context.set_isolation_level(IsolationLevel::Rc);
-        assert!(StoreAccessor::new(ctx.into()).is_none());
+        assert!(StoreAccessor::new(ctx.into(), cm.clone()).is_none());
         ctx = req_ctx.clone();
         ctx.context.set_isolation_level(IsolationLevel::RcCheckTs);
-        assert!(StoreAccessor::new(ctx.into()).is_none());
+        assert!(StoreAccessor::new(ctx.into(), cm.clone()).is_none());
 
         // does not support stale read
         ctx = req_ctx.clone();
         ctx.context.set_stale_read(true);
-        assert!(StoreAccessor::new(ctx.into()).is_none());
+        assert!(StoreAccessor::new(ctx.into(), cm.clone()).is_none());
 
         // does not support replica read
         ctx = req_ctx.clone();
         ctx.context.set_replica_read(true);
-        assert!(StoreAccessor::new(ctx.into()).is_none());
+        assert!(StoreAccessor::new(ctx.into(), cm.clone()).is_none());
     }
 
     #[test]
@@ -2508,7 +2524,11 @@ mod tests {
         }
 
         type StoreAccessor = ExtraSnapStoreAccessor<RocksEngine>;
-        let accessor = StoreAccessor::new(default_req_ctx_support_snap_accessor().into()).unwrap();
+        let accessor = StoreAccessor::new(
+            default_req_ctx_support_snap_accessor().into(),
+            ConcurrencyManager::new_for_test(1.into()),
+        )
+        .unwrap();
 
         // key is before any region, not found
         assert_eq!(
@@ -2590,7 +2610,11 @@ mod tests {
 
         impl TestCtx {
             fn new_accessor(&self) -> StoreAccessor {
-                StoreAccessor::new(self.get_req_ctx()).unwrap()
+                StoreAccessor::new(
+                    self.get_req_ctx(),
+                    ConcurrencyManager::new_for_test(1.into()),
+                )
+                .unwrap()
             }
 
             fn get_req_ctx(&self) -> ReqContext {
@@ -2784,7 +2808,11 @@ mod tests {
         }
         let def_req = default_req_ctx_support_snap_accessor();
         let store_id = def_req.context.get_peer().get_store_id();
-        let store_accessor = ExtraSnapStoreAccessor::<RocksEngine>::new(def_req.into()).unwrap();
+        let store_accessor = ExtraSnapStoreAccessor::<RocksEngine>::new(
+            def_req.into(),
+            ConcurrencyManager::new_for_test(1.into()),
+        )
+        .unwrap();
         let storage_accessor = dag::ExtraTiKVStorageAccessor::<
             ExtraSnapStoreAccessor<RocksEngine>,
         >::from_store_accessor(store_accessor);
@@ -2814,5 +2842,64 @@ mod tests {
 
         // should always disable check_can_be_cached
         assert!(storage.met_uncacheable_data().is_none());
+    }
+
+    #[test]
+    fn test_extra_snap_accessor_check_memory_locks() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let region = metapb::Region {
+            id: 1,
+            start_key: b"".to_vec(),
+            end_key: b"".to_vec(),
+            peers: vec![metapb::Peer {
+                id: 1,
+                store_id: 100,
+                ..Default::default()
+            }]
+            .into(),
+            ..Default::default()
+        };
+        engine.set_region_info_provider(MockRegionInfoProvider::new(vec![region.clone()]));
+        set_tls_engine(engine);
+        defer! {
+            unsafe {destroy_tls_engine::<RocksEngine>()}
+        }
+
+        let cm = ConcurrencyManager::new_for_test(1.into());
+        let mut req = default_req_ctx_support_snap_accessor();
+        req.txn_start_ts = 100.into();
+        let accessor = ExtraSnapStoreAccessor::<RocksEngine>::new(req.into(), cm.clone()).unwrap();
+
+        let key = Key::from_raw(b"key");
+        let guard = block_on(cm.lock_key(&key));
+        guard.with_lock(|lock| {
+            *lock = Some(txn_types::Lock::new(
+                LockType::Put,
+                b"key".to_vec(),
+                10.into(),
+                100,
+                Some(vec![]),
+                0.into(),
+                1,
+                20.into(),
+                false,
+            ));
+        });
+
+        let err = block_on(accessor.get_local_region_storage(
+            &region,
+            &[coppb::KeyRange {
+                start: b"key".to_vec(),
+                end: b"key0".to_vec(),
+                ..Default::default()
+            }],
+        ))
+        .map_err(Error::from)
+        .err()
+        .unwrap();
+        assert_matches!(err, Error::Locked(LockInfo { key, .. }) if {
+            assert_eq!(key, b"key".to_vec());
+            true
+        });
     }
 }
