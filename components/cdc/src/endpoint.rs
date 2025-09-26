@@ -1237,7 +1237,16 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
             Task::MultiBatch {
                 multi,
                 old_value_cb,
-            } => self.on_multi_batch(multi, old_value_cb),
+            } => {
+                let now = Instant::now_coarse();
+                self.on_multi_batch(multi, old_value_cb);
+                CDC_TASKS_HANDLING_DURATION
+                    .with_label_values(&["multi_batch"])
+                    .observe(now.saturating_elapsed().as_secs_f64());
+                CDC_HANDLED_TASKS_COUNT
+                    .with_label_values(&["multi_batch"])
+                    .inc();
+            }
             Task::OpenConn { conn } => self.on_open_conn(conn),
             Task::SetConnVersion {
                 conn_id,

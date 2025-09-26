@@ -116,6 +116,25 @@ lazy_static! {
         exponential_buckets(1.0, 2.0, 15).unwrap()
     ).unwrap();
 
+    pub static ref CDC_HANDLED_TASKS_COUNT: IntCounterVec = register_int_counter_vec!(
+        "tikv_cdc_handled_tasks",
+        "Total number of handled tasks in CDC",
+        &["type"]
+    ).unwrap();
+
+    pub static ref CDC_TASKS_HANDLING_DURATION: HistogramVec = register_histogram_vec!(
+        "tikv_cdc_task_handling_duration_seconds",
+        "Bucketed histogram of CDC task handling duration",
+        &["type"],
+        exponential_buckets(0.001, 2.0, 24).unwrap()
+    ).unwrap();
+
+    pub static ref CDC_DROPPED_ENTRY_COUNT: IntCounter = register_int_counter!(
+        "tikv_cdc_dropped_entry_count",
+        "Total count of dropped entries",
+    ).unwrap();
+
+
     pub static ref CDC_DROP_TXN_EXTRA_TASKS_COUNT:IntCounter = register_int_counter!(
         "tikv_cdc_drop_txn_extra_task_count",
         "Total count of dropped txn extra tasks"
