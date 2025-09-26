@@ -68,7 +68,7 @@ use crate::{
         },
         util::{KeysInfoFormatter, is_epoch_stale},
         worker::{
-            AutoSplitController, ReadStats, SplitConfigChange, WriteStats, SplitAuditor,
+            AutoSplitController, ReadStats, SplitAuditor, SplitConfigChange, WriteStats,
             split_controller::{SplitInfo, TOP_N},
         },
     },
@@ -826,7 +826,7 @@ where
         reporter: &T,
         collector_reg_handle: &CollectorRegHandle,
         region_cpu_records_collector: &mut Option<CollectorGuard>,
-        split_auditor: &SplitAuditor
+        split_auditor: &SplitAuditor,
     ) {
         let start_time = TiInstant::now();
         match auto_split_controller.refresh_and_check_cfg() {
@@ -960,7 +960,7 @@ where
     // Service manager for grpc service.
     grpc_service_manager: GrpcServiceManager,
 
-    split_auditor: SplitAuditor
+    split_auditor: SplitAuditor,
 }
 
 impl<EK, ER, T> Runner<EK, ER, T>
@@ -997,7 +997,11 @@ where
             WrappedScheduler(scheduler.clone()),
         );
         let split_auditor = SplitAuditor::new();
-        if let Err(e) = stats_monitor.start(auto_split_controller, collector_reg_handle, split_auditor.clone()) {
+        if let Err(e) = stats_monitor.start(
+            auto_split_controller,
+            collector_reg_handle,
+            split_auditor.clone(),
+        ) {
             error!("failed to start stats collector, error = {:?}", e);
         }
 
