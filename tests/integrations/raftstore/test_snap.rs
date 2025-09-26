@@ -1274,6 +1274,7 @@ fn test_extra_snapshot_override() {
     configure_for_snapshot(&mut cluster.cfg);
     cluster.run_conf_change();
     let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
     for key in [b"a", b"b", b"c", b"d"] {
         let region = pd_client.get_region_info(key).unwrap();
         cluster.must_split(&region, key);
