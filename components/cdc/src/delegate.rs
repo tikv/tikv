@@ -946,6 +946,7 @@ impl Delegate {
             } in &mut entries
             {
                 if !downstream.observed_range.contains_raw_key(&v.key) {
+                    CDC_DROPPED_ENTRY_COUNT.inc();
                     continue;
                 }
                 if let Some(read_old_ts) = needs_old_value {
