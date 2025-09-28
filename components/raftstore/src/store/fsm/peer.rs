@@ -1694,10 +1694,18 @@ where
             SignificantMsg::SnapshotBrWaitApply(syncer) => self.on_snapshot_br_wait_apply(syncer),
             SignificantMsg::CheckPendingAdmin(ch) => self.on_check_pending_admin(ch),
             SignificantMsg::ReadyToDestroyPeer {
+                to_peer_id,
                 merged_by_target,
                 clear_stat,
             } => {
-                assert!(self.fsm.peer.pending_remove);
+                if to_peer_id != self.fsm.peer_id() {
+                    // Ignore redundant or stale messages from an outdated peer for the same region.
+                    // This handles the corner case where a stale peer is being removed
+                    // asynchronously while a new peer for the region is added.
+                    // If the async cleanup thread returns a delayed message
+                    // aimed to the removed peer, skip it to avoid acting on stale state.
+                    return;
+                }
                 self.on_ready_destroy_peer(merged_by_target, clear_stat);
             }
         }
@@ -2577,8 +2585,7 @@ where
                     return;
                 }
                 self.on_ready_result(&mut res.exec_res, &res.metrics);
-                if self.fsm.stopped || self.fsm.peer.pending_remove {
-                    // Extra: no needs to apply if the peer is already pending on removing.
+                if self.fsm.stopped {
                     return;
                 }
                 let applied_index = res.apply_state.applied_index;
@@ -4259,6 +4266,7 @@ where
         merged_by_target: bool,
         clear_stat: PeerClearMetaStat,
     ) -> bool {
+        assert!(self.fsm.peer.pending_remove);
         // Clean remains if needs and notify all pending requests to exit.
         self.fsm
             .peer

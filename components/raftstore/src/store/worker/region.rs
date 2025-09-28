@@ -895,6 +895,7 @@ where
                         let _ = self.router.significant_send(
                             region_id,
                             SignificantMsg::ReadyToDestroyPeer {
+                                to_peer_id: peer_id,
                                 merged_by_target: keep_data,
                                 clear_stat,
                             },
