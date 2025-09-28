@@ -7,13 +7,13 @@ use std::{
     sync::Arc,
 };
 
-use api_version::KvFormat;
+use api_version::{ApiV1, KvFormat};
 use async_trait::async_trait;
 use kvproto::{coprocessor::KeyRange, metapb};
 use tidb_query_common::{
     Error,
     error::Result,
-    execute_stats::{ExecSummaryCollectorEnabled, ExecuteStats, WithSummaryCollector},
+    execute_stats::{ExecSummaryCollectorEnabled, ExecuteStats},
     storage::{FindRegionResult, IntervalRange, RegionStorageAccessor, StateRole, Storage},
 };
 use tidb_query_datatype::{
@@ -28,12 +28,12 @@ use tikv_util::{
     Either,
     Either::{Left, Right},
 };
-use tipb::{ColumnInfo, FieldType};
+use tipb::{ColumnInfo, FieldType, IndexLookUp, TableScan};
 use txn_types::Key;
 
 use crate::{
     BatchTableScanExecutor,
-    interface::{BatchExecIsDrain, BatchExecuteResult, BatchExecutor},
+    interface::{BatchExecIsDrain, BatchExecuteResult, BatchExecutor, WithSummaryCollector},
     util::scan_executor::field_type_from_column_info,
 };
 
@@ -43,26 +43,25 @@ struct IndexScanState {
     row_count: usize,
 }
 
-struct TableLookUpState<Iter: TableTaskIterator, F: KvFormat> {
+struct TableLookUpState<Iter, S: Storage, F: KvFormat> {
     table_task_iter: Option<Iter>,
-    table_scan: Option<
-        WithSummaryCollector<ExecSummaryCollectorEnabled, BatchTableScanExecutor<Iter::Storage, F>>,
-    >,
+    table_scan:
+        Option<WithSummaryCollector<ExecSummaryCollectorEnabled, BatchTableScanExecutor<S, F>>>,
 }
 
-enum IndexLookUpPhase<Iter: TableTaskIterator, F: KvFormat> {
+enum IndexLookUpPhase<Iter, S: Storage, F: KvFormat> {
     IndexScan(IndexScanState),
-    TableLookUp(TableLookUpState<Iter, F>),
+    TableLookUp(TableLookUpState<Iter, S, F>),
     Done,
 }
 
-impl<Iter: TableTaskIterator, F: KvFormat> Default for IndexLookUpPhase<Iter, F> {
+impl<Iter, S: Storage, F: KvFormat> Default for IndexLookUpPhase<Iter, S, F> {
     fn default() -> Self {
         IndexLookUpPhase::IndexScan(IndexScanState::default())
     }
 }
 
-impl<Iter: TableTaskIterator, F: KvFormat> IndexLookUpPhase<Iter, F> {
+impl<Iter, S: Storage, F: KvFormat> IndexLookUpPhase<Iter, S, F> {
     fn mut_index_scan_or_err(&mut self) -> Result<&mut IndexScanState> {
         match self {
             IndexLookUpPhase::IndexScan(ref mut s) => Ok(s),
@@ -70,7 +69,7 @@ impl<Iter: TableTaskIterator, F: KvFormat> IndexLookUpPhase<Iter, F> {
         }
     }
 
-    fn mut_table_lookup_or_err(&mut self) -> Result<&mut TableLookUpState<Iter, F>> {
+    fn mut_table_lookup_or_err(&mut self) -> Result<&mut TableLookUpState<Iter, S, F>> {
         match self {
             IndexLookUpPhase::TableLookUp(ref mut s) => Ok(s),
             _ => Err(other_err!("The current phase is not TableLookUp")),
@@ -78,14 +77,14 @@ impl<Iter: TableTaskIterator, F: KvFormat> IndexLookUpPhase<Iter, F> {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct TableScanParams {
-    columns_info: Vec<ColumnInfo>,
-    primary_column_ids: Vec<i64>,
-    primary_prefix_column_ids: Vec<i64>,
+    pub columns_info: Vec<ColumnInfo>,
+    pub primary_column_ids: Vec<i64>,
+    pub primary_prefix_column_ids: Vec<i64>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct IndexLayout {
     pub handle_types: Vec<FieldType>,
     pub handle_offsets: Vec<usize>,
@@ -95,7 +94,7 @@ pub struct BatchIndexLookUpExecutor<S, Src, Builder, F>
 where
     S: Storage,
     Src: BatchExecutor<StorageStats = S::Statistics>,
-    Builder: TableTaskIterBuilder<Iterator: TableTaskIterator<Storage = S>>,
+    Builder: TableTaskIterBuilder,
     F: KvFormat,
 {
     src: Src,
@@ -109,8 +108,79 @@ where
     table_task_iter_builder: Option<Builder>,
     table_scan_params: TableScanParams,
 
-    phase: IndexLookUpPhase<Builder::Iterator, F>,
+    phase: IndexLookUpPhase<Builder::Iterator, S, F>,
     intermediate_results: Vec<BatchExecuteResult>,
+    intermediate_channel_index: usize,
+}
+
+#[inline]
+pub fn build_index_lookup_executor<
+    S: Storage + 'static,
+    Handle: RowHandle + 'static,
+    F: KvFormat,
+>(
+    config: Arc<EvalConfig>,
+    src: impl BatchExecutor<StorageStats = S::Statistics> + 'static,
+    mut index_lookup: IndexLookUp,
+    mut tbl_scan: TableScan,
+    accessor: Option<impl RegionStorageAccessor<Storage = S> + 'static>,
+    intermediate_channel_index: usize,
+) -> Result<impl BatchExecutor<StorageStats = S::Statistics>> {
+    if index_lookup.get_keep_order() {
+        return Err(other_err!(
+            "IndexLookupExecutor does not support keep order currently"
+        ));
+    }
+
+    let src_schema = src.schema();
+    let handle_offsets = index_lookup
+        .take_index_handle_offsets()
+        .into_iter()
+        .map(|offset| offset as usize)
+        .collect::<Vec<_>>();
+
+    let handle_types = handle_offsets
+        .iter()
+        .map(|&offset| src_schema[offset].clone())
+        .collect();
+
+    Ok(BatchIndexLookUpExecutor::<_, _, _, F>::new(
+        config,
+        src,
+        TableScanParams {
+            columns_info: tbl_scan.take_columns().into(),
+            primary_column_ids: tbl_scan.take_primary_column_ids(),
+            primary_prefix_column_ids: tbl_scan.take_primary_prefix_column_ids(),
+        },
+        accessor.map(|acc| {
+            AccessorTableTaskIterBuilder::<_, Handle>::new(
+                tbl_scan.get_table_id(),
+                acc,
+                IndexLayout {
+                    handle_types,
+                    handle_offsets,
+                },
+            )
+        }),
+        intermediate_channel_index,
+    ))
+}
+
+// We assign a dummy type `Box<dyn Storage<Statistics = ()>>` so that we can
+// omit the type when calling `check_supported`.
+impl
+    BatchIndexLookUpExecutor<
+        Box<dyn Storage<Statistics = ()>>,
+        Box<dyn BatchExecutor<StorageStats = ()>>,
+        Box<dyn TableTaskIterBuilder<Iterator = ()>>,
+        ApiV1,
+    >
+{
+    /// Checks whether this executor can be used.
+    #[inline]
+    pub fn check_supported(_descriptor: &IndexLookUp) -> Result<()> {
+        Ok(())
+    }
 }
 
 impl<S, Src, Builder, F> BatchIndexLookUpExecutor<S, Src, Builder, F>
@@ -120,14 +190,13 @@ where
     Builder: TableTaskIterBuilder<Iterator: TableTaskIterator<Storage = S>>,
     F: KvFormat,
 {
-    // TODO: remove #[allow(dead_code)] after new function is used
-    #[allow(dead_code)]
     #[inline]
     pub fn new(
         config: Arc<EvalConfig>,
         src: Src,
         table_scan_params: TableScanParams,
         table_task_iter_builder: Option<Builder>,
+        intermediate_channel_index: usize,
     ) -> Self {
         let force_no_index_lookup =
             if config.paging_size.is_some() || table_task_iter_builder.is_none() {
@@ -159,7 +228,33 @@ where
             table_task_iter_builder,
             phase: IndexLookUpPhase::default(),
             table_scan_params,
+            intermediate_channel_index,
         }
+    }
+
+    #[cfg(test)]
+    pub fn into_index_child(self) -> Src {
+        self.src
+    }
+
+    #[inline]
+    pub fn config(&self) -> Arc<EvalConfig> {
+        self.config.clone()
+    }
+
+    #[inline]
+    pub fn get_table_scan_params(&self) -> &TableScanParams {
+        &self.table_scan_params
+    }
+
+    #[inline]
+    pub fn get_table_task_builder(&self) -> Option<&Builder> {
+        self.table_task_iter_builder.as_ref()
+    }
+
+    #[inline]
+    pub fn intermediate_channel_index(&self) -> usize {
+        self.intermediate_channel_index
     }
 
     #[inline]
@@ -358,6 +453,35 @@ where
     // TODO: A concurrent execution implementation so that the index-scan and
     // table-lookup does not block each-other.
     #[inline]
+    fn intermediate_schema(&self, index: usize) -> Result<&[FieldType]> {
+        if index == self.intermediate_channel_index {
+            Ok(self.src.schema())
+        } else {
+            self.src.intermediate_schema(index)
+        }
+    }
+
+    #[inline]
+    fn consume_and_fill_intermediate_results(
+        &mut self,
+        results: &mut [Vec<BatchExecuteResult>],
+    ) -> Result<()> {
+        match results.get_mut(self.intermediate_channel_index) {
+            Some(v) => {
+                if !self.intermediate_results.is_empty() {
+                    v.append(&mut self.intermediate_results);
+                }
+                self.src.consume_and_fill_intermediate_results(results)
+            }
+            _ => Err(other_err!(
+                "intermediate_channel_index {} exceeds the bound: {}",
+                self.intermediate_channel_index,
+                results.len()
+            )),
+        }
+    }
+
+    #[inline]
     async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         if scan_rows == 0 {
             return Self::err_result(other_err!("scan_rows cannot be 0"));
@@ -401,13 +525,26 @@ where
 
 /// produce table tasks for the index lookup executor
 pub trait TableTaskIterBuilder: Send {
-    type Iterator: TableTaskIterator;
+    type Iterator;
     // builds an iterator to produce table tasks
     fn build_iterator(
         &self,
         ctx: &mut EvalContext,
         results: Vec<BatchExecuteResult>,
     ) -> Result<Self::Iterator>;
+}
+
+impl<T: TableTaskIterBuilder + ?Sized> TableTaskIterBuilder for Box<T> {
+    type Iterator = T::Iterator;
+
+    #[inline]
+    fn build_iterator(
+        &self,
+        ctx: &mut EvalContext,
+        results: Vec<BatchExecuteResult>,
+    ) -> Result<Self::Iterator> {
+        (**self).build_iterator(ctx, results)
+    }
 }
 
 pub struct AccessorTableTaskIterBuilder<Accessor, Handle>
@@ -426,8 +563,6 @@ where
     Accessor: RegionStorageAccessor<Storage: Storage>,
     Handle: RowHandle,
 {
-    // TODO: remove #[allow(dead_code)] after new function is used
-    #[allow(dead_code)]
     #[inline]
     pub fn new(table_id: i64, accessor: Accessor, index_layout: IndexLayout) -> Self {
         AccessorTableTaskIterBuilder {
@@ -436,6 +571,18 @@ where
             index_layout,
             _phantom: std::marker::PhantomData,
         }
+    }
+
+    #[inline]
+    #[cfg(test)]
+    pub fn table_id(&self) -> i64 {
+        self.table_id
+    }
+
+    #[inline]
+    #[cfg(test)]
+    pub fn get_index_layout(&self) -> &IndexLayout {
+        &self.index_layout
     }
 }
 
@@ -839,8 +986,8 @@ where
 }
 
 #[cfg(test)]
-mod tests {
-    use std::{collections::HashSet, iter, ops::DerefMut, sync::Mutex};
+pub mod tests {
+    use std::{collections::HashSet, iter};
 
     use anyhow::anyhow;
     use api_version::ApiV1;
@@ -849,7 +996,7 @@ mod tests {
     use tidb_query_common::{
         error::StorageError,
         storage::{
-            FindRegionResult, OwnedKvPair, PointRange, Result as StorageResult, StateRole,
+            StateRole,
             test_fixture::{ErrorBuilder, FixtureStorage},
         },
     };
@@ -864,195 +1011,12 @@ mod tests {
         },
         expr::{EvalContext, EvalWarnings, Flag},
     };
-    use tikv_util::store::check_key_in_region;
 
     use super::*;
     use crate::{
         interface::{BatchExecIsDrain, BatchExecuteResult},
-        util::mock_executor::MockExecutor,
+        util::mock_executor::{MockExecutor, MockRegionStorageAccessor, MockStorage},
     };
-
-    #[derive(Debug, Clone, PartialEq)]
-    struct MockStorage(Region, Vec<KeyRange>);
-
-    impl Storage for MockStorage {
-        type Statistics = ();
-
-        fn begin_scan(
-            &mut self,
-            _is_backward_scan: bool,
-            _is_key_only: bool,
-            _range: IntervalRange,
-        ) -> StorageResult<()> {
-            unimplemented!()
-        }
-
-        fn scan_next(&mut self) -> StorageResult<Option<OwnedKvPair>> {
-            unimplemented!()
-        }
-
-        fn get(
-            &mut self,
-            _is_key_only: bool,
-            _range: PointRange,
-        ) -> StorageResult<Option<OwnedKvPair>> {
-            unimplemented!()
-        }
-
-        fn met_uncacheable_data(&self) -> Option<bool> {
-            unimplemented!()
-        }
-
-        fn collect_statistics(&mut self, _dest: &mut Self::Statistics) {
-            unimplemented!()
-        }
-    }
-
-    #[derive(Default, Debug, Clone)]
-    struct MockAccessorExpect {
-        find_region: Option<(Vec<u8>, Option<FindRegionResult>)>,
-        expect_get_local_region_storage: Option<bool>,
-    }
-
-    #[derive(Clone)]
-    enum MockRegionStorageAccessor {
-        Expect(Arc<Mutex<MockAccessorExpect>>),
-        Data(Vec<(Region, StateRole)>),
-    }
-
-    impl MockRegionStorageAccessor {
-        fn with_expect_mode() -> Self {
-            Self::Expect(Arc::new(Mutex::new(MockAccessorExpect {
-                ..Default::default()
-            })))
-        }
-
-        fn with_regions_data(data: Vec<(Region, StateRole)>) -> Self {
-            assert!(data.is_sorted_by(|a, b| { a.0.start_key < b.0.start_key }));
-            Self::Data(data)
-        }
-
-        fn with_expect<T>(&self, f: impl Fn(&mut MockAccessorExpect) -> T) -> T {
-            match self {
-                Self::Expect(e) => {
-                    let mut expect = e.lock().unwrap();
-                    f(expect.deref_mut())
-                }
-                _ => panic!("not in expect mode"),
-            }
-        }
-
-        fn expect_find_region(&self, key: Vec<u8>, region: Region, role: StateRole) {
-            self.with_expect(|expect| {
-                assert!(expect.find_region.is_none());
-                expect.find_region = Some((
-                    key.clone(),
-                    Some(FindRegionResult::Found {
-                        region: region.clone(),
-                        role,
-                    }),
-                ));
-            });
-        }
-
-        fn expect_region_not_found(&self, key: Vec<u8>, next_region_start: Option<Vec<u8>>) {
-            self.with_expect(|expect| {
-                assert!(expect.find_region.is_none());
-                expect.find_region = Some((
-                    key.clone(),
-                    Some(FindRegionResult::NotFound {
-                        next_region_start: next_region_start.clone(),
-                    }),
-                ));
-            });
-        }
-
-        fn expect_find_region_error(&self, key: Vec<u8>) {
-            self.with_expect(|expect| {
-                assert!(expect.find_region.is_none());
-                expect.find_region = Some((key.clone(), None));
-            });
-        }
-
-        fn expect_get_local_region_storage(&self, success: bool) {
-            self.with_expect(|expect| {
-                assert!(expect.expect_get_local_region_storage.is_none());
-                expect.expect_get_local_region_storage = Some(success);
-            });
-        }
-
-        fn assert_no_exceptions(&self) {
-            self.with_expect(|expect| {
-                assert!(expect.find_region.is_none());
-                assert!(expect.expect_get_local_region_storage.is_none());
-            });
-        }
-    }
-
-    #[async_trait]
-    impl RegionStorageAccessor for MockRegionStorageAccessor {
-        type Storage = MockStorage;
-
-        async fn find_region_by_key(&self, key: &[u8]) -> StorageResult<FindRegionResult> {
-            match self {
-                Self::Expect(_) => {
-                    let find_result = self.with_expect(|expect| -> Option<FindRegionResult> {
-                        let (expect_key, find_result) = expect.find_region.take().unwrap();
-                        assert_eq!(expect_key, key.to_vec());
-                        find_result
-                    });
-
-                    if let Some(result) = find_result {
-                        Ok(result)
-                    } else {
-                        Err(StorageError::from(anyhow!("mock find region error")))
-                    }
-                }
-                Self::Data(data) => {
-                    let mut result = FindRegionResult::NotFound {
-                        next_region_start: None,
-                    };
-                    for (region, role) in data.iter() {
-                        if region.get_end_key().is_empty() || region.get_end_key() >= key {
-                            if check_key_in_region(key, region) {
-                                result = FindRegionResult::Found {
-                                    region: region.clone(),
-                                    role: *role,
-                                };
-                            } else {
-                                result = FindRegionResult::NotFound {
-                                    next_region_start: Some(region.get_start_key().to_vec()),
-                                };
-                            }
-                            break;
-                        }
-                    }
-                    Ok(result)
-                }
-            }
-        }
-
-        async fn get_local_region_storage(
-            &self,
-            region: &Region,
-            key_ranges: &[KeyRange],
-        ) -> StorageResult<Self::Storage> {
-            match self {
-                Self::Expect(_) => {
-                    let success = self.with_expect(|expect| -> bool {
-                        expect.expect_get_local_region_storage.take().unwrap()
-                    });
-
-                    if success {
-                        Ok(MockStorage(region.clone(), key_ranges.to_vec()))
-                    } else {
-                        Err(StorageError::from(anyhow!("mock get storage error")))
-                    }
-                }
-                Self::Data(_) => Ok(MockStorage(region.clone(), key_ranges.to_vec())),
-            }
-        }
-    }
 
     const TEST_TABLE_ID: i64 = 13579;
 
@@ -1757,6 +1721,7 @@ mod tests {
                 primary_prefix_column_ids: vec![],
             },
             builder,
+            2,
         )
     }
 
@@ -2323,5 +2288,146 @@ mod tests {
             BatchExecIsDrain::Remain,
             0,
         );
+    }
+
+    #[test]
+    fn test_consume_and_fill_intermediate_results() {
+        let mut index_lookup = new_index_lookup_executor_for_test(
+            EvalConfig::default_for_test(),
+            build_int_array_results(vec![vec![]]),
+            None,
+            int_handle_table_columns(vec![FieldTypeTp::LongLong], 0),
+        );
+
+        assert_eq!(index_lookup.intermediate_channel_index, 2);
+        assert!(index_lookup.intermediate_results.is_empty());
+
+        index_lookup.intermediate_results = build_int_array_results(vec![vec![1, 2], vec![3]]);
+
+        // when the channel len does not match, return error
+        let err = index_lookup
+            .consume_and_fill_intermediate_results(&mut [vec![], vec![]])
+            .unwrap_err();
+        assert!(err.to_string().contains("exceeds the bound"));
+
+        // take results successfully
+        let mut channels = iter::repeat_with(Vec::new).take(4).collect::<Vec<_>>();
+        index_lookup
+            .consume_and_fill_intermediate_results(&mut channels)
+            .unwrap();
+        assert!(index_lookup.intermediate_results.is_empty());
+        assert!(channels[0].is_empty());
+        assert!(channels[1].is_empty());
+        assert!(channels[3].is_empty());
+        let results = &mut channels[2];
+        assert_eq!(results.len(), 2);
+        check_int_column_batch_execute_result(
+            &mut results[0],
+            vec![1, 2],
+            BatchExecIsDrain::Remain,
+            0,
+        );
+        check_int_column_batch_execute_result(&mut results[1], vec![3], BatchExecIsDrain::Drain, 0);
+
+        // take results should append to existing results
+        index_lookup.intermediate_results = build_int_array_results(vec![vec![7, 4]]);
+        index_lookup
+            .consume_and_fill_intermediate_results(&mut channels)
+            .unwrap();
+        assert!(index_lookup.intermediate_results.is_empty());
+        assert!(channels[0].is_empty());
+        assert!(channels[1].is_empty());
+        assert!(channels[3].is_empty());
+        let results = &mut channels[2];
+        assert_eq!(results.len(), 3);
+        check_int_column_batch_execute_result(
+            &mut results[2],
+            vec![7, 4],
+            BatchExecIsDrain::Drain,
+            0,
+        );
+
+        // take results should also take the child executor's intermediate
+        // results
+        index_lookup.src.intermediate_schema = Some((1, vec![FieldType::from(FieldTypeTp::Long)]));
+        index_lookup
+            .src
+            .set_next_intermediate_results(build_int_array_results(vec![vec![100]]));
+        index_lookup
+            .consume_and_fill_intermediate_results(&mut channels)
+            .unwrap();
+        assert!(channels[0].is_empty());
+        assert!(channels[3].is_empty());
+        assert_eq!(channels[2].len(), 3);
+        assert_eq!(channels[1].len(), 1);
+        let results = &mut channels[1];
+        assert_eq!(results.len(), 1);
+        check_int_column_batch_execute_result(
+            &mut results[0],
+            vec![100],
+            BatchExecIsDrain::Drain,
+            0,
+        );
+
+        index_lookup.intermediate_results = build_int_array_results(vec![vec![300]]);
+        index_lookup
+            .src
+            .set_next_intermediate_results(build_int_array_results(vec![vec![200]]));
+        index_lookup
+            .consume_and_fill_intermediate_results(&mut channels)
+            .unwrap();
+        assert!(channels[0].is_empty());
+        assert!(channels[3].is_empty());
+        let results = &mut channels[2];
+        assert_eq!(results.len(), 4);
+        check_int_column_batch_execute_result(
+            &mut results[3],
+            vec![300],
+            BatchExecIsDrain::Drain,
+            0,
+        );
+        let results = &mut channels[1];
+        assert_eq!(results.len(), 2);
+        check_int_column_batch_execute_result(
+            &mut results[1],
+            vec![200],
+            BatchExecIsDrain::Drain,
+            0,
+        );
+    }
+
+    #[test]
+    fn test_intermediate_schema() {
+        let mut index_lookup = new_index_lookup_executor_for_test(
+            EvalConfig::default_for_test(),
+            build_int_array_results(vec![vec![]]),
+            None,
+            int_handle_table_columns(vec![FieldTypeTp::LongLong], 0),
+        );
+
+        let schema1 = vec![
+            FieldType::from(FieldTypeTp::Long),
+            FieldType::from(FieldTypeTp::VarChar),
+        ];
+        let schema2 = vec![FieldType::from(FieldTypeTp::Long)];
+
+        assert_eq!(index_lookup.intermediate_channel_index, 2);
+        index_lookup.src.schema = schema1.clone();
+        index_lookup.src.intermediate_schema = Some((1, schema2.clone()));
+
+        // test missing intermediate schema
+        assert!(
+            index_lookup
+                .intermediate_schema(0)
+                .unwrap_err()
+                .to_string()
+                .contains("no intermediate schema for index")
+        );
+
+        // test index lookup's intermediate schema
+        assert_eq!(schema1, index_lookup.intermediate_schema(2).unwrap());
+
+        // test index lookup's child's intermediate schema
+        assert_eq!(schema2, index_lookup.intermediate_schema(1).unwrap());
     }
 }
