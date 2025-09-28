@@ -13,7 +13,8 @@ use kvproto::{coprocessor::KeyRange, metapb};
 use tidb_query_common::{
     Error,
     error::Result,
-    execute_stats::{ExecSummaryCollectorEnabled, ExecuteStats},
+    execute_stats::{ExecSummary, ExecSummaryCollector, ExecSummaryCollectorEnabled, ExecuteStats},
+    metrics::EXECUTOR_COUNT_METRICS,
     storage::{FindRegionResult, IntervalRange, RegionStorageAccessor, StateRole, Storage},
 };
 use tidb_query_datatype::{
@@ -111,6 +112,8 @@ where
     phase: IndexLookUpPhase<Builder::Iterator, S, F>,
     intermediate_results: Vec<BatchExecuteResult>,
     intermediate_channel_index: usize,
+    table_scan_child_index: usize,
+    table_scan_exec_summary: [ExecSummary; 1],
 }
 
 #[inline]
@@ -125,6 +128,7 @@ pub fn build_index_lookup_executor<
     mut tbl_scan: TableScan,
     accessor: Option<impl RegionStorageAccessor<Storage = S> + 'static>,
     intermediate_channel_index: usize,
+    table_scan_child_index: usize,
 ) -> Result<impl BatchExecutor<StorageStats = S::Statistics>> {
     if index_lookup.get_keep_order() {
         return Err(other_err!(
@@ -163,6 +167,7 @@ pub fn build_index_lookup_executor<
             )
         }),
         intermediate_channel_index,
+        table_scan_child_index,
     ))
 }
 
@@ -197,6 +202,7 @@ where
         table_scan_params: TableScanParams,
         table_task_iter_builder: Option<Builder>,
         intermediate_channel_index: usize,
+        table_scan_child_index: usize,
     ) -> Self {
         let force_no_index_lookup =
             if config.paging_size.is_some() || table_task_iter_builder.is_none() {
@@ -229,6 +235,8 @@ where
             phase: IndexLookUpPhase::default(),
             table_scan_params,
             intermediate_channel_index,
+            table_scan_child_index,
+            table_scan_exec_summary: [ExecSummary::default()],
         }
     }
 
@@ -255,6 +263,11 @@ where
     #[inline]
     pub fn intermediate_channel_index(&self) -> usize {
         self.intermediate_channel_index
+    }
+
+    #[inline]
+    pub fn table_scan_child_index(&self) -> usize {
+        self.table_scan_child_index
     }
 
     #[inline]
@@ -403,6 +416,7 @@ where
 
                 match table_task_iter.next().await {
                     Some(task) => {
+                        EXECUTOR_COUNT_METRICS.batch_index_lookup_table_scan.inc();
                         state.table_scan = Some(
                             task.build_table_scan_executor::<F>(
                                 self.config.clone(),
@@ -427,6 +441,12 @@ where
         let mut result = executor.next_batch(scan_rows).await;
         if let Ok(is_drained) = result.is_drained {
             if is_drained.stop() {
+                state
+                    .table_scan
+                    .as_mut()
+                    .unwrap()
+                    .summary_collector
+                    .collect(&mut self.table_scan_exec_summary);
                 state.table_scan = None;
                 result.is_drained = Ok(BatchExecIsDrain::Remain);
             }
@@ -499,8 +519,19 @@ where
 
     #[inline]
     fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {
-        // TODO: support collecting exec stats for index lookup executors.
         self.src.collect_exec_stats(dest);
+        // to collect the second child TableScan's stats, we need to dump the running
+        // executor's stats to `self.table_scan_exec_stats` first.
+        let mut summary = mem::take(&mut self.table_scan_exec_summary);
+        if let IndexLookUpPhase::TableLookUp(TableLookUpState {
+            table_scan: Some(exec),
+            ..
+        }) = &mut self.phase
+        {
+            exec.summary_collector.collect(&mut summary);
+        }
+        dest.summary_per_executor[self.table_scan_child_index] += summary[0];
+        // TODO: how to handle `scanned_rows_per_range`
     }
 
     #[inline]
@@ -1722,6 +1753,7 @@ pub mod tests {
             },
             builder,
             2,
+            3,
         )
     }
 
@@ -2429,5 +2461,66 @@ pub mod tests {
 
         // test index lookup's child's intermediate schema
         assert_eq!(schema2, index_lookup.intermediate_schema(1).unwrap());
+    }
+
+    #[test]
+    fn test_collect_table_scan_summary() {
+        let columns = int_handle_table_columns(vec![FieldTypeTp::LongLong], 0);
+        let src_results = build_int_array_results(vec![vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]]);
+        let mut index_lookup = new_index_lookup_executor_for_test(
+            EvalConfig::default_for_test(),
+            src_results,
+            Some(MockTableTaskIterBuilder),
+            int_handle_table_columns(vec![FieldTypeTp::LongLong, FieldTypeTp::String], 0),
+        );
+
+        // Test the below case
+        // 1. run next_batch to trigger table scan phase
+        // 2. table scan phase loops twice, the first time exhausts the first task,
+        // and the second time consumes 3 rows without exhausting the second task.
+        // 3. collect the summary info
+        assert_eq!(
+            BatchExecIsDrain::Remain,
+            block_on(index_lookup.next_batch(128)).is_drained.unwrap()
+        );
+        let s = index_lookup.phase.mut_table_lookup_or_err().unwrap();
+        s.table_task_iter.as_mut().unwrap().expect_next_task(
+            columns.clone(),
+            vec![vec![
+                Datum::I64(1),
+                Datum::I64(2),
+                Datum::I64(3),
+                Datum::I64(4),
+                Datum::I64(5),
+            ]],
+            vec![make_scan_key_range(i64::MIN, i64::MAX)],
+        );
+        assert_eq!(
+            BatchExecIsDrain::Remain,
+            block_on(index_lookup.next_batch(128)).is_drained.unwrap()
+        );
+        let s = index_lookup.phase.mut_table_lookup_or_err().unwrap();
+        s.table_task_iter.as_mut().unwrap().expect_next_task(
+            columns.clone(),
+            vec![vec![
+                Datum::I64(6),
+                Datum::I64(7),
+                Datum::I64(8),
+                Datum::I64(9),
+                Datum::I64(10),
+            ]],
+            vec![make_scan_key_range(i64::MIN, i64::MAX)],
+        );
+        assert_eq!(
+            BatchExecIsDrain::Remain,
+            block_on(index_lookup.next_batch(2)).is_drained.unwrap()
+        );
+
+        // check summary
+        let mut stats = ExecuteStats::new(index_lookup.table_scan_child_index + 2);
+        index_lookup.collect_exec_stats(&mut stats);
+        let summary = stats.summary_per_executor[index_lookup.table_scan_child_index];
+        assert_eq!(7, summary.num_produced_rows);
+        assert_eq!(2, summary.num_iterations);
     }
 }

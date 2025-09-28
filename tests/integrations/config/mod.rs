@@ -45,6 +45,7 @@ use tikv::{
 use tikv_util::config::{LogFormat, ReadableDuration, ReadableSchedule, ReadableSize};
 
 mod dynamic;
+mod graceful_shutdown_config;
 mod test_config_client;
 
 #[test]
@@ -367,7 +368,7 @@ fn test_serde_custom_tikv_config() {
                 max_bytes_for_level_base: ReadableSize::kb(12),
                 target_file_size_base: Some(ReadableSize::kb(123)),
                 level0_file_num_compaction_trigger: 123,
-                level0_slowdown_writes_trigger: Some(123),
+                level0_slowdown_writes_trigger: 123,
                 level0_stop_writes_trigger: Some(123),
                 max_compaction_bytes: ReadableSize::gb(1),
                 compaction_pri: CompactionPriority::MinOverlappingRatio,
@@ -377,7 +378,7 @@ fn test_serde_custom_tikv_config() {
                 compaction_style: DBCompactionStyle::Universal,
                 disable_auto_compactions: true,
                 disable_write_stall: true,
-                soft_pending_compaction_bytes_limit: Some(ReadableSize::gb(12)),
+                soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
                 hard_pending_compaction_bytes_limit: Some(ReadableSize::gb(12)),
                 force_consistency_checks: true,
                 titan: titan_cf_config.clone(),
@@ -427,7 +428,7 @@ fn test_serde_custom_tikv_config() {
                 max_bytes_for_level_base: ReadableSize::kb(12),
                 target_file_size_base: Some(ReadableSize::kb(123)),
                 level0_file_num_compaction_trigger: 123,
-                level0_slowdown_writes_trigger: Some(123),
+                level0_slowdown_writes_trigger: 123,
                 level0_stop_writes_trigger: Some(123),
                 max_compaction_bytes: ReadableSize::gb(1),
                 compaction_pri: CompactionPriority::MinOverlappingRatio,
@@ -437,7 +438,7 @@ fn test_serde_custom_tikv_config() {
                 compaction_style: DBCompactionStyle::Universal,
                 disable_auto_compactions: true,
                 disable_write_stall: true,
-                soft_pending_compaction_bytes_limit: Some(ReadableSize::gb(12)),
+                soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
                 hard_pending_compaction_bytes_limit: Some(ReadableSize::gb(12)),
                 force_consistency_checks: true,
                 titan: TitanCfConfig {
@@ -502,7 +503,7 @@ fn test_serde_custom_tikv_config() {
                 max_bytes_for_level_base: ReadableSize::kb(12),
                 target_file_size_base: Some(ReadableSize::kb(123)),
                 level0_file_num_compaction_trigger: 123,
-                level0_slowdown_writes_trigger: Some(123),
+                level0_slowdown_writes_trigger: 123,
                 level0_stop_writes_trigger: Some(123),
                 max_compaction_bytes: ReadableSize::gb(1),
                 compaction_pri: CompactionPriority::MinOverlappingRatio,
@@ -512,7 +513,7 @@ fn test_serde_custom_tikv_config() {
                 compaction_style: DBCompactionStyle::Universal,
                 disable_auto_compactions: true,
                 disable_write_stall: true,
-                soft_pending_compaction_bytes_limit: Some(ReadableSize::gb(12)),
+                soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
                 hard_pending_compaction_bytes_limit: Some(ReadableSize::gb(12)),
                 force_consistency_checks: true,
                 titan: TitanCfConfig {
@@ -577,7 +578,7 @@ fn test_serde_custom_tikv_config() {
                 max_bytes_for_level_base: ReadableSize::kb(12),
                 target_file_size_base: Some(ReadableSize::kb(123)),
                 level0_file_num_compaction_trigger: 123,
-                level0_slowdown_writes_trigger: Some(123),
+                level0_slowdown_writes_trigger: 123,
                 level0_stop_writes_trigger: Some(123),
                 max_compaction_bytes: ReadableSize::gb(1),
                 compaction_pri: CompactionPriority::MinOverlappingRatio,
@@ -587,7 +588,7 @@ fn test_serde_custom_tikv_config() {
                 compaction_style: DBCompactionStyle::Universal,
                 disable_auto_compactions: true,
                 disable_write_stall: true,
-                soft_pending_compaction_bytes_limit: Some(ReadableSize::gb(12)),
+                soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
                 hard_pending_compaction_bytes_limit: Some(ReadableSize::gb(12)),
                 force_consistency_checks: true,
                 titan: TitanCfConfig {
@@ -685,7 +686,7 @@ fn test_serde_custom_tikv_config() {
                 max_bytes_for_level_base: ReadableSize::kb(12),
                 target_file_size_base: Some(ReadableSize::kb(123)),
                 level0_file_num_compaction_trigger: 123,
-                level0_slowdown_writes_trigger: Some(123),
+                level0_slowdown_writes_trigger: 123,
                 level0_stop_writes_trigger: Some(123),
                 max_compaction_bytes: ReadableSize::gb(1),
                 compaction_pri: CompactionPriority::MinOverlappingRatio,
@@ -695,7 +696,7 @@ fn test_serde_custom_tikv_config() {
                 compaction_style: DBCompactionStyle::Universal,
                 disable_auto_compactions: true,
                 disable_write_stall: true,
-                soft_pending_compaction_bytes_limit: Some(ReadableSize::gb(12)),
+                soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
                 hard_pending_compaction_bytes_limit: Some(ReadableSize::gb(12)),
                 force_consistency_checks: true,
                 titan: titan_cf_config,

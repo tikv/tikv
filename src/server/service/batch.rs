@@ -3,6 +3,7 @@
 // #[PerformanceCriticalPath]
 use api_version::KvFormat;
 use kvproto::kvrpcpb::*;
+use protobuf::Message;
 use tikv_util::{
     future::poll_future_notify,
     mpsc::future::{Sender, WakePolicy},
@@ -65,6 +66,9 @@ impl ReqBatcher {
             RequestType::KvBatchGetCommand,
             req.get_version(),
         )));
+        GLOBAL_TRACKERS.with_tracker(tracker, |the_tracker| {
+            the_tracker.metrics.grpc_req_size = req.compute_size() as u64;
+        });
         self.gets.push(req);
         self.get_ids.push(id);
         self.get_trackers.push(tracker);
