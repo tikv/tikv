@@ -408,6 +408,10 @@ where
 
     committed_count: usize,
     commit_count: u64,
+    ingest_sst_count: u64,
+    delete_sst_count: u64,
+    write_kv_count: u64,
+    kv_printed: bool,
 
     // Whether synchronize WAL is preferred.
     sync_log_hint: bool,
@@ -507,6 +511,10 @@ where
             kv_wb_last_keys: 0,
             committed_count: 0,
             commit_count: 0,
+            ingest_sst_count: 0,
+            delete_sst_count: 0,
+            write_kv_count: 0,
+            kv_printed: false,
             sync_log_hint: false,
             use_delete_range: cfg.use_delete_range,
             perf_context: EK::get_perf_context(cfg.perf_level, PerfContextKind::RaftstoreApply),
@@ -547,7 +555,7 @@ where
     /// `finish_for`.
     pub fn commit(&mut self, delegate: &mut ApplyDelegate<EK>, reason: &str) {
         if delegate.last_flush_applied_index < delegate.apply_state.get_applied_index() {
-            delegate.maybe_write_apply_state(self);
+            delegate.maybe_write_apply_state(self, reason);
         }
         self.commit_opt(delegate, true, reason);
     }
@@ -576,10 +584,8 @@ where
         // There may be put and delete requests after ingest request in the same fsm.
         // To guarantee the correct order, we must ingest the pending_sst first, and
         // then persist the kv write batch to engine.
-        let start_first = Instant::now();
-        let mut write_flag = 0;
         if !self.pending_ssts.is_empty() {
-            write_flag += 1;
+            self.ingest_sst_count += 1;
             let tag = self.tag.clone();
             self.importer
                 .ingest(&self.pending_ssts, &self.engine)
@@ -591,11 +597,8 @@ where
                 });
             self.pending_ssts = vec![];
         }
-        let ingest_take = start_first.saturating_elapsed();
-        let mut data_size = 0;
-        let start = Instant::now();
         if !self.kv_wb_mut().is_empty() {
-            write_flag += 10;
+            self.write_kv_count += 1;
             self.perf_context.start_observe();
             let mut write_opts = engine_traits::WriteOptions::new();
             write_opts.set_sync(need_sync);
@@ -603,6 +606,12 @@ where
             if self.disable_wal {
                 let sn = SequenceNumber::pre_write();
                 seqno = Some(sn);
+            }
+            if self.commit_count > 50 && !self.kv_printed {
+                if let Some(d) = self.kv_wb().data() {
+                        info!("commit much kv"; "data"=>&log_wrappers::Value(d));
+                        self.kv_printed = true;
+                };
             }
             let seq = self.kv_wb_mut().write_opt(&write_opts).unwrap_or_else(|e| {
                 panic!("failed to write to engine: {:?}", e);
@@ -619,7 +628,7 @@ where
                 .collect();
             self.perf_context.report_metrics(&trackers);
             self.sync_log_hint = false;
-            data_size = self.kv_wb().data_size();
+            let data_size = self.kv_wb().data_size();
             if data_size > APPLY_WB_SHRINK_SIZE {
                 // Control the memory usage for the WriteBatch.
                 self.kv_wb = self.engine.write_batch_with_cap(DEFAULT_APPLY_WB_SIZE);
@@ -631,10 +640,8 @@ where
             self.kv_wb_last_bytes = 0;
             self.kv_wb_last_keys = 0;
         }
-        let kv_take = start.saturating_elapsed();
-        let start = Instant::now();
         if !self.delete_ssts.is_empty() {
-            write_flag += 100;
+            self.delete_sst_count += 1;
             let tag = self.tag.clone();
             for sst in self.delete_ssts.drain(..) {
                 self.importer.delete(&sst.meta).unwrap_or_else(|e| {
@@ -642,7 +649,6 @@ where
                 });
             }
         }
-        let delete_take = start.saturating_elapsed();
         // Take the applied commands and their callback
         let ApplyCallbackBatch {
             cmd_batch,
@@ -670,18 +676,6 @@ where
                 res.write_seqno.push(seqno);
             }
         }
-        let total_take = start_first.saturating_elapsed();
-        if total_take.as_secs() > 10 {
-            info!("slow write to db";
-                "write_flag"=>?write_flag,
-                "ingest_take"=>?ingest_take,
-                "kv_take"=>?kv_take,
-                "delete_take"=>?delete_take,
-                "total_take"=>?total_take,
-                "data_size"=>data_size,
-                "priority"=>?self.priority,
-            );
-        }
         (need_sync, seqno)
     }
 
@@ -692,7 +686,7 @@ where
         results: VecDeque<ExecResult<EK::Snapshot>>,
     ) {
         if self.host.pre_persist(&delegate.region, true, None) {
-            delegate.maybe_write_apply_state(self);
+            delegate.maybe_write_apply_state(self, "finish");
             self.commit_opt(delegate, false, "");
         } else {
             debug!("do not persist when finish_for";
@@ -1235,9 +1229,10 @@ where
         });
     }
 
-    fn maybe_write_apply_state(&self, apply_ctx: &mut ApplyContext<EK>) {
+    fn maybe_write_apply_state(&self, apply_ctx: &mut ApplyContext<EK>, reason: &str) {
         let can_write = apply_ctx.host.pre_write_apply_state(&self.region);
         if can_write {
+            APPLY_KV_MUT_COUNTER_VEC.with_label_values(&[reason]).inc();
             self.write_apply_state(apply_ctx.kv_wb_mut());
         }
     }
@@ -4266,7 +4261,7 @@ where
             if apply_ctx.timer.is_none() {
                 apply_ctx.timer = Some(Instant::now_coarse());
             }
-            self.delegate.maybe_write_apply_state(apply_ctx);
+            self.delegate.maybe_write_apply_state(apply_ctx, "snapshot");
             fail_point!(
                 "apply_on_handle_snapshot_1_1",
                 self.delegate.id() == 1 && self.delegate.region_id() == 1,
@@ -4405,6 +4400,9 @@ where
                     // If modified `truncated_state` in `try_compact_log`, the apply state should be
                     // persisted.
                     if should_write {
+                        APPLY_KV_MUT_COUNTER_VEC
+                            .with_label_values(&["compact"])
+                            .inc();
                         self.delegate.write_apply_state(ctx.kv_wb_mut());
                         ctx.commit_opt(&mut self.delegate, true, "compact");
                     }
@@ -4663,6 +4661,10 @@ where
             update_cfg(&incoming.apply_batch_system);
         }
         self.apply_ctx.commit_count = 0;
+        self.apply_ctx.ingest_sst_count = 0;
+        self.apply_ctx.delete_sst_count = 0;
+        self.apply_ctx.write_kv_count = 0;
+        self.apply_ctx.kv_printed = false;
     }
 
     fn handle_control(&mut self, control: &mut ControlFsm) -> Option<usize> {
@@ -4741,6 +4743,9 @@ where
         }
         MEMTRACE_APPLYS.trace(mem::take(&mut self.trace_event));
         APPLY_COMMIT_COUNTER.observe(self.apply_ctx.commit_count as f64);
+        if self.apply_ctx.commit_count > 50 {
+            info!("commit too much"; "ingest"=>self.apply_ctx.ingest_sst_count, "kv"=>self.apply_ctx.write_kv_count, "delete"=>self.apply_ctx.delete_sst_count);
+        }
     }
 
     fn get_priority(&self) -> Priority {

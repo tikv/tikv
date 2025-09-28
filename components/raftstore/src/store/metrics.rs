@@ -571,6 +571,13 @@ lazy_static! {
             &["reason"]
         ).unwrap();
 
+    pub static ref APPLY_KV_MUT_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
+            "tikv_raftstore_apply_kv_mut_total",
+            "Total number of apply kv mut",
+            &["reason"]
+        ).unwrap();
+
     pub static ref STORE_RAFT_SENT_MESSAGE_COUNTER_VEC: IntCounterVec =
         register_int_counter_vec!(
             "tikv_raftstore_raft_sent_message_total",
