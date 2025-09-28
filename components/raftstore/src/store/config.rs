@@ -325,7 +325,7 @@ pub struct Config {
     pub perf_level: PerfLevel,
 
     #[doc(hidden)]
-    #[online_config(skip)]
+    // #[online_config(skip)]
     /// Disable this feature by set to 0, logic will be removed in other pr.
     /// When TiKV memory usage is near `memory_usage_high_water` it will try to
     /// limit memory increasing. For raftstore layer entries will be evicted
@@ -338,6 +338,10 @@ pub struct Config {
     // * system=16G, memory_usage_limit=12G, evict=1.2G
     // * system=32G, memory_usage_limit=24G, evict=2.4G
     pub evict_cache_on_memory_ratio: f64,
+
+    #[doc(hidden)]
+    /// The ratio of region to be pinned when compacting.
+    pub pin_compact_region_ratio: f64,
 
     pub cmd_batch: bool,
 
@@ -533,7 +537,7 @@ impl Default for Config {
             max_apply_unpersisted_log_limit: 1024,
             follower_read_max_log_gap: 100,
             raft_log_reserve_max_ticks: 6,
-            raft_engine_purge_interval: ReadableDuration::secs(10),
+            raft_engine_purge_interval: ReadableDuration::secs(300),
             max_manual_flush_rate: 3.0,
             raft_entry_cache_life_time: ReadableDuration::secs(30),
             raft_reject_transfer_leader_duration: ReadableDuration::secs(3),
@@ -598,6 +602,7 @@ impl Default for Config {
             apply_yield_write_size: ReadableSize::kb(32),
             perf_level: PerfLevel::Uninitialized,
             evict_cache_on_memory_ratio: 0.1,
+            pin_compact_region_ratio: 0.1,
             cmd_batch: true,
             cmd_batch_concurrent_ready_max_count: 1,
             raft_write_size_limit: ReadableSize::mb(1),
@@ -1057,7 +1062,6 @@ impl Config {
                 "min_pending_apply_region_count must be greater than 0"
             ));
         }
-
         Ok(())
     }
 
@@ -1285,6 +1289,12 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["perf_level"])
             .set(self.perf_level as u64 as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["evict_cache_on_memory_ratio"])
+            .set(self.evict_cache_on_memory_ratio as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["pin_compact_region_ratio"])
+            .set(self.pin_compact_region_ratio as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["cmd_batch"])
             .set((self.cmd_batch as i32).into());

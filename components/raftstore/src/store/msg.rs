@@ -485,6 +485,8 @@ pub enum StoreTick {
     ConsistencyCheck,
     CleanupImportSst,
     PdReportMinResolvedTs,
+    RaftEngineForcelyPurge,
+    StaleRegionCheck,
 }
 
 impl StoreTick {
@@ -500,6 +502,8 @@ impl StoreTick {
             StoreTick::CleanupImportSst => RaftEventDurationType::cleanup_import_sst,
             StoreTick::LoadMetricsWindow => RaftEventDurationType::load_metrics_window,
             StoreTick::PdReportMinResolvedTs => RaftEventDurationType::pd_report_min_resolved_ts,
+            StoreTick::RaftEngineForcelyPurge => RaftEventDurationType::compact_check,
+            StoreTick::StaleRegionCheck => RaftEventDurationType::stale_region_check,
         }
     }
 }
@@ -599,6 +603,17 @@ pub enum CampaignType {
     UnsafeSplitCampaign,
 }
 
+/// Action type for raft log GC operations
+#[derive(Debug, Clone, Copy)]
+pub enum RaftLogGcAction {
+    /// Normal GC operation
+    Normal,
+    /// Force compact raft logs
+    ForceCompact,
+    /// Purge need to gc logs
+    RaftEnginePurge,
+}
+
 /// Message that will be sent to a peer.
 ///
 /// These messages are not significant and can be dropped occasionally.
@@ -657,10 +672,11 @@ pub enum CasualMessage<EK: KvEngine> {
     RegionOverlapped,
     /// Notifies that a new snapshot has been generated.
     SnapshotGenerated,
-
     /// Generally Raft leader keeps as more as possible logs for followers,
     /// however `ForceCompactRaftLogs` only cares the leader itself.
     ForceCompactRaftLogs,
+    /// Purge need to gc logs
+    RaftEnginePurge,
 
     /// A message to access peer's internal state.
     AccessPeer(Box<dyn FnOnce(RegionMeta) + Send + 'static>),
@@ -758,6 +774,7 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
             CasualMessage::RegionOverlapped => write!(fmt, "RegionOverlapped"),
             CasualMessage::SnapshotGenerated => write!(fmt, "SnapshotGenerated"),
             CasualMessage::ForceCompactRaftLogs => write!(fmt, "ForceCompactRaftLogs"),
+            CasualMessage::RaftEnginePurge => write!(fmt, "RaftEnginePurge"),
             CasualMessage::AccessPeer(_) => write!(fmt, "AccessPeer"),
             CasualMessage::QueryRegionLeaderResp { .. } => write!(fmt, "QueryRegionLeaderResp"),
             CasualMessage::RejectRaftAppend { peer_id } => {
@@ -1015,6 +1032,12 @@ where
         region_ids: Vec<u64>,
     },
 
+    /// High log lag region (only sent by leaders)
+    HighLogLagRegion {
+        region_id: u64,
+        timestamp: std::time::Instant,
+    },
+
     /// Message only used for test.
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&crate::store::Config) + Send>),
@@ -1050,6 +1073,7 @@ where
             }
             StoreMsg::GcSnapshotFinish => write!(fmt, "GcSnapshotFinish"),
             StoreMsg::AwakenRegions { .. } => write!(fmt, "AwakenRegions"),
+            StoreMsg::HighLogLagRegion { .. } => write!(fmt, "HighLogLagRegion"),
             #[cfg(any(test, feature = "testexport"))]
             StoreMsg::Validate(_) => write!(fmt, "Validate config"),
         }
@@ -1071,8 +1095,9 @@ impl<EK: KvEngine> StoreMsg<EK> {
             StoreMsg::UnsafeRecoveryCreatePeer { .. } => 9,
             StoreMsg::GcSnapshotFinish => 10,
             StoreMsg::AwakenRegions { .. } => 11,
+            StoreMsg::HighLogLagRegion { .. } => 12,
             #[cfg(any(test, feature = "testexport"))]
-            StoreMsg::Validate(_) => 12, // Please keep this always be the last one.
+            StoreMsg::Validate(_) => 13, // Please keep this always be the last one.
         }
     }
 }
