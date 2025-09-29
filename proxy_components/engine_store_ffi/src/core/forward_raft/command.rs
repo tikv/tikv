@@ -166,7 +166,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                     index,
                     term,
                 ) {
-                    info!("can't flush data, filter CompactLog";
+                    debug!("can't flush data, filter CompactLog";
                         "region_id" => ?ob_region.get_id(),
                         "region_epoch" => ?ob_region.get_region_epoch(),
                         "index" => index,
@@ -222,7 +222,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
 
         match cmd_type {
             AdminCmdType::CompactLog | AdminCmdType::ComputeHash | AdminCmdType::VerifyHash => {
-                info!(
+                debug!(
                     "observe useless admin command";
                     "region_id" => region_id,
                     "peer_id" => region_state.peer_id,
