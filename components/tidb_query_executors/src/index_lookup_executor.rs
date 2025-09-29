@@ -5,33 +5,34 @@ use async_trait::async_trait;
 use itertools::Itertools;
 use kvproto::coprocessor::KeyRange;
 use tidb_query_common::{
+    Result,
     execute_stats::ExecuteStats,
     storage::{IntervalRange, Storage},
-    Result,
+    util::convert_to_prefix_next,
 };
 use tidb_query_datatype::{
+    FieldTypeTp,
     codec::{
+        Datum,
         batch::LazyBatchColumnVec,
         data_type::LogicalRows,
         datum,
         table::{
-            encode_common_handle_to_buf, encode_row_key_to_buf, PREFIX_LEN, RECORD_ROW_KEY_LEN,
+            PREFIX_LEN, RECORD_ROW_KEY_LEN, encode_common_handle_to_buf, encode_row_key_to_buf,
         },
-        Datum,
     },
     expr::{EvalConfig, EvalContext, EvalWarnings},
-    FieldTypeTp,
 };
 use tikv_util::store::check_key_in_region;
 use tipb::{self, ColumnInfo, FieldType, IndexLookup};
 use txn_types::Key;
 
 use crate::{
+    BatchTableScanExecutor,
     interface::{
         AsyncRegion, BatchExecIsDrain, BatchExecuteResult, BatchExecutor, FnLocateRegionKey,
     },
     util::scan_executor::{check_columns_info_supported, field_type_from_column_info},
-    BatchTableScanExecutor,
 };
 
 pub struct BatchIndexLookupExecutor<S: Storage, F: KvFormat> {
@@ -151,6 +152,9 @@ trait Handle: Eq + Ord + Sized {
     ) -> Result<Self>;
     fn encode_raw_key(&self, table_id: i64) -> Vec<u8>;
     fn is_next(&self, other: &Self) -> bool;
+    fn is_int_handle() -> bool {
+        false
+    }
 }
 
 #[derive(PartialEq, PartialOrd, Eq, Ord, Clone, Copy, Debug)]
@@ -183,6 +187,11 @@ impl Handle for IntHandle {
     #[inline]
     fn is_next(&self, other: &Self) -> bool {
         other.0 + 1 == self.0
+    }
+
+    #[inline]
+    fn is_int_handle() -> bool {
+        true
     }
 }
 
@@ -277,7 +286,11 @@ async fn build_index_lookup_probe_ranges_for_handles<S: Storage, T: Handle>(
                         r.set_start(raw_key);
                         let mut raw_end = Vec::with_capacity(raw_key_len + 1);
                         raw_end.extend_from_slice(r.get_start());
-                        raw_end.push(0);
+                        if T::is_int_handle() {
+                            convert_to_prefix_next(&mut raw_end);
+                        } else {
+                            raw_end.push(0);
+                        }
                         r.set_end(raw_end);
                         ranges.push(r);
                     }
