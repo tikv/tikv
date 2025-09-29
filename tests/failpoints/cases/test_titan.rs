@@ -138,6 +138,15 @@ fn test_titan() {
     // lv6: file0 [k1: ref_to_blob_file, k3: v]
     let db = cluster.engines[&3].kv.as_inner();
     let defaultcf = db.cf_handle(CF_DEFAULT).unwrap();
+    test_util::eventually(
+        std::time::Duration::from_millis(100),
+        std::time::Duration::from_millis(2000),
+        || {
+            db.get_property_int_cf(defaultcf, "rocksdb.num-files-at-level5")
+                .unwrap()
+                == 0
+        },
+    );
     assert_eq!(
         0,
         db.get_property_int_cf(defaultcf, "rocksdb.num-files-at-level5")
