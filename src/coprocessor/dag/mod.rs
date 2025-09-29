@@ -6,9 +6,16 @@ use std::{marker::PhantomData, sync::Arc};
 
 use api_version::KvFormat;
 use async_trait::async_trait;
-use kvproto::coprocessor::{KeyRange, Response};
+use kvproto::{
+    coprocessor::{KeyRange, Response},
+    metapb::Region,
+};
 use protobuf::Message;
-use tidb_query_common::{execute_stats::ExecSummary, storage::IntervalRange};
+use tidb_query_common::{
+    execute_stats::ExecSummary,
+    storage,
+    storage::{FindRegionResult, IntervalRange, RegionStorageAccessor},
+};
 use tikv_alloc::trace::MemoryTraceGuard;
 use tipb::{DagRequest, SelectResponse, StreamResponse};
 
@@ -19,11 +26,17 @@ use crate::{
     tikv_util::quota_limiter::QuotaLimiter,
 };
 
-pub struct DagHandlerBuilder<S: Store + 'static, F: KvFormat> {
+pub struct DagHandlerBuilder<R, S, F>
+where
+    R: RegionStorageAccessor<Storage = S> + 'static,
+    S: Store + 'static,
+    F: KvFormat,
+{
     req: DagRequest,
     ranges: Vec<KeyRange>,
     versions: Option<Vec<u64>>,
     store: S,
+    extra_storage_accessor: Option<R>,
     data_version: Option<u64>,
     deadline: Deadline,
     batch_row_limit: usize,
@@ -34,12 +47,18 @@ pub struct DagHandlerBuilder<S: Store + 'static, F: KvFormat> {
     _phantom: PhantomData<F>,
 }
 
-impl<S: Store + 'static, F: KvFormat> DagHandlerBuilder<S, F> {
+impl<R, S, F> DagHandlerBuilder<R, S, F>
+where
+    R: RegionStorageAccessor<Storage = S>,
+    S: Store + 'static,
+    F: KvFormat,
+{
     pub fn new(
         req: DagRequest,
         ranges: Vec<KeyRange>,
         versions: Option<Vec<u64>>,
         store: S,
+        extra_storage_accessor: Option<R>,
         deadline: Deadline,
         batch_row_limit: usize,
         is_streaming: bool,
@@ -52,6 +71,7 @@ impl<S: Store + 'static, F: KvFormat> DagHandlerBuilder<S, F> {
             ranges,
             versions,
             store,
+            extra_storage_accessor,
             data_version: None,
             deadline,
             batch_row_limit,
@@ -76,6 +96,7 @@ impl<S: Store + 'static, F: KvFormat> DagHandlerBuilder<S, F> {
             self.ranges,
             self.versions,
             self.store,
+            self.extra_storage_accessor,
             self.data_version,
             self.deadline,
             self.is_cache_enabled,
@@ -85,6 +106,47 @@ impl<S: Store + 'static, F: KvFormat> DagHandlerBuilder<S, F> {
             self.quota_limiter,
         )?
         .into_boxed())
+    }
+}
+
+/// Wraps the internal accessor to provide the accessor for the secondary
+/// TikvStorage.
+#[derive(Clone, Debug)]
+pub struct ExtraTiKVStorageAccessor<R> {
+    store_accessor: R,
+}
+
+impl<R> ExtraTiKVStorageAccessor<R> {
+    pub fn from_store_accessor(store_accessor: R) -> Self {
+        ExtraTiKVStorageAccessor { store_accessor }
+    }
+}
+
+#[async_trait]
+impl<R> RegionStorageAccessor for ExtraTiKVStorageAccessor<R>
+where
+    R: RegionStorageAccessor<Storage: Store>,
+{
+    type Storage = TikvStorage<R::Storage>;
+
+    /// find the region by the specified key.
+    /// The argument `key` should be the comparable format, you should use
+    /// `Key::from_raw` encode the raw key.
+    async fn find_region_by_key(&self, key: &[u8]) -> storage::Result<FindRegionResult> {
+        self.store_accessor.find_region_by_key(key).await
+    }
+
+    async fn get_local_region_storage(
+        &self,
+        region: &Region,
+        key_ranges: &[KeyRange],
+    ) -> storage::Result<Self::Storage> {
+        let store = self
+            .store_accessor
+            .get_local_region_storage(region, key_ranges)
+            .await?;
+        let check_can_be_cached = store.is_check_has_newer_ts_data();
+        Ok(Self::Storage::new(store, check_can_be_cached))
     }
 }
 
@@ -99,6 +161,7 @@ impl BatchDagHandler {
         ranges: Vec<KeyRange>,
         versions: Option<Vec<u64>>,
         store: S,
+        extra_storage_accessor: Option<impl RegionStorageAccessor<Storage = S> + 'static>,
         data_version: Option<u64>,
         deadline: Deadline,
         is_cache_enabled: bool,
@@ -107,12 +170,15 @@ impl BatchDagHandler {
         paging_size: Option<u64>,
         quota_limiter: Arc<QuotaLimiter>,
     ) -> Result<Self> {
+        let extra_storage_accessor =
+            extra_storage_accessor.map(ExtraTiKVStorageAccessor::from_store_accessor);
         Ok(Self {
             runner: tidb_query_executors::runner::BatchExecutorsRunner::from_request::<_, F>(
                 req,
                 ranges,
                 versions,
                 TikvStorage::new(store, is_cache_enabled),
+                extra_storage_accessor,
                 deadline,
                 streaming_batch_limit,
                 is_streaming,

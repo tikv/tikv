@@ -426,7 +426,7 @@ impl<E: KvEngine> SstImporter<E> {
                     "download failed";
                     "meta" => ?meta,
                     "name" => name,
-                    "err" => ?e,
+                    "err" => %e,
                 );
                 Err(e)
             }
@@ -488,6 +488,18 @@ impl<E: KvEngine> SstImporter<E> {
         backend: &StorageBackend,
         cache_id: &str,
     ) -> Result<Arc<dyn ExternalStorage>> {
+        // The `DashMap` locks the entry to ensure that only one thread loads the
+        // credentials at a time. However, if the thread gets blocked during the
+        // loading process, it can lead to a deadlock. To avoid this, blocking
+        // operations must be performed outside of the `DashMap`.
+        tokio::task::block_in_place(|| self.external_storage_or_cache_internal(backend, cache_id))
+    }
+
+    fn external_storage_or_cache_internal(
+        &self,
+        backend: &StorageBackend,
+        cache_id: &str,
+    ) -> Result<Arc<dyn ExternalStorage>> {
         // prepare to download the file from the external_storage
         // TODO: pass a config to support hdfs
         let ext_storage = if cache_id.is_empty() {
@@ -521,13 +533,7 @@ impl<E: KvEngine> SstImporter<E> {
             })?;
         }
 
-        // The `DashMap` locks the entry to ensure that only one thread loads the
-        // credentials at a time. However, if the thread gets blocked during the
-        // loading process, it can lead to a deadlock. To avoid this, blocking
-        // operations must be performed outside of the `DashMap`.
-        let ext_storage = tokio::task::block_in_place(move || {
-            self.external_storage_or_cache(backend, cache_key)
-        })?;
+        let ext_storage = self.external_storage_or_cache(backend, cache_key)?;
         let ext_storage = self.auto_encrypt_local_file_if_needed(ext_storage);
 
         let result = ext_storage
@@ -3976,5 +3982,40 @@ mod tests {
         if !in_mem {
             check_file_exists(&path.save, opt_key_manager.as_deref());
         }
+    }
+
+    #[test]
+    fn test_download_stuck() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(4)
+            .enable_all()
+            .build()
+            .unwrap();
+        let importer = SstImporter::<TestEngine>::new(
+            &Config::default(),
+            tempfile::tempdir().unwrap(),
+            None,
+            ApiVersion::V1,
+            false,
+        )
+        .unwrap();
+        let importer = Arc::from(importer);
+        fail::cfg("create_storage_slowly", "return").unwrap();
+        let mut joins = Vec::new();
+        for _ in 0..10 {
+            let importer_cloned = importer.clone();
+            let j = rt.spawn(async move {
+                let mut backend = StorageBackend::new();
+                backend.set_noop(Default::default());
+                importer_cloned.external_storage_or_cache(&backend, "test")
+            });
+            joins.push(j);
+        }
+        rt.block_on(async {
+            for j in joins {
+                let _ = j.await.unwrap();
+            }
+        });
+        fail::remove("create_storage_slowly");
     }
 }

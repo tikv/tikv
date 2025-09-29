@@ -1409,7 +1409,7 @@ mod tests {
                 region_id,
                 peer_id: 0,
                 key_ranges: vec![(key_range.start_key.clone(), key_range.end_key.clone())],
-                extra_attachment: vec![],
+                extra_attachment: Arc::new(vec![]),
             });
             raw_records.records.insert(
                 key_range_tag.clone(),
@@ -1417,6 +1417,10 @@ mod tests {
                     cpu_time: cpu_times[idx],
                     read_keys: 0,
                     write_keys: 0,
+                    network_in_bytes: 0,
+                    network_out_bytes: 0,
+                    logical_read_bytes: 0,
+                    logical_write_bytes: 0,
                 },
             );
         }
@@ -1840,14 +1844,14 @@ mod tests {
             region_id: 1,
             peer_id: 0,
             key_ranges: vec![(b"a".to_vec(), b"b".to_vec())],
-            extra_attachment: vec![],
+            extra_attachment: Arc::new(vec![]),
         });
         let cd_key_range_tag = Arc::new(TagInfos {
             store_id: 0,
             region_id: 1,
             peer_id: 0,
             key_ranges: vec![(b"c".to_vec(), b"d".to_vec())],
-            extra_attachment: vec![],
+            extra_attachment: Arc::new(vec![]),
         });
         let multiple_key_ranges_tag = Arc::new(TagInfos {
             store_id: 0,
@@ -1857,14 +1861,14 @@ mod tests {
                 (b"a".to_vec(), b"b".to_vec()),
                 (b"c".to_vec(), b"d".to_vec()),
             ],
-            extra_attachment: vec![],
+            extra_attachment: Arc::new(vec![]),
         });
         let empty_key_range_tag = Arc::new(TagInfos {
             store_id: 0,
             region_id: 1,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: vec![],
+            extra_attachment: Arc::new(vec![]),
         });
 
         let test_cases = vec![
@@ -1891,6 +1895,10 @@ mod tests {
                     cpu_time: test_case.0,
                     read_keys: 0,
                     write_keys: 0,
+                    network_in_bytes: 0,
+                    network_out_bytes: 0,
+                    logical_read_bytes: 0,
+                    logical_write_bytes: 0,
                 },
             );
             // ["c", "d"] with (test_case.1)ms CPU time.
@@ -1900,6 +1908,10 @@ mod tests {
                     cpu_time: test_case.1,
                     read_keys: 0,
                     write_keys: 0,
+                    network_in_bytes: 0,
+                    network_out_bytes: 0,
+                    logical_read_bytes: 0,
+                    logical_write_bytes: 0,
                 },
             );
             // Multiple key ranges with (test_case.2)ms CPU time.
@@ -1909,6 +1921,10 @@ mod tests {
                     cpu_time: test_case.2,
                     read_keys: 0,
                     write_keys: 0,
+                    network_in_bytes: 0,
+                    network_out_bytes: 0,
+                    logical_read_bytes: 0,
+                    logical_write_bytes: 0,
                 },
             );
             // Empty key range with (test_case.3)ms CPU time.
@@ -1918,6 +1934,10 @@ mod tests {
                     cpu_time: test_case.3,
                     read_keys: 0,
                     write_keys: 0,
+                    network_in_bytes: 0,
+                    network_out_bytes: 0,
+                    logical_read_bytes: 0,
+                    logical_write_bytes: 0,
                 },
             );
 

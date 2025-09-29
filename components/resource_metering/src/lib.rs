@@ -16,12 +16,13 @@ use std::{
 };
 
 pub use collector::Collector;
-pub use config::{Config, ConfigManager};
+pub use config::{Config, ConfigManager, ENABLE_NETWORK_IO_COLLECTION};
 pub use model::*;
 pub use recorder::{
     CollectorGuard, CollectorId, CollectorRegHandle,
     ConfigChangeNotifier as RecorderConfigChangeNotifier, CpuRecorder, Recorder, RecorderBuilder,
-    SummaryRecorder, init_recorder, record_read_keys, record_write_keys,
+    SummaryRecorder, init_recorder, record_logical_read_bytes, record_logical_write_bytes,
+    record_network_in_bytes, record_network_out_bytes, record_read_keys, record_write_keys,
 };
 use recorder::{LocalStorage, LocalStorageRef, STORAGE};
 pub use reporter::{
@@ -146,7 +147,10 @@ impl Drop for Guard {
                 return;
             }
             let cur_record = ls.summary_cur_record.take_and_reset();
-            if cur_record.read_keys.load(Relaxed) == 0 && cur_record.write_keys.load(Relaxed) == 0 {
+            if cur_record.read_keys.load(Relaxed) == 0
+                && cur_record.logical_read_bytes.load(Relaxed) == 0
+                && cur_record.logical_write_bytes.load(Relaxed) == 0
+            {
                 return;
             }
             let mut records = ls.summary_records.lock().unwrap();
@@ -295,7 +299,7 @@ pub struct TagInfos {
     pub peer_id: u64,
     // Only a read request contains the key ranges.
     pub key_ranges: Vec<(Vec<u8>, Vec<u8>)>,
-    pub extra_attachment: Vec<u8>,
+    pub extra_attachment: Arc<Vec<u8>>,
 }
 
 impl TagInfos {
@@ -306,7 +310,7 @@ impl TagInfos {
             peer_id: peer.get_id(),
             region_id: context.get_region_id(),
             key_ranges: vec![],
-            extra_attachment: Vec::from(context.get_resource_group_tag()),
+            extra_attachment: Arc::new(Vec::from(context.get_resource_group_tag())),
         }
     }
 
@@ -321,7 +325,7 @@ impl TagInfos {
             peer_id: peer.get_id(),
             region_id: context.get_region_id(),
             key_ranges,
-            extra_attachment: Vec::from(context.get_resource_group_tag()),
+            extra_attachment: Arc::new(Vec::from(context.get_resource_group_tag())),
         }
     }
 }
@@ -348,7 +352,7 @@ mod tests {
                     region_id: 2,
                     peer_id: 3,
                     key_ranges: vec![],
-                    extra_attachment: b"12345".to_vec(),
+                    extra_attachment: Arc::new(b"12345".to_vec()),
                 }),
                 resource_tag_factory,
             };

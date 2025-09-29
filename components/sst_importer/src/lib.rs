@@ -2,6 +2,7 @@
 
 //! Importing RocksDB SST files into TiKV
 #![feature(min_specialization)]
+#![feature(error_reporter)]
 
 #[macro_use]
 extern crate serde_derive;
