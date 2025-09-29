@@ -98,7 +98,7 @@ impl<S: Storage, F: KvFormat> BatchTableScanExecutor<S, F> {
             handle_indices,
             primary_column_ids,
             is_column_filled,
-            allow_missing_columns: true
+            allow_missing_columns: true,
         };
         let wrapper = ScanExecutor::new(ScanExecutorOptions {
             imp,
