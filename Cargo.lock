@@ -730,6 +730,7 @@ dependencies = [
  "http-types",
  "log",
  "once_cell",
+ "openssl",
  "paste",
  "pin-project",
  "quick-xml 0.31.0",
