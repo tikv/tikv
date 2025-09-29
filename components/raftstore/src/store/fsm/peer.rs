@@ -89,7 +89,10 @@ use crate::{
         memory::*,
         metrics::*,
         msg::{Callback, CampaignType, ExtCallback, InspectedRaftMessage, PeerClearMetaStat},
-        peer::{ConsistencyState, Peer, PersistSnapshotResult, StaleState, TransferLeaderContext},
+        peer::{
+            ConsistencyState, Peer, PendingRemoveReason, PersistSnapshotResult, StaleState,
+            TransferLeaderContext,
+        },
         region_meta::RegionMeta,
         snapshot_backup::{AbortReason, SnapshotBrState, SnapshotBrWaitApplyRequest},
         transport::Transport,
@@ -1111,14 +1114,14 @@ where
                 "peer_id" => self.fsm.peer_id(),
                 "target_index" => target_index,
                 "applied_index" => applied_index,
-                "pending_remove" => self.fsm.peer.pending_remove,
+                "pending_remove" => ?self.fsm.peer.pending_remove,
                 "voter" => self.fsm.peer.raft_group.raft.vote,
             );
 
             // do some sanity check, for follower, leader already apply to last log,
             // case#1 if it is learner during backup and never vote before, vote is 0
             // case#2 if peer is suppose to remove
-            if self.fsm.peer.raft_group.raft.vote == 0 || self.fsm.peer.pending_remove {
+            if self.fsm.peer.raft_group.raft.vote == 0 || self.fsm.peer.pending_remove.is_some() {
                 info!(
                     "this peer is never vote before or pending remove, it should be skip to wait apply";
                     "region" => %self.region_id(),
@@ -1147,7 +1150,7 @@ where
     }
 
     fn on_unsafe_recovery_fill_out_report(&mut self, syncer: UnsafeRecoveryFillOutReportSyncer) {
-        if self.fsm.peer.pending_remove || self.fsm.stopped {
+        if self.fsm.peer.pending_remove.is_some() || self.fsm.stopped {
             return;
         }
         let mut self_report = pdpb::PeerReport::default();
@@ -1211,7 +1214,7 @@ where
     }
 
     fn on_casual_msg(&mut self, msg: Box<CasualMessage<EK>>) {
-        if self.fsm.peer.pending_remove {
+        if self.fsm.peer.pending_remove == Some(PendingRemoveReason::DESTROY) {
             // It means that the peer will be asynchronously removed, it's no
             // need to execute the consequentail CasualMessages.
             return;
@@ -1528,7 +1531,7 @@ where
                 && (key.idx < compacted_idx
                     || key.idx == compacted_idx
                         && !is_applying_snap
-                        && !self.fsm.peer.pending_remove)
+                        && self.fsm.peer.pending_remove.is_none())
             {
                 info!(
                     "deleting applied snap file";
@@ -2140,7 +2143,7 @@ where
         // state, or it is being destroyed, ignore the result.
         let cache_warmup_state = &self.fsm.peer.transfer_leader_state.cache_warmup_state;
         if !self.fsm.peer.is_leader() && cache_warmup_state.is_none()
-            || self.fsm.peer.pending_remove
+            || self.fsm.peer.pending_remove.is_some()
         {
             self.fsm.peer.mut_store().clean_async_fetch_res(low);
             return;
@@ -2393,7 +2396,7 @@ where
             |_| {}
         );
 
-        if self.fsm.peer.pending_remove {
+        if self.fsm.peer.pending_remove.is_some() {
             self.fsm.peer.mut_store().flush_entry_cache_metrics();
             return;
         }
@@ -2581,7 +2584,9 @@ where
                     "peer_id" => self.fsm.peer_id(),
                     "res" => ?res,
                 );
-                if self.fsm.peer.wait_data {
+                if self.fsm.peer.wait_data
+                    || self.fsm.peer.pending_remove == Some(PendingRemoveReason::DESTROY)
+                {
                     return;
                 }
                 self.on_ready_result(&mut res.exec_res, &res.metrics);
@@ -2809,7 +2814,7 @@ where
             |_| Ok(())
         );
 
-        if self.fsm.peer.pending_remove || self.fsm.stopped {
+        if self.fsm.peer.pending_remove.is_some() || self.fsm.stopped {
             return Ok(());
         }
 
@@ -4110,7 +4115,7 @@ where
         self.ctx.coprocessor_host.on_destroy_peer(self.region());
         fail_point!("destroy_peer");
         // Mark itself as pending_remove
-        self.fsm.peer.pending_remove = true;
+        self.fsm.peer.pending_remove = Some(PendingRemoveReason::DESTROY);
 
         // try to decrease the RAFT_ENABLE_UNPERSISTED_APPLY_GAUGE count.
         self.fsm.peer.disable_apply_unpersisted_log(0);
@@ -4266,7 +4271,10 @@ where
         merged_by_target: bool,
         clear_stat: PeerClearMetaStat,
     ) -> bool {
-        assert!(self.fsm.peer.pending_remove);
+        assert_eq!(
+            self.fsm.peer.pending_remove,
+            Some(PendingRemoveReason::DESTROY)
+        );
         // Clean remains if needs and notify all pending requests to exit.
         self.fsm
             .peer
@@ -5067,7 +5075,7 @@ where
 
     fn on_check_merge(&mut self) {
         if self.fsm.stopped
-            || self.fsm.peer.pending_remove
+            || self.fsm.peer.pending_remove.is_some()
             || self.fsm.peer.pending_merge_state.is_none()
         {
             return;
@@ -5155,7 +5163,7 @@ where
                 assert_eq!(state.get_target().get_id(), catch_up_logs.target_region_id);
                 // Indicate that `on_catch_up_logs_for_merge` has already executed.
                 // Mark pending_remove because its apply fsm will be destroyed.
-                self.fsm.peer.pending_remove = true;
+                self.fsm.peer.pending_remove = Some(PendingRemoveReason::MERGE);
                 // Send CatchUpLogs back to destroy source apply fsm,
                 // then it will send `Noop` to trigger target apply fsm.
                 self.ctx.apply_router.schedule_task(
@@ -5188,7 +5196,7 @@ where
                 );
                 // Indicate that `on_ready_prepare_merge` has already executed.
                 // Mark pending_remove because its apply fsm will be destroyed.
-                self.fsm.peer.pending_remove = true;
+                self.fsm.peer.pending_remove = Some(PendingRemoveReason::MERGE);
                 // Just for saving memory.
                 catch_up_logs.merge.clear_entries();
                 // Send CatchUpLogs back to destroy source apply fsm,
@@ -5427,7 +5435,7 @@ where
                     "peer_id" => self.fsm.peer_id(),
                     "target_region_id" => target_region_id,
                 );
-                self.fsm.peer.pending_remove = true;
+                self.fsm.peer.pending_remove = Some(PendingRemoveReason::MERGE);
                 // Destroy apply fsm at first
                 self.ctx.apply_router.schedule_task(
                     self.fsm.region_id(),
@@ -5447,7 +5455,7 @@ where
     }
 
     fn on_stale_merge(&mut self, target_region_id: u64) {
-        if self.fsm.peer.pending_remove {
+        if self.fsm.peer.pending_remove.is_some() {
             return;
         }
         info!(
@@ -6007,7 +6015,7 @@ where
         cb: Callback<EK::Snapshot>,
         diskfullopt: DiskFullOpt,
     ) {
-        if self.fsm.peer.pending_remove {
+        if self.fsm.peer.pending_remove.is_some() {
             apply::notify_req_region_removed(self.region_id(), cb);
             return;
         }
@@ -6140,10 +6148,11 @@ where
     fn on_raft_gc_log_tick(&mut self, force_compact: bool) {
         fail_point!(
             "check_state_on_raft_gc_log_tick",
-            self.fsm.stopped || self.fsm.peer.pending_remove,
+            self.fsm.stopped || self.fsm.peer.pending_remove.is_some(),
             |_| {}
         );
-        if self.fsm.stopped || self.fsm.peer.pending_remove || !self.fsm.peer.is_leader() {
+        if self.fsm.stopped || self.fsm.peer.pending_remove.is_some() || !self.fsm.peer.is_leader()
+        {
             // If the peer is marked as `pending_remove`, it means the clearing might be
             // executed by the region worker, or this peer is already stopped. In both
             // scenarios, there is no need to execute log gc.
@@ -6348,7 +6357,7 @@ where
         fail_point!("ignore request snapshot", |_| {
             self.schedule_tick(PeerTick::RequestSnapshot);
         });
-        if !self.fsm.peer.wait_data || self.fsm.peer.pending_remove {
+        if !self.fsm.peer.wait_data || self.fsm.peer.pending_remove.is_some() {
             return;
         }
         if self.fsm.peer.is_leader()
@@ -6425,7 +6434,7 @@ where
     }
 
     fn on_split_region_check_tick(&mut self) {
-        if !self.fsm.peer.is_leader() || self.fsm.peer.pending_remove {
+        if !self.fsm.peer.is_leader() || self.fsm.peer.pending_remove.is_some() {
             return;
         }
 
@@ -6893,7 +6902,7 @@ where
     }
 
     fn on_check_peer_stale_state_tick(&mut self) {
-        if self.fsm.peer.pending_remove {
+        if self.fsm.peer.pending_remove.is_some() {
             return;
         }
 
