@@ -3385,7 +3385,7 @@ where
         self.write_router
             .check_new_persisted(ctx, self.persisted_number);
 
-        if self.pending_remove.is_some() {
+        if self.pending_remove.is_none() {
             // If `pending_remove` is true, no need to call `on_persist_ready` to
             // update persist index.
             let pre_persist_index = self.raft_group.raft.raft_log.persisted;
