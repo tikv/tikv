@@ -215,6 +215,7 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
     storage: S,
     extra_storage_accessor: Option<impl RegionStorageAccessor<Storage = S> + 'static>,
     ranges: Vec<KeyRange>,
+    versions: Option<Vec<u64>>,
     config: Arc<EvalConfig>,
     is_scanned_range_aware: bool,
 ) -> Result<Box<dyn BatchExecutor<StorageStats = S::Statistics>>> {
@@ -239,19 +240,33 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
             let primary_column_ids = descriptor.take_primary_column_ids();
             let primary_prefix_column_ids = descriptor.take_primary_prefix_column_ids();
 
-            Box::new(
-                BatchTableScanExecutor::<_, F>::new(
-                    storage,
-                    config.clone(),
-                    columns_info,
-                    ranges,
-                    primary_column_ids,
-                    descriptor.get_desc(),
-                    is_scanned_range_aware,
-                    primary_prefix_column_ids,
-                )?
-                .collect_summary(summary_slot_index),
-            )
+            match versions {
+                Some(versions_vec) => Box::new(
+                    BatchVersionedLookupExecutor::<_, F>::new(
+                        storage,
+                        config.clone(),
+                        columns_info,
+                        ranges,
+                        primary_column_ids,
+                        versions_vec,
+                        is_scanned_range_aware,
+                    )?
+                    .collect_summary(summary_slot_index),
+                ),
+                None => Box::new(
+                    BatchTableScanExecutor::<_, F>::new(
+                        storage,
+                        config.clone(),
+                        columns_info,
+                        ranges,
+                        primary_column_ids,
+                        descriptor.get_desc(),
+                        is_scanned_range_aware,
+                        primary_prefix_column_ids,
+                    )?
+                    .collect_summary(summary_slot_index),
+                ),
+            }
         }
         ExecType::TypeIndexScan => {
             EXECUTOR_COUNT_METRICS.batch_index_scan.inc();
@@ -548,6 +563,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
     pub fn from_request<S: Storage<Statistics = SS> + 'static, F: KvFormat>(
         mut req: DagRequest,
         ranges: Vec<KeyRange>,
+        versions: Option<Vec<u64>>,
         storage: S,
         extra_storage_accessor: Option<impl RegionStorageAccessor<Storage = S> + 'static>,
         deadline: Deadline,
@@ -568,6 +584,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             storage,
             extra_storage_accessor,
             ranges,
+            versions,
             config.clone(),
             is_streaming || paging_size.is_some(), /* For streaming and paging request,
                                                     * executors will continue scan from range
