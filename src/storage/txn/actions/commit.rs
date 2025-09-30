@@ -1,15 +1,150 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
+use std::{
+    collections::HashSet,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        RwLock,
+    },
+};
+
 use txn_types::{Key, TimeStamp, Write, WriteType};
 
 use crate::storage::{
     mvcc::{
         metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
-        ErrorInner, MvccTxn, ReleasedLock, Result as MvccResult, SnapshotReader,
+        ErrorInner, MvccTxn, ReleasedLock, Result as MvccResult, SnapshotReader, TxnCommitRecord,
     },
     Snapshot,
 };
+
+// ==================== MIN_COMMIT_TS BYPASS CONFIG ====================
+
+/// Configuration for bypassing min_commit_ts check.
+/// This is a per-TiKV in-memory hotfix mechanism.
+#[derive(Default)]
+struct MinCommitTsBypassConfig {
+    bypass_set: HashSet<TimeStamp>,
+}
+
+impl MinCommitTsBypassConfig {
+    fn contains(&self, ts: &TimeStamp) -> bool {
+        self.bypass_set.contains(ts)
+    }
+
+    fn add(&mut self, ts_list: Vec<TimeStamp>) {
+        self.bypass_set.extend(ts_list);
+    }
+
+    fn remove(&mut self, ts_list: &[TimeStamp]) {
+        for ts in ts_list {
+            self.bypass_set.remove(ts);
+        }
+    }
+
+    fn clear(&mut self) {
+        self.bypass_set.clear();
+    }
+
+    fn get_all(&self) -> Vec<TimeStamp> {
+        self.bypass_set.iter().copied().collect()
+    }
+}
+
+/// Statistics for bypass operations (using atomics for lockless updates).
+struct BypassStats {
+    locks_removed_committed: AtomicU64,
+    locks_removed_rollback: AtomicU64,
+    locks_committed_bypass: AtomicU64,
+}
+
+impl BypassStats {
+    fn new() -> Self {
+        Self {
+            locks_removed_committed: AtomicU64::new(0),
+            locks_removed_rollback: AtomicU64::new(0),
+            locks_committed_bypass: AtomicU64::new(0),
+        }
+    }
+
+    fn get_snapshot(&self) -> (u64, u64, u64) {
+        (
+            self.locks_removed_committed.load(Ordering::Relaxed),
+            self.locks_removed_rollback.load(Ordering::Relaxed),
+            self.locks_committed_bypass.load(Ordering::Relaxed),
+        )
+    }
+}
+
+lazy_static::lazy_static! {
+    static ref MIN_COMMIT_TS_BYPASS: RwLock<MinCommitTsBypassConfig> =
+        RwLock::new(MinCommitTsBypassConfig::default());
+
+    static ref BYPASS_STATS: BypassStats = BypassStats::new();
+}
+
+/// Add min_commit_ts values to bypass list.
+pub fn bypass_add_min_commit_ts(ts_list: Vec<TimeStamp>) {
+    let mut cfg = MIN_COMMIT_TS_BYPASS.write().unwrap();
+    cfg.add(ts_list.clone());
+    let total = cfg.bypass_set.len();
+    drop(cfg); // Release lock before logging
+
+    info!(
+        "MIN_COMMIT_TS_BYPASS: added to bypass list";
+        "ts_list" => ?ts_list,
+        "total" => total,
+    );
+}
+
+/// Remove min_commit_ts values from bypass list.
+pub fn bypass_remove_min_commit_ts(ts_list: Vec<TimeStamp>) {
+    let mut cfg = MIN_COMMIT_TS_BYPASS.write().unwrap();
+    cfg.remove(&ts_list);
+    let remaining = cfg.bypass_set.len();
+    drop(cfg);
+
+    info!(
+        "MIN_COMMIT_TS_BYPASS: removed from bypass list";
+        "ts_list" => ?ts_list,
+        "remaining" => remaining,
+    );
+}
+
+/// Clear all entries from bypass list (restore normal mode).
+pub fn bypass_clear() -> (usize, (u64, u64, u64)) {
+    let mut cfg = MIN_COMMIT_TS_BYPASS.write().unwrap();
+    let count = cfg.bypass_set.len();
+    cfg.clear();
+    drop(cfg);
+
+    let stats = BYPASS_STATS.get_snapshot();
+    info!(
+        "MIN_COMMIT_TS_BYPASS: cleared bypass list";
+        "cleared" => count,
+        "stats" => ?stats,
+    );
+
+    (count, stats)
+}
+
+/// Get current bypass list and statistics.
+pub fn bypass_get_status() -> (Vec<TimeStamp>, (u64, u64, u64)) {
+    let cfg = MIN_COMMIT_TS_BYPASS.read().unwrap();
+    let list = cfg.get_all();
+    drop(cfg);
+
+    let stats = BYPASS_STATS.get_snapshot();
+    (list, stats)
+}
+
+/// Get statistics only.
+pub fn bypass_get_stats() -> (u64, u64, u64) {
+    BYPASS_STATS.get_snapshot()
+}
+
+// ==================== COMMIT FUNCTION ====================
 
 pub fn commit<S: Snapshot>(
     txn: &mut MvccTxn,
@@ -25,20 +160,123 @@ pub fn commit<S: Snapshot>(
         Some(lock) if lock.ts == reader.start_ts => {
             // A lock with larger min_commit_ts than current commit_ts can't be committed
             if commit_ts < lock.min_commit_ts {
-                info!(
-                    "trying to commit with smaller commit_ts than min_commit_ts";
-                    "key" => %key,
-                    "start_ts" => reader.start_ts,
-                    "commit_ts" => commit_ts,
-                    "min_commit_ts" => lock.min_commit_ts,
-                );
-                return Err(ErrorInner::CommitTsExpired {
-                    start_ts: reader.start_ts,
-                    commit_ts,
-                    key: key.into_raw()?,
-                    min_commit_ts: lock.min_commit_ts,
+                // Check if this min_commit_ts is in bypass list
+                let should_bypass = {
+                    let cfg = MIN_COMMIT_TS_BYPASS.read().unwrap();
+                    cfg.contains(&lock.min_commit_ts)
+                    // cfg dropped here, lock released
+                };
+
+                if should_bypass {
+                    // Bypass enabled - check WRITE CF to decide action (NO LOCK HELD)
+                    match reader.get_txn_commit_record(&key)? {
+                        TxnCommitRecord::SingleRecord {
+                            commit_ts: found_ts,
+                            write,
+                        } if write.write_type != WriteType::Rollback => {
+                            // Already committed, just remove lock
+                            info!(
+                                "MIN_COMMIT_TS_BYPASS: lock already committed, removing";
+                                "key" => %key,
+                                "start_ts" => reader.start_ts,
+                                "lock_min_commit_ts" => lock.min_commit_ts,
+                                "found_commit_ts" => found_ts,
+                            );
+
+                            BYPASS_STATS
+                                .locks_removed_committed
+                                .fetch_add(1, Ordering::Relaxed);
+
+                            let released = txn.unlock_key(key, lock.is_pessimistic_txn(), found_ts);
+                            return Ok(released);
+                        }
+                        TxnCommitRecord::SingleRecord { write, .. }
+                            if write.write_type == WriteType::Rollback =>
+                        {
+                            // Found rollback, remove lock
+                            info!(
+                                "MIN_COMMIT_TS_BYPASS: found rollback, removing lock";
+                                "key" => %key,
+                                "start_ts" => reader.start_ts,
+                                "lock_min_commit_ts" => lock.min_commit_ts,
+                            );
+
+                            BYPASS_STATS
+                                .locks_removed_rollback
+                                .fetch_add(1, Ordering::Relaxed);
+
+                            let released =
+                                txn.unlock_key(key, lock.is_pessimistic_txn(), TimeStamp::zero());
+                            return Ok(released);
+                        }
+                        TxnCommitRecord::OverlappedRollback { .. } => {
+                            // Overlapped rollback, remove lock
+                            info!(
+                                "MIN_COMMIT_TS_BYPASS: found overlapped rollback, removing lock";
+                                "key" => %key,
+                                "start_ts" => reader.start_ts,
+                                "lock_min_commit_ts" => lock.min_commit_ts,
+                            );
+
+                            BYPASS_STATS
+                                .locks_removed_rollback
+                                .fetch_add(1, Ordering::Relaxed);
+
+                            let released =
+                                txn.unlock_key(key, lock.is_pessimistic_txn(), TimeStamp::zero());
+                            return Ok(released);
+                        }
+                        TxnCommitRecord::None { .. } => {
+                            // Not committed yet, bypass check and commit
+                            info!(
+                                "MIN_COMMIT_TS_BYPASS: bypassing check and committing";
+                                "key" => %key,
+                                "start_ts" => reader.start_ts,
+                                "commit_ts" => commit_ts,
+                                "lock_min_commit_ts" => lock.min_commit_ts,
+                            );
+
+                            BYPASS_STATS
+                                .locks_committed_bypass
+                                .fetch_add(1, Ordering::Relaxed);
+
+                            // Fall through to normal commit logic (bypassed)
+                        }
+                        _ => {
+                            // Other cases (e.g., unexpected SingleRecord variants), bypass and
+                            // commit
+                            info!(
+                                "MIN_COMMIT_TS_BYPASS: bypassing check for other record type";
+                                "key" => %key,
+                                "start_ts" => reader.start_ts,
+                                "commit_ts" => commit_ts,
+                                "lock_min_commit_ts" => lock.min_commit_ts,
+                            );
+
+                            BYPASS_STATS
+                                .locks_committed_bypass
+                                .fetch_add(1, Ordering::Relaxed);
+
+                            // Fall through to normal commit logic (bypassed)
+                        }
+                    }
+                } else {
+                    // Not in bypass list, return normal error
+                    info!(
+                        "trying to commit with smaller commit_ts than min_commit_ts";
+                        "key" => %key,
+                        "start_ts" => reader.start_ts,
+                        "commit_ts" => commit_ts,
+                        "min_commit_ts" => lock.min_commit_ts,
+                    );
+                    return Err(ErrorInner::CommitTsExpired {
+                        start_ts: reader.start_ts,
+                        commit_ts,
+                        key: key.into_raw()?,
+                        min_commit_ts: lock.min_commit_ts,
+                    }
+                    .into());
                 }
-                .into());
             }
 
             // It's an abnormal routine since pessimistic locks shouldn't be committed in
@@ -402,5 +640,92 @@ pub mod tests {
         must_written(&mut engine, k1, 10, 20, WriteType::Put);
         must_not_have_write(&mut engine, k2, 20);
         must_not_have_write(&mut engine, k2, 10);
+    }
+
+    #[test]
+    fn test_bypass_min_commit_ts() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+
+        let k = b"k1";
+        let v = b"v1";
+        let ts = TimeStamp::compose;
+
+        // Use large txn to get min_commit_ts set
+        must_prewrite_put_for_large_txn(&mut engine, k, v, k, ts(10, 0), 100, 0);
+        check_txn_status::tests::must_success(
+            &mut engine,
+            k,
+            ts(10, 0),
+            ts(20, 0),
+            ts(20, 0),
+            true,
+            false,
+            false,
+            |s| matches!(s, TxnStatus::Uncommitted { .. }),
+        );
+
+        let lock = must_locked(&mut engine, k, ts(10, 0));
+        let min_commit_ts = lock.min_commit_ts;
+        // min_commit_ts should be ts(20, 1)
+        assert!(min_commit_ts > ts(20, 0));
+
+        // Without bypass, committing with commit_ts < min_commit_ts should fail
+        must_err(&mut engine, k, ts(10, 0), ts(20, 0));
+
+        // Add min_commit_ts to bypass list
+        bypass_add_min_commit_ts(vec![min_commit_ts]);
+
+        // Verify it's in the bypass list
+        let (bypass_list, _) = bypass_get_status();
+        assert_eq!(bypass_list.len(), 1);
+        assert!(bypass_list.contains(&min_commit_ts));
+
+        // Now commit should succeed with bypassed min_commit_ts check
+        let res = must_succeed(&mut engine, k, ts(10, 0), ts(20, 0));
+        assert!(res.is_some());
+
+        // Verify stats - at least one bypass operation occurred
+        let (_, _, committed) = bypass_get_stats();
+        assert_eq!(committed, 1);
+
+        // Clear bypass list
+        let (count, _) = bypass_clear();
+        assert_eq!(count, 1);
+
+        // Verify bypass list is empty
+        let (bypass_list, _) = bypass_get_status();
+        assert_eq!(bypass_list.len(), 0);
+    }
+
+    #[test]
+    fn test_bypass_add_remove() {
+        // Test adding and removing timestamps from bypass list
+        let ts1 = TimeStamp::new(100);
+        let ts2 = TimeStamp::new(200);
+        let ts3 = TimeStamp::new(300);
+
+        // Clear any existing state
+        bypass_clear();
+
+        // Add timestamps
+        bypass_add_min_commit_ts(vec![ts1, ts2, ts3]);
+        let (bypass_list, _) = bypass_get_status();
+        assert_eq!(bypass_list.len(), 3);
+        assert!(bypass_list.contains(&ts1));
+        assert!(bypass_list.contains(&ts2));
+        assert!(bypass_list.contains(&ts3));
+
+        // Remove one timestamp
+        bypass_remove_min_commit_ts(vec![ts2]);
+        let (bypass_list, _) = bypass_get_status();
+        assert_eq!(bypass_list.len(), 2);
+        assert!(bypass_list.contains(&ts1));
+        assert!(!bypass_list.contains(&ts2));
+        assert!(bypass_list.contains(&ts3));
+
+        // Remove all
+        bypass_clear();
+        let (bypass_list, _) = bypass_get_status();
+        assert_eq!(bypass_list.len(), 0);
     }
 }

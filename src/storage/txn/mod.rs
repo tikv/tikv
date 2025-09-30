@@ -24,7 +24,10 @@ pub use self::{
     actions::{
         acquire_pessimistic_lock::acquire_pessimistic_lock,
         cleanup::cleanup,
-        commit::commit,
+        commit::{
+            bypass_add_min_commit_ts, bypass_clear, bypass_get_stats, bypass_get_status,
+            bypass_remove_min_commit_ts, commit,
+        },
         flashback_to_version::{
             flashback_to_version_read_lock, flashback_to_version_read_write,
             flashback_to_version_write, rollback_locks, FLASHBACK_BATCH_SIZE,

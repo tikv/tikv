@@ -48,7 +48,7 @@ use prometheus::TEXT_FORMAT;
 use regex::Regex;
 use resource_control::ResourceGroupManager;
 use security::{self, SecurityConfig};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use service::service_manager::GrpcServiceManager;
 use tikv_kv::RaftExtension;
@@ -504,6 +504,169 @@ where
         ))
     }
 
+    async fn handle_bypass_min_commit_ts_post(req: Request<Body>) -> hyper::Result<Response<Body>> {
+        use crate::storage::txn::{
+            bypass_add_min_commit_ts, bypass_clear, bypass_get_status, bypass_remove_min_commit_ts,
+        };
+
+        #[derive(Deserialize)]
+        struct BypassRequest {
+            action: String,
+            min_commit_ts_list: Option<Vec<u64>>,
+        }
+
+        #[derive(Serialize)]
+        struct BypassResponse {
+            status: String,
+            bypass_list: Vec<u64>,
+            stats: BypassStatsResponse,
+        }
+
+        #[derive(Serialize)]
+        struct BypassStatsResponse {
+            locks_removed_committed: u64,
+            locks_removed_rollback: u64,
+            locks_committed_bypass: u64,
+        }
+
+        let mut body = Vec::new();
+        req.into_body()
+            .try_for_each(|bytes| {
+                body.extend(bytes);
+                ok(())
+            })
+            .await?;
+
+        let bypass_req: BypassRequest = match serde_json::from_slice(&body) {
+            Ok(req) => req,
+            Err(e) => {
+                return Ok(make_response(
+                    StatusCode::BAD_REQUEST,
+                    format!("failed to parse JSON: {}", e),
+                ));
+            }
+        };
+
+        let action = bypass_req.action.as_str();
+        match action {
+            "add" => {
+                let ts_list = match bypass_req.min_commit_ts_list {
+                    Some(list) => list,
+                    None => {
+                        return Ok(make_response(
+                            StatusCode::BAD_REQUEST,
+                            "min_commit_ts_list is required for add action",
+                        ));
+                    }
+                };
+                let ts_list: Vec<_> = ts_list.into_iter().map(txn_types::TimeStamp::new).collect();
+                bypass_add_min_commit_ts(ts_list);
+                info!("MIN_COMMIT_TS_BYPASS: API added timestamps to bypass list");
+            }
+            "remove" => {
+                let ts_list = match bypass_req.min_commit_ts_list {
+                    Some(list) => list,
+                    None => {
+                        return Ok(make_response(
+                            StatusCode::BAD_REQUEST,
+                            "min_commit_ts_list is required for remove action",
+                        ));
+                    }
+                };
+                let ts_list: Vec<_> = ts_list.into_iter().map(txn_types::TimeStamp::new).collect();
+                bypass_remove_min_commit_ts(ts_list);
+                info!("MIN_COMMIT_TS_BYPASS: API removed timestamps from bypass list");
+            }
+            "clear" => {
+                let (count, stats) = bypass_clear();
+                info!("MIN_COMMIT_TS_BYPASS: API cleared bypass list"; "count" => count, "stats" => ?stats);
+            }
+            _ => {
+                return Ok(make_response(
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "unknown action: {}, must be one of: add, remove, clear",
+                        action
+                    ),
+                ));
+            }
+        }
+
+        let (bypass_list, stats) = bypass_get_status();
+        let bypass_list: Vec<u64> = bypass_list.into_iter().map(|ts| ts.into_inner()).collect();
+
+        let response = BypassResponse {
+            status: "ok".to_string(),
+            bypass_list,
+            stats: BypassStatsResponse {
+                locks_removed_committed: stats.0,
+                locks_removed_rollback: stats.1,
+                locks_committed_bypass: stats.2,
+            },
+        };
+
+        let body = match serde_json::to_string(&response) {
+            Ok(json) => json,
+            Err(e) => {
+                return Ok(make_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("failed to serialize response: {}", e),
+                ));
+            }
+        };
+
+        Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body))
+            .unwrap())
+    }
+
+    fn handle_bypass_min_commit_ts_get() -> hyper::Result<Response<Body>> {
+        use crate::storage::txn::bypass_get_status;
+
+        #[derive(Serialize)]
+        struct BypassStatusResponse {
+            bypass_list: Vec<u64>,
+            stats: BypassStatsResponse,
+        }
+
+        #[derive(Serialize)]
+        struct BypassStatsResponse {
+            locks_removed_committed: u64,
+            locks_removed_rollback: u64,
+            locks_committed_bypass: u64,
+        }
+
+        let (bypass_list, stats) = bypass_get_status();
+        let bypass_list: Vec<u64> = bypass_list.into_iter().map(|ts| ts.into_inner()).collect();
+
+        let response = BypassStatusResponse {
+            bypass_list,
+            stats: BypassStatsResponse {
+                locks_removed_committed: stats.0,
+                locks_removed_rollback: stats.1,
+                locks_committed_bypass: stats.2,
+            },
+        };
+
+        let body = match serde_json::to_string(&response) {
+            Ok(json) => json,
+            Err(e) => {
+                return Ok(make_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("failed to serialize response: {}", e),
+                ));
+            }
+        };
+
+        Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body))
+            .unwrap())
+    }
+
     pub async fn dump_region_meta(req: Request<Body>, router: R) -> hyper::Result<Response<Body>> {
         lazy_static! {
             static ref REGION: Regex = Regex::new(r"/region/(?P<id>\d+)").unwrap();
@@ -742,6 +905,12 @@ where
                             }
                             (Method::GET, "/async_tasks") => Self::dump_async_trace(),
                             (Method::GET, "debug/ime/cached_regions") => Self::handle_dumple_cached_regions(in_memory_engine.as_ref()),
+                            (Method::POST, "/debug/bypass-min-commit-ts") => {
+                                Self::handle_bypass_min_commit_ts_post(req).await
+                            }
+                            (Method::GET, "/debug/bypass-min-commit-ts") => {
+                                Self::handle_bypass_min_commit_ts_get()
+                            }
                             _ => {
                                 is_unknown_path = true;
                                 Ok(make_response(StatusCode::NOT_FOUND, "path not found"))
