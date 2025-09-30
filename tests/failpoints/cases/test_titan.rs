@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use engine_rocks::BlobRunMode;
 use engine_traits::{CF_DEFAULT, CompactExt, ManualCompactionOptions, MiscExt};
 use test_raftstore::*;
@@ -157,9 +155,8 @@ fn test_titan() {
     cluster
         .pd_client
         .must_add_peer(region1.get_id(), peer.clone());
-    cluster
-        .try_transfer_leader_with_timeout(region1.get_id(), peer.clone(), Duration::from_secs(5))
-        .unwrap();
+    fail::remove("after_delete_files_in_range");
+    cluster.must_transfer_leader(region1.get_id(), peer.clone());
     assert_eq!(cluster.must_get(b"k1").unwrap(), b"v".repeat(20000));
     cluster.must_put(b"k11", &b"v".repeat(30000));
     assert_eq!(cluster.must_get(b"k11").unwrap(), b"v".repeat(30000));
