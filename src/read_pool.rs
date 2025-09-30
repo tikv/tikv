@@ -597,7 +597,7 @@ impl ReadPoolCpuTimeTracker {
         for &tid in &tids {
             if let Ok(stat) = full_thread_stat(pid, tid) {
                 // Look for unified read pool thread name pattern
-                if stat.command.contains("unified-read-pool") || stat.command.contains("yatp") {
+                if stat.command.contains("unified-read-po") {
                     // Sum utime + stime (user + system time)
                     current_total_cpu_time += stat.utime + stat.stime;
                 }
@@ -607,7 +607,6 @@ impl ReadPoolCpuTimeTracker {
         // Calculate CPU time difference since last check
         let cpu_time_diff = current_total_cpu_time.saturating_sub(self.prev_total_cpu_time as i64);
 
-        // Convert to CPU utilization as fraction of total available cores
         let cpu_utilization = if duration.as_secs_f64() > 0.0 && cpu_time_diff > 0 {
             // Convert CPU time to seconds using ticks_per_second
             let cpu_seconds = (cpu_time_diff as f64) / (ticks_per_second() as f64);
