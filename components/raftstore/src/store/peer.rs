@@ -691,18 +691,14 @@ impl SplitCheckTrigger {
     }
 }
 
-bitflags! {
-    /// A bitmap contains some useful flags to represent different reason for pending remove.
-    pub struct PendingRemoveReason: u8 {
-        const MERGE   = 0b0000_0001;
-        const DESTROY = 0b0000_0010;
-    }
-}
-
-impl PendingRemoveReason {
-    pub fn is_destroy(&self) -> bool {
-        *self == Self::DESTROY
-    }
+/// A enum contains some useful state to represent different reason for
+/// pending remove.
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingRemoveReason {
+    NotRemoved = 0,
+    Merge,
+    Destroy,
 }
 
 #[derive(Getters, MutGetters)]
@@ -1379,7 +1375,7 @@ where
         //   is Some and should be set to None.
         self.apply_snap_ctx = None;
 
-        self.pending_remove = Some(PendingRemoveReason::DESTROY);
+        self.pending_remove = Some(PendingRemoveReason::Destroy);
 
         Some(DestroyPeerJob {
             initialized: self.get_store().is_initialized(),

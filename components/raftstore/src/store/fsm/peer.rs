@@ -1214,7 +1214,7 @@ where
     }
 
     fn on_casual_msg(&mut self, msg: Box<CasualMessage<EK>>) {
-        if self.fsm.peer.pending_remove == Some(PendingRemoveReason::DESTROY) {
+        if self.fsm.peer.pending_remove == Some(PendingRemoveReason::Destroy) {
             // It means that the peer will be asynchronously removed, it's no
             // need to execute the consequentail CasualMessages.
             return;
@@ -1707,6 +1707,10 @@ where
                     // asynchronously while a new peer for the region is added.
                     // If the async cleanup thread returns a delayed message
                     // aimed to the removed peer, skip it to avoid acting on stale state.
+                    // This is a corner case after introducing `async destroy peer` by PR#18805.
+                    info!("delayed destroy peer message";
+                        "old_peer_id" => to_peer_id,
+                        "peer_id" => self.fsm.peer_id());
                     return;
                 }
                 self.on_ready_destroy_peer(merged_by_target, clear_stat);
@@ -2585,8 +2589,17 @@ where
                     "res" => ?res,
                 );
                 if self.fsm.peer.wait_data
-                    || self.fsm.peer.pending_remove == Some(PendingRemoveReason::DESTROY)
+                    || self.fsm.peer.pending_remove == Some(PendingRemoveReason::Destroy)
                 {
+                    // In PR#18805 we introduced asynchronous peer destruction. A peer
+                    // with `PendingRemoveReason::Destroy` is a stale peer that has been
+                    // marked for removal and will be cleaned up by an async worker.
+                    // Similarly, `wait_data` means the peer is waiting for snapshot or
+                    // apply work to finish. In either case we should ignore subsequent
+                    // apply results for this peer — this preserves the semantics of the
+                    // original synchronous-destroy path and avoids applying results for
+                    // a peer that is effectively slated for removal or not ready to
+                    // accept them.
                     return;
                 }
                 self.on_ready_result(&mut res.exec_res, &res.metrics);
@@ -4115,7 +4128,7 @@ where
         self.ctx.coprocessor_host.on_destroy_peer(self.region());
         fail_point!("destroy_peer");
         // Mark itself as pending_remove
-        self.fsm.peer.pending_remove = Some(PendingRemoveReason::DESTROY);
+        self.fsm.peer.pending_remove = Some(PendingRemoveReason::Destroy);
 
         // try to decrease the RAFT_ENABLE_UNPERSISTED_APPLY_GAUGE count.
         self.fsm.peer.disable_apply_unpersisted_log(0);
@@ -4273,7 +4286,10 @@ where
     ) -> bool {
         assert_eq!(
             self.fsm.peer.pending_remove,
-            Some(PendingRemoveReason::DESTROY)
+            Some(PendingRemoveReason::Destroy),
+            "terminate the peer under pending_remove state, exepcted {:?} actual {:?} ",
+            Some(PendingRemoveReason::Destroy),
+            self.fsm.peer.pending_remove,
         );
         // Clean remains if needs and notify all pending requests to exit.
         self.fsm
@@ -5163,7 +5179,7 @@ where
                 assert_eq!(state.get_target().get_id(), catch_up_logs.target_region_id);
                 // Indicate that `on_catch_up_logs_for_merge` has already executed.
                 // Mark pending_remove because its apply fsm will be destroyed.
-                self.fsm.peer.pending_remove = Some(PendingRemoveReason::MERGE);
+                self.fsm.peer.pending_remove = Some(PendingRemoveReason::Merge);
                 // Send CatchUpLogs back to destroy source apply fsm,
                 // then it will send `Noop` to trigger target apply fsm.
                 self.ctx.apply_router.schedule_task(
@@ -5196,7 +5212,7 @@ where
                 );
                 // Indicate that `on_ready_prepare_merge` has already executed.
                 // Mark pending_remove because its apply fsm will be destroyed.
-                self.fsm.peer.pending_remove = Some(PendingRemoveReason::MERGE);
+                self.fsm.peer.pending_remove = Some(PendingRemoveReason::Merge);
                 // Just for saving memory.
                 catch_up_logs.merge.clear_entries();
                 // Send CatchUpLogs back to destroy source apply fsm,
@@ -5435,7 +5451,7 @@ where
                     "peer_id" => self.fsm.peer_id(),
                     "target_region_id" => target_region_id,
                 );
-                self.fsm.peer.pending_remove = Some(PendingRemoveReason::MERGE);
+                self.fsm.peer.pending_remove = Some(PendingRemoveReason::Merge);
                 // Destroy apply fsm at first
                 self.ctx.apply_router.schedule_task(
                     self.fsm.region_id(),

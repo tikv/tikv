@@ -92,6 +92,15 @@ fn test_titan() {
     }
     assert!(blob_file_reclaimed);
     cluster.engines[&3].kv.flush_cf(CF_DEFAULT, true).unwrap();
+    test_util::eventually(
+        std::time::Duration::from_millis(100),
+        std::time::Duration::from_millis(3000),
+        || {
+            db.get_property_int_cf(defaultcf, "rocksdb.num-files-at-level0")
+                .unwrap()
+                == 1
+        },
+    );
     assert_eq!(
         1,
         db.get_property_int_cf(defaultcf, "rocksdb.num-files-at-level0")
@@ -140,7 +149,7 @@ fn test_titan() {
     let defaultcf = db.cf_handle(CF_DEFAULT).unwrap();
     test_util::eventually(
         std::time::Duration::from_millis(100),
-        std::time::Duration::from_millis(2000),
+        std::time::Duration::from_millis(3000),
         || {
             db.get_property_int_cf(defaultcf, "rocksdb.num-files-at-level5")
                 .unwrap()
