@@ -56,7 +56,6 @@ impl BackupStreamObserver {
             .scheduler
             .schedule(Task::ModifyObserve(ObserveOp::Start {
                 region: region.clone(),
-                handle: ObserveHandle::new(),
             }))
         {
             use crate::errors::Error;
@@ -129,7 +128,6 @@ impl<E: KvEngine> CmdObserver<E> for BackupStreamObserver {
                 self.scheduler,
                 Task::ModifyObserve(ObserveOp::Start {
                     region: region.clone(),
-                    handle: ObserveHandle::new(),
                 })
             );
         }
@@ -233,7 +231,7 @@ mod tests {
         o.register_region(&r);
         let task = rx.recv_timeout(Duration::from_secs(0)).unwrap().unwrap();
         let handle = ObserveHandle::new();
-        if let Task::ModifyObserve(ObserveOp::Start { ref region, .. }) = task {
+        if let Task::ModifyObserve(ObserveOp::Start { ref region }) = task {
             subs.register_region(region, handle.clone(), None);
         } else {
             panic!("unexpected message received: it is {}", task);
@@ -261,7 +259,7 @@ mod tests {
         o.register_region(&r);
         let task = rx.recv_timeout(Duration::from_secs(0)).unwrap().unwrap();
         let handle = ObserveHandle::new();
-        if let Task::ModifyObserve(ObserveOp::Start { ref region, .. }) = task {
+        if let Task::ModifyObserve(ObserveOp::Start { ref region }) = task {
             subs.register_region(region, handle.clone(), None);
         } else {
             panic!("not match, it is {:?}", task);
