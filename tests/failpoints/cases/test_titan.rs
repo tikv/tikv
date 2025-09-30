@@ -1,6 +1,5 @@
 use engine_rocks::BlobRunMode;
 use engine_traits::{CF_DEFAULT, CompactExt, ManualCompactionOptions, MiscExt};
-use futures::executor::block_on;
 use test_raftstore::*;
 use tikv_util::config::{ReadableDuration, ReadableSize};
 
@@ -92,15 +91,6 @@ fn test_titan() {
     }
     assert!(blob_file_reclaimed);
     cluster.engines[&3].kv.flush_cf(CF_DEFAULT, true).unwrap();
-    test_util::eventually(
-        std::time::Duration::from_millis(100),
-        std::time::Duration::from_millis(3000),
-        || {
-            db.get_property_int_cf(defaultcf, "rocksdb.num-files-at-level0")
-                .unwrap()
-                == 1
-        },
-    );
     assert_eq!(
         1,
         db.get_property_int_cf(defaultcf, "rocksdb.num-files-at-level0")
@@ -137,12 +127,14 @@ fn test_titan() {
         .find(|p| p.get_store_id() == 3)
         .unwrap()
         .clone();
-    assert!(!is_error_response(&block_on(
-        cluster
-            .async_remove_peer(region1.get_id(), peer.clone())
-            .unwrap(),
-    )));
+    cluster
+        .pd_client
+        .must_remove_peer(region1.get_id(), peer.clone());
     cluster.must_remove_region(3, region1.get_id());
+    cluster.engines[&3]
+        .kv
+        .compact_files_in_range_cf(CF_DEFAULT, None, None, None)
+        .unwrap();
     // lv5: empty, file 1 got deleted, since it is fully covered by region1
     // lv6: file0 [k1: ref_to_blob_file, k3: v]
     let db = cluster.engines[&3].kv.as_inner();
@@ -169,12 +161,9 @@ fn test_titan() {
     // lv5: file1 got deleted, since it is fully covered by region1
     // lv6: file0 [k1: ref_to_blob_file, k3: v]
     // blob db: file0 [k1: v]
-    assert!(!is_error_response(&block_on(
-        cluster
-            .async_add_peer(region1.get_id(), peer.clone())
-            .unwrap(),
-    )));
-
+    cluster
+        .pd_client
+        .must_add_peer(region1.get_id(), peer.clone());
     cluster.must_transfer_leader(region1.get_id(), peer.clone());
     assert_eq!(cluster.must_get(b"k1").unwrap(), b"v".repeat(20000));
     cluster.must_put(b"k11", &b"v".repeat(30000));
