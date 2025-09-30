@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use engine_rocks::BlobRunMode;
 use engine_traits::{CF_DEFAULT, CompactExt, ManualCompactionOptions, MiscExt};
 use test_raftstore::*;
@@ -139,15 +141,6 @@ fn test_titan() {
     // lv6: file0 [k1: ref_to_blob_file, k3: v]
     let db = cluster.engines[&3].kv.as_inner();
     let defaultcf = db.cf_handle(CF_DEFAULT).unwrap();
-    test_util::eventually(
-        std::time::Duration::from_millis(100),
-        std::time::Duration::from_millis(3000),
-        || {
-            db.get_property_int_cf(defaultcf, "rocksdb.num-files-at-level5")
-                .unwrap()
-                == 0
-        },
-    );
     assert_eq!(
         0,
         db.get_property_int_cf(defaultcf, "rocksdb.num-files-at-level5")
@@ -164,7 +157,9 @@ fn test_titan() {
     cluster
         .pd_client
         .must_add_peer(region1.get_id(), peer.clone());
-    cluster.must_transfer_leader(region1.get_id(), peer.clone());
+    cluster
+        .try_transfer_leader_with_timeout(region1.get_id(), peer.clone(), Duration::from_secs(5))
+        .unwrap();
     assert_eq!(cluster.must_get(b"k1").unwrap(), b"v".repeat(20000));
     cluster.must_put(b"k11", &b"v".repeat(30000));
     assert_eq!(cluster.must_get(b"k11").unwrap(), b"v".repeat(30000));
