@@ -175,7 +175,7 @@ pub fn commit<S: Snapshot>(
                             write,
                         } if write.write_type != WriteType::Rollback => {
                             // Already committed, just remove lock
-                            info!(
+                            warn!(
                                 "MIN_COMMIT_TS_BYPASS: lock already committed, removing";
                                 "key" => %key,
                                 "start_ts" => reader.start_ts,
@@ -194,7 +194,7 @@ pub fn commit<S: Snapshot>(
                             if write.write_type == WriteType::Rollback =>
                         {
                             // Found rollback, remove lock
-                            info!(
+                            warn!(
                                 "MIN_COMMIT_TS_BYPASS: found rollback, removing lock";
                                 "key" => %key,
                                 "start_ts" => reader.start_ts,
@@ -211,7 +211,7 @@ pub fn commit<S: Snapshot>(
                         }
                         TxnCommitRecord::OverlappedRollback { .. } => {
                             // Overlapped rollback, remove lock
-                            info!(
+                            warn!(
                                 "MIN_COMMIT_TS_BYPASS: found overlapped rollback, removing lock";
                                 "key" => %key,
                                 "start_ts" => reader.start_ts,
@@ -228,7 +228,7 @@ pub fn commit<S: Snapshot>(
                         }
                         TxnCommitRecord::None { .. } => {
                             // Not committed yet, bypass check and commit
-                            info!(
+                            warn!(
                                 "MIN_COMMIT_TS_BYPASS: bypassing check and committing";
                                 "key" => %key,
                                 "start_ts" => reader.start_ts,
@@ -245,7 +245,7 @@ pub fn commit<S: Snapshot>(
                         _ => {
                             // Other cases (e.g., unexpected SingleRecord variants), bypass and
                             // commit
-                            info!(
+                            warn!(
                                 "MIN_COMMIT_TS_BYPASS: bypassing check for other record type";
                                 "key" => %key,
                                 "start_ts" => reader.start_ts,
