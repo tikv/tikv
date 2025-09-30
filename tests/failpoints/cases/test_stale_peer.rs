@@ -401,3 +401,65 @@ fn test_destroy_clean_up_logs_with_unfinished_log_gc() {
     // All logs should be deleted.
     assert!(dest.is_empty(), "{:?}", dest);
 }
+
+#[test_case(test_raftstore::new_node_cluster)]
+fn test_async_destroy_peer_delayed() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(10);
+    cluster.cfg.raft_store.hibernate_regions = false;
+
+    let pd_client = cluster.pd_client.clone();
+    // Disable default max peer count check.
+    pd_client.disable_default_operator();
+
+    let r1 = cluster.run_conf_change();
+
+    // Now region 1 only has peer (1, 1);
+    let (key, value) = (b"k1", b"v1");
+
+    cluster.must_put(key, value);
+    assert_eq!(cluster.get(key), Some(value.to_vec()));
+
+    // add peer (2,2) to region 1.
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+
+    // add peer (3, 3) to region 1.
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+
+    let epoch = pd_client.get_region_epoch(r1);
+
+    // Conf version must change.
+    assert!(epoch.get_conf_ver() > 2);
+
+    // Transfer leader to peer (2, 2).
+    cluster.must_transfer_leader(r1, new_peer(2, 2));
+
+    // Pause destroy peer
+    let (tx, rx) = mpsc::sync_channel(1);
+    let pause_destroy_peer_fp = "destroy_peer_after_pending_move";
+    fail::cfg_callback(pause_destroy_peer_fp, move || {
+        tx.send(pause_destroy_peer_fp).unwrap();
+    })
+    .unwrap();
+
+    // Remove the peer 3 and the relevant destroying handling should be
+    // paused
+    pd_client.must_remove_peer(r1, new_peer(3, 3));
+    assert_eq!(
+        rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+        pause_destroy_peer_fp
+    );
+
+    // Add a new peer 4 to store 3, and remove the failpoint to enable
+    // the racing condition that the pending region has been added
+    // a new peer while the destroying task of the old peer is executing
+    // concurrentl.
+    pd_client.must_add_peer(r1, new_peer(3, 4));
+    fail::remove(pause_destroy_peer_fp);
+
+    // Again, remove the peer, and check the data should be cleared.
+    pd_client.must_remove_peer(r1, new_peer(3, 4));
+    sleep_ms(100); // wait for clearing data asynchronously.
+    let region = block_on(pd_client.get_region_by_id(r1)).unwrap();
+    must_region_cleared(&cluster.get_all_engines(3), &region.unwrap());
+}
