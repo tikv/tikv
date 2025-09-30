@@ -1459,7 +1459,7 @@ mod tests {
     #[test]
     fn test_security_status_service_with_san() {
         let mut allowed_san = HashSet::default();
-        allowed_san.insert("127.0.0.1".to_owned());
+        allowed_san.insert("localhost".to_owned());
         do_test_security_status_service(HashSet::default(), allowed_san, true);
     }
 
