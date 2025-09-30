@@ -583,6 +583,7 @@ where
     /// `clear_stat` records the statistics of duration when clear raft state
     /// and data in kvdb.
     ReadyToDestroyPeer {
+        to_peer_id: u64,
         merged_by_target: bool,
         clear_stat: PeerClearMetaStat,
     },

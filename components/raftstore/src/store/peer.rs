@@ -691,6 +691,16 @@ impl SplitCheckTrigger {
     }
 }
 
+/// A enum contains some useful state to represent different reason for
+/// pending remove.
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingRemoveReason {
+    NotRemoved = 0,
+    Merge,
+    Destroy,
+}
+
 #[derive(Getters, MutGetters)]
 pub struct Peer<EK, ER>
 where
@@ -734,11 +744,11 @@ where
     /// Indicates whether the peer should be woken up.
     pub should_wake_up: bool,
     /// Whether this peer is destroyed asynchronously.
-    /// If it's true,
+    /// If it's Some(...),
     /// - when merging, its data in storeMeta will be removed early by the
     ///   target peer.
     /// - all read requests must be rejected.
-    pub pending_remove: bool,
+    pub pending_remove: Option<PendingRemoveReason>,
     /// Currently it's used to indicate whether the witness -> non-witess
     /// convertion operation is complete. The meaning of completion is that
     /// this peer must contain the applied data, then PD can consider that
@@ -1013,7 +1023,7 @@ where
             split_check_trigger: SplitCheckTrigger::default(),
             delete_keys_hint: 0,
             leader_unreachable: false,
-            pending_remove: false,
+            pending_remove: None,
             wait_data,
             request_index: last_index,
             delay_clean_data: false,
@@ -1308,7 +1318,7 @@ where
     /// Tries to destroy itself. Returns a job (if needed) to do more cleaning
     /// tasks.
     pub fn maybe_destroy<T>(&mut self, ctx: &PollContext<EK, ER, T>) -> Option<DestroyPeerJob> {
-        if self.pending_remove {
+        if self.pending_remove.is_some() {
             info!(
                 "is being destroyed, skip";
                 "region_id" => self.region_id,
@@ -1365,7 +1375,7 @@ where
         //   is Some and should be set to None.
         self.apply_snap_ctx = None;
 
-        self.pending_remove = true;
+        self.pending_remove = Some(PendingRemoveReason::Destroy);
 
         Some(DestroyPeerJob {
             initialized: self.get_store().is_initialized(),
@@ -1675,7 +1685,7 @@ where
             pessimistic_locks.version = self.region().get_region_epoch().get_version();
         }
 
-        if !self.pending_remove {
+        if self.pending_remove.is_none() {
             host.on_region_changed(
                 self.region(),
                 RegionChangeEvent::Update(reason),
@@ -2786,7 +2796,7 @@ where
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
     ) -> Option<ReadyResult> {
-        if self.pending_remove {
+        if self.pending_remove.is_some() {
             return None;
         }
 
@@ -3371,7 +3381,7 @@ where
         self.write_router
             .check_new_persisted(ctx, self.persisted_number);
 
-        if !self.pending_remove {
+        if self.pending_remove.is_none() {
             // If `pending_remove` is true, no need to call `on_persist_ready` to
             // update persist index.
             let pre_persist_index = self.raft_group.raft.raft_log.persisted;
@@ -3815,7 +3825,7 @@ where
     }
 
     fn maybe_update_read_progress(&self, reader: &mut ReadDelegate, progress: ReadProgress) {
-        if self.pending_remove {
+        if self.pending_remove.is_some() {
             return;
         }
         debug!(
@@ -3870,7 +3880,7 @@ where
         mut err_resp: RaftCmdResponse,
         mut disk_full_opt: DiskFullOpt,
     ) -> bool {
-        if self.pending_remove {
+        if self.pending_remove.is_some() {
             return false;
         }
 
@@ -5482,7 +5492,7 @@ where
 
     /// Check if the command will be likely to pass all the check and propose.
     pub fn will_likely_propose(&mut self, cmd: &RaftCmdRequest) -> bool {
-        !self.pending_remove
+        self.pending_remove.is_none()
             && self.is_leader()
             && self.pending_merge_state.is_none()
             && self.prepare_merge_fence == 0
@@ -5570,7 +5580,7 @@ where
 
             if self.raft_group.raft.raft_log.applied >= *target_index
                 || force
-                || self.pending_remove
+                || self.pending_remove.is_some()
             {
                 info!("snapshot recovery wait apply finished";
                     "region_id" => self.region().get_id(),
