@@ -1099,6 +1099,11 @@ impl ServerConnection for AddrStream {
 //
 // For now, the check only verifies the role of the peer certificate.
 fn check_cert(security_config: Arc<SecurityConfig>, cert: Option<X509>) -> bool {
+    // If no certificate restrictions are configured, allow access
+    if security_config.cert_allowed_cn.is_empty() && security_config.cert_allowed_san.is_empty() {
+        return true;
+    }
+
     if let Some(x509) = cert {
         let mut is_cn_authorized = true;
         let mut is_san_authorized = true;
