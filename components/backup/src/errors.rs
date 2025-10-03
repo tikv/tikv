@@ -25,7 +25,7 @@ impl From<Error> for ErrorPb {
         let mut err = ErrorPb::default();
         match e {
             Error::ClusterId { current, request } => {
-                BACKUP_RANGE_ERROR_VEC
+                backup_range_error_vec()
                     .with_label_values(&["cluster_mismatch"])
                     .inc();
                 err.mut_cluster_id_error().set_current(current);
@@ -39,31 +39,31 @@ impl From<Error> for ErrorPb {
                 KvError(box EngineErrorInner::Request(e)),
             ))))) => {
                 if e.has_not_leader() {
-                    BACKUP_RANGE_ERROR_VEC
+                    backup_range_error_vec()
                         .with_label_values(&["not_leader"])
                         .inc();
                 } else if e.has_region_not_found() {
-                    BACKUP_RANGE_ERROR_VEC
+                    backup_range_error_vec()
                         .with_label_values(&["region_not_found"])
                         .inc();
                 } else if e.has_key_not_in_region() {
-                    BACKUP_RANGE_ERROR_VEC
+                    backup_range_error_vec()
                         .with_label_values(&["key_not_in_region"])
                         .inc();
                 } else if e.has_epoch_not_match() {
-                    BACKUP_RANGE_ERROR_VEC
+                    backup_range_error_vec()
                         .with_label_values(&["epoch_not_match"])
                         .inc();
                 } else if e.has_server_is_busy() {
-                    BACKUP_RANGE_ERROR_VEC
+                    backup_range_error_vec()
                         .with_label_values(&["server_is_busy"])
                         .inc();
                 } else if e.has_stale_command() {
-                    BACKUP_RANGE_ERROR_VEC
+                    backup_range_error_vec()
                         .with_label_values(&["stale_command"])
                         .inc();
                 } else if e.has_store_not_match() {
-                    BACKUP_RANGE_ERROR_VEC
+                    backup_range_error_vec()
                         .with_label_values(&["store_not_match"])
                         .inc();
                 }
@@ -73,7 +73,7 @@ impl From<Error> for ErrorPb {
             Error::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
                 box MvccErrorInner::KeyIsLocked(info),
             )))) => {
-                BACKUP_RANGE_ERROR_VEC
+                backup_range_error_vec()
                     .with_label_values(&["key_is_locked"])
                     .inc();
                 let mut e = KeyError::default();
@@ -81,7 +81,7 @@ impl From<Error> for ErrorPb {
                 err.set_kv_error(e);
             }
             timeout @ Error::Kv(KvError(box EngineErrorInner::Timeout(_))) => {
-                BACKUP_RANGE_ERROR_VEC.with_label_values(&["timeout"]).inc();
+                backup_range_error_vec().with_label_values(&["timeout"]).inc();
                 let mut busy = ServerIsBusy::default();
                 let reason = format!("{}", timeout);
                 busy.set_reason(reason.clone());
@@ -91,7 +91,7 @@ impl From<Error> for ErrorPb {
                 err.set_region_error(e);
             }
             other => {
-                BACKUP_RANGE_ERROR_VEC.with_label_values(&["other"]).inc();
+                backup_range_error_vec().with_label_values(&["other"]).inc();
                 err.set_msg(format!("{:?}", other));
             }
         }

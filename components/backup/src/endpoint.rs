@@ -312,7 +312,7 @@ async fn send_to_worker_with_metrics<EK: KvEngine>(
     };
     let begin = Instant::now();
     tx.send(files).await?;
-    BACKUP_SCAN_WAIT_FOR_WRITER_HISTOGRAM.observe(begin.saturating_elapsed_secs());
+    backup_scan_wait_for_writer_histogram().observe(begin.saturating_elapsed_secs());
     Ok(())
 }
 
@@ -386,7 +386,7 @@ impl BackupRange {
                 return Err(e.into());
             }
         };
-        BACKUP_RANGE_HISTOGRAM_VEC
+        backup_range_histogram_vec()
             .with_label_values(&["snapshot"])
             .observe(start_snapshot.saturating_elapsed().as_secs_f64());
 
@@ -478,7 +478,7 @@ impl BackupRange {
                 "stat" => ?stat,
             );
         }
-        BACKUP_RANGE_HISTOGRAM_VEC
+        backup_range_histogram_vec()
             .with_label_values(&["scan"])
             .observe(take);
 
@@ -554,7 +554,7 @@ impl BackupRange {
                 return Err(e);
             }
         }
-        BACKUP_RANGE_HISTOGRAM_VEC
+        backup_range_histogram_vec()
             .with_label_values(&["raw_scan"])
             .observe(start.saturating_elapsed().as_secs_f64());
         Ok(statistics)
@@ -663,7 +663,7 @@ impl SoftLimitKeeper {
     fn new(config: ConfigManager) -> Self {
         let BackupConfig { num_threads, .. } = *config.0.read().unwrap();
         let limit = SoftLimit::new(num_threads);
-        BACKUP_SOFTLIMIT_GAUGE.set(limit.current_cap() as _);
+        backup_softlimit_gauge().set(limit.current_cap() as _);
         Self { limit, config }
     }
 
@@ -707,7 +707,7 @@ impl SoftLimitKeeper {
             Error::Other(box_err!("failed to resize softlimit: {}", err))
         })?;
 
-        BACKUP_SOFTLIMIT_GAUGE.set(self.limit.current_cap() as _);
+        backup_softlimit_gauge().set(self.limit.current_cap() as _);
         Ok(())
     }
 
@@ -899,7 +899,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             config.num_threads,
             "bkwkr",
             Box::new(utils::create_tokio_runtime),
-            Box::new(|new_size| BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64)),
+            Box::new(|new_size| backup_thread_pool_size_gauge().set(new_size as i64)),
         );
         let rt = utils::create_tokio_runtime(config.io_thread_size, "backup-io").unwrap();
         let config_manager = ConfigManager(Arc::new(RwLock::new(config)));
@@ -1078,7 +1078,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                             }
                         }
                         Ok(stat) => {
-                            BACKUP_RAW_EXPIRED_COUNT.inc_by(stat.data.raw_value_tombstone as u64);
+                            backup_raw_expired_count().inc_by(stat.data.raw_value_tombstone as u64);
                             // TODO: maybe add the stat to metrics?
                             debug!("backup region finish";
                             "region" => ?brange.region,
@@ -1539,7 +1539,7 @@ pub mod tests {
             3,
             "bkwkr",
             Box::new(utils::create_tokio_runtime),
-            Box::new(|new_size: usize| BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64)),
+            Box::new(|new_size: usize| backup_thread_pool_size_gauge().set(new_size as i64)),
         );
 
         for i in 0..8 {
@@ -2445,7 +2445,7 @@ pub mod tests {
         if test_ttl {
             std::thread::sleep(Duration::from_secs(2)); // wait for ttl expired
         }
-        let original_expire_cnt = BACKUP_RAW_EXPIRED_COUNT.get();
+        let original_expire_cnt = backup_raw_expired_count().get();
         req.set_start_key(backup_start.clone());
         req.set_end_key(backup_end.clone());
         req.set_is_raw_kv(true);
@@ -2466,7 +2466,7 @@ pub mod tests {
             return false;
         }
 
-        let current_expire_cnt = BACKUP_RAW_EXPIRED_COUNT.get();
+        let current_expire_cnt = backup_raw_expired_count().get();
         let expect_expire_cnt = if test_ttl {
             original_expire_cnt + ttl_expire_cnt
         } else {
@@ -2763,7 +2763,7 @@ pub mod tests {
             1,
             "bkwkr",
             Box::new(utils::create_tokio_runtime),
-            Box::new(|new_size: usize| BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64)),
+            Box::new(|new_size: usize| backup_thread_pool_size_gauge().set(new_size as i64)),
         );
         pool.spawn(async { tokio::time::sleep(Duration::from_millis(100)).await });
         pool.adjust_with(2);
