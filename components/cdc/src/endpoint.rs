@@ -718,6 +718,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     conn.iter_downstreams(|_, region_id, downstream_id, _| {
                         self.deregister_downstream(region_id, downstream_id, None);
                     });
+                    CDC_CONNECTION_COUNT.dec();
+                    info!("cdc connection deregistered"; "conn_id" => ?conn_id)
                 } else {
                     info!("cdc connection already deregistered"; "conn_id" => ?conn_id);
                 }
@@ -1000,6 +1002,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         fail_point!("cdc_before_handle_multi_batch", |_| {});
         let size = multi.iter().map(|b| b.size()).sum();
         self.sink_memory_quota.free(size);
+        CDC_OBSERVED_BATCH_SIZE.observe(multi.len() as f64);
+
         let mut statistics = Statistics::default();
         for batch in multi {
             let region_id = batch.region_id;
@@ -1186,7 +1190,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     Ok(_) | Err(ScheduleError::Stopped(_)) => (),
                     // Must schedule `MinTS` event otherwise resolved ts can not
                     // advance normally.
-                    Err(err) => panic!("failed to schedule min ts event, error: {:?}", err),
+                    Err(err) => panic!("cdc failed to schedule min ts event, error: {:?}", err),
                 }
             }
         };
@@ -1195,6 +1199,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
 
     fn on_open_conn(&mut self, conn: Conn) {
         self.connections.insert(conn.get_id(), conn);
+        CDC_CONNECTION_COUNT.inc();
     }
 
     fn on_set_conn_version(
@@ -1235,7 +1240,16 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
             Task::MultiBatch {
                 multi,
                 old_value_cb,
-            } => self.on_multi_batch(multi, old_value_cb),
+            } => {
+                let now = Instant::now_coarse();
+                self.on_multi_batch(multi, old_value_cb);
+                CDC_TASKS_HANDLING_DURATION
+                    .with_label_values(&["multi_batch"])
+                    .observe(now.saturating_elapsed().as_secs_f64());
+                CDC_HANDLED_TASKS_COUNT
+                    .with_label_values(&["multi_batch"])
+                    .inc();
+            }
             Task::OpenConn { conn } => self.on_open_conn(conn),
             Task::SetConnVersion {
                 conn_id,
