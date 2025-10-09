@@ -139,6 +139,9 @@ pub enum Error {
 
     #[error("TiKV disk space is not enough.")]
     DiskSpaceNotEnough,
+
+    #[error("a general error wrapper")]
+    ErrorWrapper(String),
 }
 
 impl Error {
@@ -226,6 +229,7 @@ impl ErrorCodeExt for Error {
             Error::RequestTooNew(_) => error_code::sst_importer::REQUEST_TOO_NEW,
             Error::RequestTooOld(_) => error_code::sst_importer::REQUEST_TOO_OLD,
             Error::DiskSpaceNotEnough => error_code::sst_importer::DISK_SPACE_NOT_ENOUGH,
+            Error::ErrorWrapper(_) => error_code::sst_importer::ERROR_WRAPPER,
         }
     }
 }
