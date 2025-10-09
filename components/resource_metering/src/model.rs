@@ -25,8 +25,8 @@ thread_local! {
 
 /// Find the kth values in the iterator, returns (kth_cpu_time,
 /// kth_network_traffic, kth_logical_io)
-pub fn find_kth_values<'a>(
-    iter: impl Iterator<Item = (&'a Arc<Vec<u8>>, &'a RawRecord)>,
+pub fn find_kth_values<'a, T: 'a>(
+    iter: impl Iterator<Item = (&'a T, &'a RawRecord)>,
     k: usize,
 ) -> (u32, u64, u64) {
     let mut cpu_buf = STATIC_CPU_BUF.with(|b| b.take());
@@ -56,8 +56,8 @@ pub fn find_kth_values<'a>(
 }
 
 /// Find the kth cpu time in the iterator.
-pub fn find_kth_cpu_time<'a>(
-    iter: impl Iterator<Item = (&'a Arc<Vec<u8>>, &'a RawRecord)>,
+pub fn find_kth_cpu_time<'a, T: 'a>(
+    iter: impl Iterator<Item = (&'a T, &'a RawRecord)>,
     k: usize,
 ) -> u32 {
     let mut buf = STATIC_CPU_BUF.with(|b| b.take());
@@ -146,6 +146,27 @@ impl RawRecords {
             let value = raw_map.get_mut(tag);
             if value.is_none() {
                 raw_map.insert(tag.clone(), *record);
+                continue;
+            }
+            value.unwrap().merge(record);
+        }
+        raw_map
+    }
+    /// Returns RawRecord aggregated by region id.
+    pub fn aggregate_by_region(&self) -> HashMap<u64, RawRecord> {
+        let mut raw_map: HashMap<u64, RawRecord> = HashMap::default();
+        for (tag_info, record) in self.records.iter() {
+            let tag = &tag_info.extra_attachment;
+            if tag.is_empty() {
+                continue;
+            }
+            let region_id = tag_info.region_id;
+            if region_id == 0 {
+                continue;
+            }
+            let value = raw_map.get_mut(&region_id);
+            if value.is_none() {
+                raw_map.insert(region_id, *record);
                 continue;
             }
             value.unwrap().merge(record);

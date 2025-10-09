@@ -20,8 +20,8 @@ use tikv_util::{
 };
 
 use crate::{
-    Config, DataSink, ENABLE_NETWORK_IO_COLLECTION, RawRecords, Records, find_kth_cpu_time,
-    find_kth_values,
+    Config, DataSink, ENABLE_NETWORK_IO_COLLECTION, RawRecords, Records, RegionRecords,
+    find_kth_cpu_time, find_kth_values,
     recorder::{CollectorGuard, CollectorRegHandle},
     reporter::{
         collector_impl::CollectorImpl,
@@ -48,6 +48,7 @@ pub struct Reporter {
 
     data_sinks: HashMap<DataSinkId, Box<dyn DataSink>>,
     records: Records,
+    region_records: RegionRecords,
 }
 
 impl Runnable for Reporter {
@@ -90,6 +91,7 @@ impl Reporter {
 
             data_sinks: HashMap::default(),
             records: Records::default(),
+            region_records: RegionRecords::default(),
         }
     }
 
@@ -137,6 +139,48 @@ impl Reporter {
                     others.merge(v);
                 });
         }
+
+        let agg_map = records.aggregate_by_region();
+        if self.config.max_resource_groups >= agg_map.len() {
+            self.region_records.append(ts, agg_map.iter());
+            return;
+        }
+        if enable_network_io_collection {
+            let (kth_cpu, kth_network, kth_logical_io) =
+                find_kth_values(agg_map.iter(), self.config.max_resource_groups);
+            self.region_records.append(
+                ts,
+                agg_map.iter().filter(move |(_, v)| {
+                    v.cpu_time > kth_cpu
+                        || v.network_in_bytes + v.network_out_bytes > kth_network
+                        || v.logical_read_bytes + v.logical_write_bytes > kth_logical_io
+                }),
+            );
+            let others = self.region_records.others.entry(ts).or_default();
+            agg_map
+                .iter()
+                .filter(move |(_, v)| {
+                    v.cpu_time <= kth_cpu
+                        && v.network_in_bytes + v.network_out_bytes <= kth_network
+                        && v.logical_read_bytes + v.logical_write_bytes <= kth_logical_io
+                })
+                .for_each(|(_, v)| {
+                    others.merge(v);
+                });
+        } else {
+            let kth_cpu = find_kth_cpu_time(agg_map.iter(), self.config.max_resource_groups);
+            self.region_records.append(
+                ts,
+                agg_map.iter().filter(move |(_, v)| v.cpu_time > kth_cpu),
+            );
+            let others = self.region_records.others.entry(ts).or_default();
+            agg_map
+                .iter()
+                .filter(move |(_, v)| v.cpu_time <= kth_cpu)
+                .for_each(|(_, v)| {
+                    others.merge(v);
+                });
+        }
     }
 
     fn handle_config_change(&mut self, config: Config) {
@@ -167,7 +211,7 @@ impl Reporter {
         }
     }
 
-    fn upload(&mut self) {
+    fn upload_grouptag_record(&mut self) {
         // When either of records.records and records.others is not empty, we
         // will report it. Only when the cpu_time of all tags is equal, and the
         // number of tags exceeds the max_resource_group limit, will records.records
@@ -183,7 +227,6 @@ impl Reporter {
         // Whether endpoint exists or not, records should be taken in order to reset.
         let records = std::mem::take(&mut self.records);
         let report_data: Arc<Vec<ResourceUsageRecord>> = Arc::new(records.into());
-
         for data_sink in self.data_sinks.values_mut() {
             if let Err(err) = data_sink.try_send(report_data.clone()) {
                 warn!("failed to send data to datasink"; "error" => ?err);
@@ -191,9 +234,31 @@ impl Reporter {
         }
     }
 
+    fn upload_region_record(&mut self) {
+        // See: https://github.com/tikv/tikv/issues/12234
+        if self.region_records.is_empty() {
+            return;
+        }
+
+        // Whether endpoint exists or not, records should be taken in order to reset.
+        let region_records = std::mem::take(&mut self.region_records);
+        let report_data: Arc<Vec<ResourceUsageRecord>> = Arc::new(region_records.into());
+        for data_sink in self.data_sinks.values_mut() {
+            if let Err(err) = data_sink.try_send(report_data.clone()) {
+                warn!("failed to send data to datasink"; "error" => ?err);
+            }
+        }
+    }
+
+    fn upload(&mut self) {
+        self.upload_grouptag_record();
+        self.upload_region_record();
+    }
+
     fn reset(&mut self) {
         self.collector.take();
         self.records.clear();
+        self.region_records.clear();
     }
 }
 
