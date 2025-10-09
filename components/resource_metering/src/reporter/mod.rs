@@ -8,7 +8,7 @@ pub mod single_target;
 
 use std::{
     fmt::{self, Display, Formatter},
-    sync::{Arc, atomic::Ordering::Relaxed},
+    sync::Arc,
 };
 
 use collections::HashMap;
@@ -144,7 +144,7 @@ impl Reporter {
             self.region_records.append(ts, agg_map.iter());
             return;
         }
-        if enable_network_io_collection {
+        if self.config.enable_network_io_collection {
             let (kth_cpu, kth_network, kth_logical_io) =
                 find_kth_values(agg_map.iter(), self.config.max_resource_groups);
             self.region_records.append(
