@@ -13,7 +13,8 @@ mod all {
     };
 
     use backup_stream::{
-        errors::Error, GetCheckpointResult, RegionCheckpointOperation, RegionSet, Task, router::TaskSelector,
+        errors::Error, router::TaskSelector, GetCheckpointResult, RegionCheckpointOperation,
+        RegionSet, Task,
     };
     use futures::{Stream, StreamExt};
     use kvproto::metapb::RegionEpoch;
