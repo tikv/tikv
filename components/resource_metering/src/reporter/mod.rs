@@ -97,14 +97,16 @@ impl Reporter {
 
     fn handle_records(&mut self, records: Arc<RawRecords>) {
         let ts = records.begin_unix_time_secs;
+        let n = self.config.max_resource_groups;
         let agg_map = records.aggregate_by_extra_tag();
-        if self.config.max_resource_groups >= agg_map.len() {
+        if n >= agg_map.len() {
             self.records.append(ts, agg_map.iter());
             return;
         }
-        if self.config.enable_network_io_collection {
+        let enable_network_io_collection = self.config.enable_network_io_collection;
+        if enable_network_io_collection {
             let (kth_cpu, kth_network, kth_logical_io) =
-                find_kth_values(agg_map.iter(), self.config.max_resource_groups);
+                find_kth_values(agg_map.iter(), n);
             self.records.append(
                 ts,
                 agg_map.iter().filter(move |(_, v)| {
@@ -125,7 +127,7 @@ impl Reporter {
                     others.merge(v);
                 });
         } else {
-            let kth_cpu = find_kth_cpu_time(agg_map.iter(), self.config.max_resource_groups);
+            let kth_cpu = find_kth_cpu_time(agg_map.iter(), n);
             self.records.append(
                 ts,
                 agg_map.iter().filter(move |(_, v)| v.cpu_time > kth_cpu),
@@ -140,13 +142,13 @@ impl Reporter {
         }
 
         let agg_map = records.aggregate_by_region();
-        if self.config.max_resource_groups >= agg_map.len() {
+        if n >= agg_map.len() {
             self.region_records.append(ts, agg_map.iter());
             return;
         }
-        if self.config.enable_network_io_collection {
+        if enable_network_io_collection {
             let (kth_cpu, kth_network, kth_logical_io) =
-                find_kth_values(agg_map.iter(), self.config.max_resource_groups);
+                find_kth_values(agg_map.iter(), n);
             self.region_records.append(
                 ts,
                 agg_map.iter().filter(move |(_, v)| {
@@ -167,7 +169,7 @@ impl Reporter {
                     others.merge(v);
                 });
         } else {
-            let kth_cpu = find_kth_cpu_time(agg_map.iter(), self.config.max_resource_groups);
+            let kth_cpu = find_kth_cpu_time(agg_map.iter(), n);
             self.region_records.append(
                 ts,
                 agg_map.iter().filter(move |(_, v)| v.cpu_time > kth_cpu),
