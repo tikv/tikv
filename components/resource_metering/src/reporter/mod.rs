@@ -102,8 +102,7 @@ impl Reporter {
             self.records.append(ts, agg_map.iter());
             return;
         }
-        let enable_network_io_collection = ENABLE_NETWORK_IO_COLLECTION.load(Relaxed);
-        if enable_network_io_collection {
+        if self.config.enable_network_io_collection {
             let (kth_cpu, kth_network, kth_logical_io) =
                 find_kth_values(agg_map.iter(), self.config.max_resource_groups);
             self.records.append(
@@ -235,8 +234,7 @@ impl Reporter {
     }
 
     fn upload_region_record(&mut self) {
-        // See: https://github.com/tikv/tikv/issues/12234
-        if self.region_records.is_empty() {
+        if !self.config.enable_network_io_collection || self.region_records.is_empty() {
             return;
         }
 
