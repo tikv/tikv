@@ -10,7 +10,9 @@ use std::{
 };
 
 use collections::HashMap;
-use kvproto::resource_usage_agent::{GroupTagRecord, GroupTagRecordItem, ResourceUsageRecord};
+use kvproto::resource_usage_agent::{
+    GroupTagRecord, GroupTagRecordItem, RegionRecord, ResourceUsageRecord,
+};
 use tikv_util::warn;
 
 use crate::TagInfos;
@@ -304,6 +306,167 @@ impl Records {
             if record_value.is_none() {
                 self.records.insert(
                     tag.clone(),
+                    Record {
+                        timestamps: vec![ts],
+                        cpu_time_list: vec![raw_record.cpu_time],
+                        read_keys_list: vec![raw_record.read_keys],
+                        write_keys_list: vec![raw_record.write_keys],
+                        total_cpu_time: raw_record.cpu_time,
+                        logical_read_bytes_list: vec![raw_record.logical_read_bytes],
+                        logical_write_bytes_list: vec![raw_record.logical_write_bytes],
+                        network_in_bytes_list: vec![raw_record.network_in_bytes],
+                        network_out_bytes_list: vec![raw_record.network_out_bytes],
+                    },
+                );
+                continue;
+            }
+            let record = record_value.unwrap();
+            record.total_cpu_time += raw_record.cpu_time;
+            if *record.timestamps.last().unwrap() == ts {
+                *record.cpu_time_list.last_mut().unwrap() += raw_record.cpu_time;
+                *record.read_keys_list.last_mut().unwrap() += raw_record.read_keys;
+                *record.write_keys_list.last_mut().unwrap() += raw_record.write_keys;
+                *record.logical_read_bytes_list.last_mut().unwrap() +=
+                    raw_record.logical_read_bytes;
+                *record.logical_write_bytes_list.last_mut().unwrap() +=
+                    raw_record.logical_write_bytes;
+                *record.network_in_bytes_list.last_mut().unwrap() += raw_record.network_in_bytes;
+                *record.network_out_bytes_list.last_mut().unwrap() += raw_record.network_out_bytes;
+            } else {
+                record.timestamps.push(ts);
+                record.cpu_time_list.push(raw_record.cpu_time);
+                record.read_keys_list.push(raw_record.read_keys);
+                record.write_keys_list.push(raw_record.write_keys);
+                record
+                    .logical_read_bytes_list
+                    .push(raw_record.logical_read_bytes);
+                record
+                    .logical_write_bytes_list
+                    .push(raw_record.logical_write_bytes);
+                record
+                    .network_in_bytes_list
+                    .push(raw_record.network_in_bytes);
+                record
+                    .network_out_bytes_list
+                    .push(raw_record.network_out_bytes);
+            }
+        }
+    }
+
+    /// Clear all internal data.
+    pub fn clear(&mut self) {
+        self.records.clear();
+        self.others.clear();
+    }
+
+    /// Whether `Records` is empty.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.records.is_empty() && self.others.is_empty()
+    }
+}
+
+/// Resource statistics map.
+///
+/// This structure is used for final aggregation in the [Reporter] and also
+/// for uploading to the remote side through [Client].
+///
+/// [Reporter]: crate::reporter::CpuReporter
+/// [Client]: crate::client::Client
+#[derive(Debug, Default)]
+pub struct RegionRecords {
+    pub records: HashMap<u64, Record>,
+    pub others: HashMap<u64, RawRecord>,
+}
+
+impl From<RegionRecords> for Vec<ResourceUsageRecord> {
+    fn from(records: RegionRecords) -> Vec<ResourceUsageRecord> {
+        let mut res = Vec::with_capacity(records.records.len() + 1);
+        for (key, record) in records.records {
+            if !record.valid() {
+                warn!("invalid record"); // should not happen
+                continue;
+            }
+            let items: Vec<GroupTagRecordItem> = record.into();
+            let mut region_record = RegionRecord::new();
+            region_record.set_region_id(key);
+            region_record.set_items(items.into());
+            let mut r = ResourceUsageRecord::new();
+            r.set_region_record(region_record);
+            res.push(r);
+        }
+
+        if !records.others.is_empty() {
+            let mut items = Vec::with_capacity(records.others.len());
+            for (
+                ts,
+                RawRecord {
+                    cpu_time,
+                    read_keys,
+                    write_keys,
+                    logical_read_bytes,
+                    logical_write_bytes,
+                    network_in_bytes,
+                    network_out_bytes,
+                },
+            ) in records.others
+            {
+                let mut item = GroupTagRecordItem::new();
+                item.set_timestamp_sec(ts);
+                item.set_cpu_time_ms(cpu_time);
+                item.set_read_keys(read_keys);
+                item.set_write_keys(write_keys);
+                item.set_logical_read_bytes(logical_read_bytes);
+                item.set_logical_write_bytes(logical_write_bytes);
+                item.set_network_in_bytes(network_in_bytes);
+                item.set_network_out_bytes(network_out_bytes);
+                items.push(item);
+            }
+            let mut region_record = RegionRecord::new();
+            region_record.set_items(items.into());
+            let mut r = ResourceUsageRecord::new();
+            r.set_region_record(region_record);
+            res.push(r);
+        }
+
+        res
+    }
+}
+
+impl RegionRecords {
+    /// Append aggregated [RawRecords] into [RegionRecords].
+    pub fn append<'a>(&mut self, ts: u64, iter: impl Iterator<Item = (&'a u64, &'a RawRecord)>) {
+        // # Before
+        //
+        // ts: 1630464417
+        // records: | region_id | cpu time |
+        //          | --------- | -------- |
+        //          | 1         |  500     |
+        //          | 2         |  600     |
+        //          | 3         |  200     |
+
+        // # After
+        //
+        // 1:  | ts       | ... | 1630464417 |
+        //     | cpu time | ... |    500     |
+        //     | total    | $total + 500     |
+        //
+        // 2:  | ts       | ... | 1630464417 |
+        //     | cpu time | ... |    600     |
+        //     | total    | $total + 600     |
+        //
+        // 3:  | ts       | ... | 1630464417 |
+        //     | cpu time | ... |    200     |
+        //     | total    | $total + 200     |
+
+        for (region_id, raw_record) in iter {
+            if *region_id == 0 {
+                continue;
+            }
+            let record_value = self.records.get_mut(region_id);
+            if record_value.is_none() {
+                self.records.insert(
+                    *region_id,
                     Record {
                         timestamps: vec![ts],
                         cpu_time_list: vec![raw_record.cpu_time],
