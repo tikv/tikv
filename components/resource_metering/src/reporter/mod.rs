@@ -20,7 +20,7 @@ use tikv_util::{
 };
 
 use crate::{
-    Config, DataSink, ENABLE_NETWORK_IO_COLLECTION, RawRecords, Records, RegionRecords,
+    Config, DataSink, RawRecords, Records, RegionRecords,
     find_kth_cpu_time, find_kth_values,
     recorder::{CollectorGuard, CollectorRegHandle},
     reporter::{
