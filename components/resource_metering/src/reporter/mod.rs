@@ -8,7 +8,7 @@ pub mod single_target;
 
 use std::{
     fmt::{self, Display, Formatter},
-    sync::Arc,
+    sync::{Arc, atomic::Ordering::Relaxed},
 };
 
 use collections::HashMap;
@@ -20,7 +20,8 @@ use tikv_util::{
 };
 
 use crate::{
-    Config, DataSink, RawRecords, Records, find_kth_cpu_time,
+    Config, DataSink, ENABLE_NETWORK_IO_COLLECTION, RawRecords, Records, find_kth_cpu_time,
+    find_kth_values,
     recorder::{CollectorGuard, CollectorRegHandle},
     reporter::{
         collector_impl::CollectorImpl,
@@ -99,17 +100,43 @@ impl Reporter {
             self.records.append(ts, agg_map.iter());
             return;
         }
-
-        let kth = find_kth_cpu_time(agg_map.iter(), self.config.max_resource_groups);
-        self.records
-            .append(ts, agg_map.iter().filter(move |(_, v)| v.cpu_time > kth));
-        let others = self.records.others.entry(ts).or_default();
-        agg_map
-            .iter()
-            .filter(move |(_, v)| v.cpu_time <= kth)
-            .for_each(|(_, v)| {
-                others.merge(v);
-            });
+        let enable_network_io_collection = ENABLE_NETWORK_IO_COLLECTION.load(Relaxed);
+        if enable_network_io_collection {
+            let (kth_cpu, kth_network, kth_logical_io) =
+                find_kth_values(agg_map.iter(), self.config.max_resource_groups);
+            self.records.append(
+                ts,
+                agg_map.iter().filter(move |(_, v)| {
+                    v.cpu_time > kth_cpu
+                        || v.network_in_bytes + v.network_out_bytes > kth_network
+                        || v.logical_read_bytes + v.logical_write_bytes > kth_logical_io
+                }),
+            );
+            let others = self.records.others.entry(ts).or_default();
+            agg_map
+                .iter()
+                .filter(move |(_, v)| {
+                    v.cpu_time <= kth_cpu
+                        && v.network_in_bytes + v.network_out_bytes <= kth_network
+                        && v.logical_read_bytes + v.logical_write_bytes <= kth_logical_io
+                })
+                .for_each(|(_, v)| {
+                    others.merge(v);
+                });
+        } else {
+            let kth_cpu = find_kth_cpu_time(agg_map.iter(), self.config.max_resource_groups);
+            self.records.append(
+                ts,
+                agg_map.iter().filter(move |(_, v)| v.cpu_time > kth_cpu),
+            );
+            let others = self.records.others.entry(ts).or_default();
+            agg_map
+                .iter()
+                .filter(move |(_, v)| v.cpu_time <= kth_cpu)
+                .for_each(|(_, v)| {
+                    others.merge(v);
+                });
+        }
     }
 
     fn handle_config_change(&mut self, config: Config) {

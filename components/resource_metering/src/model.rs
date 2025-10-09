@@ -16,7 +16,41 @@ use tikv_util::warn;
 use crate::TagInfos;
 
 thread_local! {
-    static STATIC_BUF: Cell<Vec<u32>> = const {Cell::new(vec![])};
+    static STATIC_CPU_BUF: Cell<Vec<u32>> = const {Cell::new(vec![])};
+    static STATIC_NETWORK_BUF: Cell<Vec<u64>> = const {Cell::new(vec![])};
+    static STATIC_LOGICAL_IO_BUF: Cell<Vec<u64>> = const {Cell::new(vec![])};
+}
+
+/// Find the kth values in the iterator, returns (kth_cpu_time,
+/// kth_network_traffic, kth_logical_io)
+pub fn find_kth_values<'a>(
+    iter: impl Iterator<Item = (&'a Arc<Vec<u8>>, &'a RawRecord)>,
+    k: usize,
+) -> (u32, u64, u64) {
+    let mut cpu_buf = STATIC_CPU_BUF.with(|b| b.take());
+    let mut network_buf = STATIC_NETWORK_BUF.with(|b| b.take());
+    let mut logical_io_buf = STATIC_LOGICAL_IO_BUF.with(|b| b.take());
+    cpu_buf.clear();
+    network_buf.clear();
+    logical_io_buf.clear();
+    for (_, record) in iter {
+        cpu_buf.push(record.cpu_time);
+        network_buf.push(record.network_in_bytes + record.network_out_bytes);
+        logical_io_buf.push(record.logical_read_bytes + record.logical_write_bytes);
+    }
+    pdqselect::select_by(&mut cpu_buf, k, |a, b| b.cmp(a));
+    let kth_cpu = cpu_buf[k];
+    STATIC_CPU_BUF.with(move |b| b.set(cpu_buf));
+
+    pdqselect::select_by(&mut network_buf, k, |a, b| b.cmp(a));
+    let kth_network = network_buf[k];
+    STATIC_NETWORK_BUF.with(move |b| b.set(network_buf));
+
+    pdqselect::select_by(&mut logical_io_buf, k, |a, b| b.cmp(a));
+    let kth_logical_io = logical_io_buf[k];
+    STATIC_LOGICAL_IO_BUF.with(move |b| b.set(logical_io_buf));
+
+    (kth_cpu, kth_network, kth_logical_io)
 }
 
 /// Find the kth cpu time in the iterator.
@@ -24,14 +58,14 @@ pub fn find_kth_cpu_time<'a>(
     iter: impl Iterator<Item = (&'a Arc<Vec<u8>>, &'a RawRecord)>,
     k: usize,
 ) -> u32 {
-    let mut buf = STATIC_BUF.with(|b| b.take());
+    let mut buf = STATIC_CPU_BUF.with(|b| b.take());
     buf.clear();
     for (_, record) in iter {
         buf.push(record.cpu_time);
     }
     pdqselect::select_by(&mut buf, k, |a, b| b.cmp(a));
     let kth = buf[k];
-    STATIC_BUF.with(move |b| b.set(buf));
+    STATIC_CPU_BUF.with(move |b| b.set(buf));
     kth
 }
 
@@ -127,6 +161,10 @@ pub struct Record {
     pub cpu_time_list: Vec<u32>,
     pub read_keys_list: Vec<u32>,
     pub write_keys_list: Vec<u32>,
+    pub logical_read_bytes_list: Vec<u64>,
+    pub logical_write_bytes_list: Vec<u64>,
+    pub network_in_bytes_list: Vec<u64>,
+    pub network_out_bytes_list: Vec<u64>,
     pub total_cpu_time: u32,
 }
 
@@ -139,6 +177,10 @@ impl From<Record> for Vec<GroupTagRecordItem> {
             item.set_cpu_time_ms(record.cpu_time_list[n]);
             item.set_read_keys(record.read_keys_list[n]);
             item.set_write_keys(record.write_keys_list[n]);
+            item.set_logical_read_bytes(record.logical_read_bytes_list[n]);
+            item.set_logical_write_bytes(record.logical_write_bytes_list[n]);
+            item.set_network_in_bytes(record.network_in_bytes_list[n]);
+            item.set_network_out_bytes(record.network_out_bytes_list[n]);
             items.push(item);
         }
         items
@@ -150,6 +192,10 @@ impl Record {
         self.timestamps.len() == self.cpu_time_list.len()
             && self.timestamps.len() == self.read_keys_list.len()
             && self.timestamps.len() == self.write_keys_list.len()
+            && self.timestamps.len() == self.logical_read_bytes_list.len()
+            && self.timestamps.len() == self.logical_write_bytes_list.len()
+            && self.timestamps.len() == self.network_in_bytes_list.len()
+            && self.timestamps.len() == self.network_out_bytes_list.len()
     }
 }
 
@@ -191,10 +237,10 @@ impl From<Records> for Vec<ResourceUsageRecord> {
                     cpu_time,
                     read_keys,
                     write_keys,
-                    logical_read_bytes: _,
-                    logical_write_bytes: _,
-                    network_in_bytes: _,
-                    network_out_bytes: _,
+                    logical_read_bytes,
+                    logical_write_bytes,
+                    network_in_bytes,
+                    network_out_bytes,
                 },
             ) in records.others
             {
@@ -203,6 +249,10 @@ impl From<Records> for Vec<ResourceUsageRecord> {
                 item.set_cpu_time_ms(cpu_time);
                 item.set_read_keys(read_keys);
                 item.set_write_keys(write_keys);
+                item.set_logical_read_bytes(logical_read_bytes);
+                item.set_logical_write_bytes(logical_write_bytes);
+                item.set_network_in_bytes(network_in_bytes);
+                item.set_network_out_bytes(network_out_bytes);
                 items.push(item);
             }
             let mut tag_record = GroupTagRecord::new();
@@ -260,6 +310,10 @@ impl Records {
                         read_keys_list: vec![raw_record.read_keys],
                         write_keys_list: vec![raw_record.write_keys],
                         total_cpu_time: raw_record.cpu_time,
+                        logical_read_bytes_list: vec![raw_record.logical_read_bytes],
+                        logical_write_bytes_list: vec![raw_record.logical_write_bytes],
+                        network_in_bytes_list: vec![raw_record.network_in_bytes],
+                        network_out_bytes_list: vec![raw_record.network_out_bytes],
                     },
                 );
                 continue;
@@ -270,11 +324,29 @@ impl Records {
                 *record.cpu_time_list.last_mut().unwrap() += raw_record.cpu_time;
                 *record.read_keys_list.last_mut().unwrap() += raw_record.read_keys;
                 *record.write_keys_list.last_mut().unwrap() += raw_record.write_keys;
+                *record.logical_read_bytes_list.last_mut().unwrap() +=
+                    raw_record.logical_read_bytes;
+                *record.logical_write_bytes_list.last_mut().unwrap() +=
+                    raw_record.logical_write_bytes;
+                *record.network_in_bytes_list.last_mut().unwrap() += raw_record.network_in_bytes;
+                *record.network_out_bytes_list.last_mut().unwrap() += raw_record.network_out_bytes;
             } else {
                 record.timestamps.push(ts);
                 record.cpu_time_list.push(raw_record.cpu_time);
                 record.read_keys_list.push(raw_record.read_keys);
                 record.write_keys_list.push(raw_record.write_keys);
+                record
+                    .logical_read_bytes_list
+                    .push(raw_record.logical_read_bytes);
+                record
+                    .logical_write_bytes_list
+                    .push(raw_record.logical_write_bytes);
+                record
+                    .network_in_bytes_list
+                    .push(raw_record.network_in_bytes);
+                record
+                    .network_out_bytes_list
+                    .push(raw_record.network_out_bytes);
             }
         }
     }
@@ -593,7 +665,7 @@ mod tests {
         assert_eq!(others.logical_read_bytes, 3333);
         assert_eq!(others.logical_write_bytes, 4444);
 
-        let kth = find_kth_cpu_time(agg_map.iter(), 0);
+        let kth = find_kth_values(agg_map.iter(), 0);
         let (top, evicted) = (
             agg_map.iter().filter(move |(_, v)| v.cpu_time > kth),
             agg_map.iter().filter(move |(_, v)| v.cpu_time <= kth),
