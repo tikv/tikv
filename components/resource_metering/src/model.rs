@@ -665,7 +665,7 @@ mod tests {
         assert_eq!(others.logical_read_bytes, 3333);
         assert_eq!(others.logical_write_bytes, 4444);
 
-        let kth = find_kth_values(agg_map.iter(), 0);
+        let kth = find_kth_cpu_time(agg_map.iter(), 0);
         let (top, evicted) = (
             agg_map.iter().filter(move |(_, v)| v.cpu_time > kth),
             agg_map.iter().filter(move |(_, v)| v.cpu_time <= kth),
