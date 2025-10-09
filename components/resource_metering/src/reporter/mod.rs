@@ -20,8 +20,7 @@ use tikv_util::{
 };
 
 use crate::{
-    Config, DataSink, RawRecords, Records, RegionRecords,
-    find_kth_cpu_time, find_kth_values,
+    Config, DataSink, RawRecords, Records, RegionRecords, find_kth_cpu_time, find_kth_values,
     recorder::{CollectorGuard, CollectorRegHandle},
     reporter::{
         collector_impl::CollectorImpl,
@@ -105,8 +104,7 @@ impl Reporter {
         }
         let enable_network_io_collection = self.config.enable_network_io_collection;
         if enable_network_io_collection {
-            let (kth_cpu, kth_network, kth_logical_io) =
-                find_kth_values(agg_map.iter(), n);
+            let (kth_cpu, kth_network, kth_logical_io) = find_kth_values(agg_map.iter(), n);
             self.records.append(
                 ts,
                 agg_map.iter().filter(move |(_, v)| {
@@ -147,8 +145,7 @@ impl Reporter {
             return;
         }
         if enable_network_io_collection {
-            let (kth_cpu, kth_network, kth_logical_io) =
-                find_kth_values(agg_map.iter(), n);
+            let (kth_cpu, kth_network, kth_logical_io) = find_kth_values(agg_map.iter(), n);
             self.region_records.append(
                 ts,
                 agg_map.iter().filter(move |(_, v)| {
