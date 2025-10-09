@@ -2961,7 +2961,7 @@ where
             Ok(())
         } else {
             if msg_type == MessageType::MsgReadIndex {
-                // This can be a message that sent when it's still a follower. Nevertheleast,
+                // This can be a message that sent when it's still a follower. Nevertheless,
                 // it's meaningless to continue to handle the request as callbacks are cleared.
                 if self.fsm.peer.is_leader()
                     && (msg.get_message().get_from() == raft::INVALID_ID
@@ -2970,7 +2970,7 @@ where
                     self.ctx.raft_metrics.message_dropped.stale_msg.inc();
                     return Ok(());
                 // Or if the peer is forcely awaken by PD and waited to trigger
-                // a new election, the lease udpating should be rejected. It
+                // a new election, the lease updating should be rejected. It
                 // could make the safety for handling `Read` by
                 // lease.
                 } else if self.fsm.reject_lease_ticks.0 > 0 {
@@ -3196,7 +3196,7 @@ where
         match msg.get_extra_msg().get_type() {
             ExtraMessageType::MsgRegionWakeUp | ExtraMessageType::MsgCheckStalePeer => {
                 if msg.get_extra_msg().forcely_awaken {
-                    // Forcely awaken this region by manually setting the GroupState
+                    // Forcibly awaken this region by manually setting the GroupState
                     // into `Chaos` with adding `raft_max_election_timeout_tick` to
                     // `reject_lease_ticks`, to trigger a new voting in the
                     // Raft Group immediately. Meanwhile, it avoids the peer
@@ -7272,7 +7272,7 @@ where
 
     /// Check the reject lease ticks of this peer.
     ///
-    /// If the peer is forcely awaken by PD, it will returns the timeout ticks
+    /// If the peer is forcely awaken by PD, it will return the timeout ticks
     /// of rejecting lease.
     fn on_check_reject_lease_ticks(&mut self) -> usize {
         let (reject_lease_ticks_ttl, reject_lease_ticks) = self.fsm.reject_lease_ticks;
