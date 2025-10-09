@@ -2588,22 +2588,20 @@ where
                     "peer_id" => self.fsm.peer_id(),
                     "res" => ?res,
                 );
-                if self.fsm.peer.wait_data
+                if self.fsm.peer.wait_data {
+                    return;
+                }
+                self.on_ready_result(&mut res.exec_res, &res.metrics);
+                if self.fsm.stopped
                     || self.fsm.peer.pending_remove == Some(PendingRemoveReason::Destroy)
                 {
                     // In PR#18805 we introduced asynchronous peer destruction. A peer
                     // with `PendingRemoveReason::Destroy` is a stale peer that has been
                     // marked for removal and will be cleaned up by an async worker.
-                    // Similarly, `wait_data` means the peer is waiting for snapshot or
-                    // apply work to finish. In either case we should ignore subsequent
-                    // apply results for this peer — this preserves the semantics of the
-                    // original synchronous-destroy path and avoids applying results for
-                    // a peer that is effectively slated for removal or not ready to
-                    // accept them.
-                    return;
-                }
-                self.on_ready_result(&mut res.exec_res, &res.metrics);
-                if self.fsm.stopped {
+                    // Similarly, `stopped` means the peer is stopped. In either case we should
+                    // ignore subsequent apply results for this peer — this preserves the semantics
+                    // of the original synchronous-destroy path and avoids applying results for a
+                    // peer that is effectively slated for removal or already stopped.
                     return;
                 }
                 let applied_index = res.apply_state.applied_index;
