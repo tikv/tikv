@@ -101,7 +101,17 @@ fn test_clean_stale_peer() {
     must_get_equal(&engine, key, value);
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
     // Remove the peer 4.
+    let (notify_tx, notify_rx) = mpsc::channel();
+    let notifier_fp = "raftstore_set_region_after_change_peer";
+    fail::cfg_callback(notifier_fp, move || {
+        let _ = notify_tx.send(notifier_fp);
+    })
+    .unwrap();
     pd_client.must_remove_peer(region_id, new_peer(3, 4));
+    assert_eq!(
+        notify_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+        notifier_fp
+    );
     sleep_ms(500);
     must_get_none(&engine, key);
 }

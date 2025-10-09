@@ -1664,6 +1664,12 @@ where
         region: metapb::Region,
         reason: RegionChangeReason,
     ) {
+        fail_point!(
+            "raftstore_set_region_after_change_peer",
+            self.peer.get_store_id() == 3 && reason == RegionChangeReason::ChangePeer,
+            |_| {}
+        );
+
         if self.region().get_region_epoch().get_version() < region.get_region_epoch().get_version()
         {
             // Epoch version changed, disable read on the local reader for this region.
