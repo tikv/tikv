@@ -878,6 +878,14 @@ lazy_static! {
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
 
+    pub static ref STORE_INSPECT_NETWORK_DURATION_HISTOGRAM: HistogramVec =
+        register_histogram_vec!(
+            "tikv_raftstore_inspect_network_duration_seconds",
+            "Bucketed histogram of inspect network duration.",
+            &["target"],
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+
     pub static ref STORE_SLOW_SCORE_GAUGE: IntGaugeVec = register_int_gauge_vec!(
         "tikv_raftstore_slow_score",
         "Slow score of the store.",

@@ -20,7 +20,7 @@ use tikv_util::{
 };
 
 use crate::{
-    Config, DataSink, RawRecords, Records,
+    Config, DataSink, RawRecords, Records, find_kth_cpu_time,
     recorder::{CollectorGuard, CollectorRegHandle},
     reporter::{
         collector_impl::CollectorImpl,
@@ -94,16 +94,22 @@ impl Reporter {
 
     fn handle_records(&mut self, records: Arc<RawRecords>) {
         let ts = records.begin_unix_time_secs;
-        if self.config.max_resource_groups >= records.records.len() {
-            self.records.append(ts, records.records.iter());
+        let agg_map = records.aggregate_by_extra_tag();
+        if self.config.max_resource_groups >= agg_map.len() {
+            self.records.append(ts, agg_map.iter());
             return;
         }
-        let (top, evicted) = records.top_k(self.config.max_resource_groups);
-        self.records.append(ts, top);
+
+        let kth = find_kth_cpu_time(agg_map.iter(), self.config.max_resource_groups);
+        self.records
+            .append(ts, agg_map.iter().filter(move |(_, v)| v.cpu_time > kth));
         let others = self.records.others.entry(ts).or_default();
-        evicted.for_each(|(_, v)| {
-            others.merge(v);
-        });
+        agg_map
+            .iter()
+            .filter(move |(_, v)| v.cpu_time <= kth)
+            .for_each(|(_, v)| {
+                others.merge(v);
+            });
     }
 
     fn handle_config_change(&mut self, config: Config) {
@@ -274,6 +280,7 @@ mod tests {
             report_receiver_interval: ReadableDuration::minutes(2),
             max_resource_groups: 3000,
             precision: ReadableDuration::secs(2),
+            enable_network_io_collection: false,
         }));
         assert_eq!(r.get_interval(), Duration::from_secs(120));
         let mut records = HashMap::default();
@@ -283,12 +290,16 @@ mod tests {
                 region_id: 0,
                 peer_id: 0,
                 key_ranges: vec![],
-                extra_attachment: b"12345".to_vec(),
+                extra_attachment: Arc::new(b"12345".to_vec()),
             }),
             RawRecord {
                 cpu_time: 1,
                 read_keys: 2,
                 write_keys: 3,
+                network_in_bytes: 4,
+                network_out_bytes: 5,
+                logical_read_bytes: 6,
+                logical_write_bytes: 7,
             },
         );
         r.run(Task::Records(Arc::new(RawRecords {
@@ -329,12 +340,16 @@ mod tests {
                 region_id: 0,
                 peer_id: 0,
                 key_ranges: vec![],
-                extra_attachment: b"12345".to_vec(),
+                extra_attachment: Arc::new(b"12345".to_vec()),
             }),
             RawRecord {
                 cpu_time: 1,
                 read_keys: 2,
                 write_keys: 3,
+                network_in_bytes: 4,
+                network_out_bytes: 5,
+                logical_read_bytes: 6,
+                logical_write_bytes: 7,
             },
         );
 

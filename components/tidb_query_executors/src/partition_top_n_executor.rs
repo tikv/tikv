@@ -306,6 +306,19 @@ impl<Src: BatchExecutor> BatchExecutor for BatchPartitionTopNExecutor<Src> {
         self.src.schema()
     }
 
+    #[inline]
+    fn intermediate_schema(&self, index: usize) -> Result<&[FieldType]> {
+        self.src.intermediate_schema(index)
+    }
+
+    #[inline]
+    fn consume_and_fill_intermediate_results(
+        &mut self,
+        results: &mut [Vec<BatchExecuteResult>],
+    ) -> Result<()> {
+        self.src.consume_and_fill_intermediate_results(results)
+    }
+
     /// Implementation of BatchExecutor::next_batch
     /// Memory Control Analysis:
     /// 1. if n > paging_size(1024), this operator won't do anything and just

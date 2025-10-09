@@ -1,13 +1,12 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cmp,
-    cmp::Ordering as CmpOrdering,
+    cmp::{self, Ordering as CmpOrdering},
     fmt::{self, Display, Formatter},
     io, mem,
     sync::{
         Arc, Mutex, RwLock,
-        atomic::Ordering,
+        atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, Sender, SyncSender},
     },
     thread::{Builder, JoinHandle},
@@ -60,7 +59,7 @@ use crate::{
     router::RaftStoreRouter,
     store::{
         Callback, CasualMessage, Config, PeerMsg, RaftCmdExtraOpts, RaftCommand, RaftRouter,
-        SnapManager, StoreMsg, TxnExt,
+        SnapManager, StoreMsg, StoreTick, TxnExt,
         cmd_resp::new_error,
         metrics::*,
         unsafe_recovery::{
@@ -209,6 +208,9 @@ where
     ControlGrpcServer(pdpb::ControlGrpcEvent),
     InspectLatency {
         factor: InspectFactor,
+    },
+    GracefulShutdownState {
+        state: bool,
     },
 }
 
@@ -481,6 +483,9 @@ where
             Task::InspectLatency { factor } => {
                 write!(f, "inspect raftstore latency: {:?}", factor)
             }
+            Task::GracefulShutdownState { state } => {
+                write!(f, "graceful shutdown state: {:?}", state)
+            }
         }
     }
 }
@@ -650,6 +655,7 @@ where
     collect_tick_interval: Duration,
     inspect_latency_interval: Duration,      // for raft mount path
     inspect_kvdb_latency_interval: Duration, // for kvdb mount path
+    inspect_network_interval: Duration,
 }
 
 impl<T> StatsMonitor<T>
@@ -660,6 +666,7 @@ where
         interval: Duration,
         inspect_latency_interval: Duration,
         inspect_kvdb_latency_interval: Duration,
+        inspect_network_interval: Duration,
         reporter: T,
     ) -> Self {
         StatsMonitor {
@@ -683,6 +690,7 @@ where
             ),
             inspect_latency_interval,
             inspect_kvdb_latency_interval,
+            inspect_network_interval,
         }
     }
 
@@ -720,6 +728,9 @@ where
                 .div_duration_f64(tick_interval) as u64;
         let update_kvdisk_latency_stats_interval =
             self.inspect_kvdb_latency_interval
+                .div_duration_f64(tick_interval) as u64;
+        let update_network_latency_stats_interval =
+            self.inspect_network_interval
                 .div_duration_f64(tick_interval) as u64;
 
         let (timer_tx, timer_rx) = mpsc::channel();
@@ -786,6 +797,9 @@ where
                     }
                     if is_enable_tick(timer_cnt, update_kvdisk_latency_stats_interval) {
                         reporter.update_latency_stats(timer_cnt, InspectFactor::KvDisk);
+                    }
+                    if is_enable_tick(timer_cnt, update_network_latency_stats_interval) {
+                        reporter.update_latency_stats(timer_cnt, InspectFactor::Network);
                     }
                     timer_cnt += 1;
                 }
@@ -944,6 +958,9 @@ where
 
     // Service manager for grpc service.
     grpc_service_manager: GrpcServiceManager,
+
+    // Graceful shutdown state for evict leader during shutdown
+    graceful_shutdown_state: Arc<AtomicBool>,
 }
 
 impl<EK, ER, T> Runner<EK, ER, T>
@@ -967,6 +984,7 @@ where
         coprocessor_host: CoprocessorHost<EK>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         grpc_service_manager: GrpcServiceManager,
+        graceful_shutdown_state: Arc<std::sync::atomic::AtomicBool>,
     ) -> Runner<EK, ER, T> {
         let mut store_stat = StoreStat::default();
         store_stat.set_cpu_quota(SysQuota::cpu_cores_quota(), cfg.inspect_cpu_util_thd);
@@ -976,15 +994,17 @@ where
             interval,
             cfg.inspect_interval.0,
             cfg.inspect_kvdb_interval.0,
+            cfg.inspect_network_interval.0,
             WrappedScheduler(scheduler.clone()),
         );
         if let Err(e) = stats_monitor.start(auto_split_controller, collector_reg_handle) {
             error!("failed to start stats collector, error = {:?}", e);
         }
 
-        let health_reporter_config = RaftstoreReporterConfig {
+        let health_reporter_config: RaftstoreReporterConfig = RaftstoreReporterConfig {
             inspect_interval: cfg.inspect_interval.0,
             inspect_kvdb_interval: cfg.inspect_kvdb_interval.0,
+            inspect_network_interval: cfg.inspect_network_interval.0,
 
             unsensitive_cause: cfg.slow_trend_unsensitive_cause,
             unsensitive_result: cfg.slow_trend_unsensitive_result,
@@ -1031,6 +1051,7 @@ where
             coprocessor_host,
             causal_ts_provider,
             grpc_service_manager,
+            graceful_shutdown_state,
         }
     }
 
@@ -1317,8 +1338,16 @@ where
         self.store_stat.region_bytes_read.flush();
         self.store_stat.region_keys_read.flush();
 
-        let slow_score = self.health_reporter.get_slow_score();
-        stats.set_slow_score(slow_score as u64);
+        stats.set_slow_score(self.health_reporter.get_disk_slow_score() as u64);
+        // Filter out network slow scores equal to 1 to reduce message volume
+        let network_scores = self
+            .health_reporter
+            .get_network_slow_score()
+            .into_iter()
+            .filter(|(_, score)| *score != 1)
+            .collect();
+        stats.set_network_slow_scores(network_scores);
+
         let (rps, slow_trend_pb) = self
             .health_reporter
             .update_slow_trend(all_query_num, Instant::now());
@@ -1326,6 +1355,11 @@ where
         stats.set_slow_trend(slow_trend_pb);
 
         stats.set_is_grpc_paused(self.grpc_service_manager.is_paused());
+
+        stats.set_is_stopping(
+            self.graceful_shutdown_state
+                .load(std::sync::atomic::Ordering::SeqCst),
+        );
 
         let scheduler = self.scheduler.clone();
         let router = self.router.clone();
@@ -1769,6 +1803,15 @@ where
         }
     }
 
+    fn handle_graceful_shutdown(&mut self, state: bool) {
+        self.graceful_shutdown_state.store(state, Ordering::SeqCst);
+        info!("handle graceful shutdown"; "state" => state);
+        let msg = StoreMsg::Tick(StoreTick::PdStoreHeartbeat);
+        if let Err(e) = self.router.send_control(msg) {
+            warn!("handle graceful shutdown failed"; "err" => ?e);
+        }
+    }
+
     fn handle_store_infos(
         &mut self,
         cpu_usages: RecordPairVec,
@@ -2042,6 +2085,7 @@ where
         }
         let id = slow_score_tick_result.tick_id;
         let scheduler = self.scheduler.clone();
+
         let inspector = {
             match factor {
                 InspectFactor::RaftDisk => {
@@ -2102,6 +2146,16 @@ where
                         }
                     }),
                 ),
+                InspectFactor::Network => {
+                    let network_durations = self.health_reporter.record_network_duration(id);
+
+                    for (store_id, network_duration) in &network_durations {
+                        STORE_INSPECT_NETWORK_DURATION_HISTOGRAM
+                            .with_label_values(&[&store_id.to_string()])
+                            .observe(tikv_util::time::duration_to_sec(*network_duration));
+                    }
+                    return;
+                }
             }
         };
         let msg = StoreMsg::LatencyInspect {
@@ -2110,7 +2164,7 @@ where
             inspector,
         };
         if let Err(e) = self.router.send_control(msg) {
-            warn!("pd worker send latency inspecter failed"; "err" => ?e);
+            warn!("pd worker send latency inspector failed"; "err" => ?e);
         }
     }
 }
@@ -2368,7 +2422,7 @@ where
                 factor,
                 duration,
             } => {
-                self.health_reporter.record_raftstore_duration(
+                self.health_reporter.record_duration(
                     id,
                     factor,
                     duration,
@@ -2388,6 +2442,9 @@ where
             }
             Task::InspectLatency { factor } => {
                 self.handle_inspect_latency(factor);
+            }
+            Task::GracefulShutdownState { state } => {
+                self.handle_graceful_shutdown(state);
             }
         };
     }
@@ -2651,6 +2708,7 @@ mod tests {
                     Duration::from_secs(interval),
                     Duration::from_secs(interval),
                     Duration::default(),
+                    Duration::default(),
                     WrappedScheduler(scheduler),
                 );
                 if let Err(e) = stats_monitor.start(
@@ -2784,6 +2842,10 @@ mod tests {
                             cpu_time: 10,
                             read_keys: 0,
                             write_keys: 0,
+                            network_in_bytes: 0,
+                            network_out_bytes: 0,
+                            logical_read_bytes: 0,
+                            logical_write_bytes: 0,
                         },
                     );
                     records
@@ -2895,6 +2957,7 @@ mod tests {
             Duration::from_secs(interval),
             Duration::from_secs(interval),
             Duration::default(),
+            Duration::default(),
             WrappedScheduler(pd_worker.scheduler()),
         );
         stats_monitor
@@ -2927,12 +2990,16 @@ mod tests {
                             region_id: 1,
                             peer_id: 0,
                             key_ranges: vec![],
-                            extra_attachment: b"a".to_vec(),
+                            extra_attachment: Arc::new(b"a".to_vec()),
                         }),
                         RawRecord {
                             cpu_time: 111,
                             read_keys: 1,
                             write_keys: 0,
+                            network_in_bytes: 0,
+                            network_out_bytes: 0,
+                            logical_read_bytes: 0,
+                            logical_write_bytes: 0,
                         },
                     );
                     records

@@ -1212,7 +1212,7 @@ pub fn new_debugger(path: &std::path::Path) -> DebuggerImplV2<raft_log_engine::R
     let cache = cfg.storage.block_cache.build_shared_cache();
     let env = cfg.build_shared_rocks_env(None, None).unwrap();
 
-    let factory = KvEngineFactoryBuilder::new(env, &cfg, cache, None).build();
+    let factory = KvEngineFactoryBuilder::new(env, &cfg, cache, None, Default::default()).build();
     let reg = TabletRegistry::new(Box::new(factory), path).unwrap();
 
     let raft_engine =

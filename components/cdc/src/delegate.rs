@@ -32,7 +32,7 @@ use raftstore::{
 };
 use tikv::storage::{Statistics, txn::TxnEntry};
 use tikv_util::{
-    debug, info,
+    debug, error, info,
     memory::{HeapSize, MemoryQuota},
     time::Instant,
     warn,
@@ -369,8 +369,18 @@ impl Delegate {
                 CDC_PENDING_BYTES_GAUGE.add(bytes as _);
                 locks.push(PendingLock::Track { key, start_ts });
             }
-            LockTracker::Prepared { locks, .. } => match locks.entry(key) {
+            LockTracker::Prepared { locks, .. } => match locks.entry(key.clone()) {
                 BTreeMapEntry::Occupied(mut x) => {
+                    if x.get().ts != start_ts.ts {
+                        error!("[for debug] cdc push_lock found lock with same key but different start_ts";
+                            "old_generation" => ?x.get().generation,
+                            "new_generation" => ?start_ts.generation,
+                            "old_start_ts" => ?x.get().ts,
+                            "new_start_ts" => ?start_ts.ts,
+                            "key" => ?key,
+                            "region_id" => self.region_id,
+                        );
+                    }
                     assert_eq!(x.get().ts, start_ts.ts);
                     assert!(x.get().generation <= start_ts.generation);
                     x.get_mut().generation = start_ts.generation;
@@ -397,13 +407,21 @@ impl Delegate {
                 locks.push(PendingLock::Untrack { key, start_ts });
             }
             LockTracker::Prepared { locks, .. } => {
-                if let BTreeMapEntry::Occupied(x) = locks.entry(key) {
+                if let BTreeMapEntry::Occupied(x) = locks.entry(key.clone()) {
                     if x.get().ts == start_ts {
                         let (key, _) = x.remove_entry();
                         let bytes = key.approximate_heap_size();
                         self.memory_quota.free(bytes);
                         CDC_PENDING_BYTES_GAUGE.sub(bytes as _);
                         lock_count_modify = -1;
+                    } else {
+                        info!("[for debug] cdc pop_lock found lock with same key but different start_ts";
+                            "generation" => ?x.get().generation,
+                            "old_start_ts" => ?x.get().ts,
+                            "new_start_ts" => ?start_ts,
+                            "key" => ?key,
+                            "region_id" => self.region_id,
+                        );
                     }
                 }
             }
@@ -1742,7 +1760,7 @@ mod tests {
         let (mut tx, mut rx) = futures::channel::mpsc::unbounded();
         let runtime = tokio::runtime::Runtime::new().unwrap();
         runtime.spawn(async move {
-            drain.forward(&mut tx).await.unwrap();
+            drain.forward(&mut tx, None).await.unwrap();
         });
         let (e, _) = recv_timeout(&mut rx, std::time::Duration::from_secs(5))
             .unwrap()
@@ -1809,7 +1827,7 @@ mod tests {
         let (mut tx, mut rx) = futures::channel::mpsc::unbounded();
         let runtime = tokio::runtime::Runtime::new().unwrap();
         runtime.spawn(async move {
-            drain.forward(&mut tx).await.unwrap();
+            drain.forward(&mut tx, None).await.unwrap();
         });
         let (e, _) = recv_timeout(&mut rx, std::time::Duration::from_secs(5))
             .unwrap()

@@ -171,6 +171,23 @@ impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> BatchExecutor for ScanExecuto
     }
 
     #[inline]
+    fn intermediate_schema(&self, index: usize) -> Result<&[FieldType]> {
+        Err(other_err!(
+            "The intermediate schema is not found until root executor, index: {}",
+            index
+        ))
+    }
+
+    #[inline]
+    fn consume_and_fill_intermediate_results(
+        &mut self,
+        _results: &mut [Vec<BatchExecuteResult>],
+    ) -> Result<()> {
+        // Do nothing.
+        Ok(())
+    }
+
+    #[inline]
     async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         assert!(!self.is_ended);
         assert!(scan_rows > 0);

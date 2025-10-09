@@ -2,7 +2,7 @@
 
 use std::{
     fmt::{self, Display, Formatter},
-    sync::Arc,
+    sync::{Arc, atomic::Ordering::Relaxed},
     time::Duration,
 };
 
@@ -15,8 +15,10 @@ use tikv_util::{
 };
 
 use self::{collector_reg::CollectorReg, sub_recorder::SubRecorder};
-use crate::{Config, RawRecords, ResourceTagFactory, collector::Collector};
-
+use crate::{
+    Config, RawRecords, ResourceTagFactory, collector::Collector,
+    config::ENABLE_NETWORK_IO_COLLECTION,
+};
 mod collector_reg;
 mod localstorage;
 mod sub_recorder;
@@ -26,7 +28,10 @@ pub use self::{
     localstorage::{LocalStorage, LocalStorageRef, STORAGE},
     sub_recorder::{
         cpu::CpuRecorder,
-        summary::{SummaryRecorder, record_read_keys, record_write_keys},
+        summary::{
+            SummaryRecorder, record_logical_read_bytes, record_logical_write_bytes,
+            record_network_in_bytes, record_network_out_bytes, record_read_keys, record_write_keys,
+        },
     },
 };
 
@@ -123,6 +128,7 @@ impl Recorder {
 
     fn handle_config_change(&mut self, config: Config) {
         self.precision_ms = config.precision.as_millis();
+        ENABLE_NETWORK_IO_COLLECTION.store(config.enable_network_io_collection, Relaxed);
     }
 
     fn tick(&mut self) {
@@ -364,9 +370,14 @@ mod tests {
             records: &mut RawRecords,
             _thread_stores: &mut HashMap<Pid, LocalStorage>,
         ) {
-            let mut tag = TagInfos::default();
-            tag.extra_attachment.push(1);
-            records.records.entry(Arc::new(tag)).or_default().cpu_time = 2;
+            let tag = Arc::new(TagInfos {
+                store_id: 0,
+                region_id: 0,
+                peer_id: 0,
+                key_ranges: vec![],
+                extra_attachment: [1].to_vec().into(),
+            });
+            records.records.entry(tag).or_default().cpu_time = 2;
         }
 
         fn pause(
@@ -445,7 +456,7 @@ mod tests {
         assert_eq!(records.records.len(), 1);
         assert_eq!(
             &records.records.keys().next().unwrap().extra_attachment,
-            &[1]
+            &Arc::new([1].to_vec())
         );
 
         // deregister collector
@@ -510,7 +521,7 @@ mod tests {
         assert_eq!(records.records.len(), 1);
         assert_eq!(
             &records.records.keys().next().unwrap().extra_attachment,
-            &[1]
+            &Arc::new([1].to_vec())
         );
         assert_eq!(records, {
             collector2.records.lock().unwrap().take().unwrap()
@@ -565,7 +576,7 @@ mod tests {
         assert_eq!(records.records.len(), 1);
         assert_eq!(
             &records.records.keys().next().unwrap().extra_attachment,
-            &[1]
+            &Arc::new([1].to_vec())
         );
         assert_eq!(records, {
             observer.records.lock().unwrap().take().unwrap()

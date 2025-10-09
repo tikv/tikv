@@ -239,6 +239,7 @@ impl<E: Engine> Store<E> {
     }
 
     pub fn delete(&mut self, ctx: Context, mut keys: Vec<Vec<u8>>) {
+        keys.dedup();
         self.handles.extend(keys.clone());
         let pk = keys[0].clone();
         let mutations = keys

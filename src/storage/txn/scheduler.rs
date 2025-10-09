@@ -47,7 +47,10 @@ use parking_lot::{Mutex, MutexGuard, RwLockWriteGuard};
 use pd_client::{Feature, FeatureGate};
 use raftstore::store::TxnExt;
 use resource_control::{ResourceController, ResourceGroupManager, TaskMetadata};
-use resource_metering::{FutureExt, ResourceTagFactory};
+use resource_metering::{
+    FutureExt, ResourceTagFactory, record_logical_read_bytes, record_logical_write_bytes,
+    record_network_in_bytes,
+};
 use smallvec::{SmallVec, smallvec};
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData, WriteEvent};
 use tikv_util::{
@@ -320,7 +323,6 @@ impl<L: LockManager> TxnSchedulerInner<L> {
 
     fn dequeue_task_context(&self, cid: u64) -> TaskContext {
         let tctx = self.get_task_slot(cid).remove(&cid).unwrap();
-
         let running_write_bytes = self
             .running_write_bytes
             .fetch_sub(tctx.write_bytes, Ordering::AcqRel) as i64;
@@ -1241,9 +1243,15 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             }
 
             fail_point!("scheduler_process");
+            GLOBAL_TRACKERS.with_tracker(task.tracker_token(), |tracker| {
+                record_network_in_bytes(tracker.metrics.grpc_req_size);
+            });
+
             if task.cmd().readonly() {
                 self.process_read(snapshot, task, &mut sched_details);
+                record_logical_read_bytes(sched_details.stat.processed_size as u64);
             } else {
+                record_logical_write_bytes(task.cmd().write_bytes() as u64);
                 self.process_write(snapshot, task, &mut sched_details).await;
             };
             tls_collect_scan_details(tag.get_str(), &sched_details.stat);
@@ -1812,6 +1820,11 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         fail_point!("txn_before_process_write");
         let cid = task.cid();
         let tag = task.cmd().tag();
+        let task_cmd_str = if txn_types::ENABLE_DUP_KEY_DEBUG.load(Ordering::Relaxed) {
+            task.cmd().to_string()
+        } else {
+            String::default()
+        };
         let tracker_token = task.tracker_token();
         let mut task_meta_data = TaskMetadata::from_ctx(task.cmd().resource_control_ctx());
         let pipelined = task.cmd().can_be_pipelined()
@@ -1839,6 +1852,55 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             // `WriteFinished` message when it finishes.
             Ok(res) => res,
         };
+
+        // TODO: remove this check when the cause of issue 18498 is located.
+        if txn_types::ENABLE_DUP_KEY_DEBUG.load(Ordering::Relaxed)
+            && !write_result.to_be_write.modifies.is_empty()
+        {
+            let mut seen_keys =
+                std::collections::HashMap::<txn_types::Key, txn_types::Value>::new();
+            for modify in &write_result.to_be_write.modifies {
+                if let Modify::Put(cf, key, value) = modify {
+                    if *cf == CF_LOCK {
+                        let entry = seen_keys.entry(key.clone());
+                        match entry {
+                            std::collections::hash_map::Entry::Vacant(e) => {
+                                e.insert(value.clone());
+                            }
+                            std::collections::hash_map::Entry::Occupied(e) => {
+                                let existing_value = e.get();
+                                error!(
+                                    "[for debug] found duplicate key in CF_LOCK PUT";
+                                    "key" => ?key,
+                                    "existing_value" => ?existing_value,
+                                    "new_value" => ?value,
+                                    "tag" => ?tag,
+                                    "txn_ext" => ?txn_ext,
+                                    "task_cmd_str" => ?task_cmd_str,
+                                );
+
+                                fail_point!("scheduler_dup_key_check", |_| {
+                                    self.finish_with_err(
+                                        cid,
+                                        StorageErrorInner::Other(Box::from(
+                                            "dup_key_found_with_fp",
+                                        )),
+                                        Some(sched_details),
+                                    );
+                                });
+                                // TODO: remove this in production or new release.
+                                panic!(
+                                    "[for debug] found duplicate key in CF_LOCK PUT key={:?}, existing_value={:?}, \
+                                    new_value={:?}, tag={:?}, txn_ext={:?}, task_cmd_str={:?}",
+                                    key, existing_value, value, tag, txn_ext, task_cmd_str
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
         debug!("process_write task handle result";
             "req_info" => TrackerTokenArray::new(&[tracker_token]),

@@ -115,7 +115,7 @@ $ pip3 install -i https://test.pypi.org/simple/ tikv-client
 ```python
 from tikv_client import RawClient
 
-client = RawClient.connect("127.0.0.1:2379")
+client = RawClient.connect(["127.0.0.1:2379"])
 
 client.put(b'foo', b'bar')
 print(client.get(b'foo')) # b'bar'

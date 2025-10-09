@@ -88,8 +88,11 @@ use crate::{
         local_metrics::{RaftMetrics, TimeTracker},
         memory::*,
         metrics::*,
-        msg::{Callback, CampaignType, ExtCallback, InspectedRaftMessage},
-        peer::{ConsistencyState, Peer, PersistSnapshotResult, StaleState, TransferLeaderContext},
+        msg::{Callback, CampaignType, ExtCallback, InspectedRaftMessage, PeerClearMetaStat},
+        peer::{
+            ConsistencyState, Peer, PendingRemoveReason, PersistSnapshotResult, StaleState,
+            TransferLeaderContext,
+        },
         region_meta::RegionMeta,
         snapshot_backup::{AbortReason, SnapshotBrState, SnapshotBrWaitApplyRequest},
         transport::Transport,
@@ -201,6 +204,12 @@ where
     propose_checked: Option<bool>,
     request: Option<RaftCmdRequest>,
     callbacks: Vec<Callback<E::Snapshot>>,
+
+    // Ref: https://github.com/tikv/tikv/issues/18498.
+    // Check for duplicate key entries batching proposed commands.
+    // TODO: remove this field when the cause of issue 18498 is located.
+    lock_cf_keys: HashSet<Vec<u8>>,
+    duplicate_put_on_lock_cf_detected: bool,
 }
 
 impl<EK, ER> Drop for PeerFsm<EK, ER>
@@ -445,6 +454,8 @@ where
             propose_checked: None,
             request: None,
             callbacks: vec![],
+            lock_cf_keys: HashSet::default(),
+            duplicate_put_on_lock_cf_detected: false,
         }
     }
 
@@ -485,6 +496,31 @@ where
             mut callback,
             ..
         } = cmd;
+        if txn_types::ENABLE_DUP_KEY_DEBUG.load(Ordering::Relaxed) {
+            // Ref: https://github.com/tikv/tikv/issues/18498.
+            // Check for duplicate key entries batching proposed commands.
+            // TODO: remove this check when the cause of issue 18498 is located.
+            for req in request.get_requests() {
+                if req.has_put() && req.get_put().get_cf() == CF_LOCK {
+                    let key = req.get_put().get_key();
+                    if !self.lock_cf_keys.insert(key.to_vec()) {
+                        let wrapped_key = log_wrappers::Value::key(key);
+                        error!(
+                            "[for debug] found duplicate key in Lock CF PUT request between batched requests. \
+                            key: {:?}, existing batch request: {:?}, new request to add: {:?}",
+                            wrapped_key, self.request, request
+                        );
+                        self.duplicate_put_on_lock_cf_detected = true;
+                        // TODO: remove this in production or new release.
+                        panic!(
+                            "[for debug] found duplicate key in Lock CF PUT request between batched requests. \
+                            key: {:?}, existing batch request: {:?}, new request to add: {:?}",
+                            wrapped_key, self.request, request
+                        );
+                    }
+                }
+            }
+        }
         if let Some(batch_req) = self.request.as_mut() {
             let requests: Vec<_> = request.take_requests().into();
             for q in requests {
@@ -527,6 +563,7 @@ where
             self.batch_req_size = 0;
             self.has_proposed_cb = false;
             self.propose_checked = None;
+            self.lock_cf_keys = HashSet::default();
             if self.callbacks.len() == 1 {
                 let cb = self.callbacks.pop().unwrap();
                 return Some((req, cb));
@@ -697,6 +734,30 @@ where
                     if let Some(Err(e)) = cmd.extra_opts.deadline.map(|deadline| deadline.check()) {
                         cmd.callback.invoke_with_response(new_error(e.into()));
                         continue;
+                    }
+
+                    if txn_types::ENABLE_DUP_KEY_DEBUG.load(Ordering::Relaxed) {
+                        // Ref: https://github.com/tikv/tikv/issues/18498.
+                        // Check for duplicate key entries within the to be proposed raft cmd.
+                        // TODO: remove this check when the cause of issue 18498 is located.
+                        let mut keys_set = std::collections::HashSet::new();
+                        for req in cmd.request.get_requests() {
+                            if req.has_put() && req.get_put().get_cf() == CF_LOCK {
+                                let key = req.get_put().get_key();
+                                if !keys_set.insert(key.to_vec()) {
+                                    let wrapped_key = log_wrappers::Value::key(key);
+                                    error!(
+                                        "[for debug] found duplicate key in Lock CF PUT request, key: {:?}, cmd: {:?}",
+                                        wrapped_key, cmd
+                                    );
+                                    // TODO: remove this in production or new release.
+                                    panic!(
+                                        "[for debug] found duplicate key in Lock CF PUT request, key: {:?}, cmd: {:?}",
+                                        wrapped_key, cmd
+                                    );
+                                }
+                            }
+                        }
                     }
 
                     let req_size = cmd.request.compute_size();
@@ -1063,14 +1124,14 @@ where
                 "peer_id" => self.fsm.peer_id(),
                 "target_index" => target_index,
                 "applied_index" => applied_index,
-                "pending_remove" => self.fsm.peer.pending_remove,
+                "pending_remove" => ?self.fsm.peer.pending_remove,
                 "voter" => self.fsm.peer.raft_group.raft.vote,
             );
 
             // do some sanity check, for follower, leader already apply to last log,
             // case#1 if it is learner during backup and never vote before, vote is 0
             // case#2 if peer is suppose to remove
-            if self.fsm.peer.raft_group.raft.vote == 0 || self.fsm.peer.pending_remove {
+            if self.fsm.peer.raft_group.raft.vote == 0 || self.fsm.peer.pending_remove.is_some() {
                 info!(
                     "this peer is never vote before or pending remove, it should be skip to wait apply";
                     "region" => %self.region_id(),
@@ -1099,7 +1160,7 @@ where
     }
 
     fn on_unsafe_recovery_fill_out_report(&mut self, syncer: UnsafeRecoveryFillOutReportSyncer) {
-        if self.fsm.peer.pending_remove || self.fsm.stopped {
+        if self.fsm.peer.pending_remove.is_some() || self.fsm.stopped {
             return;
         }
         let mut self_report = pdpb::PeerReport::default();
@@ -1163,6 +1224,11 @@ where
     }
 
     fn on_casual_msg(&mut self, msg: Box<CasualMessage<EK>>) {
+        if self.fsm.peer.pending_remove == Some(PendingRemoveReason::Destroy) {
+            // It means that the peer will be asynchronously removed, it's no
+            // need to execute the consequentail CasualMessages.
+            return;
+        }
         match *msg {
             CasualMessage::SplitRegion {
                 region_epoch,
@@ -1475,7 +1541,7 @@ where
                 && (key.idx < compacted_idx
                     || key.idx == compacted_idx
                         && !is_applying_snap
-                        && !self.fsm.peer.pending_remove)
+                        && self.fsm.peer.pending_remove.is_none())
             {
                 info!(
                     "deleting applied snap file";
@@ -1640,6 +1706,25 @@ where
             // for snapshot recovery (safe recovery)
             SignificantMsg::SnapshotBrWaitApply(syncer) => self.on_snapshot_br_wait_apply(syncer),
             SignificantMsg::CheckPendingAdmin(ch) => self.on_check_pending_admin(ch),
+            SignificantMsg::ReadyToDestroyPeer {
+                to_peer_id,
+                merged_by_target,
+                clear_stat,
+            } => {
+                if to_peer_id != self.fsm.peer_id() {
+                    // Ignore redundant or stale messages from an outdated peer for the same region.
+                    // This handles the corner case where a stale peer is being removed
+                    // asynchronously while a new peer for the region is added.
+                    // If the async cleanup thread returns a delayed message
+                    // aimed to the removed peer, skip it to avoid acting on stale state.
+                    // This is a corner case after introducing `async destroy peer` by PR#18805.
+                    info!("delayed destroy peer message";
+                        "old_peer_id" => to_peer_id,
+                        "peer_id" => self.fsm.peer_id());
+                    return;
+                }
+                self.on_ready_destroy_peer(merged_by_target, clear_stat);
+            }
         }
     }
 
@@ -2072,7 +2157,7 @@ where
         // state, or it is being destroyed, ignore the result.
         let cache_warmup_state = &self.fsm.peer.transfer_leader_state.cache_warmup_state;
         if !self.fsm.peer.is_leader() && cache_warmup_state.is_none()
-            || self.fsm.peer.pending_remove
+            || self.fsm.peer.pending_remove.is_some()
         {
             self.fsm.peer.mut_store().clean_async_fetch_res(low);
             return;
@@ -2327,7 +2412,7 @@ where
             |_| {}
         );
 
-        if self.fsm.peer.pending_remove {
+        if self.fsm.peer.pending_remove.is_some() {
             self.fsm.peer.mut_store().flush_entry_cache_metrics();
             return;
         }
@@ -2520,7 +2605,18 @@ where
                     "peer_id" => self.fsm.peer_id(),
                     "res" => ?res,
                 );
-                if self.fsm.peer.wait_data {
+                if self.fsm.peer.wait_data
+                    || self.fsm.peer.pending_remove == Some(PendingRemoveReason::Destroy)
+                {
+                    // In PR#18805 we introduced asynchronous peer destruction. A peer
+                    // with `PendingRemoveReason::Destroy` is a stale peer that has been
+                    // marked for removal and will be cleaned up by an async worker.
+                    // Similarly, `wait_data` means the peer is waiting for snapshot or
+                    // apply work to finish. In either case we should ignore subsequent
+                    // apply results for this peer — this preserves the semantics of the
+                    // original synchronous-destroy path and avoids applying results for
+                    // a peer that is effectively slated for removal or not ready to
+                    // accept them.
                     return;
                 }
                 self.on_ready_result(&mut res.exec_res, &res.metrics);
@@ -2748,7 +2844,7 @@ where
             |_| Ok(())
         );
 
-        if self.fsm.peer.pending_remove || self.fsm.stopped {
+        if self.fsm.peer.pending_remove.is_some() || self.fsm.stopped {
             return Ok(());
         }
 
@@ -4068,12 +4164,11 @@ where
         self.destroy_peer(delay.merged_by_target);
     }
 
-    // [PerformanceCriticalPath] TODO: spin off the I/O code (self.fsm.peer.destroy)
     fn destroy_peer(&mut self, merged_by_target: bool) -> bool {
         self.ctx.coprocessor_host.on_destroy_peer(self.region());
         fail_point!("destroy_peer");
         // Mark itself as pending_remove
-        self.fsm.peer.pending_remove = true;
+        self.fsm.peer.pending_remove = Some(PendingRemoveReason::Destroy);
 
         // try to decrease the RAFT_ENABLE_UNPERSISTED_APPLY_GAUGE count.
         self.fsm.peer.disable_apply_unpersisted_log(0);
@@ -4203,20 +4298,47 @@ where
                 "err" => %e,
             );
         }
-        if let Err(e) = self.fsm.peer.destroy(
+
+        // Drop the `StoreMeta` lock here to ensure that the asynchronous destroy task
+        // can execute safely without blocking other threads.
+        drop(meta);
+
+        let clear_stat = self.fsm.peer.destroy(
             &self.ctx.engines,
-            &mut self.ctx.raft_perf_context,
             merged_by_target,
-            &self.ctx.pending_create_peers,
-            &self.ctx.raft_metrics,
-        ) {
-            // If not panic here, the peer will be recreated in the next restart,
-            // then it will be gc again. But if some overlap region is created
-            // before restarting, the gc action will delete the overlap region's
-            // data too.
-            panic!("{} destroy err {:?}", self.fsm.peer.tag, e);
+            self.ctx.store_meta.clone(),
+            self.ctx.pending_create_peers.clone(),
+        );
+        // If clear_stat is valid, it means the destroy task above was executed
+        // synchronously. In this case, we should immediately perform the
+        // follow-up steps required to complete the peer destruction process.
+        if let Some(clear_stat) = clear_stat {
+            self.on_ready_destroy_peer(merged_by_target, clear_stat);
         }
 
+        true
+    }
+
+    fn on_ready_destroy_peer(
+        &mut self,
+        merged_by_target: bool,
+        clear_stat: PeerClearMetaStat,
+    ) -> bool {
+        assert_eq!(
+            self.fsm.peer.pending_remove,
+            Some(PendingRemoveReason::Destroy),
+            "terminate the peer under pending_remove state, exepcted {:?} actual {:?} ",
+            Some(PendingRemoveReason::Destroy),
+            self.fsm.peer.pending_remove,
+        );
+        // Clean remains if needs and notify all pending requests to exit.
+        self.fsm
+            .peer
+            .ready_to_destroy(merged_by_target, clear_stat, &self.ctx.raft_metrics);
+
+        let region_id = self.region_id();
+        let is_peer_initialized = self.fsm.peer.is_initialized();
+        let mut meta = self.ctx.store_meta.lock().unwrap();
         // Some places use `force_send().unwrap()` if the StoreMeta lock is held.
         // So in here, it's necessary to held the StoreMeta lock when closing the
         // router.
@@ -4487,10 +4609,19 @@ where
         self.fsm.peer.schedule_raftlog_gc(self.ctx, compact_to);
         self.fsm.peer.last_compacted_idx = compact_to;
         let transfer_leader_state = &mut self.fsm.peer.transfer_leader_state;
-        self.fsm.peer.raft_group.mut_store().on_compact_raftlog(
-            compact_to,
-            transfer_leader_state.cache_warmup_state.as_mut(),
-        );
+        self.fsm
+            .peer
+            .raft_group
+            .mut_store()
+            .on_compact_raftlog_cache(
+                compact_to,
+                transfer_leader_state.cache_warmup_state.as_mut(),
+            );
+        self.fsm
+            .peer
+            .raft_group
+            .mut_store()
+            .cancel_generating_snap(Some(compact_to));
         if self.fsm.peer.is_witness() {
             self.fsm.peer.last_compacted_time = Instant::now();
         }
@@ -5000,7 +5131,7 @@ where
 
     fn on_check_merge(&mut self) {
         if self.fsm.stopped
-            || self.fsm.peer.pending_remove
+            || self.fsm.peer.pending_remove.is_some()
             || self.fsm.peer.pending_merge_state.is_none()
         {
             return;
@@ -5088,7 +5219,7 @@ where
                 assert_eq!(state.get_target().get_id(), catch_up_logs.target_region_id);
                 // Indicate that `on_catch_up_logs_for_merge` has already executed.
                 // Mark pending_remove because its apply fsm will be destroyed.
-                self.fsm.peer.pending_remove = true;
+                self.fsm.peer.pending_remove = Some(PendingRemoveReason::Merge);
                 // Send CatchUpLogs back to destroy source apply fsm,
                 // then it will send `Noop` to trigger target apply fsm.
                 self.ctx.apply_router.schedule_task(
@@ -5121,7 +5252,7 @@ where
                 );
                 // Indicate that `on_ready_prepare_merge` has already executed.
                 // Mark pending_remove because its apply fsm will be destroyed.
-                self.fsm.peer.pending_remove = true;
+                self.fsm.peer.pending_remove = Some(PendingRemoveReason::Merge);
                 // Just for saving memory.
                 catch_up_logs.merge.clear_entries();
                 // Send CatchUpLogs back to destroy source apply fsm,
@@ -5360,7 +5491,7 @@ where
                     "peer_id" => self.fsm.peer_id(),
                     "target_region_id" => target_region_id,
                 );
-                self.fsm.peer.pending_remove = true;
+                self.fsm.peer.pending_remove = Some(PendingRemoveReason::Merge);
                 // Destroy apply fsm at first
                 self.ctx.apply_router.schedule_task(
                     self.fsm.region_id(),
@@ -5380,7 +5511,7 @@ where
     }
 
     fn on_stale_merge(&mut self, target_region_id: u64) {
-        if self.fsm.peer.pending_remove {
+        if self.fsm.peer.pending_remove.is_some() {
             return;
         }
         info!(
@@ -5940,7 +6071,7 @@ where
         cb: Callback<EK::Snapshot>,
         diskfullopt: DiskFullOpt,
     ) {
-        if self.fsm.peer.pending_remove {
+        if self.fsm.peer.pending_remove.is_some() {
             apply::notify_req_region_removed(self.region_id(), cb);
             return;
         }
@@ -6071,7 +6202,16 @@ where
 
     #[allow(clippy::if_same_then_else)]
     fn on_raft_gc_log_tick(&mut self, force_compact: bool) {
-        if !self.fsm.peer.is_leader() {
+        fail_point!(
+            "check_state_on_raft_gc_log_tick",
+            self.fsm.stopped || self.fsm.peer.pending_remove.is_some(),
+            |_| {}
+        );
+        if self.fsm.stopped || self.fsm.peer.pending_remove.is_some() || !self.fsm.peer.is_leader()
+        {
+            // If the peer is marked as `pending_remove`, it means the clearing might be
+            // executed by the region worker, or this peer is already stopped. In both
+            // scenarios, there is no need to execute log gc.
             // `compact_cache_to` is called when apply, there is no need to call
             // `compact_to` here, snapshot generating has already been cancelled
             // when the role becomes follower.
@@ -6147,10 +6287,14 @@ where
         // leader may call `get_term()` on the latest replicated index, so compact
         // entries before `alive_cache_idx` instead of `alive_cache_idx + 1`.
         let transfer_leader_state = &mut self.fsm.peer.transfer_leader_state;
-        self.fsm.peer.raft_group.mut_store().on_compact_raftlog(
-            std::cmp::min(alive_cache_idx, applied_idx + 1),
-            transfer_leader_state.cache_warmup_state.as_mut(),
-        );
+        self.fsm
+            .peer
+            .raft_group
+            .mut_store()
+            .on_compact_raftlog_cache(
+                std::cmp::min(alive_cache_idx, applied_idx + 1),
+                transfer_leader_state.cache_warmup_state.as_mut(),
+            );
         if needs_evict_entry_cache(self.ctx.cfg.evict_cache_on_memory_ratio) {
             self.fsm.peer.mut_store().evict_entry_cache(true);
             if !self.fsm.peer.get_store().is_entry_cache_empty() {
@@ -6207,6 +6351,15 @@ where
             return;
         }
 
+        // If RaftEngine's compact idx exceeds the snapshot idx,
+        // means the snapshot idx has already been compacted.
+        // We should cancel the snapshot generating as it is now out of date.
+        self.fsm
+            .peer
+            .raft_group
+            .mut_store()
+            .cancel_generating_snap(Some(compact_idx));
+
         // Create a compact log request and notify directly.
         let region_id = self.fsm.peer.region().get_id();
         let peer = self.fsm.peer.peer.clone();
@@ -6260,7 +6413,7 @@ where
         fail_point!("ignore request snapshot", |_| {
             self.schedule_tick(PeerTick::RequestSnapshot);
         });
-        if !self.fsm.peer.wait_data {
+        if !self.fsm.peer.wait_data || self.fsm.peer.pending_remove.is_some() {
             return;
         }
         if self.fsm.peer.is_leader()
@@ -6337,7 +6490,7 @@ where
     }
 
     fn on_split_region_check_tick(&mut self) {
-        if !self.fsm.peer.is_leader() {
+        if !self.fsm.peer.is_leader() || self.fsm.peer.pending_remove.is_some() {
             return;
         }
 
@@ -6805,7 +6958,7 @@ where
     }
 
     fn on_check_peer_stale_state_tick(&mut self) {
-        if self.fsm.peer.pending_remove {
+        if self.fsm.peer.pending_remove.is_some() {
             return;
         }
 
@@ -7747,5 +7900,40 @@ mod tests {
         let _ = q.take_put();
         let req_size = req.compute_size();
         assert!(!builder.can_batch(&cfg, &req, req_size));
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_batch_build_with_duplicate_lock_cf_keys() {
+        let mut builder = BatchRaftCmdRequestBuilder::<KvTestEngine>::new();
+
+        // Create first request.
+        let mut req1 = RaftCmdRequest::default();
+        let mut put1 = Request::default();
+        let mut put_req1 = PutRequest::default();
+        put_req1.set_cf(CF_LOCK.to_string());
+        put_req1.set_key(b"key1".to_vec());
+        put_req1.set_value(b"value1".to_vec());
+        put1.set_cmd_type(CmdType::Put);
+        put1.set_put(put_req1);
+        req1.mut_requests().push(put1);
+
+        // Create second request with same key in Lock CF.
+        let mut req2 = RaftCmdRequest::default();
+        let mut put2 = Request::default();
+        let mut put_req2 = PutRequest::default();
+        put_req2.set_cf(CF_LOCK.to_string());
+        put_req2.set_key(b"key1".to_vec());
+        put_req2.set_value(b"value2".to_vec());
+        put2.set_cmd_type(CmdType::Put);
+        put2.set_put(put_req2);
+        req2.mut_requests().push(put2);
+
+        // Add both requests to batch builder, should cause panic.
+        let size = req1.compute_size();
+        builder.add(RaftCommand::new(req1, Callback::None), size);
+        let size = req2.compute_size();
+        builder.add(RaftCommand::new(req2, Callback::None), size);
+        assert!(builder.duplicate_put_on_lock_cf_detected);
     }
 }
