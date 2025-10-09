@@ -2914,18 +2914,18 @@ fn test_cdc_overlapped_write_bug() {
     let region = suite.cluster.get_region(&[]);
     let region_id = region.get_id();
 
-    debug!("Region ID:"; "region_id" => region_id);
+    debug!("region:"; "region_id" => region_id);
 
     let test_key = b"test_key";
-    let primary_key_t2 = b"t2_primary";  // T2's primary (different from test_key)
+    let primary_key_t2 = b"t2_primary";  // t2's primary (different from test_key)
     let value1 = b"value1";
     let value2 = b"value2";
     let value3 = b"value3";
 
-    // Phase 1: T1 prewrites and commits test_key
-    // CRITICAL: We need T2's start_ts to equal T1's commit_ts for overlapped write detection!
+    // Phase 1: t1 prewrites and commits test_key
+    // CRITICAL: We need t2's start_ts to equal t1's commit_ts for overlapped write detection!
     let t1_start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
-    debug!("T1:"; "start_ts" => t1_start_ts);
+    debug!("t1:"; "start_ts" => t1_start_ts);
 
     let mut mutation1 = Mutation::default();
     mutation1.set_op(Op::Put);
@@ -2933,9 +2933,9 @@ fn test_cdc_overlapped_write_bug() {
     mutation1.set_value(value1.to_vec());
 
     suite.must_kv_prewrite(region_id, vec![mutation1], test_key.to_vec(), t1_start_ts);
-    // T1: Prewrite completed
+    // t1: Prewrite completed
 
-    // Get T1's commit_ts, which will become T2's start_ts
+    // Get t1's commit_ts, which will become t2's start_ts
     let t1_commit_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     let mut commit_req = CommitRequest::default();
     commit_req.set_context(suite.get_context(region_id));
@@ -2944,17 +2944,17 @@ fn test_cdc_overlapped_write_bug() {
     commit_req.set_commit_version(t1_commit_ts.into_inner());
 
     suite.get_tikv_client(region_id).kv_commit(&commit_req).unwrap();
-    debug!("T1:"; "Committed at commit_ts" => t1_commit_ts);
-    // CF_WRITE now has T1's committed write
+    debug!("t1:"; "committed at commit_ts" => t1_commit_ts);
+    // CF_WRITE now has t1's committed write
 
-    // Set up CDC AFTER T1 commits
+    // Set up CDC AFTER t1 commits
     let req = suite.new_changedata_request(region_id);
     let (mut req_tx, event_feed_wrap, receive_event) =
         new_event_feed(suite.get_region_cdc_client(region_id));
     block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
 
     let events = receive_event(false).events.to_vec();
-    debug!("CDC: Initialized with "; "events" => events.len());
+    debug!("cdc: initialized with "; "events" => events.len());
 
     // Wait for stream to be registered
     let scheduler = suite.endpoints.values().next().unwrap().scheduler();
@@ -2972,11 +2972,11 @@ fn test_cdc_overlapped_write_bug() {
         .unwrap();
     rx.recv_timeout(Duration::from_secs(1)).unwrap();
 
-    // Phase 2: T2 prewrites test_key as a SECONDARY key
-    // CRITICAL: Use T1's commit_ts as T2's start_ts to trigger overlapped write!
-    let t2_start_ts = t1_commit_ts;  // This is the key: start_ts == commit_ts of T1!
-    debug!("T2: start_ts is the same as T1's commit_ts!"; "start_ts" => t2_start_ts);
-    // T2: primary_key is different from the test_key
+    // Phase 2: t2 prewrites test_key as a SECONDARY key
+    // CRITICAL: Use t1's commit_ts as t2's start_ts to trigger overlapped write!
+    let t2_start_ts = t1_commit_ts;  // This is the key: start_ts == commit_ts of t1!
+    debug!("t2: start_ts is the same as t1's commit_ts!"; "start_ts" => t2_start_ts);
+    // t2: primary_key is different from the test_key
 
     // Prewrite both primary and secondary
     let mut mutation_t2_primary = Mutation::default();
@@ -2996,11 +2996,11 @@ fn test_cdc_overlapped_write_bug() {
         primary_key_t2.to_vec(),
         t2_start_ts,
     );
-    // T2: Prewrite completed
-    debug!("CF_LOCK now has T2's lock"; "test_key" => t2_start_ts);
-    debug!("CDC should call push_lock for T2");
+    // t2: Prewrite completed
+    debug!("cf_lock now has t2's lock"; "test_key" => t2_start_ts);
+    debug!("cdc should call push_lock for t2");
 
-    // Wait for T2 prewrite events to be received
+    // Wait for t2 prewrite events to be received
     let mut t2_prewrite_received = false;
     for _ in 0..5 {
         let events = receive_event(true).events.to_vec();
@@ -3021,7 +3021,7 @@ fn test_cdc_overlapped_write_bug() {
         }
     }
 
-    // Phase 3: T2 rolls back ONLY the secondary key (test_key)
+    // Phase 3: t2 rolls back ONLY the secondary key (test_key)
     let ctx = suite.get_context(region_id);
     let tikv_client = suite.get_tikv_client(region_id);
 
@@ -3031,39 +3031,39 @@ fn test_cdc_overlapped_write_bug() {
     rollback_req.set_start_version(t2_start_ts.into_inner());
 
     tikv_client.kv_batch_rollback(&rollback_req).unwrap();
-    // T2: Rollback completed on test_key (secondary)
-    debug!("get_txn_commit_record finds T1's write where"; "commit_ts" => t1_commit_ts, "== T2's start_ts" => t2_start_ts);
+    // t2: Rollback completed on test_key (secondary)
+    debug!("get_txn_commit_record finds t1's write where"; "commit_ts" => t1_commit_ts, "== t2's start_ts" => t2_start_ts);
     // get_txn_commit_record returns overlapped_write!
-    // test_key is NOT T2's primary → protected=false
+    // test_key is NOT t2's primary → protected=false
     // make_rollback(protected=false, overlapped_write=Some) returns None
     // NO CF_WRITE ENTRY!
     // Only DELETE from CF_LOCK (CDC ignores this)
-    // CDC's lock_tracker still has T2's lock (stale)
+    // CDC's lock_tracker still has t2's lock (stale)
 
-    // Phase 4: T3 prewrites test_key
-    // This will trigger resolve_lock to clean up T2's stale lock
+    // Phase 4: t3 prewrites test_key
+    // This will trigger resolve_lock to clean up t2's stale lock
     let t3_start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
-    debug!("T3:"; "start_ts" => t3_start_ts);
-    debug!("Note:"; "T2's start_ts" => t2_start_ts, "T3's start_ts" => t3_start_ts);
+    debug!("t3:"; "start_ts" => t3_start_ts);
+    debug!("note:"; "t2's start_ts" => t2_start_ts, "t3's start_ts" => t3_start_ts);
 
     let mut mutation3 = Mutation::default();
     mutation3.set_op(Op::Put);
     mutation3.set_key(test_key.to_vec());
     mutation3.set_value(value3.to_vec());
 
-    // T3: Attempting prewrite...
-    // Will encounter T2's stale lock in CF_LOCK
+    // t3: Attempting prewrite...
+    // Will encounter t2's stale lock in CF_LOCK
     // Triggers resolve_lock_lite to clean it up
     // resolve_lock removes lock from CF_LOCK (no CDC notification)
-    // CDC processes T3's prewrite
-    debug!("CDC calls push_lock(test_key)"; "start_ts" => t3_start_ts);
-    debug!("CDC finds T2's stale lock in the lock_tracker"; "start_ts" => t2_start_ts);
+    // CDC processes t3's prewrite
+    debug!("cdc calls push_lock(test_key)"; "start_ts" => t3_start_ts);
+    debug!("cdc finds t2's stale lock in the lock_tracker"; "start_ts" => t2_start_ts);
     // EXPECTED: Assertion failure or warning!
 
     suite.must_kv_prewrite(region_id, vec![mutation3], test_key.to_vec(), t3_start_ts);
-    // T3: Prewrite completed
+    // t3: Prewrite completed
 
-    // Phase 5: Wait for CDC to process T3 prewrite event
+    // Phase 5: Wait for CDC to process t3 prewrite event
     let mut t3_prewrite_received = false;
     for _ in 0..10 {
         let events_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -3094,9 +3094,9 @@ fn test_cdc_overlapped_write_bug() {
 
     // Try to receive events (will panic if assertion fails)
     let events = receive_event(true).events.to_vec();
-    debug!("CDC:"; "Received" => events.len());
+    debug!("cdc:"; "received" => events.len());
     for (i, event) in events.iter().enumerate() {
-        debug!("Event"; "index" => i, "event" => ?event);
+        debug!("event"; "index" => i, "event" => ?event);
     }
 
     // Check delegate status
@@ -3139,7 +3139,7 @@ fn test_cdc_overlapped_write_bug() {
 fn test_verify_overlapped_write_skips_cf_write() {
     // This is a simpler test to verify that rollback indeed skips CF_WRITE
     // when there's an overlapped write and the key is not primary
-    // CRITICAL: Overlapped write requires T2.start_ts == T1.commit_ts
+    // CRITICAL: Overlapped write requires t2.start_ts == t1.commit_ts
 
     let cluster = new_server_cluster(1, 1);
     let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
@@ -3151,7 +3151,7 @@ fn test_verify_overlapped_write_skips_cf_write() {
     let value1 = b"value1";
     let value2 = b"value2";
 
-    // T1: Commit a write
+    // t1: Commit a write
     let t1_start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     let mut mutation1 = Mutation::default();
     mutation1.set_op(Op::Put);
@@ -3167,8 +3167,8 @@ fn test_verify_overlapped_write_skips_cf_write() {
     commit_req.set_commit_version(t1_commit_ts.into_inner());
     suite.get_tikv_client(region_id).kv_commit(&commit_req).unwrap();
 
-    // T2: Prewrite with test_key as SECONDARY (primary is different)
-    // CRITICAL: Use T1's commit_ts as T2's start_ts!
+    // t2: Prewrite with test_key as SECONDARY (primary is different)
+    // CRITICAL: Use t1's commit_ts as t2's start_ts!
     let t2_start_ts = t1_commit_ts;
     let mut mutation_primary = Mutation::default();
     mutation_primary.set_op(Op::Put);
@@ -3187,7 +3187,7 @@ fn test_verify_overlapped_write_skips_cf_write() {
         t2_start_ts,
     );
 
-    // T2: Rollback the secondary key
+    // t2: Rollback the secondary key
     let ctx = suite.get_context(region_id);
     let tikv_client = suite.get_tikv_client(region_id);
     let mut rollback_req = BatchRollbackRequest::default();
@@ -3197,7 +3197,7 @@ fn test_verify_overlapped_write_skips_cf_write() {
 
     tikv_client.kv_batch_rollback(&rollback_req).unwrap();
 
-    // T2: Rolled back test_key (secondary)
+    // t2: Rolled back test_key (secondary)
     // Expected behavior:
     //   - get_txn_commit_record finds: commit_ts={t1_commit_ts} == start_ts={t2_start_ts}
     //   - Overlapped write detected!
