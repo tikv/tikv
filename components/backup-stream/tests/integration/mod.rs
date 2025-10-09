@@ -13,7 +13,7 @@ mod all {
     };
 
     use backup_stream::{
-        errors::Error, router::TaskSelector, GetCheckpointResult, RegionCheckpointOperation,
+        errors::Error, GetCheckpointResult, RegionCheckpointOperation,
         RegionSet, Task,
     };
     use futures::{Stream, StreamExt};
