@@ -2944,7 +2944,7 @@ fn test_cdc_overlapped_write_bug() {
     commit_req.set_commit_version(t1_commit_ts.into_inner());
 
     suite.get_tikv_client(region_id).kv_commit(&commit_req).unwrap();
-    debug!("t1:"; "committed at commit_ts" => t1_commit_ts);
+    debug!("t1:"; "commit_ts" => t1_commit_ts);
     // CF_WRITE now has t1's committed write
 
     // Set up CDC AFTER t1 commits
