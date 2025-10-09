@@ -2909,6 +2909,7 @@ fn test_cdc_pessimistic_lock_unlock() {
 
 #[test]
 fn test_cdc_overlapped_write_bug() {
+    // This test is to verify the overlapped write bug (#18498).
     let cluster = new_server_cluster(1, 1);
     let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
     let region = suite.cluster.get_region(&[]);
