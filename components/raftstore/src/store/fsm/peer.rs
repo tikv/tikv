@@ -2961,19 +2961,18 @@ where
             Ok(())
         } else {
             if msg_type == MessageType::MsgReadIndex {
-                // This can be a message that sent when it's still a follower. Nevertheless,
-                // it's meaningless to continue to handle the request as callbacks are cleared.
-                if self.fsm.peer.is_leader()
+                // This can be a message that sent when it's still a follower.
+                // Nevertheless, it's meaningless to continue to handle the request
+                // as callbacks are cleared.
+                let is_stale_msg = self.fsm.peer.is_leader()
                     && (msg.get_message().get_from() == raft::INVALID_ID
-                        || msg.get_message().get_from() == self.fsm.peer_id())
-                {
-                    self.ctx.raft_metrics.message_dropped.stale_msg.inc();
-                    return Ok(());
+                        || msg.get_message().get_from() == self.fsm.peer_id());
                 // Or if the peer is forcely awaken by PD and waited to trigger
                 // a new election, the lease updating should be rejected. It
                 // could make the safety for handling `Read` by
                 // lease.
-                } else if self.fsm.reject_lease_ticks.0 > 0 {
+                let should_reject = self.fsm.reject_lease_ticks.0 > 0;
+                if is_stale_msg || should_reject {
                     self.ctx.raft_metrics.message_dropped.stale_msg.inc();
                     return Ok(());
                 }
