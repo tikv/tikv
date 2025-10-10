@@ -29,5 +29,6 @@ define_error_codes!(
     REQUEST_TOO_NEW => ("RequestTooNew", "", ""),
     REQUEST_TOO_OLD => ("RequestTooOld", "", ""),
     DISK_SPACE_NOT_ENOUGH => ("DiskSpaceNotEnough", "", ""),
-    ERROR_WRAPPER => ("ErrorWrapper", "", "")
+    MISMATCH_REQUEST => ("MisMatchedRequest", "", ""),
+    ERROR_WRAPPER => ("WrappedError", "", "")
 );
