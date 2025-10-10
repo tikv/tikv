@@ -698,7 +698,16 @@ impl SplitCheckTrigger {
 pub enum PendingRemoveReason {
     NotRemoved = 0,
     Merge,
+    /// The peer has been marked for destruction and is scheduled to be removed.
     Destroy,
+    /// The peer is now ready to be destroyed; all necessary preparations (such
+    /// as clearing the ApplyFsm) have been completed, so it can be safely
+    /// removed.
+    ///
+    /// Note: The peer enters the final stage of destruction only when its state
+    /// transitions from `Destroy` to `ReadyToDestroy`, or if it is directly
+    /// marked as `ReadyToDestroy`.
+    ReadyToDestroy,
 }
 
 #[derive(Getters, MutGetters)]
@@ -1375,6 +1384,8 @@ where
         //   is Some and should be set to None.
         self.apply_snap_ctx = None;
 
+        // Marks the peer is prepared to be destroyed, waiting for finishing
+        // preparations.
         self.pending_remove = Some(PendingRemoveReason::Destroy);
 
         Some(DestroyPeerJob {

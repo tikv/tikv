@@ -1214,7 +1214,7 @@ where
     }
 
     fn on_casual_msg(&mut self, msg: Box<CasualMessage<EK>>) {
-        if self.fsm.peer.pending_remove == Some(PendingRemoveReason::Destroy) {
+        if self.fsm.peer.pending_remove == Some(PendingRemoveReason::ReadyToDestroy) {
             // It means that the peer will be asynchronously removed, it's no
             // need to execute the consequentail CasualMessages.
             return;
@@ -2593,10 +2593,10 @@ where
                 }
                 self.on_ready_result(&mut res.exec_res, &res.metrics);
                 if self.fsm.stopped
-                    || self.fsm.peer.pending_remove == Some(PendingRemoveReason::Destroy)
+                    || self.fsm.peer.pending_remove == Some(PendingRemoveReason::ReadyToDestroy)
                 {
                     // In PR#18805 we introduced asynchronous peer destruction. A peer
-                    // with `PendingRemoveReason::Destroy` is a stale peer that has been
+                    // with `PendingRemoveReason::ReadyToDestroy` is a stale peer that has been
                     // marked for removal and will be cleaned up by an async worker.
                     // Similarly, `stopped` means the peer is stopped. In either case we should
                     // ignore subsequent apply results for this peer — this preserves the semantics
@@ -4125,8 +4125,9 @@ where
     fn destroy_peer(&mut self, merged_by_target: bool) -> bool {
         self.ctx.coprocessor_host.on_destroy_peer(self.region());
         fail_point!("destroy_peer");
-        // Mark itself as pending_remove
-        self.fsm.peer.pending_remove = Some(PendingRemoveReason::Destroy);
+        // Mark itself `PendingRemoveReason::ReadyToDestroy` to represent that this peer
+        // is ready to be removed.
+        self.fsm.peer.pending_remove = Some(PendingRemoveReason::ReadyToDestroy);
 
         // try to decrease the RAFT_ENABLE_UNPERSISTED_APPLY_GAUGE count.
         self.fsm.peer.disable_apply_unpersisted_log(0);
@@ -4284,9 +4285,9 @@ where
     ) -> bool {
         assert_eq!(
             self.fsm.peer.pending_remove,
-            Some(PendingRemoveReason::Destroy),
+            Some(PendingRemoveReason::ReadyToDestroy),
             "terminate the peer under pending_remove state, exepcted {:?} actual {:?} ",
-            Some(PendingRemoveReason::Destroy),
+            Some(PendingRemoveReason::ReadyToDestroy),
             self.fsm.peer.pending_remove,
         );
         // Clean remains if needs and notify all pending requests to exit.
