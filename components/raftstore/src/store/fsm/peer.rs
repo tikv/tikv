@@ -166,7 +166,9 @@ where
     /// ticks have not timed out, all incoming leader renew lease requests will
     /// be rejected to ensure new election safety.
     ///
-    /// This will be reset to (0, 0) once the role changes or ticks expire.
+    /// The first one is time-to-expire, the second one is the max number of
+    /// ticks. This will be reset to (0, 0) once the role changes or ticks
+    /// expire.
     reject_lease_ticks: (usize, usize),
     hibernate_state: HibernateState,
     stopped: bool,
