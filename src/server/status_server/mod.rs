@@ -70,7 +70,7 @@ use tracing_active_tree::tree::formating::FormatFlat;
 
 use crate::{
     config::{ConfigController, LogLevel},
-    server::Result,
+    server::{Result, debug},
     tikv_util::sys::thread::ThreadBuildWrapper,
 };
 
@@ -772,6 +772,15 @@ where
                             }
                             (Method::GET, "/async_tasks") => Self::dump_async_trace(),
                             (Method::GET, "debug/ime/cached_regions") => Self::handle_dumple_cached_regions(in_memory_engine.as_ref()),
+<<<<<<< HEAD
+=======
+                            (Method::GET, "/force_partition_ranges") => Self::dump_partition_ranges(&force_partition_range_mgr),
+                            (Method::POST, "/force_partition_ranges") => Self::add_partition_ranges(req, &force_partition_range_mgr).await,
+                            (Method::DELETE, "/force_partition_ranges") => Self::remove_partition_ranges(req, &force_partition_range_mgr).await,
+                            (_, path) if path.starts_with("/debug/dup-key") => {
+                                debug::handle_dup_key_debug(req)
+                            }
+>>>>>>> e4da2fd20b (add debug check for possible duplicate key entry (#18951))
                             _ => {
                                 is_unknown_path = true;
                                 Ok(make_response(StatusCode::NOT_FOUND, "path not found"))
