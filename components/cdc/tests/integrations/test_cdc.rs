@@ -12,7 +12,7 @@ use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
 use tikv::server::DEFAULT_CLUSTER_ID;
-use tikv_util::{HandyRwLock, debug, error,config::ReadableDuration};
+use tikv_util::{HandyRwLock, config::ReadableDuration, debug, error};
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
 use crate::{TestSuite, TestSuiteBuilder, new_event_feed, new_event_feed_v2};
@@ -2918,13 +2918,14 @@ fn test_cdc_overlapped_write_bug() {
     debug!("region:"; "region_id" => region_id);
 
     let test_key = b"test_key";
-    let primary_key_t2 = b"t2_primary";  // t2's primary (different from test_key)
+    let primary_key_t2 = b"t2_primary"; // t2's primary (different from test_key)
     let value1 = b"value1";
     let value2 = b"value2";
     let value3 = b"value3";
 
     // Phase 1: t1 prewrites and commits test_key
-    // CRITICAL: We need t2's start_ts to equal t1's commit_ts for overlapped write detection!
+    // CRITICAL: We need t2's start_ts to equal t1's commit_ts for overlapped write
+    // detection!
     let t1_start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     debug!("t1:"; "start_ts" => t1_start_ts);
 
@@ -2944,7 +2945,10 @@ fn test_cdc_overlapped_write_bug() {
     commit_req.set_keys(vec![test_key.to_vec()].into());
     commit_req.set_commit_version(t1_commit_ts.into_inner());
 
-    suite.get_tikv_client(region_id).kv_commit(&commit_req).unwrap();
+    suite
+        .get_tikv_client(region_id)
+        .kv_commit(&commit_req)
+        .unwrap();
     debug!("t1:"; "commit_ts" => t1_commit_ts);
     // CF_WRITE now has t1's committed write
 
@@ -2975,7 +2979,7 @@ fn test_cdc_overlapped_write_bug() {
 
     // Phase 2: t2 prewrites test_key as a SECONDARY key
     // CRITICAL: Use t1's commit_ts as t2's start_ts to trigger overlapped write!
-    let t2_start_ts = t1_commit_ts;  // This is the key: start_ts == commit_ts of t1!
+    let t2_start_ts = t1_commit_ts; // This is the key: start_ts == commit_ts of t1!
     debug!("t2: start_ts is the same as t1's commit_ts!"; "start_ts" => t2_start_ts);
     // t2: primary_key is different from the test_key
 
@@ -3028,7 +3032,7 @@ fn test_cdc_overlapped_write_bug() {
 
     let mut rollback_req = BatchRollbackRequest::default();
     rollback_req.set_context(ctx.clone());
-    rollback_req.set_keys(vec![test_key.to_vec()].into());  // Only rollback test_key
+    rollback_req.set_keys(vec![test_key.to_vec()].into()); // Only rollback test_key
     rollback_req.set_start_version(t2_start_ts.into_inner());
 
     tikv_client.kv_batch_rollback(&rollback_req).unwrap();
@@ -3070,7 +3074,7 @@ fn test_cdc_overlapped_write_bug() {
         let events_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             receive_event(true).events.to_vec()
         }));
-        
+
         if let Ok(events) = events_result {
             for event in events {
                 if let Some(Event_oneof_event::Entries(entries)) = event.event {
@@ -3166,7 +3170,10 @@ fn test_verify_overlapped_write_skips_cf_write() {
     commit_req.set_start_version(t1_start_ts.into_inner());
     commit_req.set_keys(vec![test_key.to_vec()].into());
     commit_req.set_commit_version(t1_commit_ts.into_inner());
-    suite.get_tikv_client(region_id).kv_commit(&commit_req).unwrap();
+    suite
+        .get_tikv_client(region_id)
+        .kv_commit(&commit_req)
+        .unwrap();
 
     // t2: Prewrite with test_key as SECONDARY (primary is different)
     // CRITICAL: Use t1's commit_ts as t2's start_ts!
@@ -3200,7 +3207,8 @@ fn test_verify_overlapped_write_skips_cf_write() {
 
     // t2: Rolled back test_key (secondary)
     // Expected behavior:
-    //   - get_txn_commit_record finds: commit_ts={t1_commit_ts} == start_ts={t2_start_ts}
+    //   - get_txn_commit_record finds: commit_ts={t1_commit_ts} ==
+    //     start_ts={t2_start_ts}
     //   - Overlapped write detected!
     //   - test_key is NOT primary → protected=false
     //   - make_rollback(protected=false, overlapped_write=Some) returns None

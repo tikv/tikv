@@ -381,9 +381,10 @@ impl Delegate {
                             "region_id" => self.region_id,
                         );
                     }
-                    // There could be stale locks in the lock_tracker due to scenarios such as the overlapped
-                    // write/rollback issue (#18498). We can safely ignore such stale locks, while keeping
-                    // the invariant of monotonically increasing start_ts and generation.
+                    // There could be stale locks in the lock_tracker due to scenarios such as the
+                    // overlapped write/rollback issue (#18498). We can safely
+                    // ignore such stale locks, while keeping the invariant of
+                    // monotonically increasing start_ts and generation.
                     assert!(x.get().ts <= start_ts.ts);
                     assert!(x.get().generation <= start_ts.generation);
                     x.get_mut().ts = start_ts.ts;
