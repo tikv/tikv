@@ -12,11 +12,7 @@ use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
 use tikv::server::DEFAULT_CLUSTER_ID;
-<<<<<<< HEAD
-use tikv_util::{config::ReadableDuration, HandyRwLock};
-=======
-use tikv_util::{HandyRwLock, config::ReadableDuration, debug, error};
->>>>>>> c290fe1eaf (cdc: fixing a TiKV assertion panic that can happen when CDC is enabled (#19025))
+use tikv_util::{config::ReadableDuration, debug, error, HandyRwLock};
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
 use crate::{new_event_feed, new_event_feed_v2, TestSuite, TestSuiteBuilder};
