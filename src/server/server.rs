@@ -165,11 +165,7 @@ where
         debug_thread_pool: Arc<Runtime>,
         health_service: HealthService,
         resource_manager: Option<Arc<ResourceGroupManager>>,
-<<<<<<< HEAD
-=======
-        raft_message_filter: Arc<dyn RaftGrpcMessageFilter>,
         background_worker: Worker,
->>>>>>> e10ed4b366 (raft-client: Implement health check inspection for TiKV stores (#18798))
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
         let stats_pool = if cfg.value().stats_concurrency > 0 {
@@ -687,11 +683,7 @@ mod tests {
             debug_thread_pool,
             HealthService::default(),
             None,
-<<<<<<< HEAD
-=======
-            Arc::new(DefaultGrpcMessageFilter::new(0.2)),
             tikv_util::worker::Worker::new("test-worker"),
->>>>>>> e10ed4b366 (raft-client: Implement health check inspection for TiKV stores (#18798))
         )
         .unwrap();
 

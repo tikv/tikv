@@ -864,9 +864,6 @@ async fn start<S, R>(
                 .report_store_unreachable(back_end.store_id);
             continue;
         } else {
-<<<<<<< HEAD
-            debug!("connection established"; "store_id" => back_end.store_id, "addr" => %addr);
-=======
             let wait_conn_duration = begin.unwrap_or_else(Instant::now).elapsed();
             info!("connection established";
                 "store_id" => back_end.store_id,
@@ -891,7 +888,6 @@ async fn start<S, R>(
                     conn_info.channel = Some(channel.clone());
                 }
             }
->>>>>>> e10ed4b366 (raft-client: Implement health check inspection for TiKV stores (#18798))
         }
 
         let client = TikvClient::new(channel);

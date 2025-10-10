@@ -805,13 +805,7 @@ where
             debug_thread_pool,
             health_service,
             self.resource_manager.clone(),
-<<<<<<< HEAD
-=======
-            Arc::new(DefaultGrpcMessageFilter::new(
-                server_config.value().reject_messages_on_memory_ratio,
-            )),
             self.core.background_worker.clone(),
->>>>>>> e10ed4b366 (raft-client: Implement health check inspection for TiKV stores (#18798))
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
         cfg_controller.register(

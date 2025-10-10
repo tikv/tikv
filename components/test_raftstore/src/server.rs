@@ -78,12 +78,8 @@ use tikv_util::{
     quota_limiter::QuotaLimiter,
     sys::thread::ThreadBuildWrapper,
     time::ThreadReadId,
-<<<<<<< HEAD
-    worker::{Builder as WorkerBuilder, LazyWorker},
+    worker::{Builder as WorkerBuilder, LazyWorker, Worker},
     HandyRwLock,
-=======
-    worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
->>>>>>> e10ed4b366 (raft-client: Implement health check inspection for TiKV stores (#18798))
 };
 use tokio::runtime::Builder as TokioBuilder;
 use txn_types::TxnExtraScheduler;
@@ -558,13 +554,7 @@ impl ServerCluster {
                 debug_thread_pool.clone(),
                 health_service.clone(),
                 resource_manager.clone(),
-<<<<<<< HEAD
-=======
-                Arc::new(DefaultGrpcMessageFilter::new(
-                    server_cfg.value().reject_messages_on_memory_ratio,
-                )),
                 Worker::new("test-background-worker"),
->>>>>>> e10ed4b366 (raft-client: Implement health check inspection for TiKV stores (#18798))
             )
             .unwrap();
             svr.register_service(create_import_sst(import_service.clone()));
