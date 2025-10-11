@@ -27,14 +27,13 @@ pub fn like<C: Collator, CS: Charset>(
                 }
             } else if code == '%' as u32 {
                 // update the backtrace point.
-                next_px = px;
                 px += poff;
+                next_px = px;
+                // Last '%' can match all left characters
+                if next_px >= pattern.len() {
+                    return Ok(Some(true as i64));
+                }
                 next_tx = tx;
-                next_tx += if let Some((_, toff)) = CS::decode_one(&target[tx..]) {
-                    toff
-                } else {
-                    1
-                };
                 continue;
             } else {
                 if code == escape && px + poff < pattern.len() {
@@ -56,8 +55,13 @@ pub fn like<C: Collator, CS: Charset>(
                 }
             }
         }
-        // mismatch and backtrace to last %.
-        if 0 < next_tx && next_tx <= target.len() {
+        // mismatch and backtrace to position after last %.
+        if 0 < next_px && next_tx < target.len() {
+            next_tx += if let Some((_, toff)) = CS::decode_one(&target[next_tx..]) {
+                toff
+            } else {
+                1
+            };
             px = next_px;
             tx = next_tx;
             continue;
