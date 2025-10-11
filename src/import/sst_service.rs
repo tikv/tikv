@@ -1088,7 +1088,6 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let timer = Instant::now_coarse();
         let importer = Arc::clone(&self.importer);
         let limiter = self.limiter.clone();
-        let region_id = req.get_sst().get_region_id();
         let tablets = self.tablets.clone();
         let start = Instant::now();
         let resource_limiter = self.resource_manager.as_ref().and_then(|r| {
@@ -1121,6 +1120,15 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 .into_option()
                 .filter(|c| c.cipher_type != EncryptionMethod::Plaintext);
 
+            let (region_id, basic_meta) = match download_request_dispatcher(&req) {
+                Ok(Some(meta)) => (meta.get_region_id(), Some(meta)),
+                Ok(None) => (req.get_sst().get_region_id(), None),
+                Err(error) => {
+                    let mut resp = DownloadResponse::default();
+                    resp.set_error(error.into());
+                    return crate::send_rpc_response!(Ok(resp), sink, label, timer);
+                }
+            };
             let tablet = match tablets.get(region_id) {
                 Some(tablet) => tablet,
                 None => {
@@ -1134,23 +1142,43 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 }
             };
 
-            let res = with_resource_limiter(
-                importer.download_ext::<E::Local>(
-                    req.get_sst(),
-                    req.get_storage_backend(),
-                    req.get_name(),
-                    req.get_rewrite_rule(),
-                    cipher,
-                    limiter,
-                    tablet.into_owned(),
-                    DownloadExt::default()
-                        .cache_key(req.get_storage_cache_id())
-                        .req_type(req.get_request_type()),
-                ),
-                resource_limiter,
-            );
+            let res = if let Some(basic_meta) = basic_meta {
+                with_resource_limiter(
+                    importer.download_files_ext::<E::Local>(
+                        &basic_meta,
+                        req.get_ssts(),
+                        req.get_storage_backend(),
+                        req.get_rewrite_rule(),
+                        cipher,
+                        limiter,
+                        tablet.into_owned(),
+                        DownloadExt::default()
+                            .cache_key(req.get_storage_cache_id())
+                            .req_type(req.get_request_type()),
+                    ),
+                    resource_limiter,
+                )
+                .await
+            } else {
+                with_resource_limiter(
+                    importer.download_file_ext::<E::Local>(
+                        req.get_sst(),
+                        req.get_storage_backend(),
+                        req.get_name(),
+                        req.get_rewrite_rule(),
+                        cipher,
+                        limiter,
+                        tablet.into_owned(),
+                        DownloadExt::default()
+                            .cache_key(req.get_storage_cache_id())
+                            .req_type(req.get_request_type()),
+                    ),
+                    resource_limiter,
+                )
+                .await
+            };
             let mut resp = DownloadResponse::default();
-            match res.await {
+            match res {
                 Ok(range) => match range {
                     Some(r) => resp.set_range(r),
                     None => resp.set_is_empty(true),
@@ -1540,6 +1568,72 @@ fn write_needs_restore(write: &[u8]) -> bool {
             false
         }
     }
+}
+
+fn download_request_dispatcher(req: &DownloadRequest) -> Result<Option<SstMeta>> {
+    if req.get_ssts().is_empty() {
+        return Ok(None);
+    }
+    let mut basic_meta = req.get_sst().clone();
+    for meta in req.get_ssts().values() {
+        if basic_meta.get_region_id() != meta.get_region_id() {
+            let error = sst_importer::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "region id mismatch in different sst meta, one is {} and another is {}",
+                    basic_meta.get_region_id(),
+                    meta.get_region_id()
+                ),
+            ));
+            return Err(error);
+        }
+        if basic_meta.get_region_epoch() != meta.get_region_epoch() {
+            let error = sst_importer::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "region epoch mismatch in different sst meta, one is {:?} and another is {:?}",
+                    basic_meta.get_region_epoch(),
+                    meta.get_region_epoch()
+                ),
+            ));
+            return Err(error);
+        }
+        if basic_meta.get_cf_name() != meta.get_cf_name() {
+            let error = sst_importer::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "cf mismatch in different sst meta, one is {} and another is {}",
+                    basic_meta.get_cf_name(),
+                    meta.get_cf_name()
+                ),
+            ));
+            return Err(error);
+        }
+        if basic_meta.get_end_key_exclusive() != meta.get_end_key_exclusive() {
+            let error = sst_importer::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "end key exclusive mismatch in different sst meta, one is {} and another is {}",
+                    basic_meta.get_end_key_exclusive(),
+                    meta.get_end_key_exclusive()
+                ),
+            ));
+            return Err(error);
+        }
+        if basic_meta.get_range().get_start() > meta.get_range().get_start() {
+            basic_meta
+                .mut_range()
+                .set_start(meta.get_range().get_start().to_owned());
+        }
+        if !basic_meta.get_range().get_end().is_empty()
+            && basic_meta.get_range().get_end() < meta.get_range().get_end()
+        {
+            basic_meta
+                .mut_range()
+                .set_end(meta.get_range().get_end().to_owned());
+        }
+    }
+    Ok(Some(basic_meta))
 }
 
 #[cfg(test)]
