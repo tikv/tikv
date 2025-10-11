@@ -72,7 +72,8 @@ pub fn find_kth_cpu_time<'a, T: 'a>(
     kth
 }
 
-// Comments
+/// Get two iterators, first is the one whose cpu_time > kth_cpu,
+/// second is the one whose cpu_time <= kth_cpu.
 pub fn get_iter_for_cpu_time<'a, T: 'a>(
     records: &'a HashMap<T, RawRecord>,
     kth_cpu: u32,
@@ -86,7 +87,8 @@ pub fn get_iter_for_cpu_time<'a, T: 'a>(
     )
 }
 
-// Comments
+/// Get two iterators, first is the one whose cpu_time > kth_cpu or network_io > kth_network or logical_io > kth_logical_io,
+/// second is the one whose cpu_time <= kth_cpu and network_io <= kth_network and logical_io <= kth_logical_io.
 pub fn get_iter_for_cpu_network_io<'a, T: 'a>(
     records: &'a HashMap<T, RawRecord>,
     kth_cpu: u32,
@@ -110,6 +112,7 @@ pub fn get_iter_for_cpu_network_io<'a, T: 'a>(
     )
 }
 
+/// Append raw_record to records[key] at timestamp ts.
 fn append_impl<T>(records: &mut HashMap<T, Record>, ts: u64, key: &T, raw_record: &RawRecord)
 where
     T: Clone,
@@ -164,7 +167,9 @@ where
     }
 }
 
-// Comments
+/// Pick top n agged raw records, then append picked topN records and merge unpicked ones to others.
+/// If enable_network_io_collection is true, pick top n records by cpu_time, network_io and logical_io,
+/// otherwise, pick top n records by cpu_time only.
 pub fn handle_records_impl<'a, K, T>(
     records: &'a mut T,
     enable_network_io_collection: bool,
