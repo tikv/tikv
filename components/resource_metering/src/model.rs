@@ -2,6 +2,7 @@
 
 use std::{
     cell::Cell,
+    hash::Hash,
     sync::{
         Arc,
         atomic::{AtomicU32, AtomicU64, Ordering::Relaxed},
@@ -222,6 +223,60 @@ impl Record {
     }
 }
 
+fn append_impl<T>(records: &mut HashMap<T, Record>, ts: u64, key: &T, raw_record: &RawRecord)
+where
+    T: Clone,
+    T: Eq,
+    T: Hash,
+{
+    let record_value = records.get_mut(key);
+    if record_value.is_none() {
+        records.insert(
+            key.clone(),
+            Record {
+                timestamps: vec![ts],
+                cpu_time_list: vec![raw_record.cpu_time],
+                read_keys_list: vec![raw_record.read_keys],
+                write_keys_list: vec![raw_record.write_keys],
+                total_cpu_time: raw_record.cpu_time,
+                logical_read_bytes_list: vec![raw_record.logical_read_bytes],
+                logical_write_bytes_list: vec![raw_record.logical_write_bytes],
+                network_in_bytes_list: vec![raw_record.network_in_bytes],
+                network_out_bytes_list: vec![raw_record.network_out_bytes],
+            },
+        );
+        return;
+    }
+    let record = record_value.unwrap();
+    record.total_cpu_time += raw_record.cpu_time;
+    if *record.timestamps.last().unwrap() == ts {
+        *record.cpu_time_list.last_mut().unwrap() += raw_record.cpu_time;
+        *record.read_keys_list.last_mut().unwrap() += raw_record.read_keys;
+        *record.write_keys_list.last_mut().unwrap() += raw_record.write_keys;
+        *record.logical_read_bytes_list.last_mut().unwrap() += raw_record.logical_read_bytes;
+        *record.logical_write_bytes_list.last_mut().unwrap() += raw_record.logical_write_bytes;
+        *record.network_in_bytes_list.last_mut().unwrap() += raw_record.network_in_bytes;
+        *record.network_out_bytes_list.last_mut().unwrap() += raw_record.network_out_bytes;
+    } else {
+        record.timestamps.push(ts);
+        record.cpu_time_list.push(raw_record.cpu_time);
+        record.read_keys_list.push(raw_record.read_keys);
+        record.write_keys_list.push(raw_record.write_keys);
+        record
+            .logical_read_bytes_list
+            .push(raw_record.logical_read_bytes);
+        record
+            .logical_write_bytes_list
+            .push(raw_record.logical_write_bytes);
+        record
+            .network_in_bytes_list
+            .push(raw_record.network_in_bytes);
+        record
+            .network_out_bytes_list
+            .push(raw_record.network_out_bytes);
+    }
+}
+
 /// Resource statistics map.
 ///
 /// This structure is used for final aggregation in the [Reporter] and also
@@ -323,54 +378,7 @@ impl Records {
             if tag.is_empty() {
                 continue;
             }
-            let record_value = self.records.get_mut(tag);
-            if record_value.is_none() {
-                self.records.insert(
-                    tag.clone(),
-                    Record {
-                        timestamps: vec![ts],
-                        cpu_time_list: vec![raw_record.cpu_time],
-                        read_keys_list: vec![raw_record.read_keys],
-                        write_keys_list: vec![raw_record.write_keys],
-                        total_cpu_time: raw_record.cpu_time,
-                        logical_read_bytes_list: vec![raw_record.logical_read_bytes],
-                        logical_write_bytes_list: vec![raw_record.logical_write_bytes],
-                        network_in_bytes_list: vec![raw_record.network_in_bytes],
-                        network_out_bytes_list: vec![raw_record.network_out_bytes],
-                    },
-                );
-                continue;
-            }
-            let record = record_value.unwrap();
-            record.total_cpu_time += raw_record.cpu_time;
-            if *record.timestamps.last().unwrap() == ts {
-                *record.cpu_time_list.last_mut().unwrap() += raw_record.cpu_time;
-                *record.read_keys_list.last_mut().unwrap() += raw_record.read_keys;
-                *record.write_keys_list.last_mut().unwrap() += raw_record.write_keys;
-                *record.logical_read_bytes_list.last_mut().unwrap() +=
-                    raw_record.logical_read_bytes;
-                *record.logical_write_bytes_list.last_mut().unwrap() +=
-                    raw_record.logical_write_bytes;
-                *record.network_in_bytes_list.last_mut().unwrap() += raw_record.network_in_bytes;
-                *record.network_out_bytes_list.last_mut().unwrap() += raw_record.network_out_bytes;
-            } else {
-                record.timestamps.push(ts);
-                record.cpu_time_list.push(raw_record.cpu_time);
-                record.read_keys_list.push(raw_record.read_keys);
-                record.write_keys_list.push(raw_record.write_keys);
-                record
-                    .logical_read_bytes_list
-                    .push(raw_record.logical_read_bytes);
-                record
-                    .logical_write_bytes_list
-                    .push(raw_record.logical_write_bytes);
-                record
-                    .network_in_bytes_list
-                    .push(raw_record.network_in_bytes);
-                record
-                    .network_out_bytes_list
-                    .push(raw_record.network_out_bytes);
-            }
+            append_impl(&mut self.records, ts, tag, raw_record);
         }
     }
 
@@ -484,54 +492,7 @@ impl RegionRecords {
             if *region_id == 0 {
                 continue;
             }
-            let record_value = self.records.get_mut(region_id);
-            if record_value.is_none() {
-                self.records.insert(
-                    *region_id,
-                    Record {
-                        timestamps: vec![ts],
-                        cpu_time_list: vec![raw_record.cpu_time],
-                        read_keys_list: vec![raw_record.read_keys],
-                        write_keys_list: vec![raw_record.write_keys],
-                        total_cpu_time: raw_record.cpu_time,
-                        logical_read_bytes_list: vec![raw_record.logical_read_bytes],
-                        logical_write_bytes_list: vec![raw_record.logical_write_bytes],
-                        network_in_bytes_list: vec![raw_record.network_in_bytes],
-                        network_out_bytes_list: vec![raw_record.network_out_bytes],
-                    },
-                );
-                continue;
-            }
-            let record = record_value.unwrap();
-            record.total_cpu_time += raw_record.cpu_time;
-            if *record.timestamps.last().unwrap() == ts {
-                *record.cpu_time_list.last_mut().unwrap() += raw_record.cpu_time;
-                *record.read_keys_list.last_mut().unwrap() += raw_record.read_keys;
-                *record.write_keys_list.last_mut().unwrap() += raw_record.write_keys;
-                *record.logical_read_bytes_list.last_mut().unwrap() +=
-                    raw_record.logical_read_bytes;
-                *record.logical_write_bytes_list.last_mut().unwrap() +=
-                    raw_record.logical_write_bytes;
-                *record.network_in_bytes_list.last_mut().unwrap() += raw_record.network_in_bytes;
-                *record.network_out_bytes_list.last_mut().unwrap() += raw_record.network_out_bytes;
-            } else {
-                record.timestamps.push(ts);
-                record.cpu_time_list.push(raw_record.cpu_time);
-                record.read_keys_list.push(raw_record.read_keys);
-                record.write_keys_list.push(raw_record.write_keys);
-                record
-                    .logical_read_bytes_list
-                    .push(raw_record.logical_read_bytes);
-                record
-                    .logical_write_bytes_list
-                    .push(raw_record.logical_write_bytes);
-                record
-                    .network_in_bytes_list
-                    .push(raw_record.network_in_bytes);
-                record
-                    .network_out_bytes_list
-                    .push(raw_record.network_out_bytes);
-            }
+            append_impl(&mut self.records, ts, region_id, raw_record);
         }
     }
 
