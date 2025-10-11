@@ -105,15 +105,10 @@ impl Reporter {
             ts,
             n,
         );
-
-        let agg_map = records.aggregate_by_region();
-        handle_records_impl(
-            &mut self.region_records,
-            self.config.enable_network_io_collection,
-            &agg_map,
-            ts,
-            n,
-        );
+        if self.config.enable_network_io_collection {
+            let agg_map = records.aggregate_by_region();
+            handle_records_impl(&mut self.region_records, true, &agg_map, ts, n);
+        }
     }
 
     fn handle_config_change(&mut self, config: Config) {

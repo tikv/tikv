@@ -87,8 +87,9 @@ pub fn get_iter_for_cpu_time<'a, T: 'a>(
     )
 }
 
-/// Get two iterators, first is the one whose cpu_time > kth_cpu or network_io > kth_network or logical_io > kth_logical_io,
-/// second is the one whose cpu_time <= kth_cpu and network_io <= kth_network and logical_io <= kth_logical_io.
+/// Get two iterators, first is the one whose cpu_time > kth_cpu or network_io >
+/// kth_network or logical_io > kth_logical_io, second is the one whose cpu_time
+/// <= kth_cpu and network_io <= kth_network and logical_io <= kth_logical_io.
 pub fn get_iter_for_cpu_network_io<'a, T: 'a>(
     records: &'a HashMap<T, RawRecord>,
     kth_cpu: u32,
@@ -167,9 +168,10 @@ where
     }
 }
 
-/// Pick top n agged raw records, then append picked topN records and merge unpicked ones to others.
-/// If enable_network_io_collection is true, pick top n records by cpu_time, network_io and logical_io,
-/// otherwise, pick top n records by cpu_time only.
+/// Pick top n agged raw records, then append picked topN records and merge
+/// unpicked ones to others. If enable_network_io_collection is true, pick top n
+/// records by cpu_time, network_io and logical_io, otherwise, pick top n
+/// records by cpu_time only.
 pub fn handle_records_impl<'a, K, T>(
     records: &'a mut T,
     enable_network_io_collection: bool,
@@ -352,9 +354,11 @@ impl Record {
 }
 
 pub trait AppendableRecords<K> {
+    /// Append picked aggregated [RawRecords].
     fn append<'a>(&mut self, ts: u64, iter: impl Iterator<Item = (&'a K, &'a RawRecord)>)
     where
         K: 'a;
+    /// Merge unpicked aggregated [RawRecords].
     fn merge_other<'a>(&mut self, ts: u64, iter: impl Iterator<Item = (&'a K, &'a RawRecord)>)
     where
         K: 'a;
@@ -929,10 +933,7 @@ mod tests {
 
         let agg_map = rs.aggregate_by_extra_tag();
         let kth = find_kth_cpu_time(agg_map.iter(), 2);
-        let (top, evicted) = (
-            agg_map.iter().filter(move |(_, v)| v.cpu_time > kth),
-            agg_map.iter().filter(move |(_, v)| v.cpu_time <= kth),
-        );
+        let (top, evicted) = get_iter_for_cpu_time(&agg_map, kth);
         let others = evicted
             .map(|(_, v)| v)
             .fold(RawRecord::default(), |mut others, r| {
@@ -949,10 +950,7 @@ mod tests {
         assert_eq!(others.logical_write_bytes, 4444);
 
         let kth = find_kth_cpu_time(agg_map.iter(), 0);
-        let (top, evicted) = (
-            agg_map.iter().filter(move |(_, v)| v.cpu_time > kth),
-            agg_map.iter().filter(move |(_, v)| v.cpu_time <= kth),
-        );
+        let (top, evicted) = get_iter_for_cpu_time(&agg_map, kth);
         // let top = top.collect::<Vec<(&Arc<TagInfos>, &RawRecord)>>();
         let others = evicted
             .map(|(_, v)| v)
@@ -1141,7 +1139,7 @@ mod tests {
             },
         );
         records.insert(
-            tag4,
+            tag4.clone(),
             RawRecord {
                 cpu_time: 1110,
                 read_keys: 2220,
@@ -1153,7 +1151,7 @@ mod tests {
             },
         );
         records.insert(
-            tag5,
+            tag5.clone(),
             RawRecord {
                 cpu_time: 4440,
                 read_keys: 5550,
@@ -1165,7 +1163,7 @@ mod tests {
             },
         );
         records.insert(
-            tag6,
+            tag6.clone(),
             RawRecord {
                 cpu_time: 7770,
                 read_keys: 8880,
@@ -1229,5 +1227,314 @@ mod tests {
             444 + 7770
         );
         assert_eq!(agg_map.get(&tag3.extra_attachment).unwrap().cpu_time, 777);
+    }
+
+    #[test]
+    fn test_raw_records_agg_by_region() {
+        let tag1 = Arc::new(TagInfos {
+            store_id: 0,
+            region_id: 1,
+            peer_id: 0,
+            key_ranges: vec![],
+            extra_attachment: Arc::new(b"a".to_vec()),
+        });
+        let tag2 = Arc::new(TagInfos {
+            store_id: 0,
+            region_id: 2,
+            peer_id: 0,
+            key_ranges: vec![],
+            extra_attachment: Arc::new(b"b".to_vec()),
+        });
+        let tag3 = Arc::new(TagInfos {
+            store_id: 0,
+            region_id: 3,
+            peer_id: 0,
+            key_ranges: vec![],
+            extra_attachment: Arc::new(b"c".to_vec()),
+        });
+        // tag4's region_id is equal to tag1's
+        let tag4 = Arc::new(TagInfos {
+            store_id: 1,
+            region_id: 1,
+            peer_id: 0,
+            key_ranges: vec![],
+            extra_attachment: Arc::new(b"a".to_vec()),
+        });
+        // tag5's region_id is equal to tag1's
+        let tag5 = Arc::new(TagInfos {
+            store_id: 2,
+            region_id: 1,
+            peer_id: 0,
+            key_ranges: vec![],
+            extra_attachment: Arc::new(b"a".to_vec()),
+        });
+        // tag6's region_id is equal to tag2's
+        let tag6 = Arc::new(TagInfos {
+            store_id: 3,
+            region_id: 2,
+            peer_id: 0,
+            key_ranges: vec![],
+            extra_attachment: Arc::new(b"b".to_vec()),
+        });
+        let mut records = HashMap::default();
+        records.insert(
+            tag1.clone(),
+            RawRecord {
+                cpu_time: 111,
+                read_keys: 222,
+                write_keys: 333,
+                network_in_bytes: 1111,
+                network_out_bytes: 2222,
+                logical_read_bytes: 3333,
+                logical_write_bytes: 4444,
+            },
+        );
+        records.insert(
+            tag2.clone(),
+            RawRecord {
+                cpu_time: 444,
+                read_keys: 555,
+                write_keys: 666,
+                network_in_bytes: 4444,
+                network_out_bytes: 5555,
+                logical_read_bytes: 6666,
+                logical_write_bytes: 7777,
+            },
+        );
+        records.insert(
+            tag3.clone(),
+            RawRecord {
+                cpu_time: 777,
+                read_keys: 888,
+                write_keys: 999,
+                network_in_bytes: 7777,
+                network_out_bytes: 8888,
+                logical_read_bytes: 9999,
+                logical_write_bytes: 11110,
+            },
+        );
+        records.insert(
+            tag4.clone(),
+            RawRecord {
+                cpu_time: 1110,
+                read_keys: 2220,
+                write_keys: 3330,
+                network_in_bytes: 11110,
+                network_out_bytes: 22220,
+                logical_read_bytes: 33330,
+                logical_write_bytes: 44440,
+            },
+        );
+        records.insert(
+            tag5.clone(),
+            RawRecord {
+                cpu_time: 4440,
+                read_keys: 5550,
+                write_keys: 6660,
+                network_in_bytes: 44440,
+                network_out_bytes: 55550,
+                logical_read_bytes: 66660,
+                logical_write_bytes: 77770,
+            },
+        );
+        records.insert(
+            tag6.clone(),
+            RawRecord {
+                cpu_time: 7770,
+                read_keys: 8880,
+                write_keys: 9990,
+                network_in_bytes: 77770,
+                network_out_bytes: 88880,
+                logical_read_bytes: 99990,
+                logical_write_bytes: 111110,
+            },
+        );
+        let rs = RawRecords {
+            begin_unix_time_secs: 1,
+            duration: Duration::from_secs(1),
+            records,
+        };
+
+        let agg_map = rs.aggregate_by_region();
+        assert_eq!(agg_map.len(), 3);
+        assert_eq!(
+            agg_map.get(&tag1.region_id).unwrap().cpu_time,
+            111 + 1110 + 4440
+        );
+        assert_eq!(
+            agg_map.get(&tag1.region_id).unwrap().read_keys,
+            222 + 2220 + 5550
+        );
+        assert_eq!(
+            agg_map.get(&tag1.region_id).unwrap().write_keys,
+            333 + 3330 + 6660
+        );
+        assert_eq!(
+            agg_map.get(&tag1.region_id).unwrap().network_in_bytes,
+            1111 + 11110 + 44440
+        );
+        assert_eq!(
+            agg_map.get(&tag1.region_id).unwrap().network_out_bytes,
+            2222 + 22220 + 55550
+        );
+        assert_eq!(
+            agg_map.get(&tag1.region_id).unwrap().logical_read_bytes,
+            3333 + 33330 + 66660
+        );
+        assert_eq!(
+            agg_map.get(&tag1.region_id).unwrap().logical_write_bytes,
+            4444 + 44440 + 77770
+        );
+        assert_eq!(agg_map.get(&tag2.region_id).unwrap().cpu_time, 444 + 7770);
+        assert_eq!(agg_map.get(&tag3.region_id).unwrap().cpu_time, 777);
+    }
+
+    #[test]
+    fn test_pick_top_k_cpu_network_io() {
+        let tag1 = Arc::new(TagInfos {
+            store_id: 0,
+            region_id: 0,
+            peer_id: 0,
+            key_ranges: vec![],
+            extra_attachment: Arc::new(b"a".to_vec()),
+        });
+        let tag2 = Arc::new(TagInfos {
+            store_id: 0,
+            region_id: 0,
+            peer_id: 0,
+            key_ranges: vec![],
+            extra_attachment: Arc::new(b"b".to_vec()),
+        });
+        let tag3 = Arc::new(TagInfos {
+            store_id: 0,
+            region_id: 0,
+            peer_id: 0,
+            key_ranges: vec![],
+            extra_attachment: Arc::new(b"c".to_vec()),
+        });
+        let mut records = HashMap::default();
+        // tag1 largest network
+        records.insert(
+            tag1,
+            RawRecord {
+                cpu_time: 111,
+                read_keys: 222,
+                write_keys: 333,
+                network_in_bytes: 9999,
+                network_out_bytes: 8888,
+                logical_read_bytes: 7777,
+                logical_write_bytes: 6666,
+            },
+        );
+        // tag2 largest logical io
+        records.insert(
+            tag2,
+            RawRecord {
+                cpu_time: 444,
+                read_keys: 555,
+                write_keys: 666,
+                network_in_bytes: 7777,
+                network_out_bytes: 6666,
+                logical_read_bytes: 9999,
+                logical_write_bytes: 9999,
+            },
+        );
+        // tag3 largest cpu
+        records.insert(
+            tag3,
+            RawRecord {
+                cpu_time: 777,
+                read_keys: 888,
+                write_keys: 999,
+                network_in_bytes: 1111,
+                network_out_bytes: 2222,
+                logical_read_bytes: 3333,
+                logical_write_bytes: 4444,
+            },
+        );
+        let rs = RawRecords {
+            begin_unix_time_secs: 1,
+            duration: Duration::from_secs(1),
+            records,
+        };
+
+        let agg_map = rs.aggregate_by_extra_tag();
+        let (kth_cpu, kth_network, kth_logical_io) = find_kth_values(agg_map.iter(), 2);
+        let (top, evicted) =
+            get_iter_for_cpu_network_io(&agg_map, kth_cpu, kth_network, kth_logical_io);
+        let others = evicted
+            .map(|(_, v)| v)
+            .fold(RawRecord::default(), |mut others, r| {
+                others.merge(r);
+                others
+            });
+        assert_eq!(top.count(), 3);
+        assert_eq!(others.cpu_time, 0);
+
+        // With unpicked tags
+        let tag4 = Arc::new(TagInfos {
+            store_id: 0,
+            region_id: 0,
+            peer_id: 0,
+            key_ranges: vec![],
+            extra_attachment: Arc::new(b"d".to_vec()),
+        });
+        let tag5 = Arc::new(TagInfos {
+            store_id: 0,
+            region_id: 0,
+            peer_id: 0,
+            key_ranges: vec![],
+            extra_attachment: Arc::new(b"ad".to_vec()),
+        });
+        let mut records = rs.records.clone();
+        // tag4 won't be picked
+        records.insert(
+            tag4,
+            RawRecord {
+                cpu_time: 77,
+                read_keys: 88,
+                write_keys: 99,
+                network_in_bytes: 111,
+                network_out_bytes: 222,
+                logical_read_bytes: 333,
+                logical_write_bytes: 444,
+            },
+        );
+        // tag5 won't be picked
+        records.insert(
+            tag5,
+            RawRecord {
+                cpu_time: 66,
+                read_keys: 55,
+                write_keys: 44,
+                network_in_bytes: 11,
+                network_out_bytes: 22,
+                logical_read_bytes: 33,
+                logical_write_bytes: 44,
+            },
+        );
+        let rs = RawRecords {
+            begin_unix_time_secs: 1,
+            duration: Duration::from_secs(1),
+            records,
+        };
+        let agg_map = rs.aggregate_by_extra_tag();
+        let (kth_cpu, kth_network, kth_logical_io) = find_kth_values(agg_map.iter(), 2);
+        let (top, evicted) =
+            get_iter_for_cpu_network_io(&agg_map, kth_cpu, kth_network, kth_logical_io);
+        let others = evicted
+            .map(|(_, v)| v)
+            .fold(RawRecord::default(), |mut others, r| {
+                others.merge(r);
+                others
+            });
+        assert_eq!(top.count(), 3);
+        assert_eq!(others.cpu_time, 77 + 66);
+        assert_eq!(others.read_keys, 88 + 55);
+        assert_eq!(others.write_keys, 99 + 44);
+        assert_eq!(others.network_in_bytes, 111 + 11);
+        assert_eq!(others.network_out_bytes, 222 + 22);
+        assert_eq!(others.logical_read_bytes, 333 + 33);
+        assert_eq!(others.logical_write_bytes, 444 + 44);
     }
 }
