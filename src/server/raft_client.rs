@@ -1030,7 +1030,7 @@ where
             self_store_id,
             pool.clone(),
             inspect_interval,
-            background_worker.clone(),
+            background_worker,
         );
         RaftClient {
             self_store_id,
@@ -1112,7 +1112,7 @@ where
                     self.future_pool
                         .spawn(start(back_end, conn_id, self.pool.clone()));
                     ConnectionInfo {
-                        queue: queue.clone(),
+                        queue,
                         channel: None,
                     }
                 });

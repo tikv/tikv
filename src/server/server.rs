@@ -228,7 +228,7 @@ where
             store_id,
             conn_builder,
             cfg.value().inspect_network_interval.0,
-            background_worker.clone(),
+            background_worker,
         );
 
         raft_client.start_network_inspection();
