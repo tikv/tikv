@@ -864,20 +864,6 @@ async fn start<S, R>(
                 .report_store_unreachable(back_end.store_id);
             continue;
         } else {
-            let wait_conn_duration = begin.unwrap_or_else(Instant::now).elapsed();
-            info!("connection established";
-                "store_id" => back_end.store_id,
-                "addr" => %addr,
-                "cost" => ?wait_conn_duration,
-                "msg_count" => ?back_end.queue.len(),
-                "try_count" => try_count,
-            );
-            RAFT_CLIENT_WAIT_CONN_READY_DURATION_HISTOGRAM_VEC
-                .with_label_values(&[addr.as_str()])
-                .observe(duration_to_sec(wait_conn_duration));
-            begin = None;
-            try_count = 0;
-
             // Update the channel in ConnectionPool for health check
             {
                 let mut pool_guard = pool.lock().unwrap();
