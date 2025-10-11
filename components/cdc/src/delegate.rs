@@ -460,9 +460,11 @@ impl Delegate {
                     BTreeMapEntry::Vacant(x) => {
                         x.insert(start_ts);
                     }
-                    BTreeMapEntry::Occupied(x) => {
-                        assert_eq!(x.get().ts, start_ts.ts);
+                    BTreeMapEntry::Occupied(mut x) => {
+                        assert!(x.get().ts <= start_ts.ts);
                         assert!(x.get().generation <= start_ts.generation);
+                        x.get_mut().ts = start_ts.ts;
+                        x.get_mut().generation = start_ts.generation;
                     }
                 },
                 PendingLock::Untrack { key, start_ts } => {
