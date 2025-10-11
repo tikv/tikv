@@ -20,7 +20,7 @@ use tikv_util::{
 };
 
 use crate::{
-    Config, DataSink, RawRecords, Records, RegionRecords, find_kth_cpu_time, find_kth_values,
+    Config, DataSink, RawRecords, Records, RegionRecords, handle_records_impl,
     recorder::{CollectorGuard, CollectorRegHandle},
     reporter::{
         collector_impl::CollectorImpl,
@@ -98,87 +98,22 @@ impl Reporter {
         let ts = records.begin_unix_time_secs;
         let n = self.config.max_resource_groups;
         let agg_map = records.aggregate_by_extra_tag();
-        if n >= agg_map.len() {
-            self.records.append(ts, agg_map.iter());
-            return;
-        }
-        let enable_network_io_collection = self.config.enable_network_io_collection;
-        if enable_network_io_collection {
-            let (kth_cpu, kth_network, kth_logical_io) = find_kth_values(agg_map.iter(), n);
-            self.records.append(
-                ts,
-                agg_map.iter().filter(move |(_, v)| {
-                    v.cpu_time > kth_cpu
-                        || v.network_in_bytes + v.network_out_bytes > kth_network
-                        || v.logical_read_bytes + v.logical_write_bytes > kth_logical_io
-                }),
-            );
-            let others = self.records.others.entry(ts).or_default();
-            agg_map
-                .iter()
-                .filter(move |(_, v)| {
-                    v.cpu_time <= kth_cpu
-                        && v.network_in_bytes + v.network_out_bytes <= kth_network
-                        && v.logical_read_bytes + v.logical_write_bytes <= kth_logical_io
-                })
-                .for_each(|(_, v)| {
-                    others.merge(v);
-                });
-        } else {
-            let kth_cpu = find_kth_cpu_time(agg_map.iter(), n);
-            self.records.append(
-                ts,
-                agg_map.iter().filter(move |(_, v)| v.cpu_time > kth_cpu),
-            );
-            let others = self.records.others.entry(ts).or_default();
-            agg_map
-                .iter()
-                .filter(move |(_, v)| v.cpu_time <= kth_cpu)
-                .for_each(|(_, v)| {
-                    others.merge(v);
-                });
-        }
+        handle_records_impl(
+            &mut self.records,
+            self.config.enable_network_io_collection,
+            &agg_map,
+            ts,
+            n,
+        );
 
         let agg_map = records.aggregate_by_region();
-        if n >= agg_map.len() {
-            self.region_records.append(ts, agg_map.iter());
-            return;
-        }
-        if enable_network_io_collection {
-            let (kth_cpu, kth_network, kth_logical_io) = find_kth_values(agg_map.iter(), n);
-            self.region_records.append(
-                ts,
-                agg_map.iter().filter(move |(_, v)| {
-                    v.cpu_time > kth_cpu
-                        || v.network_in_bytes + v.network_out_bytes > kth_network
-                        || v.logical_read_bytes + v.logical_write_bytes > kth_logical_io
-                }),
-            );
-            let others = self.region_records.others.entry(ts).or_default();
-            agg_map
-                .iter()
-                .filter(move |(_, v)| {
-                    v.cpu_time <= kth_cpu
-                        && v.network_in_bytes + v.network_out_bytes <= kth_network
-                        && v.logical_read_bytes + v.logical_write_bytes <= kth_logical_io
-                })
-                .for_each(|(_, v)| {
-                    others.merge(v);
-                });
-        } else {
-            let kth_cpu = find_kth_cpu_time(agg_map.iter(), n);
-            self.region_records.append(
-                ts,
-                agg_map.iter().filter(move |(_, v)| v.cpu_time > kth_cpu),
-            );
-            let others = self.region_records.others.entry(ts).or_default();
-            agg_map
-                .iter()
-                .filter(move |(_, v)| v.cpu_time <= kth_cpu)
-                .for_each(|(_, v)| {
-                    others.merge(v);
-                });
-        }
+        handle_records_impl(
+            &mut self.region_records,
+            self.config.enable_network_io_collection,
+            &agg_map,
+            ts,
+            n,
+        );
     }
 
     fn handle_config_change(&mut self, config: Config) {

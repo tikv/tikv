@@ -72,6 +72,129 @@ pub fn find_kth_cpu_time<'a, T: 'a>(
     kth
 }
 
+// Comments
+pub fn get_iter_for_cpu_time<'a, T: 'a>(
+    records: &'a HashMap<T, RawRecord>,
+    kth_cpu: u32,
+) -> (
+    impl Iterator<Item = (&'a T, &'a RawRecord)>,
+    impl Iterator<Item = (&'a T, &'a RawRecord)>,
+) {
+    (
+        records.iter().filter(move |(_, v)| v.cpu_time > kth_cpu),
+        records.iter().filter(move |(_, v)| v.cpu_time <= kth_cpu),
+    )
+}
+
+// Comments
+pub fn get_iter_for_cpu_network_io<'a, T: 'a>(
+    records: &'a HashMap<T, RawRecord>,
+    kth_cpu: u32,
+    kth_network: u64,
+    kth_logical_io: u64,
+) -> (
+    impl Iterator<Item = (&'a T, &'a RawRecord)>,
+    impl Iterator<Item = (&'a T, &'a RawRecord)>,
+) {
+    (
+        records.iter().filter(move |(_, v)| {
+            v.cpu_time > kth_cpu
+                || v.network_in_bytes + v.network_out_bytes > kth_network
+                || v.logical_read_bytes + v.logical_write_bytes > kth_logical_io
+        }),
+        records.iter().filter(move |(_, v)| {
+            v.cpu_time <= kth_cpu
+                && v.network_in_bytes + v.network_out_bytes <= kth_network
+                && v.logical_read_bytes + v.logical_write_bytes <= kth_logical_io
+        }),
+    )
+}
+
+fn append_impl<T>(records: &mut HashMap<T, Record>, ts: u64, key: &T, raw_record: &RawRecord)
+where
+    T: Clone,
+    T: Eq,
+    T: Hash,
+{
+    let record_value = records.get_mut(key);
+    if record_value.is_none() {
+        records.insert(
+            key.clone(),
+            Record {
+                timestamps: vec![ts],
+                cpu_time_list: vec![raw_record.cpu_time],
+                read_keys_list: vec![raw_record.read_keys],
+                write_keys_list: vec![raw_record.write_keys],
+                total_cpu_time: raw_record.cpu_time,
+                logical_read_bytes_list: vec![raw_record.logical_read_bytes],
+                logical_write_bytes_list: vec![raw_record.logical_write_bytes],
+                network_in_bytes_list: vec![raw_record.network_in_bytes],
+                network_out_bytes_list: vec![raw_record.network_out_bytes],
+            },
+        );
+        return;
+    }
+    let record = record_value.unwrap();
+    record.total_cpu_time += raw_record.cpu_time;
+    if *record.timestamps.last().unwrap() == ts {
+        *record.cpu_time_list.last_mut().unwrap() += raw_record.cpu_time;
+        *record.read_keys_list.last_mut().unwrap() += raw_record.read_keys;
+        *record.write_keys_list.last_mut().unwrap() += raw_record.write_keys;
+        *record.logical_read_bytes_list.last_mut().unwrap() += raw_record.logical_read_bytes;
+        *record.logical_write_bytes_list.last_mut().unwrap() += raw_record.logical_write_bytes;
+        *record.network_in_bytes_list.last_mut().unwrap() += raw_record.network_in_bytes;
+        *record.network_out_bytes_list.last_mut().unwrap() += raw_record.network_out_bytes;
+    } else {
+        record.timestamps.push(ts);
+        record.cpu_time_list.push(raw_record.cpu_time);
+        record.read_keys_list.push(raw_record.read_keys);
+        record.write_keys_list.push(raw_record.write_keys);
+        record
+            .logical_read_bytes_list
+            .push(raw_record.logical_read_bytes);
+        record
+            .logical_write_bytes_list
+            .push(raw_record.logical_write_bytes);
+        record
+            .network_in_bytes_list
+            .push(raw_record.network_in_bytes);
+        record
+            .network_out_bytes_list
+            .push(raw_record.network_out_bytes);
+    }
+}
+
+// Comments
+pub fn handle_records_impl<'a, K, T>(
+    records: &'a mut T,
+    enable_network_io_collection: bool,
+    agg_map: &'a HashMap<K, crate::RawRecord>,
+    ts: u64,
+    n: usize,
+) where
+    T: AppendableRecords<K>,
+    K: Clone,
+    K: Eq,
+    K: Hash,
+{
+    if n >= agg_map.len() {
+        records.append(ts, agg_map.iter());
+        return;
+    }
+    if enable_network_io_collection {
+        let (kth_cpu, kth_network, kth_logical_io) = find_kth_values(agg_map.iter(), n);
+        let (picked_iter, unpicked_iter) =
+            get_iter_for_cpu_network_io(&agg_map, kth_cpu, kth_network, kth_logical_io);
+        records.append(ts, picked_iter);
+        records.merge_other(ts, unpicked_iter);
+    } else {
+        let kth_cpu = find_kth_cpu_time(agg_map.iter(), n);
+        let (picked_iter, unpicked_iter) = get_iter_for_cpu_time(&agg_map, kth_cpu);
+        records.append(ts, picked_iter);
+        records.merge_other(ts, unpicked_iter);
+    }
+}
+
 /// Raw resource statistics record.
 #[derive(Debug, Default, Copy, Clone, PartialEq)]
 pub struct RawRecord {
@@ -223,60 +346,14 @@ impl Record {
     }
 }
 
-fn append_impl<T>(records: &mut HashMap<T, Record>, ts: u64, key: &T, raw_record: &RawRecord)
-where
-    T: Clone,
-    T: Eq,
-    T: Hash,
-{
-    let record_value = records.get_mut(key);
-    if record_value.is_none() {
-        records.insert(
-            key.clone(),
-            Record {
-                timestamps: vec![ts],
-                cpu_time_list: vec![raw_record.cpu_time],
-                read_keys_list: vec![raw_record.read_keys],
-                write_keys_list: vec![raw_record.write_keys],
-                total_cpu_time: raw_record.cpu_time,
-                logical_read_bytes_list: vec![raw_record.logical_read_bytes],
-                logical_write_bytes_list: vec![raw_record.logical_write_bytes],
-                network_in_bytes_list: vec![raw_record.network_in_bytes],
-                network_out_bytes_list: vec![raw_record.network_out_bytes],
-            },
-        );
-        return;
-    }
-    let record = record_value.unwrap();
-    record.total_cpu_time += raw_record.cpu_time;
-    if *record.timestamps.last().unwrap() == ts {
-        *record.cpu_time_list.last_mut().unwrap() += raw_record.cpu_time;
-        *record.read_keys_list.last_mut().unwrap() += raw_record.read_keys;
-        *record.write_keys_list.last_mut().unwrap() += raw_record.write_keys;
-        *record.logical_read_bytes_list.last_mut().unwrap() += raw_record.logical_read_bytes;
-        *record.logical_write_bytes_list.last_mut().unwrap() += raw_record.logical_write_bytes;
-        *record.network_in_bytes_list.last_mut().unwrap() += raw_record.network_in_bytes;
-        *record.network_out_bytes_list.last_mut().unwrap() += raw_record.network_out_bytes;
-    } else {
-        record.timestamps.push(ts);
-        record.cpu_time_list.push(raw_record.cpu_time);
-        record.read_keys_list.push(raw_record.read_keys);
-        record.write_keys_list.push(raw_record.write_keys);
-        record
-            .logical_read_bytes_list
-            .push(raw_record.logical_read_bytes);
-        record
-            .logical_write_bytes_list
-            .push(raw_record.logical_write_bytes);
-        record
-            .network_in_bytes_list
-            .push(raw_record.network_in_bytes);
-        record
-            .network_out_bytes_list
-            .push(raw_record.network_out_bytes);
-    }
+pub trait AppendableRecords<K> {
+    fn append<'a>(&mut self, ts: u64, iter: impl Iterator<Item = (&'a K, &'a RawRecord)>)
+    where
+        K: 'a;
+    fn merge_other<'a>(&mut self, ts: u64, iter: impl Iterator<Item = (&'a K, &'a RawRecord)>)
+    where
+        K: 'a;
 }
-
 /// Resource statistics map.
 ///
 /// This structure is used for final aggregation in the [Reporter] and also
@@ -341,6 +418,55 @@ impl From<Records> for Vec<ResourceUsageRecord> {
         }
 
         res
+    }
+}
+
+impl AppendableRecords<Arc<Vec<u8>>> for Records {
+    fn append<'a>(
+        &mut self,
+        ts: u64,
+        iter: impl Iterator<Item = (&'a Arc<Vec<u8>>, &'a RawRecord)>,
+    ) {
+        // # Before
+        //
+        // ts: 1630464417
+        // records: | tag | cpu time |
+        //          | --- | -------- |
+        //          | t1  |  500     |
+        //          | t2  |  600     |
+        //          | t3  |  200     |
+
+        // # After
+        //
+        // t1: | ts       | ... | 1630464417 |
+        //     | cpu time | ... |    500     |
+        //     | total    | $total + 500     |
+        //
+        // t2: | ts       | ... | 1630464417 |
+        //     | cpu time | ... |    600     |
+        //     | total    | $total + 600     |
+        //
+        // t3: | ts       | ... | 1630464417 |
+        //     | cpu time | ... |    200     |
+        //     | total    | $total + 200     |
+
+        for (tag, raw_record) in iter {
+            if tag.is_empty() {
+                continue;
+            }
+            append_impl(&mut self.records, ts, tag, raw_record);
+        }
+    }
+
+    fn merge_other<'a>(
+        &mut self,
+        ts: u64,
+        iter: impl Iterator<Item = (&'a Arc<Vec<u8>>, &'a RawRecord)>,
+    ) {
+        let others = self.others.entry(ts).or_default();
+        iter.for_each(|(_, v)| {
+            others.merge(v);
+        });
     }
 }
 
@@ -462,9 +588,8 @@ impl From<RegionRecords> for Vec<ResourceUsageRecord> {
     }
 }
 
-impl RegionRecords {
-    /// Append aggregated [RawRecords] into [RegionRecords].
-    pub fn append<'a>(&mut self, ts: u64, iter: impl Iterator<Item = (&'a u64, &'a RawRecord)>) {
+impl AppendableRecords<u64> for RegionRecords {
+    fn append<'a>(&mut self, ts: u64, iter: impl Iterator<Item = (&'a u64, &'a RawRecord)>) {
         // # Before
         //
         // ts: 1630464417
@@ -487,7 +612,6 @@ impl RegionRecords {
         // 3:  | ts       | ... | 1630464417 |
         //     | cpu time | ... |    200     |
         //     | total    | $total + 200     |
-
         for (region_id, raw_record) in iter {
             if *region_id == 0 {
                 continue;
@@ -496,6 +620,15 @@ impl RegionRecords {
         }
     }
 
+    fn merge_other<'a>(&mut self, ts: u64, iter: impl Iterator<Item = (&'a u64, &'a RawRecord)>) {
+        let others = self.others.entry(ts).or_default();
+        iter.for_each(|(_, v)| {
+            others.merge(v);
+        });
+    }
+}
+
+impl RegionRecords {
     /// Clear all internal data.
     pub fn clear(&mut self) {
         self.records.clear();
