@@ -10,8 +10,8 @@ use std::{
 };
 
 use engine_traits::{
-    CF_DEFAULT, CF_WRITE, KvEngine, ManualCompactionOptions, Range, TableProperties,
-    TablePropertiesCollection, UserCollectedProperties,
+    CF_DEFAULT, CF_WRITE, KllDoubleSketch, KvEngine, ManualCompactionOptions, Range,
+    TableProperties, TablePropertiesCollection, UserCollectedProperties,
 };
 use keys::{enc_end_key, enc_start_key};
 use kvproto::metapb::Region;
@@ -211,21 +211,21 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
                         "gc_worker_auto_compaction_candidate_k10_k15",
                         candidates
                             .iter()
-                            .any(|c| c.num_total_entries == 15 && c.num_discardable == 2),
+                            .any(|c| c.num_total_entries == 15 && c.num_discardable == 5),
                         |_| {}
                     );
                     fail_point!(
                         "gc_worker_auto_compaction_candidate_k15_k20",
                         candidates
                             .iter()
-                            .any(|c| c.num_total_entries == 20 && c.num_discardable == 7),
+                            .any(|c| c.num_total_entries == 20 && c.num_discardable == 10),
                         |_| {}
                     );
                     fail_point!(
                         "gc_worker_auto_compaction_candidate_k20_k35",
                         candidates
                             .iter()
-                            .any(|c| c.num_total_entries == 30 && c.num_discardable == 10),
+                            .any(|c| c.num_total_entries == 30 && c.num_discardable == 11),
                         |_| {}
                     );
                     candidates
@@ -552,15 +552,13 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
                     // Estimate discardable TiKV MVCC delete versions
                     num_discardable += self.get_estimated_discardable_entries(
                         mvcc_properties.num_deletes,
-                        mvcc_properties.oldest_delete_ts,
-                        mvcc_properties.newest_delete_ts,
+                        &mvcc_properties.delete_kll_sketch,
                         gc_safe_point,
                     );
                     // Estimate discardable stale MVCC versions
                     num_discardable += self.get_estimated_discardable_entries(
                         mvcc_properties.num_versions - mvcc_properties.num_rows,
-                        mvcc_properties.oldest_stale_version_ts,
-                        mvcc_properties.newest_stale_version_ts,
+                        &mvcc_properties.stale_version_kll_sketch,
                         gc_safe_point,
                     );
                 }
@@ -590,26 +588,13 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
     fn get_estimated_discardable_entries(
         &self,
         num_entries: u64,
-        oldest_ts: TimeStamp,
-        newest_ts: TimeStamp,
+        kll_sketch: &KllDoubleSketch,
         gc_safe_point: u64,
     ) -> u64 {
-        if num_entries == 0 || oldest_ts >= newest_ts {
+        if num_entries == 0 {
             return 0;
         }
-        let oldest_ts = oldest_ts.into_inner();
-        let newest_ts = newest_ts.into_inner();
-
-        if gc_safe_point >= newest_ts {
-            return num_entries;
-        }
-        if gc_safe_point < oldest_ts {
-            return 0;
-        }
-
-        let total_range = newest_ts - oldest_ts;
-        let discardable_range = gc_safe_point - oldest_ts;
-        let portion = (discardable_range as f64) / (total_range as f64);
+        let portion = kll_sketch.get_rank(gc_safe_point as f64);
         (num_entries as f64 * portion).round() as u64
     }
 

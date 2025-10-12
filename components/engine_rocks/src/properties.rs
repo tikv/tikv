@@ -478,6 +478,7 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
 
         self.props.min_ts = cmp::min(self.props.min_ts, ts);
         self.props.max_ts = cmp::max(self.props.max_ts, ts);
+
         if entry_type == DBEntryType::Delete {
             // Empty value for delete entry type, skip following properties.
             return;
@@ -492,8 +493,10 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
             self.last_row.extend(k);
         } else {
             self.row_versions += 1;
-            self.props.oldest_stale_version_ts = cmp::min(self.props.oldest_stale_version_ts, ts);
-            self.props.newest_stale_version_ts = cmp::max(self.props.newest_stale_version_ts, ts);
+            // Add timestamp to stale version KLL sketch for better distribution analysis
+            self.props
+                .stale_version_kll_sketch
+                .update(ts.into_inner() as f64);
         }
         if self.row_versions > self.props.max_row_versions {
             self.props.max_row_versions = self.row_versions;
@@ -530,8 +533,8 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
                     WriteType::Put => self.props.num_puts += 1,
                     WriteType::Delete => {
                         self.props.num_deletes += 1;
-                        self.props.oldest_delete_ts = cmp::min(self.props.oldest_delete_ts, ts);
-                        self.props.newest_delete_ts = cmp::max(self.props.newest_delete_ts, ts);
+                        // Add timestamp to delete KLL sketch for better distribution analysis
+                        self.props.delete_kll_sketch.update(ts.into_inner() as f64);
                     }
                     _ => {}
                 }
@@ -961,6 +964,109 @@ mod tests {
             let entry_size =
                 get_entry_size(&val, DBEntryType::BlobIndex, factor, max_blob_size_seen).unwrap();
             assert_eq!(entry_size, expect_size + val.len() as u64);
+        }
+    }
+
+    #[test]
+    fn test_mvcc_properties_kll_sketches() {
+        // Test stale versions (multiple versions of same key)
+        let stale_cases = [
+            ("ab", 2, WriteType::Put, DBEntryType::Put),
+            ("ab", 5, WriteType::Put, DBEntryType::Put), // This creates a stale version
+            ("cd", 10, WriteType::Put, DBEntryType::Put),
+            ("cd", 15, WriteType::Put, DBEntryType::Put), // This creates a stale version
+        ];
+
+        // Test delete versions
+        let delete_cases = [
+            ("ef", 20, WriteType::Delete, DBEntryType::Put),
+            ("gh", 25, WriteType::Delete, DBEntryType::Put),
+        ];
+
+        let mut collector = MvccPropertiesCollector::new(KeyMode::Txn);
+
+        // Add stale version cases
+        for &(key, ts, write_type, entry_type) in &stale_cases {
+            let ts = ts.into();
+            let k = Key::from_raw(key.as_bytes()).append_ts(ts);
+            let k = keys::data_key(k.as_encoded());
+            let v = Write::new(write_type, ts, None).as_ref().to_bytes();
+            collector.add(&k, &v, entry_type, 0, 0);
+        }
+
+        // Add delete version cases
+        for &(key, ts, write_type, entry_type) in &delete_cases {
+            let ts = ts.into();
+            let k = Key::from_raw(key.as_bytes()).append_ts(ts);
+            let k = keys::data_key(k.as_encoded());
+            let v = Write::new(write_type, ts, None).as_ref().to_bytes();
+            collector.add(&k, &v, entry_type, 0, 0);
+        }
+
+        let result = UserProperties(collector.finish());
+
+        // Test that stale version KLL sketch was encoded
+        let stale_kll_sketch =
+            RocksMvccProperties::decode_kll_sketch(&result, PROP_STALE_VERSION_KLL_SKETCH);
+        assert!(
+            stale_kll_sketch.is_some(),
+            "Stale version KLL sketch should be encoded"
+        );
+
+        let stale_sketch = stale_kll_sketch.unwrap();
+        assert_eq!(
+            stale_sketch.get_n(),
+            2,
+            "Stale version KLL sketch should have 2 entries"
+        );
+
+        // Test that delete KLL sketch was encoded
+        let delete_kll_sketch =
+            RocksMvccProperties::decode_kll_sketch(&result, PROP_DELETE_KLL_SKETCH);
+        assert!(
+            delete_kll_sketch.is_some(),
+            "Delete KLL sketch should be encoded"
+        );
+
+        let delete_sketch = delete_kll_sketch.unwrap();
+        assert_eq!(
+            delete_sketch.get_n(),
+            2,
+            "Delete KLL sketch should have 2 entries"
+        );
+
+        // Test that quantiles make sense for our timestamp distributions
+        let stale_median = stale_sketch.get_quantile(0.5);
+        assert!(
+            (stale_median - 5.0).abs() < f64::EPSILON,
+            "Stale median should be in range"
+        );
+
+        let delete_median = delete_sketch.get_quantile(0.5);
+        assert!(
+            (delete_median - 20.0).abs() < f64::EPSILON,
+            "Delete median should be in range"
+        );
+
+        // Test get_rank method for version timestamps
+        for i in 0..20 {
+            let rank_i = stale_sketch.get_rank(i as f64);
+            match i {
+                0..5 => assert!((rank_i - 0.0).abs() < f64::EPSILON),
+                5..15 => assert!((rank_i - 0.5).abs() < f64::EPSILON),
+                15..20 => assert!((rank_i - 1.0).abs() < f64::EPSILON),
+                _ => {}
+            }
+        }
+
+        for i in 15..30 {
+            let rank_i = delete_sketch.get_rank(i as f64);
+            match i {
+                15..20 => assert!((rank_i - 0.0).abs() < f64::EPSILON),
+                20..25 => assert!((rank_i - 0.5).abs() < f64::EPSILON),
+                25..30 => assert!((rank_i - 1.0).abs() < f64::EPSILON),
+                _ => {}
+            }
         }
     }
 }
