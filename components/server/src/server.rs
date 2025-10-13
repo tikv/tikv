@@ -994,7 +994,7 @@ where
 
         let disk_check_runner = DiskCheckRunner::new(self.core.store_path.clone());
 
-        raft_server
+        node
             .start(
                 engines.engines.clone(),
                 server.transport(),

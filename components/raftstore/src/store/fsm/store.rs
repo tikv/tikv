@@ -38,7 +38,6 @@ use health_controller::{
     HealthController,
 };
 use itertools::Itertools;
-use health_controller::{types::LatencyInspector, HealthController};
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use kvproto::{
     metapb::{self, Region, RegionEpoch},
@@ -97,6 +96,7 @@ use crate::{
             ApplyTaskRes,
         },
         local_metrics::RaftMetrics,
+        local_metrics::IoType as InspectIoType,
         memory::*,
         metrics::*,
         peer_storage,
@@ -108,8 +108,7 @@ use crate::{
             CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
             DiskCheckRunner, DiskCheckTask, GcSnapshotRunner, GcSnapshotTask, PdRunner,
             RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RefreshConfigRunner, RefreshConfigTask,
-            RegionRunner, RegionTask, SnapGenRunner, SnapGenTask, SplitCheckTask,
-            SNAP_GENERATOR_MAX_POOL_SIZE,
+            RegionRunner, RegionTask, SplitCheckTask,
         },
         Callback, CasualMessage, CompactThreshold, GlobalReplicationState, InspectedRaftMessage,
         MergeResultKind, PdTask, PeerMsg, PeerTick, RaftCommand, SignificantMsg, SnapManager,
@@ -558,7 +557,7 @@ where
     pub cleanup_scheduler: Scheduler<CleanupTask>,
     pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
     pub raftlog_fetch_scheduler: Scheduler<ReadTask<EK>>,
-    pub region_scheduler: Scheduler<RegionTask>,
+    pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     pub disk_check_scheduler: Scheduler<DiskCheckTask>,
     pub apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
@@ -1254,9 +1253,8 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     cleanup_scheduler: Scheduler<CleanupTask>,
     raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
     raftlog_fetch_scheduler: Scheduler<ReadTask<EK>>,
-    pub snap_gen_scheduler: Scheduler<SnapGenTask<EK::Snapshot>>,
     disk_check_scheduler: Scheduler<DiskCheckTask>,
-    pub region_scheduler: Scheduler<RegionTask>,
+    pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
     pub importer: Arc<SstImporter>,
@@ -1569,7 +1567,6 @@ where
             cleanup_scheduler: self.cleanup_scheduler.clone(),
             raftlog_gc_scheduler: self.raftlog_gc_scheduler.clone(),
             raftlog_fetch_scheduler: self.raftlog_fetch_scheduler.clone(),
-            snap_gen_scheduler: self.snap_gen_scheduler.clone(),
             disk_check_scheduler: self.disk_check_scheduler.clone(),
             region_scheduler: self.region_scheduler.clone(),
             apply_router: self.apply_router.clone(),
@@ -1773,7 +1770,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             router: self.router.clone(),
             split_check_scheduler,
             region_scheduler,
-            snap_gen_scheduler,
             disk_check_scheduler,
             pd_scheduler: workers.pd_worker.scheduler(),
             consistency_check_scheduler,

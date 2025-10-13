@@ -627,6 +627,7 @@ where
 {
     pub fn new(
         interval: Duration,
+        report_min_resolved_ts_interval: Duration,
         inspect_latency_interval: Duration,
         inspect_kvdb_latency_interval: Duration,
         reporter: T,
