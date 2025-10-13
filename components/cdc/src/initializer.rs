@@ -276,16 +276,12 @@ impl<E: KvEngine> Initializer<E> {
             DownstreamState::Initializing | DownstreamState::Stopped
         ));
 
-<<<<<<< HEAD
         let scan_long_time = AtomicBool::new(false);
 
         defer!(if scan_long_time.load(Ordering::SeqCst) {
             CDC_SCAN_LONG_DURATION_REGIONS.dec();
         });
-
-=======
         let mut stats = InitializeStats::default();
->>>>>>> e36cdcf039 (cdc: filter events with the observed range before load old values (#17656))
         while !done {
             // Add metrics to observe long time incremental scan region count
             if !scan_long_time.load(Ordering::SeqCst)
