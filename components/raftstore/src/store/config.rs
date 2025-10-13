@@ -1588,7 +1588,6 @@ mod tests {
 
         cfg = Config::new();
         cfg.optimize_for(false);
-        cfg.raft_write_wait_duration = ReadableDuration::micros(1001);
         cfg.validate(split_size, true, split_size / 20, false)
             .unwrap_err();
 

@@ -5,14 +5,8 @@ edition = "2021"
 publish = false
 
 [features]
-cloud-storage-dylib = [
-  "ffi-support",
-  "libloading",
-  "protobuf",
-]
-cloud-storage-grpc = [
-  "grpcio",
-]
+cloud-storage-dylib = ["ffi-support", "libloading", "protobuf"]
+cloud-storage-grpc = ["grpcio"]
 failpoints = ["fail/failpoints"]
 
 [dependencies]

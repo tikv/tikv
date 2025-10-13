@@ -7,11 +7,11 @@ publish = false
 
 [features]
 default = [
-  "test-engine-kv-rocksdb",
-  "test-engine-raft-raft-engine",
-  "cloud-aws",
-  "cloud-gcp",
-  "cloud-azure",
+    "test-engine-kv-rocksdb",
+    "test-engine-raft-raft-engine",
+    "cloud-aws",
+    "cloud-gcp",
+    "cloud-azure",
 ]
 tcmalloc = ["tikv/tcmalloc"]
 jemalloc = ["tikv/jemalloc"]
@@ -83,9 +83,9 @@ tokio = { version = "1.5", features = ["rt-multi-thread", "time"] }
 toml = "0.5"
 txn_types = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+signal-hook = "0.3"
+
 [build-dependencies]
 cc = "1.0"
 time = "0.1"
-
-[target.'cfg(unix)'.dependencies]
-signal-hook = "0.3"

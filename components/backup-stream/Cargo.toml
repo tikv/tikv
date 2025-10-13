@@ -13,19 +13,6 @@ backup-stream-debug = []
 
 metastore-etcd = ["tonic", "etcd-client"]
 
-[[test]]
-name = "integration"
-path = "tests/integration/mod.rs"
-test = true
-harness = true
-
-[[test]]
-name = "failpoints"
-path = "tests/failpoints/mod.rs"
-required-features = ["failpoints"]
-test = true
-harness = true
-
 [dependencies]
 async-compression = { version = "0.3.14", features = ["tokio", "zstd"] }
 async-trait = { version = "0.1" }
@@ -99,3 +86,16 @@ test_raftstore = { workspace = true }
 test_util = { workspace = true }
 url = "2"
 walkdir = "2"
+
+[[test]]
+name = "integration"
+path = "tests/integration/mod.rs"
+test = true
+harness = true
+
+[[test]]
+name = "failpoints"
+path = "tests/failpoints/mod.rs"
+required-features = ["failpoints"]
+test = true
+harness = true

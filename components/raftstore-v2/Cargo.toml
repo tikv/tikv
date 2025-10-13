@@ -8,21 +8,15 @@ default = ["testexport", "test-engine-kv-rocksdb", "test-engine-raft-raft-engine
 failpoints = ["raftstore/failpoints"]
 testexport = ["raftstore/testexport"]
 test-engine-kv-rocksdb = [
-  "raftstore/test-engine-kv-rocksdb",
-  "engine_test/test-engine-kv-rocksdb",
+    "raftstore/test-engine-kv-rocksdb",
+    "engine_test/test-engine-kv-rocksdb",
 ]
 test-engine-raft-raft-engine = [
-  "raftstore/test-engine-raft-raft-engine",
-  "engine_test/test-engine-raft-raft-engine",
+    "raftstore/test-engine-raft-raft-engine",
+    "engine_test/test-engine-raft-raft-engine",
 ]
-test-engines-rocksdb = [
-  "raftstore/test-engines-rocksdb",
-  "engine_test/test-engines-rocksdb",
-]
-test-engines-panic = [
-  "raftstore/test-engines-panic",
-  "engine_test/test-engines-panic",
-]
+test-engines-rocksdb = ["raftstore/test-engines-rocksdb", "engine_test/test-engines-rocksdb"]
+test-engines-panic = ["raftstore/test-engines-panic", "engine_test/test-engines-panic"]
 
 cloud-aws = ["raftstore/cloud-aws"]
 cloud-gcp = ["raftstore/cloud-gcp"]
@@ -79,7 +73,12 @@ walkdir = "2"
 [[test]]
 name = "raftstore-v2-failpoints"
 path = "tests/failpoints/mod.rs"
-required-features = ["failpoints", "testexport", "test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
+required-features = [
+    "failpoints",
+    "testexport",
+    "test-engine-kv-rocksdb",
+    "test-engine-raft-raft-engine",
+]
 
 [[test]]
 name = "raftstore-v2-integrations"

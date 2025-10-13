@@ -4,48 +4,16 @@ version = "0.0.1"
 edition = "2021"
 publish = false
 
-[[test]]
-name = "failpoints"
-path = "failpoints/mod.rs"
-required-features = ["failpoints", "testexport"]
-
-[[test]]
-name = "integrations"
-path = "integrations/mod.rs"
-required-features = ["testexport"]
-
-[[bench]]
-name = "raftstore"
-harness = false
-path = "benches/raftstore/mod.rs"
-
-[[bench]]
-name = "coprocessor_executors"
-harness = false
-path = "benches/coprocessor_executors/mod.rs"
-
-[[bench]]
-name = "hierarchy"
-harness = false
-path = "benches/hierarchy/mod.rs"
-
-[[bench]]
-name = "misc"
-path = "benches/misc/mod.rs"
-test = true
-
-[[bench]]
-name = "deadlock_detector"
-harness = false
-path = "benches/deadlock_detector/mod.rs"
-
-[[bench]]
-name = "memory"
-harness = false
-path = "benches/memory/mod.rs"
-
 [features]
-default = ["failpoints", "testexport", "test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure"]
+default = [
+    "failpoints",
+    "testexport",
+    "test-engine-kv-rocksdb",
+    "test-engine-raft-raft-engine",
+    "cloud-aws",
+    "cloud-gcp",
+    "cloud-azure",
+]
 failpoints = ["fail/failpoints", "tikv/failpoints", "pd_client/failpoints"]
 cloud-aws = ["external_storage_export/cloud-aws"]
 cloud-gcp = ["external_storage_export/cloud-gcp"]
@@ -53,18 +21,10 @@ cloud-azure = ["external_storage_export/cloud-azure"]
 testexport = ["raftstore/testexport", "tikv/testexport", "pd_client/testexport"]
 profiling = ["profiler/profiling"]
 
-test-engine-kv-rocksdb = [
-  "raftstore/test-engine-kv-rocksdb"
-]
-test-engine-raft-raft-engine = [
-  "raftstore/test-engine-raft-raft-engine"
-]
-test-engines-rocksdb = [
-  "raftstore/test-engines-rocksdb"
-]
-test-engines-panic = [
-  "raftstore/test-engines-panic"
-]
+test-engine-kv-rocksdb = ["raftstore/test-engine-kv-rocksdb"]
+test-engine-raft-raft-engine = ["raftstore/test-engine-raft-raft-engine"]
+test-engines-rocksdb = ["raftstore/test-engines-rocksdb"]
+test-engines-panic = ["raftstore/test-engines-panic"]
 jemalloc = ["tikv/jemalloc"]
 mimalloc = ["tikv/mimalloc"]
 snmalloc = ["tikv/snmalloc"]
@@ -165,3 +125,43 @@ tokio = { version = "1.5", features = ["rt-multi-thread"] }
 [target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dev-dependencies]
 criterion-perf-events = "0.1"
 perfcnt = "0.7"
+
+[[test]]
+name = "failpoints"
+path = "failpoints/mod.rs"
+required-features = ["failpoints", "testexport"]
+
+[[test]]
+name = "integrations"
+path = "integrations/mod.rs"
+required-features = ["testexport"]
+
+[[bench]]
+name = "raftstore"
+harness = false
+path = "benches/raftstore/mod.rs"
+
+[[bench]]
+name = "coprocessor_executors"
+harness = false
+path = "benches/coprocessor_executors/mod.rs"
+
+[[bench]]
+name = "hierarchy"
+harness = false
+path = "benches/hierarchy/mod.rs"
+
+[[bench]]
+name = "misc"
+path = "benches/misc/mod.rs"
+test = true
+
+[[bench]]
+name = "deadlock_detector"
+harness = false
+path = "benches/deadlock_detector/mod.rs"
+
+[[bench]]
+name = "memory"
+harness = false
+path = "benches/memory/mod.rs"

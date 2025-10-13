@@ -7,18 +7,10 @@ publish = false
 [features]
 default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
 
-test-engine-kv-rocksdb = [
-  "test_raftstore/test-engine-kv-rocksdb"
-]
-test-engine-raft-raft-engine = [
-  "test_raftstore/test-engine-raft-raft-engine"
-]
-test-engines-rocksdb = [
-  "test_raftstore/test-engines-rocksdb",
-]
-test-engines-panic = [
-  "test_raftstore/test-engines-panic",
-]
+test-engine-kv-rocksdb = ["test_raftstore/test-engine-kv-rocksdb"]
+test-engine-raft-raft-engine = ["test_raftstore/test-engine-raft-raft-engine"]
+test-engines-rocksdb = ["test_raftstore/test-engines-rocksdb"]
+test-engines-panic = ["test_raftstore/test-engines-panic"]
 
 [dependencies]
 api_version = { workspace = true }

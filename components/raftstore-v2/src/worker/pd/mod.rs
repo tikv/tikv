@@ -14,9 +14,9 @@ use kvproto::{metapb, pdpb};
 use pd_client::{BucketStat, PdClient};
 use raftstore::store::{
     metrics::STORE_INSPECT_DURATION_HISTOGRAM, util::KeysInfoFormatter, AutoSplitController,
-    Config, FlowStatsReporter, PdStatsMonitor, ReadStats, SplitInfo, StoreStatsReporter,
-    TabletSnapManager, TxnExt, WriteStats, NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
-    RegionReadProgressRegistry,
+    Config, FlowStatsReporter, PdStatsMonitor, ReadStats, RegionReadProgressRegistry, SplitInfo,
+    StoreStatsReporter, TabletSnapManager, TxnExt, WriteStats,
+    NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
 };
 use resource_metering::{Collector, CollectorRegHandle, RawRecords};
 use service::service_manager::GrpcServiceManager;
