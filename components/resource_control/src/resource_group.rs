@@ -277,9 +277,7 @@ impl ResourceGroupManager {
     // resource group.
     #[inline]
     fn enable_priority_limiter(&self) -> bool {
-        // TODO: reenable it once when we fix https://github.com/tikv/tikv/issues/18939
-        // self.get_group_count() > 1
-        false
+        self.get_group_count() > 1
     }
 
     // Always return the background resource limiter if any;
@@ -1264,6 +1262,25 @@ pub(crate) mod tests {
         assert!(Arc::ptr_eq(
             &mgr.get_resource_limiter("test1", "stats", 0).unwrap(),
             &default_limiter
+        ));
+        assert!(Arc::ptr_eq(
+            &mgr.get_resource_limiter("test1", "query", 0).unwrap(),
+            &mgr.priority_limiters[0]
+        ));
+        assert!(Arc::ptr_eq(
+            &mgr.get_resource_limiter("test1", "query", LOW_PRIORITY as u64)
+                .unwrap(),
+            &mgr.priority_limiters[2]
+        ));
+
+        assert!(Arc::ptr_eq(
+            &mgr.get_resource_limiter("default", "query", LOW_PRIORITY as u64)
+                .unwrap(),
+            &mgr.priority_limiters[2]
+        ));
+        assert!(Arc::ptr_eq(
+            &mgr.get_resource_limiter("unknown", "query", 0).unwrap(),
+            &mgr.priority_limiters[1]
         ));
     }
 }

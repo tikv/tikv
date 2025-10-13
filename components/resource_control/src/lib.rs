@@ -29,7 +29,9 @@ pub mod config;
 mod resource_limiter;
 pub use resource_limiter::ResourceLimiter;
 use tikv_util::worker::Worker;
-use worker::{GroupQuotaAdjustWorker, BACKGROUND_LIMIT_ADJUST_DURATION};
+use worker::{
+    GroupQuotaAdjustWorker, PriorityLimiterAdjustWorker, BACKGROUND_LIMIT_ADJUST_DURATION,
+};
 
 mod metrics;
 pub mod worker;
@@ -55,12 +57,10 @@ pub fn start_periodic_tasks(
     // spawn a task to auto adjust background quota limiter and priority quota
     // limiter.
     let mut worker = GroupQuotaAdjustWorker::new(mgr.clone(), io_bandwidth);
-    // We disable the priority worker by default because the current adjust
-    // algorithm is buggy. We may reenable it only we find a better algorithm.
-    // let mut priority_worker = PriorityLimiterAdjustWorker::new(mgr.clone());
+    let mut priority_worker = PriorityLimiterAdjustWorker::new(mgr.clone());
     bg_worker.spawn_interval_task(BACKGROUND_LIMIT_ADJUST_DURATION, move || {
         worker.adjust_quota();
-        // priority_worker.adjust();
+        priority_worker.adjust();
     });
     // spawn a task to periodically upload resource usage statistics to PD.
     bg_worker.spawn_async_task(async move {
