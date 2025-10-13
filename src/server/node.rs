@@ -20,8 +20,8 @@ use raftstore::{
     store::{
         self,
         fsm::{store::StoreMeta, ApplyRouter, RaftBatchSystem, RaftRouter},
-        initial_region, AutoSplitController, Config as StoreConfig, DiskCheckRunner,
-        GlobalReplicationState, PdTask, RefreshConfigTask, SnapManager, SplitCheckTask, Transport,
+        initial_region, AutoSplitController, Config as StoreConfig, GlobalReplicationState, PdTask,
+        RefreshConfigTask, SnapManager, SplitCheckTask, Transport,
     },
 };
 use resource_metering::CollectorRegHandle;
@@ -173,7 +173,6 @@ where
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
-        disk_check_runner: DiskCheckRunner,
         grpc_service_mgr: GrpcServiceManager,
         safe_point: Arc<AtomicU64>,
     ) -> Result<()>
@@ -213,7 +212,6 @@ where
             concurrency_manager,
             collector_reg_handle,
             causal_ts_provider,
-            disk_check_runner,
             grpc_service_mgr,
             safe_point,
         )?;
@@ -463,7 +461,6 @@ where
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
-        disk_check_runner: DiskCheckRunner,
         grpc_service_mgr: GrpcServiceManager,
         safe_point: Arc<AtomicU64>,
     ) -> Result<()>
@@ -499,7 +496,6 @@ where
             collector_reg_handle,
             self.health_service.clone(),
             causal_ts_provider,
-            disk_check_runner,
             grpc_service_mgr,
             safe_point,
         )?;

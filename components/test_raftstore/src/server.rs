@@ -37,9 +37,8 @@ use raftstore::{
     store::{
         fsm::{store::StoreMeta, ApplyRouter, RaftBatchSystem, RaftRouter},
         msg::RaftCmdExtraOpts,
-        AutoSplitController, Callback, CheckLeaderRunner, DiskCheckRunner, LocalReader,
-        RegionSnapshot, SnapManager, SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
-        StoreMetaDelegate,
+        AutoSplitController, Callback, CheckLeaderRunner, LocalReader, RegionSnapshot, SnapManager,
+        SnapManagerBuilder, SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
     },
     Result,
 };
@@ -618,7 +617,6 @@ impl ServerCluster {
             concurrency_manager.clone(),
             collector_reg_handle,
             causal_ts_provider,
-            DiskCheckRunner::dummy(),
             GrpcServiceManager::dummy(),
             Arc::new(AtomicU64::new(0)),
         )?;

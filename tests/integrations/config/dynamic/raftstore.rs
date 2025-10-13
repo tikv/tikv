@@ -15,7 +15,7 @@ use raftstore::{
     store::{
         config::{Config, RaftstoreConfigManager},
         fsm::{StoreMeta, *},
-        AutoSplitController, DiskCheckRunner, SnapManager, StoreMsg, Transport,
+        AutoSplitController, SnapManager, StoreMsg, Transport,
     },
     Result,
 };
@@ -113,7 +113,6 @@ fn start_raftstore(
             CollectorRegHandle::new_for_test(),
             None,
             None,
-            DiskCheckRunner::dummy(),
             GrpcServiceManager::dummy(),
             Arc::new(AtomicU64::new(0)),
         )
