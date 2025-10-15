@@ -173,11 +173,11 @@ pub struct Config {
     #[online_config(skip)]
     pub grpc_min_message_size_to_compress: usize,
     #[online_config(skip)]
-    pub grpc_concurrency: usize,
+    pub grpc_concurrency: Option<usize>,
     #[online_config(skip)]
     pub grpc_concurrent_stream: i32,
     #[online_config(skip)]
-    pub grpc_raft_conn_num: usize,
+    pub grpc_raft_conn_num: Option<usize>,
     pub grpc_memory_pool_quota: ReadableSize,
     #[online_config(skip)]
     pub grpc_stream_initial_window_size: ReadableSize,
@@ -315,9 +315,9 @@ impl Default for Config {
             grpc_compression_type: GrpcCompressionType::None,
             grpc_gzip_compression_level: DEFAULT_GRPC_GZIP_COMPRESSION_LEVEL,
             grpc_min_message_size_to_compress: DEFAULT_GRPC_MIN_MESSAGE_SIZE_TO_COMPRESS,
-            grpc_concurrency: *DEFAULT_GRPC_CONCURRENCY,
+            grpc_concurrency: None, // default with Some(*DEFAULT_GRPC_CONCURRENCY),
             grpc_concurrent_stream: DEFAULT_GRPC_CONCURRENT_STREAM,
-            grpc_raft_conn_num: *DEFAULT_GRPC_RAFT_CONN_NUM,
+            grpc_raft_conn_num: None, // default with Some(*DEFAULT_GRPC_RAFT_CONN_NUM),
             grpc_stream_initial_window_size: ReadableSize(DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE),
             grpc_memory_pool_quota: ReadableSize(DEFAULT_GRPC_MEMORY_POOL_QUOTA),
             // There will be a heartbeat every secs, it's weird a connection will be idle for more
@@ -435,6 +435,13 @@ impl Config {
             if value == 0 {
                 return Err(box_err!("server.{} should not be 0.", label));
             }
+        }
+
+        if self.grpc_concurrency.is_none() {
+            self.grpc_concurrency = Some(*DEFAULT_GRPC_CONCURRENCY);
+        }
+        if self.grpc_raft_conn_num.is_none() {
+            self.grpc_raft_conn_num = Some(*DEFAULT_GRPC_RAFT_CONN_NUM);
         }
 
         if self.end_point_recursion_limit < 100 {
@@ -633,12 +640,14 @@ mod tests {
         let mut cfg = Config::default();
         assert!(cfg.advertise_addr.is_empty());
         assert!(cfg.advertise_status_addr.is_empty());
+        assert!(cfg.grpc_concurrency.is_none());
+        assert!(cfg.grpc_raft_conn_num.is_none());
         cfg.validate().unwrap();
         assert_eq!(cfg.addr, cfg.advertise_addr);
         assert_eq!(cfg.status_addr, cfg.advertise_status_addr);
         let base_num = calculate_cpu_quota_base_num().clamp(1, 4);
-        assert_eq!(cfg.grpc_raft_conn_num, base_num);
-        assert_eq!(cfg.grpc_concurrency, base_num * 3 + 2);
+        assert_eq!(cfg.grpc_raft_conn_num, Some(base_num));
+        assert_eq!(cfg.grpc_concurrency, Some(base_num * 3 + 2));
 
         let mut invalid_cfg = cfg.clone();
         invalid_cfg.concurrent_send_snap_limit = 0;

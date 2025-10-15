@@ -661,7 +661,7 @@ impl ServerCluster {
         cfg.server.addr = format!("{}", addr);
         let trans = server.transport();
         let simulate_trans = SimulateTransport::new(trans);
-        let max_grpc_thread_count = cfg.server.grpc_concurrency;
+        let max_grpc_thread_count = cfg.server.grpc_concurrency.unwrap();
         let server_cfg = Arc::new(VersionTrack::new(cfg.server.clone()));
         self.copr_endpoints.insert(node_id, copr);
 

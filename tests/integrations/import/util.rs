@@ -60,7 +60,7 @@ pub fn open_cluster_and_tikv_import_client(
         config.server.addr = "127.0.0.1:0".to_owned();
         let cleanup_interval = Duration::from_millis(CLEANUP_SST_MILLIS);
         config.raft_store.cleanup_import_sst_interval.0 = cleanup_interval;
-        config.server.grpc_concurrency = 1;
+        config.server.grpc_concurrency = Some(1);
         config.rocksdb.defaultcf.enable_compaction_guard = Some(true);
         config.rocksdb.writecf.enable_compaction_guard = Some(true);
         config
@@ -102,7 +102,7 @@ pub fn open_cluster_and_tikv_import_client_v2(
         config.server.addr = "127.0.0.1:0".to_owned();
         let cleanup_interval = Duration::from_millis(CLEANUP_SST_MILLIS);
         config.raft_store.cleanup_import_sst_interval.0 = cleanup_interval;
-        config.server.grpc_concurrency = 1;
+        config.server.grpc_concurrency = Some(1);
         config
     });
 
@@ -149,7 +149,7 @@ pub fn new_cluster_and_tikv_import_client_tde() -> (
     config.server.addr = "127.0.0.1:0".to_owned();
     let cleanup_interval = Duration::from_millis(CLEANUP_SST_MILLIS);
     config.raft_store.cleanup_import_sst_interval.0 = cleanup_interval;
-    config.server.grpc_concurrency = 1;
+    config.server.grpc_concurrency = Some(1);
     config.security = security;
     let (cluster, ctx, tikv, import) = open_cluster_and_tikv_import_client(Some(config));
     (tmp_dir, cluster, ctx, tikv, import)

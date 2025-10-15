@@ -4354,9 +4354,19 @@ impl TikvConfig {
     /// ```
     #[allow(deprecated)]
     pub fn compatible_adjust(&mut self, last_config: Option<&TikvConfig>) {
-        let (default_raft_store, default_coprocessor) =
-            last_config.map_or((RaftstoreConfig::default(), CopConfig::default()), |cfg| {
+        let (default_server, default_raft_store, default_coprocessor) = last_config.map_or(
+            (
+                ServerConfig::default(),
+                RaftstoreConfig::default(),
+                CopConfig::default(),
+            ),
+            |cfg| {
                 (
+                    ServerConfig {
+                        grpc_concurrency: cfg.server.grpc_concurrency,
+                        grpc_raft_conn_num: cfg.server.grpc_raft_conn_num,
+                        ..Default::default()
+                    },
                     RaftstoreConfig {
                         region_max_size: cfg.raft_store.region_max_size,
                         region_split_size: cfg.raft_store.region_split_size,
@@ -4364,7 +4374,16 @@ impl TikvConfig {
                     },
                     cfg.coprocessor.clone(),
                 )
-            });
+            },
+        );
+        // Inherit grpc configurations from the last configuration file.
+        if self.server.grpc_concurrency.is_none() {
+            self.server.grpc_concurrency = default_server.grpc_concurrency;
+        }
+        if self.server.grpc_raft_conn_num.is_none() {
+            self.server.grpc_raft_conn_num = default_server.grpc_raft_conn_num;
+        }
+        // For regions-size.
         if self.raft_store.region_max_size != default_raft_store.region_max_size {
             warn!(
                 "deprecated configuration, \
@@ -7495,6 +7514,106 @@ mod tests {
         );
 
         assert_eq_debug(&cfg, &default_cfg);
+    }
+
+    #[test]
+    fn test_inherit_server_config() {
+        let mut default_cfg = TikvConfig::default();
+        default_cfg.validate().unwrap();
+
+        // Case 1: start with empty settings
+        let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
+        cfg.compatible_adjust(None);
+        cfg.validate().unwrap();
+        assert_eq!(
+            default_cfg.server.grpc_concurrency,
+            cfg.server.grpc_concurrency
+        );
+        assert_eq!(
+            default_cfg.server.grpc_raft_conn_num,
+            cfg.server.grpc_raft_conn_num
+        );
+
+        // Case 2: persist and load the last tikv configurations, then make the current
+        // config compatible to it. And it manually set `grpc_concurrency` and
+        // `grpc_raft_conn_num` in Server, but the new config does not set
+        // it.
+        cfg.server.grpc_concurrency = Some(64_usize);
+        cfg.server.grpc_raft_conn_num = Some(8_usize);
+        cfg.raft_store.raft_entry_max_size = ReadableSize::kb(16);
+        validate_and_persist_config(&mut cfg, true).unwrap();
+        let mut cfg_from_file = TikvConfig::from_file(
+            &Path::new(&cfg.storage.data_dir).join(LAST_CONFIG_FILE),
+            None,
+        )
+        .unwrap();
+        cfg_from_file.validate().unwrap();
+        assert_eq!(
+            cfg_from_file.server.grpc_concurrency,
+            cfg.server.grpc_concurrency
+        );
+        assert_eq!(
+            cfg_from_file.server.grpc_raft_conn_num,
+            cfg.server.grpc_raft_conn_num
+        );
+        let mut case2_cfg = TikvConfig::default();
+        case2_cfg.compatible_adjust(Some(&cfg_from_file));
+        assert_eq!(
+            cfg_from_file.server.grpc_concurrency,
+            case2_cfg.server.grpc_concurrency
+        );
+        assert_eq!(
+            cfg_from_file.server.grpc_raft_conn_num,
+            case2_cfg.server.grpc_raft_conn_num
+        );
+        // Other configs in RaftstoreConfig should not
+        // inherit the last config.
+        assert_eq!(
+            default_cfg.raft_store.raft_entry_max_size,
+            case2_cfg.raft_store.raft_entry_max_size
+        );
+        assert_ne!(
+            cfg_from_file.raft_store.raft_entry_max_size,
+            case2_cfg.raft_store.raft_entry_max_size
+        );
+
+        // Case 3: manually specify `grpc-conrrency`, then make it compatible to the
+        // last config. The current configuration should inherit the remained configs.
+        let content = r#"
+        [server]
+        grpc-concurrency = 32
+        "#;
+        let mut case3_cfg: TikvConfig = toml::from_str(content).unwrap();
+        case3_cfg.compatible_adjust(None);
+        assert_ne!(
+            default_cfg.server.grpc_concurrency.unwrap(),
+            case3_cfg.server.grpc_concurrency.unwrap()
+        );
+        assert!(case3_cfg.server.grpc_raft_conn_num.is_none());
+        assert_eq!(case3_cfg.server.grpc_concurrency, Some(32));
+        case3_cfg.compatible_adjust(Some(&cfg_from_file));
+        case3_cfg.validate().unwrap();
+        assert_eq!(case3_cfg.server.grpc_concurrency, Some(32));
+        assert_eq!(
+            case3_cfg.server.grpc_raft_conn_num,
+            cfg_from_file.server.grpc_raft_conn_num
+        );
+
+        // Case 4: all settings are manually changed in the current config file,
+        // then make it compatible to the last config. The current
+        // configuration should not be changed.
+        let content = r#"
+        [server]
+        grpc-concurrency = 11
+        grpc-raft-conn-num = 2
+        "#;
+        let mut case4_cfg: TikvConfig = toml::from_str(content).unwrap();
+        case4_cfg.compatible_adjust(Some(&cfg_from_file));
+        assert_eq!(case4_cfg.server.grpc_concurrency, Some(11));
+        assert_eq!(case4_cfg.server.grpc_raft_conn_num, Some(2));
+        case4_cfg.validate().unwrap();
+        assert_eq!(case4_cfg.server.grpc_concurrency, Some(11));
+        assert_eq!(case4_cfg.server.grpc_raft_conn_num, Some(2));
     }
 
     #[test]

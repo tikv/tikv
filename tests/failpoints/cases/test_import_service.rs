@@ -457,7 +457,7 @@ fn test_delete_sst_v2_after_epoch_stale() {
     config.server.addr = "127.0.0.1:0".to_owned();
     let cleanup_interval = Duration::from_millis(10);
     config.raft_store.cleanup_import_sst_interval.0 = cleanup_interval;
-    config.server.grpc_concurrency = 1;
+    config.server.grpc_concurrency = Some(1);
 
     let (mut cluster, ctx, _tikv, import) = open_cluster_and_tikv_import_client_v2(Some(config));
     let temp_dir = Builder::new().prefix("test_ingest_sst").tempdir().unwrap();
@@ -573,7 +573,7 @@ fn test_split_buckets_after_ingest_sst_v2() {
     config.coprocessor.enable_region_bucket = Some(true);
     config.coprocessor.region_bucket_size = ReadableSize(200);
     config.raft_store.region_split_check_diff = Some(ReadableSize(200));
-    config.server.grpc_concurrency = 1;
+    config.server.grpc_concurrency = Some(1);
 
     let (cluster, ctx, _tikv, import) = open_cluster_and_tikv_import_client_v2(Some(config));
     let temp_dir = Builder::new().prefix("test_ingest_sst").tempdir().unwrap();

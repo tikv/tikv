@@ -138,7 +138,7 @@ fn test_ingest_sst() {
     cfg.coprocessor.region_bucket_size = ReadableSize(200);
     cfg.raft_store.region_split_check_diff = Some(ReadableSize(200));
     cfg.server.addr = "127.0.0.1:0".to_owned();
-    cfg.server.grpc_concurrency = 1;
+    cfg.server.grpc_concurrency = Some(1);
     let (cluster, ctx, _tikv, import) = open_cluster_and_tikv_import_client(Some(cfg));
 
     let temp_dir = Builder::new().prefix("test_ingest_sst").tempdir().unwrap();
@@ -195,7 +195,7 @@ fn switch_mode(import: &ImportSstClient, range: Range, mode: SwitchMode) {
 #[test]
 fn test_switch_mode_v2() {
     let mut cfg = TikvConfig::default();
-    cfg.server.grpc_concurrency = 1;
+    cfg.server.grpc_concurrency = Some(1);
     cfg.rocksdb.writecf.disable_auto_compactions = true;
     // `ingest_maybe_slowdown_writes` uses `stop_writes_trigger` to check if ingest
     // may cause a write stall. We also set `slowdown_writes_trigger` because
@@ -692,7 +692,7 @@ fn test_suspend_import() {
 #[test]
 fn test_concurrent_ingest_admission_control() {
     let mut cfg = TikvConfig::default();
-    cfg.server.grpc_concurrency = 1;
+    cfg.server.grpc_concurrency = Some(1);
     // `ingest_maybe_slowdown_writes` uses `stop_writes_trigger` to check if ingest
     // may cause a write stall. We also set `slowdown_writes_trigger` because
     // RocksDB ignores `stop_writes_trigger` when it is smaller than

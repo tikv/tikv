@@ -335,7 +335,7 @@ where
         let props = tikv_util::thread_group::current_properties();
         let env = Arc::new(
             EnvBuilder::new()
-                .cq_count(config.server.grpc_concurrency)
+                .cq_count(config.server.grpc_concurrency.unwrap())
                 .name_prefix(thd_name!(GRPC_THREAD_PREFIX))
                 .after_start(move || {
                     tikv_util::thread_group::set_properties(props.clone());
@@ -1046,7 +1046,7 @@ where
 
         let auto_split_controller = AutoSplitController::new(
             split_config_manager,
-            self.core.config.server.grpc_concurrency,
+            self.core.config.server.grpc_concurrency.unwrap(),
             self.core.config.readpool.unified.max_thread_count,
             unified_read_pool_scale_receiver,
         );

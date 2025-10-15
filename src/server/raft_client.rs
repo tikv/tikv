@@ -1172,7 +1172,7 @@ where
     pub fn send(&mut self, msg: RaftMessage) -> result::Result<(), DiscardReason> {
         let wait_send_start = Instant::now();
         let store_id = msg.get_to_peer().store_id;
-        let grpc_raft_conn_num = self.builder.cfg.value().grpc_raft_conn_num as u64;
+        let grpc_raft_conn_num = self.builder.cfg.value().grpc_raft_conn_num.unwrap() as u64;
         let conn_id = if grpc_raft_conn_num == 1 {
             0
         } else {

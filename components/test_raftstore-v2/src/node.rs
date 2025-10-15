@@ -289,7 +289,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
 
         let auto_split_controller = AutoSplitController::new(
             split_config_manager,
-            cfg.tikv.server.grpc_concurrency,
+            cfg.tikv.server.grpc_concurrency.unwrap(),
             cfg.tikv.readpool.unified.max_thread_count,
             // todo: Is None sufficient for test?
             None,
