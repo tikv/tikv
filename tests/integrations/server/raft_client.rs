@@ -10,14 +10,14 @@ use std::{
     time::Duration,
 };
 
+use ::security::{SecurityConfig, SecurityManager};
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use grpcio::{
     ClientStreamingSink, Environment, RequestStream, RpcContext, RpcStatus, RpcStatusCode, Server,
 };
 use kvproto::{
     metapb,
-    raft_serverpb::{Done, RaftMessage},
-    tikvpb::BatchRaftMessage,
+    raft_serverpb::{BatchRaftMessage, Done, RaftMessage, RaftServer},
 };
 use raft::eraftpb::Entry;
 use raftstore::errors::DiscardReason;
@@ -32,7 +32,7 @@ use tikv_util::{
     worker::{Builder as WorkerBuilder, LazyWorker, Worker},
 };
 
-use super::*;
+use crate::server::raft_server_service;
 
 fn get_raft_client<R, T>(router: R, resolver: T) -> RaftClient<T, R>
 where
@@ -97,7 +97,7 @@ impl MockKvForRaft {
     }
 }
 
-impl Tikv for MockKvForRaft {
+impl RaftServer for MockKvForRaft {
     fn raft(
         &mut self,
         ctx: RpcContext<'_>,
@@ -284,11 +284,11 @@ fn test_batch_size_edge_limit() {
 // is available.
 fn create_mock_server<T>(service: T, min_port: u16, max_port: u16) -> Option<(Server, u16)>
 where
-    T: Tikv + Clone + Send + 'static,
+    T: RaftServer + Clone + Send + 'static,
 {
     for port in min_port..max_port {
-        let kv = service.clone();
-        let mut mock_server = match tikv_service(kv, "localhost", port) {
+        let raft = service.clone();
+        let mut mock_server = match raft_server_service(raft, "localhost", port) {
             Ok(s) => s,
             Err(_) => continue,
         };
@@ -302,9 +302,9 @@ where
 // Return `None` is the port is unavailable.
 fn create_mock_server_on<T>(service: T, port: u16) -> Option<Server>
 where
-    T: Tikv + Clone + Send + 'static,
+    T: RaftServer + Clone + Send + 'static,
 {
-    let mut mock_server = match tikv_service(service, "localhost", port) {
+    let mut mock_server = match raft_server_service(service, "localhost", port) {
         Ok(s) => s,
         Err(_) => return None,
     };

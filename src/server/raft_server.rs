@@ -43,14 +43,15 @@ pub(crate) fn init_store(store: Option<metapb::Store>, cfg: &ServerConfig) -> me
     if store.get_address().is_empty() {
         if cfg.advertise_addr.is_empty() {
             store.set_address(cfg.addr.clone());
-            if store.get_peer_address().is_empty() {
-                store.set_peer_address(cfg.addr.clone());
-            }
         } else {
             store.set_address(cfg.advertise_addr.clone());
-            if store.get_peer_address().is_empty() {
-                store.set_peer_address(cfg.advertise_addr.clone());
-            }
+        }
+    }
+    if store.get_peer_address().is_empty() {
+        if !cfg.advertise_addr.is_empty() {
+            store.set_peer_address(cfg.advertise_addr.clone());
+        } else {
+            store.set_peer_address(cfg.addr.clone());
         }
     }
     if store.get_status_address().is_empty() {

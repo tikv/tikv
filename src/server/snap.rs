@@ -28,10 +28,9 @@ use grpcio::{
 use kvproto::{
     pdpb::SnapshotStat,
     raft_serverpb::{
-        Done, RaftMessage, RaftSnapshotData, SnapshotChunk, TabletSnapshotRequest,
-        TabletSnapshotResponse,
+        Done, RaftMessage, RaftServerClient, RaftSnapshotData, SnapshotChunk,
+        TabletSnapshotRequest, TabletSnapshotResponse,
     },
-    tikvpb::TikvClient,
 };
 use protobuf::Message;
 use raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
@@ -217,7 +216,7 @@ pub fn send_snap(
         .default_grpc_min_message_size_to_compress(cfg.grpc_min_message_size_to_compress);
 
     let channel = security_mgr.connect(cb, addr);
-    let client = TikvClient::new(channel);
+    let client = RaftServerClient::new(channel);
     let (sink, receiver) = client.snapshot()?;
 
     let send_task = async move {

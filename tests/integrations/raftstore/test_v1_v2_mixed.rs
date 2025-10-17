@@ -9,10 +9,7 @@ use engine_rocks::{RocksCfOptions, RocksDbOptions};
 use engine_traits::{Checkpointer, KvEngine, LARGE_CFS, Peekable, SyncMutable};
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
-use kvproto::{
-    raft_serverpb::{RaftMessage, *},
-    tikvpb::TikvClient,
-};
+use kvproto::raft_serverpb::{RaftMessage, RaftServerClient, *};
 use raft::eraftpb::{MessageType, Snapshot};
 use raftstore::{
     errors::Result,
@@ -135,8 +132,9 @@ fn test_v1_receive_snap_from_v2() {
         let limit = Limiter::new(f64::INFINITY);
         let env = Arc::new(Environment::new(1));
         let _ = block_on(async {
-            let client =
-                TikvClient::new(security_mgr.connect(ChannelBuilder::new(env.clone()), &s1_addr));
+            let client = RaftServerClient::new(
+                security_mgr.connect(ChannelBuilder::new(env.clone()), &s1_addr),
+            );
             send_snap_v2(client, snap_mgr.clone(), msg.clone(), limit.clone())
                 .await
                 .unwrap()

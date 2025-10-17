@@ -13,7 +13,10 @@ use std::sync::Arc;
 
 use ::security::{SecurityConfig, SecurityManager};
 use grpcio::*;
-use kvproto::tikvpb::{Tikv, create_tikv};
+use kvproto::{
+    raft_serverpb::{RaftServer, create_raft_server},
+    tikvpb::{Tikv, create_tikv},
+};
 
 fn tikv_service<T>(kv: T, ip: &str, port: u16) -> Result<Server>
 where
@@ -31,6 +34,26 @@ where
     let mut sb = ServerBuilder::new(Arc::clone(&env))
         .channel_args(channel_args)
         .register_service(create_tikv(kv));
+    sb = security_mgr.bind(sb, ip, port);
+    sb.build()
+}
+
+fn raft_server_service<T>(raft: T, ip: &str, port: u16) -> grpcio::Result<Server>
+where
+    T: RaftServer + Clone + Send + 'static,
+{
+    let env = Arc::new(Environment::new(2));
+    let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
+
+    let channel_args = ChannelBuilder::new(Arc::clone(&env))
+        .max_concurrent_stream(2)
+        .max_receive_message_len(-1)
+        .max_send_message_len(-1)
+        .build_args();
+
+    let mut sb = ServerBuilder::new(Arc::clone(&env))
+        .channel_args(channel_args)
+        .register_service(create_raft_server(raft));
     sb = security_mgr.bind(sb, ip, port);
     sb.build()
 }

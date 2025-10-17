@@ -26,6 +26,7 @@ pub use crate::storage::config::Config as StorageConfig;
 
 pub const DEFAULT_CLUSTER_ID: u64 = 0;
 pub const DEFAULT_LISTENING_ADDR: &str = "127.0.0.1:20160";
+pub const RAFT_PORT_OFFSET: u16 = 30;
 const DEFAULT_ADVERTISE_LISTENING_ADDR: &str = "";
 const DEFAULT_STATUS_ADDR: &str = "127.0.0.1:20180";
 
@@ -127,6 +128,11 @@ pub struct Config {
     // Server listening address.
     #[online_config(skip)]
     pub addr: String,
+
+    // Raft server listening address for raft messages.
+    // If not set, raft messages will share the main gRPC port.
+    #[online_config(skip)]
+    pub raft_server_addr: String,
 
     // Server advertise listening address for outer communication.
     // If not set, we will use listening address instead.
@@ -292,6 +298,7 @@ impl Default for Config {
         Config {
             cluster_id: DEFAULT_CLUSTER_ID,
             addr: DEFAULT_LISTENING_ADDR.to_owned(),
+            raft_server_addr: String::new(),
             labels: HashMap::default(),
             advertise_addr: DEFAULT_ADVERTISE_LISTENING_ADDR.to_owned(),
             status_addr: DEFAULT_STATUS_ADDR.to_owned(),
@@ -364,6 +371,22 @@ impl Config {
     /// Validates the configuration and returns an error if it is misconfigured.
     pub fn validate(&mut self) -> Result<()> {
         box_try!(config::check_addr(&self.addr));
+
+        // Auto-derive raft_server_addr from addr if not configured
+        // This ensures each node gets a unique raft port in multi-node deployments
+        if self.raft_server_addr.is_empty() {
+            // Parse addr and add port offset
+            if let Ok(mut socket_addr) = self.addr.parse::<std::net::SocketAddr>() {
+                if let Some(new_port) = socket_addr.port().checked_add(RAFT_PORT_OFFSET) {
+                    socket_addr.set_port(new_port);
+                    self.raft_server_addr = socket_addr.to_string();
+                }
+            }
+        } else {
+            // Validate raft_server_addr if explicitly configured
+            box_try!(config::check_addr(&self.raft_server_addr));
+        }
+
         if !self.advertise_addr.is_empty() {
             box_try!(config::check_addr(&self.advertise_addr));
         } else {
@@ -627,6 +650,8 @@ mod tests {
         cfg.validate().unwrap();
         assert_eq!(cfg.addr, cfg.advertise_addr);
         assert_eq!(cfg.status_addr, cfg.advertise_status_addr);
+        // Test raft_server_addr is derived with port offset
+        assert_eq!(cfg.raft_server_addr, "127.0.0.1:20190"); // 20160 + 30
         let base_num = calculate_cpu_quota_base_num().clamp(1, 4);
         assert_eq!(cfg.grpc_raft_conn_num, base_num);
         assert_eq!(cfg.grpc_concurrency, base_num * 3 + 2);

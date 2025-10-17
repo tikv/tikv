@@ -18,7 +18,7 @@ use grpcio::{
 };
 use grpcio_health::{HealthService, create_health};
 use health_controller::HealthController;
-use kvproto::tikvpb::*;
+use kvproto::{raft_serverpb::create_raft_server, tikvpb::*};
 use raftstore::store::{CheckLeaderTask, SnapManager, TabletSnapManager};
 use resource_control::ResourceGroupManager;
 use security::SecurityManager;
@@ -56,6 +56,7 @@ const LOAD_STATISTICS_SLOTS: usize = 4;
 const LOAD_STATISTICS_INTERVAL: Duration = Duration::from_millis(100);
 const MEMORY_USAGE_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 pub const GRPC_THREAD_PREFIX: &str = "grpc-server";
+pub const GRPC_RAFT_THREAD_PREFIX: &str = "grpc-raft-server";
 pub const READPOOL_NORMAL_THREAD_PREFIX: &str = "store-read-norm";
 pub const STATS_THREAD_PREFIX: &str = "transport-stats";
 
@@ -140,12 +141,16 @@ where
 /// and a snapshot worker.
 pub struct Server<S: StoreAddrResolver + 'static, E: Engine> {
     env: Arc<Environment>,
+    #[allow(dead_code)]
+    raft_env: Arc<Environment>,
     /// A GrpcServer builder or a GrpcServer.
     ///
     /// If the listening port is configured, the server will be started lazily.
     builder_or_server: Option<Either<ServerBuilder, GrpcServer>>,
+    raft_builder_or_server: Option<Either<ServerBuilder, GrpcServer>>,
     grpc_mem_quota: ResourceQuota,
     local_addr: SocketAddr,
+    raft_local_addr: SocketAddr,
     // Transport.
     trans: ServerTransport<E::RaftExtension, S>,
     raft_router: E::RaftExtension,
@@ -216,6 +221,13 @@ where
             Some(cfg.value().health_feedback_interval.0)
         };
 
+        let raft_env = Arc::new(
+            grpcio::EnvBuilder::new()
+                .cq_count(cfg.value().grpc_raft_conn_num)
+                .name_prefix(thd_name!(GRPC_RAFT_THREAD_PREFIX))
+                .build(),
+        );
+
         let proxy = Proxy::new(security_mgr.clone(), &env, Arc::new(cfg.value().clone()));
         let kv_service = KvService::new(
             cfg.value().cluster_id,
@@ -233,7 +245,7 @@ where
             resource_manager,
             health_controller.clone(),
             health_feedback_interval,
-            raft_message_filter,
+            raft_message_filter.clone(),
         );
         let builder_factory = Box::new(BuilderFactory::new(
             kv_service,
@@ -242,13 +254,32 @@ where
             health_controller.get_grpc_health_service(),
         ));
 
+        let raft_service: RaftService<E> = RaftService::new(
+            store_id,
+            raft_ext.clone(),
+            lazy_worker.scheduler(),
+            raft_message_filter,
+        );
+
         let addr = SocketAddr::from_str(&cfg.value().addr)?;
+        let raft_addr = SocketAddr::from_str(&cfg.value().raft_server_addr)?;
         let mem_quota = ResourceQuota::new(Some("ServerMemQuota"))
             .resize_memory(cfg.value().grpc_memory_pool_quota.0 as usize);
-        let builder = Either::Left(builder_factory.create_builder(env.clone())?);
+
+        // Separate raft server
+        let main_builder = builder_factory.create_builder(env.clone())?;
+        let raft_server_builder = ServerBuilder::new(raft_env.clone())
+            .register_service(create_raft_server(raft_service))
+            .register_service(create_health(health_controller.get_grpc_health_service()));
+        let raft_builder = security_mgr.bind(
+            raft_server_builder,
+            &raft_addr.ip().to_string(),
+            raft_addr.port(),
+        );
+        let (builder, raft_builder) = (Either::Left(main_builder), Either::Left(raft_builder));
 
         let conn_builder = ConnectionBuilder::new(
-            env.clone(),
+            raft_env.clone(),
             Arc::clone(cfg),
             security_mgr.clone(),
             resolver,
@@ -269,9 +300,12 @@ where
 
         let svr = Server {
             env: Arc::clone(&env),
+            raft_env,
             builder_or_server: Some(builder),
+            raft_builder_or_server: Some(raft_builder),
             grpc_mem_quota: mem_quota,
             local_addr: addr,
+            raft_local_addr: raft_addr,
             trans,
             raft_router: raft_ext,
             snap_mgr,
@@ -333,7 +367,14 @@ where
         let addr = SocketAddr::new(IpAddr::from_str(host)?, port);
         self.local_addr = addr;
         self.builder_or_server = Some(Either::Right(server));
-        Ok(addr)
+
+        let sb_raft = self.raft_builder_or_server.take().unwrap().left().unwrap();
+        let raft_server = sb_raft.build()?;
+        let (host, port) = raft_server.bind_addrs().next().unwrap();
+        let raft_addr = SocketAddr::new(IpAddr::from_str(host)?, port);
+        self.raft_local_addr = raft_addr;
+        self.raft_builder_or_server = Some(Either::Right(raft_server));
+        Ok(self.local_addr)
     }
 
     fn start_grpc(&mut self) {
@@ -341,6 +382,11 @@ where
         let mut grpc_server = self.builder_or_server.take().unwrap().right().unwrap();
         grpc_server.start();
         self.builder_or_server = Some(Either::Right(grpc_server));
+        // Start raft server
+        info!("listening for raft messages on addr"; "addr" => &self.raft_local_addr);
+        let mut raft_server = self.raft_builder_or_server.take().unwrap().right().unwrap();
+        raft_server.start();
+        self.raft_builder_or_server = Some(Either::Right(raft_server));
         self.health_controller.set_is_serving(true);
     }
 
@@ -424,7 +470,14 @@ where
     /// Stops the TiKV server.
     pub fn stop(&mut self) -> Result<()> {
         self.snap_worker.stop();
+        if let Some(Either::Right(mut server)) = self.raft_builder_or_server.take() {
+            info!("shutting down raft server"; "addr" => %self.raft_local_addr);
+            server.shutdown();
+        }
+
+        // Stop main server
         if let Some(Either::Right(mut server)) = self.builder_or_server.take() {
+            info!("shutting down main server"; "addr" => %self.local_addr);
             server.shutdown();
         }
         if let Some(pool) = self.stats_pool.take() {

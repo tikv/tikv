@@ -20,8 +20,7 @@ use grpcio::{self, ChannelBuilder, Environment};
 use kvproto::{
     kvrpcpb,
     kvrpcpb::KeyRange,
-    raft_serverpb::{ExtraMessageType, RaftMessage, RaftSnapshotData},
-    tikvpb::TikvClient,
+    raft_serverpb::{ExtraMessageType, RaftMessage, RaftServerClient, RaftSnapshotData},
 };
 use pd_client::PdClient;
 use protobuf::Message as M1;
@@ -941,7 +940,7 @@ fn test_v1_apply_snap_from_v2() {
     let env = Arc::new(Environment::new(1));
     let _ = block_on(async {
         let client =
-            TikvClient::new(security_mgr.connect(ChannelBuilder::new(env.clone()), &s1_addr));
+            RaftServerClient::new(security_mgr.connect(ChannelBuilder::new(env.clone()), &s1_addr));
         send_snap_v2(client, tablet_snap_mgr.clone(), msg, limit.clone())
             .await
             .unwrap()
@@ -962,7 +961,7 @@ fn test_v1_apply_snap_from_v2() {
     let (msg, snap_key) = generate_snap(&engine, region_id, &tablet_snap_mgr);
     let _ = block_on(async {
         let client =
-            TikvClient::new(security_mgr.connect(ChannelBuilder::new(env.clone()), &s1_addr));
+            RaftServerClient::new(security_mgr.connect(ChannelBuilder::new(env.clone()), &s1_addr));
         send_snap_v2(client, tablet_snap_mgr, msg, limit)
             .await
             .unwrap()

@@ -324,7 +324,7 @@ where
         let props = tikv_util::thread_group::current_properties();
         let env = Arc::new(
             EnvBuilder::new()
-                .cq_count(config.server.grpc_concurrency)
+                .cq_count(config.server.grpc_concurrency - config.server.grpc_raft_conn_num)
                 .name_prefix(thd_name!(GRPC_THREAD_PREFIX))
                 .after_start(move || {
                     tikv_util::thread_group::set_properties(props.clone());

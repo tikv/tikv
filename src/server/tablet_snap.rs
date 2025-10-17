@@ -46,12 +46,9 @@ use grpcio::{
     self, ChannelBuilder, DuplexSink, Environment, RequestStream, RpcStatus, RpcStatusCode,
     WriteFlags,
 };
-use kvproto::{
-    raft_serverpb::{
-        RaftMessage, RaftSnapshotData, TabletSnapshotFileChunk, TabletSnapshotFileMeta,
-        TabletSnapshotPreview, TabletSnapshotRequest, TabletSnapshotResponse,
-    },
-    tikvpb::TikvClient,
+use kvproto::raft_serverpb::{
+    RaftMessage, RaftServerClient, RaftSnapshotData, TabletSnapshotFileChunk,
+    TabletSnapshotFileMeta, TabletSnapshotPreview, TabletSnapshotRequest, TabletSnapshotResponse,
 };
 use protobuf::Message;
 use raftstore::store::{
@@ -743,7 +740,7 @@ async fn send_missing(
 /// It will first send the normal raft snapshot message and then send the
 /// snapshot file.
 pub async fn send_snap(
-    client: TikvClient,
+    client: RaftServerClient,
     snap_mgr: TabletSnapManager,
     msg: RaftMessage,
     limiter: Limiter,
@@ -964,7 +961,7 @@ where
                         self.cfg.grpc_min_message_size_to_compress,
                     );
                 let channel = security_mgr.connect(channel_builder, &addr);
-                let client = TikvClient::new(channel);
+                let client = RaftServerClient::new(channel);
 
                 self.pool.spawn(async move {
                     let res = send_snap(

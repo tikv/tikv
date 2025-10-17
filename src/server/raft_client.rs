@@ -28,9 +28,8 @@ use grpcio::{
     MetadataBuilder, RpcStatusCode, WriteFlags,
 };
 use grpcio_health::proto::HealthClient;
-use kvproto::{
-    raft_serverpb::{Done, RaftMessage, RaftSnapshotData},
-    tikvpb::{BatchRaftMessage, TikvClient},
+use kvproto::raft_serverpb::{
+    BatchRaftMessage, Done, RaftMessage, RaftServerClient, RaftSnapshotData,
 };
 use protobuf::Message;
 use raft::SnapshotStatus;
@@ -48,6 +47,7 @@ use yatp::{ThreadPool, task::future::TaskCell};
 
 use crate::server::{
     Config, StoreAddrResolver,
+    config::RAFT_PORT_OFFSET,
     load_statistics::ThreadLoadPool,
     metrics::*,
     resolve::{Error as ResolveError, Result as ResolveResult},
@@ -428,6 +428,55 @@ fn grpc_error_is_unimplemented(e: &grpcio::Error) -> bool {
     }
 }
 
+/// Derives the Raft server address from the peer address by adding a port
+/// offset.
+///
+/// This function transforms a peer_address (used for general peer-to-peer RPCs)
+/// into a raft_server_addr (used specifically for Raft messages) by adding
+/// a fixed port offset.
+///
+/// # Arguments
+/// * `peer_addr` - The peer address in format "IP:PORT" (e.g.,
+///   "127.0.0.1:20160")
+///
+/// # Returns
+/// The Raft server address with offset port (e.g., "127.0.0.1:20190")
+/// Falls back to original address if parsing fails or port overflows.
+fn derive_raft_server_addr(peer_addr: &str) -> String {
+    use std::{net::SocketAddr, str::FromStr};
+
+    match SocketAddr::from_str(peer_addr) {
+        Ok(socket_addr) => match socket_addr.port().checked_add(RAFT_PORT_OFFSET) {
+            Some(raft_port) => {
+                let raft_addr = format!("{}:{}", socket_addr.ip(), raft_port);
+                debug!(
+                    "derived raft server address from peer address";
+                    "peer_addr" => peer_addr,
+                    "raft_addr" => &raft_addr,
+                    "offset" => RAFT_PORT_OFFSET
+                );
+                raft_addr
+            }
+            None => {
+                warn!(
+                    "raft port overflow, using peer_address as fallback";
+                    "peer_addr" => peer_addr,
+                    "offset" => RAFT_PORT_OFFSET
+                );
+                peer_addr.to_string()
+            }
+        },
+        Err(e) => {
+            warn!(
+                "failed to parse peer_address, using as is";
+                "peer_addr" => peer_addr,
+                "err" => ?e
+            );
+            peer_addr.to_string()
+        }
+    }
+}
+
 /// Struct tracks the lifetime of a `raft` or `batch_raft` RPC.
 struct AsyncRaftSender<R, M, B> {
     sender: ClientCStreamSender<M>,
@@ -688,6 +737,12 @@ where
                     };
                     transport_on_resolve_fp();
                 }
+
+                // Transform peer_address to raft_server_addr by adding port offset
+                if let Ok(ref mut peer_addr) = addr {
+                    *peer_addr = derive_raft_server_addr(peer_addr);
+                }
+
                 let _ = tx.send(addr);
             }),
         );
@@ -734,7 +789,11 @@ where
         self.builder.security_mgr.connect(cb, addr)
     }
 
-    fn batch_call(&self, client: &TikvClient, addr: String) -> oneshot::Receiver<RaftCallRes> {
+    fn batch_call(
+        &self,
+        client: &RaftServerClient,
+        addr: String,
+    ) -> oneshot::Receiver<RaftCallRes> {
         let (batch_sink, batch_stream) = client.batch_raft_opt(self.get_call_option()).unwrap();
 
         let (tx, rx) = oneshot::channel();
@@ -759,7 +818,7 @@ where
         rx
     }
 
-    fn call(&self, client: &TikvClient, addr: String) -> oneshot::Receiver<RaftCallRes> {
+    fn call(&self, client: &RaftServerClient, addr: String) -> oneshot::Receiver<RaftCallRes> {
         let (sink, stream) = client.raft_opt(self.get_call_option()).unwrap();
 
         let (tx, rx) = oneshot::channel();
@@ -914,7 +973,7 @@ async fn start<S, R>(
             }
         }
 
-        let client = TikvClient::new(channel);
+        let client = RaftServerClient::new(channel);
         let f = back_end.batch_call(&client, addr.clone());
         let mut res = f.await; // block here until the stream call is closed or aborted.
         if res == Ok(RaftCallRes::Fallback) {

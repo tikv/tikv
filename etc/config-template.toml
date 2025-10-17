@@ -181,6 +181,24 @@
 ## Listening address.
 # addr = "127.0.0.1:20160"
 
+## Raft server listening address for raft messages.
+## When raft-server-addr is configured, TiKV will listen on this additional port specifically
+## for Raft consensus messages, separating them from client traffic on the main addr.
+##
+## If not explicitly set, it defaults to empty, but the Raft client will automatically
+## transform peer addresses internally by adding a port offset of 30 when connecting.
+## For example, if addr = "127.0.0.1:20160", Raft connections will use "127.0.0.1:20190".
+##
+## Note: The peer_address registered to PD remains the main service address (addr),
+## ensuring other peer-to-peer RPC (like CheckLeader) work correctly.
+## Only Raft messages (raft, batch_raft, snapshot, tablet_snapshot) use the offset port.
+##
+## This separation helps:
+## - Isolate Raft traffic from client traffic
+## - Prevent compression and other operations from affecting Raft message latency
+## - Avoid port conflicts in single-machine multi-node deployments
+# raft-server-addr = "127.0.0.1:20190"
+
 ## Advertise listening address for client communication.
 ## If not set, `addr` will be used.
 # advertise-addr = ""
