@@ -5,35 +5,15 @@ use engine_traits::Iterator;
 
 /// BinaryIterator provides a multi-way merge iterator that can merge multiple
 /// sorted SST files into a single sorted stream with automatic deduplication.
-///
-/// # Algorithm
-/// Uses a minimum heap to efficiently maintain the iterator with the smallest
-/// current key. Time complexity: O(N log K) where N is total number of
-/// key-value pairs and K is number of SST files.
-///
-/// # Usage
-/// ```rust
-/// let merge_iter = BinaryIterator::new(sst_iterators);
-/// merge_iter.seek_to_first()?;
-/// while merge_iter.valid()? {
-///     let key = merge_iter.key();
-///     let value = merge_iter.value();
-///     // Process key-value pair
-///     merge_iter.next()?;
-/// }
-/// ```
 pub struct BinaryIterator<'a> {
     /// Vector of SST file iterators
     sst_iters: Vec<RocksSstIterator<'a>>,
 
     /// Minimum heap storing indices of sst_iters
-    /// entry_cache[0] always points to the iterator with the smallest current
-    /// key
     entry_cache: Vec<usize>,
 }
 
 impl<'a> BinaryIterator<'a> {
-    /// Creates a new BinaryIterator from a vector of SST iterators
     pub fn new(sst_iters: Vec<RocksSstIterator<'a>>) -> Self {
         let entry_cache = Vec::with_capacity(sst_iters.len());
         BinaryIterator {
@@ -42,7 +22,6 @@ impl<'a> BinaryIterator<'a> {
         }
     }
 
-    /// Get the key of the iterator at heap position `pos`
     fn iter_key(&self, pos: usize) -> &[u8] {
         self.sst_iters[self.entry_cache[pos]].key()
     }
