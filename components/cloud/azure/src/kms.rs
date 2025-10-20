@@ -245,8 +245,7 @@ fn new_key_client<Creds>(url: &str, credentials: Creds) -> Result<KeyClient>
 where
     Creds: TokenCredential + Send + Sync + 'static,
 {
-    KeyClient::new(url, Arc::new(credentials))
-        .map_err(|e| CloudError::Other(Box::new(e)))
+    KeyClient::new(url, Arc::new(credentials)).map_err(|e| CloudError::Other(Box::new(e)))
 }
 
 #[cfg(test)]

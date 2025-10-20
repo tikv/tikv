@@ -521,11 +521,10 @@ impl ContainerBuilder for TokenCredContainerBuilder {
             // release read lock, the thread still have modify lock,
             // so no other threads can write the token_cache, so read lock is not blocked.
             let scopes = vec![&self.token_resource as &str];
-            let token = self
-                .token_cred
-                .get_token(&scopes)
-                .await
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{:?}", &e)))?;
+            let token =
+                self.token_cred.get_token(&scopes).await.map_err(|e| {
+                    io::Error::new(io::ErrorKind::InvalidInput, format!("{:?}", &e))
+                })?;
             let blob_service = BlobServiceClient::new(
                 self.account_name.clone(),
                 StorageCredentials::bearer_token(token.token.secret().to_string()),
