@@ -287,10 +287,6 @@ impl RawRecords {
     pub fn aggregate_by_region(&self) -> HashMap<u64, RawRecord> {
         let mut raw_map: HashMap<u64, RawRecord> = HashMap::default();
         for (tag_info, record) in self.records.iter() {
-            let tag = &tag_info.extra_attachment;
-            if tag.is_empty() {
-                continue;
-            }
             let region_id = tag_info.region_id;
             if region_id == 0 {
                 continue;
