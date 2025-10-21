@@ -14,4 +14,5 @@ engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
 keys = { workspace = true }
 kvproto = { workspace = true }
+txn_types = { workspace = true }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }

@@ -48,6 +48,7 @@ fn test_region_meta_endpoint() {
         std::env::temp_dir(),
         None,
         GrpcServiceManager::dummy(),
+        Default::default(),
     )
     .unwrap();
     let addr = format!("127.0.0.1:{}", test_util::alloc_port());
