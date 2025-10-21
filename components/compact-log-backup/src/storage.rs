@@ -457,7 +457,7 @@ impl MetaFile {
         s: &dyn ExternalStorage,
         blob: BlobObject,
     ) -> Result<(Self, LoadMetaStatistic)> {
-        use protobuf::Message;
+        use protobuf::{Message, CodedInputStream};
 
         let _t = crate::statistic::prom::COMPACT_LOG_BACKUP_READ_META_DURATION.start_coarse_timer();
 
@@ -474,7 +474,7 @@ impl MetaFile {
             || async {
                 let mut content = vec![];
                 let n = read_to_end(s.read(&blob.key), &mut content).await?;
-                std::io::Result::Ok((n, content))
+                std::io::Result::Ok((n, bytes::Bytes::from(content)))
             },
             ext,
         );
@@ -485,7 +485,7 @@ impl MetaFile {
         stat.error_during_downloading += error_cnt2.get();
 
         let mut meta_file = kvproto::brpb2::Metadata::new();
-        meta_file.merge_from_bytes(&content)?;
+        meta_file.merge_from(&mut CodedInputStream::from_carllerche_bytes(&content))?;
         let name = Arc::from(blob.key.into_boxed_str());
         let result = Self::from_file(name, meta_file);
 
