@@ -18,7 +18,7 @@ use futures::{
     stream::StreamExt,
 };
 use keys::origin_key;
-use kvproto::{brpb, brpb2};
+use kvproto::brpb::{self, Metadata};
 use protobuf::{Chars, Message, parse_from_bytes};
 use tempdir::TempDir;
 use tidb_query_datatype::codec::table::encode_row_key;
@@ -381,13 +381,6 @@ pub fn build_many_log_files(
     Ok(md)
 }
 
-pub fn metadata_brpb_to_brpb2(md: &brpb::Metadata) -> brpb2::Metadata {
-    let content = md.write_to_bytes().unwrap();
-    let mut md2 = brpb2::Metadata::new();
-    md2.merge_from_bytes(content.as_slice()).unwrap();
-    md2
-}
-
 /// Simulating a flush: save all log files and generate a metadata by them.
 /// Then save the generated metadata.
 pub async fn save_many_log_files(
@@ -399,7 +392,7 @@ pub async fn save_many_log_files(
     let mut md = build_many_log_files(log_files, &mut w)?;
     let cl = w.len() as u64;
     let v = &mut md.file_groups[0];
-    v.set_path(name.to_string());
+    v.set_path(name.into());
     st.write(name, ACursor::new(w).into(), cl).await?;
     Ok(md)
 }
@@ -435,7 +428,7 @@ pub async fn save_many_logs_files(
         let file_group_name = format!("{name}.{}.log", md.file_groups.len());
         st.write(&file_group_name, ACursor::new(w).into(), cl)
             .await?;
-        file_group.set_path(file_group_name);
+        file_group.set_path(file_group_name.into());
         md.mut_file_groups().push(file_group);
     }
 
@@ -594,7 +587,7 @@ impl TmpStorage {
             result.file_groups.push(meta_result.file_groups[0].clone());
         }
         let content = result.write_to_bytes().unwrap();
-        let mut result2 = brpb2::Metadata::new();
+        let mut result2 = Metadata::new();
         result2.merge_from_bytes(content.as_slice()).unwrap();
         self.storage
             .write(
@@ -642,7 +635,7 @@ impl TmpStorage {
             result.file_groups.push(meta_result.file_groups[0].clone());
         }
         let content = result.write_to_bytes().unwrap();
-        let mut result2 = brpb2::Metadata::new();
+        let mut result2 = Metadata::new();
         result2.merge_from_bytes(content.as_slice()).unwrap();
         self.storage
             .write(

@@ -18,8 +18,7 @@ use futures::{
     stream::{Fuse, FusedStream, StreamExt, TryStreamExt},
 };
 use kvproto::{
-    brpb::{self, FileType, MetaEdit, Migration},
-    brpb2,
+    brpb::{self, FileType, Metadata, MetaEdit, Migration, DataFileInfo},
     metapb::RegionEpoch,
 };
 use prometheus::core::{Atomic, AtomicU64};
@@ -53,14 +52,14 @@ pub struct MetaFile {
     pub max_ts: u64,
 }
 
-impl From<brpb2::Metadata> for MetaFile {
-    fn from(value: brpb2::Metadata) -> Self {
+impl From<Metadata> for MetaFile {
+    fn from(value: Metadata) -> Self {
         Self::from_file(Arc::from(":memory:"), value)
     }
 }
 
 impl MetaFile {
-    pub fn from_file(name: Arc<str>, mut meta_file: brpb2::Metadata) -> Self {
+    pub fn from_file(name: Arc<str>, mut meta_file: Metadata) -> Self {
         let mut log_files = vec![];
         let min_ts = meta_file.min_ts;
         let max_ts = meta_file.max_ts;
@@ -484,7 +483,7 @@ impl MetaFile {
         stat.physical_bytes_loaded += n;
         stat.error_during_downloading += error_cnt2.get();
 
-        let mut meta_file = kvproto::brpb2::Metadata::new();
+        let mut meta_file = Metadata::new();
         meta_file.merge_from(&mut CodedInputStream::from_carllerche_bytes(&content))?;
         let name = Arc::from(blob.key.into_boxed_str());
         let result = Self::from_file(name, meta_file);
@@ -502,7 +501,7 @@ impl MetaFile {
 }
 
 impl LogFile {
-    fn from_pb(host_file: Chars, mut pb_info: brpb2::DataFileInfo) -> Self {
+    fn from_pb(host_file: Chars, mut pb_info: DataFileInfo) -> Self {
         let region_epoches = pb_info.region_epoch.is_empty().not().then(|| {
             pb_info
                 .region_epoch
@@ -553,26 +552,25 @@ impl LogFile {
         pb.range_length = self.id.length;
         pb.length = self.file_real_size;
         pb.region_id = self.region_id as _;
-        pb.cf = self.cf.to_owned();
+        pb.cf = self.cf.into();
         pb.max_ts = self.max_ts;
         pb.min_ts = self.min_ts;
-        pb.set_end_key(self.max_key.to_vec());
-        pb.set_start_key(self.min_key.to_vec());
+        pb.set_end_key(self.max_key);
+        pb.set_start_key(self.min_key);
         pb.is_meta = self.is_meta;
         pb.min_begin_ts_in_default_cf = self.min_start_ts;
         pb.r_type = self.ty;
         pb.crc64xor = self.crc64xor;
         pb.number_of_entries = self.number_of_entries;
-        pb.set_sha256(self.sha256.to_vec());
+        pb.set_sha256(self.sha256);
         pb.resolved_ts = self.resolved_ts;
         pb.table_id = self.table_id;
         pb.compression_type = self.compression;
         pb.set_region_start_key(
             self.region_start_key
-                .map(|v| v.to_vec())
                 .unwrap_or_default(),
         );
-        pb.set_region_end_key(self.region_end_key.map(|v| v.to_vec()).unwrap_or_default());
+        pb.set_region_end_key(self.region_end_key.unwrap_or_default());
         pb.set_region_epoch(
             self.region_epoches
                 .map(|v| v.iter().cloned().map(From::from).collect())

@@ -642,9 +642,9 @@ impl Suite {
                     let mut default_segs = vec![];
                     let mut write_segs = vec![];
                     for file in fg.get_data_files_info() {
-                        let v = if file.cf == "default" || file.cf.is_empty() {
+                        let v = if file.cf == "default".into() || file.cf.is_empty() {
                             Some(&mut default_segs)
-                        } else if file.cf == "write" {
+                        } else if file.cf == "write".into() {
                             Some(&mut write_segs)
                         } else {
                             None
