@@ -283,22 +283,36 @@ impl RawRecords {
         }
         raw_map
     }
-    /// Returns RawRecord aggregated by region id.
-    pub fn aggregate_by_region(&self) -> HashMap<u64, RawRecord> {
-        let mut raw_map: HashMap<u64, RawRecord> = HashMap::default();
+    /// Returns (RawRecord aggregated by extra tag, RawRecord aggregated by
+    /// region id). Merge these two aggregations together to save one
+    /// iteration.
+    pub fn aggregate_by_extra_tag_and_region(
+        &self,
+    ) -> (HashMap<Arc<Vec<u8>>, RawRecord>, HashMap<u64, RawRecord>) {
+        let mut raw_map: HashMap<Arc<Vec<u8>>, RawRecord> = HashMap::default();
+        let mut region_raw_map: HashMap<u64, RawRecord> = HashMap::default();
         for (tag_info, record) in self.records.iter() {
+            let tag = &tag_info.extra_attachment;
+            if !tag.is_empty() {
+                let value = raw_map.get_mut(tag);
+                if value.is_none() {
+                    raw_map.insert(tag.clone(), *record);
+                    continue;
+                }
+                value.unwrap().merge(record);
+            }
+
             let region_id = tag_info.region_id;
-            if region_id == 0 {
-                continue;
+            if region_id != 0 {
+                let value = region_raw_map.get_mut(&region_id);
+                if value.is_none() {
+                    region_raw_map.insert(region_id, *record);
+                    continue;
+                }
+                value.unwrap().merge(record);
             }
-            let value = raw_map.get_mut(&region_id);
-            if value.is_none() {
-                raw_map.insert(region_id, *record);
-                continue;
-            }
-            value.unwrap().merge(record);
         }
-        raw_map
+        (raw_map, region_raw_map)
     }
 }
 
@@ -1351,7 +1365,7 @@ mod tests {
             records,
         };
 
-        let agg_map = rs.aggregate_by_region();
+        let (_, agg_map) = rs.aggregate_by_extra_tag_and_region();
         assert_eq!(agg_map.len(), 3);
         assert_eq!(
             agg_map.get(&tag1.region_id).unwrap().cpu_time,

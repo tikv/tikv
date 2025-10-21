@@ -97,17 +97,13 @@ impl Reporter {
     fn handle_records(&mut self, records: Arc<RawRecords>) {
         let ts = records.begin_unix_time_secs;
         let n = self.config.max_resource_groups;
-        let agg_map = records.aggregate_by_extra_tag();
-        handle_records_impl(
-            &mut self.records,
-            self.config.enable_network_io_collection,
-            &agg_map,
-            ts,
-            n,
-        );
         if self.config.enable_network_io_collection {
-            let agg_map = records.aggregate_by_region();
-            handle_records_impl(&mut self.region_records, true, &agg_map, ts, n);
+            let (agg_tag_map, agg_region_map) = records.aggregate_by_extra_tag_and_region();
+            handle_records_impl(&mut self.records, true, &agg_tag_map, ts, n);
+            handle_records_impl(&mut self.region_records, true, &agg_region_map, ts, n);
+        } else {
+            let agg_map = records.aggregate_by_extra_tag();
+            handle_records_impl(&mut self.records, false, &agg_map, ts, n);
         }
     }
 
