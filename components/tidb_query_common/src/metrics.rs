@@ -24,6 +24,7 @@ make_auto_flush_static_metric! {
         limit,
         batch_index_lookup,
         batch_index_lookup_table_scan,
+        versioned_lookup,
     }
 
     pub struct LocalCoprExecutorCount: LocalIntCounter {
