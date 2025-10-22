@@ -410,8 +410,7 @@ mod test {
         compaction::Subcompaction,
         storage::{Epoch, MetaFile},
         test_util::{
-            CompactInMem, KvGen, LogFileBuilder, TmpStorage, gen_step,
-            save_many_log_files,
+            CompactInMem, KvGen, LogFileBuilder, TmpStorage, gen_step, save_many_log_files,
         },
     };
 

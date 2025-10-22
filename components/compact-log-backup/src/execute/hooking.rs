@@ -48,8 +48,6 @@ pub struct AfterFinishCtx<'a> {
     /// The compaction until ts to skip saving some new metadatas into the
     /// migration.
     pub until_ts: u64,
-    /// The last snapshot backup ts to skip some old metadatas to do compaction.
-    pub last_snapshot_backup_ts: u64,
 }
 
 #[derive(Clone, Copy)]

@@ -69,7 +69,6 @@ pub fn create_compaction(st: StorageBackend) -> Execution {
         cfg: ExecutionConfig {
             from_ts: 0,
             until_ts: u64::MAX,
-            last_snapshot_backup_ts: 0,
             compression: engine_traits::SstCompressionType::Lz4,
             compression_level: None,
             prefetch_buffer_count: 128,
@@ -330,7 +329,7 @@ async fn test_filter_out_small_compactions() {
     let exec = create_compaction(st.backend());
 
     tokio::task::spawn_blocking(move || {
-        exec.run((SkipSmallCompaction::new(27800, 6950), SaveMeta::default()))
+        exec.run((SkipSmallCompaction::new(27800), SaveMeta::default()))
     })
     .await
     .unwrap()

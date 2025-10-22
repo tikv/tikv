@@ -18,7 +18,7 @@ use futures::{
     stream::{Fuse, FusedStream, StreamExt, TryStreamExt},
 };
 use kvproto::{
-    brpb::{self, FileType, Metadata, MetaEdit, Migration, DataFileInfo},
+    brpb::{self, DataFileInfo, FileType, MetaEdit, Metadata, Migration},
     metapb::RegionEpoch,
 };
 use prometheus::core::{Atomic, AtomicU64};
@@ -456,7 +456,7 @@ impl MetaFile {
         s: &dyn ExternalStorage,
         blob: BlobObject,
     ) -> Result<(Self, LoadMetaStatistic)> {
-        use protobuf::{Message, CodedInputStream};
+        use protobuf::{CodedInputStream, Message};
 
         let _t = crate::statistic::prom::COMPACT_LOG_BACKUP_READ_META_DURATION.start_coarse_timer();
 
@@ -566,10 +566,7 @@ impl LogFile {
         pb.resolved_ts = self.resolved_ts;
         pb.table_id = self.table_id;
         pb.compression_type = self.compression;
-        pb.set_region_start_key(
-            self.region_start_key
-                .unwrap_or_default(),
-        );
+        pb.set_region_start_key(self.region_start_key.unwrap_or_default());
         pb.set_region_end_key(self.region_end_key.unwrap_or_default());
         pb.set_region_epoch(
             self.region_epoches

@@ -1311,12 +1311,8 @@ impl StreamTaskHandler {
         }
         let min_ts = min_ts.unwrap_or_default();
         let max_ts = max_ts.unwrap_or_default();
-        merged_file_info.set_path(TempFileKey::file_name(
-            metadata.store_id,
-            min_ts,
-            max_ts,
-            is_meta,
-        ).into());
+        merged_file_info
+            .set_path(TempFileKey::file_name(metadata.store_id, min_ts, max_ts, is_meta).into());
         merged_file_info.set_data_files_info(data_file_infos.into());
         merged_file_info.set_length(stat_length);
         merged_file_info.set_max_ts(max_ts);
@@ -1917,7 +1913,8 @@ impl DataFile {
             self.sha256
                 .finish()
                 .map(|bytes| bytes.to_vec())
-                .map_err(|err| Error::Other(box_err!("openssl hasher failed to init: {}", err)))?.into()
+                .map_err(|err| Error::Other(box_err!("openssl hasher failed to init: {}", err)))?
+                .into(),
         );
         meta.set_crc64xor(self.crc64xor);
         meta.set_number_of_entries(self.number_of_entries as _);

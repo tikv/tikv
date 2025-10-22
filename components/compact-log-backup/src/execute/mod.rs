@@ -16,7 +16,7 @@ use hooking::{
     AfterFinishCtx, BeforeStartCtx, CId, ExecHooks, SubcompactionFinishCtx, SubcompactionStartCtx,
 };
 use kvproto::brpb::StorageBackend;
-use tikv_util::{self, config::ReadableSize};
+use tikv_util::config::ReadableSize;
 use tokio::runtime::Handle;
 use tracing::{Instrument, trace_span};
 use tracing_active_tree::{frame, root};
@@ -51,9 +51,6 @@ pub struct ExecutionConfig {
     pub from_ts: u64,
     /// Filter out files doesn't contain any record with TS less than this.
     pub until_ts: u64,
-    /// Filter out metadatas doesn't contain any record with TS larger than or
-    /// equal to this.
-    pub last_snapshot_backup_ts: u64,
     /// The max count of running prefetch tasks.
     pub prefetch_running_count: u64,
     /// The max count of saved prefetch tasks in the queue.
@@ -259,7 +256,6 @@ impl Execution {
             async_rt: &Handle::current(),
             storage: &storage,
             until_ts: self.cfg.until_ts,
-            last_snapshot_backup_ts: self.cfg.last_snapshot_backup_ts,
         };
         hooks.after_execution_finished(cx).await?;
 
