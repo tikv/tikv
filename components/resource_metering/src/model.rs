@@ -293,9 +293,9 @@ impl RawRecords {
                 let value = raw_map.get_mut(tag);
                 if value.is_none() {
                     raw_map.insert(tag.clone(), *record);
-                    continue;
-                }
+                } else {
                 value.unwrap().merge(record);
+                }
             }
 
             let region_id = tag_info.region_id;
@@ -303,9 +303,9 @@ impl RawRecords {
                 let value = region_raw_map.get_mut(&region_id);
                 if value.is_none() {
                     region_raw_map.insert(region_id, *record);
-                    continue;
+                } else {
+                    value.unwrap().merge(record);
                 }
-                value.unwrap().merge(record);
             }
         }
         (raw_map, region_raw_map)
