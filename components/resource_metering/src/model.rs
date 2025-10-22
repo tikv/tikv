@@ -72,7 +72,7 @@ pub fn find_kth_cpu_time<'a, T: 'a>(
     kth
 }
 
-/// Get two iterators, first is the one whose cpu_time > kth_cpu,
+/// Get two iterators: first is the one whose cpu_time > kth_cpu,
 /// second is the one whose cpu_time <= kth_cpu.
 pub fn get_iter_for_cpu_time<'a, T: 'a>(
     records: &'a HashMap<T, RawRecord>,
