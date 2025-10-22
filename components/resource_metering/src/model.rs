@@ -116,9 +116,7 @@ pub fn get_iter_for_cpu_network_io<'a, T: 'a>(
 /// Append raw_record to records[key] at timestamp ts.
 fn append_impl<T>(records: &mut HashMap<T, Record>, ts: u64, key: &T, raw_record: &RawRecord)
 where
-    T: Clone,
-    T: Eq,
-    T: Hash,
+    T: Clone + Eq + Hash,
 {
     let record_value = records.get_mut(key);
     if record_value.is_none() {
@@ -180,9 +178,7 @@ pub fn handle_records_impl<'a, K, T>(
     n: usize,
 ) where
     T: AppendableRecords<K>,
-    K: Clone,
-    K: Eq,
-    K: Hash,
+    K: Clone + Eq + Hash,
 {
     if n >= agg_map.len() {
         records.append(ts, agg_map.iter());
@@ -191,12 +187,12 @@ pub fn handle_records_impl<'a, K, T>(
     if enable_network_io_collection {
         let (kth_cpu, kth_network, kth_logical_io) = find_kth_values(agg_map.iter(), n);
         let (picked_iter, unpicked_iter) =
-            get_iter_for_cpu_network_io(&agg_map, kth_cpu, kth_network, kth_logical_io);
+            get_iter_for_cpu_network_io(agg_map, kth_cpu, kth_network, kth_logical_io);
         records.append(ts, picked_iter);
         records.merge_other(ts, unpicked_iter);
     } else {
         let kth_cpu = find_kth_cpu_time(agg_map.iter(), n);
-        let (picked_iter, unpicked_iter) = get_iter_for_cpu_time(&agg_map, kth_cpu);
+        let (picked_iter, unpicked_iter) = get_iter_for_cpu_time(agg_map, kth_cpu);
         records.append(ts, picked_iter);
         records.merge_other(ts, unpicked_iter);
     }
