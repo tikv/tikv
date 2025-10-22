@@ -195,11 +195,9 @@ impl<E: Engine> Endpoint<E> {
             "unsupported tp (failpoint)"
         )));
 
-        let range_versions = if !req.get_range_versions().is_empty() {
-            Some(req.take_range_versions())
-        } else {
-            None
-        };
+        if !req.get_range_versions().is_empty() {
+            return self.parse_request_for_versioned_lookup::<F>(req, peer, is_streaming);
+        }
 
         let (context, data, ranges, mut start_ts) = (
             req.take_context(),
@@ -284,7 +282,7 @@ impl<E: Engine> Endpoint<E> {
                     dag::DagHandlerBuilder::<_, _, F>::new(
                         dag,
                         req_ctx.ranges.clone(),
-                        range_versions,
+                        None,
                         store,
                         extra_store_accessor,
                         req_ctx.deadline,
@@ -390,6 +388,101 @@ impl<E: Engine> Endpoint<E> {
             }
             tp => return Err(box_err!("unsupported tp {}", tp)),
         };
+
+        Ok(ParseCopRequestResult {
+            req_tag,
+            req_ctx,
+            handler_builder,
+        })
+    }
+
+    fn parse_request_for_versioned_lookup<F: KvFormat>(
+        &self,
+        mut req: coppb::Request,
+        peer: Option<String>,
+        is_streaming: bool,
+    ) -> Result<ParseCopRequestResult<E::IMSnap>> {
+        let range_versions = Some(req.take_range_versions());
+        let (context, data, ranges, mut start_ts) = (
+            req.take_context(),
+            req.take_data(),
+            req.take_ranges().to_vec(),
+            req.get_start_ts(),
+        );
+        let cache_match_version = None;
+        let mut input = CodedInputStream::from_bytes(&data);
+        input.set_recursion_limit(self.recursion_limit);
+
+        let req_ctx: ReqContext;
+        let handler_builder: RequestHandlerBuilder<E::IMSnap>;
+        let req_tag = ReqTag::select;
+        if req.get_tp() != REQ_TYPE_DAG {
+            return Err(box_err!("versioned lookup unsupported tp {}", req.get_tp()));
+        }
+        let mut dag = DagRequest::default();
+        box_try!(dag.merge_from(&mut input));
+        let mut is_desc_scan = false;
+        if let Some(scan) = dag.get_executors().iter().next() {
+            if scan.get_tp() == ExecType::TypeTableScan {
+                is_desc_scan = scan.get_tbl_scan().get_desc();
+            } else {
+                return Err(box_err!("versioned lookup unsupported index_scan"));
+            }
+        }
+        if start_ts == 0 {
+            start_ts = dag.get_start_ts_fallback();
+        }
+        req_ctx = ReqContext::new(
+            context,
+            ranges,
+            self.max_handle_duration,
+            peer,
+            Some(is_desc_scan),
+            start_ts.into(),
+            cache_match_version,
+            self.perf_level,
+            false,
+        );
+        with_tls_tracker(|tracker| {
+            tracker.req_info.request_type = RequestType::CoprocessorDag;
+            tracker.req_info.start_ts = start_ts;
+        });
+
+        let batch_row_limit = self.get_batch_row_limit(is_streaming);
+        let quota_limiter = self.quota_limiter.clone();
+        handler_builder = Box::new(move |snap, req_ctx| {
+            let data_version = snap.ext().get_data_version();
+            let store = SnapshotStore::new(
+                snap,
+                start_ts.into(),
+                req_ctx.context.get_isolation_level(),
+                !req_ctx.context.get_not_fill_cache(),
+                req_ctx.bypass_locks.clone(),
+                req_ctx.access_locks.clone(),
+                req.get_is_cache_enabled(),
+            );
+            let paging_size = match req.get_paging_size() {
+                0 => None,
+                i => Some(i),
+            };
+
+            let extra_store_accessor: Option<ExtraSnapStoreAccessor<E>> = None;
+            dag::DagHandlerBuilder::<_, _, F>::new(
+                dag,
+                req_ctx.ranges.clone(),
+                range_versions,
+                store,
+                extra_store_accessor,
+                req_ctx.deadline,
+                batch_row_limit,
+                is_streaming,
+                req.get_is_cache_enabled(),
+                paging_size,
+                quota_limiter,
+            )
+            .data_version(data_version)
+            .build()
+        });
 
         Ok(ParseCopRequestResult {
             req_tag,

@@ -1349,6 +1349,7 @@ mod tests {
                 MockStorage(Region::default(), vec![]),
                 Some(MockRegionStorageAccessor::with_expect_mode()),
                 vec![],
+                None,
                 Arc::new(cfg.clone()),
                 false,
             )
