@@ -896,6 +896,19 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let label = "download";
         IMPORT_RPC_COUNT.with_label_values(&[label]).inc();
         let timer = Instant::now_coarse();
+
+        // download method only handles single file downloads
+        // Check that this is indeed a single-file request
+        if !req.get_ssts().is_empty() {
+            let error = sst_importer::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "download method only accepts single-file requests, use batch_download for multi-file requests",
+            ));
+            let mut resp = DownloadResponse::default();
+            resp.set_error(error.into());
+            let _ = sink.success(resp).map_err(|e| warn!("send rpc response"; "err" => %e));
+            return;
+        }
         let importer = Arc::clone(&self.importer);
         let limiter = self.limiter.clone();
         let tablets = self.tablets.clone();
@@ -931,16 +944,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 .into_option()
                 .filter(|c| c.cipher_type != EncryptionMethod::Plaintext);
 
-            let (region_id, basic_meta) = match download_request_dispatcher(&req) {
-                Ok(Some(meta)) => (meta.get_region_id(), Some(meta)),
-                Ok(None) => (req.get_sst().get_region_id(), None),
-                Err(error) => {
-                    let mut resp = DownloadResponse::default();
-                    resp.set_error(error.into());
-                    crate::send_rpc_response!(Ok(resp), sink, label, timer);
-                    return;
-                }
-            };
+            let region_id = req.get_sst().get_region_id();
             let tablet = match tablets.get(region_id) {
                 Some(tablet) => tablet,
                 None => {
@@ -954,41 +958,154 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 }
             };
 
-            let res = if let Some(basic_meta) = basic_meta {
-                // 多文件合并下载
-                with_resource_limiter(
-                    importer.download_files_ext(
-                        &basic_meta,
-                        req.get_ssts(),
-                        req.get_storage_backend(),
-                        req.get_rewrite_rule(),
-                        cipher,
-                        limiter,
-                        tablet.into_owned(),
-                        DownloadExt::default()
-                            .cache_key(req.get_storage_cache_id())
-                            .req_type(req.get_request_type()),
-                    ),
-                    resource_limiter,
-                ).await
-            } else {
-                // 单文件下载 - 保持兼容
-                with_resource_limiter(
-                    importer.download_ext(
-                        req.get_sst(),
-                        req.get_storage_backend(),
-                        req.get_name(),
-                        req.get_rewrite_rule(),
-                        cipher,
-                        limiter,
-                        tablet.into_owned(),
-                        DownloadExt::default()
-                            .cache_key(req.get_storage_cache_id())
-                            .req_type(req.get_request_type()),
-                    ),
-                    resource_limiter,
-                ).await
+            let res = with_resource_limiter(
+                importer.download_ext(
+                    req.get_sst(),
+                    req.get_storage_backend(),
+                    req.get_name(),
+                    req.get_rewrite_rule(),
+                    cipher,
+                    limiter,
+                    tablet.into_owned(),
+                    DownloadExt::default()
+                        .cache_key(req.get_storage_cache_id())
+                        .req_type(req.get_request_type()),
+                ),
+                resource_limiter,
+            ).await;
+            let mut resp = DownloadResponse::default();
+            match res {
+                Ok(range) => match range {
+                    Some(r) => resp.set_range(r),
+                    None => resp.set_is_empty(true),
+                },
+                Err(e) => resp.set_error(e.into()),
+            }
+            crate::send_rpc_response!(Ok(resp), sink, label, timer);
+        };
+
+        self.threads.spawn(handle_task);
+    }
+
+    /// Batch downloads multiple files and performs key-rewrite for later ingesting.
+    /// This method is specifically designed for multi-file downloads with merging.
+    /// NOTE: This method will be activated once kvproto defines the batch_download RPC.
+    #[allow(dead_code)]
+    fn batch_download(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        req: DownloadRequest,
+        sink: UnarySink<DownloadResponse>,
+    ) {
+        let label = "batch_download";
+        IMPORT_RPC_COUNT.with_label_values(&[label]).inc();
+        let timer = Instant::now_coarse();
+
+        // batch_download specifically handles multi-file downloads
+        // Check that this is indeed a multi-file request
+        if req.get_ssts().is_empty() {
+            let error = sst_importer::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "batch_download method only accepts multi-file requests, use download for single-file requests",
+            ));
+            let mut resp = DownloadResponse::default();
+            resp.set_error(error.into());
+            let _ = sink.success(resp).map_err(|e| warn!("send rpc response"; "err" => %e));
+            return;
+        }
+        let importer = Arc::clone(&self.importer);
+        let limiter = self.limiter.clone();
+        let mem_limit = self.mem_limit;
+        let tablets = self.tablets.clone();
+        let start = Instant::now();
+        let resource_limiter = self.resource_manager.as_ref().and_then(|r| {
+            r.get_background_resource_limiter(
+                req.get_context()
+                    .get_resource_control_context()
+                    .get_resource_group_name(),
+                req.get_context().get_request_source(),
+            )
+        });
+
+        let handle_task = async move {
+            defer! { IMPORT_RPC_COUNT.with_label_values(&[label]).dec() }
+            // Records how long the batch download task waits to be scheduled.
+            sst_importer::metrics::IMPORTER_DOWNLOAD_DURATION
+                .with_label_values(&["queue"])
+                .observe(start.saturating_elapsed().as_secs_f64());
+
+            let mut resp = DownloadResponse::default();
+            match check_import_resources(mem_limit).await {
+                Ok(()) => (),
+                Err(e) => {
+                    resp.set_error(e.into());
+                    crate::send_rpc_response!(Ok(resp), sink, label, timer);
+                    return;
+                }
+            }
+
+            // FIXME: batch_download() should be an async fn, to allow BR to cancel
+            // a download task.
+            // Unfortunately, this currently can't happen because the S3Storage
+            // is not Send + Sync. See the documentation of S3Storage for reason.
+            let cipher = req
+                .cipher_info
+                .to_owned()
+                .into_option()
+                .filter(|c| c.cipher_type != EncryptionMethod::Plaintext);
+
+            let basic_meta = match download_request_dispatcher(&req) {
+                Ok(Some(meta)) => meta,
+                Ok(None) => {
+                    // This should never happen since we've already checked ssts is not empty
+                    let error = sst_importer::Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "internal error: download_request_dispatcher returned None despite non-empty ssts",
+                    ));
+                    let mut resp = DownloadResponse::default();
+                    resp.set_error(error.into());
+                    crate::send_rpc_response!(Ok(resp), sink, label, timer);
+                    return;
+                }
+                Err(error) => {
+                    let mut resp = DownloadResponse::default();
+                    resp.set_error(error.into());
+                    crate::send_rpc_response!(Ok(resp), sink, label, timer);
+                    return;
+                }
             };
+
+            let region_id = basic_meta.get_region_id();
+            let tablet = match tablets.get(region_id) {
+                Some(tablet) => tablet,
+                None => {
+                    let error = sst_importer::Error::Engine(box_err!(
+                        "region {} not found, maybe it's not a replica of this store",
+                        region_id
+                    ));
+                    let mut resp = DownloadResponse::default();
+                    resp.set_error(error.into());
+                    crate::send_rpc_response!(Ok(resp), sink, label, timer);
+                    return;
+                }
+            };
+
+            let res = with_resource_limiter(
+                importer.download_files_ext(
+                    &basic_meta,
+                    req.get_ssts(),
+                    req.get_storage_backend(),
+                    req.get_rewrite_rule(),
+                    cipher,
+                    limiter,
+                    tablet.into_owned(),
+                    DownloadExt::default()
+                        .cache_key(req.get_storage_cache_id())
+                        .req_type(req.get_request_type()),
+                ),
+                resource_limiter,
+            ).await;
+
             let mut resp = DownloadResponse::default();
             match res {
                 Ok(range) => match range {

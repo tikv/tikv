@@ -15,19 +15,17 @@ use collections::HashSet;
 use dashmap::{mapref::entry::Entry, DashMap};
 use encryption::{DataKeyManager, FileEncryptionInfo, MultiMasterKeyBackend};
 use encryption_export::create_async_backend;
-use engine_rocks::{RocksSstReader, get_env};
+use engine_rocks::{get_env, RocksSstReader};
 use engine_traits::{
     name_to_cf, util::check_key_in_range, CfName, IterOptions, Iterator, KvEngine, RefIterable,
     SstCompressionType, SstExt, SstMetaInfo, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT,
     CF_WRITE,
 };
-use file_system::get_io_rate_limiter;
 use external_storage::{
     compression_reader_dispatcher, encrypt_wrap_reader, wrap_with_checksum_reader_if_needed,
-    ExternalStorage, RestoreConfig,
+    ExternalStorage, RestoreConfig, RestoreConfig as ExternalRestoreConfig,
 };
-use external_storage::RestoreConfig as ExternalRestoreConfig;
-use file_system::{IoType, OpenOptions};
+use file_system::{get_io_rate_limiter, IoType, OpenOptions};
 use kvproto::{
     brpb::{CipherInfo, StorageBackend},
     encryptionpb::{EncryptionMethod, FileEncryptionInfo_oneof_mode, MasterKey},
