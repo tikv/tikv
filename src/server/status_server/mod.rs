@@ -71,7 +71,7 @@ use tracing_active_tree::tree::formating::FormatFlat;
 
 use crate::{
     config::{ConfigController, LogLevel},
-    server::Result,
+    server::{Result, debug},
     tikv_util::sys::thread::ThreadBuildWrapper,
 };
 
@@ -884,6 +884,9 @@ where
                             (Method::GET, "/force_partition_ranges") => Self::dump_partition_ranges(&force_partition_range_mgr),
                             (Method::POST, "/force_partition_ranges") => Self::add_partition_ranges(req, &force_partition_range_mgr).await,
                             (Method::DELETE, "/force_partition_ranges") => Self::remove_partition_ranges(req, &force_partition_range_mgr).await,
+                            (_, path) if path.starts_with("/debug/dup-key") => {
+                                debug::handle_dup_key_debug(req)
+                            }
                             _ => {
                                 is_unknown_path = true;
                                 Ok(make_response(StatusCode::NOT_FOUND, "path not found"))

@@ -176,6 +176,10 @@ where
         self.store.clone()
     }
 
+    pub fn system(&self) -> &StoreSystem<EK, ER> {
+        &self.system.as_ref().unwrap().1
+    }
+
     // TODO: support updating dynamic configuration.
 
     // TODO: check api version.

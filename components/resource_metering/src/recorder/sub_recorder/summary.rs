@@ -6,7 +6,7 @@ use collections::HashMap;
 use tikv_util::sys::thread::Pid;
 
 use crate::{
-    RawRecords,
+    ENABLE_NETWORK_IO_COLLECTION, RawRecords,
     recorder::{
         SubRecorder,
         localstorage::{LocalStorage, STORAGE},
@@ -30,6 +30,58 @@ pub fn record_write_keys(count: u32) {
             .summary_cur_record
             .write_keys
             .fetch_add(count, Relaxed);
+    })
+}
+
+/// Records how many bytes have been received in the current context.
+pub fn record_network_in_bytes(bytes: u64) {
+    if !ENABLE_NETWORK_IO_COLLECTION.load(Relaxed) {
+        return;
+    }
+    STORAGE.with(|s| {
+        s.borrow()
+            .summary_cur_record
+            .network_in_bytes
+            .fetch_add(bytes, Relaxed);
+    })
+}
+
+/// Records how many bytes have been sent in the current context.
+pub fn record_network_out_bytes(bytes: u64) {
+    if !ENABLE_NETWORK_IO_COLLECTION.load(Relaxed) {
+        return;
+    }
+    STORAGE.with(|s| {
+        s.borrow()
+            .summary_cur_record
+            .network_out_bytes
+            .fetch_add(bytes, Relaxed);
+    })
+}
+
+/// Records how many bytes have been read in the current context.
+pub fn record_logical_read_bytes(bytes: u64) {
+    if !ENABLE_NETWORK_IO_COLLECTION.load(Relaxed) {
+        return;
+    }
+    STORAGE.with(|s| {
+        s.borrow()
+            .summary_cur_record
+            .logical_read_bytes
+            .fetch_add(bytes, Relaxed);
+    })
+}
+
+/// Records how many bytes have been written in the current context.
+pub fn record_logical_write_bytes(bytes: u64) {
+    if !ENABLE_NETWORK_IO_COLLECTION.load(Relaxed) {
+        return;
+    }
+    STORAGE.with(|s| {
+        s.borrow()
+            .summary_cur_record
+            .logical_write_bytes
+            .fetch_add(bytes, Relaxed);
     })
 }
 
