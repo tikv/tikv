@@ -906,7 +906,9 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             ));
             let mut resp = DownloadResponse::default();
             resp.set_error(error.into());
-            let _ = sink.success(resp).map_err(|e| warn!("send rpc response"; "err" => %e));
+            let _ = sink
+                .success(resp)
+                .map_err(|e| warn!("send rpc response"; "err" => %e));
             return;
         }
         let importer = Arc::clone(&self.importer);
@@ -972,7 +974,8 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                         .req_type(req.get_request_type()),
                 ),
                 resource_limiter,
-            ).await;
+            )
+            .await;
             let mut resp = DownloadResponse::default();
             match res {
                 Ok(range) => match range {
@@ -987,10 +990,9 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         self.threads.spawn(handle_task);
     }
 
-    /// Batch downloads multiple files and performs key-rewrite for later ingesting.
-    /// This method is specifically designed for multi-file downloads with merging.
-    /// NOTE: This method will be activated once kvproto defines the batch_download RPC.
-    #[allow(dead_code)]
+    /// Batch downloads multiple files and performs key-rewrite for later
+    /// ingesting. This method is specifically designed for multi-file
+    /// downloads with merging.
     fn batch_download(
         &mut self,
         _ctx: RpcContext<'_>,
@@ -1010,12 +1012,13 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             ));
             let mut resp = DownloadResponse::default();
             resp.set_error(error.into());
-            let _ = sink.success(resp).map_err(|e| warn!("send rpc response"; "err" => %e));
+            let _ = sink
+                .success(resp)
+                .map_err(|e| warn!("send rpc response"; "err" => %e));
             return;
         }
         let importer = Arc::clone(&self.importer);
         let limiter = self.limiter.clone();
-        let mem_limit = self.mem_limit;
         let tablets = self.tablets.clone();
         let start = Instant::now();
         let resource_limiter = self.resource_manager.as_ref().and_then(|r| {
@@ -1034,14 +1037,11 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 .with_label_values(&["queue"])
                 .observe(start.saturating_elapsed().as_secs_f64());
 
-            let mut resp = DownloadResponse::default();
-            match check_import_resources(mem_limit).await {
-                Ok(()) => (),
-                Err(e) => {
-                    resp.set_error(e.into());
-                    crate::send_rpc_response!(Ok(resp), sink, label, timer);
-                    return;
-                }
+            if get_disk_status(0) != DiskUsage::Normal {
+                let mut resp = DownloadResponse::default();
+                resp.set_error(Error::DiskSpaceNotEnough.into());
+                crate::send_rpc_response!(Ok(resp), sink, label, timer);
+                return;
             }
 
             // FIXME: batch_download() should be an async fn, to allow BR to cancel
@@ -1104,7 +1104,8 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                         .req_type(req.get_request_type()),
                 ),
                 resource_limiter,
-            ).await;
+            )
+            .await;
 
             let mut resp = DownloadResponse::default();
             match res {
