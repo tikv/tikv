@@ -291,20 +291,20 @@ impl RawRecords {
             let tag = &tag_info.extra_attachment;
             if !tag.is_empty() {
                 let value = raw_map.get_mut(tag);
-                if value.is_none() {
-                    raw_map.insert(tag.clone(), *record);
+                if let Some(val) = value {
+                    val.merge(record);
                 } else {
-                    value.unwrap().merge(record);
+                    raw_map.insert(tag.clone(), *record);
                 }
             }
 
             let region_id = tag_info.region_id;
             if region_id != 0 {
                 let value = region_raw_map.get_mut(&region_id);
-                if value.is_none() {
-                    region_raw_map.insert(region_id, *record);
+                if let Some(val) = value {
+                    val.merge(record);
                 } else {
-                    value.unwrap().merge(record);
+                    region_raw_map.insert(region_id, *record);
                 }
             }
         }
