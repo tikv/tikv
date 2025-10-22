@@ -714,6 +714,7 @@ where
         }
         self.apply_time.flush();
         self.apply_wait.flush();
+        self.apply_msg_len.flush();
         self.key_size.flush();
         self.value_size.flush();
         let res_count = self.uncommitted_res_count;
