@@ -18,7 +18,7 @@ use futures::{
     stream::StreamExt,
 };
 use keys::origin_key;
-use kvproto::brpb::{self, Metadata};
+use kvproto::brpb;
 use protobuf::{Chars, Message, parse_from_bytes};
 use tempdir::TempDir;
 use tidb_query_datatype::codec::table::encode_row_key;
@@ -587,8 +587,6 @@ impl TmpStorage {
             result.file_groups.push(meta_result.file_groups[0].clone());
         }
         let content = result.write_to_bytes().unwrap();
-        let mut result2 = Metadata::new();
-        result2.merge_from_bytes(content.as_slice()).unwrap();
         self.storage
             .write(
                 meta_path,
@@ -597,7 +595,7 @@ impl TmpStorage {
             )
             .await
             .unwrap();
-        MetaFile::from_file(Arc::from(meta_path), result2)
+        MetaFile::from_file(Arc::from(meta_path), result)
     }
 
     pub async fn build_flush(
@@ -635,8 +633,6 @@ impl TmpStorage {
             result.file_groups.push(meta_result.file_groups[0].clone());
         }
         let content = result.write_to_bytes().unwrap();
-        let mut result2 = Metadata::new();
-        result2.merge_from_bytes(content.as_slice()).unwrap();
         self.storage
             .write(
                 meta_path,
@@ -645,7 +641,7 @@ impl TmpStorage {
             )
             .await
             .unwrap();
-        MetaFile::from_file(Arc::from(meta_path), result2)
+        MetaFile::from_file(Arc::from(meta_path), result)
     }
 
     pub async fn load_migrations(&self) -> crate::Result<Vec<(u64, brpb::Migration)>> {
