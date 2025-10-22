@@ -294,7 +294,7 @@ impl RawRecords {
                 if value.is_none() {
                     raw_map.insert(tag.clone(), *record);
                 } else {
-                value.unwrap().merge(record);
+                    value.unwrap().merge(record);
                 }
             }
 
