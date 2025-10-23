@@ -1910,7 +1910,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             snap_mgr,
             workers.pd_worker.remote(),
             collector_reg_handle,
-            region_read_progress,
             health_controller,
             coprocessor_host,
             causal_ts_provider,

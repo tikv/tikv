@@ -662,7 +662,6 @@ where
 {
     pub fn new(
         interval: Duration,
-        report_min_resolved_ts_interval: Duration,
         inspect_latency_interval: Duration,
         inspect_kvdb_latency_interval: Duration,
         reporter: T,
@@ -696,7 +695,6 @@ where
     pub fn start(
         &mut self,
         mut auto_split_controller: AutoSplitController,
-        region_read_progress: RegionReadProgressRegistry,
         collector_reg_handle: CollectorRegHandle,
         store_id: u64,
     ) -> Result<(), io::Error> {
@@ -970,7 +968,6 @@ where
         snap_mgr: SnapManager,
         remote: Remote<yatp::task::future::TaskCell>,
         collector_reg_handle: CollectorRegHandle,
-        region_read_progress: RegionReadProgressRegistry,
         health_controller: HealthController,
         coprocessor_host: CoprocessorHost<EK>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
@@ -982,14 +979,12 @@ where
         let interval = store_heartbeat_interval / NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT;
         let mut stats_monitor = StatsMonitor::new(
             interval,
-            cfg.report_min_resolved_ts_interval.0,
             cfg.inspect_interval.0,
             cfg.inspect_kvdb_interval.0,
             WrappedScheduler(scheduler.clone()),
         );
         if let Err(e) = stats_monitor.start(
             auto_split_controller,
-            region_read_progress,
             collector_reg_handle,
             store_id,
         ) {
