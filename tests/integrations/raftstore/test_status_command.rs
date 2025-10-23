@@ -1,10 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use raftstore::store::{msg::StoreMsg as StoreMsgV1, util::LatencyInspector};
+use health_controller::types::{InspectFactor, LatencyInspector};
+use raftstore::store::msg::StoreMsg as StoreMsgV1;
 use raftstore_v2::router::StoreMsg as StoreMsgV2;
 use test_raftstore::Simulator as S1;
 use test_raftstore_v2::Simulator as S2;
-use tikv_util::{config::ReadableDuration, time::Instant, HandyRwLock, InspectFactor};
+use tikv_util::{config::ReadableDuration, time::Instant, HandyRwLock};
 
 #[test]
 fn test_region_detail() {

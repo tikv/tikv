@@ -8,13 +8,12 @@ use std::{
 };
 
 use crossbeam::channel::{bounded, Receiver, Sender};
+use health_controller::types::LatencyInspector;
 use tikv_util::{
     time::Instant,
     warn,
     worker::{Runnable, Worker},
 };
-
-use crate::store::util::LatencyInspector;
 
 #[derive(Debug)]
 pub enum Task {

@@ -8,6 +8,7 @@ use std::{borrow::Cow, fmt};
 use collections::HashSet;
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
 use futures::channel::mpsc::UnboundedSender;
+use health_controller::types::{InspectFactor, LatencyInspector};
 use kvproto::{
     brpb::CheckAdminResponse,
     kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp},
@@ -24,7 +25,7 @@ use raft::SnapshotStatus;
 use resource_control::ResourceMetered;
 use smallvec::{smallvec, SmallVec};
 use strum::{EnumCount, EnumVariantNames};
-use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant, InspectFactor};
+use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
 use tracker::{get_tls_tracker_token, TrackerToken};
 
 use super::{
@@ -38,7 +39,7 @@ use crate::store::{
         UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
         UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryWaitApplySyncer,
     },
-    util::{KeysInfoFormatter, LatencyInspector},
+    util::KeysInfoFormatter,
     worker::{Bucket, BucketRange},
     SnapKey,
 };

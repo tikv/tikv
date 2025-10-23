@@ -33,7 +33,10 @@ use engine_traits::{
 use fail::fail_point;
 use file_system::{IoType, WithIoType};
 use futures::{compat::Future01CompatExt, FutureExt};
-use grpcio_health::HealthService;
+use health_controller::{
+    types::{InspectFactor, LatencyInspector},
+    HealthController,
+};
 use itertools::Itertools;
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use kvproto::{
@@ -68,7 +71,7 @@ use tikv_util::{
     warn,
     worker::{LazyWorker, Scheduler, Worker},
     yatp_pool::FuturePool,
-    Either, InspectFactor, RingQueue,
+    Either, RingQueue,
 };
 use time::{self, Timespec};
 
@@ -92,7 +95,7 @@ use crate::{
             ApplyBatchSystem, ApplyNotifier, ApplyPollerBuilder, ApplyRes, ApplyRouter,
             ApplyTaskRes,
         },
-        local_metrics::RaftMetrics,
+        local_metrics::{IoType as InspectIoType, RaftMetrics},
         memory::*,
         metrics::*,
         peer_storage,
@@ -604,7 +607,7 @@ where
     pub store_disk_usages: HashMap<u64, DiskUsage>,
     pub write_senders: WriteSenders<EK, ER>,
     pub sync_write_worker: Option<WriteWorker<EK, ER, RaftRouter<EK, ER>, T>>,
-    pub pending_latency_inspect: Vec<util::LatencyInspector>,
+    pub pending_latency_inspect: Vec<LatencyInspector>,
 
     pub safe_point: Arc<AtomicU64>,
 }
@@ -870,6 +873,14 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                     match factor {
                         InspectFactor::RaftDisk => {
                             inspector.record_store_wait(send_time.saturating_elapsed());
+                            inspector.record_store_commit(
+                                self.ctx
+                                    .raft_metrics
+                                    .health_stats
+                                    .avg(InspectIoType::Network),
+                            );
+                            // Reset the health_stats and wait it to be refreshed in the next tick.
+                            self.ctx.raft_metrics.health_stats.reset();
                             self.ctx.pending_latency_inspect.push(inspector);
                         }
                         InspectFactor::KvDisk => {
@@ -1477,8 +1488,8 @@ where
             store: self.store.clone(),
             pd_scheduler: self.pd_scheduler.clone(),
             consistency_check_scheduler: self.consistency_check_scheduler.clone(),
-            split_check_scheduler: self.split_check_scheduler.clone(),
             disk_check_scheduler: self.disk_check_scheduler.clone(),
+            split_check_scheduler: self.split_check_scheduler.clone(),
             region_scheduler: self.region_scheduler.clone(),
             apply_router: self.apply_router.clone(),
             router: self.router.clone(),
@@ -1643,7 +1654,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         global_replication_state: Arc<Mutex<GlobalReplicationState>>,
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
-        health_service: Option<HealthService>,
+        health_controller: HealthController,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         mut disk_check_runner: DiskCheckRunner,
         grpc_service_mgr: GrpcServiceManager,
@@ -1789,7 +1800,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             pd_client,
             collector_reg_handle,
             region_read_progress,
-            health_service,
+            health_controller,
             causal_ts_provider,
             snap_generator_pool,
             grpc_service_mgr,
@@ -1808,7 +1819,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         pd_client: Arc<C>,
         collector_reg_handle: CollectorRegHandle,
         region_read_progress: RegionReadProgressRegistry,
-        health_service: Option<HealthService>,
+        health_controller: HealthController,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         snap_generator_pool: FuturePool,
         grpc_service_mgr: GrpcServiceManager,
@@ -1899,8 +1910,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             snap_mgr,
             workers.pd_worker.remote(),
             collector_reg_handle,
-            region_read_progress,
-            health_service,
+            health_controller,
             coprocessor_host,
             causal_ts_provider,
             grpc_service_mgr,

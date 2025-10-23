@@ -9,14 +9,14 @@ use causal_ts::CausalTsProviderImpl;
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
+use health_controller::types::{InspectFactor, LatencyInspector, RaftstoreDuration};
 use kvproto::{metapb, pdpb};
 use pd_client::{BucketStat, PdClient};
 use raftstore::store::{
-    metrics::STORE_INSPECT_DURATION_HISTOGRAM,
-    util::{KeysInfoFormatter, LatencyInspector, RaftstoreDuration},
-    AutoSplitController, Config, FlowStatsReporter, PdStatsMonitor, ReadStats,
-    RegionReadProgressRegistry, SplitInfo, StoreStatsReporter, TabletSnapManager, TxnExt,
-    WriteStats, NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
+    metrics::STORE_INSPECT_DURATION_HISTOGRAM, util::KeysInfoFormatter, AutoSplitController,
+    Config, FlowStatsReporter, PdStatsMonitor, ReadStats, RegionReadProgressRegistry, SplitInfo,
+    StoreStatsReporter, TabletSnapManager, TxnExt, WriteStats,
+    NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
 };
 use resource_metering::{Collector, CollectorRegHandle, RawRecords};
 use service::service_manager::GrpcServiceManager;
@@ -25,7 +25,6 @@ use tikv_util::{
     config::VersionTrack,
     time::{Instant as TiInstant, UnixSecs},
     worker::{Runnable, Scheduler},
-    InspectFactor,
 };
 use yatp::{task::future::TaskCell, Remote};
 

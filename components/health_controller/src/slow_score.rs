@@ -7,15 +7,6 @@ use std::{
 
 use ordered_float::OrderedFloat;
 
-/// The result of a tick of the slow score.
-pub struct SlowScoreTickResult {
-    pub tick_id: u64,
-    // None if skipped in this tick
-    pub updated_score: Option<f64>,
-    pub has_new_record: bool,
-    pub should_force_report_slow_store: bool,
-}
-
 /// Interval for updating the slow score.
 const UPDATE_INTERVALS: Duration = Duration::from_secs(10);
 /// Recovery intervals for the slow score.
@@ -27,7 +18,7 @@ const RECOVERY_INTERVALS: Duration = Duration::from_secs(60 * 5);
 // If there are some inspecting requests timeout during a round, by default the
 // score will be increased at most 1x when above 10% inspecting requests
 // timeout. If there is not any timeout inspecting requests, the score will go
-// back to 1 in after 5min.
+// back to 1 in at least 5min.
 pub struct SlowScore {
     value: OrderedFloat<f64>,
     last_record_time: Instant,
@@ -165,6 +156,7 @@ impl SlowScore {
             // `last_update_time` is refreshed every round. If no update happens in a whole
             // round, we set the status to unknown.
             let has_new_record = self.last_record_time >= self.last_update_time;
+
             let slow_score = self.update();
             (Some(slow_score), has_new_record)
         } else {
@@ -178,6 +170,14 @@ impl SlowScore {
             should_force_report_slow_store,
         }
     }
+}
+
+pub struct SlowScoreTickResult {
+    pub tick_id: u64,
+    // None if skipped in this tick
+    pub updated_score: Option<f64>,
+    pub has_new_record: bool,
+    pub should_force_report_slow_store: bool,
 }
 
 #[cfg(test)]

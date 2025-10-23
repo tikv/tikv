@@ -20,7 +20,11 @@ use concurrency_manager::ConcurrencyManager;
 use engine_traits::{KvEngine, RaftEngine};
 use fail::fail_point;
 use futures::{compat::Future01CompatExt, FutureExt};
-use grpcio_health::{HealthService, ServingStatus};
+use health_controller::{
+    reporters::{RaftstoreReporter, RaftstoreReporterConfig},
+    types::{InspectFactor, LatencyInspector, RaftstoreDuration},
+    HealthController,
+};
 use kvproto::{
     kvrpcpb::DiskFullOpt,
     metapb, pdpb,
@@ -39,17 +43,14 @@ use service::service_manager::GrpcServiceManager;
 use tikv_util::{
     box_err, debug, error, info,
     metrics::ThreadInfoStatistics,
-    slow_score::SlowScore,
     store::QueryStats,
     sys::{disk::get_disk_space_stats, thread::StdThreadBuildWrapper, SysQuota},
     thd_name,
     time::{Instant as TiInstant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
     topn::TopN,
-    trend::{RequestPerSecRecorder, Trend},
     warn,
     worker::{Runnable, ScheduleError, Scheduler},
-    InspectFactor,
 };
 use yatp::Remote;
 
@@ -63,7 +64,7 @@ use crate::{
         unsafe_recovery::{
             UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryHandle,
         },
-        util::{is_epoch_stale, KeysInfoFormatter, LatencyInspector, RaftstoreDuration},
+        util::{is_epoch_stale, KeysInfoFormatter},
         worker::{
             split_controller::{SplitInfo, TOP_N},
             AutoSplitController, ReadStats, SplitConfigChange, WriteStats,
@@ -496,14 +497,50 @@ fn default_collect_tick_interval() -> Duration {
     DEFAULT_COLLECT_TICK_INTERVAL
 }
 
-fn config(interval: Duration) -> Duration {
-    fail_point!("mock_min_resolved_ts_interval", |_| {
-        Duration::from_millis(50)
-    });
-    fail_point!("mock_min_resolved_ts_interval_disable", |_| {
-        Duration::from_millis(0)
-    });
-    interval
+/// Determines the minimal interval for latency inspection ticks based on raft
+/// and kvdb inspection intervals.
+///
+/// This function handles different scenarios for latency inspection:
+/// 1. Both intervals are zero: Inspection is disabled, returns a large interval
+///    (1 hour)
+/// 2. Only raft interval is zero: Uses kvdb interval (raft inspection disabled)
+/// 3. Only kvdb interval is zero: Uses raft interval (kvdb inspection disabled)
+/// 4. Both intervals non-zero: Uses the smaller of the two intervals
+///
+/// # Arguments
+///
+/// * `inspect_latency_interval` - Interval for raft latency inspection
+/// * `inspect_kvdb_latency_interval` - Interval for kvdb latency inspection
+///
+/// # Returns
+///
+/// The minimal interval that should be used for latency inspection ticks
+fn get_minimal_inspect_tick_interval(
+    inspect_latency_interval: Duration,
+    inspect_kvdb_latency_interval: Duration,
+) -> Duration {
+    match (
+        inspect_latency_interval.is_zero(),
+        inspect_kvdb_latency_interval.is_zero(),
+    ) {
+        (true, true) => {
+            // Both inspections are disabled - return a large interval to avoid misleading
+            // tick checks
+            Duration::from_secs(3600)
+        }
+        (true, false) => {
+            // raft inspection disabled - use kvdb interval
+            inspect_kvdb_latency_interval
+        }
+        (false, true) => {
+            // kvdb inspection disabled - use raft interval
+            inspect_latency_interval
+        }
+        (false, false) => {
+            // Both inspections enabled - use the smaller interval
+            std::cmp::min(inspect_latency_interval, inspect_kvdb_latency_interval)
+        }
+    }
 }
 
 #[inline]
@@ -615,9 +652,8 @@ where
     collect_store_infos_interval: Duration,
     load_base_split_check_interval: Duration,
     collect_tick_interval: Duration,
-    report_min_resolved_ts_interval: Duration,
-    inspect_latency_interval: Duration,
-    inspect_kvdb_latency_interval: Duration,
+    inspect_latency_interval: Duration,      // for raft mount path
+    inspect_kvdb_latency_interval: Duration, // for kvdb mount path
 }
 
 impl<T> StatsMonitor<T>
@@ -626,7 +662,6 @@ where
 {
     pub fn new(
         interval: Duration,
-        report_min_resolved_ts_interval: Duration,
         inspect_latency_interval: Duration,
         inspect_kvdb_latency_interval: Duration,
         reporter: T,
@@ -642,11 +677,13 @@ where
                 DEFAULT_LOAD_BASE_SPLIT_CHECK_INTERVAL,
                 interval,
             ),
-            report_min_resolved_ts_interval: config(report_min_resolved_ts_interval),
-            // Use `inspect_latency_interval` as the minimal limitation for collecting tick.
+            // Use the smallest inspect latency as the minimal limitation for collecting tick.
             collect_tick_interval: cmp::min(
-                inspect_latency_interval,
-                cmp::min(default_collect_tick_interval(), interval),
+                get_minimal_inspect_tick_interval(
+                    inspect_latency_interval,
+                    inspect_kvdb_latency_interval,
+                ),
+                interval.min(default_collect_tick_interval()),
             ),
             inspect_latency_interval,
             inspect_kvdb_latency_interval,
@@ -658,13 +695,15 @@ where
     pub fn start(
         &mut self,
         mut auto_split_controller: AutoSplitController,
-        region_read_progress: RegionReadProgressRegistry,
         collector_reg_handle: CollectorRegHandle,
         store_id: u64,
     ) -> Result<(), io::Error> {
         if self.collect_tick_interval
             < cmp::min(
-                self.inspect_latency_interval,
+                get_minimal_inspect_tick_interval(
+                    self.inspect_latency_interval,
+                    self.inspect_kvdb_latency_interval,
+                ),
                 default_collect_tick_interval(),
             )
         {
@@ -680,9 +719,6 @@ where
             .div_duration_f64(tick_interval) as u64;
         let load_base_split_check_interval = self
             .load_base_split_check_interval
-            .div_duration_f64(tick_interval) as u64;
-        let report_min_resolved_ts_interval = self
-            .report_min_resolved_ts_interval
             .div_duration_f64(tick_interval) as u64;
         let update_raftdisk_latency_stats_interval =
             self.inspect_latency_interval
@@ -748,12 +784,6 @@ where
                             &reporter,
                             &collector_reg_handle,
                             &mut region_cpu_records_collector,
-                        );
-                    }
-                    if is_enable_tick(timer_cnt, report_min_resolved_ts_interval) {
-                        reporter.report_min_resolved_ts(
-                            store_id,
-                            region_read_progress.get_min_resolved_ts(),
                         );
                     }
                     if is_enable_tick(timer_cnt, update_raftdisk_latency_stats_interval) {
@@ -881,69 +911,6 @@ fn hotspot_query_num_report_threshold() -> u64 {
 /// Max limitation of delayed store_heartbeat.
 const STORE_HEARTBEAT_DELAY_LIMIT: u64 = 5 * 60;
 
-/// A unified slow score that combines multiple slow scores.
-///
-/// It calculates the final slow score of a store by picking the maximum
-/// score among multiple factors. Each factor represents a different aspect of
-/// the store's performance. Typically, we have two factors: Raft Disk I/O and
-/// KvDB Disk I/O. If there are more factors in the future, we can add them
-/// here.
-#[derive(Default)]
-pub struct UnifiedSlowScore {
-    factors: Vec<SlowScore>,
-}
-
-impl UnifiedSlowScore {
-    pub fn new(cfg: &Config) -> Self {
-        let mut unified_slow_score = UnifiedSlowScore::default();
-        // The first factor is for Raft Disk I/O.
-        unified_slow_score
-            .factors
-            .push(SlowScore::new(cfg.inspect_interval.0));
-        // The second factor is for KvDB Disk I/O.
-        unified_slow_score
-            .factors
-            .push(SlowScore::new_with_extra_config(
-                cfg.inspect_kvdb_interval.0,
-                0.6,
-            ));
-        unified_slow_score
-    }
-
-    #[inline]
-    pub fn record(
-        &mut self,
-        id: u64,
-        factor: InspectFactor,
-        duration: &RaftstoreDuration,
-        not_busy: bool,
-    ) {
-        self.factors[factor as usize].record(id, duration.delays_on_disk_io(false), not_busy);
-    }
-
-    #[inline]
-    pub fn get(&self, factor: InspectFactor) -> &SlowScore {
-        &self.factors[factor as usize]
-    }
-
-    #[inline]
-    pub fn get_mut(&mut self, factor: InspectFactor) -> &mut SlowScore {
-        &mut self.factors[factor as usize]
-    }
-
-    // Returns the maximum score of all factors.
-    pub fn get_score(&self) -> f64 {
-        self.factors
-            .iter()
-            .map(|factor| factor.get())
-            .fold(1.0, f64::max)
-    }
-
-    pub fn last_tick_finished(&self) -> bool {
-        self.factors.iter().all(SlowScore::last_tick_finished)
-    }
-}
-
 pub struct Runner<EK, ER, T>
 where
     EK: KvEngine,
@@ -973,14 +940,10 @@ where
     concurrency_manager: ConcurrencyManager,
     snap_mgr: SnapManager,
     remote: Remote<yatp::task::future::TaskCell>,
-    slow_score: UnifiedSlowScore,
-    slow_trend_cause: Trend,
-    slow_trend_result: Trend,
-    slow_trend_result_recorder: RequestPerSecRecorder,
 
-    // The health status of the store is updated by the slow score mechanism.
-    health_service: Option<HealthService>,
-    curr_health_status: ServingStatus,
+    health_reporter: RaftstoreReporter,
+    health_controller: HealthController,
+
     coprocessor_host: CoprocessorHost<EK>,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
 
@@ -1005,8 +968,7 @@ where
         snap_mgr: SnapManager,
         remote: Remote<yatp::task::future::TaskCell>,
         collector_reg_handle: CollectorRegHandle,
-        region_read_progress: RegionReadProgressRegistry,
-        health_service: Option<HealthService>,
+        health_controller: HealthController,
         coprocessor_host: CoprocessorHost<EK>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         grpc_service_manager: GrpcServiceManager,
@@ -1017,19 +979,45 @@ where
         let interval = store_heartbeat_interval / NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT;
         let mut stats_monitor = StatsMonitor::new(
             interval,
-            cfg.report_min_resolved_ts_interval.0,
             cfg.inspect_interval.0,
             cfg.inspect_kvdb_interval.0,
             WrappedScheduler(scheduler.clone()),
         );
         if let Err(e) = stats_monitor.start(
             auto_split_controller,
-            region_read_progress,
             collector_reg_handle,
             store_id,
         ) {
             error!("failed to start stats collector, error = {:?}", e);
         }
+
+        let health_reporter_config = RaftstoreReporterConfig {
+            inspect_interval: cfg.inspect_interval.0,
+            inspect_kvdb_interval: cfg.inspect_kvdb_interval.0,
+
+            unsensitive_cause: cfg.slow_trend_unsensitive_cause,
+            unsensitive_result: cfg.slow_trend_unsensitive_result,
+            net_io_factor: 0.0,
+
+            cause_spike_filter_value_gauge: STORE_SLOW_TREND_MISC_GAUGE_VEC
+                .with_label_values(&["spike_filter_value"]),
+            cause_spike_filter_count_gauge: STORE_SLOW_TREND_MISC_GAUGE_VEC
+                .with_label_values(&["spike_filter_count"]),
+            cause_l1_gap_gauges: STORE_SLOW_TREND_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC
+                .with_label_values(&["L1"]),
+            cause_l2_gap_gauges: STORE_SLOW_TREND_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC
+                .with_label_values(&["L2"]),
+            result_spike_filter_value_gauge: STORE_SLOW_TREND_RESULT_MISC_GAUGE_VEC
+                .with_label_values(&["spike_filter_value"]),
+            result_spike_filter_count_gauge: STORE_SLOW_TREND_RESULT_MISC_GAUGE_VEC
+                .with_label_values(&["spike_filter_count"]),
+            result_l1_gap_gauges: STORE_SLOW_TREND_RESULT_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC
+                .with_label_values(&["L1"]),
+            result_l2_gap_gauges: STORE_SLOW_TREND_RESULT_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC
+                .with_label_values(&["L2"]),
+        };
+
+        let health_reporter = RaftstoreReporter::new(&health_controller, health_reporter_config);
 
         Runner {
             store_id,
@@ -1047,42 +1035,8 @@ where
             concurrency_manager,
             snap_mgr,
             remote,
-            slow_score: UnifiedSlowScore::new(cfg),
-            slow_trend_cause: Trend::new(
-                // Disable SpikeFilter for now
-                Duration::from_secs(0),
-                STORE_SLOW_TREND_MISC_GAUGE_VEC.with_label_values(&["spike_filter_value"]),
-                STORE_SLOW_TREND_MISC_GAUGE_VEC.with_label_values(&["spike_filter_count"]),
-                Duration::from_secs(180),
-                Duration::from_secs(30),
-                Duration::from_secs(120),
-                Duration::from_secs(600),
-                1,
-                tikv_util::time::duration_to_us(Duration::from_micros(500)),
-                STORE_SLOW_TREND_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC.with_label_values(&["L1"]),
-                STORE_SLOW_TREND_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC.with_label_values(&["L2"]),
-                cfg.slow_trend_unsensitive_cause,
-            ),
-            slow_trend_result: Trend::new(
-                // Disable SpikeFilter for now
-                Duration::from_secs(0),
-                STORE_SLOW_TREND_RESULT_MISC_GAUGE_VEC.with_label_values(&["spike_filter_value"]),
-                STORE_SLOW_TREND_RESULT_MISC_GAUGE_VEC.with_label_values(&["spike_filter_count"]),
-                Duration::from_secs(120),
-                Duration::from_secs(15),
-                Duration::from_secs(60),
-                Duration::from_secs(300),
-                1,
-                2000,
-                STORE_SLOW_TREND_RESULT_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC
-                    .with_label_values(&["L1"]),
-                STORE_SLOW_TREND_RESULT_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC
-                    .with_label_values(&["L2"]),
-                cfg.slow_trend_unsensitive_result,
-            ),
-            slow_trend_result_recorder: RequestPerSecRecorder::new(),
-            health_service,
-            curr_health_status: ServingStatus::Serving,
+            health_reporter,
+            health_controller,
             coprocessor_host,
             causal_ts_provider,
             grpc_service_manager,
@@ -1357,9 +1311,7 @@ where
             .store_stat
             .engine_total_query_num
             .sub_query_stats(&self.store_stat.engine_last_query_num);
-        let total_query_num = self
-            .slow_trend_result_recorder
-            .record_and_get_current_rps(res.get_all_query_num(), Instant::now());
+        let all_query_num = res.get_all_query_num();
         stats.set_query_stats(res.0);
 
         stats.set_cpu_usages(self.store_stat.store_cpu_usages.clone().into());
@@ -1391,9 +1343,13 @@ where
         STORE_SIZE_EVENT_INT_VEC.available.set(available as i64);
         STORE_SIZE_EVENT_INT_VEC.used.set(used_size as i64);
 
-        let slow_score = self.slow_score.get_score();
+        let slow_score = self.health_reporter.get_slow_score();
         stats.set_slow_score(slow_score as u64);
-        self.set_slow_trend_to_store_stats(&mut stats, total_query_num);
+        let (rps, slow_trend_pb) = self
+            .health_reporter
+            .update_slow_trend(all_query_num, Instant::now());
+        self.flush_slow_trend_metrics(rps, &slow_trend_pb);
+        stats.set_slow_trend(slow_trend_pb);
 
         stats.set_is_grpc_paused(self.grpc_service_manager.is_paused());
 
@@ -1480,50 +1436,40 @@ where
         self.remote.spawn(f);
     }
 
-    fn set_slow_trend_to_store_stats(
+    fn flush_slow_trend_metrics(
         &mut self,
-        stats: &mut pdpb::StoreStats,
-        total_query_num: Option<f64>,
+        requests_per_sec: Option<f64>,
+        slow_trend_pb: &pdpb::SlowTrend,
     ) {
-        let slow_trend_cause_rate = self.slow_trend_cause.increasing_rate();
-        STORE_SLOW_TREND_GAUGE.set(slow_trend_cause_rate);
-        let mut slow_trend = pdpb::SlowTrend::default();
-        slow_trend.set_cause_rate(slow_trend_cause_rate);
-        slow_trend.set_cause_value(self.slow_trend_cause.l0_avg());
-        if let Some(total_query_num) = total_query_num {
-            self.slow_trend_result
-                .record(total_query_num as u64, Instant::now());
-            slow_trend.set_result_value(self.slow_trend_result.l0_avg());
-            let slow_trend_result_rate = self.slow_trend_result.increasing_rate();
-            slow_trend.set_result_rate(slow_trend_result_rate);
-            STORE_SLOW_TREND_RESULT_GAUGE.set(slow_trend_result_rate);
-            STORE_SLOW_TREND_RESULT_VALUE_GAUGE.set(total_query_num);
+        let slow_trend = self.health_reporter.get_slow_trend();
+        // Latest result.
+        STORE_SLOW_TREND_GAUGE.set(slow_trend_pb.get_cause_rate());
+        if let Some(requests_per_sec) = requests_per_sec {
+            STORE_SLOW_TREND_RESULT_GAUGE.set(slow_trend_pb.get_result_rate());
+            STORE_SLOW_TREND_RESULT_VALUE_GAUGE.set(requests_per_sec);
         } else {
             // Just to mark the invalid range on the graphic
             STORE_SLOW_TREND_RESULT_VALUE_GAUGE.set(-100.0);
         }
-        stats.set_slow_trend(slow_trend);
-        self.write_slow_trend_metrics();
-    }
 
-    fn write_slow_trend_metrics(&mut self) {
-        STORE_SLOW_TREND_L0_GAUGE.set(self.slow_trend_cause.l0_avg());
-        STORE_SLOW_TREND_L1_GAUGE.set(self.slow_trend_cause.l1_avg());
-        STORE_SLOW_TREND_L2_GAUGE.set(self.slow_trend_cause.l2_avg());
-        STORE_SLOW_TREND_L0_L1_GAUGE.set(self.slow_trend_cause.l0_l1_rate());
-        STORE_SLOW_TREND_L1_L2_GAUGE.set(self.slow_trend_cause.l1_l2_rate());
-        STORE_SLOW_TREND_L1_MARGIN_ERROR_GAUGE.set(self.slow_trend_cause.l1_margin_error_base());
-        STORE_SLOW_TREND_L2_MARGIN_ERROR_GAUGE.set(self.slow_trend_cause.l2_margin_error_base());
+        // Current internal states.
+        STORE_SLOW_TREND_L0_GAUGE.set(slow_trend.slow_cause.l0_avg());
+        STORE_SLOW_TREND_L1_GAUGE.set(slow_trend.slow_cause.l1_avg());
+        STORE_SLOW_TREND_L2_GAUGE.set(slow_trend.slow_cause.l2_avg());
+        STORE_SLOW_TREND_L0_L1_GAUGE.set(slow_trend.slow_cause.l0_l1_rate());
+        STORE_SLOW_TREND_L1_L2_GAUGE.set(slow_trend.slow_cause.l1_l2_rate());
+        STORE_SLOW_TREND_L1_MARGIN_ERROR_GAUGE.set(slow_trend.slow_cause.l1_margin_error_base());
+        STORE_SLOW_TREND_L2_MARGIN_ERROR_GAUGE.set(slow_trend.slow_cause.l2_margin_error_base());
         // Report results of all slow Trends.
-        STORE_SLOW_TREND_RESULT_L0_GAUGE.set(self.slow_trend_result.l0_avg());
-        STORE_SLOW_TREND_RESULT_L1_GAUGE.set(self.slow_trend_result.l1_avg());
-        STORE_SLOW_TREND_RESULT_L2_GAUGE.set(self.slow_trend_result.l2_avg());
-        STORE_SLOW_TREND_RESULT_L0_L1_GAUGE.set(self.slow_trend_result.l0_l1_rate());
-        STORE_SLOW_TREND_RESULT_L1_L2_GAUGE.set(self.slow_trend_result.l1_l2_rate());
+        STORE_SLOW_TREND_RESULT_L0_GAUGE.set(slow_trend.slow_result.l0_avg());
+        STORE_SLOW_TREND_RESULT_L1_GAUGE.set(slow_trend.slow_result.l1_avg());
+        STORE_SLOW_TREND_RESULT_L2_GAUGE.set(slow_trend.slow_result.l2_avg());
+        STORE_SLOW_TREND_RESULT_L0_L1_GAUGE.set(slow_trend.slow_result.l0_l1_rate());
+        STORE_SLOW_TREND_RESULT_L1_L2_GAUGE.set(slow_trend.slow_result.l1_l2_rate());
         STORE_SLOW_TREND_RESULT_L1_MARGIN_ERROR_GAUGE
-            .set(self.slow_trend_result.l1_margin_error_base());
+            .set(slow_trend.slow_result.l1_margin_error_base());
         STORE_SLOW_TREND_RESULT_L2_MARGIN_ERROR_GAUGE
-            .set(self.slow_trend_result.l2_margin_error_base());
+            .set(slow_trend.slow_result.l2_margin_error_base());
     }
 
     fn handle_report_batch_split(&self, regions: Vec<metapb::Region>) {
@@ -1977,13 +1923,6 @@ where
             .or_insert_with(|| ReportBucket::new(buckets));
     }
 
-    fn update_health_status(&mut self, status: ServingStatus) {
-        self.curr_health_status = status;
-        if let Some(health_service) = &self.health_service {
-            health_service.set_serving_status("", status);
-        }
-    }
-
     /// Force to send a special heartbeat to pd when current store is hung on
     /// some special circumstances, i.e. disk busy, handler busy and others.
     fn handle_fake_store_heartbeat(&mut self) {
@@ -2027,7 +1966,7 @@ where
 
     fn handle_control_grpc_server(&mut self, event: pdpb::ControlGrpcEvent) {
         info!("forcely control grpc server";
-                "curr_health_status" => ?self.curr_health_status,
+                "curr_health_status" => ?self.health_controller.get_serving_status(),
                 "event" => ?event,
         );
         match event {
@@ -2036,7 +1975,7 @@ where
                     warn!("failed to send service event to PAUSE grpc server";
                             "err" => ?e);
                 } else {
-                    self.update_health_status(ServingStatus::NotServing);
+                    self.health_controller.set_is_serving(false);
                 }
             }
             pdpb::ControlGrpcEvent::Resume => {
@@ -2044,52 +1983,26 @@ where
                     warn!("failed to send service event to RESUME grpc server";
                             "err" => ?e);
                 } else {
-                    self.update_health_status(ServingStatus::Serving);
+                    self.health_controller.set_is_serving(true);
                 }
             }
         }
     }
 
     fn handle_inspect_latency(&mut self, factor: InspectFactor) {
-        // all_ticks_finished: The last tick of all factors is finished.
-        // factor_tick_finished: The last tick of the current factor is finished.
-        let (all_ticks_finished, factor_tick_finished) = (
-            self.slow_score.last_tick_finished(),
-            self.slow_score.get(factor).last_tick_finished(),
-        );
-        // The health status is recovered to serving as long as any tick
-        // does not timeout.
-        if self.curr_health_status == ServingStatus::ServiceUnknown && all_ticks_finished {
-            self.update_health_status(ServingStatus::Serving);
-        }
-        if !all_ticks_finished {
-            // If the last tick is not finished, it means that the current store might
-            // be busy on handling requests or delayed on I/O operations. And only when
-            // the current store is not busy, it should record the last_tick as a timeout.
-            if !self.store_stat.maybe_busy() && !factor_tick_finished {
-                self.slow_score.get_mut(factor).record_timeout();
-            }
-        }
-
-        let slow_score_tick_result = self.slow_score.get_mut(factor).tick();
-        if slow_score_tick_result.updated_score.is_some() && !slow_score_tick_result.has_new_record
-        {
-            self.update_health_status(ServingStatus::ServiceUnknown);
-        }
+        let slow_score_tick_result = self
+            .health_reporter
+            .tick(self.store_stat.maybe_busy(), factor);
         if let Some(score) = slow_score_tick_result.updated_score {
             STORE_SLOW_SCORE_GAUGE
                 .with_label_values(&[factor.as_str()])
                 .set(score as i64);
         }
-
         let id = slow_score_tick_result.tick_id;
         let scheduler = self.scheduler.clone();
         let inspector = {
             match factor {
                 InspectFactor::RaftDisk => {
-                    // Record a fairly great value when timeout
-                    self.slow_trend_cause.record(500_000, Instant::now());
-
                     // If the last slow_score already reached abnormal state and was delayed for
                     // reporting by `store-heartbeat` to PD, we should report it here manually as
                     // a FAKE `store-heartbeat`.
@@ -2101,12 +2014,6 @@ where
                     LatencyInspector::new(
                         id,
                         Box::new(move |id, duration| {
-                            // TODO: use sub metric to record different durations.
-                            STORE_INSPECT_DURATION_HISTOGRAM
-                                .with_label_values(&["store_process"])
-                                .observe(tikv_util::time::duration_to_sec(
-                                    duration.store_process_duration.unwrap_or_default(),
-                                ));
                             STORE_INSPECT_DURATION_HISTOGRAM
                                 .with_label_values(&["store_wait"])
                                 .observe(tikv_util::time::duration_to_sec(
@@ -2412,9 +2319,12 @@ where
                 factor,
                 duration,
             } => {
-                // Fine-tuned, `SlowScore` only takes the I/O jitters on the disk into account.
-                self.slow_score
-                    .record(id, factor, &duration, !self.store_stat.maybe_busy());
+                self.health_reporter.record_raftstore_duration(
+                    id,
+                    factor,
+                    duration,
+                    !self.store_stat.maybe_busy(),
+                );
             }
             Task::RegionCpuRecords(records) => self.handle_region_cpu_records(records),
             Task::ReportMinResolvedTs {
