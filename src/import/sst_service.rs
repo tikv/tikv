@@ -1532,6 +1532,72 @@ fn write_needs_restore(write: &[u8]) -> bool {
     }
 }
 
+fn download_request_dispatcher(req: &DownloadRequest) -> Result<Option<SstMeta>> {
+    if req.get_ssts().is_empty() {
+        return Ok(None);
+    }
+    let mut basic_meta = req.get_sst().clone();
+    for meta in req.get_ssts().values() {
+        if basic_meta.get_region_id() != meta.get_region_id() {
+            let error = sst_importer::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "region id mismatch in different sst meta, one is {} and another is {}",
+                    basic_meta.get_region_id(),
+                    meta.get_region_id()
+                ),
+            ));
+            return Err(error);
+        }
+        if basic_meta.get_region_epoch() != meta.get_region_epoch() {
+            let error = sst_importer::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "region epoch mismatch in different sst meta, one is {:?} and another is {:?}",
+                    basic_meta.get_region_epoch(),
+                    meta.get_region_epoch()
+                ),
+            ));
+            return Err(error);
+        }
+        if basic_meta.get_cf_name() != meta.get_cf_name() {
+            let error = sst_importer::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "cf mismatch in different sst meta, one is {} and another is {}",
+                    basic_meta.get_cf_name(),
+                    meta.get_cf_name()
+                ),
+            ));
+            return Err(error);
+        }
+        if basic_meta.get_end_key_exclusive() != meta.get_end_key_exclusive() {
+            let error = sst_importer::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "end key exclusive mismatch in different sst meta, one is {} and another is {}",
+                    basic_meta.get_end_key_exclusive(),
+                    meta.get_end_key_exclusive()
+                ),
+            ));
+            return Err(error);
+        }
+        if basic_meta.get_range().get_start() > meta.get_range().get_start() {
+            basic_meta
+                .mut_range()
+                .set_start(meta.get_range().get_start().to_owned());
+        }
+        if !basic_meta.get_range().get_end().is_empty()
+            && basic_meta.get_range().get_end() < meta.get_range().get_end()
+        {
+            basic_meta
+                .mut_range()
+                .set_end(meta.get_range().get_end().to_owned());
+        }
+    }
+    Ok(Some(basic_meta))
+}
+
 #[cfg(test)]
 mod test {
     use std::collections::HashMap;
@@ -1903,70 +1969,4 @@ mod test {
                 .contains("retry write later")
         );
     }
-}
-
-fn download_request_dispatcher(req: &DownloadRequest) -> Result<Option<SstMeta>> {
-    if req.get_ssts().is_empty() {
-        return Ok(None);
-    }
-    let mut basic_meta = req.get_sst().clone();
-    for meta in req.get_ssts().values() {
-        if basic_meta.get_region_id() != meta.get_region_id() {
-            let error = sst_importer::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!(
-                    "region id mismatch in different sst meta, one is {} and another is {}",
-                    basic_meta.get_region_id(),
-                    meta.get_region_id()
-                ),
-            ));
-            return Err(error);
-        }
-        if basic_meta.get_region_epoch() != meta.get_region_epoch() {
-            let error = sst_importer::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!(
-                    "region epoch mismatch in different sst meta, one is {:?} and another is {:?}",
-                    basic_meta.get_region_epoch(),
-                    meta.get_region_epoch()
-                ),
-            ));
-            return Err(error);
-        }
-        if basic_meta.get_cf_name() != meta.get_cf_name() {
-            let error = sst_importer::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!(
-                    "cf mismatch in different sst meta, one is {} and another is {}",
-                    basic_meta.get_cf_name(),
-                    meta.get_cf_name()
-                ),
-            ));
-            return Err(error);
-        }
-        if basic_meta.get_end_key_exclusive() != meta.get_end_key_exclusive() {
-            let error = sst_importer::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!(
-                    "end key exclusive mismatch in different sst meta, one is {} and another is {}",
-                    basic_meta.get_end_key_exclusive(),
-                    meta.get_end_key_exclusive()
-                ),
-            ));
-            return Err(error);
-        }
-        if basic_meta.get_range().get_start() > meta.get_range().get_start() {
-            basic_meta
-                .mut_range()
-                .set_start(meta.get_range().get_start().to_owned());
-        }
-        if !basic_meta.get_range().get_end().is_empty()
-            && basic_meta.get_range().get_end() < meta.get_range().get_end()
-        {
-            basic_meta
-                .mut_range()
-                .set_end(meta.get_range().get_end().to_owned());
-        }
-    }
-    Ok(Some(basic_meta))
 }
