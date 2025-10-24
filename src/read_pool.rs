@@ -648,14 +648,14 @@ impl ReadPoolCpuTimeTracker {
     }
 }
 struct ReadPoolConfigRunner {
-     
     interval: Duration,
     sender: SyncSender<usize>,
     handle: ReadPoolHandle,
     cpu_time_tracker: ReadPoolCpuTimeTracker,
     process_stats: ProcessStat,
     min_thread_count: usize,
-    // configed thread pool size, it's the min thread count to be scale. It is set to max_thread_count
+    // configed thread pool size, it's the min thread count to be scale. It is set to
+    // max_thread_count
     core_thread_count: usize,
     // the max thread count can be scaled
     max_thread_count: usize,
