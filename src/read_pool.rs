@@ -478,7 +478,7 @@ pub fn build_yatp_read_pool_with_name<E: Engine, R: FlowStatsReporter>(
         .cleanup_method(cleanup_method)
         .stack_size(config.stack_size.0 as usize)
         .thread_count(
-            config.min_thread_count,
+            1, // min_thread_count is controlled by readPoolConfigRunner
             config.max_thread_count,
             std::cmp::max(
                 std::cmp::max(
@@ -648,12 +648,14 @@ impl ReadPoolCpuTimeTracker {
     }
 }
 struct ReadPoolConfigRunner {
+     
     interval: Duration,
     sender: SyncSender<usize>,
     handle: ReadPoolHandle,
     cpu_time_tracker: ReadPoolCpuTimeTracker,
     process_stats: ProcessStat,
-    // configed thread pool size, it's the min thread count to be scale
+    min_thread_count: usize,
+    // configed thread pool size, it's the min thread count to be scale. It is set to max_thread_count
     core_thread_count: usize,
     // the max thread count can be scaled
     max_thread_count: usize,
@@ -743,7 +745,7 @@ impl ReadPoolConfigRunner {
             && thread_usage > self.cur_thread_count as f64 * READ_POOL_THREAD_HIGH_THRESHOLD
             && running_tasks > self.cur_thread_count as i64 * RUNNING_TASKS_PER_THREAD_THRESHOLD;
 
-        let busy_thread_scale_in = self.cur_thread_count > self.core_thread_count
+        let busy_thread_scale_in = self.cur_thread_count > self.min_thread_count
             && thread_usage < (self.cur_thread_count - 1) as f64 * READ_POOL_THREAD_LOW_THRESHOLD
             && running_tasks < self.cur_thread_count as i64 * RUNNING_TASKS_PER_THREAD_THRESHOLD;
 
@@ -815,22 +817,20 @@ impl ReadPoolConfigManager {
         handle: ReadPoolHandle,
         sender: SyncSender<usize>,
         worker: &Worker,
-        thread_count: usize,
+        min_thread_count: usize,
+        max_thread_count: usize,
         auto_adjust: bool,
         cpu_threshold: f64,
     ) -> Self {
-        let max_thread_count = std::cmp::max(
-            UNIFIED_READPOOL_MIN_CONCURRENCY,
-            SysQuota::cpu_cores_quota().round() as usize,
-        );
         let runner = ReadPoolConfigRunner {
             interval: READ_POOL_THREAD_CHECK_DURATION,
             sender,
             handle,
             cpu_time_tracker: ReadPoolCpuTimeTracker::new(&get_unified_read_pool_name()),
             process_stats: ProcessStat::cur_proc_stat().unwrap(),
-            core_thread_count: thread_count,
-            cur_thread_count: thread_count,
+            min_thread_count,
+            core_thread_count: max_thread_count,
+            cur_thread_count: max_thread_count,
             max_thread_count,
             auto_adjust,
             cpu_threshold,
@@ -1224,6 +1224,7 @@ mod tests {
             handle: handle.clone(),
             cpu_time_tracker: ReadPoolCpuTimeTracker::new("test-pool"),
             process_stats: ProcessStat::cur_proc_stat().unwrap(),
+            min_thread_count: config.min_thread_count,
             core_thread_count: config.min_thread_count,
             cur_thread_count: config.min_thread_count,
             max_thread_count: config.max_thread_count,
