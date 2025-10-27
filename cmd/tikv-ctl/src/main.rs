@@ -405,6 +405,8 @@ fn main() {
             name,
             force_regenerate,
             minimal_compaction_size,
+            prefetch_running_count,
+            prefetch_buffer_count,
         } => {
             let tmp_engine =
                 TemporaryRocks::new(&cfg).expect("failed to create temp engine for writing SSTs.");
@@ -431,6 +433,8 @@ fn main() {
             let ccfg = compact_log::ExecutionConfig {
                 from_ts,
                 until_ts,
+                prefetch_running_count,
+                prefetch_buffer_count,
                 compression,
                 compression_level,
             };

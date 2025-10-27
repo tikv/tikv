@@ -1514,6 +1514,7 @@ dependencies = [
  "async-compression",
  "bytes",
  "chrono",
+ "cloud",
  "codec",
  "crc64fast",
  "dashmap",
@@ -5073,7 +5074,7 @@ dependencies = [
 [[package]]
 name = "protobuf"
 version = "2.8.0"
-source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#6d445fe5ff4e99621a800be0f2c54dc96f056bac"
+source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#de31a47f395c2f46dbfea2545517ea1b27ad0096"
 dependencies = [
  "atomic",
  "bytes",
@@ -5109,7 +5110,7 @@ dependencies = [
 [[package]]
 name = "protobuf-codegen"
 version = "2.8.0"
-source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#6d445fe5ff4e99621a800be0f2c54dc96f056bac"
+source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#de31a47f395c2f46dbfea2545517ea1b27ad0096"
 dependencies = [
  "heck 0.3.1",
  "protobuf 2.8.0",

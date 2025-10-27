@@ -1,6 +1,7 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
-use std::{collections::HashSet, ops::Deref, sync::Arc};
+use std::{collections::HashSet, ops::Deref};
 
+use bytes::Bytes;
 use derive_more::Display;
 use kvproto::brpb::{self, FileType};
 
@@ -53,15 +54,15 @@ pub struct Subcompaction {
     pub input_min_ts: u64,
     pub compact_from_ts: u64,
     pub compact_to_ts: u64,
-    pub min_key: Arc<[u8]>,
-    pub max_key: Arc<[u8]>,
+    pub min_key: Bytes,
+    pub max_key: Bytes,
     pub epoch_hints: Vec<EpochHint>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EpochHint {
-    pub start_key: Arc<[u8]>,
-    pub end_key: Arc<[u8]>,
+    pub start_key: Bytes,
+    pub end_key: Bytes,
     pub region_epoch: Epoch,
 }
 
@@ -112,8 +113,8 @@ struct UnformedSubcompaction {
     inputs: Vec<Input>,
     min_ts: u64,
     max_ts: u64,
-    min_key: Arc<[u8]>,
-    max_key: Arc<[u8]>,
+    min_key: Bytes,
+    max_key: Bytes,
     epoch_hints: HashSet<EpochHint>,
 }
 
@@ -143,8 +144,8 @@ impl UnformedSubcompaction {
             size: self.size,
             input_min_ts: self.min_ts,
             input_max_ts: self.max_ts,
-            min_key: self.min_key.clone(),
-            max_key: self.max_key.clone(),
+            min_key: self.min_key,
+            max_key: self.max_key,
             compact_from_ts: cfg.compact_from_ts,
             compact_to_ts: cfg.compact_to_ts,
             subc_key: *key,
