@@ -22,7 +22,7 @@ impl SkipSmallCompaction {
 impl ExecHooks for SkipSmallCompaction {
     fn before_a_subcompaction_start(&mut self, _cid: CId, cx: SubcompactionStartCtx<'_>) {
         if cx.subc.size < self.size_threshold {
-            info!("Skipped a small compaction."; 
+            info!("Skipped a small compaction.";
                 "size" => cx.subc.size, "threshold" => self.size_threshold);
             cx.skip();
         }

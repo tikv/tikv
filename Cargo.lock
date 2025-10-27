@@ -1536,6 +1536,7 @@ dependencies = [
  "async-compression",
  "bytes",
  "chrono",
+ "cloud",
  "codec",
  "crc64fast",
  "dashmap",
@@ -3769,8 +3770,9 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#732fa68a7b728382566a31c48f5fabcfa5aee450"
+source = "git+https://github.com/pingcap/kvproto.git#0503050094661a00e390e3c235966791d1c59eb0"
 dependencies = [
+ "bytes",
  "futures 0.3.15",
  "grpcio",
  "protobuf 2.8.0",
@@ -5101,7 +5103,7 @@ dependencies = [
 [[package]]
 name = "protobuf"
 version = "2.8.0"
-source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#6d445fe5ff4e99621a800be0f2c54dc96f056bac"
+source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#de31a47f395c2f46dbfea2545517ea1b27ad0096"
 dependencies = [
  "atomic",
  "bytes",
@@ -5137,7 +5139,7 @@ dependencies = [
 [[package]]
 name = "protobuf-codegen"
 version = "2.8.0"
-source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#6d445fe5ff4e99621a800be0f2c54dc96f056bac"
+source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#de31a47f395c2f46dbfea2545517ea1b27ad0096"
 dependencies = [
  "heck 0.3.1",
  "protobuf 2.8.0",

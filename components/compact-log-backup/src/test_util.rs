@@ -8,6 +8,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use bytes::Bytes;
 use engine_rocks::RocksEngine;
 use engine_traits::{IterOptions, Iterator as _, RefIterable, SstExt};
 use external_storage::ExternalStorage;
@@ -17,8 +18,8 @@ use futures::{
     stream::StreamExt,
 };
 use keys::origin_key;
-use kvproto::brpb::{self, Metadata};
-use protobuf::{Message, parse_from_bytes};
+use kvproto::brpb;
+use protobuf::{Chars, Message, parse_from_bytes};
 use tempdir::TempDir;
 use tidb_query_datatype::codec::table::encode_row_key;
 use tikv_util::codec::stream_event::EventEncoder;
@@ -324,26 +325,22 @@ impl LogFileBuilder {
 
             min_ts: self.min_ts,
             max_ts: self.max_ts,
-            min_key: Arc::from(self.min_key.into_boxed_slice()),
-            max_key: Arc::from(self.max_key.into_boxed_slice()),
+            min_key: Bytes::from(self.min_key),
+            max_key: Bytes::from(self.max_key),
             number_of_entries: self.number_of_entries as i64,
             crc64xor: self.crc64xor,
             compression: self.compression,
             file_real_size: self.file_real_size,
 
             id: LogFileId {
-                name: Arc::from(self.name.into_boxed_str()),
+                name: Chars::from(self.name),
                 offset: 0,
                 length: cnt.get_ref().len() as u64,
             },
             min_start_ts: 0,
             table_id: 0,
             resolved_ts: 0,
-            sha256: Arc::from(
-                sha256(cnt.get_ref())
-                    .expect("cannot calculate sha256 for file")
-                    .into_boxed_slice(),
-            ),
+            sha256: Bytes::from(sha256(cnt.get_ref()).expect("cannot calculate sha256 for file")),
             region_start_key: self.region_start_key.map(|v| v.into_boxed_slice().into()),
             region_end_key: self.region_end_key.map(|v| v.into_boxed_slice().into()),
             region_epoches: self
@@ -390,13 +387,51 @@ pub async fn save_many_log_files(
     name: &str,
     log_files: impl IntoIterator<Item = LogFileBuilder>,
     st: &dyn ExternalStorage,
-) -> std::io::Result<Metadata> {
+) -> std::io::Result<brpb::Metadata> {
     let mut w = vec![];
     let mut md = build_many_log_files(log_files, &mut w)?;
     let cl = w.len() as u64;
     let v = &mut md.file_groups[0];
-    v.set_path(name.to_string());
+    v.set_path(name.into());
     st.write(name, ACursor::new(w).into(), cl).await?;
+    Ok(md)
+}
+
+/// Simulating a flush: save all log files and generate a metadata by them.
+/// Then save the generated metadata.
+pub async fn save_many_logs_files(
+    name: &str,
+    logs_files: impl IntoIterator<Item = impl IntoIterator<Item = LogFileBuilder>>,
+    st: &dyn ExternalStorage,
+) -> std::io::Result<brpb::Metadata> {
+    let mut md = brpb::Metadata::new();
+    md.set_meta_version(brpb::MetaVersion::V2);
+    for logs in logs_files {
+        let mut file_group = brpb::DataFileGroup::default();
+        let mut w = vec![];
+        let mut offset = 0;
+        for log in logs {
+            let (mut log_info, content) = log.build();
+            w.write_all(&content)?;
+            log_info.id.offset = offset;
+            log_info.id.length = content.len() as _;
+            md.min_ts = md.min_ts.min(log_info.min_ts);
+            md.max_ts = md.max_ts.max(log_info.max_ts);
+
+            let pb = log_info.into_pb();
+            file_group.data_files_info.push(pb);
+
+            offset += content.len() as u64;
+        }
+        file_group.set_length(offset);
+        let cl = w.len() as u64;
+        let file_group_name = format!("{name}.{}.log", md.file_groups.len());
+        st.write(&file_group_name, ACursor::new(w).into(), cl)
+            .await?;
+        file_group.set_path(file_group_name.into());
+        md.mut_file_groups().push(file_group);
+    }
+
     Ok(md)
 }
 
@@ -514,6 +549,55 @@ impl TmpStorage {
         b.must_save(self.storage.as_ref()).await
     }
 
+    pub async fn build_flush_logs(
+        &self,
+        log_path_prefix: &str,
+        meta_path: &str,
+        data_kv_file_builders: impl IntoIterator<Item = impl IntoIterator<Item = LogFileBuilder>>,
+    ) -> MetaFile {
+        self.build_flush_with_many_physical_files(
+            log_path_prefix,
+            meta_path,
+            data_kv_file_builders,
+            None::<std::iter::Empty<LogFileBuilder>>,
+        )
+        .await
+    }
+
+    pub async fn build_flush_with_many_physical_files(
+        &self,
+        log_path_prefix: &str,
+        meta_path: &str,
+        data_kv_file_builders: impl IntoIterator<Item = impl IntoIterator<Item = LogFileBuilder>>,
+        meta_kv_file_builders: Option<impl IntoIterator<Item = LogFileBuilder>>,
+    ) -> MetaFile {
+        let mut result = save_many_logs_files(
+            log_path_prefix,
+            data_kv_file_builders,
+            self.storage.as_ref(),
+        )
+        .await
+        .unwrap();
+        if let Some(builders) = meta_kv_file_builders {
+            let meta_kv_path = format!("meta_kv_{}", log_path_prefix);
+            let meta_result = save_many_log_files(&meta_kv_path, builders, self.storage.as_ref())
+                .await
+                .unwrap();
+            // hack way to merge different physical to one metadata.
+            result.file_groups.push(meta_result.file_groups[0].clone());
+        }
+        let content = result.write_to_bytes().unwrap();
+        self.storage
+            .write(
+                meta_path,
+                ACursor::new(&content).into(),
+                content.len() as u64,
+            )
+            .await
+            .unwrap();
+        MetaFile::from_file(Arc::from(meta_path), result)
+    }
+
     pub async fn build_flush(
         &self,
         log_path: &str,
@@ -548,7 +632,6 @@ impl TmpStorage {
             // hack way to merge different physical to one metadata.
             result.file_groups.push(meta_result.file_groups[0].clone());
         }
-
         let content = result.write_to_bytes().unwrap();
         self.storage
             .write(
