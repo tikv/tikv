@@ -255,7 +255,6 @@ impl Execution {
         let cx = AfterFinishCtx {
             async_rt: &Handle::current(),
             storage: &storage,
-            until_ts: self.cfg.until_ts,
         };
         hooks.after_execution_finished(cx).await?;
 

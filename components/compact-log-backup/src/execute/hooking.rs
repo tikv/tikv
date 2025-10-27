@@ -45,9 +45,6 @@ pub struct AfterFinishCtx<'a> {
     ///
     /// For now, it is always the same as the source storage.
     pub storage: &'a Arc<dyn ExternalStorage>,
-    /// The compaction until ts to skip saving some new metadatas into the
-    /// migration.
-    pub until_ts: u64,
 }
 
 #[derive(Clone, Copy)]

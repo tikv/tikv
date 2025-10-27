@@ -192,7 +192,7 @@ pub struct ExpiringFilesOfMeta {
 
     // Whether the data kv files has been compcated before. so we can skip it quickly.
     // Since we are not handle meta kv files. the destruct_self may not work here.
-    no_data_files_to_be_compacted: bool,
+    all_data_files_compacted: bool,
     /// The logical log files that can be removed.
     spans_of_file: HashMap<Chars, (Vec<brpb::Span>, /* physical file size */ u64)>,
 }
@@ -204,7 +204,7 @@ impl ExpiringFilesOfMeta {
             meta_path: Arc::clone(path),
             logs: vec![],
             destruct_self: false,
-            no_data_files_to_be_compacted: false,
+            all_data_files_compacted: false,
             spans_of_file: Default::default(),
         }
     }
@@ -214,7 +214,7 @@ impl ExpiringFilesOfMeta {
         self.logs.is_empty()
             && self.spans_of_file.is_empty()
             && !self.destruct_self
-            && !self.no_data_files_to_be_compacted
+            && !self.all_data_files_compacted
     }
 
     /// Get the list of physical files that can be deleted.
@@ -257,8 +257,8 @@ impl CompactionRunInfoBuilder {
         &mut self.compaction
     }
 
-    pub async fn write_migration(&self, s: Arc<dyn ExternalStorage>, until_ts: u64) -> Result<()> {
-        let migration = self.migration_of(self.find_expiring_files(s.clone(), until_ts).await?);
+    pub async fn write_migration(&self, s: Arc<dyn ExternalStorage>) -> Result<()> {
+        let migration = self.migration_of(self.find_expiring_files(s.clone()).await?);
         let wrapped_storage = MigrationStorageWrapper::new(s.as_ref());
         wrapped_storage.write(migration.into()).await?;
         Ok(())
@@ -276,7 +276,7 @@ impl CompactionRunInfoBuilder {
                 medit.delete_logical_files.push(span)
             }
             medit.destruct_self = files.destruct_self;
-            medit.all_data_files_compacted = files.no_data_files_to_be_compacted;
+            medit.all_data_files_compacted = files.all_data_files_compacted;
             migration.edit_meta.push(medit);
         }
         migration.mut_compactions().push(self.compaction.clone());
@@ -286,18 +286,15 @@ impl CompactionRunInfoBuilder {
     async fn find_expiring_files(
         &self,
         s: Arc<dyn ExternalStorage>,
-        until_ts: u64,
     ) -> Result<Vec<ExpiringFilesOfMeta>> {
         let ext = LoadFromExt::default();
         let mut storage = StreamMetaStorage::load_from_ext(&s, ext).await?;
 
         let mut result = vec![];
         while let Some(item) = storage.try_next().await? {
-            if item.min_ts <= until_ts {
-                let exp = self.expiring(&item);
-                if !exp.is_empty() {
-                    result.push(exp);
-                }
+            let exp = self.expiring(&item);
+            if !exp.is_empty() {
+                result.push(exp);
             }
         }
         Ok(result)
@@ -329,7 +326,7 @@ impl CompactionRunInfoBuilder {
     fn expiring(&self, file: &MetaFile) -> ExpiringFilesOfMeta {
         let mut result = ExpiringFilesOfMeta::of(&file.name);
         let mut all_full_covers = true;
-        let mut no_data_files_to_be_compacted = true;
+        let mut all_data_files_compacted = true;
         for p in &file.physical_files {
             let full_covers = self.full_covers(p);
             if full_covers {
@@ -350,12 +347,12 @@ impl CompactionRunInfoBuilder {
                 // Therefore, only if this physical file contains no `is_meta` entries
                 // should `all_data_files_full_covers` be set to false.
                 if p.files.iter().any(|f| !f.is_meta) {
-                    no_data_files_to_be_compacted = false;
+                    all_data_files_compacted = false;
                 }
             }
         }
         result.destruct_self = all_full_covers;
-        result.no_data_files_to_be_compacted = no_data_files_to_be_compacted;
+        result.all_data_files_compacted = all_data_files_compacted;
 
         result
     }
@@ -386,7 +383,7 @@ mod test {
 
     impl CompactionRunInfoBuilder {
         async fn mig(&self, s: Arc<dyn ExternalStorage>) -> crate::Result<brpb::Migration> {
-            Ok(self.migration_of(self.find_expiring_files(s, u64::MAX).await?))
+            Ok(self.migration_of(self.find_expiring_files(s).await?))
         }
     }
 
