@@ -545,13 +545,44 @@ impl<E: KvEngine> SstImporter<E> {
                 restore_config,
             )
             .await;
-        IMPORTER_DOWNLOAD_BYTES.observe(file_length as _);
+
+        // Clean up temporary file if download failed
+        if let Err(ref err) = result {
+            warn!("download failed, cleaning up temporary file";
+                "src_file" => src_file_name,
+                "dst_file" => %dst_file.display(),
+                "error" => %err
+            );
+
+            // Attempt to remove the partially downloaded file
+            if dst_file.exists() {
+                if let Some(ref manager) = self.key_manager {
+                    if let Err(cleanup_err) = manager.delete_file(dst_file.to_str().unwrap(), None)
+                    {
+                        warn!("failed to remove encryption metadata for temporary file";
+                            "file" => %dst_file.display(),
+                            "error" => %cleanup_err
+                        );
+                    }
+                }
+                if let Err(cleanup_err) = file_system::remove_file(&dst_file) {
+                    warn!("failed to remove temporary file after download failure";
+                        "file" => %dst_file.display(),
+                        "error" => %cleanup_err
+                    );
+                }
+            }
+        }
+
         result.map_err(|e| Error::CannotReadExternalStorage {
             url: util::url_for(&ext_storage),
             name: src_file_name.to_owned(),
             local_path: dst_file.clone(),
             err: e,
         })?;
+
+        // Only record successful download bytes
+        IMPORTER_DOWNLOAD_BYTES.observe(file_length as _);
 
         OpenOptions::new()
             .append(true)
@@ -3450,6 +3481,53 @@ mod tests {
                 if s.state().starts_with("Corruption:") => {}
             _ => panic!("unexpected download result: {:?}", result),
         }
+    }
+
+    #[test]
+    fn test_download_cleanup_on_failure() {
+        let ext_sst_dir = tempfile::tempdir().unwrap();
+        // Create an invalid/corrupted SST file that will cause download to fail
+        file_system::write(
+            ext_sst_dir.path().join("invalid.sst"),
+            b"invalid sst content",
+        )
+        .unwrap();
+
+        let mut meta = SstMeta::default();
+        meta.set_uuid(vec![0u8; 16]);
+        meta.set_length(100); // Set expected length different from actual file size
+
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer =
+            SstImporter::<TestEngine>::new(&cfg, &importer_dir, None, ApiVersion::V1, false)
+                .unwrap();
+
+        let db = create_sst_test_engine().unwrap();
+        let backend = external_storage::make_local_backend(ext_sst_dir.path());
+
+        // Get the expected temporary file path
+        let temp_path = importer.dir.join_for_write(&meta).unwrap().temp;
+
+        // Attempt download - this should fail due to length mismatch
+        let result = importer.download(
+            &meta,
+            &backend,
+            "invalid.sst",
+            &RewriteRule::default(),
+            None,
+            Limiter::new(f64::INFINITY),
+            db,
+        );
+
+        // Verify download failed
+        result.unwrap_err();
+
+        // Verify temporary file was cleaned up
+        assert!(
+            !temp_path.exists(),
+            "temporary file should be cleaned up after download failure"
+        );
     }
 
     #[test]

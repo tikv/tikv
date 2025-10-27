@@ -20,7 +20,7 @@ use tikv_util::{
 };
 
 use crate::{
-    Config, DataSink, RawRecords, Records, find_kth_cpu_time,
+    Config, DataSink, RawRecords, Records, RegionRecords, handle_records_impl,
     recorder::{CollectorGuard, CollectorRegHandle},
     reporter::{
         collector_impl::CollectorImpl,
@@ -47,6 +47,7 @@ pub struct Reporter {
 
     data_sinks: HashMap<DataSinkId, Box<dyn DataSink>>,
     records: Records,
+    region_records: RegionRecords,
 }
 
 impl Runnable for Reporter {
@@ -89,27 +90,21 @@ impl Reporter {
 
             data_sinks: HashMap::default(),
             records: Records::default(),
+            region_records: RegionRecords::default(),
         }
     }
 
     fn handle_records(&mut self, records: Arc<RawRecords>) {
         let ts = records.begin_unix_time_secs;
-        let agg_map = records.aggregate_by_extra_tag();
-        if self.config.max_resource_groups >= agg_map.len() {
-            self.records.append(ts, agg_map.iter());
-            return;
+        let n = self.config.max_resource_groups;
+        if self.config.enable_network_io_collection {
+            let (agg_tag_map, agg_region_map) = records.aggregate_by_extra_tag_and_region();
+            handle_records_impl(&mut self.records, true, &agg_tag_map, ts, n);
+            handle_records_impl(&mut self.region_records, true, &agg_region_map, ts, n);
+        } else {
+            let agg_map = records.aggregate_by_extra_tag();
+            handle_records_impl(&mut self.records, false, &agg_map, ts, n);
         }
-
-        let kth = find_kth_cpu_time(agg_map.iter(), self.config.max_resource_groups);
-        self.records
-            .append(ts, agg_map.iter().filter(move |(_, v)| v.cpu_time > kth));
-        let others = self.records.others.entry(ts).or_default();
-        agg_map
-            .iter()
-            .filter(move |(_, v)| v.cpu_time <= kth)
-            .for_each(|(_, v)| {
-                others.merge(v);
-            });
     }
 
     fn handle_config_change(&mut self, config: Config) {
@@ -140,7 +135,7 @@ impl Reporter {
         }
     }
 
-    fn upload(&mut self) {
+    fn upload_grouptag_record(&mut self) {
         // When either of records.records and records.others is not empty, we
         // will report it. Only when the cpu_time of all tags is equal, and the
         // number of tags exceeds the max_resource_group limit, will records.records
@@ -156,17 +151,38 @@ impl Reporter {
         // Whether endpoint exists or not, records should be taken in order to reset.
         let records = std::mem::take(&mut self.records);
         let report_data: Arc<Vec<ResourceUsageRecord>> = Arc::new(records.into());
-
         for data_sink in self.data_sinks.values_mut() {
             if let Err(err) = data_sink.try_send(report_data.clone()) {
-                warn!("failed to send data to datasink"; "error" => ?err);
+                warn!("failed to send data to datasink"; "group_by" => "tag", "error" => ?err);
             }
         }
+    }
+
+    fn upload_region_record(&mut self) {
+        if !self.config.enable_network_io_collection || self.region_records.is_empty() {
+            return;
+        }
+
+        warn!("upload region record");
+        // Whether endpoint exists or not, records should be taken in order to reset.
+        let region_records = std::mem::take(&mut self.region_records);
+        let report_data: Arc<Vec<ResourceUsageRecord>> = Arc::new(region_records.into());
+        for data_sink in self.data_sinks.values_mut() {
+            if let Err(err) = data_sink.try_send(report_data.clone()) {
+                warn!("failed to send data to datasink"; "group_by" => "region" ,"error" => ?err);
+            }
+        }
+    }
+
+    fn upload(&mut self) {
+        self.upload_grouptag_record();
+        self.upload_region_record();
     }
 
     fn reset(&mut self) {
         self.collector.take();
         self.records.clear();
+        self.region_records.clear();
     }
 }
 
@@ -255,11 +271,15 @@ mod tests {
     #[derive(Default, Clone)]
     struct MockDataSink {
         op_count: Arc<AtomicUsize>,
+        region_op_count: Arc<AtomicUsize>,
     }
 
     impl DataSink for MockDataSink {
         fn try_send(&mut self, _records: Arc<Vec<ResourceUsageRecord>>) -> Result<()> {
             self.op_count.fetch_add(1, SeqCst);
+            if !_records.is_empty() && _records[0].has_region_record() {
+                self.region_op_count.fetch_add(1, SeqCst);
+            }
             Ok(())
         }
     }
@@ -380,5 +400,54 @@ mod tests {
         assert_eq!(ds3.op_count.load(SeqCst), 2);
 
         r.shutdown();
+    }
+
+    #[test]
+    fn test_reporter_region_data() {
+        let scheduler = LazyWorker::new("test-worker").scheduler();
+        let collector_reg_handle = CollectorRegHandle::new_for_test();
+        let mut r = Reporter::new(Config::default(), collector_reg_handle, scheduler);
+
+        let client = MockDataSink::default();
+        r.run(Task::DataSinkReg(DataSinkReg::Register {
+            id: DataSinkId(1),
+            data_sink: Box::new(client.clone()),
+        }));
+        r.run(Task::ConfigChange(Config {
+            receiver_address: "abc".to_string(),
+            report_receiver_interval: ReadableDuration::minutes(2),
+            max_resource_groups: 3000,
+            precision: ReadableDuration::secs(2),
+            enable_network_io_collection: true,
+        }));
+        assert_eq!(r.get_interval(), Duration::from_secs(120));
+        let mut records = HashMap::default();
+        records.insert(
+            Arc::new(TagInfos {
+                store_id: 0,
+                region_id: 1,
+                peer_id: 0,
+                key_ranges: vec![],
+                extra_attachment: Arc::new(b"12345".to_vec()),
+            }),
+            RawRecord {
+                cpu_time: 1,
+                read_keys: 2,
+                write_keys: 3,
+                network_in_bytes: 4,
+                network_out_bytes: 5,
+                logical_read_bytes: 6,
+                logical_write_bytes: 7,
+            },
+        );
+        r.run(Task::Records(Arc::new(RawRecords {
+            begin_unix_time_secs: 123,
+            duration: Duration::default(),
+            records,
+        })));
+        r.on_timeout();
+        r.shutdown();
+        assert_eq!(client.op_count.load(SeqCst), 2);
+        assert_eq!(client.region_op_count.load(SeqCst), 1);
     }
 }
