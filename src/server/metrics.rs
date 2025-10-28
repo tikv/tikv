@@ -139,6 +139,15 @@ make_auto_flush_static_metric! {
     pub struct ReplicaReadLockCheckHistogramVec: LocalHistogram {
         "result" => ReplicaReadLockCheckResult,
     }
+
+    pub label_enum RaftMessageDurationKind {
+        send_wait,
+        receive_delay,
+    }
+
+    pub struct RaftMessageDurationVec: LocalHistogram {
+        "type" => RaftMessageDurationKind,
+    }
 }
 
 make_static_metric! {
@@ -396,6 +405,21 @@ lazy_static! {
         exponential_buckets(1f64, 2f64, 10).unwrap()
     )
     .unwrap();
+    pub static ref RAFT_CLIENT_WAIT_CONN_READY_DURATION_HISTOGRAM_VEC: HistogramVec =
+        register_histogram_vec!(
+            "tikv_server_raft_client_wait_ready_duration",
+            "Duration of wait raft client connection ready",
+            &["to"],
+            exponential_buckets(5e-5, 2.0, 22).unwrap()
+        )
+        .unwrap();
+    pub static ref RAFT_MESSAGE_DURATION_VEC: HistogramVec = register_histogram_vec!(
+        "tikv_server_raft_message_duration_seconds",
+        "Duration of raft messages.",
+        &["type"],
+        exponential_buckets(0.00001, 2.0, 26).unwrap()
+    )
+    .unwrap();
     pub static ref REPORT_FAILURE_MSG_COUNTER: IntCounterVec = register_int_counter_vec!(
         "tikv_server_report_failure_msg_total",
         "Total number of reporting failure messages",
@@ -529,6 +553,11 @@ impl From<ErrorHeaderKind> for RequestStatusKind {
             ErrorHeaderKind::Other => RequestStatusKind::err_other,
         }
     }
+}
+
+lazy_static! {
+    pub static ref RAFT_MESSAGE_DURATION: RaftMessageDurationVec =
+        auto_flush_from!(RAFT_MESSAGE_DURATION_VEC, RaftMessageDurationVec);
 }
 
 lazy_static! {

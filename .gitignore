@@ -20,6 +20,10 @@ out/
 
 # Vscode files
 .vscode/**
+.devcontainer/
+
+# Github files
+.github/instructions/**
 
 target
 dist

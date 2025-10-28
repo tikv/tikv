@@ -28,6 +28,7 @@ use grpcio::{
     CallOption, Channel, ChannelBuilder, ClientCStreamReceiver, ClientCStreamSender, Environment,
     MetadataBuilder, RpcStatusCode, WriteFlags,
 };
+use grpcio_health::proto::HealthClient;
 use kvproto::{
     raft_serverpb::{Done, RaftMessage, RaftSnapshotData},
     tikvpb::{BatchRaftMessage, TikvClient},
@@ -40,8 +41,9 @@ use tikv_kv::RaftExtension;
 use tikv_util::{
     config::{Tracker, VersionTrack},
     lru::LruCache,
+    time::{duration_to_sec, InstantExt},
     timer::GLOBAL_TIMER_HANDLE,
-    worker::Scheduler,
+    worker::{Scheduler, Worker},
 };
 use yatp::{task::future::TaskCell, ThreadPool};
 
@@ -94,7 +96,7 @@ impl From<u8> for ConnState {
 
 /// A quick queue for sending raft messages.
 struct Queue {
-    buf: ArrayQueue<RaftMessage>,
+    buf: ArrayQueue<(RaftMessage, Instant)>,
     conn_state: AtomicU8,
     waker: Mutex<Option<Waker>>,
 }
@@ -115,9 +117,9 @@ impl Queue {
     /// finally.
     ///
     /// True when the message is pushed into queue otherwise false.
-    fn push(&self, msg: RaftMessage) -> Result<(), DiscardReason> {
+    fn push(&self, msg_with_time: (RaftMessage, Instant)) -> Result<(), DiscardReason> {
         match self.conn_state.load(Ordering::SeqCst).into() {
-            ConnState::Established => match self.buf.push(msg) {
+            ConnState::Established => match self.buf.push(msg_with_time) {
                 Ok(()) => Ok(()),
                 Err(_) => Err(DiscardReason::Full),
             },
@@ -147,7 +149,7 @@ impl Queue {
     }
 
     /// Gets message from the head of the queue.
-    fn try_pop(&self) -> Option<RaftMessage> {
+    fn try_pop(&self) -> Option<(RaftMessage, Instant)> {
         self.buf.pop()
     }
 
@@ -157,7 +159,7 @@ impl Queue {
     /// The method should be called in polling context. If the queue is empty,
     /// it will register current polling task for notifications.
     #[inline]
-    fn pop(&self, ctx: &Context<'_>) -> Option<RaftMessage> {
+    fn pop(&self, ctx: &Context<'_>) -> Option<(RaftMessage, Instant)> {
         self.buf.pop().or_else(|| {
             {
                 let mut waker = self.waker.lock().unwrap();
@@ -176,7 +178,7 @@ trait Buffer {
     /// A full buffer should be flushed successfully before calling `push`.
     fn full(&self) -> bool;
     /// Pushes the message into buffer.
-    fn push(&mut self, msg: RaftMessage);
+    fn push(&mut self, msg_with_time: (RaftMessage, Instant));
     /// Checks if the batch is empty.
     fn empty(&self) -> bool;
     /// Flushes the message to grpc.
@@ -196,8 +198,8 @@ trait Buffer {
 
 /// A buffer for BatchRaftMessage.
 struct BatchMessageBuffer {
-    batch: BatchRaftMessage,
-    overflowing: Option<RaftMessage>,
+    batch: Vec<(RaftMessage, Instant)>,
+    overflowing: Option<(RaftMessage, Instant)>,
     size: usize,
     cfg: Config,
     cfg_tracker: Tracker<Config>,
@@ -212,7 +214,7 @@ impl BatchMessageBuffer {
         let cfg_tracker = Arc::clone(global_cfg_track).tracker("raft-client-buffer".into());
         let cfg = global_cfg_track.value().clone();
         BatchMessageBuffer {
-            batch: BatchRaftMessage::default(),
+            batch: Vec::with_capacity(cfg.raft_msg_max_batch_size),
             overflowing: None,
             size: 0,
             cfg,
@@ -244,7 +246,7 @@ impl BatchMessageBuffer {
 
     #[cfg(test)]
     fn clear(&mut self) {
-        self.batch = BatchRaftMessage::default();
+        self.batch.clear();
         self.size = 0;
         self.overflowing = None;
         // try refresh config
@@ -261,34 +263,39 @@ impl Buffer for BatchMessageBuffer {
     }
 
     #[inline]
-    fn push(&mut self, msg: RaftMessage) {
-        let msg_size = Self::message_size(&msg);
+    fn push(&mut self, msg_with_time: (RaftMessage, Instant)) {
+        let msg_size = Self::message_size(&msg_with_time.0);
         // To avoid building too large batch, we limit each batch's size. Since
         // `msg_size` is estimated, `GRPC_SEND_MSG_BUF` is reserved for errors.
         if self.size > 0
             && (self.size + msg_size + self.cfg.raft_client_grpc_send_msg_buffer
                 >= self.cfg.max_grpc_send_msg_len as usize
-                || self.batch.get_msgs().len() >= self.cfg.raft_msg_max_batch_size)
+                || self.batch.len() >= self.cfg.raft_msg_max_batch_size)
         {
-            self.overflowing = Some(msg);
+            self.overflowing = Some(msg_with_time);
             return;
         }
         self.size += msg_size;
-        self.batch.mut_msgs().push(msg);
+        self.batch.push(msg_with_time);
     }
 
     #[inline]
     fn empty(&self) -> bool {
-        self.batch.get_msgs().is_empty()
+        self.batch.is_empty()
     }
 
     #[inline]
     fn flush(&mut self, sender: &mut ClientCStreamSender<BatchRaftMessage>) -> grpcio::Result<()> {
-        let batch = mem::take(&mut self.batch);
-        let res = Pin::new(sender).start_send((
-            batch,
-            WriteFlags::default().buffer_hint(self.overflowing.is_some()),
-        ));
+        let mut batch_msgs = BatchRaftMessage::default();
+        let buffer_hint = self.overflowing.is_some();
+        for (msg, enqueue_time) in self.batch.drain(..) {
+            RAFT_MESSAGE_DURATION
+                .send_wait
+                .observe(enqueue_time.saturating_elapsed().as_secs_f64());
+            batch_msgs.mut_msgs().push(msg);
+        }
+        let res = Pin::new(sender)
+            .start_send((batch_msgs, WriteFlags::default().buffer_hint(buffer_hint)));
 
         self.size = 0;
         if let Some(more) = self.overflowing.take() {
@@ -341,8 +348,8 @@ impl Buffer for MessageBuffer {
     }
 
     #[inline]
-    fn push(&mut self, msg: RaftMessage) {
-        self.batch.push_back(msg);
+    fn push(&mut self, msg_with_time: (RaftMessage, Instant)) {
+        self.batch.push_back(msg_with_time.0);
     }
 
     #[inline]
@@ -470,8 +477,8 @@ where
 
     fn fill_msg(&mut self, ctx: &Context<'_>) {
         while !self.buffer.full() {
-            let msg = match self.queue.pop(ctx) {
-                Some(msg) => msg,
+            let (msg, enqueue_time) = match self.queue.pop(ctx) {
+                Some(msg_with_time) => msg_with_time,
                 None => return,
             };
             if msg.get_message().has_snapshot() {
@@ -489,7 +496,7 @@ where
                     rep.report(SnapshotStatus::Finish);
                 }
             }
-            self.buffer.push(msg);
+            self.buffer.push((msg, enqueue_time));
         }
     }
 }
@@ -686,7 +693,7 @@ where
     fn clear_pending_message(&self, reason: &str) {
         let len = self.queue.len();
         for _ in 0..len {
-            let msg = self.queue.try_pop().unwrap();
+            let (msg, _) = self.queue.try_pop().unwrap();
             report_unreachable(&self.builder.router, &msg)
         }
         REPORT_FAILURE_MSG_COUNTER
@@ -814,7 +821,13 @@ async fn start<S, R>(
     let mut last_wake_time = None;
     let backoff_duration = back_end.builder.cfg.value().raft_client_max_backoff.0;
     let mut addr_channel = None;
+    let mut begin = None;
+    let mut try_count = 0;
     loop {
+        if begin.is_none() {
+            begin = Some(Instant::now());
+        }
+        try_count += 1;
         maybe_backoff(backoff_duration, &mut last_wake_time).await;
         let f = back_end.resolve();
         let addr = match f.await {
@@ -829,8 +842,9 @@ async fn start<S, R>(
                 error_unknown!(?e; "resolve store address failed"; "store_id" => back_end.store_id,);
                 if let ResolveError::StoreTombstone(_) = e {
                     let mut pool = pool.lock().unwrap();
-                    if let Some(s) = pool.connections.remove(&(back_end.store_id, conn_id)) {
-                        s.set_conn_state(ConnState::Disconnected);
+                    if let Some(conn_info) = pool.connections.remove(&(back_end.store_id, conn_id))
+                    {
+                        conn_info.queue.set_conn_state(ConnState::Disconnected);
                     }
                     pool.tombstone_stores.insert(back_end.store_id);
                     return;
@@ -850,7 +864,7 @@ async fn start<S, R>(
 
         debug!("connecting to store"; "store_id" => back_end.store_id, "addr" => %addr);
         if !channel.wait_for_connected(backoff_duration).await {
-            error!("wait connect timeout"; "store_id" => back_end.store_id, "addr" => addr);
+            warn!("wait connect timeout"; "store_id" => back_end.store_id, "addr" => addr);
 
             // Clears pending messages to avoid consuming high memory when one node is
             // shutdown.
@@ -862,7 +876,30 @@ async fn start<S, R>(
                 .report_store_unreachable(back_end.store_id);
             continue;
         } else {
-            debug!("connection established"; "store_id" => back_end.store_id, "addr" => %addr);
+            let wait_conn_duration = begin.unwrap_or_else(Instant::now).elapsed();
+            info!(
+                "connection established";
+                "store_id" => back_end.store_id,
+                "addr" => %addr,
+                "cost" => ?wait_conn_duration,
+                "msg_count" => back_end.queue.len(),
+                "try_count" => try_count,
+            );
+            RAFT_CLIENT_WAIT_CONN_READY_DURATION_HISTOGRAM_VEC
+                .with_label_values(&[addr.as_str()])
+                .observe(duration_to_sec(wait_conn_duration));
+            begin = None;
+            try_count = 0;
+
+            {
+                let mut pool_guard = pool.lock().unwrap();
+                if let Some(conn_info) = pool_guard
+                    .connections
+                    .get_mut(&(back_end.store_id, conn_id))
+                {
+                    conn_info.channel = Some(channel.clone());
+                }
+            }
         }
 
         let client = TikvClient::new(channel);
@@ -882,7 +919,7 @@ async fn start<S, R>(
             }
             // Err(_) should be tx is dropped
             Ok(RaftCallRes::Disconnected) | Err(_) => {
-                error!("connection abort"; "store_id" => back_end.store_id, "addr" => addr);
+                warn!("connection abort"; "store_id" => back_end.store_id, "addr" => addr);
                 REPORT_FAILURE_MSG_COUNTER
                     .with_label_values(&["unreachable", &back_end.store_id.to_string()])
                     .inc_by(1);
@@ -891,9 +928,31 @@ async fn start<S, R>(
                     .router
                     .report_store_unreachable(back_end.store_id);
                 addr_channel = None;
+
+                let mut pool_guard = pool.lock().unwrap();
+                if let Some(conn_info) = pool_guard
+                    .connections
+                    .get_mut(&(back_end.store_id, conn_id))
+                {
+                    conn_info.channel = None;
+                }
             }
         }
     }
+}
+
+/// Connection information for a specific store connection.
+///
+/// This struct contains the essential components needed to manage a connection
+/// to a remote TiKV store, including message queuing and gRPC channel
+/// management.
+struct ConnectionInfo {
+    /// Message queue for buffering raft messages before sending.
+    queue: Arc<Queue>,
+
+    /// Optional gRPC channel for the connection.
+    /// This is `None` when the connection is not established or has been lost.
+    channel: Option<Channel>,
 }
 
 /// A global connection pool.
@@ -902,7 +961,7 @@ async fn start<S, R>(
 /// from the struct, all cache clone should also remove it at some time.
 #[derive(Default)]
 struct ConnectionPool {
-    connections: HashMap<(u64, usize), Arc<Queue>>,
+    connections: HashMap<(u64, usize), ConnectionInfo>,
     tombstone_stores: HashSet<u64>,
     store_allowlist: Vec<u64>,
 }
@@ -910,12 +969,14 @@ struct ConnectionPool {
 impl ConnectionPool {
     fn set_store_allowlist(&mut self, stores: Vec<u64>) {
         self.store_allowlist = stores;
-        for (&(store_id, _), q) in self.connections.iter() {
+        let need_pause_check = !self.store_allowlist.is_empty();
+        let allowlist = &self.store_allowlist;
+        for (&(store_id, _), conn_info) in self.connections.iter_mut() {
             let mut state = ConnState::Established;
-            if self.need_pause(store_id) {
+            if need_pause_check && !allowlist.contains(&store_id) {
                 state = ConnState::Paused;
             }
-            q.set_conn_state(state);
+            conn_info.queue.set_conn_state(state);
         }
     }
 
@@ -956,6 +1017,8 @@ pub struct RaftClient<S, R> {
     future_pool: Arc<ThreadPool<TaskCell>>,
     builder: ConnectionBuilder<S, R>,
     last_hash: (u64, u64),
+
+    health_checker: HealthChecker,
 }
 
 impl<S, R> RaftClient<S, R>
@@ -963,21 +1026,34 @@ where
     S: StoreAddrResolver + Send + 'static,
     R: RaftExtension + Unpin + Send + 'static,
 {
-    pub fn new(self_store_id: u64, builder: ConnectionBuilder<S, R>) -> Self {
+    pub fn new(
+        self_store_id: u64,
+        builder: ConnectionBuilder<S, R>,
+        inspect_interval: Duration,
+        background_worker: Worker,
+    ) -> Self {
         let future_pool = Arc::new(
             yatp::Builder::new(thd_name!("raft-stream"))
                 .max_thread_count(1)
                 .build_future_pool(),
         );
+        let pool: Arc<Mutex<ConnectionPool>> = Arc::default();
+        let health_checker = HealthChecker::new(
+            self_store_id,
+            pool.clone(),
+            inspect_interval,
+            background_worker.clone(),
+        );
         RaftClient {
             self_store_id,
-            pool: Arc::default(),
+            pool,
             cache: LruCache::with_capacity_and_sample(0, 7),
             need_flush: vec![],
             full_stores: vec![],
             future_pool,
             builder,
             last_hash: (0, 0),
+            health_checker,
         }
     }
 
@@ -995,7 +1071,7 @@ where
                 return false;
             }
             let need_pause = pool.need_pause(store_id);
-            let conn = pool
+            let conn_info = pool
                 .connections
                 .entry((store_id, conn_id))
                 .or_insert_with(|| {
@@ -1013,10 +1089,13 @@ where
                     };
                     self.future_pool
                         .spawn(start(back_end, conn_id, self.pool.clone()));
-                    queue
-                })
-                .clone();
-            (conn, pool.connections.len())
+                    ConnectionInfo {
+                        queue: queue.clone(),
+                        channel: None,
+                    }
+                });
+            let queue = conn_info.queue.clone();
+            (queue, pool.connections.len())
         };
         self.cache.resize(pool_len);
         self.cache.insert(
@@ -1050,6 +1129,8 @@ where
             self.last_hash.1 as usize
         };
 
+        let wait_send_start = Instant::now();
+
         #[allow(unused_mut)]
         let mut transport_on_send_store_fp = || {
             fail_point!(
@@ -1073,7 +1154,7 @@ where
         transport_on_send_store_fp();
         loop {
             if let Some(s) = self.cache.get_mut(&(store_id, conn_id)) {
-                match s.queue.push(msg) {
+                match s.queue.push((msg, wait_send_start)) {
                     Ok(_) => {
                         if !s.dirty {
                             s.dirty = true;
@@ -1143,9 +1224,9 @@ where
                 continue;
             }
             let l = self.pool.lock().unwrap();
-            if let Some(q) = l.connections.get(id) {
+            if let Some(conn_info) = l.connections.get(id) {
                 counter += 1;
-                q.notify();
+                conn_info.queue.notify();
             }
         }
         self.need_flush.clear();
@@ -1153,6 +1234,40 @@ where
             self.need_flush.shrink_to(512);
         }
         RAFT_MESSAGE_FLUSH_COUNTER.wake.inc_by(counter);
+    }
+
+    // Start the network inspection
+    pub fn start_network_inspection(&self) {
+        let health_checker = self.health_checker.clone();
+        self.future_pool.spawn(async move {
+            health_checker.run().await;
+        });
+    }
+
+    /// Get the maximum latency for a specific store and reset it to 0
+    /// Returns the latency in milliseconds, or None if no latency recorded for
+    /// this store
+    pub fn get_and_reset_max_latency(&self, store_id: u64) -> Option<f64> {
+        self.health_checker.get_and_reset_max_latency(store_id)
+    }
+
+    /// Get all maximum latencies and reset them
+    /// Returns a HashMap of store_id -> max_latency_ms
+    pub fn get_and_reset_all_max_latencies(&self) -> HashMap<u64, f64> {
+        self.health_checker.get_and_reset_all_max_latencies()
+    }
+
+    /// Get the maximum latency for a specific store without resetting
+    /// Returns the latency in milliseconds, or None if no latency recorded for
+    /// this store
+    pub fn get_max_latency(&self, store_id: u64) -> Option<f64> {
+        self.health_checker.get_max_latency(store_id)
+    }
+
+    /// Get all maximum latencies without resetting
+    /// Returns a HashMap of store_id -> max_latency_ms
+    pub fn get_all_max_latencies(&self) -> HashMap<u64, f64> {
+        self.health_checker.get_all_max_latencies()
     }
 
     pub fn set_store_allowlist(&mut self, stores: Vec<u64>) {
@@ -1176,16 +1291,320 @@ where
             future_pool: self.future_pool.clone(),
             builder: self.builder.clone(),
             last_hash: (0, 0),
+            health_checker: self.health_checker.clone(),
         }
+    }
+}
+
+#[derive(Clone)]
+pub struct HealthChecker {
+    self_store_id: u64,
+    pool: Arc<Mutex<ConnectionPool>>,
+    inspect_interval: Duration,
+    task_handles: Arc<Mutex<HashMap<u64, oneshot::Sender<()>>>>,
+    background_worker: Worker,
+    max_latencies: Arc<Mutex<HashMap<u64, f64>>>,
+}
+
+impl HealthChecker {
+    fn new(
+        self_store_id: u64,
+        pool: Arc<Mutex<ConnectionPool>>,
+        inspect_interval: Duration,
+        background_worker: Worker,
+    ) -> Self {
+        HealthChecker {
+            self_store_id,
+            pool,
+            inspect_interval,
+            task_handles: Arc::new(Mutex::new(HashMap::default())),
+            background_worker,
+            max_latencies: Arc::new(Mutex::new(HashMap::default())),
+        }
+    }
+
+    /// Main control loop that manages inspection tasks for all stores
+    pub async fn run(&self) {
+        if self.inspect_interval.is_zero() {
+            info!("Network inspection is disabled.");
+            return;
+        }
+        let mut watched_stores = HashSet::default();
+        let check_interval = (|| {
+            fail_point!("network_inspection_interval", |_| {
+                Duration::from_millis(10)
+            });
+            Duration::from_secs(30)
+        })();
+
+        loop {
+            // Check current stores in the pool
+            let current_stores: HashSet<u64> = {
+                let pool_guard = self.pool.lock().unwrap();
+                pool_guard
+                    .connections
+                    .keys()
+                    .map(|(store_id, _)| *store_id)
+                    .collect()
+            };
+
+            // Find stores that need to be added
+            for store_id in current_stores.difference(&watched_stores) {
+                self.start_store_inspection(*store_id);
+            }
+
+            // Find stores that need to be removed
+            for store_id in watched_stores.difference(&current_stores) {
+                self.stop_store_inspection(*store_id);
+            }
+
+            watched_stores = current_stores;
+            if let Err(e) = GLOBAL_TIMER_HANDLE
+                .delay(Instant::now() + check_interval)
+                .compat()
+                .await
+            {
+                error!("failed to delay in store inspection management"; "error" => ?e);
+            }
+        }
+    }
+
+    /// Start inspection task for a specific store
+    fn start_store_inspection(&self, store_id: u64) {
+        info!("Starting health check inspection for store"; "store_id" => store_id);
+
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+
+        // Store the shutdown sender
+        {
+            let mut handles = self.task_handles.lock().unwrap();
+            handles.insert(store_id, shutdown_tx);
+        }
+
+        // Spawn the inspection task using the background worker
+        let pool = self.pool.clone();
+        let inspect_interval = self.inspect_interval;
+        let max_latencies = self.max_latencies.clone();
+        let self_store_id = self.self_store_id;
+
+        self.background_worker.spawn_async_task(async move {
+            Self::store_inspection_loop(
+                self_store_id,
+                store_id,
+                pool,
+                inspect_interval,
+                max_latencies,
+                shutdown_rx,
+            )
+            .await;
+        });
+    }
+
+    /// Stop inspection task for a specific store
+    fn stop_store_inspection(&self, store_id: u64) {
+        info!("Stopping health check inspection for store"; "store_id" => store_id);
+
+        let shutdown_tx = {
+            let mut handles = self.task_handles.lock().unwrap();
+            handles.remove(&store_id)
+        };
+
+        if let Some(tx) = shutdown_tx {
+            let _ = tx.send(());
+        }
+    }
+
+    /// Main inspection loop for a single store
+    async fn store_inspection_loop(
+        self_store_id: u64,
+        store_id: u64,
+        pool: Arc<Mutex<ConnectionPool>>,
+        inspect_interval: Duration,
+        max_latencies: Arc<Mutex<HashMap<u64, f64>>>,
+        mut shutdown_rx: oneshot::Receiver<()>,
+    ) {
+        let mut last_check_time = Instant::now();
+
+        loop {
+            // Check if we should shutdown
+            if let Ok(Some(())) = shutdown_rx.try_recv() {
+                info!("Shutting down health check inspection for store"; "store_id" => store_id);
+                // Reset max latency for this store
+                {
+                    let mut max_latencies = max_latencies.lock().unwrap();
+                    max_latencies.remove(&store_id);
+                }
+                break;
+            }
+
+            // Wait for the specified interval
+            if let Err(e) = GLOBAL_TIMER_HANDLE
+                .delay(last_check_time + inspect_interval)
+                .compat()
+                .await
+            {
+                error!("failed to latency in network inspection"; "store_id" => store_id, "error" => ?e);
+                continue;
+            }
+
+            last_check_time = Instant::now();
+
+            // Get connections for this specific store
+            let store_connections: Vec<(usize, Arc<Queue>, Option<Channel>)> = {
+                let pool_guard = pool.lock().unwrap();
+                pool_guard
+                    .connections
+                    .iter()
+                    .filter_map(|((sid, conn_id), conn_info)| {
+                        if *sid == store_id {
+                            Some((*conn_id, conn_info.queue.clone(), conn_info.channel.clone()))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            };
+
+            // If no connections for this store, continue
+            if store_connections.is_empty() {
+                continue;
+            }
+
+            // Perform health check for each connection of this store
+            for (conn_id, queue, channel_opt) in store_connections {
+                // Skip if the connection is not established
+                if queue.conn_state.load(Ordering::SeqCst) != ConnState::Established as u8 {
+                    continue;
+                }
+
+                // Get the channel if available
+                if let Some(channel) = channel_opt {
+                    Self::perform_health_check(
+                        self_store_id,
+                        store_id,
+                        conn_id,
+                        channel,
+                        max_latencies.clone(),
+                    )
+                    .await;
+
+                    break;
+                }
+            }
+        }
+    }
+
+    async fn perform_health_check(
+        self_store_id: u64,
+        store_id: u64,
+        conn_id: usize,
+        channel: Channel,
+        max_latencies: Arc<Mutex<HashMap<u64, f64>>>,
+    ) {
+        let start_time = Instant::now();
+
+        let health_client = HealthClient::new(channel);
+
+        let mut req = grpcio_health::proto::HealthCheckRequest::new();
+        req.set_service("".to_string()); // Empty service name for overall health
+
+        // Slow score calculation algorithm
+        //   1. By default, the latency is sampled every 100ms, and latencies exceeding
+        //      1s are considered timeouts.
+        //   2. A slow score is calculated every 3 samples. If there are n timeouts in
+        //      the 3 samples, the slow score is multiplied by 2^(n/3).
+        // If a request does not return within 5s, it will resulting in 40(4s) timeout
+        // samples. Thus, the slow score will reach 2^(40/3) > 100. Since the upper
+        // limit of the slow score (100) has already been reached, the probing
+        // can be stopped.
+        let call_opt = CallOption::default().timeout(Duration::from_secs(5));
+
+        match health_client.check_async_opt(&req, call_opt) {
+            Ok(resp_future) => {
+                let _ = resp_future.await;
+                let elapsed = start_time.elapsed();
+
+                let latency_ms = elapsed.as_secs_f64() * 1000.0;
+                {
+                    let mut latencies = max_latencies.lock().unwrap();
+                    let current_max = latencies.entry(store_id).or_insert(0.0);
+                    if latency_ms > *current_max {
+                        *current_max = latency_ms;
+                    }
+                }
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to create health check request";
+                    "self_store_id" => self_store_id,
+                    "store_id" => store_id,
+                    "conn_id" => conn_id,
+                    "error" => ?e
+                );
+            }
+        }
+    }
+
+    /// Get the maximum latency for a specific store and reset it to 0
+    /// Returns the latency in milliseconds, or None if no latency recorded for
+    /// this store
+    pub fn get_and_reset_max_latency(&self, store_id: u64) -> Option<f64> {
+        let mut latencies = self.max_latencies.lock().unwrap();
+        latencies.remove(&store_id)
+    }
+
+    /// Get all maximum latencies and reset them
+    /// Returns a HashMap of store_id -> max_latency_ms
+    pub fn get_and_reset_all_max_latencies(&self) -> HashMap<u64, f64> {
+        let mut latencies = self.max_latencies.lock().unwrap();
+        std::mem::take(&mut *latencies)
+    }
+
+    /// Get the maximum latency for a specific store without resetting
+    /// Returns the latency in milliseconds, or None if no latency recorded for
+    /// this store
+    pub fn get_max_latency(&self, store_id: u64) -> Option<f64> {
+        let latencies = self.max_latencies.lock().unwrap();
+        latencies.get(&store_id).copied()
+    }
+
+    /// Get all maximum latencies without resetting
+    /// Returns a HashMap of store_id -> max_latency_ms
+    pub fn get_all_max_latencies(&self) -> HashMap<u64, f64> {
+        let latencies = self.max_latencies.lock().unwrap();
+        latencies.clone()
+    }
+}
+
+impl Drop for HealthChecker {
+    fn drop(&mut self) {
+        info!(
+            "Shutting down HealthChecker, sending shutdown signals to all running inspection tasks"
+        );
+
+        // Send shutdown signals to all running inspection tasks
+        let mut handles = self.task_handles.lock().unwrap();
+        for (store_id, shutdown_tx) in handles.drain() {
+            info!("Sending shutdown signal to inspection task for store"; "store_id" => store_id);
+            if shutdown_tx.send(()).is_err() {
+                warn!("Failed to send shutdown signal to inspection task for store"; "store_id" => store_id);
+            }
+        }
+
+        info!("HealthChecker shutdown complete, all inspection tasks signaled to stop");
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
 
     use kvproto::{metapb::RegionEpoch, raft_serverpb::RaftMessage};
     use raft::eraftpb::Snapshot;
+    use tikv_util::worker::Worker;
 
     use super::*;
     use crate::server::load_statistics::ThreadLoadPool;
@@ -1212,7 +1631,7 @@ mod tests {
             if i != 0 {
                 msg.mut_message().set_context(context.into());
             }
-            msg_buf.push(msg);
+            msg_buf.push((msg, Instant::now()));
         }
         assert!(msg_buf.full());
     }
@@ -1240,7 +1659,7 @@ mod tests {
             if i != 0 {
                 msg.set_extra_ctx(ctx);
             }
-            msg_buf.push(msg);
+            msg_buf.push((msg, Instant::now()));
         }
         assert!(msg_buf.full());
     }
@@ -1270,9 +1689,9 @@ mod tests {
 
         let default_grpc_msg_len = msg_buf.cfg.max_grpc_send_msg_len as usize;
         let max_msg_len = default_grpc_msg_len - msg_buf.cfg.raft_client_grpc_send_msg_buffer;
-        msg_buf.push(new_test_msg(max_msg_len));
+        msg_buf.push((new_test_msg(max_msg_len), Instant::now()));
         assert!(!msg_buf.full());
-        msg_buf.push(new_test_msg(1));
+        msg_buf.push((new_test_msg(1), Instant::now()));
         assert!(msg_buf.full());
 
         // update config
@@ -1285,10 +1704,10 @@ mod tests {
         let new_max_msg_len =
             default_grpc_msg_len * 2 - msg_buf.cfg.raft_client_grpc_send_msg_buffer;
         for _i in 0..2 {
-            msg_buf.push(new_test_msg(new_max_msg_len / 2 - 1));
+            msg_buf.push((new_test_msg(new_max_msg_len / 2 - 1), Instant::now()));
             assert!(!msg_buf.full());
         }
-        msg_buf.push(new_test_msg(2));
+        msg_buf.push((new_test_msg(2), Instant::now()));
         assert!(msg_buf.full());
     }
 
@@ -1302,12 +1721,95 @@ mod tests {
 
         b.iter(|| {
             for _i in 0..10 {
-                msg_buf.push(test::black_box(new_test_msg(1024)));
+                msg_buf.push(test::black_box((new_test_msg(1024), Instant::now())));
             }
             // run clear to mock flush.
             msg_buf.clear();
 
             test::black_box(&mut msg_buf);
         });
+    }
+
+    #[test]
+    fn test_health_checker_creation() {
+        let self_store_id = 1;
+        let pool: Arc<Mutex<ConnectionPool>> = Arc::default();
+        let interval = Duration::from_millis(100);
+        let background_worker = Worker::new("test-worker");
+
+        let health_checker =
+            HealthChecker::new(self_store_id, pool.clone(), interval, background_worker);
+
+        assert_eq!(health_checker.self_store_id, self_store_id);
+        assert!(Arc::ptr_eq(&health_checker.pool, &pool));
+        assert_eq!(health_checker.inspect_interval, interval);
+        assert!(health_checker.task_handles.lock().unwrap().is_empty());
+        assert!(health_checker.max_latencies.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_health_checker_latency_management() {
+        let self_store_id = 1;
+        let pool: Arc<Mutex<ConnectionPool>> = Arc::default();
+        let interval = Duration::from_millis(100);
+        let background_worker = Worker::new("test-worker");
+
+        let health_checker = HealthChecker::new(self_store_id, pool, interval, background_worker);
+
+        {
+            let mut latencies = health_checker.max_latencies.lock().unwrap();
+            latencies.insert(1, 100.5);
+            latencies.insert(2, 200.8);
+            latencies.insert(3, 50.2);
+        }
+
+        assert_eq!(health_checker.get_max_latency(1), Some(100.5));
+        assert_eq!(health_checker.get_max_latency(2), Some(200.8));
+        assert_eq!(health_checker.get_max_latency(4), None);
+
+        let all_latencies = health_checker.get_all_max_latencies();
+        assert_eq!(all_latencies.len(), 3);
+        assert_eq!(all_latencies[&1], 100.5);
+        assert_eq!(all_latencies[&2], 200.8);
+        assert_eq!(all_latencies[&3], 50.2);
+
+        assert_eq!(health_checker.get_max_latency(1), Some(100.5));
+        assert_eq!(health_checker.get_and_reset_max_latency(1), Some(100.5));
+        assert_eq!(health_checker.get_max_latency(1), None);
+        assert_eq!(health_checker.get_max_latency(2), Some(200.8));
+
+        let remaining_latencies = health_checker.get_and_reset_all_max_latencies();
+        assert_eq!(remaining_latencies.len(), 2);
+        assert_eq!(remaining_latencies[&2], 200.8);
+        assert_eq!(remaining_latencies[&3], 50.2);
+
+        assert_eq!(health_checker.get_max_latency(2), None);
+        assert_eq!(health_checker.get_max_latency(3), None);
+        assert!(health_checker.get_all_max_latencies().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_health_checker_start_stop_store_inspection() {
+        let self_store_id = 1;
+        let pool: Arc<Mutex<ConnectionPool>> = Arc::default();
+        let interval = Duration::from_millis(50);
+        let background_worker = Worker::new("test-worker");
+
+        let health_checker = HealthChecker::new(self_store_id, pool, interval, background_worker);
+        let store_id = 2;
+
+        health_checker.start_store_inspection(store_id);
+
+        {
+            let handles = health_checker.task_handles.lock().unwrap();
+            assert!(handles.contains_key(&store_id));
+        }
+
+        health_checker.stop_store_inspection(store_id);
+
+        {
+            let handles = health_checker.task_handles.lock().unwrap();
+            assert!(!handles.contains_key(&store_id));
+        }
     }
 }
