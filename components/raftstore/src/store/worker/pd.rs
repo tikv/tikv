@@ -39,7 +39,7 @@ use service::service_manager::GrpcServiceManager;
 use tikv_util::{
     box_err, debug, error, info,
     metrics::ThreadInfoStatistics,
-    slow_score::SlowScore,
+    slow_score::{SlowScore, SlowScoreTickResult},
     store::QueryStats,
     sys::{disk::get_disk_space_stats, thread::StdThreadBuildWrapper, SysQuota},
     thd_name,
@@ -506,50 +506,26 @@ fn config(interval: Duration) -> Duration {
     interval
 }
 
-/// Determines the minimal interval for latency inspection ticks based on raft
-/// and kvdb inspection intervals.
+/// Determines the minimal interval for latency inspection ticks based on raft,
+/// kvdb, and network inspection intervals.
 ///
-/// This function handles different scenarios for latency inspection:
-/// 1. Both intervals are zero: Inspection is disabled, returns a large interval
-///    (1 hour)
-/// 2. Only raft interval is zero: Uses kvdb interval (raft inspection disabled)
-/// 3. Only kvdb interval is zero: Uses raft interval (kvdb inspection disabled)
-/// 4. Both intervals non-zero: Uses the smaller of the two intervals
-///
-/// # Arguments
-///
-/// * `inspect_latency_interval` - Interval for raft latency inspection
-/// * `inspect_kvdb_latency_interval` - Interval for kvdb latency inspection
-///
-/// # Returns
-///
-/// The minimal interval that should be used for latency inspection ticks
+/// Returns the smallest non-zero interval among the provided values. If all
+/// inspections are disabled (intervals are zero), falls back to a large value
+/// to effectively disable the ticker.
 fn get_minimal_inspect_tick_interval(
     inspect_latency_interval: Duration,
     inspect_kvdb_latency_interval: Duration,
+    inspect_network_latency_interval: Duration,
 ) -> Duration {
-    match (
-        inspect_latency_interval.is_zero(),
-        inspect_kvdb_latency_interval.is_zero(),
-    ) {
-        (true, true) => {
-            // Both inspections are disabled - return a large interval to avoid misleading
-            // tick checks
-            Duration::from_secs(3600)
-        }
-        (true, false) => {
-            // raft inspection disabled - use kvdb interval
-            inspect_kvdb_latency_interval
-        }
-        (false, true) => {
-            // kvdb inspection disabled - use raft interval
-            inspect_latency_interval
-        }
-        (false, false) => {
-            // Both inspections enabled - use the smaller interval
-            std::cmp::min(inspect_latency_interval, inspect_kvdb_latency_interval)
-        }
-    }
+    [
+        inspect_latency_interval,
+        inspect_kvdb_latency_interval,
+        inspect_network_latency_interval,
+    ]
+    .into_iter()
+    .filter(|interval| !interval.is_zero())
+    .min()
+    .unwrap_or_else(|| Duration::from_secs(3600))
 }
 
 #[inline]
@@ -664,6 +640,7 @@ where
     report_min_resolved_ts_interval: Duration,
     inspect_latency_interval: Duration,      // for raft mount path
     inspect_kvdb_latency_interval: Duration, // for kvdb mount path
+    inspect_network_latency_interval: Duration, // for network endpoints
 }
 
 impl<T> StatsMonitor<T>
@@ -675,6 +652,7 @@ where
         report_min_resolved_ts_interval: Duration,
         inspect_latency_interval: Duration,
         inspect_kvdb_latency_interval: Duration,
+        inspect_network_latency_interval: Duration,
         reporter: T,
     ) -> Self {
         StatsMonitor {
@@ -694,11 +672,13 @@ where
                 get_minimal_inspect_tick_interval(
                     inspect_latency_interval,
                     inspect_kvdb_latency_interval,
+                    inspect_network_latency_interval,
                 ),
                 interval.min(default_collect_tick_interval()),
             ),
             inspect_latency_interval,
             inspect_kvdb_latency_interval,
+            inspect_network_latency_interval,
         }
     }
 
@@ -716,6 +696,7 @@ where
                 get_minimal_inspect_tick_interval(
                     self.inspect_latency_interval,
                     self.inspect_kvdb_latency_interval,
+                    self.inspect_network_latency_interval,
                 ),
                 default_collect_tick_interval(),
             )
@@ -741,6 +722,9 @@ where
                 .div_duration_f64(tick_interval) as u64;
         let update_kvdisk_latency_stats_interval =
             self.inspect_kvdb_latency_interval
+                .div_duration_f64(tick_interval) as u64;
+        let update_network_latency_stats_interval =
+            self.inspect_network_latency_interval
                 .div_duration_f64(tick_interval) as u64;
 
         let (timer_tx, timer_rx) = mpsc::channel();
@@ -813,6 +797,9 @@ where
                     }
                     if is_enable_tick(timer_cnt, update_kvdisk_latency_stats_interval) {
                         reporter.update_latency_stats(timer_cnt, InspectFactor::KvDisk);
+                    }
+                    if is_enable_tick(timer_cnt, update_network_latency_stats_interval) {
+                        reporter.update_latency_stats(timer_cnt, InspectFactor::Network);
                     }
                     timer_cnt += 1;
                 }
@@ -933,28 +920,29 @@ fn hotspot_query_num_report_threshold() -> u64 {
 /// Max limitation of delayed store_heartbeat.
 const STORE_HEARTBEAT_DELAY_LIMIT: u64 = 5 * 60;
 
-/// A unified slow score that combines multiple slow scores.
+/// A unified slow score that combines multiple slow score factors.
 ///
-/// It calculates the final slow score of a store by picking the maximum
-/// score among multiple factors. Each factor represents a different aspect of
-/// the store's performance. Typically, we have two factors: Raft Disk I/O and
-/// KvDB Disk I/O. If there are more factors in the future, we can add them
-/// here.
-#[derive(Default)]
+/// Disk-related scores are tracked in a fixed list. Network slow scores are
+/// maintained per target store as they are collected dynamically from the
+/// raft client health checker.
 pub struct UnifiedSlowScore {
-    factors: Vec<SlowScore>,
+    disk_factors: Vec<SlowScore>,
+    network_factors: HashMap<u64, SlowScore>,
+    inspect_network_interval: Duration,
 }
 
 impl UnifiedSlowScore {
     pub fn new(cfg: &Config) -> Self {
-        let mut unified_slow_score = UnifiedSlowScore::default();
-        // The first factor is for Raft Disk I/O.
+        let mut unified_slow_score = UnifiedSlowScore {
+            disk_factors: Vec::new(),
+            network_factors: HashMap::default(),
+            inspect_network_interval: cfg.inspect_network_interval.0,
+        };
         unified_slow_score
-            .factors
-            .push(SlowScore::new(cfg.inspect_interval.0));
-        // The second factor is for KvDB Disk I/O.
+            .disk_factors
+            .push(SlowScore::new_disk(cfg.inspect_interval.0));
         unified_slow_score
-            .factors
+            .disk_factors
             .push(SlowScore::new_with_extra_config(
                 cfg.inspect_kvdb_interval.0,
                 0.6,
@@ -963,36 +951,112 @@ impl UnifiedSlowScore {
     }
 
     #[inline]
-    pub fn record(
+    pub fn record_disk(
         &mut self,
         id: u64,
         factor: InspectFactor,
         duration: &RaftstoreDuration,
         not_busy: bool,
     ) {
-        self.factors[factor as usize].record(id, duration.delays_on_disk_io(false), not_busy);
+        let index = factor as usize;
+        if let Some(score) = self.disk_factors.get_mut(index) {
+            score.record(id, duration.delays_on_disk_io(false), not_busy);
+        }
     }
 
     #[inline]
-    pub fn get(&self, factor: InspectFactor) -> &SlowScore {
-        &self.factors[factor as usize]
+    pub fn record_network(&mut self, id: u64, latencies: std::collections::HashMap<u64, Duration>) {
+        for (store_id, latency) in latencies {
+            self.network_factors
+                .entry(store_id)
+                .or_insert_with(|| SlowScore::new_network(self.inspect_network_interval))
+                .record(id, latency, true);
+        }
     }
 
-    #[inline]
-    pub fn get_mut(&mut self, factor: InspectFactor) -> &mut SlowScore {
-        &mut self.factors[factor as usize]
-    }
-
-    // Returns the maximum score of all factors.
-    pub fn get_score(&self) -> f64 {
-        self.factors
+    pub fn get_disk_score(&self) -> f64 {
+        self.disk_factors
             .iter()
             .map(|factor| factor.get())
             .fold(1.0, f64::max)
     }
 
-    pub fn last_tick_finished(&self) -> bool {
-        self.factors.iter().all(SlowScore::last_tick_finished)
+    pub fn get_network_score(&self) -> HashMap<u64, u64> {
+        self.network_factors
+            .iter()
+            .map(|(store_id, score)| (*store_id, score.get() as u64))
+            .collect()
+    }
+
+    pub fn last_tick_finished(&self, factor: InspectFactor) -> bool {
+        match factor {
+            InspectFactor::RaftDisk | InspectFactor::KvDisk => self
+                .disk_factors
+                .get(factor as usize)
+                .map(SlowScore::last_tick_finished)
+                .unwrap_or(true),
+            InspectFactor::Network => self
+                .network_factors
+                .values()
+                .all(SlowScore::last_tick_finished),
+        }
+    }
+
+    pub fn record_timeout(&mut self, factor: InspectFactor) {
+        match factor {
+            InspectFactor::RaftDisk | InspectFactor::KvDisk => {
+                if let Some(score) = self.disk_factors.get_mut(factor as usize) {
+                    score.record_timeout();
+                }
+            }
+            InspectFactor::Network => {}
+        }
+    }
+
+    pub fn tick(&mut self, factor: InspectFactor) -> SlowScoreTickResult {
+        match factor {
+            InspectFactor::RaftDisk | InspectFactor::KvDisk => self
+                .disk_factors
+                .get_mut(factor as usize)
+                .map(SlowScore::tick)
+                .unwrap_or_default(),
+            InspectFactor::Network => {
+                let mut result = SlowScoreTickResult::default();
+                if self.network_factors.is_empty() {
+                    return result;
+                }
+
+                let mut total_score = 0.0;
+                let mut counted = 0;
+                let mut should_force_report = false;
+                let mut max_tick_id = 0;
+
+                for score in self.network_factors.values_mut() {
+                    let tick_result = score.tick();
+                    if let Some(updated_score) = tick_result.updated_score {
+                        total_score += updated_score;
+                        counted += 1;
+                    }
+                    result.has_new_record |= tick_result.has_new_record;
+                    should_force_report |= tick_result.should_force_report_slow_store;
+                    max_tick_id = max_tick_id.max(tick_result.tick_id);
+                }
+
+                result.tick_id = max_tick_id;
+                result.should_force_report_slow_store = should_force_report;
+                if counted > 0 {
+                    result.updated_score = Some(total_score / counted as f64);
+                }
+                result
+            }
+        }
+    }
+
+    pub fn get_score(&self) -> f64 {
+        self.disk_factors
+            .iter()
+            .map(|factor| factor.get())
+            .fold(1.0, f64::max)
     }
 }
 
@@ -1072,6 +1136,7 @@ where
             cfg.report_min_resolved_ts_interval.0,
             cfg.inspect_interval.0,
             cfg.inspect_kvdb_interval.0,
+            cfg.inspect_network_interval.0,
             WrappedScheduler(scheduler.clone()),
         );
         if let Err(e) = stats_monitor.start(
@@ -2103,27 +2168,56 @@ where
     }
 
     fn handle_inspect_latency(&mut self, factor: InspectFactor) {
-        // all_ticks_finished: The last tick of all factors is finished.
-        // factor_tick_finished: The last tick of the current factor is finished.
-        let (all_ticks_finished, factor_tick_finished) = (
-            self.slow_score.last_tick_finished(),
-            self.slow_score.get(factor).last_tick_finished(),
-        );
-        // The health status is recovered to serving as long as any tick
-        // does not timeout.
+        if factor == InspectFactor::Network {
+            let slow_score_tick_result = self.slow_score.tick(factor);
+            if let Some(score) = slow_score_tick_result.updated_score {
+                STORE_SLOW_SCORE_GAUGE
+                    .with_label_values(&[factor.as_str()])
+                    .set(score as i64);
+            }
+
+            let id = slow_score_tick_result.tick_id;
+            let scheduler = self.scheduler.clone();
+            let inspector = LatencyInspector::new(
+                id,
+                Box::new(move |id, duration| {
+                    for (store_id, network_duration) in &duration.network_latencies {
+                        STORE_INSPECT_NETWORK_DURATION_HISTOGRAM
+                            .with_label_values(&[&store_id.to_string()])
+                            .observe(tikv_util::time::duration_to_sec(*network_duration));
+                    }
+                    if let Err(e) = scheduler.schedule(Task::UpdateSlowScore {
+                        id,
+                        factor,
+                        duration,
+                    }) {
+                        warn!("schedule pd task failed"; "err" => ?e);
+                    }
+                }),
+            );
+            let msg = StoreMsg::LatencyInspect {
+                factor,
+                send_time: TiInstant::now(),
+                inspector,
+            };
+            if let Err(e) = self.router.send_control(msg) {
+                warn!("pd worker send latency inspector failed"; "err" => ?e);
+            }
+            return;
+        }
+
+        let all_ticks_finished = self.slow_score.last_tick_finished(InspectFactor::RaftDisk)
+            && self.slow_score.last_tick_finished(InspectFactor::KvDisk);
+        let factor_tick_finished = self.slow_score.last_tick_finished(factor);
+
         if self.curr_health_status == ServingStatus::ServiceUnknown && all_ticks_finished {
             self.update_health_status(ServingStatus::Serving);
         }
-        if !all_ticks_finished {
-            // If the last tick is not finished, it means that the current store might
-            // be busy on handling requests or delayed on I/O operations. And only when
-            // the current store is not busy, it should record the last_tick as a timeout.
-            if !self.store_stat.maybe_busy() && !factor_tick_finished {
-                self.slow_score.get_mut(factor).record_timeout();
-            }
+        if !all_ticks_finished && !factor_tick_finished && !self.store_stat.maybe_busy() {
+            self.slow_score.record_timeout(factor);
         }
 
-        let slow_score_tick_result = self.slow_score.get_mut(factor).tick();
+        let slow_score_tick_result = self.slow_score.tick(factor);
         if slow_score_tick_result.updated_score.is_some() && !slow_score_tick_result.has_new_record
         {
             self.update_health_status(ServingStatus::ServiceUnknown);
@@ -2136,66 +2230,36 @@ where
 
         let id = slow_score_tick_result.tick_id;
         let scheduler = self.scheduler.clone();
-        let inspector = {
-            match factor {
-                InspectFactor::RaftDisk => {
-                    // Record a fairly great value when timeout
-                    self.slow_trend_cause.record(500_000, Instant::now());
+        let inspector = match factor {
+            InspectFactor::RaftDisk => {
+                self.slow_trend_cause.record(500_000, Instant::now());
 
-                    // If the last slow_score already reached abnormal state and was delayed for
-                    // reporting by `store-heartbeat` to PD, we should report it here manually as
-                    // a FAKE `store-heartbeat`.
-                    if slow_score_tick_result.should_force_report_slow_store
-                        && self.is_store_heartbeat_delayed()
-                    {
-                        self.handle_fake_store_heartbeat();
-                    }
-                    LatencyInspector::new(
-                        id,
-                        Box::new(move |id, duration| {
-                            // TODO: use sub metric to record different durations.
-                            STORE_INSPECT_DURATION_HISTOGRAM
-                                .with_label_values(&["store_process"])
-                                .observe(tikv_util::time::duration_to_sec(
-                                    duration.store_process_duration.unwrap_or_default(),
-                                ));
-                            STORE_INSPECT_DURATION_HISTOGRAM
-                                .with_label_values(&["store_wait"])
-                                .observe(tikv_util::time::duration_to_sec(
-                                    duration.store_wait_duration.unwrap_or_default(),
-                                ));
-                            STORE_INSPECT_DURATION_HISTOGRAM
-                                .with_label_values(&["store_commit"])
-                                .observe(tikv_util::time::duration_to_sec(
-                                    duration.store_commit_duration.unwrap_or_default(),
-                                ));
-
-                            STORE_INSPECT_DURATION_HISTOGRAM
-                                .with_label_values(&["all"])
-                                .observe(tikv_util::time::duration_to_sec(duration.sum()));
-                            if let Err(e) = scheduler.schedule(Task::UpdateSlowScore {
-                                id,
-                                factor,
-                                duration,
-                            }) {
-                                warn!("schedule pd task failed"; "err" => ?e);
-                            }
-                        }),
-                    )
+                if slow_score_tick_result.should_force_report_slow_store
+                    && self.is_store_heartbeat_delayed()
+                {
+                    self.handle_fake_store_heartbeat();
                 }
-                InspectFactor::KvDisk => LatencyInspector::new(
+                LatencyInspector::new(
                     id,
                     Box::new(move |id, duration| {
                         STORE_INSPECT_DURATION_HISTOGRAM
-                            .with_label_values(&["apply_wait"])
+                            .with_label_values(&["store_process"])
                             .observe(tikv_util::time::duration_to_sec(
-                                duration.apply_wait_duration.unwrap_or_default(),
+                                duration.store_process_duration.unwrap_or_default(),
                             ));
                         STORE_INSPECT_DURATION_HISTOGRAM
-                            .with_label_values(&["apply_process"])
+                            .with_label_values(&["store_wait"])
                             .observe(tikv_util::time::duration_to_sec(
-                                duration.apply_process_duration.unwrap_or_default(),
+                                duration.store_wait_duration.unwrap_or_default(),
                             ));
+                        STORE_INSPECT_DURATION_HISTOGRAM
+                            .with_label_values(&["store_commit"])
+                            .observe(tikv_util::time::duration_to_sec(
+                                duration.store_commit_duration.unwrap_or_default(),
+                            ));
+                        STORE_INSPECT_DURATION_HISTOGRAM
+                            .with_label_values(&["all"])
+                            .observe(tikv_util::time::duration_to_sec(duration.sum()));
                         if let Err(e) = scheduler.schedule(Task::UpdateSlowScore {
                             id,
                             factor,
@@ -2204,8 +2268,31 @@ where
                             warn!("schedule pd task failed"; "err" => ?e);
                         }
                     }),
-                ),
+                )
             }
+            InspectFactor::KvDisk => LatencyInspector::new(
+                id,
+                Box::new(move |id, duration| {
+                    STORE_INSPECT_DURATION_HISTOGRAM
+                        .with_label_values(&["apply_wait"])
+                        .observe(tikv_util::time::duration_to_sec(
+                            duration.apply_wait_duration.unwrap_or_default(),
+                        ));
+                    STORE_INSPECT_DURATION_HISTOGRAM
+                        .with_label_values(&["apply_process"])
+                        .observe(tikv_util::time::duration_to_sec(
+                            duration.apply_process_duration.unwrap_or_default(),
+                        ));
+                    if let Err(e) = scheduler.schedule(Task::UpdateSlowScore {
+                        id,
+                        factor,
+                        duration,
+                    }) {
+                        warn!("schedule pd task failed"; "err" => ?e);
+                    }
+                }),
+            ),
+            InspectFactor::Network => unreachable!(),
         };
         let msg = StoreMsg::LatencyInspect {
             factor,
@@ -2213,7 +2300,7 @@ where
             inspector,
         };
         if let Err(e) = self.router.send_control(msg) {
-            warn!("pd worker send latency inspecter failed"; "err" => ?e);
+            warn!("pd worker send latency inspector failed"; "err" => ?e);
         }
     }
 }
@@ -2462,12 +2549,21 @@ where
             Task::UpdateSlowScore {
                 id,
                 factor,
-                duration,
-            } => {
-                // Fine-tuned, `SlowScore` only takes the I/O jitters on the disk into account.
-                self.slow_score
-                    .record(id, factor, &duration, !self.store_stat.maybe_busy());
-            }
+                mut duration,
+            } => match factor {
+                InspectFactor::Network => {
+                    let latencies = mem::take(&mut duration.network_latencies);
+                    self.slow_score.record_network(id, latencies);
+                }
+                InspectFactor::RaftDisk | InspectFactor::KvDisk => {
+                    self.slow_score.record_disk(
+                        id,
+                        factor,
+                        &duration,
+                        !self.store_stat.maybe_busy(),
+                    );
+                }
+            },
             Task::RegionCpuRecords(records) => self.handle_region_cpu_records(records),
             Task::ReportMinResolvedTs {
                 store_id,
@@ -2782,6 +2878,7 @@ mod tests {
                     Duration::from_secs(0),
                     Duration::from_secs(interval),
                     Duration::default(),
+                    Duration::default(),
                     WrappedScheduler(scheduler),
                 );
                 let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
@@ -3035,6 +3132,7 @@ mod tests {
             Duration::from_secs(interval),
             Duration::from_secs(0),
             Duration::from_secs(interval),
+            Duration::default(),
             Duration::default(),
             WrappedScheduler(pd_worker.scheduler()),
         );

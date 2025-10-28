@@ -19,7 +19,7 @@ use raftstore::store::{
     UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryWaitApplySyncer,
 };
 use resource_control::ResourceMetered;
-use tikv_util::time::Instant;
+use tikv_util::{time::Instant, InspectFactor};
 
 use super::response_channel::{
     AnyResChannel, CmdResChannel, CmdResSubscriber, DebugInfoChannel, QueryResChannel,
@@ -388,6 +388,7 @@ pub enum StoreMsg {
     },
     /// Inspect the latency of raftstore.
     LatencyInspect {
+        factor: InspectFactor,
         send_time: Instant,
         inspector: LatencyInspector,
     },

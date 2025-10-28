@@ -1,5 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{collections::HashMap, time::Duration};
+
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::{store::Transport, Result as RaftStoreResult};
 use tikv_kv::RaftExtension;
@@ -58,5 +60,9 @@ where
 
     fn flush(&mut self) {
         self.raft_client.flush();
+    }
+
+    fn take_network_latencies(&self) -> HashMap<u64, Duration> {
+        self.raft_client.take_network_latencies()
     }
 }

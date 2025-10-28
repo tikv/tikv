@@ -56,6 +56,7 @@ use tikv_util::{
     store::find_peer,
     sys::disk::DiskUsage,
     time::{duration_to_sec, Instant},
+    InspectFactor,
 };
 
 use super::command::SplitInit;
@@ -571,6 +572,7 @@ impl Store {
     pub fn on_update_latency_inspectors<EK, ER, T>(
         &self,
         ctx: &mut StoreContext<EK, ER, T>,
+        factor: InspectFactor,
         start_ts: Instant,
         mut inspector: util::LatencyInspector,
     ) where
@@ -578,12 +580,22 @@ impl Store {
         ER: RaftEngine,
         T: Transport,
     {
-        // Record the last statistics of commit-log-duration and store-write-duration.
-        inspector.record_store_wait(start_ts.saturating_elapsed());
-        inspector.record_store_commit(ctx.raft_metrics.health_stats.avg(InspectIoType::Network));
-        // Reset the health_stats and wait it to be refreshed in the next tick.
-        ctx.raft_metrics.health_stats.reset();
-        ctx.pending_latency_inspect.push(inspector);
+        match factor {
+            InspectFactor::Network => {
+                let latencies = ctx.trans.take_network_latencies();
+                inspector.record_network_latencies(latencies);
+                inspector.finish();
+            }
+            InspectFactor::RaftDisk | InspectFactor::KvDisk => {
+                // Record the last statistics of commit-log-duration and store-write-duration.
+                inspector.record_store_wait(start_ts.saturating_elapsed());
+                inspector
+                    .record_store_commit(ctx.raft_metrics.health_stats.avg(InspectIoType::Network));
+                // Reset the health_stats and wait it to be refreshed in the next tick.
+                ctx.raft_metrics.health_stats.reset();
+                ctx.pending_latency_inspect.push(inspector);
+            }
+        }
     }
 }
 

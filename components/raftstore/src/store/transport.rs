@@ -1,7 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::sync::{mpsc, Mutex};
+use std::{
+    collections::HashMap,
+    sync::{mpsc, Mutex},
+    time::Duration,
+};
 
 use crossbeam::channel::{SendError, TrySendError};
 use engine_traits::{KvEngine, RaftEngine, Snapshot};
@@ -24,6 +28,10 @@ pub trait Transport: Send + Clone {
     fn need_flush(&self) -> bool;
 
     fn flush(&mut self);
+
+    fn take_network_latencies(&self) -> HashMap<u64, Duration> {
+        HashMap::default()
+    }
 }
 
 /// Routes message to target region.
