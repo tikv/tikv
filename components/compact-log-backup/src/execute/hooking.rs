@@ -75,13 +75,25 @@ pub struct SubcompactionStartCtx<'a> {
     /// concurrently. The statistic diff may not just contributed by the `subc`.
     pub collect_compaction_stat_diff: &'a CollectSubcompactionStatistic,
     /// Whether to skip this compaction.
-    pub(super) skip: &'a Cell<bool>,
+    pub(super) skip: &'a Cell<Option<SkipReason>>,
 }
 
 impl SubcompactionStartCtx<'_> {
-    pub fn skip(&self) {
-        self.skip.set(true);
+    pub fn skip(&self, reason: SkipReason) {
+        self.skip.set(Some(reason));
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SkipReason {
+    NoNeedToDo,
+    AlreadyDone,
+}
+
+#[derive(Clone, Copy)]
+pub struct SubcompactionSkippedCtx<'a> {
+    pub reason: SkipReason,
+    pub subc: &'a Subcompaction,
 }
 
 #[derive(Clone, Copy)]
@@ -128,6 +140,9 @@ pub trait ExecHooks: 'static {
 
     /// This hook will be called once the compaction failed due to some reason.
     async fn on_aborted(&mut self, _cx: AbortedCtx<'_>) {}
+
+    /// This hook will be called once a subcompaction is skipped.
+    async fn on_subcompaction_skipped(&mut self, _cx: SubcompactionSkippedCtx<'_>) {}
 }
 
 impl<T: ExecHooks, U: ExecHooks> ExecHooks for (T, U) {
@@ -170,6 +185,14 @@ impl<T: ExecHooks, U: ExecHooks> ExecHooks for (T, U) {
     async fn on_aborted(&mut self, cx: AbortedCtx<'_>) {
         futures::future::join(self.0.on_aborted(cx), self.1.on_aborted(cx)).await;
     }
+
+    async fn on_subcompaction_skipped(&mut self, cx: SubcompactionSkippedCtx<'_>) {
+        futures::future::join(
+            self.0.on_subcompaction_skipped(cx),
+            self.1.on_subcompaction_skipped(cx),
+        )
+        .await;
+    }
 }
 
 impl<T: ExecHooks> ExecHooks for Option<T> {
@@ -210,6 +233,12 @@ impl<T: ExecHooks> ExecHooks for Option<T> {
     async fn on_aborted(&mut self, cx: AbortedCtx<'_>) {
         if let Some(h) = self {
             h.on_aborted(cx).await
+        }
+    }
+
+    async fn on_subcompaction_skipped(&mut self, cx: SubcompactionSkippedCtx<'_>) {
+        if let Some(h) = self {
+            h.on_subcompaction_skipped(cx).await
         }
     }
 }

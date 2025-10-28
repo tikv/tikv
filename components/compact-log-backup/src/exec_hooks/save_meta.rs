@@ -17,8 +17,8 @@ use crate::{
     compaction::{META_OUT_REL, SST_OUT_REL, meta::CompactionRunInfoBuilder},
     errors::Result,
     execute::hooking::{
-        AfterFinishCtx, BeforeStartCtx, CId, ExecHooks, SubcompactionFinishCtx,
-        SubcompactionStartCtx,
+        AfterFinishCtx, BeforeStartCtx, CId, ExecHooks, SkipReason, SubcompactionFinishCtx,
+        SubcompactionSkippedCtx, SubcompactionStartCtx,
     },
     statistic::CompactLogBackupStatistic,
     util,
@@ -105,6 +105,12 @@ impl ExecHooks for SaveMeta {
         self.stats
             .update_collect_compaction_stat(c.collect_compaction_stat_diff);
         self.stats.update_load_meta_stat(c.load_stat_diff);
+    }
+
+    async fn on_subcompaction_skipped(&mut self, cx: SubcompactionSkippedCtx<'_>) {
+        if cx.reason == SkipReason::AlreadyDone {
+            self.collector.add_origin_subcompaction(cx.subc);
+        }
     }
 
     async fn after_a_subcompaction_end(

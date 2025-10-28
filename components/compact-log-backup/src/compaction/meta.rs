@@ -234,8 +234,8 @@ impl CompactionRunInfoBuilder {
         self.files.is_empty()
     }
 
-    pub fn add_subcompaction(&mut self, c: &SubcompactionResult) {
-        for file in &c.origin.inputs {
+    pub fn add_origin_subcompaction(&mut self, c: &Subcompaction) {
+        for file in &c.inputs {
             if !self.files.contains_key(&file.id.name) {
                 self.files
                     .insert(Arc::clone(&file.id.name), Default::default());
@@ -245,9 +245,13 @@ impl CompactionRunInfoBuilder {
                 .unwrap()
                 .insert(SortByOffset(file.id.clone()));
         }
-        self.compaction.artifacts_hash ^= c.origin.crc64();
-        self.compaction.input_min_ts = self.compaction.input_min_ts.min(c.origin.input_min_ts);
-        self.compaction.input_max_ts = self.compaction.input_max_ts.max(c.origin.input_max_ts);
+        self.compaction.artifacts_hash ^= c.crc64();
+        self.compaction.input_min_ts = self.compaction.input_min_ts.min(c.input_min_ts);
+        self.compaction.input_max_ts = self.compaction.input_max_ts.max(c.input_max_ts);
+    }
+
+    pub fn add_subcompaction(&mut self, c: &SubcompactionResult) {
+        self.add_origin_subcompaction(&c.origin);
     }
 
     pub fn mut_meta(&mut self) -> &mut brpb::LogFileCompaction {

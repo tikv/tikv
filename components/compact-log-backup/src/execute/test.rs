@@ -110,6 +110,10 @@ async fn test_exec_simple() {
     let (id, mig) = migs.pop().unwrap();
     assert_eq!(id, 1);
     assert_eq!(mig.edit_meta.len(), 3);
+    for meta in mig.edit_meta.iter() {
+        assert!(meta.all_data_files_compacted);
+        assert!(meta.destruct_self);
+    }
     assert_eq!(mig.compactions.len(), 1);
     let subc = st
         .load_subcompactions(mig.compactions[0].get_artifacts())
@@ -185,6 +189,10 @@ async fn test_checkpointing() {
     let (id, mig) = migs.pop().unwrap();
     assert_eq!(id, 1);
     assert_eq!(mig.edit_meta.len(), 3);
+    for meta in mig.edit_meta.iter() {
+        assert!(meta.all_data_files_compacted);
+        assert!(meta.destruct_self);
+    }
     assert_eq!(mig.compactions.len(), 1);
     let subc = st
         .load_subcompactions(mig.compactions[0].get_artifacts())
