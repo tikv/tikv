@@ -124,8 +124,10 @@ impl<C: ErrorCallback> ReadIndexQueue<C> {
     }
     /// Check it's necessary to retry pending read requests or not.
     /// Return true if all such conditions are satisfied:
-    /// 1. more than an election timeout elapsed from the last request push;
-    /// 2. more than an election timeout elapsed from the last retry;
+    /// 1. More than the retry interval (in ticks) has elapsed since the last
+    ///    request push.
+    /// 2. More than the retry interval (in ticks) has elapsed since the last
+    ///    retry.
     /// 3. there are still unresolved requests in the queue.
     pub fn check_needs_retry(&mut self, cfg: &Config) -> bool {
         if self.reads.len() == self.ready_cnt {
@@ -133,7 +135,7 @@ impl<C: ErrorCallback> ReadIndexQueue<C> {
         }
 
         if self.retry_countdown == usize::MAX {
-            self.retry_countdown = cfg.raft_election_timeout_ticks - 1;
+            self.retry_countdown = cfg.raft_read_index_retry_interval_ticks - 1;
             return false;
         }
 
@@ -142,7 +144,7 @@ impl<C: ErrorCallback> ReadIndexQueue<C> {
             return false;
         }
 
-        self.retry_countdown = cfg.raft_election_timeout_ticks;
+        self.retry_countdown = cfg.raft_read_index_retry_interval_ticks;
         true
     }
 
