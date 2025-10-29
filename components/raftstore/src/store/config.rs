@@ -1105,15 +1105,12 @@ impl Config {
             .with_label_values(&["raft_log_gc_size_limit"])
             .set(self.raft_log_gc_size_limit.unwrap_or_default().0 as f64);
         CONFIG_RAFTSTORE_GAUGE
-<<<<<<< HEAD
-=======
             .with_label_values(&["max_apply_unpersisted_log_limit"])
             .set(self.max_apply_unpersisted_log_limit as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_read_index_retry_interval_ticks"])
             .set(self.raft_read_index_retry_interval_ticks as f64);
         CONFIG_RAFTSTORE_GAUGE
->>>>>>> 7f0c32c66c (raftstore: update raft-rs & add a config for the read index retry interval (#19071))
             .with_label_values(&["raft_log_reserve_max_ticks"])
             .set(self.raft_log_reserve_max_ticks as f64);
         CONFIG_RAFTSTORE_GAUGE
