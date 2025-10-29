@@ -974,20 +974,6 @@ impl UnifiedSlowScore {
         }
     }
 
-    pub fn get_disk_score(&self) -> f64 {
-        self.disk_factors
-            .iter()
-            .map(|factor| factor.get())
-            .fold(1.0, f64::max)
-    }
-
-    pub fn get_network_score(&self) -> HashMap<u64, u64> {
-        self.network_factors
-            .iter()
-            .map(|(store_id, score)| (*store_id, score.get() as u64))
-            .collect()
-    }
-
     pub fn last_tick_finished(&self, factor: InspectFactor) -> bool {
         match factor {
             InspectFactor::RaftDisk | InspectFactor::KvDisk => self

@@ -73,6 +73,7 @@ fn test_latency_inspect() {
             }),
         );
         let msg = StoreMsgV2::LatencyInspect {
+            factor: InspectFactor::RaftDisk,
             send_time: Instant::now(),
             inspector,
         };
