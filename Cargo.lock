@@ -5231,7 +5231,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#0d01b20312f74889a5e44ad4180aade5da2f16fa"
+source = "git+https://github.com/tikv/raft-rs?branch=master#1fd05e000fb094015507c5c985849d370100fb72"
 dependencies = [
  "bytes",
  "fxhash",
@@ -5290,7 +5290,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#0d01b20312f74889a5e44ad4180aade5da2f16fa"
+source = "git+https://github.com/tikv/raft-rs?branch=master#1fd05e000fb094015507c5c985849d370100fb72"
 dependencies = [
  "bytes",
  "protobuf 2.8.0",
@@ -8069,7 +8069,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
- "cfg-if 1.0.0",
+ "cfg-if 0.1.10",
  "static_assertions",
 ]
 

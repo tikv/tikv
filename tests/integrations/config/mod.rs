@@ -194,6 +194,7 @@ fn test_serde_custom_tikv_config() {
         raft_log_gc_threshold: 12,
         raft_log_gc_count_limit: Some(12),
         raft_log_gc_size_limit: Some(ReadableSize::kb(1)),
+        raft_read_index_retry_interval_ticks: 123,
         follower_read_max_log_gap: 100,
         raft_log_reserve_max_ticks: 100,
         raft_engine_purge_interval: ReadableDuration::minutes(20),
