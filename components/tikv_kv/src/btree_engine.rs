@@ -236,6 +236,11 @@ impl Iterator for BTreeEngineIterator {
         assert!(self.valid().unwrap());
         self.cur_value.as_ref().unwrap().as_slice()
     }
+
+    fn size(&self) -> usize {
+        self.cur_key.as_ref().map(|k| k.len()).unwrap_or(0)
+            + self.cur_value.as_ref().map(|v| v.len()).unwrap_or(0)
+    }
 }
 
 pub struct BTreeEngineIterMetricsCollector;
@@ -398,10 +403,8 @@ pub mod tests {
         let mut ret = vec![];
         loop {
             ret.push((
-                Key::from_encoded(cursor.key(&mut statistics).to_vec())
-                    .to_raw()
-                    .unwrap(),
-                cursor.value(&mut statistics).to_vec(),
+                Key::from_encoded(cursor.key().to_vec()).to_raw().unwrap(),
+                cursor.value().to_vec(),
             ));
 
             if !cursor.prev(&mut statistics) {

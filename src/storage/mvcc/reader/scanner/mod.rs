@@ -377,16 +377,14 @@ where
         LoadDataHint::Seek => default_cursor.seek(&seek_key, &mut statistics.data)?,
     };
 
-    if !default_cursor.valid()?
-        || default_cursor.key(&mut statistics.data) != seek_key.as_encoded().as_slice()
-    {
+    if !default_cursor.valid()? || default_cursor.key() != seek_key.as_encoded().as_slice() {
         return Err(default_not_found_error(
             user_key.clone().append_ts(write_start_ts).into_encoded(),
             "near_load_data_by_write",
         ));
     }
     statistics.data.processed_keys += 1;
-    Ok(default_cursor.value(&mut statistics.data).to_vec())
+    Ok(default_cursor.value().to_vec())
 }
 
 /// Similar to `near_load_data_by_write`, but accepts a `BackwardCursor` and use
@@ -407,16 +405,14 @@ where
         }
         LoadDataHint::Seek => default_cursor.seek_for_prev(&seek_key, &mut statistics.data)?,
     };
-    if !default_cursor.valid()?
-        || default_cursor.key(&mut statistics.data) != seek_key.as_encoded().as_slice()
-    {
+    if !default_cursor.valid()? || default_cursor.key() != seek_key.as_encoded().as_slice() {
         return Err(default_not_found_error(
             user_key.clone().append_ts(write_start_ts).into_encoded(),
             "near_reverse_load_data_by_write",
         ));
     }
     statistics.data.processed_keys += 1;
-    Ok(default_cursor.value(&mut statistics.data).to_vec())
+    Ok(default_cursor.value().to_vec())
 }
 
 pub fn has_data_in_range<S: Snapshot>(
@@ -434,7 +430,7 @@ pub fn has_data_in_range<S: Snapshot>(
         .build()?;
     match cursor.seek(left, statistic) {
         Ok(valid) => {
-            if valid && cursor.key(statistic) < right.as_encoded().as_slice() {
+            if valid && cursor.key() < right.as_encoded().as_slice() {
                 return Ok(true);
             }
         }
@@ -472,22 +468,14 @@ where
     I: Iterator,
 {
     let mut ret = None;
-    while write_cursor.valid()?
-        && Key::is_user_key_eq(
-            write_cursor.key(&mut statistics.write),
-            user_key.as_encoded(),
-        )
-    {
-        let write_ref = WriteRef::parse(write_cursor.value(&mut statistics.write))?;
+    while write_cursor.valid()? && Key::is_user_key_eq(write_cursor.key(), user_key.as_encoded()) {
+        let write_ref = WriteRef::parse(write_cursor.value())?;
         if !write_ref.check_gc_fence_as_latest_version(gc_fence_limit) {
             break;
         }
         match write_ref.write_type {
             WriteType::Put | WriteType::Delete => {
-                assert_ge!(
-                    after_ts,
-                    Key::decode_ts_from(write_cursor.key(&mut statistics.write))?
-                );
+                assert_ge!(after_ts, Key::decode_ts_from(write_cursor.key())?);
                 ret = Some(write_ref.to_owned());
                 break;
             }
@@ -538,7 +526,7 @@ where
     {
         if write.write_type == WriteType::Put {
             if let Some(ts_filter) = ts_filter {
-                let k = write_cursor.key(&mut statistics.write);
+                let k = write_cursor.key();
                 if Key::decode_ts_from(k).unwrap() < ts_filter {
                     return Ok(seek_after());
                 }
@@ -1112,5 +1100,128 @@ mod tests {
 
         assert!(scanner.next().unwrap().is_none());
         assert_eq!(scanner.take_statistics().lock.total_op_count(), 0);
+    }
+
+    #[test]
+    fn test_scan_flow_stats() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        // insert 100 versions for key "foo"
+        // foo@10 -> 'a'*10
+        // foo@20 -> 'a'*20
+        // ...
+        // foo@1000 -> 'a'*1000
+        let key = b"aaa";
+        for i in 0..100 {
+            let start_ts = (i * 10) as u64;
+            let commit_ts = start_ts + 10;
+            let value = vec![b'a'; commit_ts as usize];
+            must_prewrite_put(&mut engine, key, &value, key, start_ts);
+            must_commit(&mut engine, key, start_ts, commit_ts);
+        }
+
+        fn next<S: Snapshot>(
+            mut scan: Scanner<S>,
+            expected_read_keys: usize,
+            expected_read_bytes: usize,
+        ) {
+            loop {
+                let res = scan.next().unwrap();
+                if res.is_none() {
+                    break;
+                }
+            }
+            let stats = scan.take_statistics();
+            let mut all = stats.write;
+            all.add(&stats.data);
+            assert_eq!(
+                all.flow_stats.read_keys, expected_read_keys,
+                "cf statistics:{:?}",
+                all
+            );
+            assert_eq!(
+                all.flow_stats.read_bytes, expected_read_bytes,
+                "cf statistics:{:?}",
+                all
+            );
+        }
+
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let scanner = ScannerBuilder::new(snapshot, 1200.into())
+            .fill_cache(false)
+            .range(Some(Key::from_raw(key)), None)
+            .isolation_level(IsolationLevel::Si)
+            .build()
+            .unwrap();
+        // first seek to aaa@1000 and get the data value, write cf:keys(9+8)+values(3)
+        // data cf:keys(9+8)+values(100) todo!: move to the next user key should
+        // be happened in next() function move to next user key 7 times and then
+        // seek to aaa@0: keys+values(9+8+3)*7 seek 2 times，next 7 times, get
+        // data 1 times
+        next(scanner, 10, (9 + 8 + 3) * 8 + 9 + 8 + 1000);
+
+        // test found key near the next key.
+        // first seek to aaa@1000 write cf:keys(9+8)+values(3)
+        // second try to next the aaa@20 7 times, each time read keys+values(9+8+3)
+        // then seek to aaa@20(short value) and get the data value: 9+8+4+20=41
+        // finnally move to the next user key, try to move 1 times reach the end:
+        // key(9+8)+short_value(4+10)=31 seek 2 times，next 8 times, get data 1
+        // times
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let scanner = ScannerBuilder::new(snapshot, 20.into())
+            .fill_cache(false)
+            .range(Some(Key::from_raw(key)), None)
+            .isolation_level(IsolationLevel::Si)
+            .build()
+            .unwrap();
+        next(scanner, 11, (9 + 8 + 3) * 8 + (9 + 8 + 4) * 2 + 20 + 10);
+
+        // test found key near the middle key.
+        // first seek to aaa@1000 write cf:keys(9+8)+values(3)=20
+        // second try to next the aaa@20 7 times, each time read
+        // keys+values(9+8+3)*7=140 then seek to aaa@400: 9+8+3=20
+        // and get the data value from data cf: 9+8+400=417
+        // try to next the aaa@0 7 times, read keys+values(9+8+3)*7=140
+        // finnally seek aaa@0: 0
+        // seek 3 times，next 14 times, get data 1 times
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let scanner = ScannerBuilder::new(snapshot, 400.into())
+            .fill_cache(false)
+            .range(Some(Key::from_raw(key)), None)
+            .isolation_level(IsolationLevel::Si)
+            .build()
+            .unwrap();
+        next(scanner, 18, (9 + 8 + 3) * 16 + (9 + 8) + 400);
+
+        let key2 = b"bbb";
+        // add more insert for scan
+        for i in 0..100 {
+            let start_ts = (i * 10) as u64;
+            let commit_ts = start_ts + 10;
+            let value = vec![b'a'; commit_ts as usize];
+            must_prewrite_put(&mut engine, key2, &value, key2, start_ts);
+            must_commit(&mut engine, key2, start_ts, commit_ts);
+        }
+
+        // test scan multi keys
+        // first seek to aaa@1000 write cf:keys(9+8)+values(3)=20
+        // second try to next the aaa@20 7 times, each time read
+        // keys+values(9+8+3)*7=140 then seek to aaa@400: 9+8+3=20
+        // and get the data value from data cf: 9+8+400=417
+        // try to next the aaa@0 7 times, read keys+values(9+8+3)*7=140
+        // move to next user key bbb@1000: seek 9+8+3=20
+        // try to next the bbb@400 7 times, each time read keys+values(9+8+3)*7=140
+        // then seek to bbb@400: 9+8+3=20
+        // and get the data value from data cf: 9+8+400=417
+        // try to next the bbb@0 7 times, read keys+values(9+8+3)*7=140
+        // finnally seek bbb@0: 0
+        // seek 7 times, next 28 times, get data 2 times
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let scanner = ScannerBuilder::new(snapshot, 400.into())
+            .fill_cache(false)
+            .range(Some(Key::from_raw(key)), None)
+            .isolation_level(IsolationLevel::Si)
+            .build()
+            .unwrap();
+        next(scanner, 35, (9 + 8 + 3) * (28 + 7 - 3) + (9 + 8 + 400) * 2);
     }
 }

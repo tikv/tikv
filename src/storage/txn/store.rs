@@ -853,6 +853,10 @@ mod tests {
         fn value(&self) -> &[u8] {
             b""
         }
+
+        fn size(&self) -> usize {
+            0
+        }
     }
 
     pub struct MockRangeSnapIterMetricsCollector;

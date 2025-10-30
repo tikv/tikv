@@ -163,4 +163,8 @@ impl<S: Snapshot> EngineIterator for RegionIterator<S> {
     fn value(&self) -> &[u8] {
         RegionIterator::value(self)
     }
+
+    fn size(&self) -> usize {
+        self.key().len() + self.value().len()
+    }
 }
