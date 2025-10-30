@@ -91,55 +91,25 @@ impl SlowScore {
 
     // Only for kvdb.
     pub fn new_with_extra_config(inspect_interval: Duration, timeout_ratio: f64) -> SlowScore {
-        let round_ticks = cmp::max(
-            UPDATE_INTERVALS.div_duration_f64(inspect_interval) as u64,
-            1_u64,
-        );
-        SlowScore::new(
-            inspect_interval,
-            timeout_ratio,
-            round_ticks,
-            DISK_RECOVERY_INTERVALS,
-        )
-    }
+        SlowScore {
+            value: OrderedFloat(1.0),
 
-    /// Creates a new `SlowScore` that uses the specified recovery interval.
-    pub fn new_with_recovery_interval(
-        inspect_interval: Duration,
-        recovery_interval: Duration,
-    ) -> SlowScore {
-        SlowScore::new(
-            inspect_interval,
-            DISK_TIMEOUT_RATIO_THRESHOLD,
-            DISK_ROUND_TICKS,
-            recovery_interval,
-        )
-    }
+            timeout_requests: 0,
+            total_requests: 0,
 
-    pub fn new_disk(inspect_interval: Duration) -> SlowScore {
-        SlowScore::new(
-            inspect_interval,
-            DISK_TIMEOUT_RATIO_THRESHOLD,
-            DISK_ROUND_TICKS,
-            DISK_RECOVERY_INTERVALS,
-        )
-    }
-
-    pub fn new_network(inspect_interval: Duration) -> SlowScore {
-        let round_ticks = if inspect_interval.is_zero() {
-            NETWORK_ROUND_TICKS
-        } else {
-            cmp::max(
+            timeout_threshold: inspect_interval,
+            ratio_thresh: OrderedFloat(timeout_ratio),
+            min_ttr: DISK_RECOVERY_INTERVALS,
+            last_record_time: Instant::now(),
+            last_update_time: Instant::now(),
+            // The minimal round ticks is 1 for kvdb.
+            round_ticks: cmp::max(
                 UPDATE_INTERVALS.div_duration_f64(inspect_interval) as u64,
-                NETWORK_ROUND_TICKS,
-            )
-        };
-        SlowScore::new(
-            NETWORK_TIMEOUT_THRESHOLD,
-            NETWORK_TIMEOUT_RATIO_THRESHOLD,
-            round_ticks,
-            NETWORK_RECOVERY_INTERVALS,
-        )
+                1_u64,
+            ),
+            last_tick_id: 0,
+            last_tick_finished: true,
+        }
     }
 
     pub fn set_last_tick_id(&mut self, id: u64) {
