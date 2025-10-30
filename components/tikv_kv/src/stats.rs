@@ -56,7 +56,6 @@ impl<'a, T: IterMetricsCollector> StatsCollector<'a, T> {
     }
 
     pub fn add_size(&mut self, size: usize) {
-        println!("add_size: {}", size);
         self.stats.flow_stats.read_bytes += size;
     }
 }
