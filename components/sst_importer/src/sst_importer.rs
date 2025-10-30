@@ -23,7 +23,7 @@ use engine_traits::{
 };
 use external_storage::{
     compression_reader_dispatcher, encrypt_wrap_reader, wrap_with_checksum_reader_if_needed,
-    ExternalStorage, RestoreConfig, RestoreConfig as ExternalRestoreConfig,
+    ExternalStorage, RestoreConfig,
 };
 use file_system::{get_io_rate_limiter, IoType, OpenOptions};
 use kvproto::{
@@ -1728,7 +1728,7 @@ impl<E: KvEngine> SstImporter<E> {
                     iv: meta.cipher_iv.to_owned(),
                 });
 
-                let restore_config = ExternalRestoreConfig {
+                let restore_config = RestoreConfig {
                     file_crypter,
                     ..Default::default()
                 };
