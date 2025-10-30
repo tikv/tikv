@@ -56,7 +56,6 @@ use tikv_util::{
     store::find_peer,
     sys::disk::DiskUsage,
     time::{duration_to_sec, Instant},
-    InspectFactor,
 };
 
 use super::command::SplitInit;
@@ -572,7 +571,6 @@ impl Store {
     pub fn on_update_latency_inspectors<EK, ER, T>(
         &self,
         ctx: &mut StoreContext<EK, ER, T>,
-        factor: InspectFactor,
         start_ts: Instant,
         mut inspector: util::LatencyInspector,
     ) where

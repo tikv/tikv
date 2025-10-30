@@ -1,7 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::HashMap, time::Duration};
-
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::{store::Transport, Result as RaftStoreResult};
 use tikv_kv::RaftExtension;

@@ -1070,16 +1070,6 @@ impl UnifiedSlowScore {
         self.disk_factors.iter().all(SlowScore::last_tick_finished)
     }
 
-    pub fn record_timeout(&mut self, factor: InspectFactor) {
-        // We should be able to get the latency from HealthChecker
-        // every time, so there is no need to explicitly mark timeout
-        if factor == InspectFactor::Network {
-            return;
-        }
-
-        self.disk_factors[factor as usize].record_timeout();
-    }
-
     pub fn tick(&mut self, factor: InspectFactor) -> SlowScoreTickResult {
         if factor == InspectFactor::Network {
             self.tick_network()
