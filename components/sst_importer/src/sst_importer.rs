@@ -4637,8 +4637,15 @@ mod tests {
 
         let mut basic_meta = file_metas[0].1.clone();
         // Set a partial range that only includes some keys
-        basic_meta.mut_range().set_start(b"t123_r04".to_vec());
-        basic_meta.mut_range().set_end(b"t123_r14".to_vec());
+        // Use timestamp-encoded keys for range boundaries. Since timestamps are stored in
+        // descending order in MVCC (larger ts comes first), TimeStamp::zero() has the largest
+        // encoded byte value. This ensures the range end includes all timestamp versions of t123_r14.
+        // Range [t123_r04, t123_r14+ts(0)] with end_key_exclusive=false (default) is a closed
+        // interval that includes all versions of r04, r07, r11, r14.
+        let range_start = Key::from_raw(b"t123_r04").into_encoded();
+        let range_end = Key::from_raw(b"t123_r14").append_ts(TimeStamp::zero()).into_encoded();
+        basic_meta.mut_range().set_start(range_start);
+        basic_meta.mut_range().set_end(range_end);
 
         let metas: HashMap<String, SstMeta> = file_metas
             .iter()
@@ -4662,9 +4669,11 @@ mod tests {
 
         // Verify only keys in the range are included (with timestamp encoding)
         // Data: r01(ts=1), r04(ts=3), r07(ts=7), r11(ts=1), r14(ts=3), r17(ts=7)
-        // Range: [t123_r04, t123_r14) should include r04(ts=3), r07(ts=7), r11(ts=1)
+        // Range: [t123_r04+ts(?), t123_r14+ts(0)] should include r04(ts=3), r07(ts=7), r11(ts=1), r14(ts=3)
+        // The actual range returned will have timestamp-encoded boundaries based on actual data
+        // Start should be the first key found (r04 with ts=3), end should be the last key found (r14 with ts=3)
         let expected_start = Key::from_raw(b"t123_r04").append_ts(TimeStamp::new(3)).into_encoded();
-        let expected_end = Key::from_raw(b"t123_r11").append_ts(TimeStamp::new(1)).into_encoded();
+        let expected_end = Key::from_raw(b"t123_r14").append_ts(TimeStamp::new(3)).into_encoded();
         assert_eq!(range.get_start(), &expected_start);
         assert_eq!(range.get_end(), &expected_end);
 
@@ -4675,11 +4684,12 @@ mod tests {
         iter.seek_to_first().unwrap();
 
         let collected = collect(iter);
-        // Should only include keys within range [t123_r04, t123_r14): r04, r07, r11
-        assert_eq!(collected.len(), 3);
+        // Should only include keys within range [t123_r04, t123_r14]: r04, r07, r11, r14
+        assert_eq!(collected.len(), 4);
         assert_eq!(collected[0].0, get_encoded_key(b"t123_r04", 3));
         assert_eq!(collected[1].0, get_encoded_key(b"t123_r07", 7));
         assert_eq!(collected[2].0, get_encoded_key(b"t123_r11", 1));
+        assert_eq!(collected[3].0, get_encoded_key(b"t123_r14", 3));
     }
 
     #[test]
