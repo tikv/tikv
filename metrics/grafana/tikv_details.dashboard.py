@@ -3815,6 +3815,12 @@ def Scheduler() -> RowPanel:
                 metric="tikv_yatp_pool_schedule_wait_duration_bucket",
                 label_selectors=['name=~"sched-worker.*"'],
             ),
+            heatmap_panel(
+                title="Txn Scheduler Pool Exec Duration",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_yatp_pool_schedule_exec_duration_bucket",
+                label_selectors=['name=~"sched-worker.*"'],
+            ),
         ]
     )
     return layout.row_panel
