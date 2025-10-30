@@ -664,13 +664,18 @@ impl Config {
 
     /// Optimize the interval of different inspectors according to the
     /// configuration.
-    pub fn optimize_inspector(&mut self, separated_raft_mount_path: bool) {
+        pub fn tune_inspector_configs(
+        &mut self,
+        separated_raft_mount_path: bool,
+        inspect_network_interval: ReadableDuration,
+    ) {
         // If the kvdb uses the same mount path with raftdb, the health status
         // of kvdb will be inspected by raftstore automatically. So it's not necessary
         // to inspect kvdb.
         if !separated_raft_mount_path {
             self.inspect_kvdb_interval = ReadableDuration::ZERO;
         }
+        self.inspect_network_interval = inspect_network_interval;
     }
 
     pub fn validate(
@@ -1591,23 +1596,23 @@ mod tests {
         );
 
         cfg = Config::new();
-        cfg.optimize_inspector(false);
+        cfg.tune_inspector_configs(false, ReadableDuration::millis(100));
         assert_eq!(cfg.inspect_kvdb_interval, ReadableDuration::ZERO);
 
         cfg = Config::new();
         cfg.inspect_kvdb_interval = ReadableDuration::secs(1);
-        cfg.optimize_inspector(false);
+        cfg.tune_inspector_configs(false, ReadableDuration::millis(100));
         assert_eq!(cfg.inspect_kvdb_interval, ReadableDuration::ZERO);
-        cfg.optimize_inspector(true);
+        cfg.tune_inspector_configs(true, ReadableDuration::millis(100));
         assert_eq!(cfg.inspect_kvdb_interval, ReadableDuration::ZERO);
 
         cfg.inspect_kvdb_interval = ReadableDuration::secs(1);
-        cfg.optimize_inspector(true);
+        cfg.tune_inspector_configs(true, ReadableDuration::millis(100));
         assert_eq!(cfg.inspect_kvdb_interval, ReadableDuration::secs(1));
 
         cfg = Config::new();
         cfg.inspect_kvdb_interval = ReadableDuration::millis(1);
-        cfg.optimize_inspector(true);
+        cfg.tune_inspector_configs(true, ReadableDuration::millis(100));
         assert_eq!(cfg.inspect_kvdb_interval, ReadableDuration::millis(1));
     }
 }
