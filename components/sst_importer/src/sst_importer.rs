@@ -4261,4 +4261,396 @@ mod tests {
         });
         fail::remove("create_storage_slowly");
     }
+
+    // Helper function to create multiple external SST files for batch download testing.
+    fn create_multiple_external_sst_files(
+        count: usize,
+    ) -> Result<(TempDir, StorageBackend, Vec<(String, SstMeta)>)> {
+        let ext_sst_dir = tempfile::tempdir()?;
+        let mut metas = Vec::new();
+
+        for i in 0..count {
+            let file_name = format!("sample_{}.sst", i);
+            let mut sst_writer = new_sst_writer(
+                ext_sst_dir
+                    .path()
+                    .join(&file_name)
+                    .to_str()
+                    .unwrap(),
+            );
+
+            // Write different keys for each SST file to ensure they can be merged
+            let base = i * 10;
+            sst_writer.put(format!("zt123_r{:02}", base + 1).as_bytes(), b"abc")?;
+            sst_writer.put(format!("zt123_r{:02}", base + 4).as_bytes(), b"xyz")?;
+            sst_writer.put(format!("zt123_r{:02}", base + 7).as_bytes(), b"pqrst")?;
+
+            let sst_info = sst_writer.finish()?;
+
+            // Make up the SST meta for downloading.
+            let mut meta = SstMeta::default();
+            let uuid = Uuid::new_v4();
+            meta.set_uuid(uuid.as_bytes().to_vec());
+            meta.set_cf_name(CF_DEFAULT.to_owned());
+            meta.set_length(sst_info.file_size());
+            meta.set_region_id(4);
+            meta.mut_region_epoch().set_conf_ver(5);
+            meta.mut_region_epoch().set_version(6);
+
+            metas.push((file_name, meta));
+        }
+
+        let backend = external_storage::make_local_backend(ext_sst_dir.path());
+        Ok((ext_sst_dir, backend, metas))
+    }
+
+    #[test]
+    fn test_download_files_ext_no_key_rewrite() {
+        // Creates multiple sample SST files.
+        let (_ext_sst_dir, backend, file_metas) = create_multiple_external_sst_files(3).unwrap();
+
+        // Performs the batch download.
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer =
+            SstImporter::<TestEngine>::new(&cfg, &importer_dir, None, ApiVersion::V1, false)
+                .unwrap();
+        let db = create_sst_test_engine().unwrap();
+
+        // Prepare basic_meta (use the first file's meta as basic)
+        let basic_meta = file_metas[0].1.clone();
+
+        // Prepare metas HashMap
+        let metas: HashMap<String, SstMeta> = file_metas
+            .iter()
+            .map(|(name, meta)| (name.clone(), meta.clone()))
+            .collect();
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let range = runtime
+            .block_on(importer.download_files_ext(
+                &basic_meta,
+                &metas,
+                &backend,
+                &RewriteRule::default(),
+                None,
+                Limiter::new(f64::INFINITY),
+                db,
+                DownloadExt::default(),
+            ))
+            .unwrap()
+            .unwrap();
+
+        // Verify the range covers all keys
+        assert_eq!(range.get_start(), b"t123_r01");
+        assert_eq!(range.get_end(), b"t123_r27");
+
+        // Verifies that the merged file is saved to the correct place.
+        let sst_file_path = importer.dir.join_for_read(&basic_meta).unwrap().save;
+        let sst_file_metadata = sst_file_path.metadata().unwrap();
+        assert!(sst_file_metadata.is_file());
+
+        // Verifies the merged SST content is correct.
+        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
+        sst_reader.verify_checksum().unwrap();
+        let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
+        iter.seek_to_first().unwrap();
+
+        let collected = collect(iter);
+        assert_eq!(collected.len(), 9); // 3 files * 3 keys each
+
+        // Verify keys are in sorted order and all present
+        assert_eq!(collected[0].0, b"zt123_r01");
+        assert_eq!(collected[1].0, b"zt123_r04");
+        assert_eq!(collected[2].0, b"zt123_r07");
+        assert_eq!(collected[3].0, b"zt123_r11");
+        assert_eq!(collected[4].0, b"zt123_r14");
+        assert_eq!(collected[5].0, b"zt123_r17");
+        assert_eq!(collected[6].0, b"zt123_r21");
+        assert_eq!(collected[7].0, b"zt123_r24");
+        assert_eq!(collected[8].0, b"zt123_r27");
+    }
+
+    #[test]
+    fn test_download_files_ext_no_key_rewrite_with_encrypted() {
+        // Creates multiple sample SST files.
+        let (_ext_sst_dir, backend, file_metas) = create_multiple_external_sst_files(2).unwrap();
+
+        // Performs the batch download with encryption.
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let (temp_dir, key_manager) = new_key_manager_for_test();
+        let importer = SstImporter::<TestEngine>::new(
+            &cfg,
+            &importer_dir,
+            Some(key_manager.clone()),
+            ApiVersion::V1,
+            false,
+        )
+        .unwrap();
+
+        // Create db with encryption env
+        let db_path = temp_dir.path().join("db");
+        let env = get_env(Some(key_manager.clone()), None /* io_rate_limiter */).unwrap();
+        let db = new_test_engine_with_env(db_path.to_str().unwrap(), DATA_CFS, env.clone());
+
+        // Prepare basic_meta and metas HashMap
+        let basic_meta = file_metas[0].1.clone();
+        let metas: HashMap<String, SstMeta> = file_metas
+            .iter()
+            .map(|(name, meta)| (name.clone(), meta.clone()))
+            .collect();
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let range = runtime
+            .block_on(importer.download_files_ext(
+                &basic_meta,
+                &metas,
+                &backend,
+                &RewriteRule::default(),
+                None,
+                Limiter::new(f64::INFINITY),
+                db,
+                DownloadExt::default(),
+            ))
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(range.get_start(), b"t123_r01");
+        assert_eq!(range.get_end(), b"t123_r17");
+
+        // Verifies that the file is saved to the correct place and encrypted
+        let sst_file_path = importer.dir.join_for_read(&basic_meta).unwrap().save;
+        let sst_file_metadata = sst_file_path.metadata().unwrap();
+        assert!(sst_file_metadata.is_file());
+
+        // Verifies the file has proper encryption metadata
+        check_file_exists(&sst_file_path, Some(key_manager.as_ref()));
+
+        // Verifies the merged SST content is correct with key_manager
+        let env = get_env(Some(key_manager.clone()), None).unwrap();
+        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), Some(env));
+        sst_reader.verify_checksum().unwrap();
+        let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
+        iter.seek_to_first().unwrap();
+
+        let collected = collect(iter);
+        assert_eq!(collected.len(), 6); // 2 files * 3 keys each
+
+        drop(temp_dir);
+    }
+
+    #[test]
+    fn test_download_files_ext_with_key_rewrite() {
+        // Creates multiple sample SST files.
+        let (_ext_sst_dir, backend, file_metas) = create_multiple_external_sst_files(2).unwrap();
+
+        // Performs the batch download with key rewrite.
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer =
+            SstImporter::<TestEngine>::new(&cfg, &importer_dir, None, ApiVersion::V1, false)
+                .unwrap();
+        let db = create_sst_test_engine().unwrap();
+
+        let basic_meta = file_metas[0].1.clone();
+        let metas: HashMap<String, SstMeta> = file_metas
+            .iter()
+            .map(|(name, meta)| (name.clone(), meta.clone()))
+            .collect();
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let range = runtime
+            .block_on(importer.download_files_ext(
+                &basic_meta,
+                &metas,
+                &backend,
+                &new_rewrite_rule(b"t123", b"t567", 0),
+                None,
+                Limiter::new(f64::INFINITY),
+                db,
+                DownloadExt::default(),
+            ))
+            .unwrap()
+            .unwrap();
+
+        // Verify the rewritten key range
+        assert_eq!(range.get_start(), b"t567_r01");
+        assert_eq!(range.get_end(), b"t567_r17");
+
+        // Verifies that the file is saved to the correct place.
+        let sst_file_path = importer.dir.join_for_read(&basic_meta).unwrap().save;
+        assert!(sst_file_path.is_file());
+
+        // Verifies the merged SST content has rewritten keys.
+        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
+        sst_reader.verify_checksum().unwrap();
+        let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
+        iter.seek_to_first().unwrap();
+
+        let collected = collect(iter);
+        assert_eq!(collected.len(), 6); // 2 files * 3 keys each
+
+        // Verify all keys have been rewritten from t123 to t567
+        assert_eq!(collected[0].0, b"zt567_r01");
+        assert_eq!(collected[1].0, b"zt567_r04");
+        assert_eq!(collected[2].0, b"zt567_r07");
+        assert_eq!(collected[3].0, b"zt567_r11");
+        assert_eq!(collected[4].0, b"zt567_r14");
+        assert_eq!(collected[5].0, b"zt567_r17");
+    }
+
+    #[test]
+    fn test_download_files_ext_partial_range() {
+        // Creates multiple sample SST files.
+        let (_ext_sst_dir, backend, file_metas) = create_multiple_external_sst_files(2).unwrap();
+
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer =
+            SstImporter::<TestEngine>::new(&cfg, &importer_dir, None, ApiVersion::V1, false)
+                .unwrap();
+        let db = create_sst_test_engine().unwrap();
+
+        let mut basic_meta = file_metas[0].1.clone();
+        // Set a partial range that only includes some keys
+        basic_meta.mut_range().set_start(b"t123_r04".to_vec());
+        basic_meta.mut_range().set_end(b"t123_r14".to_vec());
+
+        let metas: HashMap<String, SstMeta> = file_metas
+            .iter()
+            .map(|(name, meta)| (name.clone(), meta.clone()))
+            .collect();
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let range = runtime
+            .block_on(importer.download_files_ext(
+                &basic_meta,
+                &metas,
+                &backend,
+                &RewriteRule::default(),
+                None,
+                Limiter::new(f64::INFINITY),
+                db,
+                DownloadExt::default(),
+            ))
+            .unwrap()
+            .unwrap();
+
+        // Verify only keys in the range are included
+        assert_eq!(range.get_start(), b"t123_r04");
+        assert_eq!(range.get_end(), b"t123_r14");
+
+        let sst_file_path = importer.dir.join_for_read(&basic_meta).unwrap().save;
+        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
+        sst_reader.verify_checksum().unwrap();
+        let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
+        iter.seek_to_first().unwrap();
+
+        let collected = collect(iter);
+        // Should only include keys within range: r04, r07, r11, r14
+        assert_eq!(collected.len(), 4);
+        assert_eq!(collected[0].0, b"zt123_r04");
+        assert_eq!(collected[1].0, b"zt123_r07");
+        assert_eq!(collected[2].0, b"zt123_r11");
+        assert_eq!(collected[3].0, b"zt123_r14");
+    }
+
+    #[test]
+    fn test_download_files_ext_with_invalid_file() {
+        // Create one valid and one invalid SST file
+        let ext_sst_dir = tempfile::tempdir().unwrap();
+
+        // Create a valid SST file
+        let mut sst_writer = new_sst_writer(
+            ext_sst_dir.path().join("sample_0.sst").to_str().unwrap(),
+        );
+        sst_writer.put(b"zt123_r01", b"abc").unwrap();
+        let sst_info = sst_writer.finish().unwrap();
+
+        let mut meta0 = SstMeta::default();
+        meta0.set_uuid(Uuid::new_v4().as_bytes().to_vec());
+        meta0.set_cf_name(CF_DEFAULT.to_owned());
+        meta0.set_length(sst_info.file_size());
+        meta0.set_region_id(4);
+        meta0.mut_region_epoch().set_conf_ver(5);
+        meta0.mut_region_epoch().set_version(6);
+
+        // Create an invalid SST file (just write garbage)
+        file_system::write(
+            ext_sst_dir.path().join("sample_1.sst"),
+            b"not an SST file",
+        )
+        .unwrap();
+
+        let mut meta1 = SstMeta::default();
+        meta1.set_uuid(Uuid::new_v4().as_bytes().to_vec());
+        meta1.set_cf_name(CF_DEFAULT.to_owned());
+        meta1.set_length(15); // length of "not an SST file"
+        meta1.set_region_id(4);
+
+        let backend = external_storage::make_local_backend(ext_sst_dir.path());
+
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer =
+            SstImporter::<TestEngine>::new(&cfg, &importer_dir, None, ApiVersion::V1, false)
+                .unwrap();
+        let db = create_sst_test_engine().unwrap();
+
+        let mut metas = HashMap::new();
+        metas.insert("sample_0.sst".to_string(), meta0.clone());
+        metas.insert("sample_1.sst".to_string(), meta1);
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let result = runtime.block_on(importer.download_files_ext(
+            &meta0,
+            &metas,
+            &backend,
+            &RewriteRule::default(),
+            None,
+            Limiter::new(f64::INFINITY),
+            db,
+            DownloadExt::default(),
+        ));
+
+        // Should fail due to invalid SST file
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_download_files_ext_empty_metas() {
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer =
+            SstImporter::<TestEngine>::new(&cfg, &importer_dir, None, ApiVersion::V1, false)
+                .unwrap();
+        let db = create_sst_test_engine().unwrap();
+
+        // Create a valid basic_meta with proper uuid
+        let mut basic_meta = SstMeta::default();
+        basic_meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
+        basic_meta.set_cf_name(CF_DEFAULT.to_owned());
+        basic_meta.set_region_id(1);
+
+        let metas = HashMap::new(); // Empty HashMap
+        let backend = StorageBackend::default();
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let range = runtime
+            .block_on(importer.download_files_ext(
+                &basic_meta,
+                &metas,
+                &backend,
+                &RewriteRule::default(),
+                None,
+                Limiter::new(f64::INFINITY),
+                db,
+                DownloadExt::default(),
+            ))
+            .unwrap();
+
+        // With empty metas, should return None or handle gracefully
+        assert!(range.is_none());
+    }
 }
