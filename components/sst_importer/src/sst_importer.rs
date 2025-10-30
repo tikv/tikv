@@ -4263,6 +4263,7 @@ mod tests {
     }
 
     // Helper function to create multiple external SST files for batch download testing.
+    // Uses transaction default CF format with timestamp encoding for realistic test data.
     fn create_multiple_external_sst_files(
         count: usize,
     ) -> Result<(TempDir, StorageBackend, Vec<(String, SstMeta)>)> {
@@ -4279,11 +4280,11 @@ mod tests {
                     .unwrap(),
             );
 
-            // Write different keys for each SST file to ensure they can be merged
+            // Write different keys with timestamps for each SST file
             let base = i * 10;
-            sst_writer.put(format!("zt123_r{:02}", base + 1).as_bytes(), b"abc")?;
-            sst_writer.put(format!("zt123_r{:02}", base + 4).as_bytes(), b"xyz")?;
-            sst_writer.put(format!("zt123_r{:02}", base + 7).as_bytes(), b"pqrst")?;
+            sst_writer.put(&get_encoded_key(format!("t123_r{:02}", base + 1).as_bytes(), 1), b"abc")?;
+            sst_writer.put(&get_encoded_key(format!("t123_r{:02}", base + 4).as_bytes(), 3), b"xyz")?;
+            sst_writer.put(&get_encoded_key(format!("t123_r{:02}", base + 7).as_bytes(), 7), b"pqrst")?;
 
             let sst_info = sst_writer.finish()?;
 
@@ -4296,6 +4297,115 @@ mod tests {
             meta.set_region_id(4);
             meta.mut_region_epoch().set_conf_ver(5);
             meta.mut_region_epoch().set_version(6);
+
+            metas.push((file_name, meta));
+        }
+
+        let backend = external_storage::make_local_backend(ext_sst_dir.path());
+        Ok((ext_sst_dir, backend, metas))
+    }
+
+    // Helper function to create multiple external SST files for txn write CF testing.
+    fn create_multiple_external_sst_files_txn_write(
+        count: usize,
+    ) -> Result<(TempDir, StorageBackend, Vec<(String, SstMeta)>)> {
+        let ext_sst_dir = tempfile::tempdir()?;
+        let mut metas = Vec::new();
+
+        for i in 0..count {
+            let file_name = format!("sample_write_{}.sst", i);
+            let mut sst_writer = new_sst_writer(
+                ext_sst_dir
+                    .path()
+                    .join(&file_name)
+                    .to_str()
+                    .unwrap(),
+            );
+
+            // Write different keys with WriteType for each SST file
+            let base = i * 10;
+            sst_writer.put(
+                &get_encoded_key(format!("t123_r{:02}", base + 1).as_bytes(), 5),
+                &get_write_value(WriteType::Put, 1, None),
+            )?;
+            if i % 2 == 0 {
+                // Add some Delete entries in even-numbered files
+                sst_writer.put(
+                    &get_encoded_key(format!("t123_r{:02}", base + 2).as_bytes(), 5),
+                    &get_write_value(WriteType::Delete, 1, None),
+                )?;
+            }
+            sst_writer.put(
+                &get_encoded_key(format!("t123_r{:02}", base + 4).as_bytes(), 4),
+                &get_write_value(WriteType::Put, 3, None),
+            )?;
+            sst_writer.put(
+                &get_encoded_key(format!("t123_r{:02}", base + 7).as_bytes(), 8),
+                &get_write_value(WriteType::Put, 7, Some(b"value".to_vec())),
+            )?;
+
+            let sst_info = sst_writer.finish()?;
+
+            // Make up the SST meta for downloading.
+            let mut meta = SstMeta::default();
+            let uuid = Uuid::new_v4();
+            meta.set_uuid(uuid.as_bytes().to_vec());
+            meta.set_cf_name(CF_WRITE.to_owned());
+            meta.set_length(sst_info.file_size());
+            meta.set_region_id(4);
+            meta.mut_region_epoch().set_conf_ver(5);
+            meta.mut_region_epoch().set_version(6);
+
+            metas.push((file_name, meta));
+        }
+
+        let backend = external_storage::make_local_backend(ext_sst_dir.path());
+        Ok((ext_sst_dir, backend, metas))
+    }
+
+    // Helper function to create multiple external SST files for RawKV testing.
+    fn create_multiple_external_rawkv_sst_files(
+        count: usize,
+        start_key: &[u8],
+        end_key: &[u8],
+        end_key_exclusive: bool,
+    ) -> Result<(TempDir, StorageBackend, Vec<(String, SstMeta)>)> {
+        let ext_sst_dir = tempfile::tempdir()?;
+        let mut metas = Vec::new();
+
+        for i in 0..count {
+            let file_name = format!("sample_rawkv_{}.sst", i);
+            let mut sst_writer = new_sst_writer(
+                ext_sst_dir
+                    .path()
+                    .join(&file_name)
+                    .to_str()
+                    .unwrap(),
+            );
+
+            // Write different RawKV keys for each SST file
+            // Using keys like: za, zb, zc, zd... for file 0
+            //                  ze, zf, zg... for file 1, etc.
+            let base_char = b'a' + (i * 4) as u8;
+            sst_writer.put(&[b'z', base_char], b"v1")?;
+            sst_writer.put(&[b'z', base_char + 1], b"v2")?;
+            sst_writer.put(&[b'z', base_char + 1, 0], b"v3")?;
+            sst_writer.put(&[b'z', base_char + 2], b"v4")?;
+
+            let sst_info = sst_writer.finish()?;
+
+            // Make up the SST meta for downloading.
+            let mut meta = SstMeta::default();
+            let uuid = Uuid::new_v4();
+            meta.set_uuid(uuid.as_bytes().to_vec());
+            meta.set_cf_name(CF_DEFAULT.to_owned());
+            meta.set_length(sst_info.file_size());
+            meta.set_region_id(4);
+            meta.mut_region_epoch().set_conf_ver(5);
+            meta.mut_region_epoch().set_version(6);
+            meta.mut_range().set_start(start_key.to_vec());
+            meta.mut_range().set_end(end_key.to_vec());
+            meta.set_end_key_exclusive(end_key_exclusive);
 
             metas.push((file_name, meta));
         }
@@ -4341,9 +4451,13 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        // Verify the range covers all keys
-        assert_eq!(range.get_start(), b"t123_r01");
-        assert_eq!(range.get_end(), b"t123_r27");
+        // Verify the range covers all keys (with timestamp encoding)
+        // File 0: t123_r01 (ts=1), t123_r04 (ts=3), t123_r07 (ts=7)
+        // File 2: t123_r21 (ts=1), t123_r24 (ts=3), t123_r27 (ts=7)
+        let expected_start = Key::from_raw(b"t123_r01").append_ts(TimeStamp::new(1)).into_encoded();
+        let expected_end = Key::from_raw(b"t123_r27").append_ts(TimeStamp::new(7)).into_encoded();
+        assert_eq!(range.get_start(), &expected_start);
+        assert_eq!(range.get_end(), &expected_end);
 
         // Verifies that the merged file is saved to the correct place.
         let sst_file_path = importer.dir.join_for_read(&basic_meta).unwrap().save;
@@ -4416,8 +4530,13 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        assert_eq!(range.get_start(), b"t123_r01");
-        assert_eq!(range.get_end(), b"t123_r17");
+        // Verify the range covers all keys (with timestamp encoding)
+        // File 0: t123_r01 (ts=1), t123_r04 (ts=3), t123_r07 (ts=7)
+        // File 1: t123_r11 (ts=1), t123_r14 (ts=3), t123_r17 (ts=7)
+        let expected_start = Key::from_raw(b"t123_r01").append_ts(TimeStamp::new(1)).into_encoded();
+        let expected_end = Key::from_raw(b"t123_r17").append_ts(TimeStamp::new(7)).into_encoded();
+        assert_eq!(range.get_start(), &expected_start);
+        assert_eq!(range.get_end(), &expected_end);
 
         // Verifies that the file is saved to the correct place and encrypted
         let sst_file_path = importer.dir.join_for_read(&basic_meta).unwrap().save;
@@ -4474,9 +4593,13 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        // Verify the rewritten key range
-        assert_eq!(range.get_start(), b"t567_r01");
-        assert_eq!(range.get_end(), b"t567_r17");
+        // Verify the rewritten key range (with timestamp encoding)
+        // Original: t123_r01 (ts=1), t123_r17 (ts=7)
+        // Rewritten: t567_r01 (ts=1), t567_r17 (ts=7)
+        let expected_start = Key::from_raw(b"t567_r01").append_ts(TimeStamp::new(1)).into_encoded();
+        let expected_end = Key::from_raw(b"t567_r17").append_ts(TimeStamp::new(7)).into_encoded();
+        assert_eq!(range.get_start(), &expected_start);
+        assert_eq!(range.get_end(), &expected_end);
 
         // Verifies that the file is saved to the correct place.
         let sst_file_path = importer.dir.join_for_read(&basic_meta).unwrap().save;
@@ -4537,9 +4660,13 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        // Verify only keys in the range are included
-        assert_eq!(range.get_start(), b"t123_r04");
-        assert_eq!(range.get_end(), b"t123_r14");
+        // Verify only keys in the range are included (with timestamp encoding)
+        // Data: r01(ts=1), r04(ts=3), r07(ts=7), r11(ts=1), r14(ts=3), r17(ts=7)
+        // Range: [t123_r04, t123_r14) should include r04(ts=3), r07(ts=7), r11(ts=1)
+        let expected_start = Key::from_raw(b"t123_r04").append_ts(TimeStamp::new(3)).into_encoded();
+        let expected_end = Key::from_raw(b"t123_r11").append_ts(TimeStamp::new(1)).into_encoded();
+        assert_eq!(range.get_start(), &expected_start);
+        assert_eq!(range.get_end(), &expected_end);
 
         let sst_file_path = importer.dir.join_for_read(&basic_meta).unwrap().save;
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
