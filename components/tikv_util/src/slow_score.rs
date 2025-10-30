@@ -19,21 +19,22 @@ pub struct SlowScoreTickResult {
 
 /// Interval for updating the slow score.
 const UPDATE_INTERVALS: Duration = Duration::from_secs(10);
-/// Disk recovery intervals for the slow score.
-/// If the score has reached 100 and there is no timeout inspecting requests
-/// during this interval, the disk score will go back to 1 after 5min.
 pub const DISK_RECOVERY_INTERVALS: Duration = Duration::from_secs(60 * 5);
-/// Network recovery intervals for the slow score.
+/// Network recovery intervals for the network slow score.
 /// If the score has reached 100 and there is no timeout inspecting requests
-/// during this interval, the network score will go back to 1 after 10min.
+/// during this interval, the score will go back to 1 after 10min.
 pub const NETWORK_RECOVERY_INTERVALS: Duration = Duration::from_secs(60 * 10);
-/// After every DISK_ROUND_TICKS, the disk slow score will be updated.
+/// After every DISK_ROUND_TICKS, the disk's slow score will be updated.
 pub const DISK_ROUND_TICKS: u64 = 30;
-/// After every NETWORK_ROUND_TICKS, the network slow score will be updated.
+/// After every NETWORK_ROUND_TICKS, the network's slow score will be updated.
 pub const NETWORK_ROUND_TICKS: u64 = 3;
-/// The maximal tolerated timeout ratio for disk inspecting requests.
+/// DISK_TIMEOUT_RATIO_THRESHOLD is the maximal tolerated timeout ratio
+/// for disk inspecting requests. If the timeout ratio is larger than this
+/// threshold, the disk's slow score will be multiplied by 2.
 pub const DISK_TIMEOUT_RATIO_THRESHOLD: f64 = 0.1;
-/// The maximal tolerated timeout ratio for network inspecting requests.
+/// NETWORK_TIMEOUT_RATIO_THRESHOLD is the maximal tolerated timeout ratio
+/// for network inspecting requests. If the timeout ratio is larger than this
+/// threshold, the network's slow score will be multiplied by 2.
 pub const NETWORK_TIMEOUT_RATIO_THRESHOLD: f64 = 1.0;
 /// The timeout threshold for network inspecting requests.
 pub const NETWORK_TIMEOUT_THRESHOLD: Duration = Duration::from_secs(1);

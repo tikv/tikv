@@ -886,11 +886,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                                 );
                             }
                         }
-                        InspectFactor::Network => {
-                            let latencies = self.ctx.trans.take_network_latencies();
-                            inspector.record_network_latencies(latencies);
-                            inspector.finish();
-                        }
+                        _ => unimplemented!(),
                     }
                 }
                 StoreMsg::UnsafeRecoveryReport(report) => self.store_heartbeat_pd(Some(report)),
