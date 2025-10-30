@@ -2,9 +2,7 @@
 
 // #[PerformanceCriticalPath]
 use std::{
-    collections::HashMap,
     sync::{mpsc, Mutex},
-    time::Duration,
 };
 
 use crossbeam::channel::{SendError, TrySendError};
@@ -28,10 +26,6 @@ pub trait Transport: Send + Clone {
     fn need_flush(&self) -> bool;
 
     fn flush(&mut self);
-
-    fn take_network_latencies(&self) -> HashMap<u64, Duration> {
-        HashMap::default()
-    }
 }
 
 /// Routes message to target region.

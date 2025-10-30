@@ -3271,4 +3271,211 @@ mod tests {
 
         pd_worker.stop();
     }
+
+    fn create_test_config() -> Config {
+        Config {
+            inspect_interval: tikv_util::config::ReadableDuration(Duration::from_secs(1)),
+            inspect_kvdb_interval: tikv_util::config::ReadableDuration(Duration::from_secs(1)),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_unified_slow_score_record_network() {
+        let cfg = create_test_config();
+        let mut unified_slow_score = UnifiedSlowScore::new(&cfg);
+
+        // Test recording network durations for multiple stores
+        let mut durations = StdHashMap::new();
+        durations.insert(1u64, Duration::from_millis(100));
+        durations.insert(2u64, Duration::from_millis(200));
+        durations.insert(3u64, Duration::from_millis(300));
+
+        // First tick to establish baseline
+        let result = unified_slow_score.tick_network();
+        assert_eq!(result.tick_id, 0);
+
+        // Record network durations for current tick
+        unified_slow_score.record_network(0, durations.clone());
+
+        // Verify that network disk_factors are created
+        let network_factors = unified_slow_score.network_factors.lock().unwrap();
+        assert_eq!(network_factors.len(), 3);
+        assert!(network_factors.contains_key(&1));
+        assert!(network_factors.contains_key(&2));
+        assert!(network_factors.contains_key(&3));
+        assert!(!network_factors.contains_key(&4));
+        drop(network_factors);
+
+        // Tick again to advance
+        let result2 = unified_slow_score.tick_network();
+        assert_eq!(result2.tick_id, 1);
+
+        durations.insert(4u64, Duration::from_millis(400));
+        unified_slow_score.record_network(1, durations.clone());
+
+        // Test updating with fewer stores (should remove missing stores)
+        let mut new_durations = StdHashMap::new();
+        new_durations.insert(1u64, Duration::from_millis(150));
+        new_durations.insert(2u64, Duration::from_millis(250));
+        // Store 3 is not included, should be removed
+
+        unified_slow_score.record_network(2, new_durations);
+
+        let network_factors = unified_slow_score.network_factors.lock().unwrap();
+        assert_eq!(network_factors.len(), 2);
+        assert!(network_factors.contains_key(&1));
+        assert!(network_factors.contains_key(&2));
+        assert!(!network_factors.contains_key(&3));
+    }
+
+    #[test]
+    fn test_unified_slow_score_tick_network_synchronization() {
+        let cfg = create_test_config();
+        let mut unified_slow_score = UnifiedSlowScore::new(&cfg);
+
+        // Record network durations
+        let mut durations = StdHashMap::new();
+        durations.insert(1u64, Duration::from_millis(100));
+        durations.insert(2u64, Duration::from_millis(200));
+
+        // First tick to establish baseline
+        let result1 = unified_slow_score.tick_network();
+        assert_eq!(result1.tick_id, 0);
+
+        unified_slow_score.record_network(1, durations);
+
+        // Manually set different tick IDs to test synchronization
+        {
+            let mut network_factors = unified_slow_score.network_factors.lock().unwrap();
+            let factor_1 = network_factors.get_mut(&1).unwrap();
+            factor_1.set_last_tick_id(5);
+            let factor_2 = network_factors.get_mut(&2).unwrap();
+            factor_2.set_last_tick_id(3);
+        }
+
+        // Tick should synchronize the tick IDs
+        let result2 = unified_slow_score.tick_network();
+
+        // Verify all disk_factors have the same (maximum) tick ID
+        {
+            let network_factors = unified_slow_score.network_factors.lock().unwrap();
+            let factor_1_id = network_factors.get(&1).unwrap().get_last_tick_id();
+            let factor_2_id = network_factors.get(&2).unwrap().get_last_tick_id();
+            assert_eq!(factor_1_id, factor_2_id);
+            assert_eq!(factor_1_id, 6); // Should be the maximum (5 + 1 from tick)
+            assert_eq!(result2.tick_id, 6);
+        }
+    }
+
+    #[test]
+    fn test_unified_slow_score_get_network_score() {
+        let cfg = create_test_config();
+        let mut unified_slow_score = UnifiedSlowScore::new(&cfg);
+
+        // Initially should return empty scores
+        let scores = unified_slow_score.get_network_score();
+        assert!(scores.is_empty());
+
+        // Record network durations
+        let mut durations = StdHashMap::new();
+        durations.insert(1u64, Duration::from_millis(100));
+        durations.insert(2u64, Duration::from_millis(200));
+        unified_slow_score.record_network(1, durations);
+
+        // Get network scores
+        let scores = unified_slow_score.get_network_score();
+        assert_eq!(scores.len(), 2);
+        assert!(scores.contains_key(&1));
+        assert!(scores.contains_key(&2));
+
+        // All scores should start at 1 (default slow score)
+        assert_eq!(scores[&1], 1);
+        assert_eq!(scores[&2], 1);
+
+        // Test multiple ticks to see score evolution
+        // NETWORK_ROUND_TICKS = 3, so scores will update every 3 ticks
+
+        // First 2 ticks - no score update yet
+        let result1 = unified_slow_score.tick_network();
+        assert!(result1.updated_score.is_none());
+        assert_eq!(result1.tick_id, 1);
+
+        let result2 = unified_slow_score.tick_network();
+        assert!(result2.updated_score.is_none());
+        assert_eq!(result2.tick_id, 2);
+
+        // 3rd tick - should trigger score update
+        let result3 = unified_slow_score.tick_network();
+        assert!(result3.updated_score.is_some());
+        assert_eq!(result3.tick_id, 3);
+        // Since no timeout requests were recorded, scores should still be 1.0
+        assert_eq!(result3.updated_score.unwrap(), 1.0);
+
+        // Verify scores remain at 1
+        let scores_after_ticks = unified_slow_score.get_network_score();
+        assert_eq!(scores_after_ticks[&1], 1);
+        assert_eq!(scores_after_ticks[&2], 1);
+
+        // Now record some timeout durations to test score increase
+        let mut timeout_durations = StdHashMap::new();
+        timeout_durations.insert(1u64, Duration::from_secs(2)); // > NETWORK_TIMEOUT_THRESHOLD (1s)
+        timeout_durations.insert(2u64, Duration::from_secs(3)); // > NETWORK_TIMEOUT_THRESHOLD (1s)
+
+        // Tick to next round (ticks 4, 5, 6)
+        let result4 = unified_slow_score.tick_network();
+        assert!(result4.updated_score.is_none());
+        assert_eq!(result4.tick_id, 4);
+
+        // Record timeouts for tick 4 (current tick)
+        unified_slow_score.record_network(4, timeout_durations.clone());
+
+        let result5 = unified_slow_score.tick_network();
+        assert!(result5.updated_score.is_none());
+        assert_eq!(result5.tick_id, 5);
+
+        // Record timeouts for tick 5 (current tick)
+        unified_slow_score.record_network(5, timeout_durations.clone());
+
+        let result6 = unified_slow_score.tick_network();
+        assert!(result6.updated_score.is_some());
+        assert_eq!(result6.tick_id, 6);
+        // Score should increase due to timeout requests
+        assert!(result6.updated_score.unwrap() > 1.0);
+
+        // Verify scores have increased
+        let scores_after_timeout = unified_slow_score.get_network_score();
+        assert!(scores_after_timeout[&1] > 1);
+        assert!(scores_after_timeout[&2] > 1);
+
+        // Test recovery - record normal durations (no timeouts)
+        let mut normal_durations = StdHashMap::new();
+        normal_durations.insert(1u64, Duration::from_millis(100));
+        normal_durations.insert(2u64, Duration::from_millis(200));
+
+        // Record for several rounds to test score recovery
+        for i in 7..=15 {
+            unified_slow_score.record_network(i, normal_durations.clone());
+            let result = unified_slow_score.tick_network();
+
+            // Every 3rd tick should have updated score
+            if i % 3 == 0 {
+                assert!(result.updated_score.is_some());
+                // Scores should gradually decrease back towards 1.0
+                if i >= 12 {
+                    // After several rounds without timeouts, scores should be decreasing
+                    let current_scores = unified_slow_score.get_network_score();
+                    // Scores should be lower than after the timeout round
+                    assert!(
+                        current_scores[&1] <= scores_after_timeout[&1] || current_scores[&1] == 1
+                    );
+                    assert!(
+                        current_scores[&2] <= scores_after_timeout[&2] || current_scores[&2] == 1
+                    );
+                }
+            } else {
+                assert!(result.updated_score.is_none());
+            }
+        }
+    }
 }

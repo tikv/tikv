@@ -1079,20 +1079,6 @@ where
         self.health_checker.get_all_max_latencies()
     }
 
-    pub fn take_network_latencies(&self) -> std::collections::HashMap<u64, Duration> {
-        self.health_checker
-            .get_and_reset_all_max_latencies()
-            .into_iter()
-            .filter_map(|(store_id, latency_ms)| {
-                if latency_ms > 0.0 {
-                    Some((store_id, Duration::from_secs_f64(latency_ms / 1000.0)))
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
-
     /// Loads connection from pool.
     ///
     /// Creates it if it doesn't exist. `false` is returned if such connection

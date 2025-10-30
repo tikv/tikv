@@ -61,8 +61,4 @@ where
     fn flush(&mut self) {
         self.raft_client.flush();
     }
-
-    fn take_network_latencies(&self) -> HashMap<u64, Duration> {
-        self.raft_client.take_network_latencies()
-    }
 }
