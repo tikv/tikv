@@ -966,12 +966,23 @@ impl UnifiedSlowScore {
 
     #[inline]
     pub fn record_network(&mut self, id: u64, latencies: std::collections::HashMap<u64, Duration>) {
+        let store_ids: std::collections::HashSet<u64> = latencies.keys().copied().collect();
+        self.network_factors
+            .retain(|store_id, _| store_ids.contains(store_id));
+
         for (store_id, latency) in latencies {
             self.network_factors
                 .entry(store_id)
                 .or_insert_with(|| SlowScore::new_network(self.inspect_network_interval))
                 .record(id, latency, true);
         }
+    }
+
+    pub fn get_network_scores(&mut self) -> std::collections::HashMap<u64, u64> {
+        self.network_factors
+            .iter_mut()
+            .map(|(store_id, score)| (*store_id, score.get() as u64))
+            .collect()
     }
 
     pub fn last_tick_finished(&self, factor: InspectFactor) -> bool {
@@ -1496,6 +1507,13 @@ where
 
         let slow_score = self.slow_score.get_score();
         stats.set_slow_score(slow_score as u64);
+        let network_scores = self
+            .slow_score
+            .get_network_scores()
+            .into_iter()
+            .filter(|(_, score)| *score != 1)
+            .collect::<std::collections::HashMap<_, _>>();
+        stats.set_network_slow_scores(network_scores);
         self.set_slow_trend_to_store_stats(&mut stats, total_query_num);
 
         stats.set_is_grpc_paused(self.grpc_service_manager.is_paused());
