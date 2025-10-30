@@ -664,7 +664,7 @@ impl Config {
 
     /// Optimize the interval of different inspectors according to the
     /// configuration.
-        pub fn tune_inspector_configs(
+    pub fn tune_inspector_configs(
         &mut self,
         separated_raft_mount_path: bool,
         inspect_network_interval: ReadableDuration,

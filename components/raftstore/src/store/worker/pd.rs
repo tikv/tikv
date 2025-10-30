@@ -2280,7 +2280,6 @@ where
             }
         };
 
-
         let id = slow_score_tick_result.tick_id;
         let scheduler = self.scheduler.clone();
         let inspector = {
