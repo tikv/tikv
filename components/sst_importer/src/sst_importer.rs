@@ -4473,16 +4473,16 @@ mod tests {
         let collected = collect(iter);
         assert_eq!(collected.len(), 9); // 3 files * 3 keys each
 
-        // Verify keys are in sorted order and all present
-        assert_eq!(collected[0].0, b"zt123_r01");
-        assert_eq!(collected[1].0, b"zt123_r04");
-        assert_eq!(collected[2].0, b"zt123_r07");
-        assert_eq!(collected[3].0, b"zt123_r11");
-        assert_eq!(collected[4].0, b"zt123_r14");
-        assert_eq!(collected[5].0, b"zt123_r17");
-        assert_eq!(collected[6].0, b"zt123_r21");
-        assert_eq!(collected[7].0, b"zt123_r24");
-        assert_eq!(collected[8].0, b"zt123_r27");
+        // Verify keys are in sorted order and all present (with timestamp encoding)
+        assert_eq!(collected[0].0, get_encoded_key(b"t123_r01", 1));
+        assert_eq!(collected[1].0, get_encoded_key(b"t123_r04", 3));
+        assert_eq!(collected[2].0, get_encoded_key(b"t123_r07", 7));
+        assert_eq!(collected[3].0, get_encoded_key(b"t123_r11", 1));
+        assert_eq!(collected[4].0, get_encoded_key(b"t123_r14", 3));
+        assert_eq!(collected[5].0, get_encoded_key(b"t123_r17", 7));
+        assert_eq!(collected[6].0, get_encoded_key(b"t123_r21", 1));
+        assert_eq!(collected[7].0, get_encoded_key(b"t123_r24", 3));
+        assert_eq!(collected[8].0, get_encoded_key(b"t123_r27", 7));
     }
 
     #[test]
@@ -4614,13 +4614,13 @@ mod tests {
         let collected = collect(iter);
         assert_eq!(collected.len(), 6); // 2 files * 3 keys each
 
-        // Verify all keys have been rewritten from t123 to t567
-        assert_eq!(collected[0].0, b"zt567_r01");
-        assert_eq!(collected[1].0, b"zt567_r04");
-        assert_eq!(collected[2].0, b"zt567_r07");
-        assert_eq!(collected[3].0, b"zt567_r11");
-        assert_eq!(collected[4].0, b"zt567_r14");
-        assert_eq!(collected[5].0, b"zt567_r17");
+        // Verify all keys have been rewritten from t123 to t567 (with timestamp encoding)
+        assert_eq!(collected[0].0, get_encoded_key(b"t567_r01", 1));
+        assert_eq!(collected[1].0, get_encoded_key(b"t567_r04", 3));
+        assert_eq!(collected[2].0, get_encoded_key(b"t567_r07", 7));
+        assert_eq!(collected[3].0, get_encoded_key(b"t567_r11", 1));
+        assert_eq!(collected[4].0, get_encoded_key(b"t567_r14", 3));
+        assert_eq!(collected[5].0, get_encoded_key(b"t567_r17", 7));
     }
 
     #[test]
@@ -4675,12 +4675,11 @@ mod tests {
         iter.seek_to_first().unwrap();
 
         let collected = collect(iter);
-        // Should only include keys within range: r04, r07, r11, r14
-        assert_eq!(collected.len(), 4);
-        assert_eq!(collected[0].0, b"zt123_r04");
-        assert_eq!(collected[1].0, b"zt123_r07");
-        assert_eq!(collected[2].0, b"zt123_r11");
-        assert_eq!(collected[3].0, b"zt123_r14");
+        // Should only include keys within range [t123_r04, t123_r14): r04, r07, r11
+        assert_eq!(collected.len(), 3);
+        assert_eq!(collected[0].0, get_encoded_key(b"t123_r04", 3));
+        assert_eq!(collected[1].0, get_encoded_key(b"t123_r07", 7));
+        assert_eq!(collected[2].0, get_encoded_key(b"t123_r11", 1));
     }
 
     #[test]
