@@ -48799,7 +48799,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 352,
+          "id": 346,
           "interval": null,
           "legend": {
             "show": false
@@ -48900,11 +48900,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 346,
-=======
-      "id": 353,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+      "id": 347,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -48943,11 +48939,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 347,
-=======
-          "id": 354,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 348,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -49080,11 +49072,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 348,
-=======
-          "id": 355,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 349,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -49217,11 +49205,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 349,
-=======
-          "id": 356,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 350,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -49361,11 +49345,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 350,
-=======
-          "id": 357,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 351,
           "interval": null,
           "legend": {
             "show": false
@@ -49463,11 +49443,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 351,
-=======
-          "id": 358,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 352,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -49668,11 +49644,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 352,
-=======
-          "id": 359,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 353,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -49873,11 +49845,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 353,
-=======
-          "id": 360,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 354,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -50081,11 +50049,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 354,
-=======
-      "id": 361,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+      "id": 355,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -50124,11 +50088,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 355,
-=======
-          "id": 362,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 356,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -50276,11 +50236,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 356,
-=======
-          "id": 363,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 357,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -50481,11 +50437,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 357,
-=======
-          "id": 364,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 358,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -50686,11 +50638,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 358,
-=======
-          "id": 365,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 359,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -50891,11 +50839,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 359,
-=======
-          "id": 366,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 360,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -51096,11 +51040,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 360,
-=======
-          "id": 367,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 361,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -51233,11 +51173,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 361,
-=======
-          "id": 368,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 362,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -51370,11 +51306,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 362,
-=======
-          "id": 369,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 363,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -51507,11 +51439,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 363,
-=======
-          "id": 370,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 364,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -51644,11 +51572,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 364,
-=======
-          "id": 371,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 365,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -51856,11 +51780,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 365,
-=======
-          "id": 372,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 366,
           "interval": null,
           "legend": {
             "show": false
@@ -51961,11 +51881,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 366,
-=======
-      "id": 373,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+      "id": 367,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -52011,11 +51927,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 367,
-=======
-          "id": 374,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 368,
           "interval": null,
           "legend": {
             "show": false
@@ -52113,11 +52025,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 368,
-=======
-          "id": 375,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 369,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52318,11 +52226,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 369,
-=======
-          "id": 376,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 370,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52455,11 +52359,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 370,
-=======
-          "id": 377,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 371,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52592,11 +52492,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 371,
-=======
-          "id": 378,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 372,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52729,11 +52625,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 372,
-=======
-          "id": 379,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 373,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52934,11 +52826,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 373,
-=======
-          "id": 380,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 374,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53071,11 +52959,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 374,
-=======
-          "id": 381,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 375,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53208,11 +53092,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 375,
-=======
-          "id": 382,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 376,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53348,11 +53228,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 376,
-=======
-      "id": 383,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+      "id": 377,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -53391,11 +53267,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 377,
-=======
-          "id": 384,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 378,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53596,11 +53468,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 378,
-=======
-          "id": 385,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 379,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53801,11 +53669,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 379,
-=======
-          "id": 386,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 380,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54006,11 +53870,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 380,
-=======
-          "id": 387,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 381,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54211,11 +54071,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 381,
-=======
-          "id": 388,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 382,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54348,11 +54204,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 382,
-=======
-          "id": 389,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 383,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54485,11 +54337,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 383,
-=======
-          "id": 390,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 384,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54622,11 +54470,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 384,
-=======
-          "id": 391,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 385,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54759,11 +54603,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 385,
-=======
-          "id": 392,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 386,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54896,11 +54736,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 386,
-=======
-          "id": 393,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 387,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55040,11 +54876,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 387,
-=======
-          "id": 394,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 388,
           "interval": null,
           "legend": {
             "show": false
@@ -55142,11 +54974,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 388,
-=======
-          "id": 395,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 389,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55350,11 +55178,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 389,
-=======
-      "id": 396,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+      "id": 390,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -55393,11 +55217,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 390,
-=======
-          "id": 397,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 391,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55530,11 +55350,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 391,
-=======
-          "id": 398,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 392,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55667,11 +55483,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 392,
-=======
-          "id": 399,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 393,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55811,11 +55623,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 393,
-=======
-          "id": 400,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 394,
           "interval": null,
           "legend": {
             "show": false
@@ -55913,11 +55721,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 394,
-=======
-          "id": 401,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 395,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -56118,11 +55922,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 395,
-=======
-          "id": 402,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 396,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -56323,11 +56123,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 396,
-=======
-          "id": 403,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 397,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -56531,11 +56327,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 397,
-=======
-      "id": 404,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+      "id": 398,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -56574,11 +56366,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 398,
-=======
-          "id": 405,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 399,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -56756,11 +56544,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 399,
-=======
-          "id": 406,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 400,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -56961,11 +56745,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 400,
-=======
-          "id": 407,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 401,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57098,11 +56878,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 401,
-=======
-          "id": 408,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 402,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57235,11 +57011,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 402,
-=======
-          "id": 409,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 403,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57372,11 +57144,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 403,
-=======
-          "id": 410,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 404,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57509,11 +57277,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 404,
-=======
-          "id": 411,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 405,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57646,11 +57410,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 405,
-=======
-          "id": 412,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 406,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57779,11 +57539,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 406,
-=======
-          "id": 413,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 407,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -57858,11 +57614,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 407,
-=======
-          "id": 414,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 408,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -57941,11 +57693,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 408,
-=======
-          "id": 415,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 409,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -58198,11 +57946,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 409,
-=======
-          "id": 416,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 410,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -58335,11 +58079,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 410,
-=======
-          "id": 417,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 411,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -58472,11 +58212,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 411,
-=======
-          "id": 418,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 412,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -58677,11 +58413,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 412,
-=======
-          "id": 419,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 413,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -58832,11 +58564,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 413,
-=======
-      "id": 420,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+      "id": 414,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -58875,11 +58603,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 414,
-=======
-          "id": 421,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 415,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59027,11 +58751,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 415,
-=======
-          "id": 422,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 416,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59164,11 +58884,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 416,
-=======
-          "id": 423,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 417,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59369,11 +59085,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 417,
-=======
-          "id": 424,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 418,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59521,11 +59233,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 418,
-=======
-          "id": 425,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 419,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59726,11 +59434,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 419,
-=======
-          "id": 426,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 420,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59863,11 +59567,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 420,
-=======
-          "id": 427,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 421,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60000,11 +59700,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 421,
-=======
-          "id": 428,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 422,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60137,11 +59833,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 422,
-=======
-          "id": 429,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 423,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60274,11 +59966,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 423,
-=======
-          "id": 430,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 424,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60418,11 +60106,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 424,
-=======
-          "id": 431,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 425,
           "interval": null,
           "legend": {
             "show": false
@@ -60520,11 +60204,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 425,
-=======
-          "id": 432,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 426,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60728,11 +60408,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 426,
-=======
-      "id": 433,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+      "id": 427,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -60771,11 +60447,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 427,
-=======
-          "id": 434,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 428,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60908,11 +60580,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 428,
-=======
-          "id": 435,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 429,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61045,11 +60713,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 429,
-=======
-          "id": 436,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 430,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61182,11 +60846,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 430,
-=======
-          "id": 437,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 431,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61322,11 +60982,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 431,
-=======
-      "id": 438,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+      "id": 432,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -61365,11 +61021,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 432,
-=======
-          "id": 439,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 433,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61502,11 +61154,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 433,
-=======
-          "id": 440,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 434,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61639,11 +61287,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 434,
-=======
-          "id": 441,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 435,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61791,11 +61435,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 435,
-=======
-          "id": 442,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 436,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61928,11 +61568,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 436,
-=======
-          "id": 443,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 437,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62065,11 +61701,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 437,
-=======
-          "id": 444,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 438,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62202,11 +61834,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 438,
-=======
-          "id": 445,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 439,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62342,11 +61970,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 439,
-=======
-      "id": 446,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+      "id": 440,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -62385,11 +62009,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 440,
-=======
-          "id": 447,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 441,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62522,11 +62142,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 441,
-=======
-          "id": 448,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 442,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62659,11 +62275,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 442,
-=======
-          "id": 449,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 443,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62796,11 +62408,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 443,
-=======
-          "id": 450,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 444,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62933,11 +62541,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 444,
-=======
-          "id": 451,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 445,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63070,11 +62674,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 445,
-=======
-          "id": 452,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 446,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63210,11 +62810,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 446,
-=======
-      "id": 453,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+      "id": 447,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -63253,11 +62849,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 447,
-=======
-          "id": 454,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 448,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63390,11 +62982,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 448,
-=======
-          "id": 455,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 449,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63527,11 +63115,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 449,
-=======
-          "id": 456,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 450,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63679,11 +63263,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 450,
-=======
-          "id": 457,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 451,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63846,11 +63426,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 451,
-=======
-          "id": 458,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 452,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63983,11 +63559,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 452,
-=======
-          "id": 459,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 453,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64120,11 +63692,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 453,
-=======
-          "id": 460,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 454,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64287,11 +63855,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 454,
-=======
-          "id": 461,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 455,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64439,11 +64003,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 455,
-=======
-          "id": 462,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 456,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64579,11 +64139,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 456,
-=======
-      "id": 463,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+      "id": 457,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -64622,11 +64178,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 457,
-=======
-          "id": 464,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 458,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64759,11 +64311,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 458,
-=======
-          "id": 465,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 459,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64896,11 +64444,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 459,
-=======
-          "id": 466,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 460,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65033,11 +64577,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 460,
-=======
-          "id": 467,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 461,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65170,11 +64710,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 461,
-=======
-          "id": 468,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 462,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65307,11 +64843,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 462,
-=======
-          "id": 469,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 463,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65444,11 +64976,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 463,
-=======
-          "id": 470,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 464,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65581,11 +65109,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 464,
-=======
-          "id": 471,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 465,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65718,11 +65242,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 465,
-=======
-          "id": 472,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 466,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65862,11 +65382,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 466,
-=======
-          "id": 473,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 467,
           "interval": null,
           "legend": {
             "show": false
@@ -65964,11 +65480,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 467,
-=======
-          "id": 474,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 468,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66101,11 +65613,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 468,
-=======
-          "id": 475,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 469,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66253,11 +65761,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 469,
-=======
-          "id": 476,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 470,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66405,11 +65909,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 470,
-=======
-          "id": 477,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 471,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66549,11 +66049,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 471,
-=======
-          "id": 478,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 472,
           "interval": null,
           "legend": {
             "show": false
@@ -66651,11 +66147,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 472,
-=======
-          "id": 479,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 473,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66788,11 +66280,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 473,
-=======
-          "id": 480,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 474,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66928,11 +66416,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 474,
-=======
-      "id": 481,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+      "id": 475,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -66971,11 +66455,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 475,
-=======
-          "id": 482,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 476,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67108,11 +66588,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 476,
-=======
-          "id": 483,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 477,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67275,11 +66751,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 477,
-=======
-          "id": 484,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 478,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67427,11 +66899,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 478,
-=======
-          "id": 485,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 479,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67564,11 +67032,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 479,
-=======
-          "id": 486,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 480,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67708,11 +67172,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 480,
-=======
-          "id": 487,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 481,
           "interval": null,
           "legend": {
             "show": false
@@ -67817,11 +67277,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 481,
-=======
-          "id": 488,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 482,
           "interval": null,
           "legend": {
             "show": false
@@ -67926,11 +67382,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 482,
-=======
-          "id": 489,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 483,
           "interval": null,
           "legend": {
             "show": false
@@ -68028,11 +67480,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 483,
-=======
-          "id": 490,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 484,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68172,11 +67620,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 484,
-=======
-          "id": 491,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 485,
           "interval": null,
           "legend": {
             "show": false
@@ -68281,11 +67725,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 485,
-=======
-          "id": 492,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 486,
           "interval": null,
           "legend": {
             "show": false
@@ -68390,11 +67830,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 486,
-=======
-          "id": 493,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 487,
           "interval": null,
           "legend": {
             "show": false
@@ -68492,11 +67928,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 487,
-=======
-          "id": 494,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 488,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68629,11 +68061,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 488,
-=======
-          "id": 495,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 489,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68766,11 +68194,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 489,
-=======
-          "id": 496,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 490,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68910,11 +68334,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 490,
-=======
-          "id": 497,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 491,
           "interval": null,
           "legend": {
             "show": false
@@ -69012,11 +68432,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 491,
-=======
-          "id": 498,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 492,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69152,11 +68568,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 492,
-=======
-      "id": 499,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+      "id": 493,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -69195,11 +68607,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 493,
-=======
-          "id": 500,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 494,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69362,11 +68770,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 494,
-=======
-          "id": 501,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 495,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69499,11 +68903,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 495,
-=======
-          "id": 502,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 496,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69643,11 +69043,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 496,
-=======
-          "id": 503,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 497,
           "interval": null,
           "legend": {
             "show": false
@@ -69752,11 +69148,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 497,
-=======
-          "id": 504,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 498,
           "interval": null,
           "legend": {
             "show": false
@@ -69854,11 +69246,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 498,
-=======
-          "id": 505,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 499,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -70013,11 +69401,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 499,
-=======
-          "id": 506,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 500,
           "interval": null,
           "legend": {
             "show": false
@@ -70122,11 +69506,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 500,
-=======
-          "id": 507,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 501,
           "interval": null,
           "legend": {
             "show": false
@@ -70231,11 +69611,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 501,
-=======
-          "id": 508,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 502,
           "interval": null,
           "legend": {
             "show": false
@@ -70333,11 +69709,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 502,
-=======
-          "id": 509,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 503,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -70507,11 +69879,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 503,
-=======
-          "id": 510,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 504,
           "interval": null,
           "legend": {
             "show": false
@@ -70609,11 +69977,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 504,
-=======
-          "id": 511,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 505,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -70814,11 +70178,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 505,
-=======
-          "id": 512,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 506,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71019,11 +70379,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 506,
-=======
-          "id": 513,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 507,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71156,11 +70512,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 507,
-=======
-          "id": 514,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 508,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71323,11 +70675,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 508,
-=======
-          "id": 515,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 509,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71460,11 +70808,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 509,
-=======
-          "id": 516,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 510,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71597,11 +70941,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 510,
-=======
-          "id": 517,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 511,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71802,11 +71142,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 511,
-=======
-          "id": 518,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 512,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71939,11 +71275,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 512,
-=======
-          "id": 519,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 513,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -72083,11 +71415,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 513,
-=======
-          "id": 520,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 514,
           "interval": null,
           "legend": {
             "show": false
@@ -72192,11 +71520,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 514,
-=======
-          "id": 521,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 515,
           "interval": null,
           "legend": {
             "show": false
@@ -72301,11 +71625,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 515,
-=======
-          "id": 522,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 516,
           "interval": null,
           "legend": {
             "show": false
@@ -72410,11 +71730,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 516,
-=======
-          "id": 523,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 517,
           "interval": null,
           "legend": {
             "show": false
@@ -72519,11 +71835,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 517,
-=======
-          "id": 524,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 518,
           "interval": null,
           "legend": {
             "show": false
@@ -72628,11 +71940,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 518,
-=======
-          "id": 525,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 519,
           "interval": null,
           "legend": {
             "show": false
@@ -72737,11 +72045,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 519,
-=======
-          "id": 526,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 520,
           "interval": null,
           "legend": {
             "show": false
@@ -72839,11 +72143,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 520,
-=======
-          "id": 527,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 521,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -72991,11 +72291,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 521,
-=======
-          "id": 528,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 522,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -73128,11 +72424,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 522,
-=======
-          "id": 529,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 523,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -73265,11 +72557,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 523,
-=======
-          "id": 530,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 524,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -73417,11 +72705,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 524,
-=======
-          "id": 531,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 525,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -73557,11 +72841,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 525,
-=======
-      "id": 532,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+      "id": 526,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -73612,11 +72892,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 526,
-=======
-          "id": 533,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 527,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -73712,11 +72988,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 527,
-=======
-          "id": 534,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 528,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -73791,11 +73063,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 528,
-=======
-          "id": 535,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 529,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -73870,11 +73138,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 529,
-=======
-          "id": 536,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 530,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -73949,11 +73213,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 530,
-=======
-          "id": 537,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 531,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -74028,11 +73288,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 531,
-=======
-          "id": 538,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 532,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -74107,11 +73363,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 532,
-=======
-          "id": 539,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 533,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -74186,11 +73438,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 533,
-=======
-          "id": 540,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 534,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -74269,11 +73517,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 534,
-=======
-          "id": 541,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 535,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -74406,11 +73650,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 535,
-=======
-          "id": 542,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 536,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -74543,11 +73783,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 536,
-=======
-          "id": 543,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 537,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -74680,11 +73916,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 537,
-=======
-          "id": 544,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 538,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -74817,11 +74049,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 538,
-=======
-          "id": 545,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 539,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -74954,11 +74182,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 539,
-=======
-          "id": 546,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 540,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -75106,11 +74330,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 540,
-=======
-          "id": 547,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 541,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -75243,11 +74463,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 541,
-=======
-          "id": 548,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 542,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -75380,11 +74596,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 542,
-=======
-          "id": 549,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 543,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -75550,11 +74762,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 543,
-=======
-          "id": 550,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 544,
           "interval": null,
           "legend": {
             "show": false
@@ -75659,11 +74867,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 544,
-=======
-          "id": 551,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 545,
           "interval": null,
           "legend": {
             "show": false
@@ -75768,11 +74972,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 545,
-=======
-          "id": 552,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 546,
           "interval": null,
           "legend": {
             "show": false
@@ -75877,11 +75077,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 546,
-=======
-          "id": 553,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 547,
           "interval": null,
           "legend": {
             "show": false
@@ -75986,11 +75182,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 547,
-=======
-          "id": 554,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 548,
           "interval": null,
           "legend": {
             "show": false
@@ -76095,11 +75287,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 548,
-=======
-          "id": 555,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 549,
           "interval": null,
           "legend": {
             "show": false
@@ -76204,11 +75392,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 549,
-=======
-          "id": 556,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 550,
           "interval": null,
           "legend": {
             "show": false
@@ -76313,11 +75497,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 550,
-=======
-          "id": 557,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 551,
           "interval": null,
           "legend": {
             "show": false
@@ -76415,11 +75595,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 551,
-=======
-          "id": 558,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 552,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -76552,11 +75728,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 552,
-=======
-          "id": 559,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 553,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -76689,11 +75861,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 553,
-=======
-          "id": 560,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 554,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -76826,11 +75994,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 554,
-=======
-          "id": 561,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 555,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -76963,11 +76127,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 555,
-=======
-          "id": 562,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 556,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -77100,11 +76260,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 556,
-=======
-          "id": 563,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 557,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -77237,11 +76393,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 557,
-=======
-          "id": 564,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 558,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -77347,277 +76499,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-<<<<<<< HEAD
           "description": "",
-=======
-          "description": "The memory usage of buffer file (stores logs about to be flushed to external storage) cache.",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            }
-          },
-          "fill": 1,
-          "fillGradient": 1,
-          "grid": {
-            "threshold1": null,
-            "threshold1Color": "rgba(216, 200, 27, 0.27)",
-            "threshold2": null,
-            "threshold2Color": "rgba(234, 112, 112, 0.22)"
-          },
-          "gridPos": {
-            "h": 7,
-            "w": 8,
-            "x": 0,
-            "y": 77
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 565,
-          "interval": null,
-          "isNew": true,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "max",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "maxDataPoints": null,
-          "maxPerRow": null,
-          "minSpan": null,
-          "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true,
-            "dataLinks": []
-          },
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "repeat": null,
-          "repeatDirection": null,
-          "seriesOverrides": [],
-          "span": null,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum((\n    tikv_log_backup_temp_file_memory_usage\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{instance}}",
-              "metric": "",
-              "query": "sum((\n    tikv_log_backup_temp_file_memory_usage\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Buffer File Cache Mem Usage",
-          "tooltip": {
-            "msResolution": true,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "transformations": [],
-          "transparent": false,
-          "type": "graph",
-          "xaxis": {
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "decimals": null,
-              "format": "bytes",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "decimals": null,
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": 0
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "cacheTimeout": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The number of temporary buffer files.",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            }
-          },
-          "fill": 1,
-          "fillGradient": 1,
-          "grid": {
-            "threshold1": null,
-            "threshold1Color": "rgba(216, 200, 27, 0.27)",
-            "threshold2": null,
-            "threshold2Color": "rgba(234, 112, 112, 0.22)"
-          },
-          "gridPos": {
-            "h": 7,
-            "w": 8,
-            "x": 8,
-            "y": 77
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 566,
-          "interval": null,
-          "isNew": true,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "max",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "maxDataPoints": null,
-          "maxPerRow": null,
-          "minSpan": null,
-          "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true,
-            "dataLinks": []
-          },
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "repeat": null,
-          "repeatDirection": null,
-          "seriesOverrides": [],
-          "span": null,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum((\n    tikv_log_backup_temp_file_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{instance}}",
-              "metric": "",
-              "query": "sum((\n    tikv_log_backup_temp_file_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Buffer File Count",
-          "tooltip": {
-            "msResolution": true,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "transformations": [],
-          "transparent": false,
-          "type": "graph",
-          "xaxis": {
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "decimals": null,
-              "format": "none",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "decimals": null,
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": 0
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "cacheTimeout": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The total size of buffer files that are swapped out to disk.",
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -77644,11 +76526,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 558,
-=======
-          "id": 567,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 559,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -77788,11 +76666,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 559,
-=======
-          "id": 568,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 560,
           "interval": null,
           "legend": {
             "show": false
@@ -77897,11 +76771,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 560,
-=======
-          "id": 569,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 561,
           "interval": null,
           "legend": {
             "show": false
@@ -77999,11 +76869,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 561,
-=======
-          "id": 570,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 562,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78136,11 +77002,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 562,
-=======
-          "id": 571,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 563,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78273,11 +77135,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 563,
-=======
-          "id": 572,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 564,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78410,11 +77268,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 564,
-=======
-          "id": 573,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 565,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78493,543 +77347,7 @@
           "yaxes": [
             {
               "decimals": null,
-<<<<<<< HEAD
               "format": "s",
-=======
-              "format": "none",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "decimals": null,
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": 0
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "cacheTimeout": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The leader of the region with minimal checkpoint.",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            }
-          },
-          "fill": 1,
-          "fillGradient": 1,
-          "grid": {
-            "threshold1": null,
-            "threshold1Color": "rgba(216, 200, 27, 0.27)",
-            "threshold2": null,
-            "threshold2Color": "rgba(234, 112, 112, 0.22)"
-          },
-          "gridPos": {
-            "h": 7,
-            "w": 8,
-            "x": 16,
-            "y": 98
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 574,
-          "interval": null,
-          "isNew": true,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "max",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "maxDataPoints": null,
-          "maxPerRow": null,
-          "minSpan": null,
-          "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true,
-            "dataLinks": []
-          },
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "repeat": null,
-          "repeatDirection": null,
-          "seriesOverrides": [],
-          "span": null,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_log_backup_store_last_checkpoint_ts\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  / 262144",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{ instance }}",
-              "metric": "",
-              "query": "((\n    tikv_log_backup_store_last_checkpoint_ts\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  / 262144",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Current Last Region Leader Store ID",
-          "tooltip": {
-            "msResolution": true,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "transformations": [],
-          "transparent": false,
-          "type": "graph",
-          "xaxis": {
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "decimals": null,
-              "format": "none",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "decimals": null,
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": 0
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "cacheTimeout": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The region with minimal checkpoint of each store.",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            }
-          },
-          "fill": 1,
-          "fillGradient": 1,
-          "grid": {
-            "threshold1": null,
-            "threshold1Color": "rgba(216, 200, 27, 0.27)",
-            "threshold2": null,
-            "threshold2Color": "rgba(234, 112, 112, 0.22)"
-          },
-          "gridPos": {
-            "h": 7,
-            "w": 8,
-            "x": 0,
-            "y": 105
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 575,
-          "interval": null,
-          "isNew": true,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "max",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "maxDataPoints": null,
-          "maxPerRow": null,
-          "minSpan": null,
-          "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true,
-            "dataLinks": []
-          },
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "repeat": null,
-          "repeatDirection": null,
-          "seriesOverrides": [],
-          "span": null,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_log_backup_store_last_checkpoint_region_id\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{ instance }}",
-              "metric": "",
-              "query": "((\n    tikv_log_backup_store_last_checkpoint_region_id\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Current Last Region ID per Store",
-          "tooltip": {
-            "msResolution": true,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "transformations": [],
-          "transparent": false,
-          "type": "graph",
-          "xaxis": {
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "decimals": null,
-              "format": "none",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "decimals": null,
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": 0
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "cacheTimeout": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The minimal checkpoint TS of each store.",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            }
-          },
-          "fill": 1,
-          "fillGradient": 1,
-          "grid": {
-            "threshold1": null,
-            "threshold1Color": "rgba(216, 200, 27, 0.27)",
-            "threshold2": null,
-            "threshold2Color": "rgba(234, 112, 112, 0.22)"
-          },
-          "gridPos": {
-            "h": 7,
-            "w": 8,
-            "x": 8,
-            "y": 105
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 576,
-          "interval": null,
-          "isNew": true,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "max",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "maxDataPoints": null,
-          "maxPerRow": null,
-          "minSpan": null,
-          "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true,
-            "dataLinks": []
-          },
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "repeat": null,
-          "repeatDirection": null,
-          "seriesOverrides": [],
-          "span": null,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_log_backup_store_last_checkpoint_ts\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{ instance }}",
-              "metric": "",
-              "query": "((\n    tikv_log_backup_store_last_checkpoint_ts\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Current Last Checkpoint TS per Store",
-          "tooltip": {
-            "msResolution": true,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "transformations": [],
-          "transparent": false,
-          "type": "graph",
-          "xaxis": {
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "decimals": null,
-              "format": "ms",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "decimals": null,
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": 0
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "cacheTimeout": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The active progress subscription from each store",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            }
-          },
-          "fill": 1,
-          "fillGradient": 1,
-          "grid": {
-            "threshold1": null,
-            "threshold1Color": "rgba(216, 200, 27, 0.27)",
-            "threshold2": null,
-            "threshold2Color": "rgba(234, 112, 112, 0.22)"
-          },
-          "gridPos": {
-            "h": 7,
-            "w": 8,
-            "x": 16,
-            "y": 105
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 577,
-          "interval": null,
-          "isNew": true,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "max",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "maxDataPoints": null,
-          "maxPerRow": null,
-          "minSpan": null,
-          "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true,
-            "dataLinks": []
-          },
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "repeat": null,
-          "repeatDirection": null,
-          "seriesOverrides": [],
-          "span": null,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_log_backup_active_subscription_number\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{instance}}",
-              "metric": "",
-              "query": "((\n    tikv_log_backup_active_subscription_number\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Active Progress Subscrption Per Store",
-          "tooltip": {
-            "msResolution": true,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "transformations": [],
-          "transparent": false,
-          "type": "graph",
-          "xaxis": {
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "decimals": null,
-              "format": "none",
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
               "label": null,
               "logBase": 1,
               "max": null,
@@ -79083,11 +77401,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 565,
-=======
-          "id": 578,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 566,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79220,11 +77534,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 566,
-=======
-          "id": 579,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 567,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79360,11 +77670,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 567,
-=======
-      "id": 580,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+      "id": 568,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -79403,11 +77709,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 568,
-=======
-          "id": 581,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 569,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79555,11 +77857,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 569,
-=======
-          "id": 582,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 570,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79692,11 +77990,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 570,
-=======
-          "id": 583,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 571,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79829,11 +78123,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 571,
-=======
-          "id": 584,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 572,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79969,11 +78259,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 572,
-=======
-      "id": 585,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+      "id": 573,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -80012,11 +78298,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 573,
-=======
-          "id": 586,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 574,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80149,11 +78431,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 574,
-=======
-          "id": 587,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 575,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80286,11 +78564,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 575,
-=======
-          "id": 588,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 576,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80423,11 +78697,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 576,
-=======
-          "id": 589,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 577,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80560,11 +78830,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 577,
-=======
-          "id": 590,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 578,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80697,11 +78963,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 578,
-=======
-          "id": 591,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 579,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80837,11 +79099,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 579,
-=======
-      "id": 592,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+      "id": 580,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -80880,11 +79138,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 580,
-=======
-          "id": 593,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 581,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81017,11 +79271,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 581,
-=======
-          "id": 594,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 582,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81157,11 +79407,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 582,
-=======
-      "id": 595,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+      "id": 583,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -81200,11 +79446,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 583,
-=======
-          "id": 596,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 584,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81405,11 +79647,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 584,
-=======
-          "id": 597,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 585,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81545,11 +79783,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 585,
-=======
-      "id": 598,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+      "id": 586,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -81588,11 +79822,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 586,
-=======
-          "id": 599,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 587,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81725,11 +79955,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 587,
-=======
-          "id": 600,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 588,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81862,11 +80088,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 588,
-=======
-          "id": 601,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 589,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81999,11 +80221,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 589,
-=======
-          "id": 602,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 590,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82136,11 +80354,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 590,
-=======
-          "id": 603,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 591,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82288,11 +80502,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 591,
-=======
-          "id": 604,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 592,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82496,11 +80706,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 592,
-=======
-      "id": 605,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+      "id": 593,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -82539,11 +80745,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 593,
-=======
-          "id": 606,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 594,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82676,11 +80878,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 594,
-=======
-          "id": 607,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 595,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82813,11 +81011,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 595,
-=======
-          "id": 608,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 596,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82950,11 +81144,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 596,
-=======
-          "id": 609,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 597,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -83087,11 +81277,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 597,
-=======
-          "id": 610,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 598,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -83288,11 +81474,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 598,
-=======
-          "id": 611,
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+          "id": 599,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -83350,519 +81532,6 @@
       "transformations": [],
       "transparent": false,
       "type": "row"
-<<<<<<< HEAD
-=======
-    },
-    {
-      "cacheTimeout": null,
-      "collapsed": true,
-      "datasource": null,
-      "description": null,
-      "editable": true,
-      "error": false,
-      "fieldConfig": {
-        "defaults": {
-          "thresholds": {
-            "mode": "absolute",
-            "steps": []
-          }
-        }
-      },
-      "gridPos": {
-        "h": 7,
-        "w": 24,
-        "x": 0,
-        "y": 0
-      },
-      "height": null,
-      "hideTimeOverride": false,
-      "id": 612,
-      "interval": null,
-      "links": [],
-      "maxDataPoints": 100,
-      "maxPerRow": null,
-      "minSpan": null,
-      "panels": [
-        {
-          "cacheTimeout": null,
-          "color": {
-            "mode": "thresholds"
-          },
-          "columns": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "TiKV RocksDB DB Configuration",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "align": "auto",
-                "displayMode": "auto",
-                "filterable": false
-              },
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            },
-            "overrides": [
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Field"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Option"
-                  },
-                  {
-                    "id": "custom.align",
-                    "value": null
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Last (not null)"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Value"
-                  }
-                ]
-              }
-            ]
-          },
-          "fontSize": "100%",
-          "gridPos": {
-            "h": 7,
-            "w": 24,
-            "x": 0,
-            "y": 0
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 613,
-          "interval": null,
-          "links": [],
-          "mappings": [],
-          "maxDataPoints": 100,
-          "maxPerRow": null,
-          "minSpan": null,
-          "options": {
-            "showHeader": true
-          },
-          "repeat": null,
-          "repeatDirection": null,
-          "span": 6,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_config_rocksdb_db\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "format": "table",
-              "hide": false,
-              "instant": true,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": null,
-              "metric": "",
-              "query": "((\n    tikv_config_rocksdb_db\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "RocksDB DB Config",
-          "transformations": [
-            {
-              "id": "organize",
-              "options": {
-                "excludeByName": {
-                  "Time": true,
-                  "__name__": true,
-                  "job": true
-                },
-                "indexByName": {},
-                "renameByName": {
-                  "Time": "",
-                  "Value #A": "Value",
-                  "job": "",
-                  "name": "Option"
-                }
-              }
-            }
-          ],
-          "transparent": false,
-          "type": "table"
-        },
-        {
-          "cacheTimeout": null,
-          "color": {
-            "mode": "thresholds"
-          },
-          "columns": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "TiKV RocksDB CF Configuration",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "align": "auto",
-                "displayMode": "auto",
-                "filterable": false
-              },
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            },
-            "overrides": [
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Field"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Option"
-                  },
-                  {
-                    "id": "custom.align",
-                    "value": null
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Last (not null)"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Value"
-                  }
-                ]
-              }
-            ]
-          },
-          "fontSize": "100%",
-          "gridPos": {
-            "h": 7,
-            "w": 24,
-            "x": 0,
-            "y": 7
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 614,
-          "interval": null,
-          "links": [],
-          "mappings": [],
-          "maxDataPoints": 100,
-          "maxPerRow": null,
-          "minSpan": null,
-          "options": {
-            "showHeader": true
-          },
-          "repeat": null,
-          "repeatDirection": null,
-          "span": 6,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_config_rocksdb_cf\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))   or (tikv_config_rocksdb unless tikv_config_rocksdb_cf)",
-              "format": "table",
-              "hide": false,
-              "instant": true,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": null,
-              "metric": "",
-              "query": "((\n    tikv_config_rocksdb_cf\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))   or (tikv_config_rocksdb unless tikv_config_rocksdb_cf)",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "RocksDB CF Config",
-          "transformations": [
-            {
-              "id": "organize",
-              "options": {
-                "excludeByName": {
-                  "Time": true,
-                  "__name__": true,
-                  "job": true
-                },
-                "indexByName": {},
-                "renameByName": {
-                  "Time": "",
-                  "Value #A": "Value",
-                  "job": "",
-                  "name": "Option"
-                }
-              }
-            }
-          ],
-          "transparent": false,
-          "type": "table"
-        },
-        {
-          "cacheTimeout": null,
-          "color": {
-            "mode": "thresholds"
-          },
-          "columns": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "TiKV Flow Control Configuration",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "align": "auto",
-                "displayMode": "auto",
-                "filterable": false
-              },
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            },
-            "overrides": [
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Field"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Option"
-                  },
-                  {
-                    "id": "custom.align",
-                    "value": null
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Last (not null)"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Value"
-                  }
-                ]
-              }
-            ]
-          },
-          "fontSize": "100%",
-          "gridPos": {
-            "h": 7,
-            "w": 24,
-            "x": 0,
-            "y": 14
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 615,
-          "interval": null,
-          "links": [],
-          "mappings": [],
-          "maxDataPoints": 100,
-          "maxPerRow": null,
-          "minSpan": null,
-          "options": {
-            "showHeader": true
-          },
-          "repeat": null,
-          "repeatDirection": null,
-          "span": 6,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_config_flow_control\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "format": "table",
-              "hide": false,
-              "instant": true,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": null,
-              "metric": "",
-              "query": "((\n    tikv_config_flow_control\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Flow Control Config",
-          "transformations": [
-            {
-              "id": "organize",
-              "options": {
-                "excludeByName": {
-                  "Time": true,
-                  "__name__": true,
-                  "job": true
-                },
-                "indexByName": {},
-                "renameByName": {
-                  "Time": "",
-                  "Value #A": "Value",
-                  "job": "",
-                  "name": "Option"
-                }
-              }
-            }
-          ],
-          "transparent": false,
-          "type": "table"
-        },
-        {
-          "cacheTimeout": null,
-          "color": {
-            "mode": "thresholds"
-          },
-          "columns": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "TiKV Raftstore Configuration",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "align": "auto",
-                "displayMode": "auto",
-                "filterable": false
-              },
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            },
-            "overrides": [
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Field"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Option"
-                  },
-                  {
-                    "id": "custom.align",
-                    "value": null
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Last (not null)"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Value"
-                  }
-                ]
-              }
-            ]
-          },
-          "fontSize": "100%",
-          "gridPos": {
-            "h": 7,
-            "w": 24,
-            "x": 0,
-            "y": 21
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 616,
-          "interval": null,
-          "links": [],
-          "mappings": [],
-          "maxDataPoints": 100,
-          "maxPerRow": null,
-          "minSpan": null,
-          "options": {
-            "showHeader": true
-          },
-          "repeat": null,
-          "repeatDirection": null,
-          "span": 6,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_config_raftstore\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "format": "table",
-              "hide": false,
-              "instant": true,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": null,
-              "metric": "",
-              "query": "((\n    tikv_config_raftstore\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Raftstore Config",
-          "transformations": [
-            {
-              "id": "organize",
-              "options": {
-                "excludeByName": {
-                  "Time": true,
-                  "__name__": true,
-                  "job": true
-                },
-                "indexByName": {},
-                "renameByName": {
-                  "Time": "",
-                  "Value #A": "Value",
-                  "job": "",
-                  "name": "Option"
-                }
-              }
-            }
-          ],
-          "transparent": false,
-          "type": "table"
-        }
-      ],
-      "repeat": null,
-      "repeatDirection": null,
-      "span": null,
-      "targets": [],
-      "timeFrom": null,
-      "timeShift": null,
-      "title": "Config",
-      "transformations": [],
-      "transparent": false,
-      "type": "row"
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
     }
   ],
   "refresh": "1m",

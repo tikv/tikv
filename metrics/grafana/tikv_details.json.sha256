@@ -1,5 +1,1 @@
-<<<<<<< HEAD
-619b25a5750243900b1c486e1b1c501128f56532e2ada0587e281570856d2c20  ./metrics/grafana/tikv_details.json
-=======
-0fd1ebbda9a8e341e928bc888f12908fc4e245d3738c5f5d904dec22b648985e  ./metrics/grafana/tikv_details.json
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
+661161268d99b362988f8a738a1663edddcb269512ba29e4babfec2898191f07  ./metrics/grafana/tikv_details.json
