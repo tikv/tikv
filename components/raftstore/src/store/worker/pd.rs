@@ -2623,10 +2623,7 @@ where
                 factor,
                 mut duration,
             } => match factor {
-                InspectFactor::Network => {
-                    let latencies = mem::take(&mut duration.network_latencies);
-                    self.slow_score.record_network(id, latencies);
-                }
+                InspectFactor::Network => unimplemented!(),
                 InspectFactor::RaftDisk | InspectFactor::KvDisk => {
                     self.slow_score.record_disk(
                         id,
