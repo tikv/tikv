@@ -234,11 +234,10 @@ impl<T: PoolTicker> Runner for YatpPoolRunner<T> {
             } else {
                 None
             };
-        if let Some(dur) = start_time.and_then(|t1| {
-            extras
-                .schedule_time()
-                .map(|t2| t1.saturating_duration_since(t2))
-        }) {
+        if let Some(dur) = start_time
+            .zip(extras.schedule_time())
+            .map(|(t1, t2)| t1.saturating_duration_since(t2))
+        {
             self.schedule_wait_durations.observe(priority, dur);
         }
         let finished = self.inner.handle(local, task_cell);
