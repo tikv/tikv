@@ -7,13 +7,8 @@ use std::sync::Arc;
 
 use fail::fail_point;
 pub use future_pool::{Full, FuturePool};
-<<<<<<< HEAD
 use futures::{compat::Stream01CompatExt, StreamExt};
-use prometheus::{local::LocalHistogram, Histogram, HistogramOpts};
-=======
-use futures::{StreamExt, compat::Stream01CompatExt};
 use prometheus::local::LocalHistogram;
->>>>>>> 24c8bf27ef (metrics: add a histogram for observing task handling dur in schedpool (#19080))
 use yatp::{
     pool::{CloneRunnerBuilder, Local, Remote, Runner},
     queue::{multilevel, priority, Extras, QueueType, TaskCell as _},
