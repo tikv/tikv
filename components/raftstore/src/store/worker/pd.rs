@@ -2621,7 +2621,7 @@ where
             Task::UpdateSlowScore {
                 id,
                 factor,
-                mut duration,
+                duration,
             } => match factor {
                 InspectFactor::Network => unimplemented!(),
                 InspectFactor::RaftDisk | InspectFactor::KvDisk => {
