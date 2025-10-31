@@ -1,6 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    ffi::CString,
     net::{IpAddr, SocketAddr},
     str::FromStr,
     sync::Arc,
@@ -122,8 +123,20 @@ where
             .http2_max_ping_strikes(i32::MAX) // For pings without data from clients.
             .keepalive_time(self.cfg.value().grpc_keepalive_time.into())
             .keepalive_timeout(self.cfg.value().grpc_keepalive_timeout.into())
+            .raw_cfg_int(
+                CString::new("grpc.max_connection_idle_ms").unwrap(),
+                self.cfg.value().grpc_max_connection_idle.as_millis() as i32
+            )
+            .raw_cfg_int(
+                CString::new("grpc.max_connection_age_ms").unwrap(),
+                self.cfg.value().grpc_max_connection_age.as_millis() as i32
+            )
+            .raw_cfg_int(
+                CString::new("grpc.max_connection_age_grace_ms").unwrap(),
+                self.cfg.value().grpc_max_connection_age_grace.as_millis() as i32
+            )
+            .default_compression_algorithm(self.cfg.value().grpc_compression_algorithm())
             .default_gzip_compression_level(self.cfg.value().grpc_gzip_compression_level)
-            .default_compression_level(compression_level)
             .build_args();
 
         let sb = ServerBuilder::new(Arc::clone(&env))
