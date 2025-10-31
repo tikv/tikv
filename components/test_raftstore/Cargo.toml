@@ -39,6 +39,11 @@ file_system = { workspace = true }
 futures = "0.3"
 grpcio = { workspace = true }
 grpcio-health = { workspace = true }
+<<<<<<< HEAD
+=======
+health_controller = { workspace = true }
+hybrid_engine = { workspace = true }
+>>>>>>> 00a2518938 (*: Add module health_controller and move SlowScore, SlowTrend, HealthService from PdWorker to it (#16456))
 keys = { workspace = true }
 kvproto = { workspace = true }
 lazy_static = "1.3"

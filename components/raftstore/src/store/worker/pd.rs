@@ -20,7 +20,11 @@ use concurrency_manager::ConcurrencyManager;
 use engine_traits::{KvEngine, RaftEngine};
 use fail::fail_point;
 use futures::{compat::Future01CompatExt, FutureExt};
-use grpcio_health::{HealthService, ServingStatus};
+use health_controller::{
+    reporters::{RaftstoreReporter, RaftstoreReporterConfig},
+    types::{LatencyInspector, RaftstoreDuration},
+    HealthController,
+};
 use kvproto::{
     kvrpcpb::DiskFullOpt,
     metapb, pdpb,
@@ -46,7 +50,6 @@ use tikv_util::{
     time::{Instant as TiInstant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
     topn::TopN,
-    trend::{RequestPerSecRecorder, Trend},
     warn,
     worker::{Runnable, ScheduleError, Scheduler},
     InspectFactor,
@@ -63,7 +66,7 @@ use crate::{
         unsafe_recovery::{
             UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryHandle,
         },
-        util::{is_epoch_stale, KeysInfoFormatter, LatencyInspector, RaftstoreDuration},
+        util::{is_epoch_stale, KeysInfoFormatter},
         worker::{
             split_controller::{SplitInfo, TOP_N},
             AutoSplitController, ReadStats, SplitConfigChange, WriteStats,
@@ -933,6 +936,7 @@ fn hotspot_query_num_report_threshold() -> u64 {
 /// Max limitation of delayed store_heartbeat.
 const STORE_HEARTBEAT_DELAY_LIMIT: u64 = 5 * 60;
 
+<<<<<<< HEAD
 /// A unified slow score that combines multiple slow scores.
 ///
 /// It calculates the final slow score of a store by picking the maximum
@@ -996,6 +1000,8 @@ impl UnifiedSlowScore {
     }
 }
 
+=======
+>>>>>>> 00a2518938 (*: Add module health_controller and move SlowScore, SlowTrend, HealthService from PdWorker to it (#16456))
 pub struct Runner<EK, ER, T>
 where
     EK: KvEngine,
@@ -1025,14 +1031,17 @@ where
     concurrency_manager: ConcurrencyManager,
     snap_mgr: SnapManager,
     remote: Remote<yatp::task::future::TaskCell>,
+<<<<<<< HEAD
     slow_score: UnifiedSlowScore,
     slow_trend_cause: Trend,
     slow_trend_result: Trend,
     slow_trend_result_recorder: RequestPerSecRecorder,
+=======
+>>>>>>> 00a2518938 (*: Add module health_controller and move SlowScore, SlowTrend, HealthService from PdWorker to it (#16456))
 
-    // The health status of the store is updated by the slow score mechanism.
-    health_service: Option<HealthService>,
-    curr_health_status: ServingStatus,
+    health_reporter: RaftstoreReporter,
+    health_controller: HealthController,
+
     coprocessor_host: CoprocessorHost<EK>,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
 
@@ -1057,8 +1066,12 @@ where
         snap_mgr: SnapManager,
         remote: Remote<yatp::task::future::TaskCell>,
         collector_reg_handle: CollectorRegHandle,
+<<<<<<< HEAD
         region_read_progress: RegionReadProgressRegistry,
         health_service: Option<HealthService>,
+=======
+        health_controller: HealthController,
+>>>>>>> 00a2518938 (*: Add module health_controller and move SlowScore, SlowTrend, HealthService from PdWorker to it (#16456))
         coprocessor_host: CoprocessorHost<EK>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         grpc_service_manager: GrpcServiceManager,
@@ -1083,6 +1096,33 @@ where
             error!("failed to start stats collector, error = {:?}", e);
         }
 
+        let health_reporter_config = RaftstoreReporterConfig {
+            inspect_interval: cfg.inspect_interval.0,
+
+            unsensitive_cause: cfg.slow_trend_unsensitive_cause,
+            unsensitive_result: cfg.slow_trend_unsensitive_result,
+            net_io_factor: cfg.slow_trend_network_io_factor,
+
+            cause_spike_filter_value_gauge: STORE_SLOW_TREND_MISC_GAUGE_VEC
+                .with_label_values(&["spike_filter_value"]),
+            cause_spike_filter_count_gauge: STORE_SLOW_TREND_MISC_GAUGE_VEC
+                .with_label_values(&["spike_filter_count"]),
+            cause_l1_gap_gauges: STORE_SLOW_TREND_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC
+                .with_label_values(&["L1"]),
+            cause_l2_gap_gauges: STORE_SLOW_TREND_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC
+                .with_label_values(&["L2"]),
+            result_spike_filter_value_gauge: STORE_SLOW_TREND_RESULT_MISC_GAUGE_VEC
+                .with_label_values(&["spike_filter_value"]),
+            result_spike_filter_count_gauge: STORE_SLOW_TREND_RESULT_MISC_GAUGE_VEC
+                .with_label_values(&["spike_filter_count"]),
+            result_l1_gap_gauges: STORE_SLOW_TREND_RESULT_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC
+                .with_label_values(&["L1"]),
+            result_l2_gap_gauges: STORE_SLOW_TREND_RESULT_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC
+                .with_label_values(&["L2"]),
+        };
+
+        let health_reporter = RaftstoreReporter::new(&health_controller, health_reporter_config);
+
         Runner {
             store_id,
             pd_client,
@@ -1099,6 +1139,7 @@ where
             concurrency_manager,
             snap_mgr,
             remote,
+<<<<<<< HEAD
             slow_score: UnifiedSlowScore::new(cfg),
             slow_trend_cause: Trend::new(
                 // Disable SpikeFilter for now
@@ -1135,6 +1176,10 @@ where
             slow_trend_result_recorder: RequestPerSecRecorder::new(),
             health_service,
             curr_health_status: ServingStatus::Serving,
+=======
+            health_reporter,
+            health_controller,
+>>>>>>> 00a2518938 (*: Add module health_controller and move SlowScore, SlowTrend, HealthService from PdWorker to it (#16456))
             coprocessor_host,
             causal_ts_provider,
             grpc_service_manager,
@@ -1409,9 +1454,13 @@ where
             .store_stat
             .engine_total_query_num
             .sub_query_stats(&self.store_stat.engine_last_query_num);
+<<<<<<< HEAD
         let total_query_num = self
             .slow_trend_result_recorder
             .record_and_get_current_rps(res.get_all_query_num(), Instant::now());
+=======
+        let all_query_num = res.get_all_query_num();
+>>>>>>> 00a2518938 (*: Add module health_controller and move SlowScore, SlowTrend, HealthService from PdWorker to it (#16456))
         stats.set_query_stats(res.0);
 
         stats.set_cpu_usages(self.store_stat.store_cpu_usages.clone().into());
@@ -1443,9 +1492,17 @@ where
         STORE_SIZE_EVENT_INT_VEC.available.set(available as i64);
         STORE_SIZE_EVENT_INT_VEC.used.set(used_size as i64);
 
+<<<<<<< HEAD
         let slow_score = self.slow_score.get_score();
+=======
+        let slow_score = self.health_reporter.get_slow_score();
+>>>>>>> 00a2518938 (*: Add module health_controller and move SlowScore, SlowTrend, HealthService from PdWorker to it (#16456))
         stats.set_slow_score(slow_score as u64);
-        self.set_slow_trend_to_store_stats(&mut stats, total_query_num);
+        let (rps, slow_trend_pb) = self
+            .health_reporter
+            .update_slow_trend(all_query_num, Instant::now());
+        self.flush_slow_trend_metrics(rps, &slow_trend_pb);
+        stats.set_slow_trend(slow_trend_pb);
 
         stats.set_is_grpc_paused(self.grpc_service_manager.is_paused());
 
@@ -1532,11 +1589,12 @@ where
         self.remote.spawn(f);
     }
 
-    fn set_slow_trend_to_store_stats(
+    fn flush_slow_trend_metrics(
         &mut self,
-        stats: &mut pdpb::StoreStats,
-        total_query_num: Option<f64>,
+        requests_per_sec: Option<f64>,
+        slow_trend_pb: &pdpb::SlowTrend,
     ) {
+<<<<<<< HEAD
         let slow_trend_cause_rate = self.slow_trend_cause.increasing_rate();
         STORE_SLOW_TREND_GAUGE.set(slow_trend_cause_rate);
         let mut slow_trend = pdpb::SlowTrend::default();
@@ -1550,14 +1608,20 @@ where
             slow_trend.set_result_rate(slow_trend_result_rate);
             STORE_SLOW_TREND_RESULT_GAUGE.set(slow_trend_result_rate);
             STORE_SLOW_TREND_RESULT_VALUE_GAUGE.set(total_query_num);
+=======
+        let slow_trend = self.health_reporter.get_slow_trend();
+        // Latest result.
+        STORE_SLOW_TREND_GAUGE.set(slow_trend_pb.get_cause_rate());
+        if let Some(requests_per_sec) = requests_per_sec {
+            STORE_SLOW_TREND_RESULT_GAUGE.set(slow_trend_pb.get_result_rate());
+            STORE_SLOW_TREND_RESULT_VALUE_GAUGE.set(requests_per_sec);
+>>>>>>> 00a2518938 (*: Add module health_controller and move SlowScore, SlowTrend, HealthService from PdWorker to it (#16456))
         } else {
             // Just to mark the invalid range on the graphic
             STORE_SLOW_TREND_RESULT_VALUE_GAUGE.set(-100.0);
         }
-        stats.set_slow_trend(slow_trend);
-        self.write_slow_trend_metrics();
-    }
 
+<<<<<<< HEAD
     fn write_slow_trend_metrics(&mut self) {
         STORE_SLOW_TREND_L0_GAUGE.set(self.slow_trend_cause.l0_avg());
         STORE_SLOW_TREND_L1_GAUGE.set(self.slow_trend_cause.l1_avg());
@@ -1576,6 +1640,26 @@ where
             .set(self.slow_trend_result.l1_margin_error_base());
         STORE_SLOW_TREND_RESULT_L2_MARGIN_ERROR_GAUGE
             .set(self.slow_trend_result.l2_margin_error_base());
+=======
+        // Current internal states.
+        STORE_SLOW_TREND_L0_GAUGE.set(slow_trend.slow_cause.l0_avg());
+        STORE_SLOW_TREND_L1_GAUGE.set(slow_trend.slow_cause.l1_avg());
+        STORE_SLOW_TREND_L2_GAUGE.set(slow_trend.slow_cause.l2_avg());
+        STORE_SLOW_TREND_L0_L1_GAUGE.set(slow_trend.slow_cause.l0_l1_rate());
+        STORE_SLOW_TREND_L1_L2_GAUGE.set(slow_trend.slow_cause.l1_l2_rate());
+        STORE_SLOW_TREND_L1_MARGIN_ERROR_GAUGE.set(slow_trend.slow_cause.l1_margin_error_base());
+        STORE_SLOW_TREND_L2_MARGIN_ERROR_GAUGE.set(slow_trend.slow_cause.l2_margin_error_base());
+        // Report results of all slow Trends.
+        STORE_SLOW_TREND_RESULT_L0_GAUGE.set(slow_trend.slow_result.l0_avg());
+        STORE_SLOW_TREND_RESULT_L1_GAUGE.set(slow_trend.slow_result.l1_avg());
+        STORE_SLOW_TREND_RESULT_L2_GAUGE.set(slow_trend.slow_result.l2_avg());
+        STORE_SLOW_TREND_RESULT_L0_L1_GAUGE.set(slow_trend.slow_result.l0_l1_rate());
+        STORE_SLOW_TREND_RESULT_L1_L2_GAUGE.set(slow_trend.slow_result.l1_l2_rate());
+        STORE_SLOW_TREND_RESULT_L1_MARGIN_ERROR_GAUGE
+            .set(slow_trend.slow_result.l1_margin_error_base());
+        STORE_SLOW_TREND_RESULT_L2_MARGIN_ERROR_GAUGE
+            .set(slow_trend.slow_result.l2_margin_error_base());
+>>>>>>> 00a2518938 (*: Add module health_controller and move SlowScore, SlowTrend, HealthService from PdWorker to it (#16456))
     }
 
     fn handle_report_batch_split(&self, regions: Vec<metapb::Region>) {
@@ -2029,13 +2113,6 @@ where
             .or_insert_with(|| ReportBucket::new(buckets));
     }
 
-    fn update_health_status(&mut self, status: ServingStatus) {
-        self.curr_health_status = status;
-        if let Some(health_service) = &self.health_service {
-            health_service.set_serving_status("", status);
-        }
-    }
-
     /// Force to send a special heartbeat to pd when current store is hung on
     /// some special circumstances, i.e. disk busy, handler busy and others.
     fn handle_fake_store_heartbeat(&mut self) {
@@ -2079,7 +2156,7 @@ where
 
     fn handle_control_grpc_server(&mut self, event: pdpb::ControlGrpcEvent) {
         info!("forcely control grpc server";
-                "curr_health_status" => ?self.curr_health_status,
+                "curr_health_status" => ?self.health_controller.get_serving_status(),
                 "event" => ?event,
         );
         match event {
@@ -2088,7 +2165,7 @@ where
                     warn!("failed to send service event to PAUSE grpc server";
                             "err" => ?e);
                 } else {
-                    self.update_health_status(ServingStatus::NotServing);
+                    self.health_controller.set_is_serving(false);
                 }
             }
             pdpb::ControlGrpcEvent::Resume => {
@@ -2096,7 +2173,7 @@ where
                     warn!("failed to send service event to RESUME grpc server";
                             "err" => ?e);
                 } else {
-                    self.update_health_status(ServingStatus::Serving);
+                    self.health_controller.set_is_serving(true);
                 }
             }
         }
@@ -2459,6 +2536,7 @@ where
                 txn_ext,
             } => self.handle_update_max_timestamp(region_id, initial_status, txn_ext),
             Task::QueryRegionLeader { region_id } => self.handle_query_region_leader(region_id),
+<<<<<<< HEAD
             Task::UpdateSlowScore {
                 id,
                 factor,
@@ -2467,6 +2545,14 @@ where
                 // Fine-tuned, `SlowScore` only takes the I/O jitters on the disk into account.
                 self.slow_score
                     .record(id, factor, &duration, !self.store_stat.maybe_busy());
+=======
+            Task::UpdateSlowScore { id, duration } => {
+                self.health_reporter.record_raftstore_duration(
+                    id,
+                    duration,
+                    !self.store_stat.maybe_busy(),
+                );
+>>>>>>> 00a2518938 (*: Add module health_controller and move SlowScore, SlowTrend, HealthService from PdWorker to it (#16456))
             }
             Task::RegionCpuRecords(records) => self.handle_region_cpu_records(records),
             Task::ReportMinResolvedTs {
@@ -2490,6 +2576,74 @@ where
     }
 }
 
+<<<<<<< HEAD
+=======
+impl<EK, ER, T> RunnableWithTimer for Runner<EK, ER, T>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+    T: PdClient + 'static,
+{
+    fn on_timeout(&mut self) {
+        let slow_score_tick_result = self.health_reporter.tick(self.store_stat.maybe_busy());
+        if let Some(score) = slow_score_tick_result.updated_score {
+            STORE_SLOW_SCORE_GAUGE.set(score);
+        }
+
+        // If the last slow_score already reached abnormal state and was delayed for
+        // reporting by `store-heartbeat` to PD, we should report it here manually as
+        // a FAKE `store-heartbeat`.
+        if slow_score_tick_result.should_force_report_slow_store
+            && self.is_store_heartbeat_delayed()
+        {
+            self.handle_fake_store_heartbeat();
+        }
+
+        let id = slow_score_tick_result.tick_id;
+
+        let scheduler = self.scheduler.clone();
+        let inspector = LatencyInspector::new(
+            id,
+            Box::new(move |id, duration| {
+                STORE_INSPECT_DURATION_HISTOGRAM
+                    .with_label_values(&["store_process"])
+                    .observe(tikv_util::time::duration_to_sec(
+                        duration.store_process_duration.unwrap_or_default(),
+                    ));
+                STORE_INSPECT_DURATION_HISTOGRAM
+                    .with_label_values(&["store_wait"])
+                    .observe(tikv_util::time::duration_to_sec(
+                        duration.store_wait_duration.unwrap_or_default(),
+                    ));
+                STORE_INSPECT_DURATION_HISTOGRAM
+                    .with_label_values(&["store_commit"])
+                    .observe(tikv_util::time::duration_to_sec(
+                        duration.store_commit_duration.unwrap_or_default(),
+                    ));
+
+                STORE_INSPECT_DURATION_HISTOGRAM
+                    .with_label_values(&["all"])
+                    .observe(tikv_util::time::duration_to_sec(duration.sum()));
+                if let Err(e) = scheduler.schedule(Task::UpdateSlowScore { id, duration }) {
+                    warn!("schedule pd task failed"; "err" => ?e);
+                }
+            }),
+        );
+        let msg = StoreMsg::LatencyInspect {
+            send_time: TiInstant::now(),
+            inspector,
+        };
+        if let Err(e) = self.router.send_control(msg) {
+            warn!("pd worker send latency inspecter failed"; "err" => ?e);
+        }
+    }
+
+    fn get_interval(&self) -> Duration {
+        self.health_reporter.get_tick_interval()
+    }
+}
+
+>>>>>>> 00a2518938 (*: Add module health_controller and move SlowScore, SlowTrend, HealthService from PdWorker to it (#16456))
 fn new_change_peer_request(change_type: ConfChangeType, peer: metapb::Peer) -> AdminRequest {
     let mut req = AdminRequest::default();
     req.set_cmd_type(AdminCmdType::ChangePeer);
