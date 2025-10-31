@@ -189,6 +189,7 @@ impl SchedPool {
                     tls_flush(&reporter);
                 })
                 .enable_task_wait_metrics(true)
+                .enable_task_exec_metrics(true)
         };
         let vanilla = VanillaQueue {
             worker_pool: builder(pool_size, "sched-worker-pool").build_future_pool(),
