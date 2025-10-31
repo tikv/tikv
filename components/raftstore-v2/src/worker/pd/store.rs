@@ -25,7 +25,6 @@ use tikv_util::{
     sys::disk::get_disk_space_stats,
     time::{Duration, Instant as TiInstant, UnixSecs},
     topn::TopN,
-    InspectFactor,
 };
 
 use super::Runner;
@@ -419,14 +418,8 @@ where
             && (interval_second % store_heartbeat_interval == 0)
     }
 
-    pub fn handle_inspect_latency(
-        &self,
-        factor: InspectFactor,
-        send_time: TiInstant,
-        inspector: LatencyInspector,
-    ) {
+    pub fn handle_inspect_latency(&self, send_time: TiInstant, inspector: LatencyInspector) {
         let msg = StoreMsg::LatencyInspect {
-            factor,
             send_time,
             inspector,
         };

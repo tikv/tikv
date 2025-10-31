@@ -12,7 +12,7 @@ use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use kvproto::{metapb, pdpb};
 use pd_client::{BucketStat, PdClient};
 use raftstore::store::{
-    metrics::{STORE_INSPECT_DURATION_HISTOGRAM, STORE_INSPECT_NETWORK_DURATION_HISTOGRAM},
+    metrics::STORE_INSPECT_DURATION_HISTOGRAM,
     util::{KeysInfoFormatter, LatencyInspector, RaftstoreDuration},
     AutoSplitController, Config, FlowStatsReporter, PdStatsMonitor, ReadStats,
     RegionReadProgressRegistry, SplitInfo, StoreStatsReporter, TabletSnapManager, TxnExt,
@@ -93,7 +93,6 @@ pub enum Task {
     },
     // In slowness.rs
     InspectLatency {
-        factor: InspectFactor,
         send_time: TiInstant,
         inspector: LatencyInspector,
     },
@@ -166,13 +165,12 @@ impl Display for Task {
                 store_id, min_resolved_ts,
             ),
             Task::InspectLatency {
-                factor,
                 send_time,
                 ref inspector,
             } => write!(
                 f,
-                "inspect latency: factor {:?}, send_time {:?}, inspector {:?}",
-                factor, send_time, inspector
+                "inspect latency: send_time {:?}, inspector {:?}",
+                send_time, inspector
             ),
             Task::TickSlownessStats => write!(f, "tick slowness statistics"),
             Task::UpdateSlownessStats {
@@ -350,10 +348,9 @@ where
                 min_resolved_ts,
             } => self.handle_report_min_resolved_ts(store_id, min_resolved_ts),
             Task::InspectLatency {
-                factor,
                 send_time,
                 inspector,
-            } => self.handle_inspect_latency(factor, send_time, inspector),
+            } => self.handle_inspect_latency(send_time, inspector),
             Task::TickSlownessStats => self.handle_slowness_stats_tick(),
             Task::UpdateSlownessStats { tick_id, duration } => {
                 self.handle_update_slowness_stats(tick_id, duration)
@@ -442,8 +439,8 @@ impl StoreStatsReporter for PdReporter {
         }
     }
 
-    fn update_latency_stats(&self, timer_tick: u64, factor: InspectFactor) {
-        if factor != InspectFactor::Network {
+    fn update_latency_stats(&self, timer_tick: u64, _factor: InspectFactor) {
+        {
             if let Err(e) = self.scheduler.schedule(Task::TickSlownessStats) {
                 error!(
                     self.logger,
@@ -453,22 +450,13 @@ impl StoreStatsReporter for PdReporter {
             }
         }
 
-        let scheduler = self.scheduler.clone();
-        let logger = self.logger.clone();
-        let tick_id = timer_tick;
+        // Tick a new latency inspector.
+        {
+            let scheduler = self.scheduler.clone();
+            let logger = self.logger.clone();
+            let tick_id = timer_tick;
 
-        let inspector = match factor {
-            InspectFactor::Network => LatencyInspector::new(
-                tick_id,
-                Box::new(move |_, duration| {
-                    for (store_id, network_duration) in &duration.network_latencies {
-                        STORE_INSPECT_NETWORK_DURATION_HISTOGRAM
-                            .with_label_values(&[&store_id.to_string()])
-                            .observe(tikv_util::time::duration_to_sec(*network_duration));
-                    }
-                }),
-            ),
-            _ => LatencyInspector::new(
+            let inspector = LatencyInspector::new(
                 tick_id,
                 Box::new(move |tick_id, duration| {
                     let dur = duration.sum();
@@ -497,19 +485,17 @@ impl StoreStatsReporter for PdReporter {
                         warn!(logger, "schedule pd UpdateSlownessStats task failed"; "err" => ?e);
                     }
                 }),
-            ),
-        };
-
-        if let Err(e) = self.scheduler.schedule(Task::InspectLatency {
-            factor,
-            send_time: TiInstant::now(),
-            inspector,
-        }) {
-            error!(
-                self.logger,
-                "failed to send inspect latency to pd worker";
-                "err" => ?e,
             );
+            if let Err(e) = self.scheduler.schedule(Task::InspectLatency {
+                send_time: TiInstant::now(),
+                inspector,
+            }) {
+                error!(
+                    self.logger,
+                    "failed to send inspect latency to pd worker";
+                    "err" => ?e,
+                );
+            }
         }
     }
 }
