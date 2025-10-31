@@ -1840,7 +1840,6 @@ pub struct RaftstoreDuration {
     pub store_commit_duration: Option<std::time::Duration>,
     pub apply_wait_duration: Option<std::time::Duration>,
     pub apply_process_duration: Option<std::time::Duration>,
-    pub network_latencies: HashMap<u64, std::time::Duration>,
 }
 
 impl RaftstoreDuration {
@@ -1927,10 +1926,6 @@ impl LatencyInspector {
 
     pub fn record_apply_process(&mut self, duration: std::time::Duration) {
         self.duration.apply_process_duration = Some(duration);
-    }
-
-    pub fn record_network_latencies(&mut self, latencies: HashMap<u64, std::time::Duration>) {
-        self.duration.network_latencies = latencies;
     }
 
     /// Call the callback.
