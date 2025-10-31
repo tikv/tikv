@@ -246,8 +246,9 @@ impl<T: PoolTicker> Runner for YatpPoolRunner<T> {
         } else {
             None
         };
-        if let Some(dur) =
-            end_time.zip(start_time).map(|(t1, t2)| t1.saturating_duration_since(t2))
+        if let Some(dur) = end_time
+            .zip(start_time)
+            .map(|(t1, t2)| t1.saturating_duration_since(t2))
         {
             self.schedule_exec_durations.observe(priority, dur);
         }
