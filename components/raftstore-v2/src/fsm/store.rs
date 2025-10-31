@@ -324,7 +324,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
                 StoreMsg::LatencyInspect {
                     send_time,
                     inspector,
-                    ..
                 } => self.fsm.store.on_update_latency_inspectors(
                     self.store_ctx,
                     send_time,
