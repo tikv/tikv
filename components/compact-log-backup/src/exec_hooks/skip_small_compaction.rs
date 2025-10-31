@@ -2,7 +2,7 @@
 
 use tikv_util::info;
 
-use crate::execute::hooking::{CId, ExecHooks, SubcompactionStartCtx};
+use crate::execute::hooking::{CId, ExecHooks, SkipReason, SubcompactionStartCtx};
 
 /// A hook that skips small compaction.
 ///
@@ -24,7 +24,7 @@ impl ExecHooks for SkipSmallCompaction {
         if cx.subc.size < self.size_threshold {
             info!("Skipped a small compaction."; 
                 "size" => cx.subc.size, "threshold" => self.size_threshold);
-            cx.skip();
+            cx.skip(SkipReason::NoNeedToDo);
         }
     }
 }

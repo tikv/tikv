@@ -33,6 +33,7 @@ use super::{
 use crate::{
     compaction::{exec::SubcompactionExecArg, SubcompactionResult},
     errors::{Result, TraceResultExt},
+    execute::hooking::SubcompactionSkippedCtx,
     util, ErrorKind,
 };
 
@@ -198,7 +199,7 @@ impl Execution {
 
             let c = c?;
             let cid = CId(id);
-            let skip = Cell::new(false);
+            let skip = Cell::new(None);
             let cx = SubcompactionStartCtx {
                 subc: &c,
                 load_stat_diff: &lstat,
@@ -206,7 +207,9 @@ impl Execution {
                 skip: &skip,
             };
             hooks.before_a_subcompaction_start(cid, cx);
-            if skip.get() {
+            if let Some(reason) = skip.get() {
+                let skipped_cx = SubcompactionSkippedCtx { subc: &c, reason };
+                hooks.on_subcompaction_skipped(skipped_cx).await;
                 continue;
             }
 
