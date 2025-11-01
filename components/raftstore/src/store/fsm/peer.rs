@@ -415,9 +415,9 @@ where
         }
     }
 
-    pub fn maybe_hibernate(&mut self) -> bool {
+    pub fn maybe_hibernate(&mut self, inactive_peer_ids: & Vec<u64>) -> bool {
         self.hibernate_state
-            .maybe_hibernate(self.peer.peer_id(), self.peer.region())
+            .maybe_hibernate(self.peer.peer_id(), self.peer.region(), inactive_peer_ids)
     }
 
     pub fn update_memory_trace(&mut self, event: &mut TraceEvent) {
@@ -2991,7 +2991,13 @@ where
     }
 
     fn all_agree_to_hibernate(&mut self) -> bool {
-        if self.fsm.maybe_hibernate() {
+        let mut inactive_peer_ids = Vec::<u64>::new();
+        for (peer_id, progress) in self.fsm.peer.raft_group.raft.prs().iter() {
+            if *peer_id != self.fsm.peer.peer_id() && !progress.recent_active {
+                inactive_peer_ids.push(*peer_id);
+            }
+        }
+        if self.fsm.maybe_hibernate(&inactive_peer_ids) {
             return true;
         }
         if !self
