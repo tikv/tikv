@@ -7,6 +7,9 @@ use serde_derive::{Deserialize, Serialize};
 
 use crate::store::metrics::*;
 
+use tikv_util::{
+    trace, info,
+};
 /// Because negotiation protocol can't be recognized by old version of binaries,
 /// so enabling it directly can cause a lot of connection reset.
 const NEGOTIATION_HIBERNATE: Feature = Feature::require(5, 0, 0);
@@ -85,7 +88,7 @@ impl HibernateState {
         gate.can_enable(NEGOTIATION_HIBERNATE)
     }
 
-    pub fn maybe_hibernate(&mut self, my_id: u64, region: &Region) -> bool {
+    pub fn maybe_hibernate(&mut self, my_id: u64, region: &Region, inactive_peer_ids: & Vec<u64>) -> bool {
         let peers = region.get_peers();
         let v = match &mut self.leader {
             LeaderState::Awaken => {
@@ -95,9 +98,56 @@ impl HibernateState {
             LeaderState::Poll(v) => v,
             LeaderState::Hibernated => return true,
         };
+        let mut active_non_voter_exist = false; // whether there is any active non-voter peer
+        let mut active_non_voter_pid = 0;
+        for peer in peers {
+            let pid = peer.get_id();
+            if pid == my_id { // skip self
+                continue;
+            }
+            if !v.contains(&pid) && !inactive_peer_ids.contains(&pid) {
+                trace!(
+                    "hibernate check failed: peer is active and not voted";
+                    "peer_id" => pid,
+                    "region_id" => region.get_id(),
+                );
+                active_non_voter_exist = true;
+                active_non_voter_pid = pid;
+                break;
+            }
+        }
         // 1 is for leader itself, which is not counted into votes.
         if v.len() + 1 < peers.len() {
-            return false;
+            if active_non_voter_exist {
+                // there is still some active non-voter peer, cannot hibernate
+                info!(
+                    "hibernate vote check failed: active non-voter peer exists";
+                    "votes" => v.len(),
+                    "inactive_peer_ids" => inactive_peer_ids.len(),
+                    "active_non_voter_pid" => active_non_voter_pid,
+                    "region_id" => region.get_id(),
+                );
+                return false
+            } else if v.len() < (peers.len() / 2) {
+                // no active non-voter peer, but votes do not reach majority, cannot hibernate
+                info!(
+                    "hibernate vote check failed: votes do not reach majority";
+                    "votes" => v.len(),
+                    "inactive_peer_ids" => inactive_peer_ids.len(),
+                    "peers" => peers.len(),
+                    "region_id" => region.get_id(),
+                );
+                return false
+            } else {
+                // no active non-voter peer, but votes reach majority, can hibernate
+                info!(
+                    "hibernate vote check passed: no active non-voter peer and votes reach majority";
+                    "votes" => v.len(),
+                    "inactive_peer_ids" => inactive_peer_ids.len(),
+                    "peers" => peers.len(),
+                    "region_id" => region.get_id(),
+                );
+            }
         }
         if peers
             .iter()
