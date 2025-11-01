@@ -1,12 +1,13 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
+use collections::HashSet;
 use kvproto::metapb::Region;
 use pd_client::{Feature, FeatureGate};
 use serde_derive::{Deserialize, Serialize};
+use tikv_util::debug;
 
 use crate::store::metrics::*;
-
 /// Because negotiation protocol can't be recognized by old version of binaries,
 /// so enabling it directly can cause a lot of connection reset.
 const NEGOTIATION_HIBERNATE: Feature = Feature::require(5, 0, 0);
@@ -85,7 +86,19 @@ impl HibernateState {
         gate.can_enable(NEGOTIATION_HIBERNATE)
     }
 
-    pub fn maybe_hibernate(&mut self, my_id: u64, region: &Region) -> bool {
+    pub fn maybe_hibernate<F>(
+        &mut self,
+        has_quorum: F,
+        my_id: u64,
+        region: &Region,
+        down_peer_ids: &Vec<u64>,
+        vote_peer_ids: &mut Vec<u64>,
+    ) -> bool
+    where
+        F: Fn(&HashSet<u64>) -> bool,
+    {
+        let mut hibernate_vote_peer_ids = HashSet::default();
+        hibernate_vote_peer_ids.insert(my_id); // leader always votes for itself
         let peers = region.get_peers();
         let v = match &mut self.leader {
             LeaderState::Awaken => {
@@ -95,14 +108,49 @@ impl HibernateState {
             LeaderState::Poll(v) => v,
             LeaderState::Hibernated => return true,
         };
+        hibernate_vote_peer_ids.extend(v.iter());
+        vote_peer_ids.extend(hibernate_vote_peer_ids.iter());
+        let mut alive_non_voter_exist = false; // whether alive non-voter peer exists
+        let mut alive_non_voter_peer_id = 0;
+        for peer in peers {
+            let peer_id = peer.get_id();
+            if peer_id == my_id {
+                continue;
+            }
+            if !v.contains(&peer_id) && !down_peer_ids.contains(&peer_id) {
+                debug!(
+                    "peer is alive but not voted";
+                    "peer_id" => peer_id,
+                    "my_id" => my_id,
+                    "region_id" => region.get_id(),
+                );
+                alive_non_voter_exist = true;
+                alive_non_voter_peer_id = peer_id;
+                break;
+            }
+        }
         // 1 is for leader itself, which is not counted into votes.
         if v.len() + 1 < peers.len() {
-            return false;
+            if alive_non_voter_exist {
+                // There is some alive non-voter peer, cannot hibernate
+                return false;
+            } else if !has_quorum(&hibernate_vote_peer_ids) {
+                // No alive non-voter peer, but not enough votes to form a quorum
+                return false;
+            } else {
+                debug!(
+                    "hibernate vote check passed by quorum with down peers";
+                    "my_id" => my_id,
+                    "votes" => v.len(),
+                    "down_peer_ids" => ?down_peer_ids,
+                    "vote_peer_ids" => ?v,
+                    "region_id" => region.get_id(),
+                );
+            }
         }
-        if peers
-            .iter()
-            .all(|p| p.get_id() == my_id || v.contains(&p.get_id()))
-        {
+        if peers.iter().all(|p| {
+            p.get_id() == my_id || v.contains(&p.get_id()) || down_peer_ids.contains(&p.get_id())
+        }) {
             self.leader = LeaderState::Hibernated;
             true
         } else {
