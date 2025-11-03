@@ -164,7 +164,6 @@ impl Reporter {
             }
         }
     }
-
     fn reset(&mut self) {
         self.collector.take();
         self.records.clear();
