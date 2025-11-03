@@ -350,6 +350,10 @@ pub struct Config {
     #[doc(hidden)]
     #[online_config(hidden)]
     pub inspect_kvdb_interval: ReadableDuration,
+    /// Interval to inspect network latency for slow store detection.
+    #[doc(hidden)]
+    #[online_config(hidden)]
+    pub inspect_network_interval: ReadableDuration,
     /// Threshold of CPU utilization to inspect for slow store detection.
     #[doc(hidden)]
     #[online_config(hidden)]
@@ -525,6 +529,7 @@ impl Default for Config {
             clean_stale_peer_delay: ReadableDuration::minutes(0),
             inspect_interval: ReadableDuration::millis(100),
             inspect_kvdb_interval: ReadableDuration::millis(100),
+            inspect_network_interval: ReadableDuration::millis(100),
             // The default value of `inspect_cpu_util_thd` is 0.4, which means
             // when the cpu utilization is greater than 40%, the store might be
             // regarded as a slow node if there exists delayed inspected messages.
@@ -659,13 +664,18 @@ impl Config {
 
     /// Optimize the interval of different inspectors according to the
     /// configuration.
-    pub fn optimize_inspector(&mut self, separated_raft_mount_path: bool) {
+    pub fn tune_inspector_configs(
+        &mut self,
+        separated_raft_mount_path: bool,
+        inspect_network_interval: ReadableDuration,
+    ) {
         // If the kvdb uses the same mount path with raftdb, the health status
         // of kvdb will be inspected by raftstore automatically. So it's not necessary
         // to inspect kvdb.
         if !separated_raft_mount_path {
             self.inspect_kvdb_interval = ReadableDuration::ZERO;
         }
+        self.inspect_network_interval = inspect_network_interval;
     }
 
     pub fn validate(
@@ -1586,23 +1596,23 @@ mod tests {
         );
 
         cfg = Config::new();
-        cfg.optimize_inspector(false);
+        cfg.tune_inspector_configs(false, ReadableDuration::millis(100));
         assert_eq!(cfg.inspect_kvdb_interval, ReadableDuration::ZERO);
 
         cfg = Config::new();
         cfg.inspect_kvdb_interval = ReadableDuration::secs(1);
-        cfg.optimize_inspector(false);
+        cfg.tune_inspector_configs(false, ReadableDuration::millis(100));
         assert_eq!(cfg.inspect_kvdb_interval, ReadableDuration::ZERO);
-        cfg.optimize_inspector(true);
+        cfg.tune_inspector_configs(true, ReadableDuration::millis(100));
         assert_eq!(cfg.inspect_kvdb_interval, ReadableDuration::ZERO);
 
         cfg.inspect_kvdb_interval = ReadableDuration::secs(1);
-        cfg.optimize_inspector(true);
+        cfg.tune_inspector_configs(true, ReadableDuration::millis(100));
         assert_eq!(cfg.inspect_kvdb_interval, ReadableDuration::secs(1));
 
         cfg = Config::new();
         cfg.inspect_kvdb_interval = ReadableDuration::millis(1);
-        cfg.optimize_inspector(true);
+        cfg.tune_inspector_configs(true, ReadableDuration::millis(100));
         assert_eq!(cfg.inspect_kvdb_interval, ReadableDuration::millis(1));
     }
 }

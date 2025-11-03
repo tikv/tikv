@@ -259,6 +259,7 @@ where
             cfg.value().report_min_resolved_ts_interval.0,
             cfg.value().inspect_interval.0,
             std::time::Duration::default(),
+            cfg.value().inspect_network_interval.0,
             PdReporter::new(pd_scheduler, logger.clone()),
         );
         stats_monitor.start(
@@ -439,7 +440,6 @@ impl StoreStatsReporter for PdReporter {
     }
 
     fn update_latency_stats(&self, timer_tick: u64, _factor: InspectFactor) {
-        // Tick slowness statistics.
         {
             if let Err(e) = self.scheduler.schedule(Task::TickSlownessStats) {
                 error!(
@@ -449,6 +449,7 @@ impl StoreStatsReporter for PdReporter {
                 );
             }
         }
+
         // Tick a new latency inspector.
         {
             let scheduler = self.scheduler.clone();
