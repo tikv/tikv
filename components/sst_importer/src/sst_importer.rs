@@ -5010,4 +5010,52 @@ mod tests {
         // With empty metas, should return None or handle gracefully
         assert!(range.is_none());
     }
+
+    #[test]
+    fn test_download_files_ext_partial_range_with_key_rewrite() {
+        let (_ext_sst_dir, backend, file_metas) = create_multiple_external_sst_files(2).unwrap();
+
+        // Rewrite key prefix from t123 to t567
+        let rewrite_rule = new_rewrite_rule(b"t123", b"t567", 0);
+
+        // Set a partial range using the NEW prefix (after rewrite): t567_r04 to t567_r14
+        // The range should use the rewritten key prefix, not the original prefix
+        // Using long keys (8 bytes) to ensure proper encoding behavior in batch8.5
+        let range_start = Key::from_raw(b"t567_r04").into_encoded();
+        let range_end = Key::from_raw(b"t567_r14")
+            .append_ts(TimeStamp::zero())
+            .into_encoded();
+
+        let (collected, range) = run_download_files_ext_test(
+            file_metas,
+            &backend,
+            &rewrite_rule,
+            Some((range_start.clone(), range_end.clone())),
+        );
+
+        // Verify returned range (after rewrite)
+        // Original range: t123_r04 to t123_r14 (includes r04, r07, r11, r14)
+        // After rewrite: t567_r04 to t567_r14
+        let expected_start = Key::from_raw(b"t567_r04")
+            .append_ts(TimeStamp::new(3))
+            .into_encoded();
+        let expected_end = Key::from_raw(b"t567_r14")
+            .append_ts(TimeStamp::new(3))
+            .into_encoded();
+
+        assert_eq!(range.get_start(), &expected_start);
+        assert_eq!(range.get_end(), &expected_end);
+
+        // Verify SST content - should only include keys within range, all rewritten
+        assert_eq!(collected.len(), 4);
+        assert_eq!(collected[0].0, get_encoded_key(b"t567_r04", 3)); // t123_r04 -> t567_r04
+        assert_eq!(collected[0].1, b"xyz");
+        assert_eq!(collected[1].0, get_encoded_key(b"t567_r07", 7)); // t123_r07 -> t567_r07
+        assert_eq!(collected[1].1, b"pqrst");
+        assert_eq!(collected[2].0, get_encoded_key(b"t567_r11", 1)); // t123_r11 -> t567_r11
+        assert_eq!(collected[2].1, b"abc");
+        assert_eq!(collected[3].0, get_encoded_key(b"t567_r14", 3)); // t123_r14 -> t567_r14
+        assert_eq!(collected[3].1, b"xyz");
+    }
+
 }
