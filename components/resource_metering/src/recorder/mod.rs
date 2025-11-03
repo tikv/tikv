@@ -301,12 +301,15 @@ impl ConfigChangeNotifier {
 /// This function is intended to simplify external use.
 pub fn init_recorder(
     precision_ms: u64,
+    enable_network_io_collection: bool,
 ) -> (
     ConfigChangeNotifier,
     CollectorRegHandle,
     ResourceTagFactory,
     Box<LazyWorker<Task>>,
 ) {
+    // initialize the global flag for network io collection
+    ENABLE_NETWORK_IO_COLLECTION.store(enable_network_io_collection, Relaxed);
     let recorder = RecorderBuilder::default()
         .precision_ms(precision_ms)
         .add_sub_recorder(Box::<CpuRecorder>::default())
