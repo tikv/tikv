@@ -4419,13 +4419,16 @@ mod tests {
     /// - `range`: Optional (start, end) to set in basic_meta
     ///
     /// # Returns
-    /// Tuple of (collected SST content, returned range from download_files_ext)
+    /// Result containing either:
+    /// - Ok: Tuple of (collected SST content, returned range from
+    ///   download_files_ext)
+    /// - Err: The error from download_files_ext (for error test cases)
     fn run_download_files_ext_test(
         file_metas: Vec<(String, SstMeta)>,
         backend: &StorageBackend,
         rewrite_rule: &RewriteRule,
         range: Option<(Vec<u8>, Vec<u8>)>,
-    ) -> (Vec<(Vec<u8>, Vec<u8>)>, Range) {
+    ) -> Result<(Vec<(Vec<u8>, Vec<u8>)>, Range)> {
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
         let importer =
@@ -4447,19 +4450,19 @@ mod tests {
             .collect();
 
         let runtime = tokio::runtime::Runtime::new().unwrap();
-        let returned_range = runtime
-            .block_on(importer.download_files_ext(
-                &basic_meta,
-                &metas,
-                &backend,
-                rewrite_rule,
-                None,
-                Limiter::new(f64::INFINITY),
-                db,
-                DownloadExt::default(),
-            ))
-            .unwrap()
-            .unwrap();
+        let result = runtime.block_on(importer.download_files_ext(
+            &basic_meta,
+            &metas,
+            &backend,
+            rewrite_rule,
+            None,
+            Limiter::new(f64::INFINITY),
+            db,
+            DownloadExt::default(),
+        ));
+
+        // Return error if download failed (for error test cases)
+        let returned_range = result?.ok_or(Error::Engine(box_err!("No range returned")))?;
 
         // Verify file exists
         let sst_file_path = importer.dir.join_for_read(&basic_meta).unwrap().save;
@@ -4470,19 +4473,16 @@ mod tests {
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
         iter.seek_to_first().unwrap();
-        (collect(iter), returned_range)
+        Ok((collect(iter), returned_range))
     }
 
     #[test]
     fn test_download_files_ext_no_key_rewrite() {
         let (_ext_sst_dir, backend, file_metas) = create_multiple_external_sst_files(3).unwrap();
 
-        let (collected, range) = run_download_files_ext_test(
-            file_metas,
-            &backend,
-            &RewriteRule::default(),
-            None,
-        );
+        let (collected, range) =
+            run_download_files_ext_test(file_metas, &backend, &RewriteRule::default(), None)
+                .unwrap();
 
         // Verify the range covers all keys (with timestamp encoding)
         // File 0: t123_r01 (ts=1), t123_r04 (ts=3), t123_r07 (ts=7)
@@ -4596,7 +4596,8 @@ mod tests {
             &backend,
             &new_rewrite_rule(b"t123", b"t567", 0),
             None,
-        );
+        )
+        .unwrap();
 
         // Verify the rewritten key range (with timestamp encoding)
         // Original: t123_r01 (ts=1), t123_r17 (ts=7)
@@ -4641,7 +4642,8 @@ mod tests {
             &backend,
             &RewriteRule::default(),
             Some((range_start.clone(), range_end.clone())),
-        );
+        )
+        .unwrap();
 
         // Verify only keys in the range are included (with timestamp encoding)
         // Data: r01(ts=1), r04(ts=3), r07(ts=7), r11(ts=1), r14(ts=3), r17(ts=7)
@@ -4656,7 +4658,8 @@ mod tests {
         assert_eq!(range.get_start(), &expected_start);
         assert_eq!(range.get_end(), &expected_end);
 
-        // Verify SST content - should only include keys within range [t123_r04, t123_r14]
+        // Verify SST content - should only include keys within range [t123_r04,
+        // t123_r14]
         assert_eq!(collected.len(), 4);
         assert_eq!(collected[0].0, get_encoded_key(b"t123_r04", 3));
         assert_eq!(collected[1].0, get_encoded_key(b"t123_r07", 7));
@@ -4673,7 +4676,8 @@ mod tests {
             &backend,
             &new_rewrite_rule(b"", b"", 16),
             None,
-        );
+        )
+        .unwrap();
 
         // File 0: t123_r01, t123_r04, t123_r07 (original ts: 1, 3, 7)
         // File 1: t123_r11, t123_r14, t123_r17 (original ts: 1, 3, 7)
@@ -4727,12 +4731,9 @@ mod tests {
         ];
 
         for (rewrite_rule, expected) in test_cases {
-            let (collected, _range) = run_download_files_ext_test(
-                file_metas.clone(),
-                &backend,
-                &rewrite_rule,
-                None,
-            );
+            let (collected, _range) =
+                run_download_files_ext_test(file_metas.clone(), &backend, &rewrite_rule, None)
+                    .unwrap();
             assert_eq!(collected, expected);
         }
     }
@@ -4747,11 +4748,12 @@ mod tests {
             &backend,
             &new_rewrite_rule(b"", b"", 16),
             None,
-        );
+        )
+        .unwrap();
 
-        // All timestamps (both commit_ts in key and start_ts in value) should be rewritten to 16
-        // File 0: r01(Put), r02(Delete), r04(Put), r07(Put with short_value)
-        // File 1: r11(Put), r14(Put), r17(Put with short_value)
+        // All timestamps (both commit_ts in key and start_ts in value) should be
+        // rewritten to 16 File 0: r01(Put), r02(Delete), r04(Put), r07(Put with
+        // short_value) File 1: r11(Put), r14(Put), r17(Put with short_value)
         assert_eq!(
             collected,
             vec![
@@ -4908,12 +4910,9 @@ mod tests {
         ];
 
         for (rewrite_rule, expected) in test_cases {
-            let (collected, _range) = run_download_files_ext_test(
-                file_metas.clone(),
-                &backend,
-                &rewrite_rule,
-                None,
-            );
+            let (collected, _range) =
+                run_download_files_ext_test(file_metas.clone(), &backend, &rewrite_rule, None)
+                    .unwrap();
             assert_eq!(collected, expected);
         }
     }
@@ -5018,9 +5017,10 @@ mod tests {
         // Rewrite key prefix from t123 to t567
         let rewrite_rule = new_rewrite_rule(b"t123", b"t567", 0);
 
-        // Set a partial range using the NEW prefix (after rewrite): t567_r04 to t567_r14
-        // The range should use the rewritten key prefix, not the original prefix
-        // Using long keys (8 bytes) to ensure proper encoding behavior in batch8.5
+        // Set a partial range using the NEW prefix (after rewrite): t567_r04 to
+        // t567_r14 The range should use the rewritten key prefix, not the
+        // original prefix Using long keys (8 bytes) to ensure proper encoding
+        // behavior in batch8.5
         let range_start = Key::from_raw(b"t567_r04").into_encoded();
         let range_end = Key::from_raw(b"t567_r14")
             .append_ts(TimeStamp::zero())
@@ -5031,7 +5031,8 @@ mod tests {
             &backend,
             &rewrite_rule,
             Some((range_start.clone(), range_end.clone())),
-        );
+        )
+        .unwrap();
 
         // Verify returned range (after rewrite)
         // Original range: t123_r04 to t123_r14 (includes r04, r07, r11, r14)
@@ -5058,4 +5059,33 @@ mod tests {
         assert_eq!(collected[3].1, b"xyz");
     }
 
+    #[test]
+    fn test_download_files_ext_wrong_key_prefix() {
+        // Test error handling when using an incorrect key prefix for rewriting
+        // The SST files contain keys with prefix "t123", but we try to rewrite with prefix "xxx"
+        let (_ext_sst_dir, backend, file_metas) = create_multiple_external_sst_files(2).unwrap();
+
+        // Try to rewrite keys with wrong prefix "xxx" -> "yyy"
+        // This should fail because the actual keys have prefix "t123"
+        let result = run_download_files_ext_test(
+            file_metas,
+            &backend,
+            &new_rewrite_rule(b"xxx", b"yyy", 0),
+            None,
+        );
+
+        // Verify we get the expected WrongKeyPrefix error
+        match result {
+            Err(Error::WrongKeyPrefix { key, prefix, .. }) => {
+                // The first key in the SST is t123_r01 with timestamp 1
+                // The key returned is the MVCC encoded key (without 'z' prefix)
+                let expected_key = Key::from_raw(b"t123_r01")
+                    .append_ts(TimeStamp::new(1))
+                    .into_encoded();
+                assert_eq!(key.as_slice(), &expected_key);
+                assert_eq!(prefix, b"xxx");
+            }
+            _ => panic!("Expected WrongKeyPrefix error, got: {:?}", result),
+        }
+    }
 }
