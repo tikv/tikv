@@ -4380,13 +4380,14 @@ mod tests {
                 new_sst_writer(ext_sst_dir.path().join(&file_name).to_str().unwrap());
 
             // Write different RawKV keys for each SST file
-            // Using keys like: za, zb, zc, zd... for file 0
-            //                  ze, zf, zg... for file 1, etc.
+            // Using keys like: zza, zzb, zzc, zzd... for file 0
+            //                  zze, zzf, zzg... for file 1, etc.
+            // Format: first 'z' is data_key prefix, second 'z' is user prefix
             let base_char = b'a' + (i * 4) as u8;
-            sst_writer.put(&[b'z', base_char], b"v1")?;
-            sst_writer.put(&[b'z', base_char + 1], b"v2")?;
-            sst_writer.put(&[b'z', base_char + 1, 0], b"v3")?;
-            sst_writer.put(&[b'z', base_char + 2], b"v4")?;
+            sst_writer.put(&[b'z', b'z', base_char], b"v1")?;
+            sst_writer.put(&[b'z', b'z', base_char + 1], b"v2")?;
+            sst_writer.put(&[b'z', b'z', base_char + 1, 0], b"v3")?;
+            sst_writer.put(&[b'z', b'z', base_char + 2], b"v4")?;
 
             let sst_info = sst_writer.finish()?;
 
@@ -5087,5 +5088,169 @@ mod tests {
             }
             _ => panic!("Expected WrongKeyPrefix error, got: {:?}", result),
         }
+    }
+
+    #[test]
+    fn test_download_files_ext_rawkv_sst() {
+        test_download_files_ext_rawkv_sst_impl(ApiVersion::V1);
+        test_download_files_ext_rawkv_sst_impl(ApiVersion::V1ttl);
+        test_download_files_ext_rawkv_sst_impl(ApiVersion::V2);
+    }
+
+    fn test_download_files_ext_rawkv_sst_impl(api_version: ApiVersion) {
+        // Create RawKV SST files with range [z, {]
+        // Keys are: za, zb, zb\x00, zc, ze, zf, zf\x00, zg
+        // Range needs to cover 'z' prefix
+        let (_ext_sst_dir, backend, file_metas) =
+            create_multiple_external_rawkv_sst_files(2, b"z", b"{", false).unwrap();
+
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer =
+            SstImporter::<TestEngine>::new(&cfg, &importer_dir, None, api_version, false).unwrap();
+        let db = create_sst_test_engine().unwrap();
+
+        // Prepare basic_meta and metas HashMap
+        let basic_meta = file_metas[0].1.clone();
+        let metas: HashMap<String, SstMeta> = file_metas
+            .iter()
+            .map(|(name, meta)| (name.clone(), meta.clone()))
+            .collect();
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let range = runtime
+            .block_on(importer.download_files_ext(
+                &basic_meta,
+                &metas,
+                &backend,
+                &RewriteRule::default(),
+                None,
+                Limiter::new(f64::INFINITY),
+                db,
+                DownloadExt::default(),
+            ))
+            .unwrap()
+            .unwrap();
+
+        // Verify range covers all keys
+        // File 0: za, zb, zb\x00, zc (base_char='a')
+        // File 1: ze, zf, zf\x00, zg (base_char='e')
+        // Range should be [za, zg]
+        assert_eq!(range.get_start(), b"za");
+        assert_eq!(range.get_end(), b"zg");
+
+        // Verify file exists
+        let sst_file_path = importer.dir.join_for_read(&basic_meta).unwrap().save;
+        assert!(sst_file_path.is_file());
+
+        // Verify SST content
+        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
+        sst_reader.verify_checksum().unwrap();
+        let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
+        iter.seek_to_first().unwrap();
+
+        let collected = collect(iter);
+        // Expect 8 keys from 2 files (4 keys each)
+        // Keys include data_key prefix 'z' + user key 'z' + suffix
+        assert_eq!(collected.len(), 8);
+        // File 0 keys: zza, zzb, zzb\x00, zzc
+        assert_eq!(collected[0].0, b"zza");
+        assert_eq!(collected[0].1, b"v1");
+        assert_eq!(collected[1].0, b"zzb");
+        assert_eq!(collected[1].1, b"v2");
+        assert_eq!(collected[2].0, b"zzb\x00");
+        assert_eq!(collected[2].1, b"v3");
+        assert_eq!(collected[3].0, b"zzc");
+        assert_eq!(collected[3].1, b"v4");
+        // File 1 keys: zze, zzf, zzf\x00, zzg
+        assert_eq!(collected[4].0, b"zze");
+        assert_eq!(collected[4].1, b"v1");
+        assert_eq!(collected[5].0, b"zzf");
+        assert_eq!(collected[5].1, b"v2");
+        assert_eq!(collected[6].0, b"zzf\x00");
+        assert_eq!(collected[6].1, b"v3");
+        assert_eq!(collected[7].0, b"zzg");
+        assert_eq!(collected[7].1, b"v4");
+    }
+
+    #[test]
+    fn test_download_files_ext_rawkv_sst_partial() {
+        test_download_files_ext_rawkv_sst_partial_impl(ApiVersion::V1);
+        test_download_files_ext_rawkv_sst_partial_impl(ApiVersion::V1ttl);
+        test_download_files_ext_rawkv_sst_partial_impl(ApiVersion::V2);
+    }
+
+    fn test_download_files_ext_rawkv_sst_partial_impl(api_version: ApiVersion) {
+        // Create RawKV SST files with range [z, {]
+        // File 0: za, zb, zb\x00, zc
+        // File 1: ze, zf, zf\x00, zg
+        let (_ext_sst_dir, backend, file_metas) =
+            create_multiple_external_rawkv_sst_files(2, b"z", b"{", false).unwrap();
+
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer =
+            SstImporter::<TestEngine>::new(&cfg, &importer_dir, None, api_version, false).unwrap();
+        let db = create_sst_test_engine().unwrap();
+
+        // Modify basic_meta to specify partial range [yb, yf)
+        // Range keys must use the NEW prefix (after rewrite)
+        let mut basic_meta = file_metas[0].1.clone();
+        basic_meta.mut_range().set_start(b"yb".to_vec());
+        basic_meta.mut_range().set_end(b"yf".to_vec());
+        basic_meta.set_end_key_exclusive(true);  // [yb, yf) - exclusive end
+
+        let metas: HashMap<String, SstMeta> = file_metas
+            .iter()
+            .map(|(name, meta)| (name.clone(), meta.clone()))
+            .collect();
+
+        // Test partial range [b, f) with rewrite - should include: zb, zb\x00, zc, ze
+        let mut rewrite_rule = RewriteRule::default();
+        rewrite_rule.set_old_key_prefix(b"z".to_vec());
+        rewrite_rule.set_new_key_prefix(b"y".to_vec());
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let range = runtime
+            .block_on(importer.download_files_ext(
+                &basic_meta,
+                &metas,
+                &backend,
+                &rewrite_rule,
+                None,
+                Limiter::new(f64::INFINITY),
+                db,
+                DownloadExt::default(),
+            ))
+            .unwrap()
+            .unwrap();
+
+        // Verify range covers the actual data range after rewrite
+        // Data: yb, yb\x00, yc, ye (last key is ye, not yf)
+        assert_eq!(range.get_start(), b"yb");
+        assert_eq!(range.get_end(), b"ye");
+
+        // Verify file exists
+        let sst_file_path = importer.dir.join_for_read(&basic_meta).unwrap().save;
+        assert!(sst_file_path.is_file());
+
+        // Verify SST content - should only contain keys in range [b, f): zb, zb\x00, zc, ze
+        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
+        sst_reader.verify_checksum().unwrap();
+        let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
+        iter.seek_to_first().unwrap();
+
+        let collected = collect(iter);
+        // Expected: 4 keys (zzb, zzb\x00, zzc, zze) after rewrite to 'y' prefix
+        // The keys include data_key prefix 'z' + user key with new prefix 'y'
+        assert_eq!(collected.len(), 4);
+        assert_eq!(collected[0].0, b"zyb");
+        assert_eq!(collected[0].1, b"v2");
+        assert_eq!(collected[1].0, b"zyb\x00");
+        assert_eq!(collected[1].1, b"v3");
+        assert_eq!(collected[2].0, b"zyc");
+        assert_eq!(collected[2].1, b"v4");
+        assert_eq!(collected[3].0, b"zye");
+        assert_eq!(collected[3].1, b"v1");
     }
 }
