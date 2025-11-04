@@ -14,6 +14,7 @@ use std::{
 use collections::HashSet;
 use dashmap::{DashMap, mapref::entry::Entry};
 use encryption::{DataKeyManager, FileEncryptionInfo, MultiMasterKeyBackend};
+use scopeguard::defer;
 use encryption_export::create_async_backend;
 use engine_rocks::{RocksSstReader, get_env};
 use engine_traits::{
@@ -1876,37 +1877,72 @@ impl<E: KvEngine> SstImporter<E> {
         speed_limiter: &Limiter,
         cache_key: &str,
     ) -> Result<String> {
-        let file_crypter = crypter.map(|c| FileEncryptionInfo {
-            method: c.cipher_type,
-            key: c.cipher_key,
-            iv: meta.cipher_iv.to_owned(),
-        });
+        let path_str = path.temp.to_string_lossy().to_string();
 
-        let restore_config = ExternalRestoreConfig {
-            file_crypter,
-            ..Default::default()
+        // Check if this file is already being downloaded
+        let res = {
+            match self.file_locks.entry(path_str.clone()) {
+                Entry::Occupied(mut entry) => match entry.get_mut() {
+                    (CacheKvFile::Download(state), last_used) => {
+                        // safety check
+                        if state.0 != *meta {
+                            error!("same path but different meta"; "meta" => ?meta, "name" => name);
+                            return Err(Error::MisMatchRequest);
+                        }
+                        // Another download is already in progress, reuse it
+                        info!("duplicate file download request ignored"; "meta" => ?meta, "name" => name);
+                        *last_used = Instant::now();
+                        Arc::clone(state)
+                    }
+                    _ => {
+                        error!("mismatched request type for download"; "meta" => ?meta, "name" => name);
+                        return Err(Error::MisMatchRequest);
+                    }
+                },
+                Entry::Vacant(entry) => {
+                    // We're the first one, insert our marker and proceed with download
+                    let cache = Arc::new((meta.clone(), OnceCell::new()));
+                    entry.insert((CacheKvFile::Download(Arc::clone(&cache)), Instant::now()));
+                    cache
+                }
+            }
         };
+        defer! {{self.file_locks.remove(&path_str);}}
 
-        self.async_download_file_from_external_storage(
-            meta.length,
-            name,
-            path.temp.clone(),
-            backend,
-            speed_limiter,
-            cache_key,
-            restore_config,
-        )
-        .await?;
+        let result = res
+            .1
+            .get_or_try_init(|| async {
+                let file_crypter = crypter.map(|c| FileEncryptionInfo {
+                    method: c.cipher_type,
+                    key: c.cipher_key,
+                    iv: meta.cipher_iv.to_owned(),
+                });
 
-        let dst_file_name = path.temp.to_str().unwrap();
+                let restore_config = RestoreConfig {
+                    file_crypter,
+                    ..Default::default()
+                };
 
-        debug!("downloaded file and verified";
-            "meta" => ?meta,
-            "name" => name,
-            "path" => dst_file_name,
-        );
+                self.async_download_file_from_external_storage(
+                    meta.length,
+                    name,
+                    path.temp.clone(),
+                    backend,
+                    speed_limiter,
+                    cache_key,
+                    restore_config,
+                )
+                .await?;
 
-        Ok(dst_file_name.to_string())
+                let dst_file_name = path.temp.to_str().unwrap();
+
+                debug!("downloaded file"; "meta" => ?meta, "name" => name, "path" => dst_file_name);
+
+                Ok::<String, Error>(dst_file_name.to_string())
+            })
+            .await?;
+
+        Ok(result.clone())
     }
 
     fn do_pre_rewrite(
