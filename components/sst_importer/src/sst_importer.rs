@@ -4903,4 +4903,264 @@ mod tests {
         assert_eq!(collected[3].0, b"zye");
         assert_eq!(collected[3].1, b"v1");
     }
+
+    // Helper function to create multiple external SST files with overlapping keys
+    // for testing BinaryIterator's deduplication functionality.
+    // Each file can have custom keys specified by the keys_per_file parameter.
+    fn create_external_sst_files_with_overlap(
+        keys_per_file: Vec<Vec<(&[u8], u64)>>, // Vec of (key, timestamp) for each file
+    ) -> Result<(TempDir, StorageBackend, Vec<(String, SstMeta)>)> {
+        let ext_sst_dir = tempfile::tempdir()?;
+        let mut metas = Vec::new();
+
+        for (i, keys) in keys_per_file.iter().enumerate() {
+            let file_name = format!("sample_{}.sst", i);
+            let mut sst_writer =
+                new_sst_writer(ext_sst_dir.path().join(&file_name).to_str().unwrap());
+
+            for (key, ts) in keys {
+                sst_writer.put(&get_encoded_key(key, *ts), b"value")?;
+            }
+
+            let sst_info = sst_writer.finish()?;
+
+            let mut meta = SstMeta::default();
+            let uuid = Uuid::new_v4();
+            meta.set_uuid(uuid.as_bytes().to_vec());
+            meta.set_cf_name(CF_DEFAULT.to_owned());
+            meta.set_length(sst_info.file_size());
+            meta.set_region_id(4);
+            meta.mut_region_epoch().set_conf_ver(5);
+            meta.mut_region_epoch().set_version(6);
+
+            metas.push((file_name, meta));
+        }
+
+        let backend = external_storage::make_local_backend(ext_sst_dir.path());
+        Ok((ext_sst_dir, backend, metas))
+    }
+
+    // Helper function to create multiple RawKV SST files with overlapping keys
+    // for testing BinaryIterator's deduplication in RawKV mode.
+    fn create_rawkv_sst_files_with_overlap(
+        keys_per_file: Vec<Vec<&[u8]>>, // Vec of raw keys for each file
+    ) -> Result<(TempDir, StorageBackend, Vec<(String, SstMeta)>)> {
+        let ext_sst_dir = tempfile::tempdir()?;
+        let mut metas = Vec::new();
+
+        for (i, keys) in keys_per_file.iter().enumerate() {
+            let file_name = format!("sample_rawkv_{}.sst", i);
+            let mut sst_writer =
+                new_sst_writer(ext_sst_dir.path().join(&file_name).to_str().unwrap());
+
+            for key in keys {
+                // RawKV format: data_key prefix 'z' + user key
+                let mut full_key = vec![b'z'];
+                full_key.extend_from_slice(key);
+                sst_writer.put(&full_key, b"value")?;
+            }
+
+            let sst_info = sst_writer.finish()?;
+
+            let mut meta = SstMeta::default();
+            let uuid = Uuid::new_v4();
+            meta.set_uuid(uuid.as_bytes().to_vec());
+            meta.set_cf_name(CF_DEFAULT.to_owned());
+            meta.set_length(sst_info.file_size());
+            meta.set_region_id(4);
+            meta.mut_region_epoch().set_conf_ver(5);
+            meta.mut_region_epoch().set_version(6);
+
+            metas.push((file_name, meta));
+        }
+
+        let backend = external_storage::make_local_backend(ext_sst_dir.path());
+        Ok((ext_sst_dir, backend, metas))
+    }
+
+    #[test]
+    fn test_download_files_ext_deduplication() {
+        // Test BinaryIterator's automatic deduplication when multiple SST files
+        // contain the same keys (MVCC format with timestamps).
+        //
+        // This tests the core deduplication logic in BinaryIterator::next()
+        // (sst_merge_iter.rs:155-162) which skips duplicate keys from different files.
+
+        // Create 3 SST files with overlapping keys
+        let (_ext_sst_dir, backend, file_metas) = create_external_sst_files_with_overlap(vec![
+            // File 0: t123_r01@ts1, t123_r04@ts3, t123_r07@ts7
+            vec![(b"t123_r01", 1), (b"t123_r04", 3), (b"t123_r07", 7)],
+            // File 1: t123_r04@ts3 (duplicate), t123_r10@ts1, t123_r13@ts3
+            vec![(b"t123_r04", 3), (b"t123_r10", 1), (b"t123_r13", 3)],
+            // File 2: t123_r01@ts1 (duplicate), t123_r07@ts7 (duplicate), t123_r16@ts1
+            vec![(b"t123_r01", 1), (b"t123_r07", 7), (b"t123_r16", 1)],
+        ])
+        .unwrap();
+
+        let (collected, range) =
+            run_download_files_ext_test(file_metas, &backend, &RewriteRule::default(), None)
+                .unwrap();
+
+        // Verify range covers all unique keys
+        let expected_start = Key::from_raw(b"t123_r01")
+            .append_ts(TimeStamp::new(1))
+            .into_encoded();
+        let expected_end = Key::from_raw(b"t123_r16")
+            .append_ts(TimeStamp::new(1))
+            .into_encoded();
+        assert_eq!(range.get_start(), &expected_start);
+        assert_eq!(range.get_end(), &expected_end);
+
+        // Verify deduplication: should have exactly 6 unique keys
+        // (r01, r04, r07, r10, r13, r16)
+        assert_eq!(collected.len(), 6);
+        assert_eq!(collected[0].0, get_encoded_key(b"t123_r01", 1));
+        assert_eq!(collected[1].0, get_encoded_key(b"t123_r04", 3));
+        assert_eq!(collected[2].0, get_encoded_key(b"t123_r07", 7));
+        assert_eq!(collected[3].0, get_encoded_key(b"t123_r10", 1));
+        assert_eq!(collected[4].0, get_encoded_key(b"t123_r13", 3));
+        assert_eq!(collected[5].0, get_encoded_key(b"t123_r16", 1));
+    }
+
+    #[test]
+    fn test_download_files_ext_deduplication_rawkv() {
+        // Test BinaryIterator's deduplication in RawKV mode.
+        // RawKV keys don't have timestamps, so deduplication is purely based on key bytes.
+
+        // Create 3 RawKV SST files with overlapping keys
+        let (_ext_sst_dir, backend, file_metas) = create_rawkv_sst_files_with_overlap(vec![
+            // File 0: zza, zzb, zzc, zzd
+            vec![b"zza", b"zzb", b"zzc", b"zzd"],
+            // File 1: zzb (duplicate), zzc (duplicate), zze, zzf
+            vec![b"zzb", b"zzc", b"zze", b"zzf"],
+            // File 2: zza (duplicate), zzd (duplicate), zzg
+            vec![b"zza", b"zzd", b"zzg"],
+        ])
+        .unwrap();
+
+        let (collected, range) =
+            run_download_files_ext_test(file_metas, &backend, &RewriteRule::default(), None)
+                .unwrap();
+
+        // Verify range covers all unique keys
+        assert_eq!(range.get_start(), b"zza");
+        assert_eq!(range.get_end(), b"zzg");
+
+        // Verify deduplication: should have exactly 7 unique keys
+        // (zza, zzb, zzc, zzd, zze, zzf, zzg)
+        assert_eq!(collected.len(), 7);
+        assert_eq!(collected[0].0, b"zzza"); // data_key('z') + user_key("zza")
+        assert_eq!(collected[1].0, b"zzzb");
+        assert_eq!(collected[2].0, b"zzzc");
+        assert_eq!(collected[3].0, b"zzzd");
+        assert_eq!(collected[4].0, b"zzze");
+        assert_eq!(collected[5].0, b"zzzf");
+        assert_eq!(collected[6].0, b"zzzg");
+    }
+
+    #[test]
+    fn test_download_files_ext_merge_order() {
+        // Test that BinaryIterator correctly merges multiple SST files in sorted order.
+        // This validates the heap-based merge algorithm (sift_up/sift_down operations).
+        //
+        // Keys are interleaved across files to thoroughly test the heap operations:
+        // - File 0 has keys at positions 2, 8, 14 (r02, r08, r14)
+        // - File 1 has keys at positions 1, 7, 13 (r01, r07, r13)
+        // - File 2 has keys at positions 4, 10, 16 (r04, r10, r16)
+
+        let (_ext_sst_dir, backend, file_metas) = create_external_sst_files_with_overlap(vec![
+            // File 0: interleaved keys
+            vec![(b"t123_r02", 1), (b"t123_r08", 1), (b"t123_r14", 1)],
+            // File 1: interleaved keys
+            vec![(b"t123_r01", 1), (b"t123_r07", 1), (b"t123_r13", 1)],
+            // File 2: interleaved keys
+            vec![(b"t123_r04", 1), (b"t123_r10", 1), (b"t123_r16", 1)],
+        ])
+        .unwrap();
+
+        let (collected, range) =
+            run_download_files_ext_test(file_metas, &backend, &RewriteRule::default(), None)
+                .unwrap();
+
+        // Verify range covers all keys
+        let expected_start = Key::from_raw(b"t123_r01")
+            .append_ts(TimeStamp::new(1))
+            .into_encoded();
+        let expected_end = Key::from_raw(b"t123_r16")
+            .append_ts(TimeStamp::new(1))
+            .into_encoded();
+        assert_eq!(range.get_start(), &expected_start);
+        assert_eq!(range.get_end(), &expected_end);
+
+        // Verify strict ordering: all 9 keys should be in sorted order
+        assert_eq!(collected.len(), 9);
+        assert_eq!(collected[0].0, get_encoded_key(b"t123_r01", 1));
+        assert_eq!(collected[1].0, get_encoded_key(b"t123_r02", 1));
+        assert_eq!(collected[2].0, get_encoded_key(b"t123_r04", 1));
+        assert_eq!(collected[3].0, get_encoded_key(b"t123_r07", 1));
+        assert_eq!(collected[4].0, get_encoded_key(b"t123_r08", 1));
+        assert_eq!(collected[5].0, get_encoded_key(b"t123_r10", 1));
+        assert_eq!(collected[6].0, get_encoded_key(b"t123_r13", 1));
+        assert_eq!(collected[7].0, get_encoded_key(b"t123_r14", 1));
+        assert_eq!(collected[8].0, get_encoded_key(b"t123_r16", 1));
+
+        // Additional check: ensure each key is strictly less than the next
+        for i in 0..collected.len() - 1 {
+            assert!(collected[i].0 < collected[i + 1].0);
+        }
+    }
+
+    #[test]
+    fn test_download_files_ext_with_empty_files() {
+        // Test BinaryIterator's handling when some files have no keys after range filtering.
+        // This simulates the behavior of empty iterators and validates the logic in
+        // seek_to_first() that skips empty/exhausted iterators (sst_merge_iter.rs:132-134).
+        //
+        // Note: We can't create truly empty SST files because RocksDB rejects them,
+        // but we can create files where all keys are outside the range filter,
+        // effectively making them empty from the iterator's perspective.
+
+        // Create 3 SST files with different key ranges
+        let (_ext_sst_dir, backend, file_metas) = create_external_sst_files_with_overlap(vec![
+            // File 0: t123_r01@ts1 - will be included
+            vec![(b"t123_r01", 1)],
+            // File 1: t123_r20@ts1 - will be excluded by range filter
+            vec![(b"t123_r20", 1)],
+            // File 2: t123_r04@ts1, t123_r07@ts1 - will be included
+            vec![(b"t123_r04", 1), (b"t123_r07", 1)],
+        ])
+        .unwrap();
+
+        // Apply range filter [t123_r00, t123_r10) to exclude File 1's keys
+        let range_start = Key::from_raw(b"t123_r00")
+            .append_ts(TimeStamp::new(1))
+            .into_encoded();
+        let range_end = Key::from_raw(b"t123_r10")
+            .append_ts(TimeStamp::new(1))
+            .into_encoded();
+
+        let (collected, range) = run_download_files_ext_test(
+            file_metas,
+            &backend,
+            &RewriteRule::default(),
+            Some((range_start.clone(), range_end.clone())),
+        )
+        .unwrap();
+
+        // Verify range covers only filtered keys (File 1's key r20 should be excluded)
+        let expected_start = Key::from_raw(b"t123_r01")
+            .append_ts(TimeStamp::new(1))
+            .into_encoded();
+        let expected_end = Key::from_raw(b"t123_r07")
+            .append_ts(TimeStamp::new(1))
+            .into_encoded();
+        assert_eq!(range.get_start(), &expected_start);
+        assert_eq!(range.get_end(), &expected_end);
+
+        // Verify only keys within range are included (File 1's r20 is excluded)
+        assert_eq!(collected.len(), 3);
+        assert_eq!(collected[0].0, get_encoded_key(b"t123_r01", 1));
+        assert_eq!(collected[1].0, get_encoded_key(b"t123_r04", 1));
+        assert_eq!(collected[2].0, get_encoded_key(b"t123_r07", 1));
+    }
 }
