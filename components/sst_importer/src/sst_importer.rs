@@ -135,6 +135,7 @@ impl CacheKvFile {
             }
             CacheKvFile::Fs(path) => Arc::strong_count(path),
             CacheKvFile::State(state) => Arc::strong_count(state),
+            CacheKvFile::Download(state) => Arc::strong_count(state),
         }
     }
 
@@ -147,6 +148,8 @@ impl CacheKvFile {
             CacheKvFile::Fs(_) => start.saturating_elapsed() >= Duration::from_secs(600),
             // The expired duration for memory is 60s.
             CacheKvFile::State(_) => start.saturating_elapsed() >= Duration::from_secs(60),
+            // The expired duration for download is 60s.
+            CacheKvFile::Download(_) => start.saturating_elapsed() >= Duration::from_secs(60),
         }
     }
 }
@@ -734,6 +737,12 @@ impl<E: KvEngine> SstImporter<E> {
                 }
                 // regular check, normally the lock will resolved immediately
                 CacheKvFile::State(_) => {
+                    if c.ref_count() == 1 && c.is_expired(start) {
+                        CACHE_EVENT.with_label_values(&["remain-locks"]).inc();
+                        need_retain = false;
+                    }
+                }
+                CacheKvFile::Download(_) => {
                     if c.ref_count() == 1 && c.is_expired(start) {
                         CACHE_EVENT.with_label_values(&["remain-locks"]).inc();
                         need_retain = false;
