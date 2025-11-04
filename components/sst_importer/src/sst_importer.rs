@@ -14,7 +14,6 @@ use std::{
 use collections::HashSet;
 use dashmap::{DashMap, mapref::entry::Entry};
 use encryption::{DataKeyManager, FileEncryptionInfo, MultiMasterKeyBackend};
-use scopeguard::defer;
 use encryption_export::create_async_backend;
 use engine_rocks::{RocksSstReader, get_env};
 use engine_traits::{
@@ -23,8 +22,8 @@ use engine_traits::{
     util::check_key_in_range,
 };
 use external_storage::{
-    ExternalStorage, RestoreConfig, RestoreConfig as ExternalRestoreConfig,
-    compression_reader_dispatcher, encrypt_wrap_reader, wrap_with_checksum_reader_if_needed,
+    ExternalStorage, RestoreConfig, compression_reader_dispatcher, encrypt_wrap_reader,
+    wrap_with_checksum_reader_if_needed,
 };
 use file_system::{IoType, OpenOptions, get_io_rate_limiter};
 use kvproto::{
@@ -109,9 +108,9 @@ pub enum CacheKvFile {
     /// The `meta` field stores the SST file metadata, while `range` indicates
     /// the key range affected by the download operation.
     State(Arc<(SstMeta, OnceCell<Option<Range>>)>),
-    /// Tracks raw file download to prevent duplicate downloads of the same SST file.
-    /// The `meta` stores SST metadata, while `OnceCell<String>` holds the download result
-    /// (file path) once the download completes.
+    /// Tracks raw file download to prevent duplicate downloads of the same SST
+    /// file. The `meta` stores SST metadata, while `OnceCell<String>` holds
+    /// the download result (file path) once the download completes.
     Download(Arc<(SstMeta, OnceCell<String>)>),
 }
 
@@ -4929,7 +4928,8 @@ mod tests {
     #[test]
     fn test_download_files_ext_wrong_key_prefix() {
         // Test error handling when using an incorrect key prefix for rewriting
-        // The SST files contain keys with prefix "t123", but we try to rewrite with prefix "xxx"
+        // The SST files contain keys with prefix "t123", but we try to rewrite with
+        // prefix "xxx"
         let (_ext_sst_dir, backend, file_metas) = create_multiple_external_sst_files(2).unwrap();
 
         // Try to rewrite keys with wrong prefix "xxx" -> "yyy"
@@ -5064,7 +5064,7 @@ mod tests {
         let mut basic_meta = file_metas[0].1.clone();
         basic_meta.mut_range().set_start(b"yb".to_vec());
         basic_meta.mut_range().set_end(b"yf".to_vec());
-        basic_meta.set_end_key_exclusive(true);  // [yb, yf) - exclusive end
+        basic_meta.set_end_key_exclusive(true); // [yb, yf) - exclusive end
 
         let metas: HashMap<String, SstMeta> = file_metas
             .iter()
@@ -5100,7 +5100,8 @@ mod tests {
         let sst_file_path = importer.dir.join_for_read(&basic_meta).unwrap().save;
         assert!(sst_file_path.is_file());
 
-        // Verify SST content - should only contain keys in range [b, f): zb, zb\x00, zc, ze
+        // Verify SST content - should only contain keys in range [b, f): zb, zb\x00,
+        // zc, ze
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
@@ -5241,7 +5242,8 @@ mod tests {
     #[test]
     fn test_download_files_ext_deduplication_rawkv() {
         // Test BinaryIterator's deduplication in RawKV mode.
-        // RawKV keys don't have timestamps, so deduplication is purely based on key bytes.
+        // RawKV keys don't have timestamps, so deduplication is purely based on key
+        // bytes.
 
         // Create 3 RawKV SST files with overlapping keys
         let (_ext_sst_dir, backend, file_metas) = create_rawkv_sst_files_with_overlap(vec![
@@ -5328,9 +5330,10 @@ mod tests {
 
     #[test]
     fn test_download_files_ext_with_empty_files() {
-        // Test BinaryIterator's handling when some files have no keys after range filtering.
-        // This simulates the behavior of empty iterators and validates the logic in
-        // seek_to_first() that skips empty/exhausted iterators (sst_merge_iter.rs:132-134).
+        // Test BinaryIterator's handling when some files have no keys after range
+        // filtering. This simulates the behavior of empty iterators and
+        // validates the logic in seek_to_first() that skips empty/exhausted
+        // iterators (sst_merge_iter.rs:132-134).
         //
         // Note: We can't create truly empty SST files because RocksDB rejects them,
         // but we can create files where all keys are outside the range filter,

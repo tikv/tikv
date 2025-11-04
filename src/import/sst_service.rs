@@ -976,7 +976,9 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             ));
             let mut resp = DownloadResponse::default();
             resp.set_error(error.into());
-            let _ = sink.success(resp).map_err(|e| warn!("send rpc response"; "err" => %e));
+            let _ = sink
+                .success(resp)
+                .map_err(|e| warn!("send rpc response"; "err" => %e));
             return;
         }
         let importer = Arc::clone(&self.importer);
@@ -1049,7 +1051,8 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                         .req_type(req.get_request_type()),
                 ),
                 resource_limiter,
-            ).await;
+            )
+            .await;
             let mut resp = DownloadResponse::default();
             match res {
                 Ok(range) => match range {
@@ -1064,9 +1067,10 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         self.threads.spawn(handle_task);
     }
 
-    /// Batch downloads multiple files and performs key-rewrite for later ingesting.
-    /// This method is specifically designed for multi-file downloads with merging.
-    /// NOTE: This method will be activated once kvproto defines the batch_download RPC.
+    /// Batch downloads multiple files and performs key-rewrite for later
+    /// ingesting. This method is specifically designed for multi-file
+    /// downloads with merging. NOTE: This method will be activated once
+    /// kvproto defines the batch_download RPC.
     #[allow(dead_code)]
     fn batch_download(
         &mut self,
@@ -1087,7 +1091,9 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             ));
             let mut resp = DownloadResponse::default();
             resp.set_error(error.into());
-            let _ = sink.success(resp).map_err(|e| warn!("send rpc response"; "err" => %e));
+            let _ = sink
+                .success(resp)
+                .map_err(|e| warn!("send rpc response"; "err" => %e));
             return;
         }
         let importer = Arc::clone(&self.importer);
@@ -1181,7 +1187,8 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                         .req_type(req.get_request_type()),
                 ),
                 resource_limiter,
-            ).await;
+            )
+            .await;
 
             let mut resp = DownloadResponse::default();
             match res {
