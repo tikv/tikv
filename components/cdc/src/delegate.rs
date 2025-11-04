@@ -366,13 +366,21 @@ impl Delegate {
                 CDC_PENDING_BYTES_GAUGE.add(bytes as _);
                 locks.push(PendingLock::Track { key, start_ts });
             }
-            LockTracker::Prepared { locks, .. } => {
-                if locks.insert(key, start_ts).is_none() {
+            LockTracker::Prepared { locks, .. } => match locks.insert(key, start_ts) {
+                Some(old_lock) => {
+                    info!("cdc push_lock found lock key already exists, overwrite it";
+                        "key" => ?key,
+                        "old_start_ts" => ?old_lock.ts,
+                        "new_start_ts" => ?start_ts.ts,
+                        "region_id" => self.region_id,
+                    );
+                }
+                None => {
                     self.memory_quota.alloc(bytes)?;
                     CDC_PENDING_BYTES_GAUGE.add(bytes as _);
                     lock_count_modify = 1;
                 }
-            }
+            },
         }
         Ok(lock_count_modify)
     }
@@ -395,6 +403,13 @@ impl Delegate {
                         self.memory_quota.free(bytes);
                         CDC_PENDING_BYTES_GAUGE.sub(bytes as _);
                         lock_count_modify = -1;
+                    } else {
+                        info!("cdc pop_lock found lock key exists but start_ts mismatched, ignore it";
+                            "key" => ?key,
+                            "existing_start_ts" => ?x.get().ts,
+                            "start_ts" => ?start_ts,
+                            "region_id" => self.region_id,
+                        );
                     }
                 }
             }
