@@ -32,7 +32,7 @@ use raftstore::{
 };
 use tikv::storage::{Statistics, txn::TxnEntry};
 use tikv_util::{
-    debug, error, info,
+    debug, info,
     memory::{HeapSize, MemoryQuota},
     time::Instant,
     warn,
@@ -358,6 +358,7 @@ impl Drop for Delegate {
 impl Delegate {
     fn push_lock(&mut self, key: Key, start_ts: MiniLock) -> Result<isize> {
         let bytes = key.approximate_heap_size();
+        let ts = start_ts.ts;
         let mut lock_count_modify = 0;
         match &mut self.lock_tracker {
             LockTracker::Pending => unreachable!(),
@@ -366,12 +367,12 @@ impl Delegate {
                 CDC_PENDING_BYTES_GAUGE.add(bytes as _);
                 locks.push(PendingLock::Track { key, start_ts });
             }
-            LockTracker::Prepared { locks, .. } => match locks.insert(key, start_ts) {
+            LockTracker::Prepared { locks, .. } => match locks.insert(key.clone(), start_ts) {
                 Some(old_lock) => {
                     info!("cdc push_lock found lock key already exists, overwrite it";
                         "key" => ?key,
                         "old_start_ts" => ?old_lock.ts,
-                        "new_start_ts" => ?start_ts.ts,
+                        "new_start_ts" => ?ts,
                         "region_id" => self.region_id,
                     );
                 }
