@@ -108,6 +108,10 @@ pub enum CacheKvFile {
     /// The `meta` field stores the SST file metadata, while `range` indicates
     /// the key range affected by the download operation.
     State(Arc<(SstMeta, OnceCell<Option<Range>>)>),
+    /// Tracks raw file download to prevent duplicate downloads of the same SST file.
+    /// The `meta` stores SST metadata, while `OnceCell<String>` holds the download result
+    /// (file path) once the download completes.
+    Download(Arc<(SstMeta, OnceCell<String>)>),
 }
 
 /// returns an error on an invalid internal state.
