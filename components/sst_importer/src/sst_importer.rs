@@ -4495,4 +4495,148 @@ mod tests {
         });
         fail::remove("create_storage_slowly");
     }
+
+    fn create_multiple_external_sst_files(
+        count: usize,
+    ) -> Result<(TempDir, StorageBackend, Vec<(String, SstMeta)>)> {
+        let ext_sst_dir = tempfile::tempdir()?;
+        let mut metas = Vec::new();
+
+        for i in 0..count {
+            let file_name = format!("sample_{}.sst", i);
+            let mut sst_writer =
+                new_sst_writer(ext_sst_dir.path().join(&file_name).to_str().unwrap());
+
+            // Write different keys with timestamps for each SST file
+            let base = i * 10;
+            sst_writer.put(
+                &get_encoded_key(format!("t123_r{:02}", base + 1).as_bytes(), 1),
+                b"abc",
+            )?;
+            sst_writer.put(
+                &get_encoded_key(format!("t123_r{:02}", base + 4).as_bytes(), 3),
+                b"xyz",
+            )?;
+            sst_writer.put(
+                &get_encoded_key(format!("t123_r{:02}", base + 7).as_bytes(), 7),
+                b"pqrst",
+            )?;
+
+            let sst_info = sst_writer.finish()?;
+
+            // Make up the SST meta for downloading.
+            let mut meta = SstMeta::default();
+            let uuid = Uuid::new_v4();
+            meta.set_uuid(uuid.as_bytes().to_vec());
+            meta.set_cf_name(CF_DEFAULT.to_owned());
+            meta.set_length(sst_info.file_size());
+            meta.set_region_id(4);
+            meta.mut_region_epoch().set_conf_ver(5);
+            meta.mut_region_epoch().set_version(6);
+
+            metas.push((file_name, meta));
+        }
+
+        let backend = external_storage::make_local_backend(ext_sst_dir.path());
+        Ok((ext_sst_dir, backend, metas))
+    }
+
+    fn create_multiple_external_rawkv_sst_files(
+        count: usize,
+        start_key: &[u8],
+        end_key: &[u8],
+        end_key_exclusive: bool,
+    ) -> Result<(TempDir, StorageBackend, Vec<(String, SstMeta)>)> {
+        let ext_sst_dir = tempfile::tempdir()?;
+        let mut metas = Vec::new();
+
+        for i in 0..count {
+            let file_name = format!("sample_rawkv_{}.sst", i);
+            let mut sst_writer =
+                new_sst_writer(ext_sst_dir.path().join(&file_name).to_str().unwrap());
+
+            // Write different RawKV keys for each SST file
+            // Using keys like: zza, zzb, zzc, zzd... for file 0
+            //                  zze, zzf, zzg... for file 1, etc.
+            // Format: first 'z' is data_key prefix, second 'z' is user prefix
+            let base_char = b'a' + (i * 4) as u8;
+            sst_writer.put(&[b'z', b'z', base_char], b"v1")?;
+            sst_writer.put(&[b'z', b'z', base_char + 1], b"v2")?;
+            sst_writer.put(&[b'z', b'z', base_char + 1, 0], b"v3")?;
+            sst_writer.put(&[b'z', b'z', base_char + 2], b"v4")?;
+
+            let sst_info = sst_writer.finish()?;
+
+            // Make up the SST meta for downloading.
+            let mut meta = SstMeta::default();
+            let uuid = Uuid::new_v4();
+            meta.set_uuid(uuid.as_bytes().to_vec());
+            meta.set_cf_name(CF_DEFAULT.to_owned());
+            meta.set_length(sst_info.file_size());
+            meta.set_region_id(4);
+            meta.mut_region_epoch().set_conf_ver(5);
+            meta.mut_region_epoch().set_version(6);
+            meta.mut_range().set_start(start_key.to_vec());
+            meta.mut_range().set_end(end_key.to_vec());
+            meta.set_end_key_exclusive(end_key_exclusive);
+
+            metas.push((file_name, meta));
+        }
+
+        let backend = external_storage::make_local_backend(ext_sst_dir.path());
+        Ok((ext_sst_dir, backend, metas))
+    }
+
+    fn run_download_files_ext_test(
+        file_metas: Vec<(String, SstMeta)>,
+        backend: &StorageBackend,
+        rewrite_rule: &RewriteRule,
+        range: Option<(Vec<u8>, Vec<u8>)>,
+    ) -> Result<(Vec<(Vec<u8>, Vec<u8>)>, Range)> {
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer =
+            SstImporter::<TestEngine>::new(&cfg, &importer_dir, None, ApiVersion::V1, false)
+                .unwrap();
+        let db = create_sst_test_engine().unwrap();
+
+        let mut basic_meta = file_metas[0].1.clone();
+
+        // Apply range filter if provided
+        if let Some((start, end)) = range {
+            basic_meta.mut_range().set_start(start);
+            basic_meta.mut_range().set_end(end);
+        }
+
+        let metas: HashMap<String, SstMeta> = file_metas
+            .iter()
+            .map(|(name, meta)| (name.clone(), meta.clone()))
+            .collect();
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let result = runtime.block_on(importer.download_files_ext(
+            &basic_meta,
+            &metas,
+            &backend,
+            rewrite_rule,
+            None,
+            Limiter::new(f64::INFINITY),
+            db,
+            DownloadExt::default(),
+        ));
+
+        // Return error if download failed (for error test cases)
+        let returned_range = result?.ok_or(Error::Engine(box_err!("No range returned")))?;
+
+        // Verify file exists
+        let sst_file_path = importer.dir.join_for_read(&basic_meta).unwrap().save;
+        assert!(sst_file_path.is_file());
+
+        // Read and return content
+        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
+        sst_reader.verify_checksum().unwrap();
+        let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
+        iter.seek_to_first().unwrap();
+        Ok((collect(iter), returned_range))
+    }
 }
