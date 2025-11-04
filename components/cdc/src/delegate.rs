@@ -288,18 +288,16 @@ impl fmt::Debug for LockTracker {
 pub struct MiniLock {
     pub ts: TimeStamp,
     pub txn_source: u64,
-    pub generation: u64,
 }
 
 impl MiniLock {
-    pub fn new<T>(ts: T, txn_source: u64, generation: u64) -> Self
+    pub fn new<T>(ts: T, txn_source: u64) -> Self
     where
         TimeStamp: From<T>,
     {
         MiniLock {
             ts: TimeStamp::from(ts),
             txn_source,
-            generation,
         }
     }
 
@@ -311,7 +309,6 @@ impl MiniLock {
         MiniLock {
             ts: TimeStamp::from(ts),
             txn_source: 0,
-            generation: 0,
         }
     }
 }
@@ -369,29 +366,13 @@ impl Delegate {
                 CDC_PENDING_BYTES_GAUGE.add(bytes as _);
                 locks.push(PendingLock::Track { key, start_ts });
             }
-            LockTracker::Prepared { locks, .. } => match locks.entry(key.clone()) {
-                BTreeMapEntry::Occupied(mut x) => {
-                    if x.get().ts != start_ts.ts {
-                        warn!("cdc push_lock found lock with same key but different start_ts";
-                            "old_generation" => ?x.get().generation,
-                            "new_generation" => ?start_ts.generation,
-                            "old_start_ts" => ?x.get().ts,
-                            "new_start_ts" => ?start_ts.ts,
-                            "key" => ?key,
-                            "region_id" => self.region_id,
-                        );
-                    }
-                    assert!(x.get().generation <= start_ts.generation);
-                    x.get_mut().ts = start_ts.ts;
-                    x.get_mut().generation = start_ts.generation;
-                }
-                BTreeMapEntry::Vacant(x) => {
-                    x.insert(start_ts);
+            LockTracker::Prepared { locks, .. } => {
+                if locks.insert(key, start_ts).is_none() {
                     self.memory_quota.alloc(bytes)?;
                     CDC_PENDING_BYTES_GAUGE.add(bytes as _);
                     lock_count_modify = 1;
                 }
-            },
+            }
         }
         Ok(lock_count_modify)
     }
@@ -447,20 +428,8 @@ impl Delegate {
                     BTreeMapEntry::Vacant(x) => {
                         x.insert(start_ts);
                     }
-                    BTreeMapEntry::Occupied(mut x) => {
-                        if x.get().ts != start_ts.ts {
-                            warn!("cdc finish prepare lock tracker found lock with same key but different start_ts";
-                                "old_generation" => ?x.get().generation,
-                                "new_generation" => ?start_ts.generation,
-                                "old_start_ts" => ?x.get().ts,
-                                "new_start_ts" => ?start_ts.ts,
-                                "key" => ?key,
-                                "region_id" => self.region_id,
-                            );
-                        }
-                        assert!(x.get().generation <= start_ts.generation);
-                        x.get_mut().ts = start_ts.ts;
-                        x.get_mut().generation = start_ts.generation;
+                    BTreeMapEntry::Occupied(x) => {
+                        assert_eq!(*x.get(), start_ts);
                     }
                 },
                 PendingLock::Untrack { key, start_ts } => {
@@ -1065,7 +1034,6 @@ impl Delegate {
                 let lock = Lock::parse(put.get_value()).unwrap();
                 let for_update_ts = lock.for_update_ts;
                 let txn_source = lock.txn_source;
-                let generation = lock.generation;
 
                 let key = Key::from_encoded_slice(&put.key);
                 let row = rows.txns_by_key.entry(key.clone()).or_default();
@@ -1074,7 +1042,7 @@ impl Delegate {
                 }
 
                 assert_eq!(row.lock_count_modify, 0);
-                let mini_lock = MiniLock::new(row.v.start_ts, txn_source, generation);
+                let mini_lock = MiniLock::new(row.v.start_ts, txn_source);
                 row.lock_count_modify = self.push_lock(key, mini_lock)?;
                 let read_old_ts = std::cmp::max(for_update_ts, row.v.start_ts.into());
                 row.needs_old_value = Some(read_old_ts);
@@ -1279,7 +1247,6 @@ fn decode_lock(key: Vec<u8>, mut lock: Lock, row: &mut EventRow, has_value: &mut
     };
 
     row.start_ts = lock.ts.into_inner();
-    row.generation = lock.generation;
     row.key = key.into_raw().unwrap();
     row.op_type = op_type as _;
     row.txn_source = lock.txn_source;
