@@ -108,7 +108,7 @@ impl<'a> BinaryIterator<'a> {
     }
 }
 
-impl<'a> Iterator for BinaryIterator<'a> {
+impl Iterator for BinaryIterator<'_> {
     fn seek(&mut self, key: &[u8]) -> engine_traits::Result<bool> {
         self.entry_cache.clear();
         for (i, iter) in self.sst_iters.iter_mut().enumerate() {
