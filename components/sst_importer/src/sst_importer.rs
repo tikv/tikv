@@ -4837,7 +4837,7 @@ mod tests {
         ));
 
         // Should fail due to invalid SST file
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 
     #[test]
