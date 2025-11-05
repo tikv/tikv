@@ -367,16 +367,17 @@ impl Delegate {
                 CDC_PENDING_BYTES_GAUGE.add(bytes as _);
                 locks.push(PendingLock::Track { key, start_ts });
             }
-            LockTracker::Prepared { locks, .. } => match locks.insert(key.clone(), start_ts) {
-                Some(old_lock) => {
-                    info!("cdc push_lock found lock key already exists, overwrite it";
+            LockTracker::Prepared { locks, .. } => match locks.entry(key.clone()) {
+                BTreeMapEntry::Occupied(x) => {
+                    info!("cdc push_lock found lock key already exists, skip it";
                         "key" => ?key,
-                        "old_start_ts" => ?old_lock.ts,
+                        "old_start_ts" => ?x.get().ts,
                         "new_start_ts" => ?ts,
                         "region_id" => self.region_id,
                     );
                 }
-                None => {
+                BTreeMapEntry::Vacant(x) => {
+                    x.insert(start_ts);
                     self.memory_quota.alloc(bytes)?;
                     CDC_PENDING_BYTES_GAUGE.add(bytes as _);
                     lock_count_modify = 1;
