@@ -408,8 +408,8 @@ impl Delegate {
                         CDC_PENDING_BYTES_GAUGE.sub(bytes as _);
                         lock_count_modify = -1;
                     } else {
-                        info!("cdc pop_lock found lock key exists but start_ts mismatched,
-                        ignore it";                 "key" => ?key,
+                        info!("cdc pop_lock found lock key exists but start_ts mismatched, ignore it";
+                            "key" => ?key,
                             "existing_start_ts" => ?x.get().ts,
                             "start_ts" => ?start_ts,
                             "region_id" => self.region_id,
@@ -1232,7 +1232,10 @@ fn decode_write(
         // Currently the only case is writing overlapped_rollback. And in this case
         assert!(write.has_overlapped_rollback);
         assert_ne!(write.write_type, WriteType::Rollback);
-        make_overlapped_rollback(key, row);
+        make_overlapped_rollback(key.clone(), row);
+        warn!("cdc meet overlapped rollback";
+            "key" => ?key, "start_ts" => row.start_ts,
+        );
         return false;
     }
 
