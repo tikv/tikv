@@ -1285,9 +1285,21 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                     .unwrap_or_else(|e| ProcessResult::Failed { err: e.into() })
             })
         };
+        let cmd_process_duration = begin_instant.saturating_elapsed();
+        sched_details.cmd_process_nanos = cmd_process_duration.as_nanos() as u64;
+        sched_details.block_read_nanos = GLOBAL_TRACKERS
+            .with_tracker(sched_details.tracker, |tracker| {
+                tracker.metrics.block_read_nanos
+            })
+            .unwrap_or_default();
         SCHED_PROCESSING_READ_HISTOGRAM_STATIC
             .get(tag)
-            .observe(begin_instant.saturating_elapsed_secs());
+            .observe(cmd_process_duration.as_secs_f64());
+        if sched_details.block_read_nanos > 0 {
+            SCHED_BLOCK_READ_HISTOGRAM_VEC_STATIC
+                .get(tag)
+                .observe((sched_details.block_read_nanos as f64) / 1_000_000_000f64);
+        }
         self.on_read_finished(cid, pr, tag);
     }
 
@@ -1331,9 +1343,19 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             };
             let cmd_process_duration = begin_instant.saturating_elapsed();
             sched_details.cmd_process_nanos = cmd_process_duration.as_nanos() as u64;
+            sched_details.block_read_nanos = GLOBAL_TRACKERS
+                .with_tracker(sched_details.tracker, |tracker| {
+                    tracker.metrics.block_read_nanos
+                })
+                .unwrap_or_default();
             SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                 .get(tag)
                 .observe(cmd_process_duration.as_secs_f64());
+            if sched_details.block_read_nanos > 0 {
+                SCHED_BLOCK_READ_HISTOGRAM_VEC_STATIC
+                    .get(tag)
+                    .observe((sched_details.block_read_nanos as f64) / 1_000_000_000f64);
+            }
             res
         };
 
@@ -2223,6 +2245,8 @@ struct SchedulerDetails {
     quota_limit_delay_nanos: u64,
     flow_control_nanos: u64,
     async_write_nanos: u64,
+    // Time spent on reading data blocks from disk.
+    block_read_nanos: u64,
 }
 
 impl SchedulerDetails {
@@ -2235,6 +2259,7 @@ impl SchedulerDetails {
             quota_limit_delay_nanos: 0,
             flow_control_nanos: 0,
             async_write_nanos: 0,
+            block_read_nanos: 0,
         }
     }
 }
