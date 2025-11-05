@@ -356,7 +356,7 @@ impl Drop for Delegate {
 }
 
 impl Delegate {
-    fn push_lock(&mut self, key: Key, start_ts: MiniLock) -> Result<isize> {
+    fn push_lock(&mut self, key: Key, start_ts: MiniLock, batch_id: usize) -> Result<isize> {
         let bytes = key.approximate_heap_size();
         let ts = start_ts.ts;
         let mut lock_count_modify = 0;
@@ -373,7 +373,7 @@ impl Delegate {
                         "key" => ?key,
                         "old_start_ts" => ?x.get().ts,
                         "new_start_ts" => ?ts,
-                        "region_id" => self.region_id,
+                        "batch_id" => batch_id,
                     );
                 }
                 BTreeMapEntry::Vacant(x) => {
@@ -384,7 +384,7 @@ impl Delegate {
                     info!("cdc push_lock insert new lock";
                         "key" => ?key,
                         "start_ts" => ?ts,
-                        "region_id" => self.region_id,
+                        "batch_id" => batch_id,
                     );
                 }
             },
@@ -392,7 +392,7 @@ impl Delegate {
         Ok(lock_count_modify)
     }
 
-    fn pop_lock(&mut self, key: Key, start_ts: TimeStamp) -> Result<isize> {
+    fn pop_lock(&mut self, key: Key, start_ts: TimeStamp, batch_id: usize) -> Result<isize> {
         let mut lock_count_modify = 0;
         match &mut self.lock_tracker {
             LockTracker::Pending => unreachable!(),
@@ -414,14 +414,14 @@ impl Delegate {
                             "key" => ?key,
                             "existing_start_ts" => ?entry.ts,
                             "start_ts" => ?start_ts,
-                            "region_id" => self.region_id,
+                            "batch_id" => batch_id,
                         );
                     }
                 } else {
                     info!("cdc pop_lock found lock key not exists, skip it";
                         "key" => ?key,
                         "start_ts" => ?start_ts,
-                        "region_id" => self.region_id,
+                        "batch_id" => batch_id,
                     );
                 }
             }
@@ -889,6 +889,7 @@ impl Delegate {
         };
 
         let mut rows_builder = RowsBuilder::default();
+        rows_builder.batch_id = ROWS_IN_BUILD_ID_ALLOC.fetch_add(1, Ordering::SeqCst);
         rows_builder.is_one_pc = flags.contains(WriteBatchFlags::ONE_PC);
         for mut req in requests {
             match req.get_cmd_type() {
@@ -1037,6 +1038,7 @@ impl Delegate {
     }
 
     fn sink_txn_put(&mut self, mut put: PutRequest, rows: &mut RowsBuilder) -> Result<()> {
+        let batch_id = rows.batch_id;
         match put.cf.as_str() {
             "write" => {
                 let key = Key::from_encoded_slice(&put.key).truncate_ts().unwrap();
@@ -1062,14 +1064,13 @@ impl Delegate {
                         error!(
                             "lock count modify should be zero when handling write cf";
                             "key" => ?key,
+                            "batch_id" => rows.batch_id,
                             "lock_count_modify" => row.lock_count_modify,
                             "start_ts" => ?start_ts,
-                            "region_id" => self.region_id,
                         );
                         assert_eq!(row.lock_count_modify, 0);
                     }
-
-                    row.lock_count_modify = self.pop_lock(key.clone(), start_ts)?;
+                    row.lock_count_modify = self.pop_lock(key.clone(), start_ts, batch_id)?;
                 }
             }
             "lock" => {
@@ -1085,7 +1086,7 @@ impl Delegate {
 
                 assert_eq!(row.lock_count_modify, 0);
                 let mini_lock = MiniLock::new(row.v.start_ts, txn_source);
-                row.lock_count_modify = self.push_lock(key, mini_lock)?;
+                row.lock_count_modify = self.push_lock(key, mini_lock, batch_id)?;
                 let read_old_ts = std::cmp::max(for_update_ts, row.v.start_ts.into());
                 row.needs_old_value = Some(read_old_ts);
             }
@@ -1172,6 +1173,8 @@ impl Delegate {
     }
 }
 
+static ROWS_IN_BUILD_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
+
 #[derive(Default)]
 struct RowsBuilder {
     txns_by_key: HashMap<Key, RowInBuilding>,
@@ -1179,6 +1182,8 @@ struct RowsBuilder {
     raws: Vec<EventRow>,
 
     is_one_pc: bool,
+
+    batch_id: usize,
 }
 
 #[derive(Default)]
