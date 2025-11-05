@@ -32,7 +32,7 @@ use raftstore::{
 };
 use tikv::storage::{Statistics, txn::TxnEntry};
 use tikv_util::{
-    debug, error, info,
+    debug, info,
     memory::{HeapSize, MemoryQuota},
     time::Instant,
     warn,
@@ -356,10 +356,15 @@ impl Drop for Delegate {
 }
 
 impl Delegate {
-    fn push_lock(&mut self, key: Key, start_ts: MiniLock, batch_id: usize) -> Result<isize> {
+    fn push_lock(
+        &mut self,
+        key: Key,
+        start_ts: MiniLock,
+        batch_id: usize,
+    ) -> Result<Vec<LockModifiedCount>> {
         let bytes = key.approximate_heap_size();
         let ts = start_ts.ts;
-        let mut lock_count_modify = 0;
+        let mut lock_modified_count = Vec::new();
         match &mut self.lock_tracker {
             LockTracker::Pending => unreachable!(),
             LockTracker::Preparing(locks) => {
@@ -367,20 +372,21 @@ impl Delegate {
                 CDC_PENDING_BYTES_GAUGE.add(bytes as _);
                 locks.push(PendingLock::Track { key, start_ts });
             }
-            LockTracker::Prepared { locks, .. } => match locks.entry(key.clone()) {
-                BTreeMapEntry::Occupied(x) => {
-                    info!("cdc push_lock found lock key already exists, skip it";
+            LockTracker::Prepared { locks, .. } => match locks.insert(key.clone(), start_ts) {
+                Some(old_lock) => {
+                    info!("cdc push_lock found lock key already exists, update it";
                         "key" => ?key,
-                        "old_start_ts" => ?x.get().ts,
+                        "old_start_ts" => ?old_lock.ts,
                         "new_start_ts" => ?ts,
                         "batch_id" => batch_id,
                     );
+                    lock_modified_count.push(LockModifiedCount::new(old_lock.ts, -1));
+                    lock_modified_count.push(LockModifiedCount::new(ts, 1));
                 }
-                BTreeMapEntry::Vacant(x) => {
-                    x.insert(start_ts);
+                None => {
                     self.memory_quota.alloc(bytes)?;
                     CDC_PENDING_BYTES_GAUGE.add(bytes as _);
-                    lock_count_modify = 1;
+                    lock_modified_count.push(LockModifiedCount::new(ts, 1));
                     info!("cdc push_lock insert new lock";
                         "key" => ?key,
                         "start_ts" => ?ts,
@@ -389,11 +395,16 @@ impl Delegate {
                 }
             },
         }
-        Ok(lock_count_modify)
+        Ok(lock_modified_count)
     }
 
-    fn pop_lock(&mut self, key: Key, start_ts: TimeStamp, batch_id: usize) -> Result<isize> {
-        let mut lock_count_modify = 0;
+    fn pop_lock(
+        &mut self,
+        key: Key,
+        start_ts: TimeStamp,
+        batch_id: usize,
+    ) -> Result<Vec<LockModifiedCount>> {
+        let mut lock_modified_count = Vec::new();
         match &mut self.lock_tracker {
             LockTracker::Pending => unreachable!(),
             LockTracker::Preparing(locks) => {
@@ -409,7 +420,7 @@ impl Delegate {
                         let bytes = key.approximate_heap_size();
                         self.memory_quota.free(bytes);
                         CDC_PENDING_BYTES_GAUGE.sub(bytes as _);
-                        lock_count_modify = -1;
+                        lock_modified_count.push(LockModifiedCount::new(start_ts, -1));
                         info!("cdc pop_lock, remove it";
                             "key" => ?key,
                             "start_ts" => ?start_ts,
@@ -432,7 +443,7 @@ impl Delegate {
                 }
             }
         }
-        Ok(lock_count_modify)
+        Ok(lock_modified_count)
     }
 
     pub(crate) fn init_lock_tracker(&mut self) -> bool {
@@ -968,7 +979,7 @@ impl Delegate {
             let mut filtered_entries = Vec::with_capacity(entries.len());
             for RowInBuilding {
                 v,
-                lock_count_modify,
+                lock_modified_counts,
                 needs_old_value,
                 ..
             } in &mut entries
@@ -980,25 +991,22 @@ impl Delegate {
                     read_old_value(v, *read_old_ts)?;
                     *needs_old_value = None;
                 }
-
-                if *lock_count_modify != 0 && downstream.lock_heap.is_some() {
+                // lock_heap initialized and there is lock_modified_counts, update the lock_heap
+                // to avoid the resolved-ts stuck.
+                if !lock_modified_counts.is_empty() && downstream.lock_heap.is_some() {
                     let lock_heap = downstream.lock_heap.as_mut().unwrap();
-                    match lock_heap.entry(v.start_ts.into()) {
-                        BTreeMapEntry::Vacant(x) => {
-                            x.insert(*lock_count_modify);
+                    lock_modified_counts.iter().for_each(|modified| {
+                        let lock_count = lock_heap.entry(modified.start_ts).or_insert(0isize);
+                        *lock_count += modified.count;
+                        assert!(
+                            *lock_count >= 0,
+                            "lock_count_modify should never be negative, start_ts: {}",
+                            modified.start_ts
+                        );
+                        if *lock_count == 0 {
+                            lock_heap.remove(&modified.start_ts);
                         }
-                        BTreeMapEntry::Occupied(mut x) => {
-                            *x.get_mut() += *lock_count_modify;
-                            assert!(
-                                *x.get() >= 0,
-                                "lock_count_modify should never be negative, start_ts: {}",
-                                v.start_ts
-                            );
-                            if *x.get() == 0 {
-                                x.remove();
-                            }
-                        }
-                    }
+                    });
                 }
 
                 if TxnSource::is_lightning_physical_import(v.txn_source)
@@ -1065,18 +1073,9 @@ impl Delegate {
                     let read_old_ts = TimeStamp::from(row.v.commit_ts).prev();
                     row.needs_old_value = Some(read_old_ts);
                 } else {
+                    assert!(row.lock_modified_counts.is_empty());
                     let start_ts = TimeStamp::from(row.v.start_ts);
-                    if row.lock_count_modify != 0 {
-                        error!(
-                            "lock count modify should be zero when handling write cf";
-                            "key" => ?key,
-                            "batch_id" => rows.batch_id,
-                            "lock_count_modify" => row.lock_count_modify,
-                            "start_ts" => ?start_ts,
-                        );
-                        assert_eq!(row.lock_count_modify, 0);
-                    }
-                    row.lock_count_modify = self.pop_lock(key.clone(), start_ts, batch_id)?;
+                    row.lock_modified_counts = self.pop_lock(key.clone(), start_ts, batch_id)?;
                 }
             }
             "lock" => {
@@ -1090,9 +1089,9 @@ impl Delegate {
                     return Ok(());
                 }
 
-                assert_eq!(row.lock_count_modify, 0);
+                assert!(row.lock_modified_counts.is_empty());
                 let mini_lock = MiniLock::new(row.v.start_ts, txn_source);
-                row.lock_count_modify = self.push_lock(key, mini_lock, batch_id)?;
+                row.lock_modified_counts = self.push_lock(key, mini_lock, batch_id)?;
                 let read_old_ts = std::cmp::max(for_update_ts, row.v.start_ts.into());
                 row.needs_old_value = Some(read_old_ts);
             }
@@ -1192,11 +1191,22 @@ struct RowsBuilder {
     batch_id: usize,
 }
 
+struct LockModifiedCount {
+    start_ts: TimeStamp,
+    count: isize,
+}
+
+impl LockModifiedCount {
+    fn new(start_ts: TimeStamp, count: isize) -> Self {
+        LockModifiedCount { start_ts, count }
+    }
+}
+
 #[derive(Default)]
 struct RowInBuilding {
     v: EventRow,
     has_value: bool,
-    lock_count_modify: isize,
+    lock_modified_counts: Vec<LockModifiedCount>,
     needs_old_value: Option<TimeStamp>,
 }
 
