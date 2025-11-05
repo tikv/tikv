@@ -678,6 +678,11 @@ impl Delegate {
                 downstream.advanced_to = advanced_to;
             } else {
                 advance.blocked_on_locks += 1;
+                info!("cdc downstream resolved-ts block on locks";
+                    "advance_to" => ?advanced_to,
+                    "downstream.advance_to" => ?downstream.advanced_to,
+                    "region_id" => ?self.region_id,
+                )
             }
             Some(downstream.advanced_to)
         };
