@@ -662,8 +662,10 @@ where
                     unified_read_pool.as_ref().unwrap().handle(),
                     unified_read_pool_scale_notifier,
                     &self.core.background_worker,
+                    self.core.config.readpool.unified.min_thread_count,
                     self.core.config.readpool.unified.max_thread_count,
                     self.core.config.readpool.unified.auto_adjust_pool_size,
+                    self.core.config.readpool.unified.cpu_threshold,
                 )),
             );
             unified_read_pool_scale_receiver = Some(rx);
