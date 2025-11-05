@@ -367,19 +367,22 @@ impl Delegate {
                 CDC_PENDING_BYTES_GAUGE.add(bytes as _);
                 locks.push(PendingLock::Track { key, start_ts });
             }
-            LockTracker::Prepared { locks, .. } => match locks.insert(key.clone(), start_ts) {
-                Some(old_lock) => {
-                    info!("cdc push_lock found lock key already exists, overwrite it";
-                        "key" => ?key,
-                        "old_start_ts" => ?old_lock.ts,
-                        "new_start_ts" => ?ts,
-                        "region_id" => self.region_id,
-                    );
-                }
-                None => {
+            LockTracker::Prepared { locks, .. } => match locks.entry(key.clone()) {
+                BTreeMapEntry::Vacant(x) => {
+                    x.insert(start_ts);
                     self.memory_quota.alloc(bytes)?;
                     CDC_PENDING_BYTES_GAUGE.add(bytes as _);
                     lock_count_modify = 1;
+                }
+                BTreeMapEntry::Occupied(x) => {
+                    if x.get().ts != ts {
+                        info!("cdc push_lock found lock key already exists with different start_ts, ignore it";
+                            "key" => ?key,
+                            "old_start_ts" => ?x.get().ts,
+                            "new_start_ts" => ?ts,
+                            "region_id" => self.region_id,
+                        );
+                    }
                 }
             },
         }
@@ -405,15 +408,22 @@ impl Delegate {
                         CDC_PENDING_BYTES_GAUGE.sub(bytes as _);
                         lock_count_modify = -1;
                     } else {
-                        info!("cdc pop_lock found lock key exists but start_ts mismatched, ignore it";
-                            "key" => ?key,
+                        info!("cdc pop_lock found lock key exists but start_ts mismatched,
+                        ignore it";                 "key" => ?key,
                             "existing_start_ts" => ?x.get().ts,
                             "start_ts" => ?start_ts,
                             "region_id" => self.region_id,
                         );
                     }
                 }
-            }
+            } /*             LockTracker::Prepared { locks, .. } => {
+               *     if let Some((key, _)) = locks.remove_entry(&key) {
+               *         let bytes = key.approximate_heap_size();
+               *         self.memory_quota.free(bytes);
+               *         CDC_PENDING_BYTES_GAUGE.sub(bytes as _);
+               *         lock_count_modify = -1;
+               *     }
+               * } */
         }
         Ok(lock_count_modify)
     }
