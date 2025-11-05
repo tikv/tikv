@@ -2304,6 +2304,15 @@ pub struct UnifiedReadPoolConfig {
     pub stack_size: ReadableSize,
     pub max_tasks_per_worker: usize,
     pub auto_adjust_pool_size: bool,
+    /// Maximum CPU usage percentage for the unified read pool (0.0-1.0).
+    /// When set to 0, uses the busy thread scaling algorithm only.
+    /// When > 0, CPU threshold constraints ON TOP OF the busy thread scaling
+    /// algorithm:
+    /// - Forces scale down when CPU exceeds threshold + 10% leeway
+    /// - Prevents scale up when it would exceed threshold - 10% leeway Example:
+    ///   0.8 means read pool should not use more than 80% of available CPU
+    ///   cores.
+    pub cpu_threshold: f64,
     // FIXME: Add more configs when they are effective in yatp
 }
 
@@ -2335,6 +2344,9 @@ impl UnifiedReadPoolConfig {
         if self.max_tasks_per_worker <= 1 {
             return Err("readpool.unified.max-tasks-per-worker should be > 1".into());
         }
+        if self.cpu_threshold < 0.0 || self.cpu_threshold > 1.0 {
+            return Err("readpool.unified.cpu-threshold should be between 0.0 and 1.0".into());
+        }
         Ok(())
     }
 }
@@ -2353,6 +2365,7 @@ impl Default for UnifiedReadPoolConfig {
             stack_size: ReadableSize::mb(DEFAULT_READPOOL_STACK_SIZE_MB),
             max_tasks_per_worker: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
             auto_adjust_pool_size: false,
+            cpu_threshold: 0.0, // 0 means no threshold (disabled)
         }
     }
 }
@@ -2369,6 +2382,7 @@ mod unified_read_pool_tests {
             stack_size: ReadableSize::mb(2),
             max_tasks_per_worker: 2000,
             auto_adjust_pool_size: false,
+            cpu_threshold: 0.0,
         };
         cfg.validate().unwrap();
         let cfg = UnifiedReadPoolConfig {
@@ -2704,6 +2718,7 @@ mod readpool_tests {
             stack_size: ReadableSize::mb(0),
             max_tasks_per_worker: 0,
             auto_adjust_pool_size: false,
+            cpu_threshold: 0.0,
         };
         unified.validate().unwrap_err();
         let storage = StorageReadPoolConfig {
