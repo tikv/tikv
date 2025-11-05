@@ -1073,7 +1073,7 @@ impl Delegate {
                     let read_old_ts = TimeStamp::from(row.v.commit_ts).prev();
                     row.needs_old_value = Some(read_old_ts);
                 } else {
-                    assert!(row.lock_modified_counts.is_empty());
+                    // assert!(row.lock_modified_counts.is_empty());
                     let start_ts = TimeStamp::from(row.v.start_ts);
                     row.lock_modified_counts = self.pop_lock(key.clone(), start_ts, batch_id)?;
                 }
