@@ -4616,7 +4616,7 @@ mod tests {
         let result = runtime.block_on(importer.download_files_ext(
             &basic_meta,
             &metas,
-            &backend,
+            backend,
             rewrite_rule,
             None,
             Limiter::new(f64::INFINITY),
