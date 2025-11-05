@@ -32,7 +32,7 @@ use raftstore::{
 };
 use tikv::storage::{Statistics, txn::TxnEntry};
 use tikv_util::{
-    debug, info,
+    debug, error, info,
     memory::{HeapSize, MemoryQuota},
     time::Instant,
     warn,
@@ -1057,8 +1057,18 @@ impl Delegate {
                     let read_old_ts = TimeStamp::from(row.v.commit_ts).prev();
                     row.needs_old_value = Some(read_old_ts);
                 } else {
-                    assert_eq!(row.lock_count_modify, 0);
                     let start_ts = TimeStamp::from(row.v.start_ts);
+                    if row.lock_count_modify != 0 {
+                        error!(
+                            "lock count modify should be zero when handling write cf";
+                            "key" => ?key,
+                            "lock_count_modify" => row.lock_count_modify,
+                            "start_ts" => ?start_ts,
+                            "region_id" => self.region_id,
+                        );
+                        assert_eq!(row.lock_count_modify, 0);
+                    }
+
                     row.lock_count_modify = self.pop_lock(key.clone(), start_ts)?;
                 }
             }
