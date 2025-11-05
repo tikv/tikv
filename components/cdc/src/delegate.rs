@@ -1058,7 +1058,18 @@ impl Delegate {
                 } else {
                     assert_eq!(row.lock_count_modify, 0);
                     let start_ts = TimeStamp::from(row.v.start_ts);
-                    row.lock_count_modify = self.pop_lock(key, start_ts)?;
+                    row.lock_count_modify = self.pop_lock(key.clone(), start_ts)?;
+
+                    if row.v.r_type == EventLogType::Rollback
+                        && row.v.op_type == EventRowOpType::Unknown
+                    {
+                        warn!("cdc found overlapped rollback";
+                            "key" => ?key,
+                            "lock_count_modify" => ?row.lock_count_modify,
+                            "start_ts" => ?start_ts,
+                            "region_id" => self.region_id,
+                        );
+                    }
                 }
             }
             "lock" => {
