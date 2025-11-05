@@ -381,6 +381,11 @@ impl Delegate {
                     self.memory_quota.alloc(bytes)?;
                     CDC_PENDING_BYTES_GAUGE.add(bytes as _);
                     lock_count_modify = 1;
+                    info!("cdc push_lock insert new lock";
+                        "key" => ?key,
+                        "start_ts" => ?ts,
+                        "region_id" => self.region_id,
+                    );
                 }
             },
         }
@@ -412,6 +417,12 @@ impl Delegate {
                             "region_id" => self.region_id,
                         );
                     }
+                } else {
+                    info!("cdc pop_lock found lock key not exists, skip it";
+                        "key" => ?key,
+                        "start_ts" => ?start_ts,
+                        "region_id" => self.region_id,
+                    );
                 }
             }
         }
@@ -1049,18 +1060,6 @@ impl Delegate {
                     assert_eq!(row.lock_count_modify, 0);
                     let start_ts = TimeStamp::from(row.v.start_ts);
                     row.lock_count_modify = self.pop_lock(key.clone(), start_ts)?;
-
-                    if row.v.r_type == EventLogType::Rollback
-                        && row.v.op_type == EventRowOpType::Unknown
-                    {
-                        warn!("cdc found overlapped rollback";
-                            "key" => ?key,
-                            "is_one_pc" => rows.is_one_pc,
-                            "lock_count_modify" => ?row.lock_count_modify,
-                            "start_ts" => ?start_ts,
-                            "region_id" => self.region_id,
-                        );
-                    }
                 }
             }
             "lock" => {
