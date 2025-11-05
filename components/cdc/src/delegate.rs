@@ -398,14 +398,13 @@ impl Delegate {
             }
             LockTracker::Prepared { locks, .. } => {
                 if let BTreeMapEntry::Occupied(x) = locks.entry(key.clone()) {
-                    if x.get().ts == start_ts {
-                        let (key, _) = x.remove_entry();
-                        let bytes = key.approximate_heap_size();
-                        self.memory_quota.free(bytes);
-                        CDC_PENDING_BYTES_GAUGE.sub(bytes as _);
-                        lock_count_modify = -1;
-                    } else {
-                        info!("cdc pop_lock found lock key exists but start_ts mismatched, ignore it";
+                    let (key, _) = x.remove_entry();
+                    let bytes = key.approximate_heap_size();
+                    self.memory_quota.free(bytes);
+                    CDC_PENDING_BYTES_GAUGE.sub(bytes as _);
+                    lock_count_modify = -1;
+                    if x.get().ts != start_ts {
+                        info!("cdc pop_lock found lock key exists but start_ts mismatched, still untrack it";
                             "key" => ?key,
                             "existing_start_ts" => ?x.get().ts,
                             "start_ts" => ?start_ts,
@@ -1055,6 +1054,7 @@ impl Delegate {
                     {
                         warn!("cdc found overlapped rollback";
                             "key" => ?key,
+                            "is_one_pc" => rows.is_one_pc,
                             "lock_count_modify" => ?row.lock_count_modify,
                             "start_ts" => ?start_ts,
                             "region_id" => self.region_id,
@@ -1245,9 +1245,7 @@ fn decode_write(
         WriteType::Delete => (EventRowOpType::Delete, EventLogType::Commit),
         WriteType::Rollback => (EventRowOpType::Unknown, EventLogType::Rollback),
         other => {
-            warn!("cdc skip write record"; "write" => ?other,
-                "has_overlapped_rollback" => write.has_overlapped_rollback,
-                "start_ts" => write.start_ts, "key" => %key);
+            debug!("cdc skip write record"; "write" => ?other, "key" => %key);
             return true;
         }
     };
