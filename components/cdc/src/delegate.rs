@@ -367,22 +367,19 @@ impl Delegate {
                 CDC_PENDING_BYTES_GAUGE.add(bytes as _);
                 locks.push(PendingLock::Track { key, start_ts });
             }
-            LockTracker::Prepared { locks, .. } => match locks.entry(key.clone()) {
-                BTreeMapEntry::Vacant(x) => {
-                    x.insert(start_ts);
+            LockTracker::Prepared { locks, .. } => match locks.insert(key.clone(), start_ts) {
+                Some(old_lock) => {
+                    info!("cdc push_lock found lock key already exists, overwrite it";
+                        "key" => ?key,
+                        "old_start_ts" => ?old_lock.ts,
+                        "new_start_ts" => ?ts,
+                        "region_id" => self.region_id,
+                    );
+                }
+                None => {
                     self.memory_quota.alloc(bytes)?;
                     CDC_PENDING_BYTES_GAUGE.add(bytes as _);
                     lock_count_modify = 1;
-                }
-                BTreeMapEntry::Occupied(x) => {
-                    if x.get().ts != ts {
-                        info!("cdc push_lock found lock key already exists with different start_ts, ignore it";
-                            "key" => ?key,
-                            "old_start_ts" => ?x.get().ts,
-                            "new_start_ts" => ?ts,
-                            "region_id" => self.region_id,
-                        );
-                    }
                 }
             },
         }
@@ -416,14 +413,7 @@ impl Delegate {
                         );
                     }
                 }
-            } /*             LockTracker::Prepared { locks, .. } => {
-               *     if let Some((key, _)) = locks.remove_entry(&key) {
-               *         let bytes = key.approximate_heap_size();
-               *         self.memory_quota.free(bytes);
-               *         CDC_PENDING_BYTES_GAUGE.sub(bytes as _);
-               *         lock_count_modify = -1;
-               *     }
-               * } */
+            }
         }
         Ok(lock_count_modify)
     }
@@ -1255,7 +1245,9 @@ fn decode_write(
         WriteType::Delete => (EventRowOpType::Delete, EventLogType::Commit),
         WriteType::Rollback => (EventRowOpType::Unknown, EventLogType::Rollback),
         other => {
-            debug!("cdc skip write record"; "write" => ?other, "key" => %key);
+            warn!("cdc skip write record"; "write" => ?other,
+                "has_overlapped_rollback" => write.has_overlapped_rollback,
+                "start_ts" => write.start_ts, "key" => %key);
             return true;
         }
     };
