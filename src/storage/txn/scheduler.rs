@@ -2241,8 +2241,8 @@ struct SchedulerDetails {
     start_instant: Instant,
     // A write command processing can be divided into five stages:
     // 0. Take a consistent snapshot from the storage asynchronously.
-    // 1. The command is processed using a snapshot to generate the write content. a. If the
-    //    process involves block read, there will be IO time spent on reading blocks.
+    // 1. The command is processed using a snapshot to generate the write content.
+    //   a. If the process involves block read, there will be IO time spent on reading blocks.
     // 2. If the quota is exceeded, there will be a delay.
     // 3. If the write flow exceeds the limit, it will be throttled.
     // 4. Finally, the write request is sent to raftkv and responses are awaited.
