@@ -291,17 +291,6 @@ impl Lock {
 
     #[inline]
     #[must_use]
-    pub fn remove_shared_lock(&mut self, start_ts: TimeStamp) -> Option<Lock> {
-        if self.is_shared() {
-            if let Some(info) = self.shared_lock_txns_info.as_mut() {
-                return info.remove_lock(&start_ts);
-            }
-        }
-        return None;
-    }
-
-    #[inline]
-    #[must_use]
     pub fn shared_lock_num(&self) -> usize {
         if self.is_shared() {
             self.shared_lock_txns_info.as_ref().unwrap().len()
@@ -313,16 +302,6 @@ impl Lock {
     #[inline]
     pub fn put_shared_lock(&mut self, lock: Lock) {
         assert!(self.is_shared());
-        if let Some(existing) = self
-            .shared_lock_txns_info
-            .as_mut()
-            .unwrap()
-            .get_lock(&lock.ts)
-        {
-            if existing.lock_type == lock.lock_type {
-                return;
-            }
-        }
         let lock_type = lock.lock_type;
         match lock_type {
             LockType::Lock => {
@@ -825,6 +804,8 @@ impl SharedLockTxnsInfo {
         }
     }
 
+    // Decode all shared-lock segments so tests can rely on parsed locks.
+    #[cfg(test)]
     pub fn parse_all(&mut self) {
         for (_ts, either) in self.txn_info_segments.iter_mut() {
             match either {
@@ -846,19 +827,6 @@ impl SharedLockTxnsInfo {
                 Either::Right(lock) => Some(lock),
             },
             None => None,
-        }
-    }
-
-    pub fn remove_lock(&mut self, ts: &TimeStamp) -> Option<Lock> {
-        if let Some(either) = self.txn_info_segments.remove(ts) {
-            match either {
-                Either::Left(encoded) => {
-                    Some(Lock::parse(&encoded).expect("failed to parse shared lock txn info"))
-                }
-                Either::Right(lock) => Some(lock),
-            }
-        } else {
-            None
         }
     }
 }
@@ -1737,6 +1705,71 @@ mod tests {
         // 7 bytes for primary key, 16 bytes for Box<[u8]>, 4 x 8-byte integers, 1
         // enum (8 + 2 * 8) and a bool.
         assert_eq!(lock.memory_size(), 7 + 16 + 5 * 8 + 24);
+    }
+
+    #[test]
+    fn test_detect_lock_type() {
+        fn lock_bytes(lock_type: LockType) -> Vec<u8> {
+            Lock::new(
+                lock_type,
+                b"primary".to_vec(),
+                42.into(),
+                3600,
+                None,
+                TimeStamp::zero(),
+                0,
+                TimeStamp::zero(),
+                false,
+            )
+            .to_bytes()
+        }
+
+        let shared_bytes = Lock::new_in_shared_mode().to_bytes();
+
+        assert!(matches!(
+            Lock::detect_lock_type(&lock_bytes(LockType::Put)),
+            Ok(LockType::Put)
+        ));
+        assert!(matches!(
+            Lock::detect_lock_type(&lock_bytes(LockType::Delete)),
+            Ok(LockType::Delete)
+        ));
+        assert!(matches!(
+            Lock::detect_lock_type(&lock_bytes(LockType::Lock)),
+            Ok(LockType::Lock)
+        ));
+        assert!(matches!(
+            Lock::detect_lock_type(&lock_bytes(LockType::Pessimistic)),
+            Ok(LockType::Pessimistic)
+        ));
+        assert!(matches!(
+            Lock::detect_lock_type(&shared_bytes),
+            Ok(LockType::Shared)
+        ));
+        assert!(Lock::detect_lock_type(&[]).is_err());
+    }
+
+    #[test]
+    fn test_detect_lock_ts() {
+        let ts: TimeStamp = 123.into();
+        let lock = Lock::new(
+            LockType::Put,
+            b"primary_key".to_vec(),
+            ts,
+            10,
+            None,
+            TimeStamp::zero(),
+            0,
+            TimeStamp::zero(),
+            false,
+        );
+        let bytes = lock.to_bytes();
+
+        assert_eq!(Lock::detect_lock_ts(&bytes).unwrap(), ts);
+
+        let incomplete = vec![LockType::Put.to_u8()];
+        assert!(Lock::detect_lock_ts(&incomplete).is_err());
+        assert!(Lock::detect_lock_ts(&[]).is_err());
     }
 
     #[test]
