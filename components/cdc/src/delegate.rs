@@ -398,15 +398,15 @@ impl Delegate {
             }
             LockTracker::Prepared { locks, .. } => {
                 if let BTreeMapEntry::Occupied(x) = locks.entry(key.clone()) {
-                    let (key, _) = x.remove_entry();
+                    let (key, entry) = x.remove_entry();
                     let bytes = key.approximate_heap_size();
                     self.memory_quota.free(bytes);
                     CDC_PENDING_BYTES_GAUGE.sub(bytes as _);
                     lock_count_modify = -1;
-                    if x.get().ts != start_ts {
+                    if entry.ts != start_ts {
                         info!("cdc pop_lock found lock key exists but start_ts mismatched, still untrack it";
                             "key" => ?key,
-                            "existing_start_ts" => ?x.get().ts,
+                            "existing_start_ts" => ?entry.ts,
                             "start_ts" => ?start_ts,
                             "region_id" => self.region_id,
                         );
