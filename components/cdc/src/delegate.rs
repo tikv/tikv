@@ -1033,6 +1033,7 @@ impl Delegate {
                     let read_old_ts = TimeStamp::from(row.v.commit_ts).prev();
                     row.needs_old_value = Some(read_old_ts);
                 } else {
+                    assert!(row.lock_modified_counts.is_empty());
                     let start_ts = TimeStamp::from(row.v.start_ts);
                     row.lock_modified_counts = self.pop_lock(key.clone(), start_ts)?;
                 }
@@ -1048,6 +1049,7 @@ impl Delegate {
                     return Ok(());
                 }
 
+                assert!(row.lock_modified_counts.is_empty());
                 let mini_lock = MiniLock::new(row.v.start_ts, txn_source);
                 row.lock_modified_counts = self.push_lock(key, mini_lock)?;
                 let read_old_ts = std::cmp::max(for_update_ts, row.v.start_ts.into());
