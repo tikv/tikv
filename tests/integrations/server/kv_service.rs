@@ -8,6 +8,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use collections::HashMap;
+
 use api_version::{ApiV1, ApiV1Ttl, ApiV2, KvFormat};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{
@@ -49,9 +51,17 @@ use tikv::{
 };
 use tikv_util::{
     config::ReadableSize,
-    worker::{dummy_scheduler, LazyWorker},
+    worker::{dummy_scheduler, HealthChecker, LazyWorker},
     HandyRwLock,
 };
+
+struct DummyHealthChecker;
+
+impl HealthChecker for DummyHealthChecker {
+    fn get_all_max_latencies(&self) -> HashMap<u64, f64> {
+        HashMap::default()
+    }
+}
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
 #[test_case(test_raftstore::must_new_cluster_and_kv_client)]
@@ -1413,6 +1423,7 @@ fn test_double_run_node() {
             DiskCheckRunner::dummy(),
             GrpcServiceManager::dummy(),
             Arc::new(AtomicU64::new(0)),
+            Arc::new(DummyHealthChecker),
         )
         .unwrap_err();
     assert!(format!("{:?}", e).contains("already started"), "{:?}", e);

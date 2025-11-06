@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::VecDeque,
+    collections::{VecDeque, HashMap as StdHashMap},
     ffi::CString,
     marker::Unpin,
     mem,
@@ -53,14 +53,6 @@ use crate::server::{
     snap::Task as SnapTask,
     Config, StoreAddrResolver,
 };
-
-// Implement health_controller::HealthChecker for HealthChecker to bridge with
-// health_controller
-impl health_controller::HealthChecker for HealthChecker {
-    fn get_all_max_latencies(&self) -> HashMap<u64, f64> {
-        self.get_all_max_latencies()
-    }
-}
 
 pub struct MetadataSourceStoreId {}
 
@@ -1510,7 +1502,7 @@ impl HealthChecker {
         let now = Instant::now();
         {
             let mut latencies = max_latencies.lock().unwrap();
-            latencies.entry(store_id).insert_entry((0.0, now));
+            latencies.entry(store_id).or_insert((0.0, now));
         }
         match health_client.check_async_opt(&req, call_opt) {
             Ok(resp_future) => {
@@ -1568,6 +1560,12 @@ impl HealthChecker {
                 (*k, ret)
             })
             .collect()
+    }
+}
+
+impl tikv_util::worker::HealthChecker for HealthChecker {
+    fn get_all_max_latencies(&self) -> HashMap<u64, f64> {
+        HealthChecker::get_all_max_latencies(self)
     }
 }
 
@@ -1784,8 +1782,8 @@ mod tests {
         assert_eq!(all_latencies[&3], 300.2);
     }
 
-    #[tokio::test]
-    async fn test_health_checker_start_stop_store_inspection() {
+    #[test]
+    fn test_health_checker_start_stop_store_inspection() {
         let self_store_id = 1;
         let pool: Arc<Mutex<ConnectionPool>> = Arc::default();
         let interval = Duration::from_millis(50);

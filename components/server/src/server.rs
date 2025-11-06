@@ -1011,6 +1011,7 @@ where
             disk_check_runner,
             self.grpc_service_mgr.clone(),
             safe_point.clone(),
+            server.health_checker(),
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 

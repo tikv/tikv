@@ -20,7 +20,7 @@ use tikv_util::{
     config::VersionTrack,
     sys::{get_global_memory_usage, record_global_memory_usage},
     timer::GLOBAL_TIMER_HANDLE,
-    worker::{LazyWorker, Scheduler, Worker},
+    worker::{HealthChecker, LazyWorker, Scheduler, Worker},
     Either,
 };
 use tokio::runtime::{Builder as RuntimeBuilder, Handle as RuntimeHandle, Runtime};
@@ -140,6 +140,9 @@ pub struct Server<S: StoreAddrResolver + 'static, E: Engine> {
     health_service: HealthService,
     timer: Handle,
     builder_factory: Box<dyn GrpcBuilderFactory>,
+
+    /// Health checker for network latency monitoring
+    health_checker: Arc<dyn HealthChecker>,
 }
 
 impl<S, E> Server<S, E>
@@ -232,7 +235,7 @@ where
         );
 
         raft_client.start_network_inspection();
-        health_controller.set_health_checker(Box::new(raft_client.get_health_checker()));
+        let health_checker: Arc<dyn HealthChecker> = Arc::new(raft_client.get_health_checker());
 
         let trans = ServerTransport::new(raft_client);
         health_service.set_serving_status("", ServingStatus::NotServing);
@@ -253,6 +256,7 @@ where
             health_service,
             timer: GLOBAL_TIMER_HANDLE.clone(),
             builder_factory,
+            health_checker: Arc::clone(&health_checker),
         };
 
         Ok(svr)
@@ -272,6 +276,10 @@ where
 
     pub fn env(&self) -> Arc<Environment> {
         self.env.clone()
+    }
+
+    pub fn health_checker(&self) -> Arc<dyn HealthChecker> {
+        Arc::clone(&self.health_checker)
     }
 
     pub fn get_grpc_mem_quota(&self) -> &ResourceQuota {

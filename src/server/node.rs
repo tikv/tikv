@@ -28,7 +28,7 @@ use resource_metering::CollectorRegHandle;
 use service::service_manager::GrpcServiceManager;
 use tikv_util::{
     config::VersionTrack,
-    worker::{LazyWorker, Scheduler, Worker},
+    worker::{LazyWorker, Scheduler, Worker, HealthChecker},
 };
 
 use super::Result;
@@ -176,6 +176,7 @@ where
         disk_check_runner: DiskCheckRunner,
         grpc_service_mgr: GrpcServiceManager,
         safe_point: Arc<AtomicU64>,
+        health_checker: Arc<dyn HealthChecker>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -216,6 +217,7 @@ where
             disk_check_runner,
             grpc_service_mgr,
             safe_point,
+            health_checker,
         )?;
 
         Ok(())
@@ -466,6 +468,7 @@ where
         disk_check_runner: DiskCheckRunner,
         grpc_service_mgr: GrpcServiceManager,
         safe_point: Arc<AtomicU64>,
+        health_checker: Arc<dyn HealthChecker>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -502,6 +505,7 @@ where
             disk_check_runner,
             grpc_service_mgr,
             safe_point,
+            health_checker,
         )?;
         Ok(())
     }

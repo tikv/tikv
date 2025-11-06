@@ -6,6 +6,7 @@ use std::{
     time::Duration,
 };
 
+use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
 use engine_traits::{Engines, ALL_CFS, CF_DEFAULT};
@@ -29,8 +30,16 @@ use tikv::{
 };
 use tikv_util::{
     config::{ReadableDuration, ReadableSize, VersionTrack},
-    worker::{dummy_scheduler, LazyWorker, Worker},
+    worker::{dummy_scheduler, HealthChecker, LazyWorker, Worker},
 };
+
+struct DummyHealthChecker;
+
+impl HealthChecker for DummyHealthChecker {
+    fn get_all_max_latencies(&self) -> HashMap<u64, f64> {
+        HashMap::default()
+    }
+}
 
 #[derive(Clone)]
 struct MockTransport;
@@ -116,6 +125,7 @@ fn start_raftstore(
             DiskCheckRunner::dummy(),
             GrpcServiceManager::dummy(),
             Arc::new(AtomicU64::new(0)),
+            Arc::new(DummyHealthChecker),
         )
         .unwrap();
 
