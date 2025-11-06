@@ -367,7 +367,7 @@ impl Delegate {
                 CDC_PENDING_BYTES_GAUGE.add(bytes as _);
                 locks.push(PendingLock::Track { key, start_ts });
             }
-            LockTracker::Prepared { locks, .. } => match locks.entry(key.clone()) {
+            LockTracker::Prepared { locks, .. } => match locks.entry(key) {
                 BTreeMapEntry::Occupied(mut x) => {
                     if x.get().ts == ts {
                         return Ok(lock_modified_count);
@@ -376,22 +376,12 @@ impl Delegate {
                     x.insert(start_ts);
                     lock_modified_count.push(LockModifiedCount::new(old_start_ts, -1));
                     lock_modified_count.push(LockModifiedCount::new(ts, 1));
-                    info!("cdc push_lock found lock key already exists, update it";
-                        "key" => ?x.key(),
-                        "old_start_ts" => ?old_start_ts,
-                        "new_start_ts" => ?ts,
-                        "new_start_ts > old_start_ts" => ts > old_start_ts,
-                    );
                 }
                 BTreeMapEntry::Vacant(x) => {
                     x.insert(start_ts);
                     self.memory_quota.alloc(bytes)?;
                     CDC_PENDING_BYTES_GAUGE.add(bytes as _);
                     lock_modified_count.push(LockModifiedCount::new(ts, 1));
-                    info!("cdc push_lock insert new lock";
-                        "key" => ?key,
-                        "start_ts" => ?ts,
-                    );
                 }
             },
         }
@@ -409,29 +399,14 @@ impl Delegate {
                 locks.push(PendingLock::Untrack { key, start_ts });
             }
             LockTracker::Prepared { locks, .. } => {
-                if let BTreeMapEntry::Occupied(x) = locks.entry(key.clone()) {
+                if let BTreeMapEntry::Occupied(x) = locks.entry(key) {
                     if x.get().ts == start_ts {
                         let (key, _) = x.remove_entry();
                         let bytes = key.approximate_heap_size();
                         self.memory_quota.free(bytes);
                         CDC_PENDING_BYTES_GAUGE.sub(bytes as _);
                         lock_modified_count.push(LockModifiedCount::new(start_ts, -1));
-                        info!("cdc pop_lock, remove it";
-                            "key" => ?key,
-                            "start_ts" => ?start_ts,
-                        );
-                    } else {
-                        info!("cdc pop_lock found lock key exists but start_ts mismatched, skip it it";
-                            "key" => ?key,
-                            "existing_start_ts" => ?x.get().ts,
-                            "start_ts" => ?start_ts,
-                        );
                     }
-                } else {
-                    info!("cdc pop_lock found lock key not exists, skip it";
-                        "key" => ?key,
-                        "start_ts" => ?start_ts,
-                    );
                 }
             }
         }
