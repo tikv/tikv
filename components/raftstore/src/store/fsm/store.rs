@@ -66,7 +66,7 @@ use tikv_util::{
     time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant, SlowTimer},
     timer::SteadyTimer,
     warn,
-    worker::{LazyWorker, Scheduler, Worker},
+    worker::{HealthChecker, LazyWorker, Scheduler, Worker},
     yatp_pool::FuturePool,
     Either, InspectFactor, RingQueue,
 };
@@ -112,8 +112,6 @@ use crate::{
     },
     Error, Result,
 };
-
-use tikv_util::worker::HealthChecker;
 
 type Key = Vec<u8>;
 
@@ -1651,7 +1649,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         mut disk_check_runner: DiskCheckRunner,
         grpc_service_mgr: GrpcServiceManager,
         safe_point: Arc<AtomicU64>,
-    health_checker: Arc<dyn HealthChecker>,
+        health_checker: Arc<dyn HealthChecker>,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.

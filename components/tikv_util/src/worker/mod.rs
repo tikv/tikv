@@ -16,7 +16,6 @@ mod metrics;
 mod pool;
 
 use collections::HashMap;
-
 pub use pool::{
     dummy_scheduler, Builder, LazyWorker, ReceiverWrapper, Runnable, RunnableWithTimer,
     ScheduleError, Scheduler, Worker,
@@ -29,7 +28,8 @@ pub use self::future::{
 
 /// Abstraction over a health checker that can report network latencies.
 pub trait HealthChecker: Send + Sync {
-    /// Returns mapping from store id to the max observed latency in milliseconds.
+    /// Returns mapping from store id to the max observed latency in
+    /// milliseconds.
     fn get_all_max_latencies(&self) -> HashMap<u64, f64>;
 }
 

@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::{VecDeque, HashMap as StdHashMap},
+    collections::{HashMap as StdHashMap, VecDeque},
     ffi::CString,
     marker::Unpin,
     mem,

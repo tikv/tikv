@@ -48,7 +48,7 @@ use tikv_util::{
     topn::TopN,
     trend::{RequestPerSecRecorder, Trend},
     warn,
-    worker::{Runnable, ScheduleError, Scheduler},
+    worker::{HealthChecker, Runnable, ScheduleError, Scheduler},
     InspectFactor,
 };
 use yatp::Remote;
@@ -72,8 +72,6 @@ use crate::{
         RegionReadProgressRegistry, SnapManager, StoreInfo, StoreMsg, TxnExt,
     },
 };
-
-use tikv_util::worker::HealthChecker;
 
 pub const NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT: u32 = 2;
 /// The upper bound of buffered stats messages.
@@ -1192,8 +1190,8 @@ where
         health_service: Option<HealthService>,
         coprocessor_host: CoprocessorHost<EK>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
-    grpc_service_manager: GrpcServiceManager,
-    health_checker: Arc<dyn HealthChecker>,
+        grpc_service_manager: GrpcServiceManager,
+        health_checker: Arc<dyn HealthChecker>,
     ) -> Runner<EK, ER, T> {
         let mut store_stat = StoreStat::default();
         store_stat.set_cpu_quota(SysQuota::cpu_cores_quota(), cfg.inspect_cpu_util_thd);
@@ -2356,20 +2354,24 @@ where
                     }),
                 ),
                 InspectFactor::Network => {
-                    let network_durations: HashMap<u64, Duration> = self.health_checker
+                    let network_durations: HashMap<u64, Duration> = self
+                        .health_checker
                         .get_all_max_latencies()
                         .into_iter()
-                        .map(|(store_id, latency_ms)| (store_id, Duration::from_millis(latency_ms as u64)))
+                        .map(|(store_id, latency_ms)| {
+                            (store_id, Duration::from_millis(latency_ms as u64))
+                        })
                         .collect();
 
-                    self.slow_score.record_network(id, network_durations.clone());
+                    self.slow_score
+                        .record_network(id, network_durations.clone());
 
                     for (store_id, network_duration) in &network_durations {
                         STORE_INSPECT_NETWORK_DURATION_HISTOGRAM
                             .with_label_values(&[&store_id.to_string()])
                             .observe(tikv_util::time::duration_to_sec(*network_duration));
                     }
-                    
+
                     return;
                 }
             }

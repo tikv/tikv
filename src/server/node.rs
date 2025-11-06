@@ -28,7 +28,7 @@ use resource_metering::CollectorRegHandle;
 use service::service_manager::GrpcServiceManager;
 use tikv_util::{
     config::VersionTrack,
-    worker::{LazyWorker, Scheduler, Worker, HealthChecker},
+    worker::{HealthChecker, LazyWorker, Scheduler, Worker},
 };
 
 use super::Result;
