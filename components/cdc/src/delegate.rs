@@ -1034,6 +1034,22 @@ impl Delegate {
                     row.needs_old_value = Some(read_old_ts);
                 } else {
                     let start_ts = TimeStamp::from(row.v.start_ts);
+                    if !row.lock_modified_counts.is_empty() {
+                        error!(
+                            "lock_modified_counts should be empty when handling write cf";
+                            "row" => ?row.v,
+                            "key" => ?key,
+                            "start_ts" => ?start_ts,
+                        );
+                        for lock_modified in &row.lock_modified_counts {
+                            error!(
+                                "existing lock_modified_count";
+                                "start_ts" => ?lock_modified.start_ts,
+                                "count" => lock_modified.count,
+                            );
+                        }
+                        assert!(row.lock_modified_counts.is_empty());
+                    }
                     row.lock_modified_counts = self.pop_lock(key.clone(), start_ts)?;
                 }
             }
@@ -1048,6 +1064,7 @@ impl Delegate {
                     return Ok(());
                 }
 
+                assert!(row.lock_modified_counts.is_empty());
                 let mini_lock = MiniLock::new(row.v.start_ts, txn_source);
                 row.lock_modified_counts = self.push_lock(key, mini_lock)?;
                 let read_old_ts = std::cmp::max(for_update_ts, row.v.start_ts.into());
