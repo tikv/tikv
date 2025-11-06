@@ -358,7 +358,7 @@ impl Drop for Delegate {
 impl Delegate {
     fn push_lock(&mut self, key: Key, start_ts: MiniLock) -> Result<Vec<LockModifiedCount>> {
         let bytes = key.approximate_heap_size();
-        let ts = start_ts.ts;
+        let new_start_ts = start_ts.ts;
         let mut lock_modified_count = Vec::new();
         match &mut self.lock_tracker {
             LockTracker::Pending => unreachable!(),
@@ -369,19 +369,18 @@ impl Delegate {
             }
             LockTracker::Prepared { locks, .. } => match locks.entry(key) {
                 BTreeMapEntry::Occupied(mut x) => {
-                    if x.get().ts == ts {
-                        return Ok(lock_modified_count);
-                    }
                     let old_start_ts = x.get().ts;
-                    x.insert(start_ts);
-                    lock_modified_count.push(LockModifiedCount::new(old_start_ts, -1));
-                    lock_modified_count.push(LockModifiedCount::new(ts, 1));
+                    if old_start_ts != new_start_ts {
+                        x.insert(start_ts);
+                        lock_modified_count.push(LockModifiedCount::new(old_start_ts, -1));
+                        lock_modified_count.push(LockModifiedCount::new(new_start_ts, 1));
+                    }
                 }
                 BTreeMapEntry::Vacant(x) => {
                     x.insert(start_ts);
                     self.memory_quota.alloc(bytes)?;
                     CDC_PENDING_BYTES_GAUGE.add(bytes as _);
-                    lock_modified_count.push(LockModifiedCount::new(ts, 1));
+                    lock_modified_count.push(LockModifiedCount::new(new_start_ts, 1));
                 }
             },
         }
@@ -663,11 +662,6 @@ impl Delegate {
                 downstream.advanced_to = advanced_to;
             } else {
                 advance.blocked_on_locks += 1;
-                info!("cdc downstream resolved-ts block on locks";
-                    "advance_to" => ?advanced_to,
-                    "downstream.advance_to" => ?downstream.advanced_to,
-                    "region_id" => ?self.region_id,
-                )
             }
             Some(downstream.advanced_to)
         };
@@ -1039,7 +1033,6 @@ impl Delegate {
                     let read_old_ts = TimeStamp::from(row.v.commit_ts).prev();
                     row.needs_old_value = Some(read_old_ts);
                 } else {
-                    // assert!(row.lock_modified_counts.is_empty());
                     let start_ts = TimeStamp::from(row.v.start_ts);
                     row.lock_modified_counts = self.pop_lock(key.clone(), start_ts)?;
                 }
@@ -1055,7 +1048,6 @@ impl Delegate {
                     return Ok(());
                 }
 
-                assert!(row.lock_modified_counts.is_empty());
                 let mini_lock = MiniLock::new(row.v.start_ts, txn_source);
                 row.lock_modified_counts = self.push_lock(key, mini_lock)?;
                 let read_old_ts = std::cmp::max(for_update_ts, row.v.start_ts.into());
@@ -1226,10 +1218,7 @@ fn decode_write(
         // Currently the only case is writing overlapped_rollback. And in this case
         assert!(write.has_overlapped_rollback);
         assert_ne!(write.write_type, WriteType::Rollback);
-        make_overlapped_rollback(key.clone(), row);
-        warn!("cdc meet overlapped rollback";
-            "key" => ?key, "start_ts" => row.start_ts,
-        );
+        make_overlapped_rollback(key, row);
         return false;
     }
 
