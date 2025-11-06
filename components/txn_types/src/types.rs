@@ -313,8 +313,6 @@ pub enum Mutation {
     ///
     /// Returns `kvrpcpb::KeyError::AlreadyExists` if the key already exists.
     CheckNotExists(Key, Assertion),
-    /// The write mutation is same as Lock, check as shared lock.
-    SharedLock(Key, Assertion),
 }
 
 impl HeapSize for Mutation {
@@ -323,8 +321,7 @@ impl HeapSize for Mutation {
             Mutation::Put(kv, _) | Mutation::Insert(kv, _) => kv.approximate_heap_size(),
             Mutation::Delete(k, _)
             | Mutation::CheckNotExists(k, _)
-            | Mutation::Lock(k, _)
-            | Mutation::SharedLock(k, _) => k.approximate_heap_size(),
+            | Mutation::Lock(k, _) => k.approximate_heap_size(),
         }
     }
 }
@@ -361,9 +358,6 @@ impl Display for Mutation {
             Mutation::CheckNotExists(key, assertion) => {
                 write!(f, "CheckNotExists key:{:?} assertion:{:?}", key, assertion)
             }
-            Mutation::SharedLock(key, assertion) => {
-                write!(f, "Shared key:{:?} assertion:{:?}", key, assertion)
-            }
         }
     }
 }
@@ -376,7 +370,6 @@ impl Mutation {
             Mutation::Lock(ref key, _) => key,
             Mutation::Insert((ref key, _), _) => key,
             Mutation::CheckNotExists(ref key, _) => key,
-            Mutation::SharedLock(ref key, _) => key,
         }
     }
 
@@ -386,7 +379,6 @@ impl Mutation {
             Mutation::Delete(..) => MutationType::Delete,
             Mutation::Lock(..) => MutationType::Lock,
             Mutation::Insert(..) => MutationType::Insert,
-            Mutation::SharedLock(..) => MutationType::Lock,
             _ => MutationType::Other,
         }
     }
@@ -398,7 +390,6 @@ impl Mutation {
             Mutation::Lock(key, _) => (key, None),
             Mutation::Insert((key, value), _) => (key, Some(value)),
             Mutation::CheckNotExists(key, _) => (key, None),
-            Mutation::SharedLock(key, _) => (key, None),
         }
     }
 
@@ -420,7 +411,6 @@ impl Mutation {
             Mutation::Lock(_, assertion) => assertion,
             Mutation::Insert(_, assertion) => assertion,
             Mutation::CheckNotExists(_, assertion) => assertion,
-            Mutation::SharedLock(_, assertion) => assertion,
         }
     }
 
@@ -431,7 +421,6 @@ impl Mutation {
             Mutation::Lock(_, ref mut assertion) => assertion,
             Mutation::Insert(_, ref mut assertion) => assertion,
             Mutation::CheckNotExists(_, ref mut assertion) => assertion,
-            Mutation::SharedLock(_, ref mut assertion) => assertion,
         } = assertion;
     }
 
@@ -476,9 +465,6 @@ impl From<kvrpcpb::Mutation> for Mutation {
             ),
             kvrpcpb::Op::CheckNotExists => {
                 Mutation::CheckNotExists(Key::from_raw(m.get_key()), m.get_assertion())
-            }
-            kvrpcpb::Op::SharedLock => {
-                Mutation::SharedLock(Key::from_raw(m.get_key()), m.get_assertion())
             }
             _ => panic!("mismatch Op in prewrite mutations"),
         }

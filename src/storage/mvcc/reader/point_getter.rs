@@ -407,7 +407,7 @@ impl<S: Snapshot> PointGetter<S> {
                 }
             }
             LockType::Delete => Ok(None),
-            LockType::Lock | LockType::Pessimistic => {
+            LockType::Lock | LockType::Pessimistic | LockType::Shared => {
                 // Only when fails to call `Lock::check_ts_conflict()`, the function is called,
                 // so it's unreachable here.
                 unreachable!()
