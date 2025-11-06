@@ -319,9 +319,9 @@ impl HeapSize for Mutation {
     fn approximate_heap_size(&self) -> usize {
         match self {
             Mutation::Put(kv, _) | Mutation::Insert(kv, _) => kv.approximate_heap_size(),
-            Mutation::Delete(k, _)
-            | Mutation::CheckNotExists(k, _)
-            | Mutation::Lock(k, _) => k.approximate_heap_size(),
+            Mutation::Delete(k, _) | Mutation::CheckNotExists(k, _) | Mutation::Lock(k, _) => {
+                k.approximate_heap_size()
+            }
         }
     }
 }
