@@ -356,12 +356,7 @@ impl Drop for Delegate {
 }
 
 impl Delegate {
-    fn push_lock(
-        &mut self,
-        key: Key,
-        start_ts: MiniLock,
-        batch_id: usize,
-    ) -> Result<Vec<LockModifiedCount>> {
+    fn push_lock(&mut self, key: Key, start_ts: MiniLock) -> Result<Vec<LockModifiedCount>> {
         let bytes = key.approximate_heap_size();
         let ts = start_ts.ts;
         let mut lock_modified_count = Vec::new();
@@ -372,29 +367,30 @@ impl Delegate {
                 CDC_PENDING_BYTES_GAUGE.add(bytes as _);
                 locks.push(PendingLock::Track { key, start_ts });
             }
-            LockTracker::Prepared { locks, .. } => match locks.insert(key.clone(), start_ts) {
-                Some(old_lock) => {
-                    if old_lock.ts == ts {
+            LockTracker::Prepared { locks, .. } => match locks.entry(key.clone()) {
+                BTreeMapEntry::Occupied(mut x) => {
+                    if x.get().ts == ts {
                         return Ok(lock_modified_count);
                     }
-                    lock_modified_count.push(LockModifiedCount::new(old_lock.ts, -1));
+                    let old_start_ts = x.get().ts;
+                    x.insert(start_ts);
+                    lock_modified_count.push(LockModifiedCount::new(old_start_ts, -1));
                     lock_modified_count.push(LockModifiedCount::new(ts, 1));
                     info!("cdc push_lock found lock key already exists, update it";
-                        "key" => ?key,
-                        "old_start_ts" => ?old_lock.ts,
+                        "key" => ?x.key(),
+                        "old_start_ts" => ?old_start_ts,
                         "new_start_ts" => ?ts,
-                        "new_start_ts > old_start_ts" => ts > old_lock.ts,
-                        "batch_id" => batch_id,
+                        "new_start_ts > old_start_ts" => ts > old_start_ts,
                     );
                 }
-                None => {
+                BTreeMapEntry::Vacant(x) => {
+                    x.insert(start_ts);
                     self.memory_quota.alloc(bytes)?;
                     CDC_PENDING_BYTES_GAUGE.add(bytes as _);
                     lock_modified_count.push(LockModifiedCount::new(ts, 1));
                     info!("cdc push_lock insert new lock";
                         "key" => ?key,
                         "start_ts" => ?ts,
-                        "batch_id" => batch_id,
                     );
                 }
             },
@@ -402,12 +398,7 @@ impl Delegate {
         Ok(lock_modified_count)
     }
 
-    fn pop_lock(
-        &mut self,
-        key: Key,
-        start_ts: TimeStamp,
-        batch_id: usize,
-    ) -> Result<Vec<LockModifiedCount>> {
+    fn pop_lock(&mut self, key: Key, start_ts: TimeStamp) -> Result<Vec<LockModifiedCount>> {
         let mut lock_modified_count = Vec::new();
         match &mut self.lock_tracker {
             LockTracker::Pending => unreachable!(),
@@ -428,21 +419,18 @@ impl Delegate {
                         info!("cdc pop_lock, remove it";
                             "key" => ?key,
                             "start_ts" => ?start_ts,
-                            "batch_id" => batch_id,
                         );
                     } else {
                         info!("cdc pop_lock found lock key exists but start_ts mismatched, skip it it";
                             "key" => ?key,
                             "existing_start_ts" => ?x.get().ts,
                             "start_ts" => ?start_ts,
-                            "batch_id" => batch_id,
                         );
                     }
                 } else {
                     info!("cdc pop_lock found lock key not exists, skip it";
                         "key" => ?key,
                         "start_ts" => ?start_ts,
-                        "batch_id" => batch_id,
                     );
                 }
             }
@@ -910,7 +898,6 @@ impl Delegate {
         };
 
         let mut rows_builder = RowsBuilder::default();
-        rows_builder.batch_id = ROWS_IN_BUILD_ID_ALLOC.fetch_add(1, Ordering::SeqCst);
         rows_builder.is_one_pc = flags.contains(WriteBatchFlags::ONE_PC);
         for mut req in requests {
             match req.get_cmd_type() {
@@ -1009,7 +996,7 @@ impl Delegate {
                             start_ts
                         );
                         if *lock_count == 0 {
-                            lock_heap.remove(start_ts);
+                            lock_heap.remove(&start_ts);
                         }
                     });
                 }
@@ -1057,7 +1044,6 @@ impl Delegate {
     }
 
     fn sink_txn_put(&mut self, mut put: PutRequest, rows: &mut RowsBuilder) -> Result<()> {
-        let batch_id = rows.batch_id;
         match put.cf.as_str() {
             "write" => {
                 let key = Key::from_encoded_slice(&put.key).truncate_ts().unwrap();
@@ -1080,7 +1066,7 @@ impl Delegate {
                 } else {
                     // assert!(row.lock_modified_counts.is_empty());
                     let start_ts = TimeStamp::from(row.v.start_ts);
-                    row.lock_modified_counts = self.pop_lock(key.clone(), start_ts, batch_id)?;
+                    row.lock_modified_counts = self.pop_lock(key.clone(), start_ts)?;
                 }
             }
             "lock" => {
@@ -1096,7 +1082,7 @@ impl Delegate {
 
                 assert!(row.lock_modified_counts.is_empty());
                 let mini_lock = MiniLock::new(row.v.start_ts, txn_source);
-                row.lock_modified_counts = self.push_lock(key, mini_lock, batch_id)?;
+                row.lock_modified_counts = self.push_lock(key, mini_lock)?;
                 let read_old_ts = std::cmp::max(for_update_ts, row.v.start_ts.into());
                 row.needs_old_value = Some(read_old_ts);
             }
@@ -1183,8 +1169,6 @@ impl Delegate {
     }
 }
 
-static ROWS_IN_BUILD_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
-
 #[derive(Default)]
 struct RowsBuilder {
     txns_by_key: HashMap<Key, RowInBuilding>,
@@ -1192,8 +1176,6 @@ struct RowsBuilder {
     raws: Vec<EventRow>,
 
     is_one_pc: bool,
-
-    batch_id: usize,
 }
 
 struct LockModifiedCount {
@@ -1953,13 +1935,16 @@ mod tests {
     fn test_lock_tracker() {
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
         let mut delegate = Delegate::new(1, quota.clone(), Default::default());
+        // lock tracker is preparing
         assert!(delegate.init_lock_tracker());
         assert!(!delegate.init_lock_tracker());
 
         let mut k1 = Vec::with_capacity(100);
         k1.extend_from_slice(Key::from_raw(b"key1").as_encoded());
         let k1 = Key::from_encoded(k1);
-        assert_eq!(delegate.push_lock(k1, MiniLock::from_ts(100)).unwrap(), 0);
+
+        let modified_counts = delegate.push_lock(k1, MiniLock::from_ts(100));
+        assert_eq!(modified_counts.unwrap().len(), 0);
         assert_eq!(quota.in_use(), 100);
 
         delegate
@@ -1975,7 +1960,8 @@ mod tests {
         let mut k2 = Vec::with_capacity(200);
         k2.extend_from_slice(Key::from_raw(b"key2").as_encoded());
         let k2 = Key::from_encoded(k2);
-        assert_eq!(delegate.push_lock(k2, MiniLock::from_ts(100)).unwrap(), 0);
+        let modified_counts = delegate.push_lock(k2, MiniLock::from_ts(100)).unwrap();
+        assert_eq!(modified_counts.len(), 0);
         assert_eq!(quota.in_use(), 334);
 
         let mut scaned_locks = BTreeMap::default();
@@ -1995,15 +1981,16 @@ mod tests {
             .unwrap();
         assert_eq!(quota.in_use(), 0);
 
-        let v = delegate
+        let modified_counts = delegate
             .push_lock(Key::from_raw(b"key1"), MiniLock::from_ts(300))
             .unwrap();
-        assert_eq!(v, 1);
+        assert_eq!(modified_counts.len(), 1);
         assert_eq!(quota.in_use(), 17);
-        let v = delegate
+
+        let modified_counts = delegate
             .push_lock(Key::from_raw(b"key1"), MiniLock::from_ts(300))
             .unwrap();
-        assert_eq!(v, 0);
+        assert_eq!(modified_counts.len(), 0);
         assert_eq!(quota.in_use(), 17);
     }
 
