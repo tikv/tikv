@@ -32,7 +32,7 @@ use raftstore::{
 };
 use tikv::storage::{Statistics, txn::TxnEntry};
 use tikv_util::{
-    debug, info,
+    debug, error, info,
     memory::{HeapSize, MemoryQuota},
     time::Instant,
     warn,
@@ -356,9 +356,14 @@ impl Drop for Delegate {
 }
 
 impl Delegate {
-    fn push_lock(&mut self, key: Key, start_ts: MiniLock) -> Result<Vec<LockModifiedCount>> {
+    fn push_lock(
+        &mut self,
+        key: Key,
+        start_ts: MiniLock,
+        batch_id: usize,
+    ) -> Result<Vec<LockModifiedCount>> {
         let bytes = key.approximate_heap_size();
-        let ts = start_ts.ts;
+        let new_start_ts = start_ts.ts;
         let mut lock_modified_count = Vec::new();
         match &mut self.lock_tracker {
             LockTracker::Pending => unreachable!(),
@@ -369,28 +374,29 @@ impl Delegate {
             }
             LockTracker::Prepared { locks, .. } => match locks.entry(key.clone()) {
                 BTreeMapEntry::Occupied(mut x) => {
-                    if x.get().ts == ts {
-                        return Ok(lock_modified_count);
-                    }
                     let old_start_ts = x.get().ts;
-                    x.insert(start_ts);
-                    lock_modified_count.push(LockModifiedCount::new(old_start_ts, -1));
-                    lock_modified_count.push(LockModifiedCount::new(ts, 1));
-                    info!("cdc push_lock found lock key already exists, update it";
-                        "key" => ?x.key(),
-                        "old_start_ts" => ?old_start_ts,
-                        "new_start_ts" => ?ts,
-                        "new_start_ts > old_start_ts" => ts > old_start_ts,
-                    );
+                    if old_start_ts != new_start_ts {
+                        x.insert(start_ts);
+                        lock_modified_count.push(LockModifiedCount::new(old_start_ts, -1));
+                        lock_modified_count.push(LockModifiedCount::new(new_start_ts, 1));
+                        info!("cdc push_lock found lock key already exists, update it";
+                            "key" => ?x.key(),
+                            "old_start_ts" => ?old_start_ts,
+                            "new_start_ts" => ?new_start_ts,
+                            "new_start_ts > old_start_ts" => new_start_ts > old_start_ts,
+                            "batch_id" => batch_id,
+                        );
+                    }
                 }
                 BTreeMapEntry::Vacant(x) => {
                     x.insert(start_ts);
                     self.memory_quota.alloc(bytes)?;
                     CDC_PENDING_BYTES_GAUGE.add(bytes as _);
-                    lock_modified_count.push(LockModifiedCount::new(ts, 1));
+                    lock_modified_count.push(LockModifiedCount::new(new_start_ts, 1));
                     info!("cdc push_lock insert new lock";
                         "key" => ?key,
-                        "start_ts" => ?ts,
+                        "start_ts" => ?new_start_ts,
+                        "batch_id" => batch_id,
                     );
                 }
             },
@@ -398,7 +404,12 @@ impl Delegate {
         Ok(lock_modified_count)
     }
 
-    fn pop_lock(&mut self, key: Key, start_ts: TimeStamp) -> Result<Vec<LockModifiedCount>> {
+    fn pop_lock(
+        &mut self,
+        key: Key,
+        start_ts: TimeStamp,
+        batch_id: usize,
+    ) -> Result<Vec<LockModifiedCount>> {
         let mut lock_modified_count = Vec::new();
         match &mut self.lock_tracker {
             LockTracker::Pending => unreachable!(),
@@ -419,18 +430,21 @@ impl Delegate {
                         info!("cdc pop_lock, remove it";
                             "key" => ?key,
                             "start_ts" => ?start_ts,
+                            "batch_id" => batch_id,
                         );
                     } else {
                         info!("cdc pop_lock found lock key exists but start_ts mismatched, skip it it";
                             "key" => ?key,
                             "existing_start_ts" => ?x.get().ts,
                             "start_ts" => ?start_ts,
+                            "batch_id" => batch_id,
                         );
                     }
                 } else {
                     info!("cdc pop_lock found lock key not exists, skip it";
                         "key" => ?key,
                         "start_ts" => ?start_ts,
+                        "batch_id" => batch_id,
                     );
                 }
             }
@@ -898,6 +912,7 @@ impl Delegate {
         };
 
         let mut rows_builder = RowsBuilder::default();
+        rows_builder.batch_id = ROWS_IN_BUILD_ID_ALLOC.fetch_add(1, Ordering::SeqCst);
         rows_builder.is_one_pc = flags.contains(WriteBatchFlags::ONE_PC);
         for mut req in requests {
             match req.get_cmd_type() {
@@ -1082,7 +1097,8 @@ impl Delegate {
                         }
                         assert!(row.lock_modified_counts.is_empty());
                     }
-                    row.lock_modified_counts = self.pop_lock(key.clone(), start_ts)?;
+                    row.lock_modified_counts =
+                        self.pop_lock(key.clone(), start_ts, rows.batch_id)?;
                 }
             }
             "lock" => {
@@ -1098,7 +1114,7 @@ impl Delegate {
 
                 assert!(row.lock_modified_counts.is_empty());
                 let mini_lock = MiniLock::new(row.v.start_ts, txn_source);
-                row.lock_modified_counts = self.push_lock(key, mini_lock)?;
+                row.lock_modified_counts = self.push_lock(key, mini_lock, rows.batch_id)?;
                 let read_old_ts = std::cmp::max(for_update_ts, row.v.start_ts.into());
                 row.needs_old_value = Some(read_old_ts);
             }
@@ -1185,6 +1201,7 @@ impl Delegate {
     }
 }
 
+static ROWS_IN_BUILD_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 #[derive(Default)]
 struct RowsBuilder {
     txns_by_key: HashMap<Key, RowInBuilding>,
@@ -1192,6 +1209,8 @@ struct RowsBuilder {
     raws: Vec<EventRow>,
 
     is_one_pc: bool,
+
+    batch_id: usize,
 }
 
 struct LockModifiedCount {
