@@ -1000,15 +1000,16 @@ impl Delegate {
                 if !lock_modified_counts.is_empty() && downstream.lock_heap.is_some() {
                     let lock_heap = downstream.lock_heap.as_mut().unwrap();
                     lock_modified_counts.iter().for_each(|modified| {
-                        let lock_count = lock_heap.entry(modified.start_ts).or_insert(0isize);
+                        let start_ts = modified.start_ts;
+                        let lock_count = lock_heap.entry(start_ts).or_insert(0isize);
                         *lock_count += modified.count;
                         assert!(
                             *lock_count >= 0,
                             "lock_count_modify should never be negative, start_ts: {}",
-                            modified.start_ts
+                            start_ts
                         );
                         if *lock_count == 0 {
-                            lock_heap.remove(&modified.start_ts);
+                            lock_heap.remove(start_ts);
                         }
                     });
                 }
