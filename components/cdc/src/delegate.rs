@@ -374,14 +374,18 @@ impl Delegate {
             }
             LockTracker::Prepared { locks, .. } => match locks.insert(key.clone(), start_ts) {
                 Some(old_lock) => {
+                    if old_lock.ts == ts {
+                        return Ok(lock_modified_count);
+                    }
+                    lock_modified_count.push(LockModifiedCount::new(old_lock.ts, -1));
+                    lock_modified_count.push(LockModifiedCount::new(ts, 1));
                     info!("cdc push_lock found lock key already exists, update it";
                         "key" => ?key,
                         "old_start_ts" => ?old_lock.ts,
                         "new_start_ts" => ?ts,
+                        "new_start_ts > old_start_ts" => ts > old_lock.ts,
                         "batch_id" => batch_id,
                     );
-                    lock_modified_count.push(LockModifiedCount::new(old_lock.ts, -1));
-                    lock_modified_count.push(LockModifiedCount::new(ts, 1));
                 }
                 None => {
                     self.memory_quota.alloc(bytes)?;
