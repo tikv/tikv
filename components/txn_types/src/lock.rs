@@ -620,6 +620,8 @@ impl Lock {
     }
 
     pub fn into_lock_info(self, raw_key: Vec<u8>) -> LockInfo {
+        // The constructed LockInfo is used in deadlock detection, the lock_Version
+        // shall be a real TSO (the initial version is u64::MAX for Shared locks).
         let mut info = LockInfo::default();
         info.set_primary_lock(self.primary);
         info.set_lock_version(self.ts.into_inner());
