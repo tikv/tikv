@@ -369,23 +369,12 @@ impl Delegate {
             }
             LockTracker::Prepared { locks, .. } => match locks.entry(key) {
                 BTreeMapEntry::Occupied(mut x) => {
-<<<<<<< HEAD
-                    // There could be stale locks in the lock_tracker due to scenarios such as the
-                    // overlapped write/rollback issue (#18498). We can safely
-                    // ignore such stale locks, while keeping the invariant of
-                    // monotonically increasing start_ts and generation.
-                    assert!(x.get().ts <= start_ts.ts);
-                    assert!(x.get().generation <= start_ts.generation);
-                    x.get_mut().ts = start_ts.ts;
-                    x.get_mut().generation = start_ts.generation;
-=======
                     let old_start_ts = x.get().ts;
                     if old_start_ts != new_start_ts {
                         x.insert(start_ts);
                         lock_modified_count.push(LockModifiedCount::new(old_start_ts, -1));
                         lock_modified_count.push(LockModifiedCount::new(new_start_ts, 1));
                     }
->>>>>>> 887e6c892d (cdc: remove assertion on the lock start-ts (#19084))
                 }
                 BTreeMapEntry::Vacant(x) => {
                     x.insert(start_ts);
@@ -415,11 +404,7 @@ impl Delegate {
                         let bytes = key.approximate_heap_size();
                         self.memory_quota.free(bytes);
                         CDC_PENDING_BYTES_GAUGE.sub(bytes as _);
-<<<<<<< HEAD
-                        lock_count_modify = -1;
-=======
                         lock_modified_count.push(LockModifiedCount::new(start_ts, -1));
->>>>>>> 887e6c892d (cdc: remove assertion on the lock start-ts (#19084))
                     }
                 }
             }

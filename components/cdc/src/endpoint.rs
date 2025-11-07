@@ -721,21 +721,10 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 conn_id,
                 request_id,
             } => {
-<<<<<<< HEAD
                 let conn = self.connections.get_mut(&conn_id).unwrap();
                 for (region_id, downstream) in conn.unsubscribe_request(request_id) {
                     let err = Some(Error::Other("region not found".into()));
                     self.deregister_downstream(region_id, downstream, err);
-=======
-                if let Some(conn) = self.connections.get_mut(&conn_id) {
-                    for (region_id, downstream) in conn.unsubscribe_request(request_id) {
-                        let err = Some(Error::Other("region not found".into()));
-                        self.deregister_downstream(region_id, downstream, err);
-                    }
-                } else {
-                    info!("cdc connection already deregistered for request deregister";
-                    "request_id" => ?request_id, "conn_id" => ?conn_id);
->>>>>>> 887e6c892d (cdc: remove assertion on the lock start-ts (#19084))
                 }
             }
             Deregister::Region {
