@@ -1033,9 +1033,9 @@ impl Delegate {
                     let read_old_ts = TimeStamp::from(row.v.commit_ts).prev();
                     row.needs_old_value = Some(read_old_ts);
                 } else {
-                    assert!(row.lock_modified_counts.is_empty());
                     let start_ts = TimeStamp::from(row.v.start_ts);
-                    row.lock_modified_counts = self.pop_lock(key.clone(), start_ts)?;
+                    let mut modified = self.pop_lock(key, start_ts)?;
+                    row.lock_modified_counts.append(&mut modified);
                 }
             }
             "lock" => {
@@ -1049,9 +1049,9 @@ impl Delegate {
                     return Ok(());
                 }
 
-                assert!(row.lock_modified_counts.is_empty());
                 let mini_lock = MiniLock::new(row.v.start_ts, txn_source);
-                row.lock_modified_counts = self.push_lock(key, mini_lock)?;
+                let mut modified = self.push_lock(key, mini_lock)?;
+                row.lock_modified_counts.append(&mut modified);
                 let read_old_ts = std::cmp::max(for_update_ts, row.v.start_ts.into());
                 row.needs_old_value = Some(read_old_ts);
             }
