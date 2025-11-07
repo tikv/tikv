@@ -164,15 +164,19 @@ pub(crate) fn decode_write(key: &[u8], value: &[u8], is_apply: bool) -> Option<W
 }
 
 pub(crate) fn decode_lock(key: &[u8], value: &[u8]) -> Option<Lock> {
-    let lock = Lock::parse(value).ok()?;
-    match lock.lock_type {
-        LockType::Put | LockType::Delete => Some(lock),
-        other => {
-            debug!("skip lock record";
-                "type" => ?other,
-                "start_ts" => ?lock.ts,
-                "key" => log_wrappers::Value(key),
-                "for_update_ts" => ?lock.for_update_ts);
+    let lock_type = Lock::detect_lock_type(value).ok()?;
+    match lock_type {
+        LockType::Put | LockType::Delete => Some(Lock::parse(value).ok()?),
+        _ => {
+            #[cfg(debug_assertions)]
+            {
+                let lock = Lock::parse(value).ok()?;
+                debug!("skip lock record";
+                    "type" => ?lock.lock_type,
+                    "start_ts" => ?lock.ts,
+                    "key" => log_wrappers::Value(key),
+                    "for_update_ts" => ?lock.for_update_ts);
+            }
             None
         }
     }

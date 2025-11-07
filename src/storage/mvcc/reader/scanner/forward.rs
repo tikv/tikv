@@ -2659,7 +2659,7 @@ mod delta_entry_tests {
                         for_update_ts,
                         DoPessimisticCheck,
                     ),
-                    LockType::Pessimistic => {}
+                    LockType::Pessimistic | LockType::Shared => {}
                 }
             }
         }
