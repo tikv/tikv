@@ -290,8 +290,9 @@ impl LockManagerTrait for LockManager {
 
         // If it is the first lock the transaction tries to lock, it won't cause
         // deadlock.
-        // The lock waiting for shared lock is not tracked yet, because the shared lock may grow after this detection.
-        // After we implement the shrinking of shared lock, we can track it then.
+        // The lock waiting for shared lock is not tracked yet, because the shared lock
+        // may grow after this detection. After we implement the shrinking of
+        // shared lock, we can track it then.
         if !is_first_lock && wait_info.lock_info.lock_type != kvproto::kvrpcpb::Op::SharedLock {
             self.detector_scheduler
                 .detect(start_ts, wait_info, diag_ctx);

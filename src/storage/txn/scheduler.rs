@@ -349,11 +349,7 @@ impl<L: LockManager> TxnSchedulerInner<L> {
             .unwrap_or(None)
     }
 
-    fn store_lock_changes(
-        &self,
-        cid: u64,
-        woken_up_resumable_lock_requests: SVec<LockWaitEntry>,
-    ) {
+    fn store_lock_changes(&self, cid: u64, woken_up_resumable_lock_requests: SVec<LockWaitEntry>) {
         self.get_task_slot(cid)
             .get_mut(&cid)
             .map(move |tctx| {
@@ -1139,9 +1135,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         &self,
         request_source: &str,
         metadata: TaskMetadata<'_>,
-        legacy_wake_up_list: impl IntoIterator<Item = (LockWaitEntry, ReleasedLock)>
-        + Send
-        + 'static,
+        legacy_wake_up_list: impl IntoIterator<Item = (LockWaitEntry, ReleasedLock)> + Send + 'static,
         delayed_wake_up_futures: impl IntoIterator<Item = DelayedNotifyAllFuture> + Send + 'static,
     ) {
         let self1 = self.clone();
