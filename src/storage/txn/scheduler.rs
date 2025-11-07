@@ -1079,7 +1079,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             for lock_wait_entry in entries {
                 // With multi entries, only shared lock's waiters can be awaken up.
                 debug_assert!(
-                    lock_wait_entry.shared || !multi_entries,
+                    lock_wait_entry.is_shared_lock || !multi_entries,
                     "only pessimistic locks are supported here"
                 );
                 if lock_wait_entry.parameters.allow_lock_with_conflict {
@@ -2000,7 +2000,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             lock_hash: lock_info.lock_digest.hash,
             parameters: lock_info.parameters,
             should_not_exist: lock_info.should_not_exist,
-            shared: is_shared_lock,
+            is_shared_lock,
             lock_wait_token,
             req_states: ctx.get_shared_states().clone(),
             legacy_wake_up_index: None,
@@ -2021,7 +2021,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             lock_hash: lock_info.lock_digest.hash,
             parameters: lock_info.parameters,
             should_not_exist: lock_info.should_not_exist,
-            shared: false,
+            is_shared_lock: false,
             lock_wait_token: lock_info.lock_wait_token,
             // This must be called after an execution fo AcquirePessimisticLockResumed, in which
             // case there must be a valid req_state.

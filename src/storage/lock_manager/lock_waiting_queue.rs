@@ -92,7 +92,7 @@ pub struct LockWaitEntry {
     // Put it in a separated field.
     pub should_not_exist: bool,
     /// Whether the lock currently blocking this entry is a shared lock.
-    pub shared: bool,
+    pub is_shared_lock: bool,
     pub lock_wait_token: LockWaitToken,
     pub req_states: Arc<LockWaitContextSharedState>,
     pub legacy_wake_up_index: Option<usize>,
@@ -371,12 +371,12 @@ impl<L: LockManager> LockWaitQueues<L> {
                         schedule_delayed_wake_up = true;
                     }
 
-                    let shared_group = lock_wait_entry.shared;
+                    let shared_group = lock_wait_entry.is_shared_lock;
                     group_entries.push(lock_wait_entry);
 
                     if shared_group {
                         while let Some((_, front)) = v.queue.peek() {
-                            if !front.shared {
+                            if !front.is_shared_lock {
                                 break;
                             }
                             let (_, shared_entry) = v.queue.pop().unwrap();
@@ -799,7 +799,7 @@ mod tests {
                 lock_hash,
                 parameters,
                 should_not_exist: false,
-                shared: false,
+                is_shared_lock: false,
                 lock_wait_token: token,
                 req_states: dummy_ctx.get_shared_states().clone(),
                 legacy_wake_up_index: None,
@@ -850,7 +850,7 @@ mod tests {
             let (mut entry, handle) =
                 self.make_mock_lock_wait_entry(key, start_ts, lock_info_pb.clone());
             entry.parameters.allow_lock_with_conflict = resumable;
-            entry.shared = shared;
+            entry.is_shared_lock = shared;
             self.push_lock_wait(entry, lock_info_pb);
             handle
         }
@@ -949,7 +949,7 @@ mod tests {
         }
 
         fn check_shared(&self, expected: bool) -> &Self {
-            assert_eq!(self.shared, expected);
+            assert_eq!(self.is_shared_lock, expected);
             self
         }
 
@@ -1315,14 +1315,14 @@ mod tests {
             queues.pop_for_waking_up_impl(&Key::from_raw(b"k1"), 5.into(), 6.into(), Some(50));
         assert_eq!(entries.len(), 3);
         for entry in &entries {
-            assert!(entry.shared);
+            assert!(entry.is_shared_lock);
         }
         assert!(future.is_some());
 
         let (next_entries, next_future) =
             queues.pop_for_waking_up_impl(&Key::from_raw(b"k1"), 7.into(), 8.into(), Some(50));
         assert_eq!(next_entries.len(), 1);
-        assert!(!next_entries[0].shared);
+        assert!(!next_entries[0].is_shared_lock);
         assert!(next_future.is_none());
 
         queues.must_not_contain_key(b"k1");
