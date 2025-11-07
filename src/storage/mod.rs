@@ -1100,6 +1100,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                                     LockType::Delete => Some(Ok((k.into_raw().unwrap(), vec![]))),
                                                     LockType::Lock => unreachable!("Unexpected LockType::Lock. pipelined-dml only supports optimistic transactions"),
                                                     LockType::Pessimistic => unreachable!("Unexpected LockType::Pessimistic. pipelined-dml only supports optimistic transactions"),
+                                                    LockType::Shared => unreachable!("Unexpected LockType::Shared. pipelined-dml only supports optimistic transactions"),
                                                     LockType::Put => {
                                                         match lock.short_value {
                                                             Some(v) => Some(Ok((k.into_raw().unwrap(), v))),

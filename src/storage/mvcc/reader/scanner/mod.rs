@@ -590,7 +590,7 @@ pub(crate) fn load_data_by_lock<S: Snapshot, I: Iterator>(
             }
         }
         LockType::Delete => Ok(None),
-        LockType::Lock | LockType::Pessimistic => {
+        LockType::Lock | LockType::Pessimistic | LockType::Shared => {
             // Only when fails to call `Lock::check_ts_conflict()`, the function is called,
             // so it's unreachable here.
             unreachable!()
