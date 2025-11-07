@@ -321,6 +321,7 @@ pub(crate) fn make_txn_error(
 #[cfg(test)]
 pub(crate) mod tests {
     use kvproto::kvrpcpb::{AssertionLevel, Context, PrewriteRequestPessimisticAction::*};
+    use tikv_util::Either;
     use txn_types::{SHORT_VALUE_MAX_LEN, TimeStamp, WriteType};
 
     use super::*;
@@ -1341,7 +1342,12 @@ pub(crate) mod tests {
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true);
-        let lock = reader.load_lock(&Key::from_raw(b"key")).unwrap().unwrap();
+        let lock = match reader.load_lock(&Key::from_raw(b"key")).unwrap().unwrap() {
+            Either::Left(lock) => lock,
+            Either::Right(_shared_locks) => {
+                unimplemented!("SharedLocks returned from load_lock is not supported here")
+            }
+        };
         assert_eq!(lock.ts, TimeStamp::new(2));
         assert_eq!(lock.use_async_commit, true);
         assert_eq!(
@@ -1400,7 +1406,12 @@ pub(crate) mod tests {
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true);
-        let lock = reader.load_lock(&Key::from_raw(b"key")).unwrap().unwrap();
+        let lock = match reader.load_lock(&Key::from_raw(b"key")).unwrap().unwrap() {
+            Either::Left(lock) => lock,
+            Either::Right(_shared_locks) => {
+                unimplemented!("SharedLocks returned from load_lock is not supported here")
+            }
+        };
         assert_eq!(lock.ts, TimeStamp::new(2));
         assert_eq!(lock.use_async_commit, true);
         assert_eq!(

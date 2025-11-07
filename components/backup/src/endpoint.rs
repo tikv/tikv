@@ -45,7 +45,7 @@ use tikv_util::{
     worker::Runnable,
 };
 use tokio::runtime::{Handle, Runtime};
-use txn_types::{Key, Lock, TimeStamp, TsSet};
+use txn_types::{Key, TimeStamp, TsSet};
 
 use crate::{
     Error,
@@ -365,8 +365,8 @@ impl BackupRange {
                     self.start_key.as_ref(),
                     self.end_key.as_ref(),
                     |key, lock| {
-                        Lock::check_ts_conflict(
-                            Cow::Borrowed(lock),
+                        txn_types::check_ts_conflict(
+                            Cow::Owned(tikv_util::Either::Left(lock.clone())),
                             key,
                             backup_ts,
                             &Default::default(),

@@ -5,6 +5,7 @@ use std::{borrow::Cow, cmp::Ordering};
 
 use engine_traits::CF_DEFAULT;
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel, WriteConflictReason};
+use tikv_util::Either;
 use txn_types::{
     Key, LastChange, Lock, LockType, OldValue, TimeStamp, ValueEntry, WriteRef, WriteType,
 };
@@ -396,18 +397,21 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
         }
         // Only needs to check lock in SI
         let lock_cursor = cursors.lock.as_mut().unwrap();
-        let lock = {
+        let lock_or_shared_locks = {
             let lock_value = lock_cursor.value(&mut statistics.lock);
-            Lock::parse(lock_value)?
+            txn_types::parse_lock(lock_value)?
         };
         lock_cursor.next(&mut statistics.lock);
-        if let Err(e) = Lock::check_ts_conflict(
-            Cow::Borrowed(&lock),
+        if let Err(e) = txn_types::check_ts_conflict(
+            Cow::Borrowed(&lock_or_shared_locks),
             &current_user_key,
             cfg.ts,
             &cfg.bypass_locks,
             cfg.isolation_level,
         ) {
+            let lock = lock_or_shared_locks
+                .left()
+                .expect("Err result only for single lock");
             statistics.lock.processed_keys += 1;
             // Skip current_user_key because this key is either blocked or handled.
             cursors.move_write_cursor_to_next_user_key(&current_user_key, statistics)?;
@@ -647,14 +651,21 @@ fn scan_latest_handle_lock<S: Snapshot, T>(
     }
     // Only needs to check lock in SI
     let lock_cursor = cursors.lock.as_mut().unwrap();
-    let lock = {
+    let lock_or_shared_locks = {
         let lock_value = lock_cursor.value(&mut statistics.lock);
-        Lock::parse(lock_value)?
+        match txn_types::parse_lock(lock_value)? {
+            Either::Left(lock) => Either::Left(lock),
+            Either::Right(_shared_locks) => {
+                unimplemented!(
+                    "SharedLocks returned from txn_types::parse_lock is not supported here"
+                )
+            }
+        }
     };
     lock_cursor.next(&mut statistics.lock);
 
-    Lock::check_ts_conflict(
-        Cow::Owned(lock),
+    txn_types::check_ts_conflict(
+        Cow::Owned(lock_or_shared_locks),
         &current_user_key,
         cfg.ts,
         &cfg.bypass_locks,
@@ -707,7 +718,14 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
             .unwrap()
             .value(&mut statistics.lock)
             .to_owned();
-        let lock = Lock::parse(&lock_value)?;
+        let lock = match txn_types::parse_lock(&lock_value)? {
+            Either::Left(lock) => lock,
+            Either::Right(_shared_locks) => {
+                unimplemented!(
+                    "SharedLocks returned from txn_types::parse_lock is not supported here"
+                )
+            }
+        };
         let result = if lock.ts > cfg.ts {
             Ok(HandleRes::Skip(current_user_key))
         } else {
@@ -2667,7 +2685,7 @@ mod delta_entry_tests {
                         for_update_ts,
                         DoPessimisticCheck,
                     ),
-                    LockType::Pessimistic => {}
+                    LockType::Pessimistic | LockType::Shared => {}
                 }
             }
         }

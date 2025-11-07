@@ -3,6 +3,7 @@
 // #[PerformanceCriticalPath]
 use std::mem;
 
+use tikv_util::Either;
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
@@ -78,6 +79,12 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
                 .into()
             ));
             let released_lock: MvccResult<_> = if let Some(lock) = reader.load_lock(&key)? {
+                let lock = match lock {
+                    Either::Left(lock) => lock,
+                    Either::Right(_shared_locks) => {
+                        unimplemented!("SharedLocks returned from load_lock is not supported here")
+                    }
+                };
                 if lock.is_pessimistic_lock()
                     && lock.ts == self.start_ts
                     && lock.for_update_ts <= self.for_update_ts

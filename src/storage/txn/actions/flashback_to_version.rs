@@ -1,5 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+use tikv_util::Either;
 use txn_types::{Key, Lock, LockType, TimeStamp, Write, WriteType};
 
 use crate::storage::{
@@ -24,7 +25,18 @@ pub fn flashback_to_version_read_lock(
         FLASHBACK_BATCH_SIZE,
     );
     let (key_locks, _) = result?;
-    Ok(key_locks)
+    Ok(key_locks
+        .into_iter()
+        .map(|(key, lock)| {
+            let lock = match lock {
+                Either::Left(lock) => lock,
+                Either::Right(_shared_locks) => unimplemented!(
+                    "SharedLocks returned from scan_locks_from_storage is not supported here"
+                ),
+            };
+            (key, lock)
+        })
+        .collect())
 }
 
 pub fn flashback_to_version_read_write(
@@ -199,7 +211,13 @@ pub fn commit_flashback_key(
     flashback_start_ts: TimeStamp,
     flashback_commit_ts: TimeStamp,
 ) -> TxnResult<()> {
-    if let Some(mut lock) = reader.load_lock(key_to_commit)? {
+    if let Some(lock) = reader.load_lock(key_to_commit)? {
+        let mut lock = match lock {
+            Either::Left(lock) => lock,
+            Either::Right(_shared_locks) => {
+                unimplemented!("SharedLocks returned from load_lock is not supported here")
+            }
+        };
         txn.put_write(
             key_to_commit.clone(),
             flashback_commit_ts,
@@ -240,6 +258,12 @@ pub fn check_flashback_commit(
     match reader.load_lock(key_to_commit)? {
         // If the lock exists, it means the flashback hasn't been finished.
         Some(lock) => {
+            let lock = match lock {
+                Either::Left(lock) => lock,
+                Either::Right(_shared_locks) => {
+                    unimplemented!("SharedLocks returned from load_lock is not supported here")
+                }
+            };
             if lock.ts == flashback_start_ts {
                 return Ok(false);
             }

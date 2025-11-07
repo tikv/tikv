@@ -773,7 +773,13 @@ impl Delegate {
                     if !observed_range.contains_encoded_key(&lock.0) {
                         continue;
                     }
-                    let l = Lock::parse(&lock.1).unwrap();
+                    let lock_type = txn_types::detect_lock_type(&lock.1).unwrap();
+                    if !matches!(lock_type, LockType::Put | LockType::Delete) {
+                        // We only send locks with data changes to downstream.
+                        debug!("cdc skip lock record"; "lock" => ?lock_type, "key" => %Key::from_encoded(lock.0));
+                        continue;
+                    }
+                    let l = txn_types::parse_lock(&lock.1).unwrap().left().unwrap();
                     if decode_lock(lock.0, l, &mut row, &mut _has_value) {
                         continue;
                     }
@@ -1039,14 +1045,23 @@ impl Delegate {
                 }
             }
             "lock" => {
-                let lock = Lock::parse(put.get_value()).unwrap();
+                let lock_type = txn_types::detect_lock_type(put.get_value()).unwrap();
+                if !matches!(lock_type, LockType::Put | LockType::Delete) {
+                    // We only send locks with data changes to downstream.
+                    debug!("cdc skip lock record"; "lock" => ?lock_type, "key" => %Key::from_encoded(put.take_key()));
+                    return Ok(());
+                }
+                let lock = txn_types::parse_lock(put.get_value())
+                    .unwrap()
+                    .left()
+                    .unwrap();
                 let for_update_ts = lock.for_update_ts;
                 let txn_source = lock.txn_source;
 
                 let key = Key::from_encoded_slice(&put.key);
                 let row = rows.txns_by_key.entry(key.clone()).or_default();
                 if decode_lock(put.take_key(), lock, &mut row.v, &mut row.has_value) {
-                    return Ok(());
+                    unreachable!();
                 }
 
                 let mini_lock = MiniLock::new(row.v.start_ts, txn_source);
