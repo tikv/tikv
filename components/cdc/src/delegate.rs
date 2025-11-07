@@ -372,24 +372,20 @@ impl Delegate {
                 CDC_PENDING_BYTES_GAUGE.add(bytes as _);
                 locks.push(PendingLock::Track { key, start_ts });
             }
-            LockTracker::Prepared { locks, .. } => match locks.entry(key.clone()) {
-                BTreeMapEntry::Occupied(mut x) => {
-                    let old_start_ts = x.get().ts;
-                    if old_start_ts != new_start_ts {
-                        x.insert(start_ts);
-                        lock_modified_count.push(LockModifiedCount::new(old_start_ts, -1));
-                        lock_modified_count.push(LockModifiedCount::new(new_start_ts, 1));
-                        info!("cdc push_lock found lock key already exists, update it";
-                            "key" => ?x.key(),
-                            "old_start_ts" => ?old_start_ts,
-                            "new_start_ts" => ?new_start_ts,
-                            "new_start_ts > old_start_ts" => new_start_ts > old_start_ts,
-                            "batch_id" => batch_id,
-                        );
-                    }
+            LockTracker::Prepared { locks, .. } => match locks.insert(key.clone(), start_ts) {
+                Some(old_lock) => {
+                    let old_start_ts = old_lock.ts;
+                    info!("cdc push_lock found lock key already exists, update it";
+                        "key" => ?key,
+                        "old_start_ts" => ?old_start_ts,
+                        "new_start_ts" => ?new_start_ts,
+                        "new_start_ts > old_start_ts" => (new_start_ts > old_start_ts),
+                        "batch_id" => batch_id,
+                    );
+                    lock_modified_count.push(LockModifiedCount::new(old_start_ts, -1));
+                    lock_modified_count.push(LockModifiedCount::new(new_start_ts, 1));
                 }
-                BTreeMapEntry::Vacant(x) => {
-                    x.insert(start_ts);
+                None => {
                     self.memory_quota.alloc(bytes)?;
                     CDC_PENDING_BYTES_GAUGE.add(bytes as _);
                     lock_modified_count.push(LockModifiedCount::new(new_start_ts, 1));
@@ -1079,7 +1075,6 @@ impl Delegate {
                     let read_old_ts = TimeStamp::from(row.v.commit_ts).prev();
                     row.needs_old_value = Some(read_old_ts);
                 } else {
-                    // assert!(row.lock_modified_counts.is_empty());
                     let start_ts = TimeStamp::from(row.v.start_ts);
                     if !row.lock_modified_counts.is_empty() {
                         error!(
