@@ -993,7 +993,6 @@ mod tests {
         queues
             .must_pop(b"k1", 5, 6)
             .check_key(b"k1")
-            .check_shared(false)
             .check_start_ts(10);
         queues.must_pop_none(b"k1", 5, 6);
         queues.must_not_contain_key(b"k1");
@@ -1003,7 +1002,6 @@ mod tests {
         queues
             .must_pop(b"k2", 5, 6)
             .check_key(b"k2")
-            .check_shared(false)
             .check_start_ts(11);
         queues.must_pop_none(b"k2", 5, 6);
         queues.must_not_contain_key(b"k2");
@@ -1029,7 +1027,6 @@ mod tests {
             queues
                 .must_pop(b"k1", 5, 6)
                 .check_key(b"k1")
-                .check_shared(false)
                 .check_start_ts(expected_start_ts);
         }
 
@@ -1054,13 +1051,11 @@ mod tests {
             .remove_by_token(&Key::from_raw(b"k1"), token11)
             .unwrap()
             .check_key(b"k1")
-            .check_shared(false)
             .check_start_ts(11);
         queues
             .remove_by_token(&Key::from_raw(b"k1"), token13)
             .unwrap()
             .check_key(b"k1")
-            .check_shared(false)
             .check_start_ts(13);
         assert_eq!(queues.get_queue_length_of_key(b"k1"), 3);
         assert_eq!(queues.entry_count(), 3);
@@ -1133,7 +1128,7 @@ mod tests {
         assert_eq!(queues.entry_count(), 4);
 
         let (entry, delay_wake_up_future) = queues.must_pop_with_delayed_notify(b"k1", 5, 6);
-        entry.check_key(b"k1").check_shared(false).check_start_ts(8);
+        entry.check_key(b"k1").check_start_ts(8);
 
         // Current queue: [11*, 12*, 13*] (Items marked with * means it has
         // legacy_wake_up_index less than that in KeyLockWaitState, so it might
@@ -1180,7 +1175,7 @@ mod tests {
         // However since 15 is resumable, it will only wake up 14 and return 15
         // through the result of the `delay_wake_up_future`.
         let (entry, delay_wake_up_future) = queues.must_pop_with_delayed_notify(b"k1", 7, 8);
-        entry.check_key(b"k1").check_shared(false).check_start_ts(9);
+        entry.check_key(b"k1").check_start_ts(9);
 
         // Current queue: [14*, 15*, 16*]
         assert_eq!(queues.entry_count(), 3);
@@ -1194,10 +1189,7 @@ mod tests {
         // Wakes up 14, and stops at 15 which is resumable. Then, 15 should be returned
         // and the caller should be responsible for waking it up.
         let entry15 = delay_wake_up_future.await.unwrap();
-        entry15
-            .check_key(b"k1")
-            .check_shared(false)
-            .check_start_ts(15);
+        entry15.check_key(b"k1").check_start_ts(15);
 
         // Current queue: [16*, 17, 18]
         assert_eq!(queues.entry_count(), 3);
@@ -1242,10 +1234,7 @@ mod tests {
         assert_eq!(queues.entry_count(), 3);
 
         let (entry, delayed_wake_up_future) = queues.must_pop_with_delayed_notify(b"k1", 7, 8);
-        entry
-            .check_key(b"k1")
-            .check_shared(false)
-            .check_start_ts(16);
+        entry.check_key(b"k1").check_start_ts(16);
         queues.must_have_next_entry(b"k1", 17);
         let notify_id = queues.get_delayed_notify_id(b"k1").unwrap();
         // Call `delayed_notify_all` with a different ID. Nothing happens.
@@ -1261,10 +1250,7 @@ mod tests {
 
         // Don't need to create new future if there already exists one for the key.
         let entry = queues.must_pop_with_no_delayed_notify(b"k1", 9, 10);
-        entry
-            .check_key(b"k1")
-            .check_shared(false)
-            .check_start_ts(17);
+        entry.check_key(b"k1").check_start_ts(17);
         queues.must_have_next_entry(b"k1", 18);
 
         // Current queue: [18*]
@@ -1281,10 +1267,7 @@ mod tests {
 
         // Don't need to create new future if the queue is cleared.
         let entry = queues.must_pop_with_no_delayed_notify(b"k1", 9, 10);
-        entry
-            .check_key(b"k1")
-            .check_shared(false)
-            .check_start_ts(19);
+        entry.check_key(b"k1").check_start_ts(19);
         // Current queue: empty
         assert_eq!(queues.entry_count(), 0);
         queues.must_not_contain_key(b"k1");
@@ -1314,15 +1297,19 @@ mod tests {
         let (entries, future) =
             queues.pop_for_waking_up_impl(&Key::from_raw(b"k1"), 5.into(), 6.into(), Some(50));
         assert_eq!(entries.len(), 3);
+        let mut start_ts_set = vec![];
         for entry in &entries {
-            assert!(entry.is_shared_lock);
+            entry.check_shared(true);
+            start_ts_set.push(entry.parameters.start_ts.into_inner());
         }
+        start_ts_set.sort_by(|a, b| a.cmp(b));
+        assert_eq!(start_ts_set, vec![10, 11, 12]);
         assert!(future.is_some());
 
         let (next_entries, next_future) =
             queues.pop_for_waking_up_impl(&Key::from_raw(b"k1"), 7.into(), 8.into(), Some(50));
         assert_eq!(next_entries.len(), 1);
-        assert!(!next_entries[0].is_shared_lock);
+        next_entries[0].check_shared(false).check_start_ts(20);
         assert!(next_future.is_none());
 
         queues.must_not_contain_key(b"k1");
