@@ -871,6 +871,7 @@ impl Delegate {
         for mut req in requests {
             match req.get_cmd_type() {
                 CmdType::Put => self.sink_put(req.take_put(), &mut rows_builder)?,
+                CmdType::Delete => self.sink_delete(req.take_delete(), &mut rows_builder)?,
                 _ => debug!("cdc skip other command";
                     "region_id" => self.region_id,
                     "command" => ?req),
@@ -880,6 +881,52 @@ impl Delegate {
         let (raws, txns) = rows_builder.finish_build();
         self.sink_downstream_raw(raws, index)?;
         self.sink_downstream_tidb(txns, read_old_value)?;
+        Ok(())
+    }
+
+    fn sink_delete(&mut self, mut delete: DeleteRequest, rows: &mut RowsBuilder) -> Result<()> {
+        // RawKV (API v2, and only API v2 can use CDC) has no lock and will write to
+        // default cf only.
+        match delete.cf.as_str() {
+            "lock" => {
+                let key = Key::from_encoded(delete.take_key());
+                let lock = Lock::parse(delete.get_value()).unwrap();
+                let for_update_ts = lock.for_update_ts;
+                let txn_source = lock.txn_source;
+                let generation = lock.generation;
+                if lock.lock_type == LockType::Pessimistic {
+                    // Pessimistic locks are not tracked in CDC.
+                    return Ok(());
+                }
+
+                // let key = Key::from_encoded(delete.take_key());
+                // let lock_count_modify = self.pop_lock(key.clone())?;
+                // if lock_count_modify != 0 {
+                //     // If lock_count_modify isn't 0 it means the deletion
+                // must come from a commit     // or rollback,
+                // instead of any `Unlock` operations.
+                //     let row = rows.txns_by_key.get_mut(&key).unwrap();
+                //     assert_eq!(row.lock_count_modify, 0);
+                //     row.lock_count_modify = lock_count_modify;
+                // }
+
+                // let key = Key::from_encoded_slice(&put.key);
+                // let row = rows.txns_by_key.entry(key.clone()).or_default();
+                // if decode_lock(put.take_key(), lock, &mut row.v, &mut
+                // row.has_value) {     return Ok(());
+                // }
+
+                // assert_eq!(row.lock_count_modify, 0);
+                // let mini_lock = MiniLock::new(row.v.start_ts, txn_source,
+                // generation); row.lock_count_modify =
+                // self.push_lock(key, mini_lock)?;
+                // let read_old_ts = std::cmp::max(for_update_ts,
+                // row.v.start_ts.into()); row.needs_old_value =
+                // Some(read_old_ts);
+            }
+            "" | "default" | "write" => {}
+            other => panic!("invalid cf {}", other),
+        }
         Ok(())
     }
 
