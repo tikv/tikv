@@ -210,7 +210,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLockR
 
 impl AcquirePessimisticLockResumed {
     pub fn from_lock_wait_entries(
-        lock_wait_entries: impl IntoIterator<Item = Box<LockWaitEntry>>,
+        lock_wait_entries: impl IntoIterator<Item = LockWaitEntry>,
     ) -> TypedCommand<StorageResult<PessimisticLockResults>> {
         let items: Vec<_> = lock_wait_entries
             .into_iter()
@@ -254,10 +254,9 @@ mod tests {
         TestEngineBuilder,
     };
 
-    #[allow(clippy::vec_box)]
     fn must_success<E: Engine>(
         engine: &mut E,
-        lock_wait_entries: Vec<Box<LockWaitEntry>>,
+        lock_wait_entries: Vec<LockWaitEntry>,
     ) -> PessimisticLockResults {
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
@@ -322,7 +321,7 @@ mod tests {
         for_update_ts: impl Into<TimeStamp>,
         return_values: bool,
         check_existence: bool,
-    ) -> Box<LockWaitEntry> {
+    ) -> LockWaitEntry {
         let start_ts = start_ts.into();
         let for_update_ts = for_update_ts.into();
         assert!(for_update_ts >= start_ts);
@@ -347,7 +346,7 @@ mod tests {
         // The tests in this file doesn't need a valid req_state. Set a dummy value
         // here.
         let req_states = Arc::new(LockWaitContextSharedState::new_dummy(token, key.clone()));
-        let entry = LockWaitEntry {
+        LockWaitEntry {
             key,
             lock_hash,
             parameters,
@@ -357,8 +356,7 @@ mod tests {
             legacy_wake_up_index: Some(0),
             req_states,
             key_cb: None,
-        };
-        Box::new(entry)
+        }
     }
 
     #[test]

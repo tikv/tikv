@@ -125,7 +125,7 @@ struct TaskContext {
     lock: Lock,
     cb: Option<SchedulerTaskCallback>,
     pr: Option<ProcessResult>,
-    woken_up_resumable_lock_requests: SVec<Box<LockWaitEntry>>,
+    woken_up_resumable_lock_requests: SVec<LockWaitEntry>,
     // The one who sets `owned` from false to true is allowed to take
     // `cb` and `pr` safely.
     owned: AtomicBool,
@@ -352,7 +352,7 @@ impl<L: LockManager> TxnSchedulerInner<L> {
     fn store_lock_changes(
         &self,
         cid: u64,
-        woken_up_resumable_lock_requests: SVec<Box<LockWaitEntry>>,
+        woken_up_resumable_lock_requests: SVec<LockWaitEntry>,
     ) {
         self.get_task_slot(cid)
             .get_mut(&cid)
@@ -686,7 +686,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         &self,
         specified_cid: Option<u64>,
         prepared_latches: Option<Lock>,
-        mut awakened_entries: SVec<Box<LockWaitEntry>>,
+        mut awakened_entries: SVec<LockWaitEntry>,
     ) {
         let key_callbacks: Vec<_> = awakened_entries
             .iter_mut()
@@ -971,7 +971,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
     }
 
     fn gen_latches_for_lock_wait_entries<'a>(
-        entries: impl IntoIterator<Item = &'a Box<LockWaitEntry>>,
+        entries: impl IntoIterator<Item = &'a LockWaitEntry>,
     ) -> Lock {
         Lock::new(entries.into_iter().map(|entry| &entry.key))
     }
@@ -1038,7 +1038,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         request_source: &str,
         metadata: &TaskMetadata<'_>,
         released_locks: ReleasedLocks,
-    ) -> SVec<Box<LockWaitEntry>> {
+    ) -> SVec<LockWaitEntry> {
         // This function is always called when holding the latch of the involved keys.
         // So if we found the lock waiting queues are empty, there's no chance
         // that other threads/commands adds new lock-wait entries to the keys
@@ -1139,7 +1139,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         &self,
         request_source: &str,
         metadata: TaskMetadata<'_>,
-        legacy_wake_up_list: impl IntoIterator<Item = (Box<LockWaitEntry>, ReleasedLock)>
+        legacy_wake_up_list: impl IntoIterator<Item = (LockWaitEntry, ReleasedLock)>
         + Send
         + 'static,
         delayed_wake_up_futures: impl IntoIterator<Item = DelayedNotifyAllFuture> + Send + 'static,
@@ -1982,7 +1982,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         cid: u64,
         lock_wait_token: LockWaitToken,
         lock_info: WriteResultLockInfo,
-    ) -> (LockWaitContext<L>, Box<LockWaitEntry>, kvrpcpb::LockInfo) {
+    ) -> (LockWaitContext<L>, LockWaitEntry, kvrpcpb::LockInfo) {
         let mut slot = self.inner.get_task_slot(cid);
         let task_ctx = slot.get_mut(&cid).unwrap();
         let cb = task_ctx.cb.take().unwrap();
@@ -2001,7 +2001,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
         assert!(lock_info.req_states.is_none());
 
-        let lock_wait_entry = Box::new(LockWaitEntry {
+        let lock_wait_entry = LockWaitEntry {
             key: lock_info.key,
             lock_hash: lock_info.lock_digest.hash,
             parameters: lock_info.parameters,
@@ -2011,7 +2011,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             req_states: ctx.get_shared_states().clone(),
             legacy_wake_up_index: None,
             key_cb: Some(ctx.get_callback_for_blocked_key().into()),
-        });
+        };
 
         (ctx, lock_wait_entry, lock_info.lock_info_pb)
     }
@@ -2020,9 +2020,9 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         &self,
         lock_info: WriteResultLockInfo,
         cb: PessimisticLockKeyCallback,
-    ) -> Box<LockWaitEntry> {
+    ) -> LockWaitEntry {
         assert!(lock_info.lock_info_pb.lock_type != kvrpcpb::Op::SharedLock);
-        Box::new(LockWaitEntry {
+        LockWaitEntry {
             key: lock_info.key,
             lock_hash: lock_info.lock_digest.hash,
             parameters: lock_info.parameters,
@@ -2034,7 +2034,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             req_states: lock_info.req_states.unwrap(),
             legacy_wake_up_index: None,
             key_cb: Some(cb.into()),
-        })
+        }
     }
 
     fn on_wait_for_lock_after_resuming(
@@ -2099,7 +2099,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         }
     }
 
-    fn put_back_lock_wait_entries(&self, entries: impl IntoIterator<Item = Box<LockWaitEntry>>) {
+    fn put_back_lock_wait_entries(&self, entries: impl IntoIterator<Item = LockWaitEntry>) {
         for entry in entries.into_iter() {
             // TODO: Do not pass `default` as the lock info. Here we need another method
             // `put_back_lock_wait`, which doesn't require updating lock info and

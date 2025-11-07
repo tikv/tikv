@@ -8,13 +8,10 @@
 //!   error being shared in multiple places
 //! - Related type aliases
 //! - [`LockWaitEntry`]: which is used to represent lock-waiting requests in the
-//!   queue
-//! - [`Box<LockWaitEntry>`]: The comparable wrapper of [`LockWaitEntry`] which
-//!   defines the priority ordering among lock-waiting requests
+//!   queue and defines the priority ordering among lock-waiting requests
 //!
 //! Each key may have its own lock-waiting queue, which is a priority queue that
-//! orders the entries with the order defined by
-//! [`Box<LockWaitEntry>`].
+//! orders the entries with the order defined by [`LockWaitEntry`].
 //!
 //! There are be two kinds of `AcquirePessimisticLock` requests:
 //!
@@ -188,7 +185,7 @@ pub struct KeyLockWaitState {
     legacy_wake_up_index: usize,
     queue: KeyedPriorityQueue<
         LockWaitToken,
-        Box<LockWaitEntry>,
+        LockWaitEntry,
         std::hash::BuildHasherDefault<fxhash::FxHasher>,
     >,
 
@@ -214,7 +211,7 @@ impl KeyLockWaitState {
     }
 }
 
-pub type DelayedNotifyAllFuture = Pin<Box<dyn Future<Output = Option<Box<LockWaitEntry>>> + Send>>;
+pub type DelayedNotifyAllFuture = Pin<Box<dyn Future<Output = Option<LockWaitEntry>> + Send>>;
 
 pub struct LockWaitQueueInner<L: LockManager> {
     queue_map: dashmap::DashMap<Key, KeyLockWaitState>,
@@ -245,7 +242,7 @@ impl<L: LockManager> LockWaitQueues<L> {
     /// information of the current-holding lock.
     pub fn push_lock_wait(
         &self,
-        mut lock_wait_entry: Box<LockWaitEntry>,
+        mut lock_wait_entry: LockWaitEntry,
         current_lock: kvrpcpb::LockInfo,
     ) {
         let mut new_key = false;
@@ -291,7 +288,7 @@ impl<L: LockManager> LockWaitQueues<L> {
 
     fn on_push_canceled_entry(
         &self,
-        lock_wait_entry: Box<LockWaitEntry>,
+        lock_wait_entry: LockWaitEntry,
         key_state: DashMapEntry<'_, Key, KeyLockWaitState, impl std::hash::BuildHasher>,
     ) {
         let mut err = lock_wait_entry.req_states.get_external_error();
@@ -333,7 +330,7 @@ impl<L: LockManager> LockWaitQueues<L> {
         conflicting_start_ts: TimeStamp,
         conflicting_commit_ts: TimeStamp,
         wake_up_delay_duration_ms: u64,
-    ) -> (Vec<Box<LockWaitEntry>>, Option<DelayedNotifyAllFuture>) {
+    ) -> (Vec<LockWaitEntry>, Option<DelayedNotifyAllFuture>) {
         self.pop_for_waking_up_impl(
             key,
             conflicting_start_ts,
@@ -348,8 +345,8 @@ impl<L: LockManager> LockWaitQueues<L> {
         conflicting_start_ts: TimeStamp,
         conflicting_commit_ts: TimeStamp,
         wake_up_delay_duration_ms: Option<u64>,
-    ) -> (Vec<Box<LockWaitEntry>>, Option<DelayedNotifyAllFuture>) {
-        let mut popped_entries: Vec<Box<LockWaitEntry>> = Vec::new();
+    ) -> (Vec<LockWaitEntry>, Option<DelayedNotifyAllFuture>) {
+        let mut popped_entries: Vec<LockWaitEntry> = Vec::new();
         let mut popped_future: Option<DelayedNotifyAllFuture> = None;
         // For statistics.
         let mut removed_waiters = 0usize;
@@ -478,7 +475,7 @@ impl<L: LockManager> LockWaitQueues<L> {
         start_time: Instant,
         delay_ms: Arc<AtomicU64>,
         notify_id: u64,
-    ) -> Option<Box<LockWaitEntry>> {
+    ) -> Option<LockWaitEntry> {
         let mut prev_delay_ms = 0;
         // The delay duration may be extended by later waking-up events, by updating the
         // value of `delay_ms`. So we loop until we find that the elapsed
@@ -509,7 +506,7 @@ impl<L: LockManager> LockWaitQueues<L> {
         self.delayed_notify_all(&key, notify_id)
     }
 
-    fn delayed_notify_all(&self, key: &Key, notify_id: u64) -> Option<Box<LockWaitEntry>> {
+    fn delayed_notify_all(&self, key: &Key, notify_id: u64) -> Option<LockWaitEntry> {
         let mut popped_lock_wait_entries = SmallVec::<[_; 4]>::new();
 
         let mut woken_up_resumable_entry = None;
@@ -580,7 +577,6 @@ impl<L: LockManager> LockWaitQueues<L> {
         // TODO: Perhaps we'd better make it concurrent with scheduling the new command
         // (if `woken_up_resumable_entry` is some) if there are too many.
         for lock_wait_entry in popped_lock_wait_entries {
-            let lock_wait_entry = *lock_wait_entry;
             let cb = lock_wait_entry.key_cb.unwrap().into_inner();
             let e = StorageError::from(TxnError::from(MvccError::from(
                 MvccErrorInner::WriteConflict {
@@ -607,7 +603,7 @@ impl<L: LockManager> LockWaitQueues<L> {
         &self,
         key: &Key,
         lock_wait_token: LockWaitToken,
-    ) -> Option<Box<LockWaitEntry>> {
+    ) -> Option<LockWaitEntry> {
         let mut result = None;
 
         // We don't want other threads insert any more entries between finding the
@@ -768,7 +764,7 @@ mod tests {
             key: &[u8],
             start_ts: impl Into<TimeStamp>,
             lock_info_pb: kvrpcpb::LockInfo,
-        ) -> (Box<LockWaitEntry>, TestLockWaitEntryHandle) {
+        ) -> (LockWaitEntry, TestLockWaitEntryHandle) {
             let start_ts = start_ts.into();
             let token = self.inner.lock_mgr.allocate_token();
             let dummy_request_cb = StorageCallback::PessimisticLock(Box::new(|_| ()));
@@ -798,7 +794,7 @@ mod tests {
             let key = Key::from_raw(key);
             let lock_hash = key.gen_hash();
             let (tx, rx) = channel();
-            let lock_wait_entry = Box::new(LockWaitEntry {
+            let lock_wait_entry = LockWaitEntry {
                 key,
                 lock_hash,
                 parameters,
@@ -810,7 +806,7 @@ mod tests {
                 key_cb: Some(SyncWrapper::new(Box::new(move |res, _| {
                     tx.send(res).unwrap()
                 }))),
-            });
+            };
 
             let cancel_callback = dummy_ctx.get_callback_for_cancellation();
             let cancel = move || {
@@ -867,7 +863,7 @@ mod tests {
             key: &[u8],
             conflicting_start_ts: impl Into<TimeStamp>,
             conflicting_commit_ts: impl Into<TimeStamp>,
-        ) -> Box<LockWaitEntry> {
+        ) -> LockWaitEntry {
             let (mut entries, future) = self.pop_for_waking_up_impl(
                 &Key::from_raw(key),
                 conflicting_start_ts.into(),
@@ -900,7 +896,7 @@ mod tests {
             key: &[u8],
             conflicting_start_ts: impl Into<TimeStamp>,
             conflicting_commit_ts: impl Into<TimeStamp>,
-        ) -> (Box<LockWaitEntry>, DelayedNotifyAllFuture) {
+        ) -> (LockWaitEntry, DelayedNotifyAllFuture) {
             let (mut entries, future) = self.pop_for_waking_up_impl(
                 &Key::from_raw(key),
                 conflicting_start_ts.into(),
@@ -916,7 +912,7 @@ mod tests {
             key: &[u8],
             conflicting_start_ts: impl Into<TimeStamp>,
             conflicting_commit_ts: impl Into<TimeStamp>,
-        ) -> Box<LockWaitEntry> {
+        ) -> LockWaitEntry {
             let (mut entries, future) = self.pop_for_waking_up_impl(
                 &Key::from_raw(key),
                 conflicting_start_ts.into(),
