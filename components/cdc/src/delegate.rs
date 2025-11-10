@@ -288,18 +288,16 @@ impl fmt::Debug for LockTracker {
 pub struct MiniLock {
     pub ts: TimeStamp,
     pub txn_source: u64,
-    pub generation: u64,
 }
 
 impl MiniLock {
-    pub fn new<T>(ts: T, txn_source: u64, generation: u64) -> Self
+    pub fn new<T>(ts: T, txn_source: u64) -> Self
     where
         TimeStamp: From<T>,
     {
         MiniLock {
             ts: TimeStamp::from(ts),
             txn_source,
-            generation,
         }
     }
 
@@ -311,7 +309,6 @@ impl MiniLock {
         MiniLock {
             ts: TimeStamp::from(ts),
             txn_source: 0,
-            generation: 0,
         }
     }
 }
@@ -359,9 +356,10 @@ impl Drop for Delegate {
 }
 
 impl Delegate {
-    fn push_lock(&mut self, key: Key, start_ts: MiniLock) -> Result<isize> {
+    fn push_lock(&mut self, key: Key, start_ts: MiniLock) -> Result<Vec<LockModifiedCount>> {
         let bytes = key.approximate_heap_size();
-        let mut lock_count_modify = 0;
+        let new_start_ts = start_ts.ts;
+        let mut lock_modified_count = Vec::new();
         match &mut self.lock_tracker {
             LockTracker::Pending => unreachable!(),
             LockTracker::Preparing(locks) => {
@@ -371,28 +369,26 @@ impl Delegate {
             }
             LockTracker::Prepared { locks, .. } => match locks.entry(key) {
                 BTreeMapEntry::Occupied(mut x) => {
-                    // There could be stale locks in the lock_tracker due to scenarios such as the
-                    // overlapped write/rollback issue (#18498). We can safely
-                    // ignore such stale locks, while keeping the invariant of
-                    // monotonically increasing start_ts and generation.
-                    assert!(x.get().ts <= start_ts.ts);
-                    assert!(x.get().generation <= start_ts.generation);
-                    x.get_mut().ts = start_ts.ts;
-                    x.get_mut().generation = start_ts.generation;
+                    let old_start_ts = x.get().ts;
+                    if old_start_ts != new_start_ts {
+                        x.insert(start_ts);
+                        lock_modified_count.push(LockModifiedCount::new(old_start_ts, -1));
+                        lock_modified_count.push(LockModifiedCount::new(new_start_ts, 1));
+                    }
                 }
                 BTreeMapEntry::Vacant(x) => {
                     x.insert(start_ts);
                     self.memory_quota.alloc(bytes)?;
                     CDC_PENDING_BYTES_GAUGE.add(bytes as _);
-                    lock_count_modify = 1;
+                    lock_modified_count.push(LockModifiedCount::new(new_start_ts, 1));
                 }
             },
         }
-        Ok(lock_count_modify)
+        Ok(lock_modified_count)
     }
 
-    fn pop_lock(&mut self, key: Key, start_ts: TimeStamp) -> Result<isize> {
-        let mut lock_count_modify = 0;
+    fn pop_lock(&mut self, key: Key, start_ts: TimeStamp) -> Result<Vec<LockModifiedCount>> {
+        let mut lock_modified_count = Vec::new();
         match &mut self.lock_tracker {
             LockTracker::Pending => unreachable!(),
             LockTracker::Preparing(locks) => {
@@ -408,12 +404,12 @@ impl Delegate {
                         let bytes = key.approximate_heap_size();
                         self.memory_quota.free(bytes);
                         CDC_PENDING_BYTES_GAUGE.sub(bytes as _);
-                        lock_count_modify = -1;
+                        lock_modified_count.push(LockModifiedCount::new(start_ts, -1));
                     }
                 }
             }
         }
-        Ok(lock_count_modify)
+        Ok(lock_modified_count)
     }
 
     pub(crate) fn init_lock_tracker(&mut self) -> bool {
@@ -442,11 +438,8 @@ impl Delegate {
                     BTreeMapEntry::Vacant(x) => {
                         x.insert(start_ts);
                     }
-                    BTreeMapEntry::Occupied(mut x) => {
-                        assert!(x.get().ts <= start_ts.ts);
-                        assert!(x.get().generation <= start_ts.generation);
-                        x.get_mut().ts = start_ts.ts;
-                        x.get_mut().generation = start_ts.generation;
+                    BTreeMapEntry::Occupied(x) => {
+                        assert_eq!(*x.get(), start_ts);
                     }
                 },
                 PendingLock::Untrack { key, start_ts } => {
@@ -944,7 +937,7 @@ impl Delegate {
             let mut filtered_entries = Vec::with_capacity(entries.len());
             for RowInBuilding {
                 v,
-                lock_count_modify,
+                lock_modified_counts,
                 needs_old_value,
                 ..
             } in &mut entries
@@ -956,25 +949,23 @@ impl Delegate {
                     read_old_value(v, *read_old_ts)?;
                     *needs_old_value = None;
                 }
-
-                if *lock_count_modify != 0 && downstream.lock_heap.is_some() {
+                // lock_heap initialized and there is lock_modified_counts, update the lock_heap
+                // to avoid the resolved-ts stuck.
+                if !lock_modified_counts.is_empty() && downstream.lock_heap.is_some() {
                     let lock_heap = downstream.lock_heap.as_mut().unwrap();
-                    match lock_heap.entry(v.start_ts.into()) {
-                        BTreeMapEntry::Vacant(x) => {
-                            x.insert(*lock_count_modify);
+                    lock_modified_counts.iter().for_each(|modified| {
+                        let start_ts = modified.start_ts;
+                        let lock_count = lock_heap.entry(start_ts).or_insert(0isize);
+                        *lock_count += modified.count;
+                        assert!(
+                            *lock_count >= 0,
+                            "lock_count_modify should never be negative, start_ts: {}",
+                            start_ts
+                        );
+                        if *lock_count == 0 {
+                            lock_heap.remove(&start_ts);
                         }
-                        BTreeMapEntry::Occupied(mut x) => {
-                            *x.get_mut() += *lock_count_modify;
-                            assert!(
-                                *x.get() >= 0,
-                                "lock_count_modify should never be negative, start_ts: {}",
-                                v.start_ts
-                            );
-                            if *x.get() == 0 {
-                                x.remove();
-                            }
-                        }
-                    }
+                    });
                 }
 
                 if TxnSource::is_lossy_ddl_reorg_source_set(v.txn_source)
@@ -1039,16 +1030,15 @@ impl Delegate {
                     let read_old_ts = TimeStamp::from(row.v.commit_ts).prev();
                     row.needs_old_value = Some(read_old_ts);
                 } else {
-                    assert_eq!(row.lock_count_modify, 0);
                     let start_ts = TimeStamp::from(row.v.start_ts);
-                    row.lock_count_modify = self.pop_lock(key, start_ts)?;
+                    let mut modified = self.pop_lock(key, start_ts)?;
+                    row.lock_modified_counts.append(&mut modified);
                 }
             }
             "lock" => {
                 let lock = Lock::parse(put.get_value()).unwrap();
                 let for_update_ts = lock.for_update_ts;
                 let txn_source = lock.txn_source;
-                let generation = lock.generation;
 
                 let key = Key::from_encoded_slice(&put.key);
                 let row = rows.txns_by_key.entry(key.clone()).or_default();
@@ -1056,9 +1046,9 @@ impl Delegate {
                     return Ok(());
                 }
 
-                assert_eq!(row.lock_count_modify, 0);
-                let mini_lock = MiniLock::new(row.v.start_ts, txn_source, generation);
-                row.lock_count_modify = self.push_lock(key, mini_lock)?;
+                let mini_lock = MiniLock::new(row.v.start_ts, txn_source);
+                let mut modified = self.push_lock(key, mini_lock)?;
+                row.lock_modified_counts.append(&mut modified);
                 let read_old_ts = std::cmp::max(for_update_ts, row.v.start_ts.into());
                 row.needs_old_value = Some(read_old_ts);
             }
@@ -1154,11 +1144,22 @@ struct RowsBuilder {
     is_one_pc: bool,
 }
 
+struct LockModifiedCount {
+    start_ts: TimeStamp,
+    count: isize,
+}
+
+impl LockModifiedCount {
+    fn new(start_ts: TimeStamp, count: isize) -> Self {
+        LockModifiedCount { start_ts, count }
+    }
+}
+
 #[derive(Default)]
 struct RowInBuilding {
     v: EventRow,
     has_value: bool,
-    lock_count_modify: isize,
+    lock_modified_counts: Vec<LockModifiedCount>,
     needs_old_value: Option<TimeStamp>,
 }
 
@@ -1262,7 +1263,6 @@ fn decode_lock(key: Vec<u8>, mut lock: Lock, row: &mut EventRow, has_value: &mut
     };
 
     row.start_ts = lock.ts.into_inner();
-    row.generation = lock.generation;
     row.key = key.into_raw().unwrap();
     row.op_type = op_type as _;
     row.txn_source = lock.txn_source;
@@ -1891,13 +1891,16 @@ mod tests {
     fn test_lock_tracker() {
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
         let mut delegate = Delegate::new(1, quota.clone(), Default::default());
+        // lock tracker is preparing
         assert!(delegate.init_lock_tracker());
         assert!(!delegate.init_lock_tracker());
 
         let mut k1 = Vec::with_capacity(100);
         k1.extend_from_slice(Key::from_raw(b"key1").as_encoded());
         let k1 = Key::from_encoded(k1);
-        assert_eq!(delegate.push_lock(k1, MiniLock::from_ts(100)).unwrap(), 0);
+
+        let modified_counts = delegate.push_lock(k1, MiniLock::from_ts(100));
+        assert_eq!(modified_counts.unwrap().len(), 0);
         assert_eq!(quota.in_use(), 100);
 
         delegate
@@ -1913,7 +1916,8 @@ mod tests {
         let mut k2 = Vec::with_capacity(200);
         k2.extend_from_slice(Key::from_raw(b"key2").as_encoded());
         let k2 = Key::from_encoded(k2);
-        assert_eq!(delegate.push_lock(k2, MiniLock::from_ts(100)).unwrap(), 0);
+        let modified_counts = delegate.push_lock(k2, MiniLock::from_ts(100)).unwrap();
+        assert_eq!(modified_counts.len(), 0);
         assert_eq!(quota.in_use(), 334);
 
         let mut scaned_locks = BTreeMap::default();
@@ -1933,15 +1937,16 @@ mod tests {
             .unwrap();
         assert_eq!(quota.in_use(), 0);
 
-        let v = delegate
+        let modified_counts = delegate
             .push_lock(Key::from_raw(b"key1"), MiniLock::from_ts(300))
             .unwrap();
-        assert_eq!(v, 1);
+        assert_eq!(modified_counts.len(), 1);
         assert_eq!(quota.in_use(), 17);
-        let v = delegate
+
+        let modified_counts = delegate
             .push_lock(Key::from_raw(b"key1"), MiniLock::from_ts(300))
             .unwrap();
-        assert_eq!(v, 0);
+        assert_eq!(modified_counts.len(), 0);
         assert_eq!(quota.in_use(), 17);
     }
 
