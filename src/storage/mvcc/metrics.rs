@@ -19,6 +19,7 @@ make_static_metric! {
         commit,
         rollback,
         acquire_pessimistic_lock,
+        acquire_pessimistic_lock_shared,
     }
 
     pub label_enum MvccCheckTxnStatusKind {

@@ -21,8 +21,23 @@ pub fn commit<S: Snapshot>(
         crate::storage::mvcc::txn::make_txn_error(err, &key, reader.start_ts,).into()
     ));
 
-    let (mut lock, commit) = match reader.load_lock(&key)? {
-        Some(lock) if lock.ts == reader.start_ts => {
+    let (mut lock, shared_lock, commit) = match reader.load_lock(&key)? {
+        Some(mut lock) if lock.contains_start_ts(reader.start_ts) => {
+            let (lock, shared_lock) = if lock.is_shared() {
+                match lock.remove_shared_lock(reader.start_ts) {
+                    Some(l) => (l, Some(lock)),
+                    None => {
+                        return Err(ErrorInner::TxnLockNotFound {
+                            start_ts: reader.start_ts,
+                            commit_ts,
+                            key: key.into_raw()?,
+                        }
+                        .into());
+                    }
+                }
+            } else {
+                (lock, None)
+            };
             // A lock with larger min_commit_ts than current commit_ts can't be committed
             if commit_ts < lock.min_commit_ts {
                 info!(
@@ -54,9 +69,9 @@ pub fn commit<S: Snapshot>(
                     "start_ts" => reader.start_ts,
                     "commit_ts" => commit_ts,
                 );
-                (lock, false)
+                (lock, None, false)
             } else {
-                (lock, true)
+                (lock, shared_lock, true)
             }
         }
         _ => {
@@ -112,7 +127,17 @@ pub fn commit<S: Snapshot>(
     }
 
     txn.put_write(key.clone(), commit_ts, write.as_ref().to_bytes());
-    Ok(txn.unlock_key(key, lock.is_pessimistic_txn(), commit_ts))
+    match shared_lock {
+        Some(shared_lock) => {
+            if shared_lock.shared_lock_num() == 0 {
+                Ok(txn.unlock_key(key, true, commit_ts))
+            } else {
+                txn.put_lock(key, &shared_lock, false);
+                Ok(None)
+            }
+        }
+        None => Ok(txn.unlock_key(key, lock.is_pessimistic_txn(), commit_ts)),
+    }
 }
 
 pub mod tests {
@@ -122,9 +147,11 @@ pub mod tests {
     use kvproto::kvrpcpb::PrewriteRequestPessimisticAction::*;
     use tikv_kv::SnapContext;
     #[cfg(test)]
-    use txn_types::{LastChange, TimeStamp};
+    use txn_types::{LastChange, Lock, LockType, TimeStamp};
 
     use super::*;
+    #[cfg(test)]
+    use crate::storage::mvcc::MvccReader;
     #[cfg(test)]
     use crate::storage::txn::tests::{
         must_acquire_pessimistic_lock_for_large_txn, must_prewrite_delete, must_prewrite_lock,
@@ -199,6 +226,45 @@ pub mod tests {
         let mut txn = MvccTxn::new(start_ts, cm);
         let mut reader = SnapshotReader::new(start_ts, snapshot, true);
         commit(&mut txn, &mut reader, Key::from_raw(key), commit_ts.into()).unwrap_err();
+    }
+
+    #[cfg(test)]
+    fn make_shared_sub_lock(primary: &[u8], start_ts: TimeStamp) -> Lock {
+        Lock::new(
+            LockType::Lock,
+            primary.to_vec(),
+            start_ts,
+            0,
+            None,
+            TimeStamp::zero(),
+            0,
+            TimeStamp::zero(),
+            false,
+        )
+    }
+
+    #[cfg(test)]
+    fn put_shared_lock<E: Engine>(engine: &mut E, key: &[u8], locks: Vec<Lock>) {
+        let lock_count = locks.len();
+        let mut shared_lock = Lock::new_in_shared_mode();
+        shared_lock.primary = key.to_vec();
+        // if let Some(info) = shared_lock.shared_lock_txns_info.as_mut() {
+        for lock in locks {
+            // shared_lock.ts = std::cmp::min(shared_lock.ts, lock.ts);
+            // shared_lock.for_update_ts =
+            //     std::cmp::min(shared_lock.for_update_ts, lock.for_update_ts);
+            // info.txn_info_segments.insert(lock.ts, lock);
+            shared_lock.put_shared_lock(lock);
+        }
+        // }
+        debug_assert_eq!(shared_lock.shared_lock_num(), lock_count);
+        let mut txn = MvccTxn::new(
+            TimeStamp::zero(),
+            ConcurrencyManager::new(TimeStamp::zero()),
+        );
+        txn.put_lock(Key::from_raw(key), &shared_lock, true);
+        let ctx = Context::default();
+        write(engine, &ctx, txn.into_modifies());
     }
 
     #[cfg(test)]
@@ -402,5 +468,59 @@ pub mod tests {
         must_written(&mut engine, k1, 10, 20, WriteType::Put);
         must_not_have_write(&mut engine, k2, 20);
         must_not_have_write(&mut engine, k2, 10);
+    }
+
+    #[test]
+    fn test_commit_shared_lock_keeps_remaining_entries() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+
+        let key = b"shared-lock-key";
+        let start_ts1 = TimeStamp::new(10);
+        let start_ts2 = TimeStamp::new(20);
+        let commit_ts_1 = TimeStamp::new(30);
+        let commit_ts_2 = TimeStamp::new(40);
+
+        put_shared_lock(
+            &mut engine,
+            key,
+            vec![
+                make_shared_sub_lock(key, start_ts1),
+                make_shared_sub_lock(key, start_ts2),
+            ],
+        );
+
+        fn load_lock<E: Engine>(engine: &mut E, key: &[u8]) -> Option<Lock> {
+            let snapshot = engine.snapshot(Default::default()).unwrap();
+            let mut reader = MvccReader::new(snapshot, None, true);
+            reader.load_lock(&Key::from_raw(key)).unwrap()
+        }
+
+        let mut current_lock = load_lock(&mut engine, key).unwrap();
+        assert!(current_lock.is_shared());
+        assert_eq!(current_lock.shared_lock_num(), 2);
+        assert!(current_lock.find_shared_lock_txn(start_ts1).is_some());
+        assert!(current_lock.find_shared_lock_txn(start_ts2).is_some());
+
+        let mut simulated_lock = current_lock.clone();
+        let _ = simulated_lock.remove_shared_lock(start_ts1);
+        assert_eq!(simulated_lock.shared_lock_num(), 1);
+
+        // commit start_ts1
+        assert!(must_succeed(&mut engine, key, start_ts1, commit_ts_1).is_none());
+        must_written(&mut engine, key, start_ts1, commit_ts_1, WriteType::Lock);
+        let mut current_lock = load_lock(&mut engine, key).unwrap();
+        assert!(current_lock.is_shared());
+        assert_eq!(current_lock.shared_lock_num(), 1);
+        assert!(current_lock.find_shared_lock_txn(start_ts1).is_none());
+        assert!(current_lock.find_shared_lock_txn(start_ts2).is_some());
+
+        // commit start_ts2
+        let released_lock = must_succeed(&mut engine, key, start_ts2, commit_ts_2).unwrap();
+        assert_eq!(released_lock.key, Key::from_raw(key));
+        assert_eq!(released_lock.start_ts, start_ts2);
+        assert_eq!(released_lock.commit_ts, commit_ts_2);
+        must_written(&mut engine, key, start_ts2, commit_ts_2, WriteType::Lock);
+        // lock is removed when no shared lock entries are left.
+        assert!(load_lock(&mut engine, key).is_none());
     }
 }

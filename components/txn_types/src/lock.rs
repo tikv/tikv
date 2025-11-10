@@ -290,6 +290,17 @@ impl Lock {
 
     #[inline]
     #[must_use]
+    pub fn remove_shared_lock(&mut self, start_ts: TimeStamp) -> Option<Lock> {
+        if self.is_shared() {
+            if let Some(info) = self.shared_lock_txns_info.as_mut() {
+                return info.remove_lock(&start_ts);
+            }
+        }
+        None
+    }
+
+    #[inline]
+    #[must_use]
     pub fn shared_lock_num(&self) -> usize {
         if self.is_shared() {
             self.shared_lock_txns_info.as_ref().unwrap().len()
@@ -301,8 +312,7 @@ impl Lock {
     #[inline]
     pub fn put_shared_lock(&mut self, lock: Lock) {
         assert!(self.is_shared());
-        let lock_type = lock.lock_type;
-        match lock_type {
+        match lock.lock_type {
             LockType::Lock => {
                 // Prewriting a shared lock guarantees that no non-shared lock with commit_ts >
                 // lock.ts can exist for this key. Therefore a later shared lock
@@ -319,17 +329,10 @@ impl Lock {
             _ => unreachable!(),
         }
         let ts = lock.ts;
-        let old = self
-            .shared_lock_txns_info
+        self.shared_lock_txns_info
             .as_mut()
             .unwrap()
             .put_lock(ts, lock);
-        if lock_type == LockType::Lock {
-            debug_assert!(
-                old.is_some(),
-                "shared lock should be prewritten over pessimistic lock"
-            );
-        }
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -822,6 +825,19 @@ impl SharedLockTxnsInfo {
                 Either::Right(lock) => Some(lock),
             },
             None => None,
+        }
+    }
+
+    pub fn remove_lock(&mut self, ts: &TimeStamp) -> Option<Lock> {
+        if let Some(either) = self.txn_info_segments.remove(ts) {
+            match either {
+                Either::Left(encoded) => {
+                    Some(Lock::parse(&encoded).expect("failed to parse shared lock txn info"))
+                }
+                Either::Right(lock) => Some(lock),
+            }
+        } else {
+            None
         }
     }
 }
