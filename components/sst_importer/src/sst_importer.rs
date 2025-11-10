@@ -15,6 +15,7 @@ use collections::HashSet;
 use dashmap::{DashMap, mapref::entry::Entry};
 use encryption::{DataKeyManager, FileEncryptionInfo, MultiMasterKeyBackend};
 use encryption_export::create_async_backend;
+use engine_rocks::{RocksSstReader, get_env};
 use engine_traits::{
     CF_DEFAULT, CF_WRITE, CfName, IterOptions, Iterator, KvEngine, RefIterable, SstCompressionType,
     SstExt, SstMetaInfo, SstReader, SstWriter, SstWriterBuilder, name_to_cf,
@@ -24,7 +25,7 @@ use external_storage::{
     ExternalStorage, RestoreConfig, compression_reader_dispatcher, encrypt_wrap_reader,
     wrap_with_checksum_reader_if_needed,
 };
-use file_system::{IoType, OpenOptions};
+use file_system::{IoType, OpenOptions, get_io_rate_limiter};
 use kvproto::{
     brpb::{CipherInfo, StorageBackend},
     encryptionpb::{EncryptionMethod, FileEncryptionInfo_oneof_mode, MasterKey},
@@ -54,6 +55,7 @@ use crate::{
     import_mode::{ImportModeSwitcher, RocksDbMetricsFn},
     import_mode2::{HashRange, ImportModeSwitcherV2},
     metrics::*,
+    sst_merge_iter::BinaryIterator,
     sst_writer::{RawSstWriter, TxnSstWriter},
     util,
 };
@@ -106,6 +108,10 @@ pub enum CacheKvFile {
     /// The `meta` field stores the SST file metadata, while `range` indicates
     /// the key range affected by the download operation.
     State(Arc<(SstMeta, OnceCell<Option<Range>>)>),
+    /// Tracks raw file download to prevent duplicate downloads of the same SST
+    /// file. The `meta` stores SST metadata, while `OnceCell<String>` holds
+    /// the download result (file path) once the download completes.
+    Download(Arc<(SstMeta, OnceCell<String>)>),
 }
 
 /// returns an error on an invalid internal state.
@@ -129,6 +135,7 @@ impl CacheKvFile {
             }
             CacheKvFile::Fs(path) => Arc::strong_count(path),
             CacheKvFile::State(state) => Arc::strong_count(state),
+            CacheKvFile::Download(state) => Arc::strong_count(state),
         }
     }
 
@@ -141,6 +148,8 @@ impl CacheKvFile {
             CacheKvFile::Fs(_) => start.saturating_elapsed() >= Duration::from_secs(600),
             // The expired duration for memory is 60s.
             CacheKvFile::State(_) => start.saturating_elapsed() >= Duration::from_secs(60),
+            // The expired duration for download is 60s.
+            CacheKvFile::Download(_) => start.saturating_elapsed() >= Duration::from_secs(60),
         }
     }
 }
@@ -433,6 +442,89 @@ impl<E: KvEngine> SstImporter<E> {
         }
     }
 
+    pub async fn download_files_ext(
+        &self,
+        basic_meta: &SstMeta,
+        metas: &HashMap<String, SstMeta>,
+        backend: &StorageBackend,
+        rewrite_rule: &RewriteRule,
+        crypter: Option<CipherInfo>,
+        speed_limiter: Limiter,
+        engine: E,
+        ext: DownloadExt<'_>,
+    ) -> Result<Option<Range>> {
+        debug!("download start";
+            "metas" => ?basic_meta,
+            "url" => ?backend,
+            "rewrite_rule" => ?rewrite_rule,
+            "speed_limit" => speed_limiter.speed_limit(),
+        );
+        let mut sst_readers = Vec::new();
+        let mut clean_paths = Vec::new();
+        for (name, meta) in metas {
+            let path = self.dir.join_for_write(meta)?;
+            let dst_file_name = self
+                .do_download_sst_file(
+                    &path,
+                    meta,
+                    backend,
+                    name,
+                    crypter.clone(),
+                    &speed_limiter,
+                    ext.cache_key.unwrap_or(""),
+                )
+                .await?;
+            // now validate the SST file.
+            let env = get_env(self.key_manager.clone(), get_io_rate_limiter())?;
+            // Use abstracted SstReader after Env is abstracted.
+            let sst_reader = RocksSstReader::open_with_env(&dst_file_name, Some(env))?;
+            sst_reader.verify_checksum()?;
+
+            sst_readers.push(sst_reader);
+            clean_paths.push(path.temp);
+        }
+
+        let mut sst_iters = Vec::with_capacity(sst_readers.len());
+        for sst_reader in &sst_readers {
+            let sst_iter = sst_reader.iter(IterOptions::default())?;
+            sst_iters.push(sst_iter);
+        }
+        let mut sst_iter = BinaryIterator::new(sst_iters);
+
+        let (range_start, range_end) =
+            self.do_pre_rewrite(basic_meta, rewrite_rule, ext.req_type)?;
+        let res = self
+            .do_rewrite_keys(
+                self.dir.join_for_write(basic_meta)?.save,
+                rewrite_rule,
+                range_start,
+                range_end,
+                &mut sst_iter,
+                name_to_cf(basic_meta.get_cf_name()).unwrap(),
+                engine,
+                ext.req_type,
+                Instant::now(),
+                || {
+                    for path in clean_paths {
+                        let _ = file_system::remove_file(path);
+                    }
+                },
+            )
+            .await;
+
+        match res {
+            Ok(r) => {
+                let r = r.map(|(range, _)| range);
+                info!("download"; "meta" => ?basic_meta, "range" => ?r);
+                Ok(r)
+            }
+            Err(e) => {
+                error!(%e; "download failed"; "meta" => ?basic_meta,);
+                Err(e)
+            }
+        }
+    }
+
     pub fn enter_normal_mode(&self, db: E, mf: RocksDbMetricsFn) -> Result<bool> {
         if let Either::Left(ref switcher) = self.switcher {
             switcher.enter_normal_mode(&db, mf)
@@ -645,6 +737,12 @@ impl<E: KvEngine> SstImporter<E> {
                 }
                 // regular check, normally the lock will resolved immediately
                 CacheKvFile::State(_) => {
+                    if c.ref_count() == 1 && c.is_expired(start) {
+                        CACHE_EVENT.with_label_values(&["remain-locks"]).inc();
+                        need_retain = false;
+                    }
+                }
+                CacheKvFile::Download(_) => {
                     if c.ref_count() == 1 && c.is_expired(start) {
                         CACHE_EVENT.with_label_values(&["remain-locks"]).inc();
                         need_retain = false;
@@ -1764,6 +1862,306 @@ fn is_after_end_bound<K: AsRef<[u8]>>(value: &[u8], bound: &Bound<K>) -> bool {
         Bound::Unbounded => false,
         Bound::Included(b) => *value > *b.as_ref(),
         Bound::Excluded(b) => *value >= *b.as_ref(),
+    }
+}
+
+impl<E: KvEngine> SstImporter<E> {
+    async fn do_download_sst_file(
+        &self,
+        path: &crate::import_file::ImportPath,
+        meta: &SstMeta,
+        backend: &StorageBackend,
+        name: &str,
+        crypter: Option<CipherInfo>,
+        speed_limiter: &Limiter,
+        cache_key: &str,
+    ) -> Result<String> {
+        let path_str = path.temp.to_string_lossy().to_string();
+
+        // Check if this file is already being downloaded
+        let res = {
+            match self.file_locks.entry(path_str.clone()) {
+                Entry::Occupied(mut entry) => match entry.get_mut() {
+                    (CacheKvFile::Download(state), last_used) => {
+                        // safety check
+                        if state.0 != *meta {
+                            error!("same path but different meta"; "meta" => ?meta, "name" => name);
+                            return Err(Error::MisMatchRequest);
+                        }
+                        // Another download is already in progress, reuse it
+                        info!("duplicate file download request ignored"; "meta" => ?meta, "name" => name);
+                        *last_used = Instant::now();
+                        Arc::clone(state)
+                    }
+                    _ => {
+                        error!("mismatched request type for download"; "meta" => ?meta, "name" => name);
+                        return Err(Error::MisMatchRequest);
+                    }
+                },
+                Entry::Vacant(entry) => {
+                    // We're the first one, insert our marker and proceed with download
+                    let cache = Arc::new((meta.clone(), OnceCell::new()));
+                    entry.insert((CacheKvFile::Download(Arc::clone(&cache)), Instant::now()));
+                    cache
+                }
+            }
+        };
+        defer! {{self.file_locks.remove(&path_str);}}
+
+        let result = res
+            .1
+            .get_or_try_init(|| async {
+                let file_crypter = crypter.map(|c| FileEncryptionInfo {
+                    method: c.cipher_type,
+                    key: c.cipher_key,
+                    iv: meta.cipher_iv.to_owned(),
+                });
+
+                let restore_config = RestoreConfig {
+                    file_crypter,
+                    ..Default::default()
+                };
+
+                self.async_download_file_from_external_storage(
+                    meta.length,
+                    name,
+                    path.temp.clone(),
+                    backend,
+                    speed_limiter,
+                    cache_key,
+                    restore_config,
+                )
+                .await?;
+
+                let dst_file_name = path.temp.to_str().unwrap();
+
+                debug!("downloaded file"; "meta" => ?meta, "name" => name, "path" => dst_file_name);
+
+                Ok::<String, Error>(dst_file_name.to_string())
+            })
+            .await?;
+
+        Ok(result.clone())
+    }
+
+    fn do_pre_rewrite(
+        &self,
+        meta: &SstMeta,
+        rewrite_rule: &RewriteRule,
+        req_type: DownloadRequestType,
+    ) -> Result<(Bound<Vec<u8>>, Bound<Vec<u8>>)> {
+        // undo key rewrite so we could compare with the keys inside SST
+        let old_prefix = rewrite_rule.get_old_key_prefix();
+        let new_prefix = rewrite_rule.get_new_key_prefix();
+
+        debug!("rewrite preparation";
+            "meta" => ?meta,
+            "old_prefix" => log_wrappers::Value::key(old_prefix),
+            "new_prefix" => log_wrappers::Value::key(new_prefix),
+            "req_type" => ?req_type,
+        );
+
+        let range_start = meta.get_range().get_start();
+        let range_end = meta.get_range().get_end();
+        let range_start_bound = key_to_bound(range_start);
+        let range_end_bound = if meta.get_end_key_exclusive() {
+            key_to_exclusive_bound(range_end)
+        } else {
+            key_to_bound(range_end)
+        };
+
+        let mut range_start =
+            keys::rewrite::rewrite_prefix_of_start_bound(new_prefix, old_prefix, range_start_bound)
+                .map_err(|_| Error::WrongKeyPrefix {
+                    what: "SST start range",
+                    key: range_start.to_vec(),
+                    prefix: new_prefix.to_vec(),
+                })?;
+        let mut range_end =
+            keys::rewrite::rewrite_prefix_of_end_bound(new_prefix, old_prefix, range_end_bound)
+                .map_err(|_| Error::WrongKeyPrefix {
+                    what: "SST end range",
+                    key: range_end.to_vec(),
+                    prefix: new_prefix.to_vec(),
+                })?;
+
+        if req_type == DownloadRequestType::Keyspace {
+            range_start = keys::rewrite::encode_bound(range_start);
+            range_end = keys::rewrite::encode_bound(range_end);
+        }
+
+        Ok((range_start, range_end))
+    }
+
+    async fn do_rewrite_keys<'a, Iter: Iterator, F>(
+        &'a self,
+        dst_file_name: PathBuf,
+        rewrite_rule: &'a RewriteRule,
+        range_start: Bound<Vec<u8>>,
+        range_end: Bound<Vec<u8>>,
+        iter: &'a mut Iter,
+        cf_name: CfName,
+        engine: E,
+        req_type: DownloadRequestType,
+        start_rewrite: Instant,
+        clean_files: F,
+    ) -> Result<
+        Option<(
+            Range,
+            <<E as SstExt>::SstWriter as SstWriter>::ExternalSstFileInfo,
+        )>,
+    >
+    where
+        F: FnOnce(),
+    {
+        let old_prefix = rewrite_rule.get_old_key_prefix();
+        let new_prefix = rewrite_rule.get_new_key_prefix();
+        // perform iteration and key rewrite.
+        let mut data_key = keys::DATA_PREFIX_KEY.to_vec();
+        let data_key_prefix_len = keys::DATA_PREFIX_KEY.len();
+        let mut user_key = new_prefix.to_vec();
+        let user_key_prefix_len = new_prefix.len();
+        let mut first_key = None;
+
+        match range_start {
+            Bound::Unbounded => iter.seek_to_first()?,
+            Bound::Included(s) => iter.seek(&keys::data_key(&s))?,
+            Bound::Excluded(_) => unreachable!(),
+        };
+        // SST writer must not be opened in gRPC threads, because it may be
+        // blocked for a long time due to IO, especially, when encryption at rest
+        // is enabled, and it leads to gRPC keepalive timeout.
+        let mut sst_writer = <E as SstExt>::SstWriterBuilder::new()
+            .set_db(&engine)
+            .set_cf(cf_name)
+            .set_compression_type(self.compression_types.get(cf_name).copied())
+            .build(dst_file_name.to_str().unwrap())
+            .unwrap();
+
+        let mut yield_check =
+            RescheduleChecker::new(tokio::task::yield_now, Duration::from_millis(10));
+        let mut count = 0;
+        while iter.valid()? {
+            let mut old_key = Cow::Borrowed(keys::origin_key(iter.key()));
+            let mut ts = None;
+
+            if is_after_end_bound(old_key.as_ref(), &range_end) {
+                break;
+            }
+
+            if req_type == DownloadRequestType::Keyspace {
+                ts = Some(Key::decode_ts_bytes_from(old_key.as_ref())?.to_owned());
+                old_key = {
+                    let mut key = old_key.to_vec();
+                    decode_bytes_in_place(&mut key, false)?;
+                    Cow::Owned(key)
+                };
+            }
+
+            if !old_key.starts_with(old_prefix) {
+                return Err(Error::WrongKeyPrefix {
+                    what: "Key in SST",
+                    key: keys::origin_key(iter.key()).to_vec(),
+                    prefix: old_prefix.to_vec(),
+                });
+            }
+
+            data_key.truncate(data_key_prefix_len);
+            user_key.truncate(user_key_prefix_len);
+            user_key.extend_from_slice(&old_key[old_prefix.len()..]);
+            if req_type == DownloadRequestType::Keyspace {
+                data_key.extend(encode_bytes(&user_key));
+                data_key.extend(ts.unwrap());
+            } else {
+                data_key.extend_from_slice(&user_key);
+            }
+
+            let mut value = Cow::Borrowed(iter.value());
+
+            if rewrite_rule.ignore_after_timestamp != 0 {
+                let ts = Key::decode_ts_from(iter.key())?;
+                if ts > TimeStamp::new(rewrite_rule.ignore_after_timestamp) {
+                    iter.next()?;
+                    INPORTER_DOWNLOAD_COMPACT_KEYS_COUNT
+                        .with_label_values(&["after"])
+                        .inc();
+                    continue;
+                }
+            }
+            if rewrite_rule.ignore_before_timestamp != 0 {
+                // Let the client decide the ts here for default/write CF.
+                // Normally the ts in default CF is less than the ts in write CF.
+                let ts = Key::decode_ts_from(iter.key())?;
+                if ts < TimeStamp::new(rewrite_rule.ignore_before_timestamp) {
+                    iter.next()?;
+                    INPORTER_DOWNLOAD_COMPACT_KEYS_COUNT
+                        .with_label_values(&["before"])
+                        .inc();
+                    continue;
+                }
+            }
+
+            if rewrite_rule.new_timestamp != 0 {
+                data_key = Key::from_encoded(data_key)
+                    .truncate_ts()
+                    .map_err(|e| {
+                        Error::BadFormat(format!(
+                            "key {}: {}",
+                            log_wrappers::Value::key(keys::origin_key(iter.key())),
+                            e
+                        ))
+                    })?
+                    .append_ts(TimeStamp::new(rewrite_rule.new_timestamp))
+                    .into_encoded();
+                if cf_name == CF_WRITE {
+                    let mut write = WriteRef::parse(iter.value()).map_err(|e| {
+                        Error::BadFormat(format!(
+                            "write {}: {}",
+                            log_wrappers::Value::key(keys::origin_key(iter.key())),
+                            e
+                        ))
+                    })?;
+                    write.start_ts = TimeStamp::new(rewrite_rule.new_timestamp);
+                    value = Cow::Owned(write.to_bytes());
+                }
+            }
+
+            sst_writer.put(&data_key, &value)?;
+            count += 1;
+            if count >= 1024 {
+                count = 0;
+                yield_check.check().await;
+            }
+            iter.next()?;
+            if first_key.is_none() {
+                first_key = Some(keys::origin_key(&data_key).to_vec());
+            }
+        }
+
+        clean_files();
+
+        IMPORTER_DOWNLOAD_DURATION
+            .with_label_values(&["rewrite"])
+            .observe(start_rewrite.saturating_elapsed().as_secs_f64());
+
+        if let Some(start_key) = first_key {
+            let start_finish = Instant::now();
+            let info = sst_writer.finish()?;
+            IMPORTER_DOWNLOAD_DURATION
+                .with_label_values(&["finish"])
+                .observe(start_finish.saturating_elapsed().as_secs_f64());
+
+            let mut final_range = Range::default();
+            final_range.set_start(start_key);
+            final_range.set_end(keys::origin_key(&data_key).to_vec());
+            Ok(Some((final_range, info)))
+        } else {
+            // nothing is written: prevents finishing the SST at all.
+            // also delete the empty sst file that is created when creating sst_writer
+            drop(sst_writer);
+            self.remove_file_no_throw(&dst_file_name);
+            Ok(None)
+        }
     }
 }
 
@@ -4095,5 +4493,893 @@ mod tests {
             }
         });
         fail::remove("create_storage_slowly");
+    }
+
+    fn create_multiple_external_sst_files(
+        count: usize,
+    ) -> Result<(TempDir, StorageBackend, Vec<(String, SstMeta)>)> {
+        let ext_sst_dir = tempfile::tempdir()?;
+        let mut metas = Vec::new();
+
+        for i in 0..count {
+            let file_name = format!("sample_{}.sst", i);
+            let mut sst_writer =
+                new_sst_writer(ext_sst_dir.path().join(&file_name).to_str().unwrap());
+
+            // Write different keys with timestamps for each SST file
+            let base = i * 10;
+            sst_writer.put(
+                &get_encoded_key(format!("t123_r{:02}", base + 1).as_bytes(), 1),
+                b"abc",
+            )?;
+            sst_writer.put(
+                &get_encoded_key(format!("t123_r{:02}", base + 4).as_bytes(), 3),
+                b"xyz",
+            )?;
+            sst_writer.put(
+                &get_encoded_key(format!("t123_r{:02}", base + 7).as_bytes(), 7),
+                b"pqrst",
+            )?;
+
+            let sst_info = sst_writer.finish()?;
+
+            // Make up the SST meta for downloading.
+            let mut meta = SstMeta::default();
+            let uuid = Uuid::new_v4();
+            meta.set_uuid(uuid.as_bytes().to_vec());
+            meta.set_cf_name(CF_DEFAULT.to_owned());
+            meta.set_length(sst_info.file_size());
+            meta.set_region_id(4);
+            meta.mut_region_epoch().set_conf_ver(5);
+            meta.mut_region_epoch().set_version(6);
+
+            metas.push((file_name, meta));
+        }
+
+        let backend = external_storage::make_local_backend(ext_sst_dir.path());
+        Ok((ext_sst_dir, backend, metas))
+    }
+
+    fn create_multiple_external_rawkv_sst_files(
+        count: usize,
+        start_key: &[u8],
+        end_key: &[u8],
+        end_key_exclusive: bool,
+    ) -> Result<(TempDir, StorageBackend, Vec<(String, SstMeta)>)> {
+        let ext_sst_dir = tempfile::tempdir()?;
+        let mut metas = Vec::new();
+
+        for i in 0..count {
+            let file_name = format!("sample_rawkv_{}.sst", i);
+            let mut sst_writer =
+                new_sst_writer(ext_sst_dir.path().join(&file_name).to_str().unwrap());
+
+            // Write different RawKV keys for each SST file
+            // Using keys like: zza, zzb, zzc, zzd... for file 0
+            //                  zze, zzf, zzg... for file 1, etc.
+            // Format: first 'z' is data_key prefix, second 'z' is user prefix
+            let base_char = b'a' + (i * 4) as u8;
+            sst_writer.put(&[b'z', b'z', base_char], b"v1")?;
+            sst_writer.put(&[b'z', b'z', base_char + 1], b"v2")?;
+            sst_writer.put(&[b'z', b'z', base_char + 1, 0], b"v3")?;
+            sst_writer.put(&[b'z', b'z', base_char + 2], b"v4")?;
+
+            let sst_info = sst_writer.finish()?;
+
+            // Make up the SST meta for downloading.
+            let mut meta = SstMeta::default();
+            let uuid = Uuid::new_v4();
+            meta.set_uuid(uuid.as_bytes().to_vec());
+            meta.set_cf_name(CF_DEFAULT.to_owned());
+            meta.set_length(sst_info.file_size());
+            meta.set_region_id(4);
+            meta.mut_region_epoch().set_conf_ver(5);
+            meta.mut_region_epoch().set_version(6);
+            meta.mut_range().set_start(start_key.to_vec());
+            meta.mut_range().set_end(end_key.to_vec());
+            meta.set_end_key_exclusive(end_key_exclusive);
+
+            metas.push((file_name, meta));
+        }
+
+        let backend = external_storage::make_local_backend(ext_sst_dir.path());
+        Ok((ext_sst_dir, backend, metas))
+    }
+
+    fn run_download_files_ext_test(
+        file_metas: Vec<(String, SstMeta)>,
+        backend: &StorageBackend,
+        rewrite_rule: &RewriteRule,
+        range: Option<(Vec<u8>, Vec<u8>)>,
+    ) -> Result<(Vec<(Vec<u8>, Vec<u8>)>, Range)> {
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer =
+            SstImporter::<TestEngine>::new(&cfg, &importer_dir, None, ApiVersion::V1, false)
+                .unwrap();
+        let db = create_sst_test_engine().unwrap();
+
+        let mut basic_meta = file_metas[0].1.clone();
+
+        // Apply range filter if provided
+        if let Some((start, end)) = range {
+            basic_meta.mut_range().set_start(start);
+            basic_meta.mut_range().set_end(end);
+        }
+
+        let metas: HashMap<String, SstMeta> = file_metas
+            .iter()
+            .map(|(name, meta)| (name.clone(), meta.clone()))
+            .collect();
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let result = runtime.block_on(importer.download_files_ext(
+            &basic_meta,
+            &metas,
+            backend,
+            rewrite_rule,
+            None,
+            Limiter::new(f64::INFINITY),
+            db,
+            DownloadExt::default(),
+        ));
+
+        // Return error if download failed (for error test cases)
+        let returned_range = result?.ok_or(Error::Engine(box_err!("No range returned")))?;
+
+        // Verify file exists
+        let sst_file_path = importer.dir.join_for_read(&basic_meta).unwrap().save;
+        assert!(sst_file_path.is_file());
+
+        // Read and return content
+        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
+        sst_reader.verify_checksum().unwrap();
+        let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
+        iter.seek_to_first().unwrap();
+        Ok((collect(iter), returned_range))
+    }
+    #[test]
+    fn test_download_files_ext_no_key_rewrite() {
+        let (_ext_sst_dir, backend, file_metas) = create_multiple_external_sst_files(3).unwrap();
+
+        let (collected, range) =
+            run_download_files_ext_test(file_metas, &backend, &RewriteRule::default(), None)
+                .unwrap();
+
+        // Verify the range covers all keys (with timestamp encoding)
+        // File 0: t123_r01 (ts=1), t123_r04 (ts=3), t123_r07 (ts=7)
+        // File 2: t123_r21 (ts=1), t123_r24 (ts=3), t123_r27 (ts=7)
+        let expected_start = Key::from_raw(b"t123_r01")
+            .append_ts(TimeStamp::new(1))
+            .into_encoded();
+        let expected_end = Key::from_raw(b"t123_r27")
+            .append_ts(TimeStamp::new(7))
+            .into_encoded();
+        assert_eq!(range.get_start(), &expected_start);
+        assert_eq!(range.get_end(), &expected_end);
+
+        // Verify SST content
+        assert_eq!(collected.len(), 9); // 3 files * 3 keys each
+        assert_eq!(collected[0].0, get_encoded_key(b"t123_r01", 1));
+        assert_eq!(collected[1].0, get_encoded_key(b"t123_r04", 3));
+        assert_eq!(collected[2].0, get_encoded_key(b"t123_r07", 7));
+        assert_eq!(collected[3].0, get_encoded_key(b"t123_r11", 1));
+        assert_eq!(collected[4].0, get_encoded_key(b"t123_r14", 3));
+        assert_eq!(collected[5].0, get_encoded_key(b"t123_r17", 7));
+        assert_eq!(collected[6].0, get_encoded_key(b"t123_r21", 1));
+        assert_eq!(collected[7].0, get_encoded_key(b"t123_r24", 3));
+        assert_eq!(collected[8].0, get_encoded_key(b"t123_r27", 7));
+    }
+
+    #[test]
+    fn test_download_files_ext_no_key_rewrite_with_encrypted() {
+        // Creates multiple sample SST files.
+        let (_ext_sst_dir, backend, file_metas) = create_multiple_external_sst_files(2).unwrap();
+
+        // Performs the batch download with encryption.
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let (temp_dir, key_manager) = new_key_manager_for_test();
+        let importer = SstImporter::<TestEngine>::new(
+            &cfg,
+            &importer_dir,
+            Some(key_manager.clone()),
+            ApiVersion::V1,
+            false,
+        )
+        .unwrap();
+
+        // Create db with encryption env
+        let db_path = temp_dir.path().join("db");
+        let env = get_env(Some(key_manager.clone()), None /* io_rate_limiter */).unwrap();
+        let db = new_test_engine_with_env(db_path.to_str().unwrap(), DATA_CFS, env.clone());
+
+        // Prepare basic_meta and metas HashMap
+        let basic_meta = file_metas[0].1.clone();
+        let metas: HashMap<String, SstMeta> = file_metas
+            .iter()
+            .map(|(name, meta)| (name.clone(), meta.clone()))
+            .collect();
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let range = runtime
+            .block_on(importer.download_files_ext(
+                &basic_meta,
+                &metas,
+                &backend,
+                &RewriteRule::default(),
+                None,
+                Limiter::new(f64::INFINITY),
+                db,
+                DownloadExt::default(),
+            ))
+            .unwrap()
+            .unwrap();
+
+        // Verify the range covers all keys (with timestamp encoding)
+        // File 0: t123_r01 (ts=1), t123_r04 (ts=3), t123_r07 (ts=7)
+        // File 1: t123_r11 (ts=1), t123_r14 (ts=3), t123_r17 (ts=7)
+        let expected_start = Key::from_raw(b"t123_r01")
+            .append_ts(TimeStamp::new(1))
+            .into_encoded();
+        let expected_end = Key::from_raw(b"t123_r17")
+            .append_ts(TimeStamp::new(7))
+            .into_encoded();
+        assert_eq!(range.get_start(), &expected_start);
+        assert_eq!(range.get_end(), &expected_end);
+
+        // Verifies that the file is saved to the correct place and encrypted
+        let sst_file_path = importer.dir.join_for_read(&basic_meta).unwrap().save;
+        let sst_file_metadata = sst_file_path.metadata().unwrap();
+        assert!(sst_file_metadata.is_file());
+
+        // Verifies the file has proper encryption metadata
+        check_file_exists(&sst_file_path, Some(key_manager.as_ref()));
+
+        // Verifies the merged SST content is correct with key_manager
+        let env = get_env(Some(key_manager.clone()), None).unwrap();
+        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), Some(env));
+        sst_reader.verify_checksum().unwrap();
+        let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
+        iter.seek_to_first().unwrap();
+
+        let collected = collect(iter);
+        assert_eq!(collected.len(), 6); // 2 files * 3 keys each
+
+        drop(temp_dir);
+    }
+
+    #[test]
+    fn test_download_files_ext_with_key_rewrite() {
+        let (_ext_sst_dir, backend, file_metas) = create_multiple_external_sst_files(2).unwrap();
+
+        let (collected, range) = run_download_files_ext_test(
+            file_metas,
+            &backend,
+            &new_rewrite_rule(b"t123", b"t567", 0),
+            None,
+        )
+        .unwrap();
+
+        // Verify the rewritten key range (with timestamp encoding)
+        // Original: t123_r01 (ts=1), t123_r17 (ts=7)
+        // Rewritten: t567_r01 (ts=1), t567_r17 (ts=7)
+        let expected_start = Key::from_raw(b"t567_r01")
+            .append_ts(TimeStamp::new(1))
+            .into_encoded();
+        let expected_end = Key::from_raw(b"t567_r17")
+            .append_ts(TimeStamp::new(7))
+            .into_encoded();
+        assert_eq!(range.get_start(), &expected_start);
+        assert_eq!(range.get_end(), &expected_end);
+
+        // Verify SST content - all keys rewritten from t123 to t567
+        assert_eq!(collected.len(), 6); // 2 files * 3 keys each
+        assert_eq!(collected[0].0, get_encoded_key(b"t567_r01", 1));
+        assert_eq!(collected[1].0, get_encoded_key(b"t567_r04", 3));
+        assert_eq!(collected[2].0, get_encoded_key(b"t567_r07", 7));
+        assert_eq!(collected[3].0, get_encoded_key(b"t567_r11", 1));
+        assert_eq!(collected[4].0, get_encoded_key(b"t567_r14", 3));
+        assert_eq!(collected[5].0, get_encoded_key(b"t567_r17", 7));
+    }
+
+    #[test]
+    fn test_download_files_ext_with_invalid_file() {
+        // Create one valid and one invalid SST file
+        let ext_sst_dir = tempfile::tempdir().unwrap();
+
+        // Create a valid SST file
+        let mut sst_writer =
+            new_sst_writer(ext_sst_dir.path().join("sample_0.sst").to_str().unwrap());
+        sst_writer.put(b"zt123_r01", b"abc").unwrap();
+        let sst_info = sst_writer.finish().unwrap();
+
+        let mut meta0 = SstMeta::default();
+        meta0.set_uuid(Uuid::new_v4().as_bytes().to_vec());
+        meta0.set_cf_name(CF_DEFAULT.to_owned());
+        meta0.set_length(sst_info.file_size());
+        meta0.set_region_id(4);
+        meta0.mut_region_epoch().set_conf_ver(5);
+        meta0.mut_region_epoch().set_version(6);
+
+        // Create an invalid SST file (just write garbage)
+        file_system::write(ext_sst_dir.path().join("sample_1.sst"), b"not an SST file").unwrap();
+
+        let mut meta1 = SstMeta::default();
+        meta1.set_uuid(Uuid::new_v4().as_bytes().to_vec());
+        meta1.set_cf_name(CF_DEFAULT.to_owned());
+        meta1.set_length(15); // length of "not an SST file"
+        meta1.set_region_id(4);
+
+        let backend = external_storage::make_local_backend(ext_sst_dir.path());
+
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer =
+            SstImporter::<TestEngine>::new(&cfg, &importer_dir, None, ApiVersion::V1, false)
+                .unwrap();
+        let db = create_sst_test_engine().unwrap();
+
+        let mut metas = HashMap::new();
+        metas.insert("sample_0.sst".to_string(), meta0.clone());
+        metas.insert("sample_1.sst".to_string(), meta1);
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let result = runtime.block_on(importer.download_files_ext(
+            &meta0,
+            &metas,
+            &backend,
+            &RewriteRule::default(),
+            None,
+            Limiter::new(f64::INFINITY),
+            db,
+            DownloadExt::default(),
+        ));
+
+        // Should fail due to invalid SST file
+        result.unwrap_err();
+    }
+
+    #[test]
+    fn test_download_files_ext_empty_metas() {
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer =
+            SstImporter::<TestEngine>::new(&cfg, &importer_dir, None, ApiVersion::V1, false)
+                .unwrap();
+        let db = create_sst_test_engine().unwrap();
+
+        // Create a valid basic_meta with proper uuid
+        let mut basic_meta = SstMeta::default();
+        basic_meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
+        basic_meta.set_cf_name(CF_DEFAULT.to_owned());
+        basic_meta.set_region_id(1);
+
+        let metas = HashMap::new(); // Empty HashMap
+        let backend = StorageBackend::default();
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let range = runtime
+            .block_on(importer.download_files_ext(
+                &basic_meta,
+                &metas,
+                &backend,
+                &RewriteRule::default(),
+                None,
+                Limiter::new(f64::INFINITY),
+                db,
+                DownloadExt::default(),
+            ))
+            .unwrap();
+
+        // With empty metas, should return None or handle gracefully
+        assert!(range.is_none());
+    }
+
+    #[test]
+    fn test_download_files_ext_partial_range_with_key_rewrite() {
+        let (_ext_sst_dir, backend, file_metas) = create_multiple_external_sst_files(2).unwrap();
+
+        // Rewrite key prefix from t123 to t567
+        let rewrite_rule = new_rewrite_rule(b"t123", b"t567", 0);
+
+        // Set a partial range using the NEW prefix (after rewrite): t567_r04 to
+        // t567_r14 The range should use the rewritten key prefix, not the
+        // original prefix Using long keys (8 bytes) to ensure proper encoding
+        // behavior in batch8.5
+        let range_start = Key::from_raw(b"t567_r04").into_encoded();
+        let range_end = Key::from_raw(b"t567_r14")
+            .append_ts(TimeStamp::zero())
+            .into_encoded();
+
+        let (collected, range) = run_download_files_ext_test(
+            file_metas,
+            &backend,
+            &rewrite_rule,
+            Some((range_start.clone(), range_end.clone())),
+        )
+        .unwrap();
+
+        // Verify returned range (after rewrite)
+        // Original range: t123_r04 to t123_r14 (includes r04, r07, r11, r14)
+        // After rewrite: t567_r04 to t567_r14
+        let expected_start = Key::from_raw(b"t567_r04")
+            .append_ts(TimeStamp::new(3))
+            .into_encoded();
+        let expected_end = Key::from_raw(b"t567_r14")
+            .append_ts(TimeStamp::new(3))
+            .into_encoded();
+
+        assert_eq!(range.get_start(), &expected_start);
+        assert_eq!(range.get_end(), &expected_end);
+
+        // Verify SST content - should only include keys within range, all rewritten
+        assert_eq!(collected.len(), 4);
+        assert_eq!(collected[0].0, get_encoded_key(b"t567_r04", 3)); // t123_r04 -> t567_r04
+        assert_eq!(collected[0].1, b"xyz");
+        assert_eq!(collected[1].0, get_encoded_key(b"t567_r07", 7)); // t123_r07 -> t567_r07
+        assert_eq!(collected[1].1, b"pqrst");
+        assert_eq!(collected[2].0, get_encoded_key(b"t567_r11", 1)); // t123_r11 -> t567_r11
+        assert_eq!(collected[2].1, b"abc");
+        assert_eq!(collected[3].0, get_encoded_key(b"t567_r14", 3)); // t123_r14 -> t567_r14
+        assert_eq!(collected[3].1, b"xyz");
+    }
+
+    #[test]
+    fn test_download_files_ext_wrong_key_prefix() {
+        // Test error handling when using an incorrect key prefix for rewriting
+        // The SST files contain keys with prefix "t123", but we try to rewrite with
+        // prefix "xxx"
+        let (_ext_sst_dir, backend, file_metas) = create_multiple_external_sst_files(2).unwrap();
+
+        // Try to rewrite keys with wrong prefix "xxx" -> "yyy"
+        // This should fail because the actual keys have prefix "t123"
+        let result = run_download_files_ext_test(
+            file_metas,
+            &backend,
+            &new_rewrite_rule(b"xxx", b"yyy", 0),
+            None,
+        );
+
+        // Verify we get the expected WrongKeyPrefix error
+        match result {
+            Err(Error::WrongKeyPrefix { key, prefix, .. }) => {
+                // The first key in the SST is t123_r01 with timestamp 1
+                // The key returned is the MVCC encoded key (without 'z' prefix)
+                let expected_key = Key::from_raw(b"t123_r01")
+                    .append_ts(TimeStamp::new(1))
+                    .into_encoded();
+                assert_eq!(key.as_slice(), &expected_key);
+                assert_eq!(prefix, b"xxx");
+            }
+            _ => panic!("Expected WrongKeyPrefix error, got: {:?}", result),
+        }
+    }
+
+    #[test]
+    fn test_download_files_ext_rawkv_sst() {
+        test_download_files_ext_rawkv_sst_impl(ApiVersion::V1);
+        test_download_files_ext_rawkv_sst_impl(ApiVersion::V1ttl);
+        test_download_files_ext_rawkv_sst_impl(ApiVersion::V2);
+    }
+
+    fn test_download_files_ext_rawkv_sst_impl(api_version: ApiVersion) {
+        // Create RawKV SST files with range [z, {]
+        // Keys are: za, zb, zb\x00, zc, ze, zf, zf\x00, zg
+        // Range needs to cover 'z' prefix
+        let (_ext_sst_dir, backend, file_metas) =
+            create_multiple_external_rawkv_sst_files(2, b"z", b"{", false).unwrap();
+
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer =
+            SstImporter::<TestEngine>::new(&cfg, &importer_dir, None, api_version, false).unwrap();
+        let db = create_sst_test_engine().unwrap();
+
+        // Prepare basic_meta and metas HashMap
+        let basic_meta = file_metas[0].1.clone();
+        let metas: HashMap<String, SstMeta> = file_metas
+            .iter()
+            .map(|(name, meta)| (name.clone(), meta.clone()))
+            .collect();
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let range = runtime
+            .block_on(importer.download_files_ext(
+                &basic_meta,
+                &metas,
+                &backend,
+                &RewriteRule::default(),
+                None,
+                Limiter::new(f64::INFINITY),
+                db,
+                DownloadExt::default(),
+            ))
+            .unwrap()
+            .unwrap();
+
+        // Verify range covers all keys
+        // File 0: za, zb, zb\x00, zc (base_char='a')
+        // File 1: ze, zf, zf\x00, zg (base_char='e')
+        // Range should be [za, zg]
+        assert_eq!(range.get_start(), b"za");
+        assert_eq!(range.get_end(), b"zg");
+
+        // Verify file exists
+        let sst_file_path = importer.dir.join_for_read(&basic_meta).unwrap().save;
+        assert!(sst_file_path.is_file());
+
+        // Verify SST content
+        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
+        sst_reader.verify_checksum().unwrap();
+        let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
+        iter.seek_to_first().unwrap();
+
+        let collected = collect(iter);
+        // Expect 8 keys from 2 files (4 keys each)
+        // Keys include data_key prefix 'z' + user key 'z' + suffix
+        assert_eq!(collected.len(), 8);
+        // File 0 keys: zza, zzb, zzb\x00, zzc
+        assert_eq!(collected[0].0, b"zza");
+        assert_eq!(collected[0].1, b"v1");
+        assert_eq!(collected[1].0, b"zzb");
+        assert_eq!(collected[1].1, b"v2");
+        assert_eq!(collected[2].0, b"zzb\x00");
+        assert_eq!(collected[2].1, b"v3");
+        assert_eq!(collected[3].0, b"zzc");
+        assert_eq!(collected[3].1, b"v4");
+        // File 1 keys: zze, zzf, zzf\x00, zzg
+        assert_eq!(collected[4].0, b"zze");
+        assert_eq!(collected[4].1, b"v1");
+        assert_eq!(collected[5].0, b"zzf");
+        assert_eq!(collected[5].1, b"v2");
+        assert_eq!(collected[6].0, b"zzf\x00");
+        assert_eq!(collected[6].1, b"v3");
+        assert_eq!(collected[7].0, b"zzg");
+        assert_eq!(collected[7].1, b"v4");
+    }
+
+    #[test]
+    fn test_download_files_ext_rawkv_sst_partial() {
+        test_download_files_ext_rawkv_sst_partial_impl(ApiVersion::V1);
+        test_download_files_ext_rawkv_sst_partial_impl(ApiVersion::V1ttl);
+        test_download_files_ext_rawkv_sst_partial_impl(ApiVersion::V2);
+    }
+
+    fn test_download_files_ext_rawkv_sst_partial_impl(api_version: ApiVersion) {
+        // Create RawKV SST files with range [z, {]
+        // File 0: za, zb, zb\x00, zc
+        // File 1: ze, zf, zf\x00, zg
+        let (_ext_sst_dir, backend, file_metas) =
+            create_multiple_external_rawkv_sst_files(2, b"z", b"{", false).unwrap();
+
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer =
+            SstImporter::<TestEngine>::new(&cfg, &importer_dir, None, api_version, false).unwrap();
+        let db = create_sst_test_engine().unwrap();
+
+        // Modify basic_meta to specify partial range [yb, yf)
+        // Range keys must use the NEW prefix (after rewrite)
+        let mut basic_meta = file_metas[0].1.clone();
+        basic_meta.mut_range().set_start(b"yb".to_vec());
+        basic_meta.mut_range().set_end(b"yf".to_vec());
+        basic_meta.set_end_key_exclusive(true); // [yb, yf) - exclusive end
+
+        let metas: HashMap<String, SstMeta> = file_metas
+            .iter()
+            .map(|(name, meta)| (name.clone(), meta.clone()))
+            .collect();
+
+        // Test partial range [b, f) with rewrite - should include: zb, zb\x00, zc, ze
+        let mut rewrite_rule = RewriteRule::default();
+        rewrite_rule.set_old_key_prefix(b"z".to_vec());
+        rewrite_rule.set_new_key_prefix(b"y".to_vec());
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let range = runtime
+            .block_on(importer.download_files_ext(
+                &basic_meta,
+                &metas,
+                &backend,
+                &rewrite_rule,
+                None,
+                Limiter::new(f64::INFINITY),
+                db,
+                DownloadExt::default(),
+            ))
+            .unwrap()
+            .unwrap();
+
+        // Verify range covers the actual data range after rewrite
+        // Data: yb, yb\x00, yc, ye (last key is ye, not yf)
+        assert_eq!(range.get_start(), b"yb");
+        assert_eq!(range.get_end(), b"ye");
+
+        // Verify file exists
+        let sst_file_path = importer.dir.join_for_read(&basic_meta).unwrap().save;
+        assert!(sst_file_path.is_file());
+
+        // Verify SST content - should only contain keys in range [b, f): zb, zb\x00,
+        // zc, ze
+        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
+        sst_reader.verify_checksum().unwrap();
+        let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
+        iter.seek_to_first().unwrap();
+
+        let collected = collect(iter);
+        // Expected: 4 keys (zzb, zzb\x00, zzc, zze) after rewrite to 'y' prefix
+        // The keys include data_key prefix 'z' + user key with new prefix 'y'
+        assert_eq!(collected.len(), 4);
+        assert_eq!(collected[0].0, b"zyb");
+        assert_eq!(collected[0].1, b"v2");
+        assert_eq!(collected[1].0, b"zyb\x00");
+        assert_eq!(collected[1].1, b"v3");
+        assert_eq!(collected[2].0, b"zyc");
+        assert_eq!(collected[2].1, b"v4");
+        assert_eq!(collected[3].0, b"zye");
+        assert_eq!(collected[3].1, b"v1");
+    }
+
+    // Helper function to create multiple external SST files with overlapping keys
+    // for testing BinaryIterator's deduplication functionality.
+    // Each file can have custom keys specified by the keys_per_file parameter.
+    fn create_external_sst_files_with_overlap(
+        keys_per_file: Vec<Vec<(&[u8], u64)>>, // Vec of (key, timestamp) for each file
+    ) -> Result<(TempDir, StorageBackend, Vec<(String, SstMeta)>)> {
+        let ext_sst_dir = tempfile::tempdir()?;
+        let mut metas = Vec::new();
+
+        for (i, keys) in keys_per_file.iter().enumerate() {
+            let file_name = format!("sample_{}.sst", i);
+            let mut sst_writer =
+                new_sst_writer(ext_sst_dir.path().join(&file_name).to_str().unwrap());
+
+            for (key, ts) in keys {
+                sst_writer.put(&get_encoded_key(key, *ts), b"value")?;
+            }
+
+            let sst_info = sst_writer.finish()?;
+
+            let mut meta = SstMeta::default();
+            let uuid = Uuid::new_v4();
+            meta.set_uuid(uuid.as_bytes().to_vec());
+            meta.set_cf_name(CF_DEFAULT.to_owned());
+            meta.set_length(sst_info.file_size());
+            meta.set_region_id(4);
+            meta.mut_region_epoch().set_conf_ver(5);
+            meta.mut_region_epoch().set_version(6);
+
+            metas.push((file_name, meta));
+        }
+
+        let backend = external_storage::make_local_backend(ext_sst_dir.path());
+        Ok((ext_sst_dir, backend, metas))
+    }
+
+    // Helper function to create multiple RawKV SST files with overlapping keys
+    // for testing BinaryIterator's deduplication in RawKV mode.
+    fn create_rawkv_sst_files_with_overlap(
+        keys_per_file: Vec<Vec<&[u8]>>, // Vec of raw keys for each file
+    ) -> Result<(TempDir, StorageBackend, Vec<(String, SstMeta)>)> {
+        let ext_sst_dir = tempfile::tempdir()?;
+        let mut metas = Vec::new();
+
+        for (i, keys) in keys_per_file.iter().enumerate() {
+            let file_name = format!("sample_rawkv_{}.sst", i);
+            let mut sst_writer =
+                new_sst_writer(ext_sst_dir.path().join(&file_name).to_str().unwrap());
+
+            for key in keys {
+                // RawKV format: data_key prefix 'z' + user key
+                let mut full_key = vec![b'z'];
+                full_key.extend_from_slice(key);
+                sst_writer.put(&full_key, b"value")?;
+            }
+
+            let sst_info = sst_writer.finish()?;
+
+            let mut meta = SstMeta::default();
+            let uuid = Uuid::new_v4();
+            meta.set_uuid(uuid.as_bytes().to_vec());
+            meta.set_cf_name(CF_DEFAULT.to_owned());
+            meta.set_length(sst_info.file_size());
+            meta.set_region_id(4);
+            meta.mut_region_epoch().set_conf_ver(5);
+            meta.mut_region_epoch().set_version(6);
+
+            metas.push((file_name, meta));
+        }
+
+        let backend = external_storage::make_local_backend(ext_sst_dir.path());
+        Ok((ext_sst_dir, backend, metas))
+    }
+
+    #[test]
+    fn test_download_files_ext_deduplication() {
+        // Test BinaryIterator's automatic deduplication when multiple SST files
+        // contain the same keys (MVCC format with timestamps).
+        //
+        // This tests the core deduplication logic in BinaryIterator::next()
+        // (sst_merge_iter.rs:155-162) which skips duplicate keys from different files.
+
+        // Create 3 SST files with overlapping keys
+        let (_ext_sst_dir, backend, file_metas) = create_external_sst_files_with_overlap(vec![
+            // File 0: t123_r01@ts1, t123_r04@ts3, t123_r07@ts7
+            vec![(b"t123_r01", 1), (b"t123_r04", 3), (b"t123_r07", 7)],
+            // File 1: t123_r04@ts3 (duplicate), t123_r10@ts1, t123_r13@ts3
+            vec![(b"t123_r04", 3), (b"t123_r10", 1), (b"t123_r13", 3)],
+            // File 2: t123_r01@ts1 (duplicate), t123_r07@ts7 (duplicate), t123_r16@ts1
+            vec![(b"t123_r01", 1), (b"t123_r07", 7), (b"t123_r16", 1)],
+        ])
+        .unwrap();
+
+        let (collected, range) =
+            run_download_files_ext_test(file_metas, &backend, &RewriteRule::default(), None)
+                .unwrap();
+
+        // Verify range covers all unique keys
+        let expected_start = Key::from_raw(b"t123_r01")
+            .append_ts(TimeStamp::new(1))
+            .into_encoded();
+        let expected_end = Key::from_raw(b"t123_r16")
+            .append_ts(TimeStamp::new(1))
+            .into_encoded();
+        assert_eq!(range.get_start(), &expected_start);
+        assert_eq!(range.get_end(), &expected_end);
+
+        // Verify deduplication: should have exactly 6 unique keys
+        // (r01, r04, r07, r10, r13, r16)
+        assert_eq!(collected.len(), 6);
+        assert_eq!(collected[0].0, get_encoded_key(b"t123_r01", 1));
+        assert_eq!(collected[1].0, get_encoded_key(b"t123_r04", 3));
+        assert_eq!(collected[2].0, get_encoded_key(b"t123_r07", 7));
+        assert_eq!(collected[3].0, get_encoded_key(b"t123_r10", 1));
+        assert_eq!(collected[4].0, get_encoded_key(b"t123_r13", 3));
+        assert_eq!(collected[5].0, get_encoded_key(b"t123_r16", 1));
+    }
+
+    #[test]
+    fn test_download_files_ext_deduplication_rawkv() {
+        // Test BinaryIterator's deduplication in RawKV mode.
+        // RawKV keys don't have timestamps, so deduplication is purely based on key
+        // bytes.
+
+        // Create 3 RawKV SST files with overlapping keys
+        let (_ext_sst_dir, backend, file_metas) = create_rawkv_sst_files_with_overlap(vec![
+            // File 0: zza, zzb, zzc, zzd
+            vec![b"zza", b"zzb", b"zzc", b"zzd"],
+            // File 1: zzb (duplicate), zzc (duplicate), zze, zzf
+            vec![b"zzb", b"zzc", b"zze", b"zzf"],
+            // File 2: zza (duplicate), zzd (duplicate), zzg
+            vec![b"zza", b"zzd", b"zzg"],
+        ])
+        .unwrap();
+
+        let (collected, range) =
+            run_download_files_ext_test(file_metas, &backend, &RewriteRule::default(), None)
+                .unwrap();
+
+        // Verify range covers all unique keys
+        assert_eq!(range.get_start(), b"zza");
+        assert_eq!(range.get_end(), b"zzg");
+
+        // Verify deduplication: should have exactly 7 unique keys
+        // (zza, zzb, zzc, zzd, zze, zzf, zzg)
+        assert_eq!(collected.len(), 7);
+        assert_eq!(collected[0].0, b"zzza"); // data_key('z') + user_key("zza")
+        assert_eq!(collected[1].0, b"zzzb");
+        assert_eq!(collected[2].0, b"zzzc");
+        assert_eq!(collected[3].0, b"zzzd");
+        assert_eq!(collected[4].0, b"zzze");
+        assert_eq!(collected[5].0, b"zzzf");
+        assert_eq!(collected[6].0, b"zzzg");
+    }
+
+    #[test]
+    fn test_download_files_ext_merge_order() {
+        // Test that BinaryIterator correctly merges multiple SST files in sorted order.
+        // This validates the heap-based merge algorithm (sift_up/sift_down operations).
+        //
+        // Keys are interleaved across files to thoroughly test the heap operations:
+        // - File 0 has keys at positions 2, 8, 14 (r02, r08, r14)
+        // - File 1 has keys at positions 1, 7, 13 (r01, r07, r13)
+        // - File 2 has keys at positions 4, 10, 16 (r04, r10, r16)
+
+        let (_ext_sst_dir, backend, file_metas) = create_external_sst_files_with_overlap(vec![
+            // File 0: interleaved keys
+            vec![(b"t123_r02", 1), (b"t123_r08", 1), (b"t123_r14", 1)],
+            // File 1: interleaved keys
+            vec![(b"t123_r01", 1), (b"t123_r07", 1), (b"t123_r13", 1)],
+            // File 2: interleaved keys
+            vec![(b"t123_r04", 1), (b"t123_r10", 1), (b"t123_r16", 1)],
+        ])
+        .unwrap();
+
+        let (collected, range) =
+            run_download_files_ext_test(file_metas, &backend, &RewriteRule::default(), None)
+                .unwrap();
+
+        // Verify range covers all keys
+        let expected_start = Key::from_raw(b"t123_r01")
+            .append_ts(TimeStamp::new(1))
+            .into_encoded();
+        let expected_end = Key::from_raw(b"t123_r16")
+            .append_ts(TimeStamp::new(1))
+            .into_encoded();
+        assert_eq!(range.get_start(), &expected_start);
+        assert_eq!(range.get_end(), &expected_end);
+
+        // Verify strict ordering: all 9 keys should be in sorted order
+        assert_eq!(collected.len(), 9);
+        assert_eq!(collected[0].0, get_encoded_key(b"t123_r01", 1));
+        assert_eq!(collected[1].0, get_encoded_key(b"t123_r02", 1));
+        assert_eq!(collected[2].0, get_encoded_key(b"t123_r04", 1));
+        assert_eq!(collected[3].0, get_encoded_key(b"t123_r07", 1));
+        assert_eq!(collected[4].0, get_encoded_key(b"t123_r08", 1));
+        assert_eq!(collected[5].0, get_encoded_key(b"t123_r10", 1));
+        assert_eq!(collected[6].0, get_encoded_key(b"t123_r13", 1));
+        assert_eq!(collected[7].0, get_encoded_key(b"t123_r14", 1));
+        assert_eq!(collected[8].0, get_encoded_key(b"t123_r16", 1));
+
+        // Additional check: ensure each key is strictly less than the next
+        for i in 0..collected.len() - 1 {
+            assert!(collected[i].0 < collected[i + 1].0);
+        }
+    }
+
+    #[test]
+    fn test_download_files_ext_with_empty_files() {
+        // Test BinaryIterator's handling when some files have no keys after range
+        // filtering. This simulates the behavior of empty iterators and
+        // validates the logic in seek_to_first() that skips empty/exhausted
+        // iterators (sst_merge_iter.rs:132-134).
+        //
+        // Note: We can't create truly empty SST files because RocksDB rejects them,
+        // but we can create files where all keys are outside the range filter,
+        // effectively making them empty from the iterator's perspective.
+
+        // Create 3 SST files with different key ranges
+        let (_ext_sst_dir, backend, file_metas) = create_external_sst_files_with_overlap(vec![
+            // File 0: t123_r01@ts1 - will be included
+            vec![(b"t123_r01", 1)],
+            // File 1: t123_r20@ts1 - will be excluded by range filter
+            vec![(b"t123_r20", 1)],
+            // File 2: t123_r04@ts1, t123_r07@ts1 - will be included
+            vec![(b"t123_r04", 1), (b"t123_r07", 1)],
+        ])
+        .unwrap();
+
+        // Apply range filter [t123_r00, t123_r10) to exclude File 1's keys
+        let range_start = Key::from_raw(b"t123_r00")
+            .append_ts(TimeStamp::new(1))
+            .into_encoded();
+        let range_end = Key::from_raw(b"t123_r10")
+            .append_ts(TimeStamp::new(1))
+            .into_encoded();
+
+        let (collected, range) = run_download_files_ext_test(
+            file_metas,
+            &backend,
+            &RewriteRule::default(),
+            Some((range_start.clone(), range_end.clone())),
+        )
+        .unwrap();
+
+        // Verify range covers only filtered keys (File 1's key r20 should be excluded)
+        let expected_start = Key::from_raw(b"t123_r01")
+            .append_ts(TimeStamp::new(1))
+            .into_encoded();
+        let expected_end = Key::from_raw(b"t123_r07")
+            .append_ts(TimeStamp::new(1))
+            .into_encoded();
+        assert_eq!(range.get_start(), &expected_start);
+        assert_eq!(range.get_end(), &expected_end);
+
+        // Verify only keys within range are included (File 1's r20 is excluded)
+        assert_eq!(collected.len(), 3);
+        assert_eq!(collected[0].0, get_encoded_key(b"t123_r01", 1));
+        assert_eq!(collected[1].0, get_encoded_key(b"t123_r04", 1));
+        assert_eq!(collected[2].0, get_encoded_key(b"t123_r07", 1));
     }
 }

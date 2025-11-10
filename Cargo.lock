@@ -3770,7 +3770,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#0503050094661a00e390e3c235966791d1c59eb0"
+source = "git+https://github.com/pingcap/kvproto.git#291054671541d529d18b3cbe1dc736a0cfff5ab0"
 dependencies = [
  "bytes",
  "futures 0.3.15",
@@ -6531,6 +6531,7 @@ dependencies = [
  "test_sst_importer",
  "test_util",
  "thiserror 1.0.40",
+ "tikv",
  "tikv_alloc",
  "tikv_util",
  "tokio",
