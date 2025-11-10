@@ -43,7 +43,7 @@ use tikv::{
 use tikv_util::{
     config::VersionTrack,
     time::ThreadReadId,
-    worker::{Builder as WorkerBuilder, LazyWorker},
+    worker::{Builder as WorkerBuilder, HealthChecker, LazyWorker},
 };
 
 use super::*;
@@ -52,6 +52,14 @@ use crate::Config;
 pub struct ChannelTransportCore {
     snap_paths: HashMap<u64, (SnapManager, TempDir)>,
     routers: HashMap<u64, SimulateTransport<ServerRaftStoreRouter<RocksEngine, RaftTestEngine>>>,
+}
+
+struct DummyHealthChecker;
+
+impl HealthChecker for DummyHealthChecker {
+    fn get_all_max_latencies(&self) -> HashMap<u64, f64> {
+        HashMap::default()
+    }
 }
 
 #[derive(Clone)]
@@ -337,6 +345,7 @@ impl Simulator for NodeCluster {
             DiskCheckRunner::dummy(),
             GrpcServiceManager::dummy(),
             Arc::new(AtomicU64::new(0)),
+            Arc::new(DummyHealthChecker),
         )?;
         assert!(
             engines

@@ -66,7 +66,7 @@ use tikv_util::{
     time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant, SlowTimer},
     timer::SteadyTimer,
     warn,
-    worker::{LazyWorker, Scheduler, Worker},
+    worker::{HealthChecker, LazyWorker, Scheduler, Worker},
     yatp_pool::FuturePool,
     Either, InspectFactor, RingQueue,
 };
@@ -1649,6 +1649,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         mut disk_check_runner: DiskCheckRunner,
         grpc_service_mgr: GrpcServiceManager,
         safe_point: Arc<AtomicU64>,
+        health_checker: Arc<dyn HealthChecker>,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1794,6 +1795,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             causal_ts_provider,
             snap_generator_pool,
             grpc_service_mgr,
+            Arc::clone(&health_checker),
         )?;
         Ok(())
     }
@@ -1813,6 +1815,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         snap_generator_pool: FuturePool,
         grpc_service_mgr: GrpcServiceManager,
+        health_checker: Arc<dyn HealthChecker>,
     ) -> Result<()> {
         let cfg = builder.cfg.value().clone();
         let store = builder.store.clone();
@@ -1905,6 +1908,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             coprocessor_host,
             causal_ts_provider,
             grpc_service_mgr,
+            Arc::clone(&health_checker),
         );
         assert!(workers.pd_worker.start(pd_runner));
 

@@ -3,7 +3,6 @@
 use std::{
     cmp,
     cmp::Ordering as CmpOrdering,
-    collections::HashMap as StdHashMap,
     fmt::{self, Display, Formatter},
     io, mem,
     sync::{
@@ -49,7 +48,7 @@ use tikv_util::{
     topn::TopN,
     trend::{RequestPerSecRecorder, Trend},
     warn,
-    worker::{Runnable, ScheduleError, Scheduler},
+    worker::{HealthChecker, Runnable, ScheduleError, Scheduler},
     InspectFactor,
 };
 use yatp::Remote;
@@ -971,14 +970,14 @@ pub const NETWORK_TIMEOUT_THRESHOLD: Duration = Duration::from_secs(1);
 /// which is greater than 1 to PD.
 pub struct UnifiedSlowScore {
     disk_factors: Vec<SlowScore>,
-    network_factors: Arc<Mutex<StdHashMap<u64, SlowScore>>>,
+    network_factors: Arc<Mutex<HashMap<u64, SlowScore>>>,
 }
 
 impl UnifiedSlowScore {
     pub fn new(cfg: &Config) -> Self {
         let mut unified_slow_score = UnifiedSlowScore {
             disk_factors: Vec::new(),
-            network_factors: Arc::new(Mutex::new(StdHashMap::new())),
+            network_factors: Arc::new(Mutex::new(HashMap::default())),
         };
         // The first factor is for Raft Disk I/O.
         unified_slow_score.disk_factors.push(SlowScore::new(
@@ -1014,13 +1013,12 @@ impl UnifiedSlowScore {
     pub fn record_network(
         &mut self,
         id: u64,
-        durations: StdHashMap<u64, Duration>, // store_id -> duration
+        durations: HashMap<u64, Duration>, // store_id -> duration
     ) {
         let mut network_factors = self.network_factors.lock().unwrap();
 
         // Remove store_ids that exist in network_factors but not in durations
-        let store_ids_in_durations: std::collections::HashSet<u64> =
-            durations.keys().cloned().collect();
+        let store_ids_in_durations: HashSet<u64> = durations.keys().cloned().collect();
         network_factors.retain(|store_id, _| store_ids_in_durations.contains(store_id));
 
         // Record durations for each store
@@ -1167,6 +1165,8 @@ where
 
     // Service manager for grpc service.
     grpc_service_manager: GrpcServiceManager,
+
+    health_checker: Arc<dyn HealthChecker>,
 }
 
 impl<EK, ER, T> Runner<EK, ER, T>
@@ -1191,6 +1191,7 @@ where
         coprocessor_host: CoprocessorHost<EK>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         grpc_service_manager: GrpcServiceManager,
+        health_checker: Arc<dyn HealthChecker>,
     ) -> Runner<EK, ER, T> {
         let mut store_stat = StoreStat::default();
         store_stat.set_cpu_quota(SysQuota::cpu_cores_quota(), cfg.inspect_cpu_util_thd);
@@ -1268,6 +1269,7 @@ where
             coprocessor_host,
             causal_ts_provider,
             grpc_service_manager,
+            health_checker,
         }
     }
 
@@ -2352,15 +2354,23 @@ where
                     }),
                 ),
                 InspectFactor::Network => {
-                    let duration = std::collections::HashMap::<u64, Duration>::new();
+                    let network_durations: HashMap<u64, Duration> = self
+                        .health_checker
+                        .get_all_max_latencies()
+                        .into_iter()
+                        .map(|(store_id, latency_ms)| {
+                            (store_id, Duration::from_millis(latency_ms as u64))
+                        })
+                        .collect();
 
-                    for (store_id, network_duration) in &duration {
+                    self.slow_score
+                        .record_network(id, network_durations.clone());
+
+                    for (store_id, network_duration) in &network_durations {
                         STORE_INSPECT_NETWORK_DURATION_HISTOGRAM
                             .with_label_values(&[&store_id.to_string()])
                             .observe(tikv_util::time::duration_to_sec(*network_duration));
                     }
-
-                    self.slow_score.record_network(id, duration);
 
                     return;
                 }
@@ -3272,7 +3282,7 @@ mod tests {
         let mut unified_slow_score = UnifiedSlowScore::new(&cfg);
 
         // Test recording network durations for multiple stores
-        let mut durations = StdHashMap::new();
+        let mut durations = HashMap::default();
         durations.insert(1u64, Duration::from_millis(100));
         durations.insert(2u64, Duration::from_millis(200));
         durations.insert(3u64, Duration::from_millis(300));
@@ -3301,7 +3311,7 @@ mod tests {
         unified_slow_score.record_network(1, durations.clone());
 
         // Test updating with fewer stores (should remove missing stores)
-        let mut new_durations = StdHashMap::new();
+        let mut new_durations = HashMap::default();
         new_durations.insert(1u64, Duration::from_millis(150));
         new_durations.insert(2u64, Duration::from_millis(250));
         // Store 3 is not included, should be removed
@@ -3321,7 +3331,7 @@ mod tests {
         let mut unified_slow_score = UnifiedSlowScore::new(&cfg);
 
         // Record network durations
-        let mut durations = StdHashMap::new();
+        let mut durations = HashMap::default();
         durations.insert(1u64, Duration::from_millis(100));
         durations.insert(2u64, Duration::from_millis(200));
 
@@ -3364,7 +3374,7 @@ mod tests {
         assert!(scores.is_empty());
 
         // Record network durations
-        let mut durations = StdHashMap::new();
+        let mut durations = HashMap::default();
         durations.insert(1u64, Duration::from_millis(100));
         durations.insert(2u64, Duration::from_millis(200));
         unified_slow_score.record_network(1, durations);
@@ -3404,7 +3414,7 @@ mod tests {
         assert_eq!(scores_after_ticks[&2], 1);
 
         // Now record some timeout durations to test score increase
-        let mut timeout_durations = StdHashMap::new();
+        let mut timeout_durations = HashMap::default();
         timeout_durations.insert(1u64, Duration::from_secs(2)); // > NETWORK_TIMEOUT_THRESHOLD (1s)
         timeout_durations.insert(2u64, Duration::from_secs(3)); // > NETWORK_TIMEOUT_THRESHOLD (1s)
 
@@ -3435,7 +3445,7 @@ mod tests {
         assert!(scores_after_timeout[&2] > 1);
 
         // Test recovery - record normal durations (no timeouts)
-        let mut normal_durations = StdHashMap::new();
+        let mut normal_durations = HashMap::default();
         normal_durations.insert(1u64, Duration::from_millis(100));
         normal_durations.insert(2u64, Duration::from_millis(200));
 

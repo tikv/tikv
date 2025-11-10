@@ -78,7 +78,7 @@ use tikv_util::{
     quota_limiter::QuotaLimiter,
     sys::thread::ThreadBuildWrapper,
     time::ThreadReadId,
-    worker::{Builder as WorkerBuilder, LazyWorker, Worker},
+    worker::{Builder as WorkerBuilder, HealthChecker, LazyWorker, Worker},
     HandyRwLock,
 };
 use tokio::runtime::Builder as TokioBuilder;
@@ -97,6 +97,14 @@ type SimulateServerTransport =
 #[derive(Default, Clone)]
 pub struct AddressMap {
     addrs: Arc<Mutex<HashMap<u64, String>>>,
+}
+
+struct DummyHealthChecker;
+
+impl HealthChecker for DummyHealthChecker {
+    fn get_all_max_latencies(&self) -> HashMap<u64, f64> {
+        HashMap::default()
+    }
 }
 
 impl AddressMap {
@@ -622,6 +630,7 @@ impl ServerCluster {
             DiskCheckRunner::dummy(),
             GrpcServiceManager::dummy(),
             Arc::new(AtomicU64::new(0)),
+            Arc::new(DummyHealthChecker),
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();

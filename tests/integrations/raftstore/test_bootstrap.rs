@@ -5,6 +5,7 @@ use std::{
     time::Duration,
 };
 
+use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{
     DbOptionsExt, Engines, MiscExt, Peekable, RaftEngine, RaftEngineReadOnly, ALL_CFS, CF_DEFAULT,
@@ -27,8 +28,16 @@ use test_raftstore::*;
 use tikv::{import::SstImporter, server::Node};
 use tikv_util::{
     config::VersionTrack,
-    worker::{dummy_scheduler, Builder as WorkerBuilder, LazyWorker},
+    worker::{dummy_scheduler, Builder as WorkerBuilder, HealthChecker, LazyWorker},
 };
+
+struct DummyHealthChecker;
+
+impl HealthChecker for DummyHealthChecker {
+    fn get_all_max_latencies(&self) -> HashMap<u64, f64> {
+        HashMap::default()
+    }
+}
 
 fn test_bootstrap_idempotent<T: Simulator>(cluster: &mut Cluster<T>) {
     // assume that there is a node  bootstrap the cluster and add region in pd
@@ -127,6 +136,7 @@ fn test_node_bootstrap_with_prepared_data() {
         DiskCheckRunner::dummy(),
         GrpcServiceManager::dummy(),
         Arc::new(AtomicU64::new(0)),
+        Arc::new(DummyHealthChecker),
     )
     .unwrap();
     assert!(
