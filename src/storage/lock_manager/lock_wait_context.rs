@@ -410,7 +410,7 @@ mod tests {
         // Add a corresponding entry to the lock waiting queue to test actively removing
         // the entry from the queue.
         lock_wait_queues.push_lock_wait(
-            LockWaitEntry {
+            Box::new(LockWaitEntry {
                 key: key.clone(),
                 lock_hash: key.gen_hash(),
                 parameters: PessimisticLockParameters {
@@ -424,7 +424,7 @@ mod tests {
                 req_states: ctx.get_shared_states().clone(),
                 legacy_wake_up_index: None,
                 key_cb: None,
-            },
+            }),
             kvproto::kvrpcpb::LockInfo::default(),
         );
         lock_wait_queues.must_have_next_entry(b"k", 1);
