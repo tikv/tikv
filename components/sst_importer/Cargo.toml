@@ -64,4 +64,5 @@ engine_test = { workspace = true }
 tempfile = "3.0"
 test_sst_importer = { workspace = true }
 test_util = { workspace = true }
+tikv = { workspace = true }
 tokio-util = { version = "0.7", features = ["compat"] }
