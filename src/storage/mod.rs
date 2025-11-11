@@ -109,7 +109,7 @@ use tracker::{
     TlsTrackedFuture, TrackerToken, clear_tls_tracker_token, set_tls_tracker_token,
     with_tls_tracker,
 };
-use txn_types::{Key, KvPair, Lock, LockType, TimeStamp, TsSet, Value};
+use txn_types::{Key, KvPair, KvPairEntry, Lock, LockType, TimeStamp, TsSet, Value, ValueEntry};
 
 use self::kv::SnapContext;
 pub use self::{
@@ -606,12 +606,29 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     /// Get value of the given key from a snapshot.
     ///
     /// Only writes that are committed before `start_ts` are visible.
+    #[inline]
     pub fn get(
+        &self,
+        ctx: Context,
+        key: Key,
+        start_ts: TimeStamp,
+    ) -> impl Future<Output = Result<(Option<Value>, KvGetStatistics)>> {
+        self.get_entry(ctx, key, start_ts, false).map(|result| {
+            let (entry, stats) = result?;
+            Ok((entry.map(|e| e.value), stats))
+        })
+    }
+
+    /// Get value entry of the given key from a snapshot.
+    ///
+    /// Only writes that are committed before `start_ts` are visible.
+    pub fn get_entry(
         &self,
         mut ctx: Context,
         key: Key,
         start_ts: TimeStamp,
-    ) -> impl Future<Output = Result<(Option<Value>, KvGetStatistics)>> {
+        load_commit_ts: bool,
+    ) -> impl Future<Output = Result<(Option<ValueEntry>, KvGetStatistics)>> {
         let deadline = Self::get_deadline(&ctx);
         const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
@@ -703,7 +720,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             false,
                         );
                         snap_store
-                            .get(&key, &mut statistics)
+                            .get_entry(&key, load_commit_ts, &mut statistics)
                             // map storage::txn::Error -> storage::Error
                             .map_err(Error::from)
                             .inspect(|_r| {
@@ -743,7 +760,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         .as_ref()
                         .unwrap_or(&None)
                         .as_ref()
-                        .map_or(0, |v| v.len());
+                        .map_or(0, |v| v.value.len());
                     record_network_out_bytes(result_len as u64);
                     let read_bytes = key.len() + result_len;
                     sample.add_read_bytes(read_bytes);
@@ -1225,7 +1242,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         mut ctx: Context,
         keys: Vec<Key>,
         start_ts: TimeStamp,
-    ) -> impl Future<Output = Result<(Vec<Result<KvPair>>, KvGetStatistics)>> {
+        load_commit_ts: bool,
+    ) -> impl Future<Output = Result<(Vec<Result<KvPairEntry>>, KvGetStatistics)>> {
         let deadline = Self::get_deadline(&ctx);
         const CMD: CommandKind = CommandKind::batch_get;
         let priority = ctx.get_priority();
@@ -1322,7 +1340,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         );
                         let mut stats = Statistics::default();
                         let result = snap_store
-                            .batch_get(&keys, &mut statistics)
+                            .batch_get(&keys, load_commit_ts, &mut statistics)
                             .map_err(Error::from)
                             .map(|v| {
                                 let kv_pairs: Vec<_> = v
@@ -1350,7 +1368,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                     .get(CMD)
                                     .observe(kv_pairs.len() as f64);
                                 record_network_out_bytes(kv_pairs.iter().fold(0u64, |acc, r| {
-                                    acc + r.as_ref().map_or(0, |(k, v)| k.len() + v.len()) as u64
+                                    acc + r.as_ref().map_or(0, |(k, v)| k.len() + v.value.len())
+                                        as u64
                                 }));
                                 kv_pairs
                             });
@@ -3831,7 +3850,7 @@ pub mod test_util {
         types::{PessimisticLockKeyResult, PessimisticLockResults},
     };
 
-    pub fn expect_none(x: Option<Value>) {
+    pub fn expect_none<T: PartialEq + Debug>(x: Option<T>) {
         assert_eq!(x, None);
     }
 
@@ -3841,6 +3860,11 @@ pub mod test_util {
 
     pub fn expect_multi_values(v: Vec<Option<KvPair>>, x: Vec<Result<KvPair>>) {
         let x: Vec<Option<KvPair>> = x.into_iter().map(Result::ok).collect();
+        assert_eq!(x, v);
+    }
+
+    pub fn expect_multi_value_entries(v: Vec<Option<KvPairEntry>>, x: Vec<Result<KvPairEntry>>) {
+        let x: Vec<Option<KvPairEntry>> = x.into_iter().map(Result::ok).collect();
         assert_eq!(x, v);
     }
 
@@ -4507,6 +4531,7 @@ mod tests {
                 Context::default(),
                 vec![Key::from_raw(b"c"), Key::from_raw(b"d")],
                 1.into(),
+                false,
             )),
         );
         let consumer = GetConsumer::new();
@@ -5136,12 +5161,13 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        expect_multi_values(
+        expect_multi_value_entries(
             vec![None],
             block_on(storage.batch_get(
                 Context::default(),
                 vec![Key::from_raw(b"c"), Key::from_raw(b"d")],
                 2.into(),
+                false,
             ))
             .unwrap()
             .0,
@@ -5163,11 +5189,11 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        expect_multi_values(
+        expect_multi_value_entries(
             vec![
-                Some((b"c".to_vec(), b"cc".to_vec())),
-                Some((b"a".to_vec(), b"aa".to_vec())),
-                Some((b"b".to_vec(), b"bb".to_vec())),
+                Some((b"c".to_vec(), ValueEntry::from_value(b"cc".to_vec()))),
+                Some((b"a".to_vec(), ValueEntry::from_value(b"aa".to_vec()))),
+                Some((b"b".to_vec(), ValueEntry::from_value(b"bb".to_vec()))),
             ],
             block_on(storage.batch_get(
                 Context::default(),
@@ -5178,6 +5204,7 @@ mod tests {
                     Key::from_raw(b"b"),
                 ],
                 5.into(),
+                false,
             ))
             .unwrap()
             .0,
@@ -10222,6 +10249,7 @@ mod tests {
                 ctx,
                 vec![Key::from_raw(b"a"), Key::from_raw(b"key")],
                 100.into(),
+                false,
             ))
         };
         let key_error = extract_key_error(&batch_get(ctx.clone()).unwrap_err());
@@ -10321,15 +10349,16 @@ mod tests {
             ctx.clone(),
             vec![Key::from_raw(&k1), Key::from_raw(&k2)],
             110.into(),
+            false,
         ))
         .unwrap()
         .0;
         if res[0].as_ref().unwrap().0 == k1 {
-            assert_eq!(&res[0].as_ref().unwrap().1, &v1);
-            assert_eq!(&res[1].as_ref().unwrap().1, &v2);
+            assert_eq!(&res[0].as_ref().unwrap().1.value, &v1);
+            assert_eq!(&res[1].as_ref().unwrap().1.value, &v2);
         } else {
-            assert_eq!(&res[0].as_ref().unwrap().1, &v2);
-            assert_eq!(&res[1].as_ref().unwrap().1, &v1);
+            assert_eq!(&res[0].as_ref().unwrap().1.value, &v2);
+            assert_eq!(&res[1].as_ref().unwrap().1.value, &v1);
         }
         // batch get commands
         let mut req = GetRequest::default();

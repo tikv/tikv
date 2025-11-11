@@ -1594,7 +1594,7 @@ fn test_deadline_exceeded_on_get_and_batch_get() {
         block_on(f),
         Err(StorageError(box StorageErrorInner::DeadlineExceeded))
     ));
-    let f = storage.batch_get(ctx.clone(), vec![Key::from_raw(b"a")], 1.into());
+    let f = storage.batch_get(ctx.clone(), vec![Key::from_raw(b"a")], 1.into(), false);
     assert!(matches!(
         block_on(f),
         Err(StorageError(box StorageErrorInner::DeadlineExceeded))
