@@ -78,11 +78,11 @@ impl<S: Store> Storage for TikvStorage<S> {
         // TODO: Default CF does not need to be accessed if KeyOnly.
         // TODO: No need to check newer ts data if self.scanner has met newer ts data.
         let key = range.0;
-        let value = self
+        let entry = self
             .store
-            .incremental_get(&Key::from_raw(&key))
+            .incremental_get_entry(&Key::from_raw(&key), false)
             .map_err(Error::from)?;
-        Ok(value.map(move |v| (key, v)))
+        Ok(entry.map(move |e| (key, e.value)))
     }
 
     #[inline]
