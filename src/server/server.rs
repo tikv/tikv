@@ -68,6 +68,7 @@ struct BuilderFactory<S: Tikv + Send + Clone + 'static> {
     cfg: Arc<VersionTrack<Config>>,
     security_mgr: Arc<SecurityManager>,
     health_service: HealthService,
+    memory_quota: ResourceQuota,
 }
 
 impl<S> BuilderFactory<S>
@@ -79,12 +80,14 @@ where
         cfg: Arc<VersionTrack<Config>>,
         security_mgr: Arc<SecurityManager>,
         health_service: HealthService,
+        memory_quota: ResourceQuota,
     ) -> BuilderFactory<S> {
         BuilderFactory {
             kv_service,
             cfg,
             security_mgr,
             health_service,
+            memory_quota,
         }
     }
 }
@@ -96,8 +99,6 @@ where
     fn create_builder(&self, env: Arc<Environment>) -> Result<ServerBuilder> {
         let addr = SocketAddr::from_str(&self.cfg.value().addr)?;
         let ip: String = format!("{}", addr.ip());
-        let mem_quota = ResourceQuota::new(Some("ServerMemQuota"))
-            .resize_memory(self.cfg.value().grpc_memory_pool_quota.0 as usize);
 
         // Best-effort algorithm selection: If the client doesn't support the specified
         // algorithm, the server may fall back to a different one or disable
@@ -117,7 +118,7 @@ where
             .stream_initial_window_size(self.cfg.value().grpc_stream_initial_window_size.0 as i32)
             .max_concurrent_stream(self.cfg.value().grpc_concurrent_stream)
             .max_receive_message_len(-1)
-            .set_resource_quota(mem_quota)
+            .set_resource_quota(self.memory_quota.clone())
             .max_send_message_len(-1)
             .http2_max_ping_strikes(i32::MAX) // For pings without data from clients.
             .keepalive_time(self.cfg.value().grpc_keepalive_time.into())
@@ -235,16 +236,18 @@ where
             health_feedback_interval,
             raft_message_filter,
         );
+
+        let mem_quota = ResourceQuota::new(Some("ServerMemQuota"))
+            .resize_memory(cfg.value().grpc_memory_pool_quota.0 as usize);
         let builder_factory = Box::new(BuilderFactory::new(
             kv_service,
             cfg.clone(),
             security_mgr.clone(),
             health_controller.get_grpc_health_service(),
+            mem_quota.clone(),
         ));
 
         let addr = SocketAddr::from_str(&cfg.value().addr)?;
-        let mem_quota = ResourceQuota::new(Some("ServerMemQuota"))
-            .resize_memory(cfg.value().grpc_memory_pool_quota.0 as usize);
         let builder = Either::Left(builder_factory.create_builder(env.clone())?);
 
         let conn_builder = ConnectionBuilder::new(
