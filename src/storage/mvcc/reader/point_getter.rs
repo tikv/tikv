@@ -178,6 +178,12 @@ impl<S: Snapshot> PointGetter<S> {
     }
 
     /// Get the value entry of a user key.
+    ///
+    /// If `load_commit_ts` is true, the commit timestamp will be present in
+    /// the return `ValueEntry`, otherwise `ValueEntry.CommitTS` will be `None`.
+    /// The access_locks will be skipped if `load_commit_ts` to ensure a valid
+    /// commit timestamp can be fetched, so, set it to false if you don't
+    /// need commit_ts to reduce unnecessary performance overhead.
     #[inline]
     pub fn get_entry(
         &mut self,
@@ -208,6 +214,15 @@ impl<S: Snapshot> PointGetter<S> {
     /// In common cases we expect to get nothing in lock cf. Using a `get_cf`
     /// instead of `seek` is fast in such cases due to no need for RocksDB
     /// to continue move and skip deleted entries until find a user key.
+    ///
+    /// If `extract_access_lock` is true, this method will return the `Lock` if
+    /// its start_ts is in the access_locks; otherwise, all locks should be
+    /// regarded as a conflict ignoring the access_locks setting.
+    /// Sometimes we need to set `extract_access_lock` to false because we need
+    /// the commit timestamp to construct the `ValueEntry`, and the commit
+    /// timestamp is not stored in the lock.
+    /// For other cases, we can set `extract_access_lock` to true to avoid
+    /// unnecessary performance overhead.
     fn load_and_check_lock(
         &mut self,
         user_key: &Key,
@@ -245,6 +260,12 @@ impl<S: Snapshot> PointGetter<S> {
     ///
     /// First, a correct version info in the Write CF will be sought. Then,
     /// value will be loaded from Default CF if necessary.
+    ///
+    /// If `load_commit_ts` is true, the commit timestamp will be present in
+    /// the return `ValueEntry`, otherwise it will be `None`.
+    /// The access_locks will be skipped if `load_commit_ts` to ensure a valid
+    /// commit timestamp can be fetched, so, set it to false if you don't
+    /// need commit_ts to reduce unnecessary performance overhead.
     fn load_data(&mut self, user_key: &Key, load_commit_ts: bool) -> Result<Option<ValueEntry>> {
         let mut use_near_seek = false;
         let mut seek_key = user_key.clone();

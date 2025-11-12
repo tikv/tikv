@@ -35,6 +35,8 @@ pub type Value = Vec<u8>;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ValueEntry {
     pub value: Value,
+    /// The commit timestamp of the value.
+    /// `None` means the commit timestamp unknown.
     pub commit_ts: Option<TimeStamp>,
 }
 
@@ -44,6 +46,11 @@ impl ValueEntry {
         ValueEntry { value, commit_ts }
     }
 
+    /// Creates a `ValueEntry` from only a `Value`,
+    /// with other attributes not present.
+    ///
+    /// Please use `ValueEntry::new` instead if you commit_ts or other
+    /// attributes is required to make the value complete.
     #[inline]
     pub fn from_value(value: Value) -> Self {
         ValueEntry {

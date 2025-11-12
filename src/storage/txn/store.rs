@@ -20,6 +20,12 @@ pub trait Store: Send {
     type Scanner: Scanner;
 
     /// Fetch the provided key and returns the ValueEntry
+    ///
+    /// If `load_commit_ts` is true, the commit timestamp will be present in
+    /// the return `ValueEntry`, otherwise `ValueEntry.CommitTS` will be `None`.
+    /// The access_locks will be skipped if `load_commit_ts` to ensure a valid
+    /// commit timestamp can be fetched, so, set it to false if you don't
+    /// need commit_ts to reduce unnecessary performance overhead.
     fn get_entry(
         &self,
         key: &Key,
@@ -37,20 +43,17 @@ pub trait Store: Send {
 
     /// Re-use last cursor to incrementally (if possible) fetch the provided
     /// key to return the ValueEntry.
+    ///
+    /// If `load_commit_ts` is true, the commit timestamp will be present in
+    /// the return `ValueEntry`, otherwise `ValueEntry.CommitTS` will be `None`.
+    /// The access_locks will be skipped if `load_commit_ts` to ensure a valid
+    /// commit timestamp can be fetched, so, set it to false if you don't
+    /// need commit_ts to reduce unnecessary performance overhead.
     fn incremental_get_entry(
         &mut self,
         key: &Key,
         load_commit_ts: bool,
     ) -> Result<Option<ValueEntry>>;
-
-    /// Re-use last cursor to incrementally (if possible) fetch the provided
-    /// key.
-    fn incremental_get(&mut self, key: &Key) -> Result<Option<Value>> {
-        match self.incremental_get_entry(key, false)? {
-            Some(entry) => Ok(Some(entry.value)),
-            None => Ok(None),
-        }
-    }
 
     /// Take the statistics. Currently only available for `incremental_get`.
     fn incremental_get_take_statistics(&mut self) -> Statistics;
