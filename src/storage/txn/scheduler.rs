@@ -1074,24 +1074,43 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             .load(Ordering::Relaxed);
 
         released_locks.into_iter().for_each(|released_lock| {
-            let (lock_wait_entry, delay_wake_up_future) =
-                match self.inner.lock_wait_queues.pop_for_waking_up(
-                    &released_lock.key,
-                    released_lock.start_ts,
-                    released_lock.commit_ts,
-                    wake_up_delay_duration_ms,
-                ) {
-                    Some(e) => e,
-                    None => return,
-                };
-
-            if lock_wait_entry.parameters.allow_lock_with_conflict {
-                resumable_wake_up_list.push(lock_wait_entry);
-            } else {
-                legacy_wake_up_list.push((lock_wait_entry, released_lock));
+            let (entries, delay_future) = self.inner.lock_wait_queues.pop_for_waking_up(
+                &released_lock.key,
+                released_lock.start_ts,
+                released_lock.commit_ts,
+                wake_up_delay_duration_ms,
+            );
+            if entries.is_empty() {
+                return;
             }
-            if let Some(f) = delay_wake_up_future {
+
+            let ReleasedLock {
+                start_ts,
+                commit_ts,
+                key,
+                pessimistic,
+            } = released_lock;
+
+            if let Some(f) = delay_future {
                 delay_wake_up_futures.push(f);
+            }
+
+            let multi_entries = entries.len() > 1;
+
+            for lock_wait_entry in entries {
+                // With multi entries, only shared lock's waiters can be awaken up.
+                debug_assert!(
+                    lock_wait_entry.is_shared_lock || !multi_entries,
+                    "only pessimistic locks are supported here"
+                );
+                if lock_wait_entry.parameters.allow_lock_with_conflict {
+                    resumable_wake_up_list.push(lock_wait_entry);
+                } else {
+                    legacy_wake_up_list.push((
+                        lock_wait_entry,
+                        ReleasedLock::new(start_ts, commit_ts, key.clone(), pessimistic),
+                    ));
+                }
             }
         });
 
@@ -1407,6 +1426,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         write_result: WriteResult,
         sched_details: &mut SchedulerDetails,
         txn_ext: Option<Arc<TxnExt>>,
+        is_shared_lock_cmd: bool,
     ) -> Option<(WriteResult, TaskMetadata<'a>)> {
         let WriteResult {
             ctx,
@@ -1496,6 +1516,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             tag,
             CommandKind::acquire_pessimistic_lock | CommandKind::acquire_pessimistic_lock_resumed
         ) && txn_scheduler.pessimistic_lock_mode() == PessimisticLockMode::InMemory
+            && !is_shared_lock_cmd
             && txn_scheduler.try_write_in_memory_pessimistic_locks(
                 txn_ext.as_deref(),
                 &mut to_be_write,
@@ -1854,6 +1875,11 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let mut task_meta_data = TaskMetadata::from_ctx(task.cmd().resource_control_ctx());
         let pipelined = task.cmd().can_be_pipelined()
             && self.pessimistic_lock_mode() == PessimisticLockMode::Pipelined;
+        let is_shared_lock_cmd = if let Command::AcquirePessimisticLock(ref cmd) = task.cmd() {
+            cmd.keys.iter().any(|k| k.2)
+        } else {
+            false
+        };
         let txn_ext = snapshot.ext().get_txn_ext().cloned();
         let deadline = task.cmd().deadline();
         let write_result = Self::handle_task(self.clone(), snapshot, task, sched_details).await;
@@ -1945,6 +1971,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 write_result,
                 sched_details,
                 txn_ext.clone(),
+                is_shared_lock_cmd,
             )
         {
             write_result = write_result_res;
@@ -2062,6 +2089,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let mut slot = self.inner.get_task_slot(cid);
         let task_ctx = slot.get_mut(&cid).unwrap();
         let cb = task_ctx.cb.take().unwrap();
+        let is_shared_lock = lock_info.lock_info_pb.lock_type == kvrpcpb::Op::SharedLock;
 
         let ctx = LockWaitContext::new(
             lock_info.key.clone(),
@@ -2081,6 +2109,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             lock_hash: lock_info.lock_digest.hash,
             parameters: lock_info.parameters,
             should_not_exist: lock_info.should_not_exist,
+            is_shared_lock,
             lock_wait_token,
             req_states: ctx.get_shared_states().clone(),
             legacy_wake_up_index: None,
@@ -2095,11 +2124,13 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         lock_info: WriteResultLockInfo,
         cb: PessimisticLockKeyCallback,
     ) -> Box<LockWaitEntry> {
+        assert!(lock_info.lock_info_pb.lock_type != kvrpcpb::Op::SharedLock);
         Box::new(LockWaitEntry {
             key: lock_info.key,
             lock_hash: lock_info.lock_digest.hash,
             parameters: lock_info.parameters,
             should_not_exist: lock_info.should_not_exist,
+            is_shared_lock: false,
             lock_wait_token: lock_info.lock_wait_token,
             // This must be called after an execution fo AcquirePessimisticLockResumed, in which
             // case there must be a valid req_state.
@@ -2371,7 +2402,7 @@ mod tests {
             )
             .into(),
             commands::AcquirePessimisticLock::new(
-                vec![(Key::from_raw(b"k"), false)],
+                vec![(Key::from_raw(b"k"), false, false)],
                 b"k".to_vec(),
                 10.into(),
                 0,
