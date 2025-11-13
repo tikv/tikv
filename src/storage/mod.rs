@@ -3969,6 +3969,28 @@ pub mod test_util {
         return_values: bool,
         check_existence: bool,
     ) -> PessimisticLockCommand {
+        let keys = keys
+            .into_iter()
+            .map(|(k, b)| (k, b, false))
+            .collect::<Vec<_>>();
+        new_acquire_pessimistic_lock_command_with_pk_with_shared(
+            keys,
+            pk,
+            start_ts,
+            for_update_ts,
+            return_values,
+            check_existence,
+        )
+    }
+
+    pub fn new_acquire_pessimistic_lock_command_with_pk_with_shared(
+        keys: Vec<(Key, bool, bool)>,
+        pk: Option<&[u8]>,
+        start_ts: impl Into<TimeStamp>,
+        for_update_ts: impl Into<TimeStamp>,
+        return_values: bool,
+        check_existence: bool,
+    ) -> PessimisticLockCommand {
         let primary = pk
             .map(|k| k.to_vec())
             .unwrap_or_else(|| keys[0].0.clone().to_raw().unwrap());
@@ -7787,7 +7809,10 @@ mod tests {
             storage
                 .sched_txn_command(
                     commands::AcquirePessimisticLock::new(
-                        vec![(Key::from_raw(b"a"), false), (Key::from_raw(b"b"), false)],
+                        vec![
+                            (Key::from_raw(b"a"), false, false),
+                            (Key::from_raw(b"b"), false, false),
+                        ],
                         b"a".to_vec(),
                         20.into(),
                         3000,
@@ -9707,7 +9732,10 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::AcquirePessimisticLock::new(
-                    vec![(Key::from_raw(b"foo"), false), (Key::from_raw(&k), false)],
+                    vec![
+                        (Key::from_raw(b"foo"), false, false),
+                        (Key::from_raw(&k), false, false),
+                    ],
                     k.clone(),
                     20.into(),
                     3000,
@@ -9799,7 +9827,7 @@ mod tests {
                 storage
                     .sched_txn_command(
                         commands::AcquirePessimisticLock::new(
-                            vec![(k.clone(), false)],
+                            vec![(k.clone(), false, false)],
                             k.to_raw().unwrap(),
                             lock_ts.into(),
                             3000,
@@ -10390,7 +10418,7 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::AcquirePessimisticLock::new(
-                    vec![(key1.clone(), false)],
+                    vec![(key1.clone(), false, false)],
                     k1.to_vec(),
                     1.into(),
                     0,
@@ -10413,7 +10441,7 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::AcquirePessimisticLock::new(
-                    vec![(key2.clone(), false)],
+                    vec![(key2.clone(), false, false)],
                     k2.to_vec(),
                     10.into(),
                     0,
@@ -10647,7 +10675,9 @@ mod tests {
             ],
 
             command: AcquirePessimisticLock::new(
-                keys.iter().map(|&it| (Key::from_raw(it), true)).collect(),
+                keys.iter()
+                    .map(|&it| (Key::from_raw(it), true, false))
+                    .collect(),
                 keys[0].to_vec(),
                 TimeStamp::new(10),
                 0,
@@ -10673,7 +10703,9 @@ mod tests {
             ],
 
             command: AcquirePessimisticLock::new(
-                keys.iter().map(|&it| (Key::from_raw(it), true)).collect(),
+                keys.iter()
+                    .map(|&it| (Key::from_raw(it), true, false))
+                    .collect(),
                 keys[0].to_vec(),
                 TimeStamp::new(10),
                 0,
