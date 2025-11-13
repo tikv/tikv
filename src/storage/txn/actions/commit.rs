@@ -248,16 +248,10 @@ pub mod tests {
         let lock_count = locks.len();
         let mut shared_lock = Lock::new_in_shared_mode();
         shared_lock.primary = key.to_vec();
-        // if let Some(info) = shared_lock.shared_lock_txns_info.as_mut() {
         for lock in locks {
-            // shared_lock.ts = std::cmp::min(shared_lock.ts, lock.ts);
-            // shared_lock.for_update_ts =
-            //     std::cmp::min(shared_lock.for_update_ts, lock.for_update_ts);
-            // info.txn_info_segments.insert(lock.ts, lock);
             shared_lock.put_shared_lock(lock);
         }
-        // }
-        debug_assert_eq!(shared_lock.shared_lock_num(), lock_count);
+        assert_eq!(shared_lock.shared_lock_num(), lock_count);
         let mut txn = MvccTxn::new(
             TimeStamp::zero(),
             ConcurrencyManager::new(TimeStamp::zero()),

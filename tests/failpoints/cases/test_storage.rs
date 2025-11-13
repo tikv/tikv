@@ -1838,7 +1838,7 @@ fn test_raw_put_deadline() {
 
 #[test]
 #[allow(unused)]
-fn test_shared_lock_multiple_holders() {
+fn test_shared_exclusive_lock_conflict() {
     let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
         .build()
         .unwrap();
@@ -1873,7 +1873,7 @@ fn test_shared_lock_multiple_holders() {
             .sched_txn_command(
                 commands::PrewritePessimistic::new(
                     vec![(
-                        Mutation::make_put(Key::from_raw(&shared_key), shared_key.clone()),
+                        Mutation::make_lock(Key::from_raw(&shared_key)),
                         DoPessimisticCheck,
                     )],
                     pk.clone(),

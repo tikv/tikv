@@ -112,6 +112,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     if let Some(lock) = current_lock.as_mut() {
         let can_add_shared_lock = is_shared_lock && lock.is_shared();
         if !can_add_shared_lock {
+            // handle exclusive lock
             if lock.ts != reader.start_ts {
                 return Err(
                     ErrorInner::KeyIsLocked(lock.clone().into_lock_info(key.into_raw()?)).into(),
@@ -129,6 +130,22 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
             let requested_for_update_ts = for_update_ts;
             let locked_with_conflict_ts =
                 if allow_lock_with_conflict && for_update_ts < lock.for_update_ts {
+                    // If the key is already locked by the same transaction with larger
+                    // for_update_ts, and the current request has
+                    // `allow_lock_with_conflict` set, we must consider
+                    // these possibilities:
+                    // * A previous request successfully locked the key with conflict, but the
+                    //   response is lost due to some errors such as RPC failures. In this case, we
+                    //   return like the current request's result is locked_with_conflict, for
+                    //   idempotency concern.
+                    // * The key is locked by a newer request with larger for_update_ts, and the
+                    //   current request is stale. We can't distinguish this case with the above
+                    //   one, but we don't need to handle this case since no one would need the
+                    //   current request's result anymore.
+
+                    // Load value if locked_with_conflict, so that when the client (TiDB) need to
+                    // read the value during statement retry, it will be possible to read the value
+                    // from cache instead of RPC.
                     need_load_value = true;
                     for_update_ts = lock.for_update_ts;
                     Some(lock.for_update_ts)
@@ -139,6 +156,8 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
             if need_load_value || need_check_existence || should_not_exist {
                 let write = reader.get_write_with_commit_ts(&key, for_update_ts)?;
                 if let Some((write, commit_ts)) = write {
+                    // Here `get_write_with_commit_ts` returns only the latest PUT if it exists and
+                    // is not deleted. It's still ok to pass it into `check_data_constraint`.
                     check_data_constraint(reader, should_not_exist, &write, commit_ts, &key)
                         .or_else(|e| {
                             if is_already_exist(&e) && commit_ts > requested_for_update_ts {
@@ -162,6 +181,8 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                     }
                 }
             }
+
+            // Previous write is not loaded.
             let (prev_write_loaded, prev_write) = (false, None);
             let old_value = load_old_value(
                 need_old_value,
@@ -201,42 +222,9 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                 old_value,
             ));
         } else if let Some(existing_sub_lock) = lock.find_shared_lock_txn(reader.start_ts) {
-            let requested_for_update_ts = for_update_ts;
-            let locked_with_conflict_ts =
-                if allow_lock_with_conflict && for_update_ts < existing_sub_lock.for_update_ts {
-                    need_load_value = true;
-                    for_update_ts = existing_sub_lock.for_update_ts;
-                    Some(existing_sub_lock.for_update_ts)
-                } else {
-                    None
-                };
+            // handle shared lock
+            debug_assert!(!allow_lock_with_conflict);
 
-            if need_load_value || need_check_existence || should_not_exist {
-                let write = reader.get_write_with_commit_ts(&key, for_update_ts)?;
-                if let Some((write, commit_ts)) = write {
-                    check_data_constraint(reader, should_not_exist, &write, commit_ts, &key)
-                        .or_else(|e| {
-                            if is_already_exist(&e) && commit_ts > requested_for_update_ts {
-                                let conflict_info = ConflictInfo {
-                                    conflict_start_ts: write.start_ts,
-                                    conflict_commit_ts: commit_ts,
-                                };
-                                return Err(conflict_info.into_write_conflict_error(
-                                    reader.start_ts,
-                                    primary.to_vec(),
-                                    key.to_raw()?,
-                                ));
-                            }
-                            Err(e)
-                        })?;
-
-                    if need_load_value {
-                        val = Some(reader.load_data(&key, write)?);
-                    } else if need_check_existence {
-                        val = Some(vec![]);
-                    }
-                }
-            }
             let (prev_write_loaded, prev_write) = (false, None);
             let old_value = load_old_value(
                 need_old_value,
@@ -249,14 +237,28 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                 prev_write,
             )?;
 
-            MVCC_DUPLICATE_CMD_COUNTER_VEC
-                .acquire_pessimistic_lock_shared
-                .inc();
+            if for_update_ts > existing_sub_lock.for_update_ts {
+                let lock_to_write = PessimisticLock {
+                    primary: primary.into(),
+                    start_ts: reader.start_ts,
+                    ttl: lock_ttl,
+                    for_update_ts,
+                    min_commit_ts,
+                    last_change: lock.last_change.clone(),
+                    is_locked_with_conflict: lock.is_pessimistic_lock_with_conflict(),
+                };
+                txn.put_shared_pessimistic_lock(key, current_lock, lock_to_write);
+            } else {
+                // The shared lock for the transaction already exists.
+                MVCC_DUPLICATE_CMD_COUNTER_VEC
+                    .acquire_pessimistic_lock_shared
+                    .inc();
+            }
             return Ok((
                 PessimisticLockKeyResult::new_success(
                     need_value,
                     need_check_existence,
-                    locked_with_conflict_ts,
+                    None,
                     val,
                 ),
                 old_value,
@@ -832,7 +834,7 @@ pub mod tests {
             min_commit_ts,
             false,
             false,
-            true,
+            false,
             true,
         )
         .unwrap();
@@ -2701,9 +2703,10 @@ pub mod tests {
         let pk = b"shared-idempotent-pk";
         let start_ts = TimeStamp::from(25);
         let for_update_ts = TimeStamp::from(35);
+        let new_for_update_ts = TimeStamp::from(45);
 
         must_acquire_shared_lock(&mut engine, key, pk, start_ts, for_update_ts, 3000);
-        must_acquire_shared_lock(&mut engine, key, pk, start_ts, for_update_ts, 3000);
+        must_acquire_shared_lock(&mut engine, key, pk, start_ts, new_for_update_ts, 3000);
 
         let mut shared_lock = load_lock(&mut engine, key);
         assert!(shared_lock.is_shared());
@@ -2714,7 +2717,9 @@ pub mod tests {
             .expect("sub lock should exist");
         assert_eq!(sub_lock.lock_type, txn_types::LockType::Pessimistic);
         assert_eq!(sub_lock.primary, pk);
-        assert_eq!(sub_lock.for_update_ts, for_update_ts);
+        // the for_update_ts should be updated to the new one.
+        assert_eq!(sub_lock.for_update_ts, new_for_update_ts);
+        // the shared lock's for_update_ts keep the minimal value.
         assert_eq!(shared_lock.for_update_ts, for_update_ts);
     }
 }
