@@ -9750,13 +9750,454 @@
       "type": "row"
     },
     {
+      "cacheTimeout": null,
+      "collapsed": true,
+      "datasource": null,
+      "description": null,
+      "editable": true,
+      "error": false,
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": []
+          }
+        }
+      },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 8
+      },
+      "height": null,
+      "hideTimeOverride": false,
+      "id": 448,
+      "interval": null,
+      "links": [],
+      "maxDataPoints": 100,
+      "maxPerRow": null,
+      "minSpan": null,
+      "panels": [
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The duration that recorded by inspecting messages.",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 0,
+            "y": 0
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 449,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_raftstore_inspect_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance, type, le) \n    \n    \n))  ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{instance}}-{{type}}-0.99",
+              "metric": "",
+              "query": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_raftstore_inspect_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance, type, le) \n    \n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Inspected duration per server",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "s",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The duration that recorded by inspecting network.",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 0,
+            "y": 12
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 451,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_raftstore_inspect_network_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance, target, le) \n    \n    \n))  ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{instance}}-{{target}}-0.99",
+              "metric": "",
+              "query": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_raftstore_inspect_network_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance, target, le) \n    \n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Inspected duration per server",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "s",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The slow score of stores",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 12,
+            "y": 0
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 450,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum((\n    tikv_raftstore_slow_score\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance, type) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{instance}}-{{type}}",
+              "metric": "",
+              "query": "sum((\n    tikv_raftstore_slow_score\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance, type) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Store Slow Score",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "none",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        }
+      ],
+      "repeat": null,
+      "repeatDirection": null,
+      "span": null,
+      "targets": [],
+      "timeFrom": null,
+      "timeShift": null,
+      "title": "Slow Trend Statistics",
+      "transformations": [],
+      "transparent": false,
+      "type": "row"
+    },
+    {
       "collapsed": true,
       "datasource": null,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 8
+        "y": 9
       },
       "id": 5265,
       "panels": [
@@ -10214,7 +10655,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 9
+        "y": 10
       },
       "id": 13117,
       "panels": [
@@ -12049,7 +12490,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 10
+        "y": 11
       },
       "id": 2748,
       "panels": [
@@ -13196,7 +13637,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 11
+        "y": 12
       },
       "id": 2751,
       "panels": [
@@ -14603,7 +15044,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 12
+        "y": 13
       },
       "id": 2749,
       "panels": [
@@ -15005,7 +15446,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 13
+        "y": 14
       },
       "id": 2750,
       "panels": [
@@ -15668,7 +16109,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 14
+        "y": 15
       },
       "id": 2752,
       "panels": [
@@ -16527,7 +16968,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 15
+        "y": 16
       },
       "id": 12797,
       "panels": [
@@ -17604,7 +18045,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 16
+        "y": 17
       },
       "id": 2753,
       "panels": [
@@ -17729,7 +18170,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 17
+        "y": 18
       },
       "id": 4200,
       "panels": [
@@ -18440,7 +18881,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 18
+        "y": 19
       },
       "id": 2754,
       "panels": [
@@ -19556,7 +19997,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 19
+        "y": 20
       },
       "id": 9160,
       "panels": [
@@ -20678,7 +21119,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 20
+        "y": 21
       },
       "id": 2756,
       "panels": [
