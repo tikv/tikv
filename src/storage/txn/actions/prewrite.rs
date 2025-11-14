@@ -95,8 +95,11 @@ pub fn prewrite_with_generation<S: Snapshot>(
     let (shared_lock, lock_status) = match reader.load_lock(&mutation.key)? {
         Some(mut lock) => {
             let (lock, shared_lock) = if lock.is_shared() {
-                if mutation.mutation_type != MutationType::Lock {
-                    return Err(ErrorInner::Other(box_err!("only lock can prewrite on a shared lock")).into());
+                if mutation.mutation_type != MutationType::SharedLock {
+                    return Err(ErrorInner::Other(box_err!(
+                        "use Op::SharedLock to prewrite on a shared lock"
+                    ))
+                    .into());
                 }
                 match lock.remove_shared_lock(reader.start_ts) {
                     Some(l) => (l, Some(lock)),
@@ -690,6 +693,13 @@ impl<'a> PrewriteMutation<'a> {
                     "shared lock prewrite cannot use async-commit, falling back to 2PC"
                 ));
             }
+            if lock.lock_type != LockType::Shared {
+                return Err(box_err!("shared lock prewrite requires shared lock type"));
+            }
+            // before the lock is written, we use LockType::SharedLock to mark it as a
+            // shared lock. when writing, we change the sub-lock's type to
+            // LockType::Lock as a common prewrite result.
+            lock.lock_type = LockType::Lock;
 
             lock = match current_lock {
                 Some(mut shared_lock) => {
@@ -2970,7 +2980,7 @@ pub mod tests {
             &mut txn,
             &mut reader,
             &props,
-            Mutation::make_lock(Key::from_raw(key)),
+            Mutation::make_shared_lock(Key::from_raw(key)),
             &None,
             DoPessimisticCheck,
             None,
@@ -3013,7 +3023,7 @@ pub mod tests {
                 &mut txn,
                 &mut reader,
                 &props,
-                Mutation::make_lock(Key::from_raw(key)),
+                Mutation::make_shared_lock(Key::from_raw(key)),
                 &Some(vec![b"s".to_vec()]),
                 DoPessimisticCheck,
                 None,
@@ -3042,7 +3052,7 @@ pub mod tests {
             &mut txn,
             &mut reader,
             &props,
-            Mutation::make_lock(Key::from_raw(key)),
+            Mutation::make_shared_lock(Key::from_raw(key)),
             &None,
             DoPessimisticCheck,
             None,
@@ -3052,7 +3062,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_prewrite_shared_lock_requires_lock_mutation() {
+    fn test_prewrite_shared_lock_invalid_mutations() {
         let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
         let key = b"shared-lock-key";
         let pk = b"shared-lock-pk";
@@ -3064,6 +3074,7 @@ pub mod tests {
         for prewrite_type in [
             Mutation::make_put(Key::from_raw(key), b"value".to_vec()),
             Mutation::make_delete(Key::from_raw(key)),
+            Mutation::make_lock(Key::from_raw(key)),
             Mutation::make_insert(Key::from_raw(key), b"value".to_vec()),
             Mutation::make_check_not_exists(Key::from_raw(key)),
         ] {
@@ -3082,10 +3093,7 @@ pub mod tests {
                 None,
             )
             .unwrap_err();
-            assert!(matches!(
-                err,
-                Error(box ErrorInner::Other { .. })
-            ));
+            assert!(matches!(err, Error(box ErrorInner::Other { .. })));
         }
     }
 }

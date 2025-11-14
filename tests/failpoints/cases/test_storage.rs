@@ -1867,13 +1867,17 @@ fn test_shared_exclusive_lock_conflict() {
         done_rx
     };
 
-    let prewrite = |start_ts: u64| {
+    let prewrite = |start_ts: u64, is_shared: bool| {
         let (done_tx, done_rx) = channel::<i32>();
         storage
             .sched_txn_command(
                 commands::PrewritePessimistic::new(
                     vec![(
-                        Mutation::make_lock(Key::from_raw(&shared_key)),
+                        if is_shared {
+                            Mutation::make_shared_lock(Key::from_raw(&shared_key))
+                        } else {
+                            Mutation::make_lock(Key::from_raw(&shared_key))
+                        },
                         DoPessimisticCheck,
                     )],
                     pk.clone(),
@@ -1962,8 +1966,8 @@ fn test_shared_exclusive_lock_conflict() {
         .recv_timeout(Duration::from_millis(100))
         .unwrap_err();
 
-    prewrite(10);
-    prewrite(20);
+    prewrite(10, true);
+    prewrite(20, true);
     commit(10, 15);
     commit(20, 25);
 
@@ -1995,7 +1999,7 @@ fn test_shared_exclusive_lock_conflict() {
         .recv_timeout(Duration::from_millis(100))
         .unwrap_err();
 
-    prewrite(40);
+    prewrite(40, false);
     commit(40, 70);
 
     // acquire shared lock return conflict after exclusive lock is committed.

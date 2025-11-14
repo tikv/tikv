@@ -53,6 +53,7 @@ impl LockType {
             Mutation::Put(..) | Mutation::Insert(..) => Some(LockType::Put),
             Mutation::Delete(..) => Some(LockType::Delete),
             Mutation::Lock(..) => Some(LockType::Lock),
+            Mutation::SharedLock(..) => Some(LockType::Shared),
             Mutation::CheckNotExists(..) => None,
         }
     }
@@ -988,6 +989,11 @@ mod tests {
                 LockType::Lock,
                 FLAG_LOCK,
             ),
+            (
+                Mutation::make_shared_lock(Key::from_raw(key)),
+                LockType::Shared,
+                FLAG_SHARED,
+            ),
         ];
         for (i, (mutation, lock_type, flag)) in tests.drain(..).enumerate() {
             let lt = LockType::from_mutation(&mutation).unwrap();
@@ -1009,7 +1015,6 @@ mod tests {
                 i, flag, lock_type, lt
             );
         }
-
         let lock_type = LockType::Shared;
         let f = lock_type.to_u8();
         assert_eq!(f, FLAG_SHARED);
