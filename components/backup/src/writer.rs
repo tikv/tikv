@@ -111,13 +111,13 @@ impl<W: SstWriter + 'static> Writer<W> {
         cipher: &CipherInfo,
     ) -> Result<File> {
         let (size, sst_reader) = Self::finish_read(self.writer)?;
-        BACKUP_RANGE_SIZE_HISTOGRAM_VEC
+        &BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&[cf.into()])
             .observe(size as f64);
-        BACKUP_SCAN_KV_SIZE
+        &BACKUP_SCAN_KV_SIZE
             .with_label_values(&[cf.into()])
             .inc_by(self.total_bytes);
-        BACKUP_SCAN_KV_COUNT
+        &BACKUP_SCAN_KV_COUNT
             .with_label_values(&[cf.into()])
             .inc_by(self.total_kvs);
         let file_name = format!("{}_{}.sst", name, cf);
@@ -319,7 +319,7 @@ impl<EK: KvEngine> BackupWriter<EK> {
                 .await?;
             files.push(write);
         }
-        BACKUP_RANGE_HISTOGRAM_VEC
+        &BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["save"])
             .observe(start.saturating_elapsed().as_secs_f64());
         Ok(files)
@@ -414,7 +414,7 @@ impl<EK: KvEngine> BackupRawKvWriter<EK> {
                 .await?;
             files.push(file);
         }
-        BACKUP_RANGE_HISTOGRAM_VEC
+        &BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["save_raw"])
             .observe(start.saturating_elapsed().as_secs_f64());
         Ok(files)
