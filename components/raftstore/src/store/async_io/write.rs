@@ -436,6 +436,10 @@ impl WriteTaskBatchRecorder {
     fn update_config(&mut self, batch_size: usize, wait_duration: Duration) {
         self.batch_size_hint = batch_size;
         self.wait_duration = wait_duration;
+        info!("update write task batch recorder config";
+            "batch_size_hint" => self.batch_size_hint,
+            "wait_duration_ns" => self.wait_duration.as_nanos(),
+        );
     }
 
     fn record(&mut self, size: usize) {
@@ -1325,10 +1329,10 @@ where
         if let Some(incoming) = self.cfg_tracker.any_new() {
             self.raft_write_size_limit = incoming.raft_write_size_limit.0 as usize;
             self.metrics.waterfall_metrics = incoming.waterfall_metrics;
-            self.batch.update_config(
-                incoming.raft_write_batch_size_hint.0 as usize,
-                incoming.raft_write_wait_duration.0,
-            );
+            // self.batch.update_config(
+            //     incoming.raft_write_batch_size_hint.0 as usize,
+            //     incoming.raft_write_wait_duration.0,
+            // );
         }
     }
 
