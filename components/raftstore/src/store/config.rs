@@ -326,6 +326,7 @@ pub struct Config {
     /// When the size of raft db writebatch exceeds this value, write will be
     /// triggered.
     pub raft_write_size_limit: ReadableSize,
+    pub raft_write_batch_size_hint_limit: ReadableSize,
 
     /// When the size of raft db writebatch is smaller than this value, write
     /// will wait for a while to make the writebatch larger, which will reduce
@@ -543,6 +544,7 @@ impl Default for Config {
             cmd_batch: true,
             cmd_batch_concurrent_ready_max_count: 1,
             raft_write_size_limit: ReadableSize::mb(1),
+            raft_write_batch_size_hint_limit: ReadableSize::mb(1),
             raft_write_batch_size_hint: ReadableSize::kb(8),
             raft_write_wait_duration: ReadableDuration::micros(20),
             waterfall_metrics: true,
@@ -1241,6 +1243,9 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_write_size_limit"])
             .set(self.raft_write_size_limit.0 as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["raft_write_batch_size_hint_limit"])
+            .set(self.raft_write_batch_size_hint_limit.0 as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_write_batch_size_hint"])
             .set(self.raft_write_batch_size_hint.0 as f64);

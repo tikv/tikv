@@ -715,6 +715,7 @@ where
     batch: WriteTaskBatch<EK, ER>,
     cfg_tracker: Tracker<Config>,
     raft_write_size_limit: usize,
+    raft_write_batch_size_hint_limit: usize,
     metrics: StoreWriteMetrics,
     message_metrics: RaftSendMessageMetrics,
     perf_context: ER::PerfContext,
@@ -777,6 +778,7 @@ where
             batch,
             cfg_tracker,
             raft_write_size_limit: cfg.value().raft_write_size_limit.0 as usize,
+            raft_write_batch_size_hint_limit: cfg.value().raft_write_batch_size_hint_limit.0 as usize,
             metrics: StoreWriteMetrics::new(cfg.value().waterfall_metrics),
             message_metrics: RaftSendMessageMetrics::default(),
             perf_context,
@@ -1018,7 +1020,7 @@ where
             latency_baseline.as_micros(), avg_latency.as_micros(), latency_ratio, 
             qps_baseline, avg_qps, qps_ratio);
         // Ensure new size is within reasonable range (8KB to 16MB)
-        new_size.clamp(8 * 1024, 16 * 1024 * 1024)
+        new_size.clamp(8 * 1024, self.raft_write_batch_size_hint_limit)
     }
     
     /// Calculate adaptive wait duration based on latency and QPS
@@ -1097,8 +1099,8 @@ where
             current_duration.as_nanos() as f64 / 1000.0,
             new_duration_nanos as f64 / 1000.0, adjustment_factor, latency_baseline.as_micros(), avg_latency.as_micros(), latency_ratio, 
             qps_baseline, avg_qps, qps_ratio);
-        // Ensure new wait time is within reasonable range (5us to 2ms)
-        Duration::from_nanos(new_duration_nanos.clamp(5_000, 2_000_000))
+        // Ensure new wait time is within reasonable range (10us to 1ms)
+        Duration::from_nanos(new_duration_nanos.clamp(10_000, 1_000_000))
     }
     
     /// Update baseline value history records
@@ -1328,6 +1330,7 @@ where
         // update config
         if let Some(incoming) = self.cfg_tracker.any_new() {
             self.raft_write_size_limit = incoming.raft_write_size_limit.0 as usize;
+            self.raft_write_batch_size_hint_limit = incoming.raft_write_batch_size_hint_limit.0 as usize;
             self.metrics.waterfall_metrics = incoming.waterfall_metrics;
             // self.batch.update_config(
             //     incoming.raft_write_batch_size_hint.0 as usize,
