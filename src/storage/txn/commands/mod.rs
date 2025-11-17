@@ -217,10 +217,10 @@ impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLock
             .take_mutations()
             .into_iter()
             .map(|x| match x.get_op() {
-                Op::PessimisticLock | Op::SharedLock => (
+                Op::PessimisticLock | Op::SharedPessimisticLock => (
                     Key::from_raw(x.get_key()),
                     x.get_assertion() == Assertion::NotExist,
-                    x.get_op() == Op::SharedLock,
+                    x.get_op() == Op::SharedPessimisticLock,
                 ),
                 _ => panic!("mismatch Op in pessimistic lock mutations"),
             })
