@@ -2366,10 +2366,15 @@ where
                     self.slow_score
                         .record_network(id, network_durations.clone());
 
+                    // To avoid recording too many metrics, we only record durations
+                    // that exceed a certain threshold.
+                    let metric_threshold = Duration::from_millis(100);
                     for (store_id, network_duration) in &network_durations {
-                        STORE_INSPECT_NETWORK_DURATION_HISTOGRAM
-                            .with_label_values(&[&store_id.to_string()])
-                            .observe(tikv_util::time::duration_to_sec(*network_duration));
+                        if *network_duration > metric_threshold {
+                            STORE_INSPECT_NETWORK_DURATION_HISTOGRAM
+                                .with_label_values(&[&store_id.to_string(), &self.store_id.to_string()])
+                                .observe(tikv_util::time::duration_to_sec(*network_duration));
+                        }
                     }
 
                     return;
