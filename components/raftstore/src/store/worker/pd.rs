@@ -2272,15 +2272,15 @@ where
                     self.update_health_status(ServingStatus::ServiceUnknown);
                 }
 
-                if let Some(score) = slow_score_tick_result.updated_score {
-                    STORE_SLOW_SCORE_GAUGE
-                        .with_label_values(&[factor.as_str()])
-                        .set(score as i64);
-                }
-
                 slow_score_tick_result
             }
         };
+
+        if let Some(score) = slow_score_tick_result.updated_score {
+            STORE_SLOW_SCORE_GAUGE
+                .with_label_values(&[factor.as_str()])
+                .set(score as i64);
+        }
 
         let id = slow_score_tick_result.tick_id;
         let scheduler = self.scheduler.clone();
