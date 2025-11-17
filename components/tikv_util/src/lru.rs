@@ -344,7 +344,7 @@ where
                 let record = if should_evict_on_insert {
                     let res = self.trace.reuse_tail(v.key().clone());
                     if self.logging {
-                        info!("lru reuse_tail, insert new key by replace the key in the trace";
+                        info!("lru insert new key by replace the key in the trace";
                            "old_key" => ?res.0, "new_key" => ?v.key());
                     }
                     old_key = Some(res.0);
@@ -352,7 +352,7 @@ where
                 } else {
                     let res = self.trace.create(v.key().clone());
                     if self.logging {
-                        info!("lru trace.create, insert new key to the trace"; "key" => ?v.key());
+                        info!("lru insert new key to the trace"; "new_key" => ?v.key());
                     }
                     res
                 };
@@ -361,7 +361,7 @@ where
                 self.size_policy.on_insert(v.key(), &value);
                 v.insert(ValueEntry { value, record });
                 if self.logging {
-                    info!("lru insert key into the map"; "key" => ?key);
+                    info!("lru insert new key into the map"; "new_key" => ?key);
                 }
             }
         }
@@ -373,7 +373,7 @@ where
             let entry = self.map.remove(&o).unwrap();
             self.size_policy.on_remove(&o, &entry.value);
             if self.logging {
-                info!("lru remove key from map"; "key" => ?o);
+                info!("lru remove old key from map"; "old_key" => ?o);
             }
         }
 
@@ -428,7 +428,7 @@ where
             self.trace.delete(v.record);
             self.size_policy.on_remove(key, &v.value);
             if self.logging {
-                info!("lru remove key from map and trace"; "key" => ?key);
+                info!("lru remove key from map and trace by calling remove"; "key" => ?key);
             }
             return Some(v.value);
         }
