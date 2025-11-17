@@ -226,6 +226,8 @@ where
     capacity: usize,
     size_policy: T,
     evict_policy: E,
+
+    logging: bool,
 }
 
 impl<K, V, T> LruCache<K, V, T>
@@ -236,8 +238,9 @@ where
         capacity: usize,
         sample_mask: usize,
         size_policy: T,
+        logging: bool,
     ) -> LruCache<K, V, T> {
-        Self::new(capacity, sample_mask, size_policy, EvictOnFull)
+        Self::new(capacity, sample_mask, size_policy, EvictOnFull, logging)
     }
 }
 
@@ -246,7 +249,13 @@ where
     T: SizePolicy<K, V>,
     E: EvictPolicy<K, V>,
 {
-    pub fn new(mut capacity: usize, sample_mask: usize, size_policy: T, evict_policy: E) -> Self {
+    pub fn new(
+        mut capacity: usize,
+        sample_mask: usize,
+        size_policy: T,
+        evict_policy: E,
+        logging: bool,
+    ) -> Self {
         // The capacity is at least 1.
         if capacity == 0 {
             capacity = 1;
@@ -257,6 +266,7 @@ where
             capacity,
             size_policy,
             evict_policy,
+            logging,
         }
     }
 
@@ -294,7 +304,7 @@ where
     }
 
     pub fn with_capacity_and_sample(capacity: usize, sample_mask: usize) -> LruCache<K, V> {
-        Self::with_capacity_sample_and_trace(capacity, sample_mask, CountTracker::default())
+        Self::with_capacity_sample_and_trace(capacity, sample_mask, CountTracker::default(), false)
     }
 }
 
@@ -322,8 +332,10 @@ where
                     let entry = e.get_mut();
                     self.trace.promote(entry.record);
                     entry.value = value;
-                    info!("lru replace the existing key with new value and promote it";
+                    if self.logging {
+                        info!("lru replace the existing key with new value and promote it";
                            "key" => ?e.key());
+                    }
                 } else {
                     inserted = false;
                 }
@@ -331,30 +343,38 @@ where
             HashMapEntry::Vacant(v) => {
                 let record = if should_evict_on_insert {
                     let res = self.trace.reuse_tail(v.key().clone());
-                    info!("lru reuse_tail, insert new key by replace the key in the trace";
+                    if self.logging {
+                        info!("lru reuse_tail, insert new key by replace the key in the trace";
                            "old_key" => ?res.0, "new_key" => ?v.key());
+                    }
                     old_key = Some(res.0);
                     res.1
                 } else {
                     let res = self.trace.create(v.key().clone());
-                    info!("lru trace.create, insert new key to the trace"; "key" => ?v.key());
+                    if self.logging {
+                        info!("lru trace.create, insert new key to the trace"; "key" => ?v.key());
+                    }
                     res
                 };
 
                 let key = v.key().clone();
                 self.size_policy.on_insert(v.key(), &value);
                 v.insert(ValueEntry { value, record });
-                info!("lru insert key into the map"; "key" => ?key);
+                if self.logging {
+                    info!("lru insert key into the map"; "key" => ?key);
+                }
             }
         }
         if let Some(o) = old_key {
-            if !self.map.contains_key(&o) {
+            if self.logging && !self.map.contains_key(&o) {
                 error!("lru inconsistency before removing old_key after reuse_tail";
                        "old_key" => ?o);
             }
             let entry = self.map.remove(&o).unwrap();
             self.size_policy.on_remove(&o, &entry.value);
-            info!("lru remove key from map"; "key" => ?o);
+            if self.logging {
+                info!("lru remove key from map"; "key" => ?o);
+            }
         }
 
         // NOTE: now when inserting a value larger than the capacity, actually this
@@ -376,12 +396,12 @@ where
                 break;
             }
             let tail_key_dbg = self.trace.get_tail().clone();
-            if !self.map.contains_key(&tail_key_dbg) {
+            if self.logging && !self.map.contains_key(&tail_key_dbg) {
                 error!("lru inconsistency before eviction: tail key missing in map";
                        "tail_key" => ?tail_key_dbg, "map_len" => self.map.len(), "size" => current_size);
             }
             let key = self.trace.remove_tail();
-            if !self.map.contains_key(&key) {
+            if self.logging && !self.map.contains_key(&key) {
                 error!("lru inconsistency on eviction: removed tail key not in map";
                        "key" => ?key, "map_len" => self.map.len(), "size" => current_size);
             }
@@ -407,7 +427,9 @@ where
         if let Some(v) = self.map.remove(key) {
             self.trace.delete(v.record);
             self.size_policy.on_remove(key, &v.value);
-            info!("lru remove key from map and trace"; "key" => ?key);
+            if self.logging {
+                info!("lru remove key from map and trace"; "key" => ?key);
+            }
             return Some(v.value);
         }
         None
@@ -723,7 +745,7 @@ mod tests {
 
     #[test]
     fn test_tracker() {
-        let mut map = LruCache::with_capacity_sample_and_trace(10, 0, TestTracker(0));
+        let mut map = LruCache::with_capacity_sample_and_trace(10, 0, TestTracker(0), false);
         for i in 0..10 {
             map.insert(i, vec![b' ']);
             assert_eq!(
@@ -748,7 +770,7 @@ mod tests {
 
     #[test]
     fn test_oversized() {
-        let mut cache = LruCache::with_capacity_sample_and_trace(42, 0, TestTracker(0));
+        let mut cache = LruCache::with_capacity_sample_and_trace(42, 0, TestTracker(0), false);
         cache.insert(
             42,
             b"this is the answer... but will it being inserted?".to_vec(),
@@ -771,7 +793,8 @@ mod tests {
 
     #[test]
     fn test_get_no_promote() {
-        let mut cache = LruCache::with_capacity_sample_and_trace(3, 0, CountTracker::default());
+        let mut cache =
+            LruCache::with_capacity_sample_and_trace(3, 0, CountTracker::default(), false);
         cache.insert(1, 1);
         cache.insert(2, 2);
         cache.insert(3, 3);
@@ -789,7 +812,8 @@ mod tests {
 
     #[test]
     fn test_insert_if_not_exist() {
-        let mut cache = LruCache::with_capacity_sample_and_trace(4, 0, CountTracker::default());
+        let mut cache =
+            LruCache::with_capacity_sample_and_trace(4, 0, CountTracker::default(), false);
         assert!(cache.insert_if_not_exist(1, 1));
         assert!(cache.insert_if_not_exist(2, 2));
         assert!(cache.insert_if_not_exist(3, 3));

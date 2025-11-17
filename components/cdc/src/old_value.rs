@@ -60,13 +60,14 @@ pub struct OldValueCache {
 }
 
 impl OldValueCache {
-    pub fn new(capacity: ReadableSize) -> OldValueCache {
+    pub fn new(capacity: ReadableSize, logging: bool) -> OldValueCache {
         CDC_OLD_VALUE_CACHE_MEMORY_QUOTA.set(capacity.0 as i64);
         OldValueCache {
             cache: LruCache::with_capacity_sample_and_trace(
                 capacity.0 as usize,
                 0,
                 OldValueCacheSizePolicy(0),
+                true,
             ),
             access_count: 0,
             miss_count: 0,
