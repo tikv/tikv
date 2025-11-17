@@ -8,6 +8,8 @@ use std::{
 
 use collections::{HashMap, HashMapEntry};
 
+use crate::{error, info};
+
 struct Record<K> {
     prev: NonNull<Record<K>>,
     next: NonNull<Record<K>>,
@@ -312,7 +314,7 @@ where
         let should_evict_on_insert =
             self.evict_policy
                 .should_evict(current_size + 1, self.capacity, self);
-        match self.map.entry(key) {
+        match self.map.entry(key.clone()) {
             HashMapEntry::Occupied(mut e) => {
                 if replace {
                     self.size_policy.on_remove(e.key(), &e.get().value);
@@ -320,6 +322,8 @@ where
                     let entry = e.get_mut();
                     self.trace.promote(entry.record);
                     entry.value = value;
+                    info!("lru replace the existing key with new value and promote it";
+                           "key" => ?e.key());
                 } else {
                     inserted = false;
                 }
@@ -327,17 +331,27 @@ where
             HashMapEntry::Vacant(v) => {
                 let record = if should_evict_on_insert {
                     let res = self.trace.reuse_tail(v.key().clone());
+                    info!("lru reuse_tail, replace the key in the trace";
+                           "old_key" => ?res.0, "new_key" => ?v.key());
                     old_key = Some(res.0);
                     res.1
                 } else {
-                    self.trace.create(v.key().clone())
+                    let res = self.trace.create(v.key().clone());
+                    info!("lru trace.create, insert key to the trace"; "key" => ?v.key());
+                    res
                 };
 
+                let key = key.clone();
                 self.size_policy.on_insert(v.key(), &value);
                 v.insert(ValueEntry { value, record });
+                info!("lru insert key into the map"; "key" => ?key);
             }
         }
         if let Some(o) = old_key {
+            if !self.map.contains_key(&o) {
+                error!("lru inconsistency before removing old_key after reuse_tail";
+                       "old_key" => ?o);
+            }
             let entry = self.map.remove(&o).unwrap();
             self.size_policy.on_remove(&o, &entry.value);
         }
@@ -360,7 +374,16 @@ where
             if !self.evict_policy.should_evict(current_size, cap, self) || self.map.is_empty() {
                 break;
             }
+            let tail_key_dbg = self.trace.get_tail().clone();
+            if !self.map.contains_key(&tail_key_dbg) {
+                error!("lru inconsistency before eviction: tail key missing in map";
+                       "tail_key" => ?tail_key_dbg, "map_len" => self.map.len(), "size" => current_size);
+            }
             let key = self.trace.remove_tail();
+            if !self.map.contains_key(&key) {
+                error!("lru inconsistency on eviction: removed tail key not in map";
+                       "key" => ?key, "map_len" => self.map.len(), "size" => current_size);
+            }
             let val = self.map.remove(&key).unwrap();
             self.size_policy.on_remove(&key, &val.value);
         }
