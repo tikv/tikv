@@ -331,17 +331,17 @@ where
             HashMapEntry::Vacant(v) => {
                 let record = if should_evict_on_insert {
                     let res = self.trace.reuse_tail(v.key().clone());
-                    info!("lru reuse_tail, replace the key in the trace";
+                    info!("lru reuse_tail, insert new key by replace the key in the trace";
                            "old_key" => ?res.0, "new_key" => ?v.key());
                     old_key = Some(res.0);
                     res.1
                 } else {
                     let res = self.trace.create(v.key().clone());
-                    info!("lru trace.create, insert key to the trace"; "key" => ?v.key());
+                    info!("lru trace.create, insert new key to the trace"; "key" => ?v.key());
                     res
                 };
 
-                let key = key.clone();
+                let key = v.key().clone();
                 self.size_policy.on_insert(v.key(), &value);
                 v.insert(ValueEntry { value, record });
                 info!("lru insert key into the map"; "key" => ?key);
@@ -354,6 +354,7 @@ where
             }
             let entry = self.map.remove(&o).unwrap();
             self.size_policy.on_remove(&o, &entry.value);
+            info!("lru remove key from map"; "key" => ?o);
         }
 
         // NOTE: now when inserting a value larger than the capacity, actually this
@@ -406,6 +407,7 @@ where
         if let Some(v) = self.map.remove(key) {
             self.trace.delete(v.record);
             self.size_policy.on_remove(key, &v.value);
+            info!("lru remove key from map and trace"; "key" => ?key);
             return Some(v.value);
         }
         None
