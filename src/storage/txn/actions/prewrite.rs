@@ -101,7 +101,7 @@ pub fn prewrite_with_generation<S: Snapshot>(
                     ))
                     .into());
                 }
-                match lock.remove_shared_lock(reader.start_ts) {
+                match lock.remove_shared_lock(reader.start_ts)? {
                     Some(l) => (l, Some(lock)),
                     None => {
                         return Err(ErrorInner::PessimisticLockNotFound {
@@ -709,18 +709,17 @@ impl<'a> PrewriteMutation<'a> {
                         ));
                     }
                     shared_lock.put_shared_lock(lock);
-                    debug_assert!(
-                        matches!(
-                            shared_lock
-                                .find_shared_lock_txn(self.txn_props.start_ts)
-                                .map(|l| l.lock_type),
-                            Some(LockType::Lock)
-                        ),
-                        "shared lock sub lock stored as {:?}",
-                        shared_lock
-                            .find_shared_lock_txn(self.txn_props.start_ts)
-                            .map(|l| l.lock_type)
-                    );
+                    #[cfg(debug_assertions)]
+                    {
+                        let sub_lock_type = shared_lock
+                            .find_shared_lock_txn(self.txn_props.start_ts)?
+                            .map(|l| l.lock_type);
+                        debug_assert!(
+                            matches!(sub_lock_type, Some(LockType::Lock)),
+                            "shared lock sub lock stored as {:?}",
+                            sub_lock_type
+                        );
+                    }
                     shared_lock
                 }
                 None => {
@@ -2966,7 +2965,7 @@ pub mod tests {
         let mut shared_lock = must_load_shared_lock(&mut engine, key);
         assert!(shared_lock.is_shared());
         assert_eq!(shared_lock.shared_lock_num(), 1);
-        let sub_lock = shared_lock.find_shared_lock_txn(start_ts).unwrap();
+        let sub_lock = shared_lock.find_shared_lock_txn(start_ts).unwrap().unwrap();
         assert_eq!(sub_lock.lock_type, LockType::Pessimistic);
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
@@ -2995,7 +2994,7 @@ pub mod tests {
         assert_eq!(shared_lock.shared_lock_num(), 1);
         assert!(shared_lock.is_shared());
         assert_eq!(shared_lock.shared_lock_num(), 1);
-        let sub_lock = shared_lock.find_shared_lock_txn(start_ts).unwrap();
+        let sub_lock = shared_lock.find_shared_lock_txn(start_ts).unwrap().unwrap();
         assert_eq!(sub_lock.lock_type, LockType::Lock);
         assert_eq!(sub_lock.primary, pk);
         assert_eq!(sub_lock.for_update_ts, for_update_ts);

@@ -1932,6 +1932,7 @@ fn test_shared_exclusive_lock_conflict() {
     assert!(
         shared_lock
             .find_shared_lock_txn(TimeStamp::from(10))
+            .unwrap()
             .is_some()
     );
 
@@ -1954,11 +1955,13 @@ fn test_shared_exclusive_lock_conflict() {
     assert!(
         shared_lock
             .find_shared_lock_txn(TimeStamp::from(10))
+            .unwrap()
             .is_some()
     );
     assert!(
         shared_lock
             .find_shared_lock_txn(TimeStamp::from(20))
+            .unwrap()
             .is_some()
     );
 

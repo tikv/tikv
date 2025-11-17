@@ -24,7 +24,7 @@ pub fn commit<S: Snapshot>(
     let (mut lock, shared_lock, commit) = match reader.load_lock(&key)? {
         Some(mut lock) if lock.contains_start_ts(reader.start_ts) => {
             let (lock, shared_lock) = if lock.is_shared() {
-                match lock.remove_shared_lock(reader.start_ts) {
+                match lock.remove_shared_lock(reader.start_ts)? {
                     Some(l) => (l, Some(lock)),
                     None => {
                         return Err(ErrorInner::TxnLockNotFound {
@@ -492,11 +492,21 @@ pub mod tests {
         let mut current_lock = load_lock(&mut engine, key).unwrap();
         assert!(current_lock.is_shared());
         assert_eq!(current_lock.shared_lock_num(), 2);
-        assert!(current_lock.find_shared_lock_txn(start_ts1).is_some());
-        assert!(current_lock.find_shared_lock_txn(start_ts2).is_some());
+        assert!(
+            current_lock
+                .find_shared_lock_txn(start_ts1)
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            current_lock
+                .find_shared_lock_txn(start_ts2)
+                .unwrap()
+                .is_some()
+        );
 
         let mut simulated_lock = current_lock.clone();
-        let _ = simulated_lock.remove_shared_lock(start_ts1);
+        let _ = simulated_lock.remove_shared_lock(start_ts1).unwrap();
         assert_eq!(simulated_lock.shared_lock_num(), 1);
 
         // commit start_ts1
@@ -505,8 +515,18 @@ pub mod tests {
         let mut current_lock = load_lock(&mut engine, key).unwrap();
         assert!(current_lock.is_shared());
         assert_eq!(current_lock.shared_lock_num(), 1);
-        assert!(current_lock.find_shared_lock_txn(start_ts1).is_none());
-        assert!(current_lock.find_shared_lock_txn(start_ts2).is_some());
+        assert!(
+            current_lock
+                .find_shared_lock_txn(start_ts1)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            current_lock
+                .find_shared_lock_txn(start_ts2)
+                .unwrap()
+                .is_some()
+        );
 
         // commit start_ts2
         let released_lock = must_succeed(&mut engine, key, start_ts2, commit_ts_2).unwrap();
