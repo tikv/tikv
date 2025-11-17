@@ -23,7 +23,9 @@ use kvproto::{
     },
     kvrpcpb::ExtraOp as TxnExtraOp,
     metapb::{Region, RegionEpoch},
-    raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CmdType, PutRequest, Request},
+    raft_cmdpb::{
+        AdminCmdType, AdminRequest, AdminResponse, CmdType, DeleteRequest, PutRequest, Request,
+    },
 };
 use raftstore::{
     Error as RaftStoreError,
@@ -387,7 +389,7 @@ impl Delegate {
         Ok(lock_modified_count)
     }
 
-    fn pop_lock(&mut self, key: Key, start_ts: TimeStamp) -> Result<Vec<LockModifiedCount>> {
+    fn pop_lock(&mut self, key: Key) -> Result<Vec<LockModifiedCount>> {
         let mut lock_modified_count = Vec::new();
         match &mut self.lock_tracker {
             LockTracker::Pending => unreachable!(),
@@ -399,13 +401,12 @@ impl Delegate {
             }
             LockTracker::Prepared { locks, .. } => {
                 if let BTreeMapEntry::Occupied(x) = locks.entry(key) {
-                    if x.get().ts == start_ts {
-                        let (key, _) = x.remove_entry();
-                        let bytes = key.approximate_heap_size();
-                        self.memory_quota.free(bytes);
-                        CDC_PENDING_BYTES_GAUGE.sub(bytes as _);
-                        lock_modified_count.push(LockModifiedCount::new(start_ts, -1));
-                    }
+                    let (key, _) = x.remove_entry();
+                    let start_ts = locks.get_mut(&key).unwrap().ts;
+                    let bytes = key.approximate_heap_size();
+                    self.memory_quota.free(bytes);
+                    CDC_PENDING_BYTES_GAUGE.sub(bytes as _);
+                    lock_modified_count.push(LockModifiedCount::new(start_ts, -1));
                 }
             }
         }
@@ -890,39 +891,9 @@ impl Delegate {
         match delete.cf.as_str() {
             "lock" => {
                 let key = Key::from_encoded(delete.take_key());
-                let lock = Lock::parse(delete.get_value()).unwrap();
-                let for_update_ts = lock.for_update_ts;
-                let txn_source = lock.txn_source;
-                let generation = lock.generation;
-                if lock.lock_type == LockType::Pessimistic {
-                    // Pessimistic locks are not tracked in CDC.
-                    return Ok(());
-                }
-
-                // let key = Key::from_encoded(delete.take_key());
-                // let lock_count_modify = self.pop_lock(key.clone())?;
-                // if lock_count_modify != 0 {
-                //     // If lock_count_modify isn't 0 it means the deletion
-                // must come from a commit     // or rollback,
-                // instead of any `Unlock` operations.
-                //     let row = rows.txns_by_key.get_mut(&key).unwrap();
-                //     assert_eq!(row.lock_count_modify, 0);
-                //     row.lock_count_modify = lock_count_modify;
-                // }
-
-                // let key = Key::from_encoded_slice(&put.key);
-                // let row = rows.txns_by_key.entry(key.clone()).or_default();
-                // if decode_lock(put.take_key(), lock, &mut row.v, &mut
-                // row.has_value) {     return Ok(());
-                // }
-
-                // assert_eq!(row.lock_count_modify, 0);
-                // let mini_lock = MiniLock::new(row.v.start_ts, txn_source,
-                // generation); row.lock_count_modify =
-                // self.push_lock(key, mini_lock)?;
-                // let read_old_ts = std::cmp::max(for_update_ts,
-                // row.v.start_ts.into()); row.needs_old_value =
-                // Some(read_old_ts);
+                let row = rows.txns_by_key.entry(key.clone()).or_default();
+                let mut modified = self.pop_lock(key)?;
+                row.lock_modified_counts.append(&mut modified);
             }
             "" | "default" | "write" => {}
             other => panic!("invalid cf {}", other),
@@ -1079,10 +1050,6 @@ impl Delegate {
                     set_event_row_type(&mut row.v, EventLogType::Committed);
                     let read_old_ts = TimeStamp::from(row.v.commit_ts).prev();
                     row.needs_old_value = Some(read_old_ts);
-                } else {
-                    let start_ts = TimeStamp::from(row.v.start_ts);
-                    let mut modified = self.pop_lock(key, start_ts)?;
-                    row.lock_modified_counts.append(&mut modified);
                 }
             }
             "lock" => {
@@ -1960,14 +1927,10 @@ mod tests {
         assert_eq!(modified_counts.unwrap().len(), 0);
         assert_eq!(quota.in_use(), 100);
 
-        delegate
-            .pop_lock(Key::from_raw(b"key1"), TimeStamp::from(99))
-            .unwrap();
+        delegate.pop_lock(Key::from_raw(b"key1")).unwrap();
         assert_eq!(quota.in_use(), 117);
 
-        delegate
-            .pop_lock(Key::from_raw(b"key1"), TimeStamp::from(100))
-            .unwrap();
+        delegate.pop_lock(Key::from_raw(b"key1")).unwrap();
         assert_eq!(quota.in_use(), 134);
 
         let mut k2 = Vec::with_capacity(200);
@@ -1986,12 +1949,8 @@ mod tests {
             .unwrap();
         assert_eq!(quota.in_use(), 34);
 
-        delegate
-            .pop_lock(Key::from_raw(b"key2"), TimeStamp::from(100))
-            .unwrap();
-        delegate
-            .pop_lock(Key::from_raw(b"key3"), TimeStamp::from(100))
-            .unwrap();
+        delegate.pop_lock(Key::from_raw(b"key2")).unwrap();
+        delegate.pop_lock(Key::from_raw(b"key3")).unwrap();
         assert_eq!(quota.in_use(), 0);
 
         let modified_counts = delegate
@@ -2014,9 +1973,7 @@ mod tests {
         assert!(delegate.init_lock_tracker());
         assert!(!delegate.init_lock_tracker());
 
-        delegate
-            .pop_lock(Key::from_raw(b"key1"), TimeStamp::zero())
-            .unwrap();
+        delegate.pop_lock(Key::from_raw(b"key1")).unwrap();
         let mut scaned_locks = BTreeMap::default();
         scaned_locks.insert(Key::from_raw(b"key2"), MiniLock::from_ts(100));
         delegate
