@@ -832,7 +832,7 @@ lazy_static! {
         register_histogram_vec!(
             "tikv_raftstore_inspect_network_duration_seconds",
             "Bucketed histogram of inspect network duration.",
-            &["target"],
+            &["target", "source"],
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
 
