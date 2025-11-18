@@ -143,6 +143,20 @@ impl MvccTxn {
         self.modifies.push(Modify::PessimisticLock(key, lock))
     }
 
+    pub(crate) fn put_shared_pessimistic_lock(
+        &mut self,
+        key: Key,
+        shared_lock: Option<Lock>,
+        lock: PessimisticLock,
+    ) {
+        let (mut shared_lock, is_new) = match shared_lock {
+            Some(l) => (l, false),
+            None => (Lock::new_in_shared_mode(), true),
+        };
+        shared_lock.put_shared_lock(lock.into_lock());
+        self.put_lock(key, &shared_lock, is_new);
+    }
+
     /// Append a modify that unlocks the key. If the lock is removed due to
     /// committing, a non-zero `commit_ts` needs to be provided; otherwise if
     /// the lock is removed due to rolling back, `commit_ts` must be set to
