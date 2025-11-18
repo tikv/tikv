@@ -1514,7 +1514,102 @@ fn pb_error_inc(type_: &str, e: &errorpb::Error) {
         "unknown"
     };
 
+<<<<<<< HEAD
     IMPORTER_ERROR_VEC.with_label_values(&[type_, label]).inc();
+=======
+        let handle_task = async move {
+            let resp = AddPartitionRangeResponse::default();
+            let engine = if let Some(eng) = kv_engine {
+                eng
+            } else {
+                info!("ignore add_force_partition_range request on raftstore-v2 cluster");
+                // engine is none means this is raftstore-v2, then we can just return.
+                send_rpc_response!(Ok(resp), sink, label, timer);
+                return;
+            };
+            let start = keys::data_key(Key::from_raw(req.get_range().get_start()).as_encoded());
+            let end = keys::data_end_key(Key::from_raw(req.get_range().get_end()).as_encoded());
+            let mut ttl_seconds = req.get_ttl_seconds();
+            if ttl_seconds == 0 {
+                // default value if the ttl is not set, 1h is big enough for most cases.
+                ttl_seconds = DEFAULT_FORCE_PARTITION_RANGE_TTL_SECONDS;
+            }
+            if start >= end {
+                send_rpc_response!(
+                    Err(Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!(
+                            "start keys must be smaller than end key, start: {:?}, end: {:?}",
+                            req.get_range().get_start(),
+                            req.get_range().get_end()
+                        )
+                    ))),
+                    sink,
+                    label,
+                    timer
+                );
+                return;
+            }
+
+            let added =
+                force_partition_range_mgr.add_range(start.clone(), end.clone(), ttl_seconds);
+
+            // here, we don't compact the whole range directly because it's possible that
+            // the task is restart from a checkpoint, thus, there may be already
+            // many SST files, but there's no need to compact them. Instaed, we
+            // try to compact a range that won't overlap with any real data kv
+            // at both side of the range. These 2 ranges won't overlap with any real
+            // data kv, but can trigger a compact if a SST with huge range overlaps with the
+            // input range.
+            let mut start_next = req.get_range().get_start().to_owned();
+            start_next.push(0);
+            let start_next_data_key = keys::data_key(Key::from_raw(&start_next).as_encoded());
+            let mut end_next = req.get_range().get_end().to_owned();
+            end_next.push(0);
+            let end_next_data_key = keys::data_key(Key::from_raw(&end_next).as_encoded());
+            let mut opts = ManualCompactionOptions::new(false, 1, true);
+            opts.set_check_range_overlap_on_bottom_level(true);
+            for cf in [CF_WRITE, CF_DEFAULT] {
+                for rg in [(&*start, &*start_next_data_key), (&end, &end_next_data_key)] {
+                    let start = Instant::now_coarse();
+                    let start_key = log_wrappers::Value::key(req.get_range().get_start());
+                    let end_key = log_wrappers::Value::key(req.get_range().get_end());
+                    let res = engine.compact_range_cf(cf, Some(rg.0), Some(rg.1), opts.clone());
+                    let dur = start.saturating_elapsed();
+                    if let Err(e) = res {
+                        warn!("manual compact range failed"; "cf" => cf, "start" => ?start_key, "end" => ?end_key, "err" => ?e, "dur" => ?dur);
+                    } else {
+                        info!("manual compact range success"; "cf" => cf, "start" => ?start_key, "end" => ?end_key, "dur" => ?dur);
+                    }
+                }
+            }
+
+            info!("add force_partition range"; "start" => ?log_wrappers::Value::key(req.get_range().get_start()),
+                    "end" => ?log_wrappers::Value::key(req.get_range().get_end()), "ttl" => ttl_seconds, "added" => added);
+            send_rpc_response!(Ok(resp), sink, label, timer);
+        };
+
+        self.threads.spawn(handle_task);
+    }
+    fn remove_force_partition_range(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: RemovePartitionRangeRequest,
+        sink: UnarySink<RemovePartitionRangeResponse>,
+    ) {
+        let label = "remove_force_partition_range";
+        let timer = Instant::now_coarse();
+
+        let start = keys::data_key(Key::from_raw(req.get_range().get_start()).as_encoded());
+        let end = keys::data_end_key(Key::from_raw(req.get_range().get_end()).as_encoded());
+        let removed = self.force_partition_range_mgr.remove_range(&start, &end);
+        info!("remove force_partition range"; "start" => log_wrappers::Value::key(req.get_range().get_start()),
+                "end" => log_wrappers::Value::key(req.get_range().get_end()), "removed" => removed);
+
+        let resp = RemovePartitionRangeResponse::default();
+        ctx.spawn(async move { send_rpc_response!(Ok(resp), sink, label, timer) });
+    }
+>>>>>>> 2c5bb34747 (sst_service: avoid trigger false-positive manual compact in `add_force_partition_range` (#19121))
 }
 
 fn write_needs_restore(write: &[u8]) -> bool {
