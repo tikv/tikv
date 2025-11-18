@@ -905,8 +905,8 @@ where
         }
         
         let now = Instant::now();
-        // Update parameters every 1s to avoid too frequent adjustments and allow for more stable metrics
-        if now.saturating_duration_since(self.last_adaptive_update) < Duration::from_secs(1) {
+        // Update parameters every 5s to allow for more stable metrics and reduce oscillations
+        if now.saturating_duration_since(self.last_adaptive_update) < Duration::from_secs(5) {
             return;
         }
         
@@ -987,24 +987,30 @@ where
         // Determine adjustment factor with smoother transitions:
         let mut adjustment_factor = 1.0;
         
-        if latency_ratio > 3.0 {
+        if latency_ratio > 4.0 {
             // Latency is much higher than baseline, significantly reduce batch size
-            adjustment_factor = 0.5;
-        } else if latency_ratio > 2.0 {
+            adjustment_factor = 0.4;
+        } else if latency_ratio > 3.0 {
             // Latency is higher than baseline, moderately reduce batch size
-            adjustment_factor = 0.7;
-        } else if latency_ratio > 1.5 {
+            adjustment_factor = 0.6;
+        } else if latency_ratio > 2.0 {
             // Latency is slightly higher than baseline, slightly reduce batch size
-            adjustment_factor = 0.85;
+            adjustment_factor = 0.8;
+        } else if latency_ratio < 0.2 && qps_ratio > 3.0 {
+            // Latency is much lower than baseline and QPS is very high, increase batch size significantly
+            adjustment_factor = 3.0;
         } else if latency_ratio < 0.3 && qps_ratio > 2.0 {
             // Latency is much lower than baseline and QPS is high, increase batch size significantly
-            adjustment_factor = 2.0;
+            adjustment_factor = 2.5;
         } else if latency_ratio < 0.5 && qps_ratio > 1.5 {
             // Latency is lower than baseline and QPS is high, increase batch size moderately
-            adjustment_factor = 1.5;
+            adjustment_factor = 1.8;
         } else if latency_ratio < 0.8 && qps_ratio > 1.2 {
             // Latency is lower than baseline and QPS is high, increase batch size slightly
-            adjustment_factor = 1.2;
+            adjustment_factor = 1.3;
+        } else if qps_ratio < 0.2 && latency_ratio > 1.5 {
+            // QPS is very low and latency is not low, reduce batch size to maintain responsiveness
+            adjustment_factor = 0.5;
         } else if qps_ratio < 0.3 && latency_ratio > 1.2 {
             // QPS is very low and latency is not low, reduce batch size to maintain responsiveness
             adjustment_factor = 0.6;
@@ -1019,8 +1025,8 @@ where
             current_size, new_size, adjustment_factor, 
             latency_baseline.as_micros(), avg_latency.as_micros(), latency_ratio, 
             qps_baseline, avg_qps, qps_ratio);
-        // Ensure new size is within reasonable range (8KB to max_hint)
-        new_size.clamp(8 * 1024, self.raft_write_batch_size_hint_limit)
+        // Ensure new size is within reasonable range (4KB to max_hint)
+        new_size.clamp(4 * 1024, 256 * 1024)
     }
     
     /// Calculate adaptive wait duration based on latency and QPS
@@ -1067,30 +1073,39 @@ where
         
         let mut adjustment_factor = 1.0;
         
-        if latency_ratio > 3.0 {
+        if latency_ratio > 4.0 {
             // Latency is much higher than baseline, significantly reduce wait time
-            adjustment_factor = 0.2;
+            adjustment_factor = 0.1;
+        } else if latency_ratio > 3.0 {
+            // Latency is higher than baseline, moderately reduce wait time
+            adjustment_factor = 0.25;
         } else if latency_ratio > 2.0 {
             // Latency is higher than baseline, moderately reduce wait time
             adjustment_factor = 0.4;
         } else if latency_ratio > 1.5 {
             // Latency is slightly higher than baseline, slightly reduce wait time
             adjustment_factor = 0.6;
+        } else if latency_ratio < 0.2 && qps_ratio > 3.0 {
+            // Latency is much lower than baseline and QPS is very high, increase wait time to aggregate more requests
+            adjustment_factor = 4.0;
         } else if latency_ratio < 0.3 && qps_ratio > 2.0 {
             // Latency is much lower than baseline and QPS is high, increase wait time to aggregate more requests
-            adjustment_factor = 2.5;
+            adjustment_factor = 3.0;
         } else if latency_ratio < 0.5 && qps_ratio > 1.5 {
             // Latency is lower than baseline and QPS is high, increase wait time to aggregate more requests
-            adjustment_factor = 1.8;
+            adjustment_factor = 2.0;
         } else if latency_ratio < 0.8 && qps_ratio > 1.2 {
             // Latency is lower than baseline and QPS is high, moderately increase wait time
-            adjustment_factor = 1.4;
+            adjustment_factor = 1.5;
+        } else if qps_ratio < 0.2 && latency_ratio > 1.5 {
+            // QPS is very low and latency is not low, reduce wait time to maintain responsiveness
+            adjustment_factor = 0.2;
         } else if qps_ratio < 0.3 && latency_ratio > 1.2 {
             // QPS is very low and latency is not low, reduce wait time to maintain responsiveness
-            adjustment_factor = 0.4;
+            adjustment_factor = 0.3;
         } else if qps_ratio < 0.5 && latency_ratio > 1.0 {
             // QPS is low and latency is not low, reduce wait time to maintain responsiveness
-            adjustment_factor = 0.6;
+            adjustment_factor = 0.5;
         }
         
         let new_duration_nanos = (current_duration.as_nanos() as f64 * adjustment_factor).round() as u64;
@@ -1099,8 +1114,8 @@ where
             current_duration.as_nanos() as f64 / 1000.0,
             new_duration_nanos as f64 / 1000.0, adjustment_factor, latency_baseline.as_micros(), avg_latency.as_micros(), latency_ratio, 
             qps_baseline, avg_qps, qps_ratio);
-        // Ensure new wait time is within reasonable range (10us to 1ms)
-        Duration::from_nanos(new_duration_nanos.clamp(10_000, 1_000_000))
+        // Ensure new wait time is within reasonable range (5us to 1ms)
+        Duration::from_nanos(new_duration_nanos.clamp(5_000, 1_000_000))
     }
     
     /// Update baseline value history records
