@@ -11,7 +11,7 @@ pub struct ManualCompactionOptions {
     pub exclusive_manual: bool,
     pub max_subcompactions: u32,
     pub bottommost_level_force: bool,
-    pub bottom_level_check_range_overlap: bool,
+    pub check_range_overlap_on_bottom_level: bool,
 }
 
 impl ManualCompactionOptions {
@@ -24,12 +24,12 @@ impl ManualCompactionOptions {
             exclusive_manual,
             max_subcompactions,
             bottommost_level_force,
-            bottom_level_check_range_overlap: false,
+            check_range_overlap_on_bottom_level: false,
         }
     }
 
-    pub fn set_bottom_level_range_overlap_check(&mut self, v: bool) {
-        self.bottom_level_check_range_overlap = v;
+    pub fn set_check_range_overlap_on_bottom_level(&mut self, v: bool) {
+        self.check_range_overlap_on_bottom_level = v;
     }
 }
 
