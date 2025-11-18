@@ -532,13 +532,15 @@ lazy_static! {
     .unwrap();
     pub static ref SCHED_PROCESSING_READ_HISTOGRAM_STATIC: ProcessingReadVec =
         auto_flush_from!(SCHED_PROCESSING_READ_HISTOGRAM_VEC, ProcessingReadVec);
-    pub static ref SCHED_PROCESSING_WRITE_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
-        "tikv_scheduler_processing_write_duration_seconds",
-        "Bucketed histogram of processing write duration",
+    pub static ref SCHED_BLOCK_READ_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
+        "tikv_scheduler_block_read_duration_seconds",
+        "Bucketed histogram of block read duration while processing read",
         &["type"],
-        exponential_buckets(0.00001, 2.0, 26).unwrap()
+        exponential_buckets(0.001, 2.0, 18).unwrap()
     )
     .unwrap();
+    pub static ref SCHED_BLOCK_READ_HISTOGRAM_VEC_STATIC: ProcessingReadVec =
+        auto_flush_from!(SCHED_BLOCK_READ_HISTOGRAM_VEC, ProcessingReadVec);
     pub static ref SCHED_TOO_BUSY_COUNTER: IntCounterVec = register_int_counter_vec!(
         "tikv_scheduler_too_busy_total",
         "Total count of scheduler too busy",

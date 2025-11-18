@@ -3697,13 +3697,25 @@ def SchedulerCommands() -> RowPanel:
     layout.row(
         [
             graph_panel_histogram_quantiles(
-                title="Scheduler command read duration",
-                description="The time consumed on reading when executing commit command",
+                title="Scheduler command process duration",
+                description="The time consumed on processing command",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
                 metric="tikv_scheduler_processing_read_duration_seconds",
                 label_selectors=['type="$command"'],
                 hide_count=True,
             ),
+            graph_panel_histogram_quantiles(
+                title="Scheduler command block read duration",
+                description="The time consumed on rocksdb block read while processing command",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_scheduler_block_read_duration_seconds",
+                label_selectors=['type="$command"'],
+                hide_count=True,
+            ),
+        ]
+    )
+    layout.row(
+        [
             heatmap_panel(
                 title="Check memory locks duration",
                 description="The time consumed on checking memory locks",
