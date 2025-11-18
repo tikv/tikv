@@ -54,7 +54,9 @@ impl CommandExt for Flush {
                     bytes += key.as_encoded().len();
                     bytes += value.len();
                 }
-                Mutation::Delete(ref key, _) | Mutation::Lock(ref key, _) => {
+                Mutation::Delete(ref key, _)
+                | Mutation::Lock(ref key, _)
+                | Mutation::SharedLock(ref key, _) => {
                     bytes += key.as_encoded().len();
                 }
                 Mutation::CheckNotExists(..) => (),

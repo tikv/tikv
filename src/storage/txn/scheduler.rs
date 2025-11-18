@@ -2010,7 +2010,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let mut slot = self.inner.get_task_slot(cid);
         let task_ctx = slot.get_mut(&cid).unwrap();
         let cb = task_ctx.cb.take().unwrap();
-        let is_shared_lock = lock_info.lock_info_pb.lock_type == kvrpcpb::Op::SharedLock;
+        let is_shared_lock = lock_info.is_shared_lock_request;
 
         let ctx = LockWaitContext::new(
             lock_info.key.clone(),
