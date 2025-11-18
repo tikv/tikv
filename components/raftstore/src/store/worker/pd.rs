@@ -2372,7 +2372,10 @@ where
                     for (store_id, network_duration) in &network_durations {
                         if *network_duration > metric_threshold {
                             STORE_INSPECT_NETWORK_DURATION_HISTOGRAM
-                                .with_label_values(&[&store_id.to_string(), &self.store_id.to_string()])
+                                .with_label_values(&[
+                                    &store_id.to_string(),
+                                    &self.store_id.to_string(),
+                                ])
                                 .observe(tikv_util::time::duration_to_sec(*network_duration));
                         }
                     }
