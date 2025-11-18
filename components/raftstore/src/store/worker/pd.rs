@@ -2368,9 +2368,9 @@ where
 
                     // To avoid recording too many metrics, we only record durations
                     // that exceed a certain threshold.
-                    let metric_threshold = Duration::from_millis(100);
+                    const METRIC_THRESHOLD: Duration = Duration::from_millis(100);
                     for (store_id, network_duration) in &network_durations {
-                        if *network_duration > metric_threshold {
+                        if *network_duration > METRIC_THRESHOLD {
                             STORE_INSPECT_NETWORK_DURATION_HISTOGRAM
                                 .with_label_values(&[
                                     &store_id.to_string(),
