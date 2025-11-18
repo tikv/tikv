@@ -3014,7 +3014,11 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.5#eb969913e1e243c0b09533a9a63540cd588e7bdc"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#a6b0bb0483986cbcec14530064f53b7f14facfa2"
+>>>>>>> 2c5bb34747 (sst_service: avoid trigger false-positive manual compact in `add_force_partition_range` (#19121))
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -3033,7 +3037,11 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.5#eb969913e1e243c0b09533a9a63540cd588e7bdc"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#a6b0bb0483986cbcec14530064f53b7f14facfa2"
+>>>>>>> 2c5bb34747 (sst_service: avoid trigger false-positive manual compact in `add_force_partition_range` (#19121))
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4932,7 +4940,11 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.5#eb969913e1e243c0b09533a9a63540cd588e7bdc"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#a6b0bb0483986cbcec14530064f53b7f14facfa2"
+>>>>>>> 2c5bb34747 (sst_service: avoid trigger false-positive manual compact in `add_force_partition_range` (#19121))
 dependencies = [
  "libc 0.2.146",
  "librocksdb_sys",
