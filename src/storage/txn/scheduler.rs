@@ -816,19 +816,11 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         };
         if let Some(details) = sched_details {
             let req_info = GLOBAL_TRACKERS.with_tracker(details.tracker, |tracker| {
-<<<<<<< HEAD
-                tracker.metrics.scheduler_process_nanos = details
-                    .start_process_instant
-                    .saturating_elapsed()
-                    .as_nanos() as u64;
-=======
                 let now = Instant::now();
-                TlsFutureTracker::collect_to_tracker(now, tracker);
                 tracker.metrics.scheduler_process_nanos = (now
                     .saturating_duration_since(details.start_instant)
                     .as_nanos() as u64)
                     .saturating_sub(details.async_snapshot_nanos);
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
                 tracker.metrics.scheduler_throttle_nanos =
                     details.flow_control_nanos + details.quota_limit_delay_nanos;
                 tracker.req_info.clone()
@@ -945,20 +937,11 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 self.schedule_command(task, cb, None);
             } else {
                 GLOBAL_TRACKERS.with_tracker(sched_details.tracker, |tracker| {
-<<<<<<< HEAD
-                    tracker.metrics.scheduler_process_nanos = sched_details
-                        .start_process_instant
-                        .saturating_elapsed()
-                        .as_nanos()
-                        as u64;
-=======
                     let now = Instant::now();
-                    TlsFutureTracker::collect_to_tracker(now, tracker);
                     tracker.metrics.scheduler_process_nanos =
                         (now.saturating_duration_since(sched_details.start_instant)
                             .as_nanos() as u64)
                             .saturating_sub(sched_details.async_snapshot_nanos);
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
                     tracker.metrics.scheduler_throttle_nanos =
                         sched_details.flow_control_nanos + sched_details.quota_limit_delay_nanos;
                 });

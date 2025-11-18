@@ -51906,7 +51906,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 373,
+          "id": 367,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52114,11 +52114,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 367,
-=======
-          "id": 374,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 368,
           "interval": null,
           "legend": {
             "show": false
@@ -52219,11 +52215,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 368,
-=======
-      "id": 375,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+      "id": 369,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -52269,11 +52261,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 369,
-=======
-          "id": 376,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 370,
           "interval": null,
           "legend": {
             "show": false
@@ -52371,11 +52359,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 370,
-=======
-          "id": 377,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 371,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52576,11 +52560,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 371,
-=======
-          "id": 378,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 372,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52713,11 +52693,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 372,
-=======
-          "id": 379,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 373,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52850,11 +52826,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 373,
-=======
-          "id": 380,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 374,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52987,11 +52959,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 374,
-=======
-          "id": 381,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 375,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53192,11 +53160,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 375,
-=======
-          "id": 382,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 376,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53329,11 +53293,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 376,
-=======
-          "id": 383,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 377,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53466,11 +53426,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 377,
-=======
-          "id": 384,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 378,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53606,11 +53562,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 378,
-=======
-      "id": 385,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+      "id": 379,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -53649,11 +53601,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 379,
-=======
-          "id": 386,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 380,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53854,11 +53802,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 380,
-=======
-          "id": 387,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 381,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54059,11 +54003,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 381,
-=======
-          "id": 388,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 382,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54264,11 +54204,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 382,
-=======
-          "id": 389,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 383,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54469,11 +54405,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 383,
-=======
-          "id": 390,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 384,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54606,11 +54538,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 384,
-=======
-          "id": 391,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 385,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54743,11 +54671,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 385,
-=======
-          "id": 392,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 386,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54880,11 +54804,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 386,
-=======
-          "id": 393,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 387,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55017,11 +54937,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 387,
-=======
-          "id": 394,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 388,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55154,11 +55070,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 388,
-=======
-          "id": 395,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 389,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55298,11 +55210,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 389,
-=======
-          "id": 396,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 390,
           "interval": null,
           "legend": {
             "show": false
@@ -55400,11 +55308,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 390,
-=======
-          "id": 397,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 391,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55608,11 +55512,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 391,
-=======
-      "id": 398,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+      "id": 392,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -55651,11 +55551,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 392,
-=======
-          "id": 399,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 393,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55788,11 +55684,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 393,
-=======
-          "id": 400,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 394,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55925,11 +55817,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 394,
-=======
-          "id": 401,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 395,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -56069,11 +55957,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 395,
-=======
-          "id": 402,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 396,
           "interval": null,
           "legend": {
             "show": false
@@ -56144,142 +56028,6 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-<<<<<<< HEAD
-=======
-          "description": "The number of concurrently running threads in the yatp thread pool.",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            }
-          },
-          "fill": 1,
-          "fillGradient": 1,
-          "grid": {
-            "threshold1": null,
-            "threshold1Color": "rgba(216, 200, 27, 0.27)",
-            "threshold2": null,
-            "threshold2Color": "rgba(234, 112, 112, 0.22)"
-          },
-          "gridPos": {
-            "h": 7,
-            "w": 8,
-            "x": 16,
-            "y": 7
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 403,
-          "interval": null,
-          "isNew": true,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "max",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "maxDataPoints": null,
-          "maxPerRow": null,
-          "minSpan": null,
-          "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true,
-            "dataLinks": []
-          },
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "repeat": null,
-          "repeatDirection": null,
-          "seriesOverrides": [],
-          "span": null,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(avg_over_time(\n    tikv_unified_read_pool_thread_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [1m]\n)) by (instance, $additional_groupby) ",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{instance}} {{$additional_groupby}}",
-              "metric": "",
-              "query": "sum(avg_over_time(\n    tikv_unified_read_pool_thread_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [1m]\n)) by (instance, $additional_groupby) ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Running threads",
-          "tooltip": {
-            "msResolution": true,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "transformations": [],
-          "transparent": false,
-          "type": "graph",
-          "xaxis": {
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "decimals": null,
-              "format": "none",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "decimals": null,
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": 0
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "cacheTimeout": null,
-          "datasource": "${DS_TEST-CLUSTER}",
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
           "description": "Task execution time during one schedule.",
           "editable": true,
           "error": false,
@@ -56307,11 +56055,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 396,
-=======
-          "id": 404,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 397,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -56512,11 +56256,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 397,
-=======
-          "id": 405,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 398,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -56717,11 +56457,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 398,
-=======
-          "id": 406,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 399,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -56925,11 +56661,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 399,
-=======
-      "id": 407,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+      "id": 400,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -56968,11 +56700,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 400,
-=======
-          "id": 408,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 401,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57150,11 +56878,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 401,
-=======
-          "id": 409,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 402,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57355,11 +57079,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 402,
-=======
-          "id": 410,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 403,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57492,11 +57212,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 403,
-=======
-          "id": 411,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 404,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57629,11 +57345,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 404,
-=======
-          "id": 412,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 405,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57766,11 +57478,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 405,
-=======
-          "id": 413,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 406,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57903,11 +57611,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 406,
-=======
-          "id": 414,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 407,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -58040,11 +57744,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 407,
-=======
-          "id": 415,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 408,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -58173,11 +57873,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 408,
-=======
-          "id": 416,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 409,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -58252,11 +57948,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 409,
-=======
-          "id": 417,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 410,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -58335,11 +58027,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 410,
-=======
-          "id": 418,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 411,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -58592,11 +58280,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 411,
-=======
-          "id": 419,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 412,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -58729,11 +58413,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 412,
-=======
-          "id": 420,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 413,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -58866,11 +58546,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 413,
-=======
-          "id": 421,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 414,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59071,11 +58747,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 414,
-=======
-          "id": 422,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 415,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59226,11 +58898,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 415,
-=======
-      "id": 423,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+      "id": 416,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -59269,11 +58937,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 416,
-=======
-          "id": 424,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 417,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59421,11 +59085,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 417,
-=======
-          "id": 425,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 418,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59558,11 +59218,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 418,
-=======
-          "id": 426,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 419,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59763,11 +59419,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 419,
-=======
-          "id": 427,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 420,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59915,11 +59567,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 420,
-=======
-          "id": 428,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 421,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60120,11 +59768,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 421,
-=======
-          "id": 429,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 422,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60257,11 +59901,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 422,
-=======
-          "id": 430,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 423,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60394,11 +60034,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 423,
-=======
-          "id": 431,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 424,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60531,11 +60167,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 424,
-=======
-          "id": 432,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 425,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60668,11 +60300,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 425,
-=======
-          "id": 433,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 426,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60812,11 +60440,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 426,
-=======
-          "id": 434,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 427,
           "interval": null,
           "legend": {
             "show": false
@@ -60914,11 +60538,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 427,
-=======
-          "id": 435,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 428,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61122,11 +60742,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 428,
-=======
-      "id": 436,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+      "id": 429,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -61165,11 +60781,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 429,
-=======
-          "id": 437,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 430,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61302,11 +60914,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 430,
-=======
-          "id": 438,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 431,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61439,11 +61047,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 431,
-=======
-          "id": 439,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 432,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61576,11 +61180,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 432,
-=======
-          "id": 440,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 433,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61716,11 +61316,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 433,
-=======
-      "id": 441,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+      "id": 434,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -61759,11 +61355,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 434,
-=======
-          "id": 442,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 435,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61896,11 +61488,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 435,
-=======
-          "id": 443,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 436,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62033,11 +61621,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 436,
-=======
-          "id": 444,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 437,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62185,11 +61769,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 437,
-=======
-          "id": 445,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 438,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62322,11 +61902,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 438,
-=======
-          "id": 446,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 439,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62459,11 +62035,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 439,
-=======
-          "id": 447,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 440,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62596,11 +62168,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 440,
-=======
-          "id": 448,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 441,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62736,11 +62304,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 441,
-=======
-      "id": 449,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+      "id": 442,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -62779,11 +62343,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 442,
-=======
-          "id": 450,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 443,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62916,11 +62476,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 443,
-=======
-          "id": 451,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 444,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63053,11 +62609,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 444,
-=======
-          "id": 452,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 445,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63190,11 +62742,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 445,
-=======
-          "id": 453,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 446,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63327,11 +62875,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 446,
-=======
-          "id": 454,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 447,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63464,11 +63008,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 447,
-=======
-          "id": 455,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 448,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63604,11 +63144,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 448,
-=======
-      "id": 456,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+      "id": 449,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -63647,11 +63183,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 449,
-=======
-          "id": 457,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 450,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63784,11 +63316,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 450,
-=======
-          "id": 458,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 451,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63921,11 +63449,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 451,
-=======
-          "id": 459,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 452,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64073,11 +63597,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 452,
-=======
-          "id": 460,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 453,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64240,11 +63760,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 453,
-=======
-          "id": 461,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 454,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64377,11 +63893,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 454,
-=======
-          "id": 462,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 455,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64514,11 +64026,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 455,
-=======
-          "id": 463,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 456,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64681,11 +64189,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 456,
-=======
-          "id": 464,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 457,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64833,11 +64337,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 457,
-=======
-          "id": 465,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 458,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64973,11 +64473,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 458,
-=======
-      "id": 466,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+      "id": 459,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -65016,11 +64512,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 459,
-=======
-          "id": 467,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 460,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65153,11 +64645,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 460,
-=======
-          "id": 468,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 461,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65290,11 +64778,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 461,
-=======
-          "id": 469,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 462,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65427,11 +64911,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 462,
-=======
-          "id": 470,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 463,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65564,11 +65044,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 463,
-=======
-          "id": 471,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 464,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65701,11 +65177,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 464,
-=======
-          "id": 472,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 465,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65838,11 +65310,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 465,
-=======
-          "id": 473,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 466,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65975,11 +65443,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 466,
-=======
-          "id": 474,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 467,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66112,11 +65576,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 467,
-=======
-          "id": 475,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 468,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66256,11 +65716,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 468,
-=======
-          "id": 476,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 469,
           "interval": null,
           "legend": {
             "show": false
@@ -66358,11 +65814,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 469,
-=======
-          "id": 477,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 470,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66495,11 +65947,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 470,
-=======
-          "id": 478,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 471,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66647,11 +66095,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 471,
-=======
-          "id": 479,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 472,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66799,11 +66243,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 472,
-=======
-          "id": 480,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 473,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66943,11 +66383,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 473,
-=======
-          "id": 481,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 474,
           "interval": null,
           "legend": {
             "show": false
@@ -67045,11 +66481,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 474,
-=======
-          "id": 482,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 475,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67182,11 +66614,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 475,
-=======
-          "id": 483,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 476,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67322,11 +66750,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 476,
-=======
-      "id": 484,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+      "id": 477,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -67365,11 +66789,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 477,
-=======
-          "id": 485,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 478,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67502,11 +66922,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 478,
-=======
-          "id": 486,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 479,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67669,11 +67085,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 479,
-=======
-          "id": 487,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 480,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67821,11 +67233,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 480,
-=======
-          "id": 488,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 481,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67958,11 +67366,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 481,
-=======
-          "id": 489,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 482,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68102,11 +67506,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 482,
-=======
-          "id": 490,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 483,
           "interval": null,
           "legend": {
             "show": false
@@ -68211,11 +67611,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 483,
-=======
-          "id": 491,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 484,
           "interval": null,
           "legend": {
             "show": false
@@ -68320,11 +67716,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 484,
-=======
-          "id": 492,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 485,
           "interval": null,
           "legend": {
             "show": false
@@ -68422,11 +67814,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 485,
-=======
-          "id": 493,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 486,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68566,11 +67954,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 486,
-=======
-          "id": 494,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 487,
           "interval": null,
           "legend": {
             "show": false
@@ -68675,11 +68059,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 487,
-=======
-          "id": 495,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 488,
           "interval": null,
           "legend": {
             "show": false
@@ -68784,11 +68164,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 488,
-=======
-          "id": 496,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 489,
           "interval": null,
           "legend": {
             "show": false
@@ -68886,11 +68262,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 489,
-=======
-          "id": 497,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 490,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69023,11 +68395,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 490,
-=======
-          "id": 498,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 491,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69160,11 +68528,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 491,
-=======
-          "id": 499,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 492,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69304,11 +68668,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 492,
-=======
-          "id": 500,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 493,
           "interval": null,
           "legend": {
             "show": false
@@ -69406,11 +68766,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 493,
-=======
-          "id": 501,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 494,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69546,11 +68902,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 494,
-=======
-      "id": 502,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+      "id": 495,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -69589,11 +68941,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 495,
-=======
-          "id": 503,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 496,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69756,11 +69104,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 496,
-=======
-          "id": 504,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 497,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69893,11 +69237,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 497,
-=======
-          "id": 505,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 498,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -70037,11 +69377,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 498,
-=======
-          "id": 506,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 499,
           "interval": null,
           "legend": {
             "show": false
@@ -70146,11 +69482,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 499,
-=======
-          "id": 507,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 500,
           "interval": null,
           "legend": {
             "show": false
@@ -70248,11 +69580,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 500,
-=======
-          "id": 508,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 501,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -70407,11 +69735,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 501,
-=======
-          "id": 509,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 502,
           "interval": null,
           "legend": {
             "show": false
@@ -70516,11 +69840,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 502,
-=======
-          "id": 510,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 503,
           "interval": null,
           "legend": {
             "show": false
@@ -70625,11 +69945,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 503,
-=======
-          "id": 511,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 504,
           "interval": null,
           "legend": {
             "show": false
@@ -70727,11 +70043,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 504,
-=======
-          "id": 512,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 505,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -70901,11 +70213,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 505,
-=======
-          "id": 513,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 506,
           "interval": null,
           "legend": {
             "show": false
@@ -71003,11 +70311,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 506,
-=======
-          "id": 514,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 507,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71208,11 +70512,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 507,
-=======
-          "id": 515,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 508,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71413,11 +70713,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 508,
-=======
-          "id": 516,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 509,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71550,11 +70846,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 509,
-=======
-          "id": 517,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 510,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71717,11 +71009,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 510,
-=======
-          "id": 518,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 511,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71854,11 +71142,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 511,
-=======
-          "id": 519,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 512,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71991,11 +71275,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 512,
-=======
-          "id": 520,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 513,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -72196,11 +71476,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 513,
-=======
-          "id": 521,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 514,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -72333,11 +71609,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 514,
-=======
-          "id": 522,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 515,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -72477,11 +71749,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 515,
-=======
-          "id": 523,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 516,
           "interval": null,
           "legend": {
             "show": false
@@ -72586,11 +71854,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 516,
-=======
-          "id": 524,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 517,
           "interval": null,
           "legend": {
             "show": false
@@ -72695,11 +71959,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 517,
-=======
-          "id": 525,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 518,
           "interval": null,
           "legend": {
             "show": false
@@ -72804,11 +72064,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 518,
-=======
-          "id": 526,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 519,
           "interval": null,
           "legend": {
             "show": false
@@ -72913,11 +72169,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 519,
-=======
-          "id": 527,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 520,
           "interval": null,
           "legend": {
             "show": false
@@ -73022,11 +72274,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 520,
-=======
-          "id": 528,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 521,
           "interval": null,
           "legend": {
             "show": false
@@ -73131,11 +72379,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 521,
-=======
-          "id": 529,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 522,
           "interval": null,
           "legend": {
             "show": false
@@ -73233,11 +72477,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 522,
-=======
-          "id": 530,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 523,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -73385,11 +72625,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 523,
-=======
-          "id": 531,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 524,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -73522,11 +72758,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 524,
-=======
-          "id": 532,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 525,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -73659,11 +72891,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 525,
-=======
-          "id": 533,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 526,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -73811,11 +73039,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 526,
-=======
-          "id": 534,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 527,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -73951,11 +73175,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 527,
-=======
-      "id": 535,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+      "id": 528,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -74006,11 +73226,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 528,
-=======
-          "id": 536,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 529,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -74106,11 +73322,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 529,
-=======
-          "id": 537,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 530,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -74185,11 +73397,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 530,
-=======
-          "id": 538,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 531,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -74264,11 +73472,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 531,
-=======
-          "id": 539,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 532,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -74343,11 +73547,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 532,
-=======
-          "id": 540,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 533,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -74422,11 +73622,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 533,
-=======
-          "id": 541,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 534,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -74501,11 +73697,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 534,
-=======
-          "id": 542,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 535,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -74580,11 +73772,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 535,
-=======
-          "id": 543,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 536,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -74663,11 +73851,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 536,
-=======
-          "id": 544,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 537,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -74800,11 +73984,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 537,
-=======
-          "id": 545,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 538,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -74937,11 +74117,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 538,
-=======
-          "id": 546,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 539,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -75074,11 +74250,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 539,
-=======
-          "id": 547,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 540,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -75211,11 +74383,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 540,
-=======
-          "id": 548,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 541,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -75348,11 +74516,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 541,
-=======
-          "id": 549,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 542,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -75500,11 +74664,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 542,
-=======
-          "id": 550,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 543,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -75637,11 +74797,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 543,
-=======
-          "id": 551,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 544,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -75774,11 +74930,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 544,
-=======
-          "id": 552,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 545,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -75944,11 +75096,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 545,
-=======
-          "id": 553,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 546,
           "interval": null,
           "legend": {
             "show": false
@@ -76053,11 +75201,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 546,
-=======
-          "id": 554,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 547,
           "interval": null,
           "legend": {
             "show": false
@@ -76162,11 +75306,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 547,
-=======
-          "id": 555,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 548,
           "interval": null,
           "legend": {
             "show": false
@@ -76271,11 +75411,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 548,
-=======
-          "id": 556,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 549,
           "interval": null,
           "legend": {
             "show": false
@@ -76380,11 +75516,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 549,
-=======
-          "id": 557,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 550,
           "interval": null,
           "legend": {
             "show": false
@@ -76489,11 +75621,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 550,
-=======
-          "id": 558,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 551,
           "interval": null,
           "legend": {
             "show": false
@@ -76598,11 +75726,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 551,
-=======
-          "id": 559,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 552,
           "interval": null,
           "legend": {
             "show": false
@@ -76707,11 +75831,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 552,
-=======
-          "id": 560,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 553,
           "interval": null,
           "legend": {
             "show": false
@@ -76809,11 +75929,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 553,
-=======
-          "id": 561,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 554,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -76946,11 +76062,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 554,
-=======
-          "id": 562,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 555,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -77083,11 +76195,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 555,
-=======
-          "id": 563,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 556,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -77220,11 +76328,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 556,
-=======
-          "id": 564,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 557,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -77357,11 +76461,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 557,
-=======
-          "id": 565,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 558,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -77494,11 +76594,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 558,
-=======
-          "id": 566,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 559,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -77631,11 +76727,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 559,
-=======
-          "id": 567,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 560,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -77741,277 +76833,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-<<<<<<< HEAD
           "description": "",
-=======
-          "description": "The memory usage of buffer file (stores logs about to be flushed to external storage) cache.",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            }
-          },
-          "fill": 1,
-          "fillGradient": 1,
-          "grid": {
-            "threshold1": null,
-            "threshold1Color": "rgba(216, 200, 27, 0.27)",
-            "threshold2": null,
-            "threshold2Color": "rgba(234, 112, 112, 0.22)"
-          },
-          "gridPos": {
-            "h": 7,
-            "w": 8,
-            "x": 0,
-            "y": 77
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 568,
-          "interval": null,
-          "isNew": true,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "max",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "maxDataPoints": null,
-          "maxPerRow": null,
-          "minSpan": null,
-          "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true,
-            "dataLinks": []
-          },
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "repeat": null,
-          "repeatDirection": null,
-          "seriesOverrides": [],
-          "span": null,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum((\n    tikv_log_backup_temp_file_memory_usage\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{instance}}",
-              "metric": "",
-              "query": "sum((\n    tikv_log_backup_temp_file_memory_usage\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Buffer File Cache Mem Usage",
-          "tooltip": {
-            "msResolution": true,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "transformations": [],
-          "transparent": false,
-          "type": "graph",
-          "xaxis": {
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "decimals": null,
-              "format": "bytes",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "decimals": null,
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": 0
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "cacheTimeout": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The number of temporary buffer files.",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            }
-          },
-          "fill": 1,
-          "fillGradient": 1,
-          "grid": {
-            "threshold1": null,
-            "threshold1Color": "rgba(216, 200, 27, 0.27)",
-            "threshold2": null,
-            "threshold2Color": "rgba(234, 112, 112, 0.22)"
-          },
-          "gridPos": {
-            "h": 7,
-            "w": 8,
-            "x": 8,
-            "y": 77
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 569,
-          "interval": null,
-          "isNew": true,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "max",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "maxDataPoints": null,
-          "maxPerRow": null,
-          "minSpan": null,
-          "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true,
-            "dataLinks": []
-          },
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "repeat": null,
-          "repeatDirection": null,
-          "seriesOverrides": [],
-          "span": null,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum((\n    tikv_log_backup_temp_file_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{instance}}",
-              "metric": "",
-              "query": "sum((\n    tikv_log_backup_temp_file_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Buffer File Count",
-          "tooltip": {
-            "msResolution": true,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "transformations": [],
-          "transparent": false,
-          "type": "graph",
-          "xaxis": {
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "decimals": null,
-              "format": "none",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "decimals": null,
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": 0
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "cacheTimeout": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The total size of buffer files that are swapped out to disk.",
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -78038,11 +76860,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 560,
-=======
-          "id": 570,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 561,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78182,11 +77000,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 561,
-=======
-          "id": 571,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 562,
           "interval": null,
           "legend": {
             "show": false
@@ -78291,11 +77105,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 562,
-=======
-          "id": 572,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 563,
           "interval": null,
           "legend": {
             "show": false
@@ -78393,11 +77203,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 563,
-=======
-          "id": 573,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 564,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78530,11 +77336,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 564,
-=======
-          "id": 574,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 565,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78667,11 +77469,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 565,
-=======
-          "id": 575,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 566,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78804,11 +77602,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 566,
-=======
-          "id": 576,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 567,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78887,543 +77681,7 @@
           "yaxes": [
             {
               "decimals": null,
-<<<<<<< HEAD
               "format": "s",
-=======
-              "format": "none",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "decimals": null,
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": 0
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "cacheTimeout": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The leader of the region with minimal checkpoint.",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            }
-          },
-          "fill": 1,
-          "fillGradient": 1,
-          "grid": {
-            "threshold1": null,
-            "threshold1Color": "rgba(216, 200, 27, 0.27)",
-            "threshold2": null,
-            "threshold2Color": "rgba(234, 112, 112, 0.22)"
-          },
-          "gridPos": {
-            "h": 7,
-            "w": 8,
-            "x": 16,
-            "y": 98
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 577,
-          "interval": null,
-          "isNew": true,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "max",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "maxDataPoints": null,
-          "maxPerRow": null,
-          "minSpan": null,
-          "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true,
-            "dataLinks": []
-          },
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "repeat": null,
-          "repeatDirection": null,
-          "seriesOverrides": [],
-          "span": null,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_log_backup_store_last_checkpoint_ts\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  / 262144",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{ instance }}",
-              "metric": "",
-              "query": "((\n    tikv_log_backup_store_last_checkpoint_ts\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  / 262144",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Current Last Region Leader Store ID",
-          "tooltip": {
-            "msResolution": true,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "transformations": [],
-          "transparent": false,
-          "type": "graph",
-          "xaxis": {
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "decimals": null,
-              "format": "none",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "decimals": null,
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": 0
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "cacheTimeout": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The region with minimal checkpoint of each store.",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            }
-          },
-          "fill": 1,
-          "fillGradient": 1,
-          "grid": {
-            "threshold1": null,
-            "threshold1Color": "rgba(216, 200, 27, 0.27)",
-            "threshold2": null,
-            "threshold2Color": "rgba(234, 112, 112, 0.22)"
-          },
-          "gridPos": {
-            "h": 7,
-            "w": 8,
-            "x": 0,
-            "y": 105
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 578,
-          "interval": null,
-          "isNew": true,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "max",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "maxDataPoints": null,
-          "maxPerRow": null,
-          "minSpan": null,
-          "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true,
-            "dataLinks": []
-          },
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "repeat": null,
-          "repeatDirection": null,
-          "seriesOverrides": [],
-          "span": null,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_log_backup_store_last_checkpoint_region_id\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{ instance }}",
-              "metric": "",
-              "query": "((\n    tikv_log_backup_store_last_checkpoint_region_id\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Current Last Region ID per Store",
-          "tooltip": {
-            "msResolution": true,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "transformations": [],
-          "transparent": false,
-          "type": "graph",
-          "xaxis": {
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "decimals": null,
-              "format": "none",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "decimals": null,
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": 0
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "cacheTimeout": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The minimal checkpoint TS of each store.",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            }
-          },
-          "fill": 1,
-          "fillGradient": 1,
-          "grid": {
-            "threshold1": null,
-            "threshold1Color": "rgba(216, 200, 27, 0.27)",
-            "threshold2": null,
-            "threshold2Color": "rgba(234, 112, 112, 0.22)"
-          },
-          "gridPos": {
-            "h": 7,
-            "w": 8,
-            "x": 8,
-            "y": 105
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 579,
-          "interval": null,
-          "isNew": true,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "max",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "maxDataPoints": null,
-          "maxPerRow": null,
-          "minSpan": null,
-          "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true,
-            "dataLinks": []
-          },
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "repeat": null,
-          "repeatDirection": null,
-          "seriesOverrides": [],
-          "span": null,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_log_backup_store_last_checkpoint_ts\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{ instance }}",
-              "metric": "",
-              "query": "((\n    tikv_log_backup_store_last_checkpoint_ts\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Current Last Checkpoint TS per Store",
-          "tooltip": {
-            "msResolution": true,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "transformations": [],
-          "transparent": false,
-          "type": "graph",
-          "xaxis": {
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "decimals": null,
-              "format": "ms",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "decimals": null,
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": 0
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "cacheTimeout": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The active progress subscription from each store",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            }
-          },
-          "fill": 1,
-          "fillGradient": 1,
-          "grid": {
-            "threshold1": null,
-            "threshold1Color": "rgba(216, 200, 27, 0.27)",
-            "threshold2": null,
-            "threshold2Color": "rgba(234, 112, 112, 0.22)"
-          },
-          "gridPos": {
-            "h": 7,
-            "w": 8,
-            "x": 16,
-            "y": 105
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 580,
-          "interval": null,
-          "isNew": true,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "max",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "maxDataPoints": null,
-          "maxPerRow": null,
-          "minSpan": null,
-          "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true,
-            "dataLinks": []
-          },
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "repeat": null,
-          "repeatDirection": null,
-          "seriesOverrides": [],
-          "span": null,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_log_backup_active_subscription_number\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{instance}}",
-              "metric": "",
-              "query": "((\n    tikv_log_backup_active_subscription_number\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Active Progress Subscrption Per Store",
-          "tooltip": {
-            "msResolution": true,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "transformations": [],
-          "transparent": false,
-          "type": "graph",
-          "xaxis": {
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "decimals": null,
-              "format": "none",
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
               "label": null,
               "logBase": 1,
               "max": null,
@@ -79477,11 +77735,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 567,
-=======
-          "id": 581,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 568,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79614,11 +77868,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 568,
-=======
-          "id": 582,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 569,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79754,11 +78004,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 569,
-=======
-      "id": 583,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+      "id": 570,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -79797,11 +78043,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 570,
-=======
-          "id": 584,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 571,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79949,11 +78191,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 571,
-=======
-          "id": 585,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 572,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80086,11 +78324,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 572,
-=======
-          "id": 586,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 573,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80223,11 +78457,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 573,
-=======
-          "id": 587,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 574,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80363,11 +78593,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 574,
-=======
-      "id": 588,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+      "id": 575,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -80406,11 +78632,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 575,
-=======
-          "id": 589,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 576,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80543,11 +78765,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 576,
-=======
-          "id": 590,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 577,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80680,11 +78898,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 577,
-=======
-          "id": 591,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 578,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80817,11 +79031,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 578,
-=======
-          "id": 592,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 579,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80954,11 +79164,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 579,
-=======
-          "id": 593,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 580,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81091,11 +79297,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 580,
-=======
-          "id": 594,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 581,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81231,11 +79433,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 581,
-=======
-      "id": 595,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+      "id": 582,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -81274,11 +79472,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 582,
-=======
-          "id": 596,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 583,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81411,11 +79605,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 583,
-=======
-          "id": 597,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 584,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81551,11 +79741,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 584,
-=======
-      "id": 598,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+      "id": 585,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -81594,11 +79780,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 585,
-=======
-          "id": 599,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 586,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81799,11 +79981,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 586,
-=======
-          "id": 600,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 587,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81939,11 +80117,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 587,
-=======
-      "id": 601,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+      "id": 588,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -81982,11 +80156,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 588,
-=======
-          "id": 602,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 589,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82119,11 +80289,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 589,
-=======
-          "id": 603,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 590,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82256,11 +80422,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 590,
-=======
-          "id": 604,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 591,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82393,11 +80555,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 591,
-=======
-          "id": 605,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 592,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82530,11 +80688,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 592,
-=======
-          "id": 606,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 593,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82682,11 +80836,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 593,
-=======
-          "id": 607,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 594,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82890,11 +81040,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 594,
-=======
-      "id": 608,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+      "id": 595,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -82933,11 +81079,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 595,
-=======
-          "id": 609,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 596,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -83070,11 +81212,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 596,
-=======
-          "id": 610,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 597,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -83207,11 +81345,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 597,
-=======
-          "id": 611,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 598,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -83344,11 +81478,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 598,
-=======
-          "id": 612,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 599,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -83481,11 +81611,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 599,
-=======
-          "id": 613,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 600,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -83682,11 +81808,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 600,
-=======
-          "id": 614,
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
+          "id": 601,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -83744,519 +81866,6 @@
       "transformations": [],
       "transparent": false,
       "type": "row"
-<<<<<<< HEAD
-=======
-    },
-    {
-      "cacheTimeout": null,
-      "collapsed": true,
-      "datasource": null,
-      "description": null,
-      "editable": true,
-      "error": false,
-      "fieldConfig": {
-        "defaults": {
-          "thresholds": {
-            "mode": "absolute",
-            "steps": []
-          }
-        }
-      },
-      "gridPos": {
-        "h": 7,
-        "w": 24,
-        "x": 0,
-        "y": 0
-      },
-      "height": null,
-      "hideTimeOverride": false,
-      "id": 615,
-      "interval": null,
-      "links": [],
-      "maxDataPoints": 100,
-      "maxPerRow": null,
-      "minSpan": null,
-      "panels": [
-        {
-          "cacheTimeout": null,
-          "color": {
-            "mode": "thresholds"
-          },
-          "columns": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "TiKV RocksDB DB Configuration",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "align": "auto",
-                "displayMode": "auto",
-                "filterable": false
-              },
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            },
-            "overrides": [
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Field"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Option"
-                  },
-                  {
-                    "id": "custom.align",
-                    "value": null
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Last (not null)"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Value"
-                  }
-                ]
-              }
-            ]
-          },
-          "fontSize": "100%",
-          "gridPos": {
-            "h": 7,
-            "w": 24,
-            "x": 0,
-            "y": 0
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 616,
-          "interval": null,
-          "links": [],
-          "mappings": [],
-          "maxDataPoints": 100,
-          "maxPerRow": null,
-          "minSpan": null,
-          "options": {
-            "showHeader": true
-          },
-          "repeat": null,
-          "repeatDirection": null,
-          "span": 6,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_config_rocksdb_db\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "format": "table",
-              "hide": false,
-              "instant": true,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": null,
-              "metric": "",
-              "query": "((\n    tikv_config_rocksdb_db\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "RocksDB DB Config",
-          "transformations": [
-            {
-              "id": "organize",
-              "options": {
-                "excludeByName": {
-                  "Time": true,
-                  "__name__": true,
-                  "job": true
-                },
-                "indexByName": {},
-                "renameByName": {
-                  "Time": "",
-                  "Value #A": "Value",
-                  "job": "",
-                  "name": "Option"
-                }
-              }
-            }
-          ],
-          "transparent": false,
-          "type": "table"
-        },
-        {
-          "cacheTimeout": null,
-          "color": {
-            "mode": "thresholds"
-          },
-          "columns": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "TiKV RocksDB CF Configuration",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "align": "auto",
-                "displayMode": "auto",
-                "filterable": false
-              },
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            },
-            "overrides": [
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Field"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Option"
-                  },
-                  {
-                    "id": "custom.align",
-                    "value": null
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Last (not null)"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Value"
-                  }
-                ]
-              }
-            ]
-          },
-          "fontSize": "100%",
-          "gridPos": {
-            "h": 7,
-            "w": 24,
-            "x": 0,
-            "y": 7
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 617,
-          "interval": null,
-          "links": [],
-          "mappings": [],
-          "maxDataPoints": 100,
-          "maxPerRow": null,
-          "minSpan": null,
-          "options": {
-            "showHeader": true
-          },
-          "repeat": null,
-          "repeatDirection": null,
-          "span": 6,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_config_rocksdb_cf\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))   or (tikv_config_rocksdb unless tikv_config_rocksdb_cf)",
-              "format": "table",
-              "hide": false,
-              "instant": true,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": null,
-              "metric": "",
-              "query": "((\n    tikv_config_rocksdb_cf\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))   or (tikv_config_rocksdb unless tikv_config_rocksdb_cf)",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "RocksDB CF Config",
-          "transformations": [
-            {
-              "id": "organize",
-              "options": {
-                "excludeByName": {
-                  "Time": true,
-                  "__name__": true,
-                  "job": true
-                },
-                "indexByName": {},
-                "renameByName": {
-                  "Time": "",
-                  "Value #A": "Value",
-                  "job": "",
-                  "name": "Option"
-                }
-              }
-            }
-          ],
-          "transparent": false,
-          "type": "table"
-        },
-        {
-          "cacheTimeout": null,
-          "color": {
-            "mode": "thresholds"
-          },
-          "columns": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "TiKV Flow Control Configuration",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "align": "auto",
-                "displayMode": "auto",
-                "filterable": false
-              },
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            },
-            "overrides": [
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Field"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Option"
-                  },
-                  {
-                    "id": "custom.align",
-                    "value": null
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Last (not null)"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Value"
-                  }
-                ]
-              }
-            ]
-          },
-          "fontSize": "100%",
-          "gridPos": {
-            "h": 7,
-            "w": 24,
-            "x": 0,
-            "y": 14
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 618,
-          "interval": null,
-          "links": [],
-          "mappings": [],
-          "maxDataPoints": 100,
-          "maxPerRow": null,
-          "minSpan": null,
-          "options": {
-            "showHeader": true
-          },
-          "repeat": null,
-          "repeatDirection": null,
-          "span": 6,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_config_flow_control\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "format": "table",
-              "hide": false,
-              "instant": true,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": null,
-              "metric": "",
-              "query": "((\n    tikv_config_flow_control\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Flow Control Config",
-          "transformations": [
-            {
-              "id": "organize",
-              "options": {
-                "excludeByName": {
-                  "Time": true,
-                  "__name__": true,
-                  "job": true
-                },
-                "indexByName": {},
-                "renameByName": {
-                  "Time": "",
-                  "Value #A": "Value",
-                  "job": "",
-                  "name": "Option"
-                }
-              }
-            }
-          ],
-          "transparent": false,
-          "type": "table"
-        },
-        {
-          "cacheTimeout": null,
-          "color": {
-            "mode": "thresholds"
-          },
-          "columns": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "TiKV Raftstore Configuration",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "align": "auto",
-                "displayMode": "auto",
-                "filterable": false
-              },
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            },
-            "overrides": [
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Field"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Option"
-                  },
-                  {
-                    "id": "custom.align",
-                    "value": null
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Last (not null)"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Value"
-                  }
-                ]
-              }
-            ]
-          },
-          "fontSize": "100%",
-          "gridPos": {
-            "h": 7,
-            "w": 24,
-            "x": 0,
-            "y": 21
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 619,
-          "interval": null,
-          "links": [],
-          "mappings": [],
-          "maxDataPoints": 100,
-          "maxPerRow": null,
-          "minSpan": null,
-          "options": {
-            "showHeader": true
-          },
-          "repeat": null,
-          "repeatDirection": null,
-          "span": 6,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_config_raftstore\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "format": "table",
-              "hide": false,
-              "instant": true,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": null,
-              "metric": "",
-              "query": "((\n    tikv_config_raftstore\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Raftstore Config",
-          "transformations": [
-            {
-              "id": "organize",
-              "options": {
-                "excludeByName": {
-                  "Time": true,
-                  "__name__": true,
-                  "job": true
-                },
-                "indexByName": {},
-                "renameByName": {
-                  "Time": "",
-                  "Value #A": "Value",
-                  "job": "",
-                  "name": "Option"
-                }
-              }
-            }
-          ],
-          "transparent": false,
-          "type": "table"
-        }
-      ],
-      "repeat": null,
-      "repeatDirection": null,
-      "span": null,
-      "targets": [],
-      "timeFrom": null,
-      "timeShift": null,
-      "title": "Config",
-      "transformations": [],
-      "transparent": false,
-      "type": "row"
->>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
     }
   ],
   "refresh": "1m",
