@@ -1468,7 +1468,19 @@ pub mod tests {
                 );
                 must_pessimistic_rollback(&mut engine, key, 50, 51);
             } else {
-                must_err_impl(&mut engine, key, key, 50, true, 50, false, false, 51, false, false);
+                must_err_impl(
+                    &mut engine,
+                    key,
+                    key,
+                    50,
+                    true,
+                    50,
+                    false,
+                    false,
+                    51,
+                    false,
+                    false,
+                );
             }
             must_unlocked(&mut engine, key);
 
@@ -2823,7 +2835,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_lock_upgrade_and_downgrade_blocked () {
+    fn test_lock_upgrade_and_downgrade_blocked() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let shared_key = b"shared-lock";
         let exclusive_key = b"exclusive-lock";

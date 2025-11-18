@@ -53,7 +53,7 @@ impl LockType {
             Mutation::Put(..) | Mutation::Insert(..) => Some(LockType::Put),
             Mutation::Delete(..) => Some(LockType::Delete),
             Mutation::Lock(..) => Some(LockType::Lock),
-            Mutation::SharedLock(..) => Some(LockType::Shared),
+            Mutation::SharedLock(..) => Some(LockType::Lock),
             Mutation::CheckNotExists(..) => None,
         }
     }
