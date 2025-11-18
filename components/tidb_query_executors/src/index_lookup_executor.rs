@@ -46,8 +46,12 @@ struct IndexScanState {
 
 struct TableLookUpState<Iter, S: Storage, F: KvFormat> {
     table_task_iter: Option<Iter>,
-    table_scan:
-        Option<WithSummaryCollector<ExecSummaryCollectorEnabled, BatchTableScanExecutor<S, F>>>,
+    table_scan: Option<(
+        // executor
+        WithSummaryCollector<ExecSummaryCollectorEnabled, BatchTableScanExecutor<S, F>>,
+        // total row count
+        usize,
+    )>,
 }
 
 enum IndexLookUpPhase<Iter, S: Storage, F: KvFormat> {
@@ -404,9 +408,9 @@ where
         Ok(output_result)
     }
 
-    async fn on_phase_table_lookup(&mut self, scan_rows: usize) -> Result<BatchExecuteResult> {
+    async fn on_phase_table_lookup(&mut self, mut scan_rows: usize) -> Result<BatchExecuteResult> {
         let state = self.phase.mut_table_lookup_or_err()?;
-        let executor = match state.table_scan.as_mut() {
+        let (executor, total_row_count) = match state.table_scan.as_mut() {
             Some(e) => e,
             _ => {
                 let table_task_iter = state
@@ -417,13 +421,15 @@ where
                 match table_task_iter.next().await {
                     Some(task) => {
                         EXECUTOR_COUNT_METRICS.batch_index_lookup_table_scan.inc();
-                        state.table_scan = Some(
+                        let key_cnt = task.key_count;
+                        state.table_scan = Some((
                             task.build_table_scan_executor::<F>(
                                 self.config.clone(),
                                 self.table_scan_params.clone(),
                             )?
                             .collect_summary(0),
-                        );
+                            key_cnt,
+                        ));
                         state.table_scan.as_mut().unwrap()
                     }
                     None => {
@@ -438,13 +444,14 @@ where
             }
         };
 
+        // if total_row_count is less than scan_rows, just scan total_row_count rows.
+        // use `*total_row_count + 1` here to make sure the executor
+        // can be drained in the first `next_batch`
+        scan_rows = min(scan_rows, *total_row_count + 1);
         let mut result = executor.next_batch(scan_rows).await;
         if let Ok(is_drained) = result.is_drained {
             if is_drained.stop() {
-                state
-                    .table_scan
-                    .as_mut()
-                    .unwrap()
+                executor
                     .summary_collector
                     .collect(&mut self.table_scan_exec_summary);
                 state.table_scan = None;
@@ -528,7 +535,7 @@ where
             ..
         }) = &mut self.phase
         {
-            exec.summary_collector.collect(&mut summary);
+            exec.0.summary_collector.collect(&mut summary);
         }
         dest.summary_per_executor[self.table_scan_child_index] += summary[0];
         // TODO: how to handle `scanned_rows_per_range`
@@ -643,6 +650,7 @@ where
 pub struct TableTask<S> {
     storage: S,
     key_ranges: Vec<KeyRange>,
+    key_count: usize,
 }
 
 impl<S: Storage> TableTask<S> {
@@ -930,6 +938,7 @@ where
                     Ok(storage) => Some(TableTask {
                         storage,
                         key_ranges,
+                        key_count: scanned,
                     }),
                     Err(_) => {
                         // TODO: handle error
@@ -1589,6 +1598,7 @@ pub mod tests {
         let task = TableTask {
             storage,
             key_ranges,
+            key_count: 3,
         };
 
         let expected_schema = columns_info
@@ -1637,6 +1647,7 @@ pub mod tests {
             self.expect_next = Some(Some(TableTask {
                 storage: FixtureStorage::new(iter::once((row_key, Err(err_builder))).collect()),
                 key_ranges,
+                key_count: 10,
             }));
         }
 
@@ -1670,6 +1681,7 @@ pub mod tests {
             self.expect_next = Some(Some(TableTask {
                 storage: FixtureStorage::from(rows),
                 key_ranges,
+                key_count: 10,
             }));
         }
 
