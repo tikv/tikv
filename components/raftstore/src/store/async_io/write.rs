@@ -785,7 +785,7 @@ where
             pending_latency_inspect: vec![],
             
             // Adaptive batching initialization
-            adaptive_batch_enabled: true,
+            adaptive_batch_enabled: cfg.value().adaptive_batch_enabled,
             latency_history: VecDeque::with_capacity(100), // Keep the latest 100 latency samples
             qps_history: VecDeque::with_capacity(100),     // Keep the latest 100 QPS samples
             last_adaptive_update: Instant::now(),
@@ -1019,7 +1019,7 @@ where
             current_size, new_size, adjustment_factor, 
             latency_baseline.as_micros(), avg_latency.as_micros(), latency_ratio, 
             qps_baseline, avg_qps, qps_ratio);
-        // Ensure new size is within reasonable range (8KB to 16MB)
+        // Ensure new size is within reasonable range (8KB to max_hint)
         new_size.clamp(8 * 1024, self.raft_write_batch_size_hint_limit)
     }
     
@@ -1330,6 +1330,7 @@ where
         // update config
         if let Some(incoming) = self.cfg_tracker.any_new() {
             self.raft_write_size_limit = incoming.raft_write_size_limit.0 as usize;
+            self.adaptive_batch_enabled = incoming.adaptive_batch_enabled;
             self.raft_write_batch_size_hint_limit = incoming.raft_write_batch_size_hint_limit.0 as usize;
             self.metrics.waterfall_metrics = incoming.waterfall_metrics;
             // self.batch.update_config(
