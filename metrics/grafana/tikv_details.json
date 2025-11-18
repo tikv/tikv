@@ -9749,7 +9749,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The duration that recorded by inspecting network.",
+          "description": "The duration that recorded by inspecting network. Note: it will be collected only when duration is greater than 100ms, to avoid collect too many metrics.",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -9819,15 +9819,15 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_raftstore_inspect_network_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance, target, le) \n    \n    \n))  ",
+              "expr": "histogram_quantile(0.8,(\n    sum(rate(\n    tikv_raftstore_inspect_network_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance, target, le) \n    \n    \n))  ",
               "format": "time_series",
               "hide": false,
               "instant": false,
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "{{instance}}-{{target}}-0.99",
+              "legendFormat": "{{source}}-{{target}}-0.8",
               "metric": "",
-              "query": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_raftstore_inspect_network_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance, target, le) \n    \n    \n))  ",
+              "query": "histogram_quantile(0.8,(\n    sum(rate(\n    tikv_raftstore_inspect_network_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance, target, le) \n    \n    \n))  ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -9836,7 +9836,7 @@
           "thresholds": [],
           "timeFrom": null,
           "timeShift": null,
-          "title": "Inspected network duration per server",
+          "title": "Inspected network duration(>100ms) per server",
           "tooltip": {
             "msResolution": true,
             "shared": true,
