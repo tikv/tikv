@@ -735,11 +735,15 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             ) {
                 snap_ctx.allowed_in_flashback = true;
             }
+            let mut sched_details = SchedulerDetails::new(task.tracker_token());
+
             // The program is currently in scheduler worker threads.
             // Safety: `self.inner.worker_pool` should ensure that a TLS engine exists.
             match unsafe { with_tls_engine(|engine: &mut E| kv::snapshot(engine, snap_ctx)) }.await
             {
                 Ok(snapshot) => {
+                    sched_details.async_snapshot_nanos =
+                        sched_details.start_instant.saturating_elapsed().as_nanos() as u64;
                     SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_ok.inc();
                     let term = snapshot.ext().get_term();
                     let extra_op = snapshot.ext().get_txn_extra_op();
@@ -768,7 +772,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                         "cid" => task.cid(), "term" => ?term, "extra_op" => ?extra_op,
                         "task" => ?&task,
                     );
-                    sched.process(snapshot, task).await;
+                    sched.process(snapshot, task, sched_details).await;
                 }
                 Err(err) => {
                     SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_err.inc();
@@ -812,10 +816,19 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         };
         if let Some(details) = sched_details {
             let req_info = GLOBAL_TRACKERS.with_tracker(details.tracker, |tracker| {
+<<<<<<< HEAD
                 tracker.metrics.scheduler_process_nanos = details
                     .start_process_instant
                     .saturating_elapsed()
                     .as_nanos() as u64;
+=======
+                let now = Instant::now();
+                TlsFutureTracker::collect_to_tracker(now, tracker);
+                tracker.metrics.scheduler_process_nanos = (now
+                    .saturating_duration_since(details.start_instant)
+                    .as_nanos() as u64)
+                    .saturating_sub(details.async_snapshot_nanos);
+>>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
                 tracker.metrics.scheduler_throttle_nanos =
                     details.flow_control_nanos + details.quota_limit_delay_nanos;
                 tracker.req_info.clone()
@@ -932,11 +945,20 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 self.schedule_command(task, cb, None);
             } else {
                 GLOBAL_TRACKERS.with_tracker(sched_details.tracker, |tracker| {
+<<<<<<< HEAD
                     tracker.metrics.scheduler_process_nanos = sched_details
                         .start_process_instant
                         .saturating_elapsed()
                         .as_nanos()
                         as u64;
+=======
+                    let now = Instant::now();
+                    TlsFutureTracker::collect_to_tracker(now, tracker);
+                    tracker.metrics.scheduler_process_nanos =
+                        (now.saturating_duration_since(sched_details.start_instant)
+                            .as_nanos() as u64)
+                            .saturating_sub(sched_details.async_snapshot_nanos);
+>>>>>>> 1f1612f5fa (metrics: observe block read time at command level (#19089))
                     tracker.metrics.scheduler_throttle_nanos =
                         sched_details.flow_control_nanos + sched_details.quota_limit_delay_nanos;
                 });
@@ -1194,7 +1216,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
     }
 
     /// Process the task in the current thread.
-    async fn process(self, snapshot: E::Snap, task: Task) {
+    async fn process(self, snapshot: E::Snap, task: Task, mut sched_details: SchedulerDetails) {
         if self.check_task_deadline_exceeded(&task, None) {
             return;
         }
@@ -1205,11 +1227,8 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             fail_point!("scheduler_async_snapshot_finish");
             SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
 
-            let timer = Instant::now();
-
             let region_id = task.cmd().ctx().get_region_id();
             let ts = task.cmd().ts();
-            let mut sched_details = SchedulerDetails::new(task.tracker_token(), timer);
             match task.cmd() {
                 Command::Prewrite(_) | Command::PrewritePessimistic(_) => {
                     tls_collect_query(region_id, QueryKind::Prewrite);
@@ -1233,7 +1252,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 self.process_write(snapshot, task, &mut sched_details).await;
             };
             tls_collect_scan_details(tag.get_str(), &sched_details.stat);
-            let elapsed = timer.saturating_elapsed();
+            let elapsed = sched_details.start_instant.saturating_elapsed();
             slow_log!(
                 elapsed,
                 "[region {}] scheduler handle command: {}, ts: {}, details: {:?}",
@@ -1263,9 +1282,21 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                     .unwrap_or_else(|e| ProcessResult::Failed { err: e.into() })
             })
         };
+        let cmd_process_duration = begin_instant.saturating_elapsed();
+        sched_details.cmd_process_nanos = cmd_process_duration.as_nanos() as u64;
+        sched_details.block_read_nanos = GLOBAL_TRACKERS
+            .with_tracker(sched_details.tracker, |tracker| {
+                tracker.metrics.block_read_nanos
+            })
+            .unwrap_or_default();
         SCHED_PROCESSING_READ_HISTOGRAM_STATIC
             .get(tag)
-            .observe(begin_instant.saturating_elapsed_secs());
+            .observe(cmd_process_duration.as_secs_f64());
+        if sched_details.block_read_nanos > 0 {
+            SCHED_BLOCK_READ_HISTOGRAM_VEC_STATIC
+                .get(tag)
+                .observe((sched_details.block_read_nanos as f64) / 1_000_000_000f64);
+        }
         self.on_read_finished(cid, pr, tag);
     }
 
@@ -1309,9 +1340,19 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             };
             let cmd_process_duration = begin_instant.saturating_elapsed();
             sched_details.cmd_process_nanos = cmd_process_duration.as_nanos() as u64;
+            sched_details.block_read_nanos = GLOBAL_TRACKERS
+                .with_tracker(sched_details.tracker, |tracker| {
+                    tracker.metrics.block_read_nanos
+                })
+                .unwrap_or_default();
             SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                 .get(tag)
                 .observe(cmd_process_duration.as_secs_f64());
+            if sched_details.block_read_nanos > 0 {
+                SCHED_BLOCK_READ_HISTOGRAM_VEC_STATIC
+                    .get(tag)
+                    .observe((sched_details.block_read_nanos as f64) / 1_000_000_000f64);
+            }
             res
         };
 
@@ -2135,27 +2176,33 @@ enum PessimisticLockMode {
 struct SchedulerDetails {
     tracker: TrackerToken,
     stat: Statistics,
-    start_process_instant: Instant,
-    // A write command processing can be divided into four stages:
+    start_instant: Instant,
+    // A write command processing can be divided into five stages:
+    // 0. Take a consistent snapshot from the storage asynchronously.
     // 1. The command is processed using a snapshot to generate the write content.
+    //   a. If the process involves block read, there will be IO time spent on reading blocks.
     // 2. If the quota is exceeded, there will be a delay.
     // 3. If the write flow exceeds the limit, it will be throttled.
     // 4. Finally, the write request is sent to raftkv and responses are awaited.
     cmd_process_nanos: u64,
+    block_read_nanos: u64,
     quota_limit_delay_nanos: u64,
     flow_control_nanos: u64,
+    async_snapshot_nanos: u64,
     async_write_nanos: u64,
 }
 
 impl SchedulerDetails {
-    fn new(tracker: TrackerToken, start_process_instant: Instant) -> Self {
+    fn new(tracker: TrackerToken) -> Self {
         SchedulerDetails {
             tracker,
             stat: Default::default(),
-            start_process_instant,
+            start_instant: Instant::now(),
             cmd_process_nanos: 0,
+            block_read_nanos: 0,
             quota_limit_delay_nanos: 0,
             flow_control_nanos: 0,
+            async_snapshot_nanos: 0,
             async_write_nanos: 0,
         }
     }
