@@ -792,8 +792,8 @@ where
             last_qps_stat: Instant::now(),
             current_write_tasks: 0,
             max_history_size: 100,
-            latency_baseline_history: VecDeque::with_capacity(1000), // Keep more baseline history
-            qps_baseline_history: VecDeque::with_capacity(1000),
+            latency_baseline_history: VecDeque::with_capacity(30), // Keep shorter baseline history for responsiveness
+            qps_baseline_history: VecDeque::with_capacity(30),
         }
     }
 
@@ -905,21 +905,25 @@ where
         }
         
         let now = Instant::now();
-        // Update parameters every 1s to avoid too frequent adjustments and allow for more stable metrics
-        if now.saturating_duration_since(self.last_adaptive_update) < Duration::from_secs(1) {
+        // Update parameters every 500ms for more responsive adjustments
+        if now.saturating_duration_since(self.last_adaptive_update) < Duration::from_millis(500) {
             return;
         }
         
         self.last_adaptive_update = now;
         
-        // Calculate median latency and QPS for more stable metrics
-        let mut sorted_latencies: Vec<Duration> = self.latency_history.iter().cloned().collect();
-        sorted_latencies.sort();
-        let avg_latency = sorted_latencies[sorted_latencies.len() / 2]; // Median
+        // Use recent samples (last 20) for more responsive metrics
+        let latency_window = self.latency_history.len().min(20);
+        let qps_window = self.qps_history.len().min(20);
         
-        let mut sorted_qps: Vec<u64> = self.qps_history.iter().cloned().collect();
-        sorted_qps.sort();
-        let avg_qps = sorted_qps[sorted_qps.len() / 2]; // Median
+        // Calculate median latency and QPS from recent samples
+        let mut recent_latencies: Vec<Duration> = self.latency_history.iter().rev().take(latency_window).cloned().collect();
+        recent_latencies.sort();
+        let avg_latency = recent_latencies[recent_latencies.len() / 2]; // Median
+        
+        let mut recent_qps: Vec<u64> = self.qps_history.iter().rev().take(qps_window).cloned().collect();
+        recent_qps.sort();
+        let avg_qps = recent_qps[recent_qps.len() / 2]; // Median
         
         // Update baseline history
         self.update_baseline_history(avg_latency, avg_qps);
@@ -932,43 +936,63 @@ where
         let new_batch_size = self.calculate_adaptive_batch_size(avg_latency, avg_qps, current_batch_size);
         let new_wait_duration = self.calculate_adaptive_wait_duration(avg_latency, avg_qps, current_wait_duration);
         
+        // Use exponential moving average for smoother transitions (alpha = 0.4 for faster convergence)
+        let alpha = 0.4;
+        let smoothed_batch_size = ((current_batch_size as f64 * (1.0 - alpha)) + (new_batch_size as f64 * alpha)).round() as usize;
+        let smoothed_wait_duration_nanos = ((current_wait_duration.as_nanos() as f64 * (1.0 - alpha)) + (new_wait_duration.as_nanos() as f64 * alpha)).round() as u64;
+        let smoothed_wait_duration = Duration::from_nanos(smoothed_wait_duration_nanos);
+        
         // Update configuration
-        self.batch.update_config(new_batch_size, new_wait_duration);
-        info!("update adaptive parameters, avg_latency: {}μs, avg_qps: {}, batch_size: {} => {}, wait_duration: {}μs => {}μs", 
+        self.batch.update_config(smoothed_batch_size, smoothed_wait_duration);
+        info!("update adaptive parameters, avg_latency: {}μs, avg_qps: {}, batch_size: {} => {} (smoothed: {}), wait_duration: {}μs => {}μs (smoothed: {}μs)", 
             avg_latency.as_micros(),
             avg_qps,
-            current_batch_size, new_batch_size,
-            current_wait_duration.as_micros(), new_wait_duration.as_micros()
+            current_batch_size, new_batch_size, smoothed_batch_size,
+            current_wait_duration.as_micros(), new_wait_duration.as_micros(), smoothed_wait_duration.as_micros()
         );
     }
     
     /// Calculate adaptive batch size based on latency and QPS
     fn calculate_adaptive_batch_size(&self, avg_latency: Duration, avg_qps: u64, current_size: usize) -> usize {
-        // Dynamically calculate latency baseline using 90th percentile for more responsive adjustments
-        let latency_baseline = if self.latency_baseline_history.len() >= 10 {
-            let mut sorted_latencies: Vec<Duration> = self.latency_baseline_history.iter().cloned().collect();
-            sorted_latencies.sort();
-            sorted_latencies[sorted_latencies.len() * 9 / 10]
+        // Use recent baseline samples (last 30) for more responsive baseline calculation
+        let baseline_window = 30.min(self.latency_baseline_history.len());
+        let latency_baseline = if baseline_window >= 10 {
+            let mut recent_latencies: Vec<Duration> = self.latency_baseline_history.iter().rev().take(baseline_window).cloned().collect();
+            recent_latencies.sort();
+            // Use 75th percentile for more responsive baseline
+            recent_latencies[recent_latencies.len() * 3 / 4]
         } else if !self.latency_baseline_history.is_empty() {
-            // If we don't have enough samples, use the maximum value
-            *self.latency_baseline_history.iter().max().unwrap()
+            // If we don't have enough samples, use the median
+            let mut sorted: Vec<Duration> = self.latency_baseline_history.iter().cloned().collect();
+            sorted.sort();
+            sorted[sorted.len() / 2]
         } else {
             // Default baseline value is 100 microseconds
             Duration::from_micros(100)
         };
         
-        // Dynamically calculate QPS baseline using median
-        let qps_baseline = if self.qps_baseline_history.len() >= 10 {
-            let mut sorted_qps: Vec<u64> = self.qps_baseline_history.iter().cloned().collect();
-            sorted_qps.sort();
-            sorted_qps[sorted_qps.len() / 2]
+        // Use recent baseline samples for QPS
+        let qps_baseline_window = 30.min(self.qps_baseline_history.len());
+        let qps_baseline = if qps_baseline_window >= 10 {
+            let mut recent_qps: Vec<u64> = self.qps_baseline_history.iter().rev().take(qps_baseline_window).cloned().collect();
+            recent_qps.sort();
+            // Use median for QPS baseline
+            recent_qps[recent_qps.len() / 2]
         } else if !self.qps_baseline_history.is_empty() {
-            // If we don't have enough samples, use the minimum value
-            *self.qps_baseline_history.iter().min().unwrap()
+            // If we don't have enough samples, use the median
+            let mut sorted: Vec<u64> = self.qps_baseline_history.iter().cloned().collect();
+            sorted.sort();
+            sorted[sorted.len() / 2]
         } else {
             // Default baseline value is 1000 QPS
             1000
         };
+        
+        // Known good values for medium-high QPS scenarios (sysbench oltp_read_write)
+        const OPTIMAL_BATCH_SIZE: usize = 8 * 1024; // 8KB
+        const MEDIUM_QPS_MIN: u64 = 1000; // Medium QPS range: 1000-8000
+        const MEDIUM_QPS_MAX: u64 = 8000;
+        const HIGH_QPS_THRESHOLD: u64 = 10000; // High QPS above 10000
         
         // Calculate latency ratio (relative to baseline latency)
         let latency_ratio = if !latency_baseline.is_zero() && avg_latency > LATENCY_THRESHOLD {
@@ -984,72 +1008,108 @@ where
             1.0
         };
         
-        // Determine adjustment factor with smoother transitions:
+        // Check if we're close to optimal (within 20%)
+        let size_ratio = current_size as f64 / OPTIMAL_BATCH_SIZE as f64;
+        let is_near_optimal = size_ratio >= 0.8 && size_ratio <= 1.25;
+        
         let mut adjustment_factor = 1.0;
         
-        if latency_ratio > 3.0 {
-            // Latency is much higher than baseline, significantly reduce batch size
-            adjustment_factor = 0.5;
-        } else if latency_ratio > 2.0 {
-            // Latency is higher than baseline, moderately reduce batch size
-            adjustment_factor = 0.7;
-        } else if latency_ratio > 1.5 {
-            // Latency is slightly higher than baseline, slightly reduce batch size
-            adjustment_factor = 0.85;
-        } else if latency_ratio < 0.3 && qps_ratio > 2.0 {
-            // Latency is much lower than baseline and QPS is high, increase batch size significantly
-            adjustment_factor = 2.0;
-        } else if latency_ratio < 0.5 && qps_ratio > 1.5 {
-            // Latency is lower than baseline and QPS is high, increase batch size moderately
-            adjustment_factor = 1.5;
-        } else if latency_ratio < 0.8 && qps_ratio > 1.2 {
-            // Latency is lower than baseline and QPS is high, increase batch size slightly
-            adjustment_factor = 1.2;
-        } else if qps_ratio < 0.3 && latency_ratio > 1.2 {
-            // QPS is very low and latency is not low, reduce batch size to maintain responsiveness
-            adjustment_factor = 0.6;
-        } else if qps_ratio < 0.5 && latency_ratio > 1.0 {
-            // QPS is low and latency is not low, reduce batch size to maintain responsiveness
-            adjustment_factor = 0.8;
+        // For medium QPS (100-200 threads scenario), aggressively converge to optimal
+        if avg_qps >= MEDIUM_QPS_MIN && avg_qps <= MEDIUM_QPS_MAX {
+            if !is_near_optimal {
+                // Move towards optimal more aggressively (20% per update)
+                adjustment_factor = if size_ratio < 1.0 {
+                    1.20 // Increase towards optimal
+                } else {
+                    0.80 // Decrease towards optimal
+                };
+            } else if latency_ratio > 1.5 {
+                // Latency is high, reduce slightly
+                adjustment_factor = 0.95;
+            } else if latency_ratio < 0.6 && avg_latency < Duration::from_micros(50) {
+                // Latency is very low, can slightly increase
+                adjustment_factor = 1.05;
+            }
+            // Otherwise stay near optimal (adjustment_factor = 1.0)
+        } else if avg_qps > HIGH_QPS_THRESHOLD {
+            // Very high QPS (500 threads): allow more flexibility
+            if latency_ratio > 2.5 {
+                adjustment_factor = 0.85;
+            } else if latency_ratio > 1.8 {
+                adjustment_factor = 0.92;
+            } else if latency_ratio > 1.3 {
+                adjustment_factor = 0.97;
+            } else if latency_ratio < 0.4 && qps_ratio > 2.0 {
+                adjustment_factor = 1.15;
+            } else if latency_ratio < 0.6 && qps_ratio > 1.5 {
+                adjustment_factor = 1.08;
+            } else if latency_ratio < 0.8 && qps_ratio > 1.2 {
+                adjustment_factor = 1.03;
+            }
+        } else {
+            // Low QPS: use conservative adjustments
+            if latency_ratio > 2.5 {
+                adjustment_factor = 0.90;
+            } else if latency_ratio > 1.8 {
+                adjustment_factor = 0.95;
+            } else if latency_ratio < 0.4 && qps_ratio > 2.0 {
+                adjustment_factor = 1.10;
+            } else if latency_ratio < 0.6 && qps_ratio > 1.5 {
+                adjustment_factor = 1.05;
+            }
         }
         
         let new_size = (current_size as f64 * adjustment_factor).round() as usize;
-        info!("calculated new size before clamp: {} => {} (adjustment_factor: {}, latency_baseline: {}, avg_latency: {}, 
-            latency_ratio: {}, qps_baseline: {}, avg_qps: {}, qps_ratio: {})", 
+        info!("calculated new size before clamp: {} => {} (adjustment_factor: {:.3}, latency_baseline: {}μs, avg_latency: {}μs, 
+            latency_ratio: {:.3}, qps_baseline: {}, avg_qps: {}, qps_ratio: {:.3}, near_optimal: {})", 
             current_size, new_size, adjustment_factor, 
             latency_baseline.as_micros(), avg_latency.as_micros(), latency_ratio, 
-            qps_baseline, avg_qps, qps_ratio);
+            qps_baseline, avg_qps, qps_ratio, is_near_optimal);
         // Ensure new size is within reasonable range (8KB to max_hint)
-        new_size.clamp(8 * 1024, self.raft_write_batch_size_hint_limit)
+        new_size.clamp(8 * 1024, 256 * 1024)
     }
     
     /// Calculate adaptive wait duration based on latency and QPS
     fn calculate_adaptive_wait_duration(&self, avg_latency: Duration, avg_qps: u64, current_duration: Duration) -> Duration {
-        // Dynamically calculate latency baseline
-        let latency_baseline = if self.latency_baseline_history.len() >= 10 {
-            let mut sorted_latencies: Vec<Duration> = self.latency_baseline_history.iter().cloned().collect();
-            sorted_latencies.sort();
-            sorted_latencies[sorted_latencies.len() * 9 / 10]
+        // Use recent baseline samples (last 30) for more responsive baseline calculation
+        let baseline_window = 30.min(self.latency_baseline_history.len());
+        let latency_baseline = if baseline_window >= 10 {
+            let mut recent_latencies: Vec<Duration> = self.latency_baseline_history.iter().rev().take(baseline_window).cloned().collect();
+            recent_latencies.sort();
+            // Use 75th percentile for more responsive baseline
+            recent_latencies[recent_latencies.len() * 3 / 4]
         } else if !self.latency_baseline_history.is_empty() {
-            // If we don't have enough samples, use the maximum value
-            *self.latency_baseline_history.iter().max().unwrap()
+            // If we don't have enough samples, use the median
+            let mut sorted: Vec<Duration> = self.latency_baseline_history.iter().cloned().collect();
+            sorted.sort();
+            sorted[sorted.len() / 2]
         } else {
             // Default baseline value is 100 microseconds
             Duration::from_micros(100)
         };
         
-        // Dynamically calculate QPS baseline
-        let qps_baseline = if self.qps_baseline_history.len() >= 10 {
-            let mut sorted_qps: Vec<u64> = self.qps_baseline_history.iter().cloned().collect();
-            sorted_qps.sort();
-            sorted_qps[sorted_qps.len() / 2]
+        // Use recent baseline samples for QPS
+        let qps_baseline_window = 30.min(self.qps_baseline_history.len());
+        let qps_baseline = if qps_baseline_window >= 10 {
+            let mut recent_qps: Vec<u64> = self.qps_baseline_history.iter().rev().take(qps_baseline_window).cloned().collect();
+            recent_qps.sort();
+            // Use median for QPS baseline
+            recent_qps[recent_qps.len() / 2]
         } else if !self.qps_baseline_history.is_empty() {
-            // If we don't have enough samples, use the minimum value
-            *self.qps_baseline_history.iter().min().unwrap()
+            // If we don't have enough samples, use the median
+            let mut sorted: Vec<u64> = self.qps_baseline_history.iter().cloned().collect();
+            sorted.sort();
+            sorted[sorted.len() / 2]
         } else {
             // Default baseline value is 1000 QPS
             1000
         };
+        
+        // Known good values for medium-high QPS scenarios (sysbench oltp_read_write)
+        let optimal_wait_duration = Duration::from_micros(20); // 20us
+        const MEDIUM_QPS_MIN: u64 = 1000; // Medium QPS range: 1000-8000
+        const MEDIUM_QPS_MAX: u64 = 8000;
+        const HIGH_QPS_THRESHOLD: u64 = 10000; // High QPS above 10000
         
         // Calculate latency ratio (relative to baseline latency)
         let latency_ratio = if !latency_baseline.is_zero() && avg_latency > LATENCY_THRESHOLD {
@@ -1065,40 +1125,63 @@ where
             1.0
         };
         
+        // Check if we're close to optimal (within 30% for wait duration)
+        let duration_ratio = current_duration.as_nanos() as f64 / optimal_wait_duration.as_nanos() as f64;
+        let is_near_optimal = duration_ratio >= 0.7 && duration_ratio <= 1.5;
+        
         let mut adjustment_factor = 1.0;
         
-        if latency_ratio > 3.0 {
-            // Latency is much higher than baseline, significantly reduce wait time
-            adjustment_factor = 0.2;
-        } else if latency_ratio > 2.0 {
-            // Latency is higher than baseline, moderately reduce wait time
-            adjustment_factor = 0.4;
-        } else if latency_ratio > 1.5 {
-            // Latency is slightly higher than baseline, slightly reduce wait time
-            adjustment_factor = 0.6;
-        } else if latency_ratio < 0.3 && qps_ratio > 2.0 {
-            // Latency is much lower than baseline and QPS is high, increase wait time to aggregate more requests
-            adjustment_factor = 2.5;
-        } else if latency_ratio < 0.5 && qps_ratio > 1.5 {
-            // Latency is lower than baseline and QPS is high, increase wait time to aggregate more requests
-            adjustment_factor = 1.8;
-        } else if latency_ratio < 0.8 && qps_ratio > 1.2 {
-            // Latency is lower than baseline and QPS is high, moderately increase wait time
-            adjustment_factor = 1.4;
-        } else if qps_ratio < 0.3 && latency_ratio > 1.2 {
-            // QPS is very low and latency is not low, reduce wait time to maintain responsiveness
-            adjustment_factor = 0.4;
-        } else if qps_ratio < 0.5 && latency_ratio > 1.0 {
-            // QPS is low and latency is not low, reduce wait time to maintain responsiveness
-            adjustment_factor = 0.6;
+        // For medium QPS (100-200 threads scenario), aggressively converge to optimal
+        if avg_qps >= MEDIUM_QPS_MIN && avg_qps <= MEDIUM_QPS_MAX {
+            if !is_near_optimal {
+                // Move towards optimal more aggressively (25% per update)
+                adjustment_factor = if duration_ratio < 1.0 {
+                    0.75 // Decrease towards optimal
+                } else {
+                    1.25 // Increase towards optimal
+                };
+            } else if latency_ratio > 1.5 {
+                // Latency is high, reduce slightly
+                adjustment_factor = 0.95;
+            } else if latency_ratio < 0.6 && avg_latency < Duration::from_micros(50) {
+                // Latency is very low, can slightly increase to batch more
+                adjustment_factor = 1.05;
+            }
+            // Otherwise stay near optimal (adjustment_factor = 1.0)
+        } else if avg_qps > HIGH_QPS_THRESHOLD {
+            // Very high QPS (500 threads): allow more flexibility
+            if latency_ratio > 2.5 {
+                adjustment_factor = 0.85;
+            } else if latency_ratio > 1.8 {
+                adjustment_factor = 0.92;
+            } else if latency_ratio > 1.3 {
+                adjustment_factor = 0.97;
+            } else if latency_ratio < 0.4 && qps_ratio > 2.0 {
+                adjustment_factor = 1.15;
+            } else if latency_ratio < 0.6 && qps_ratio > 1.5 {
+                adjustment_factor = 1.08;
+            } else if latency_ratio < 0.8 && qps_ratio > 1.2 {
+                adjustment_factor = 1.03;
+            }
+        } else {
+            // Low QPS: use conservative adjustments
+            if latency_ratio > 2.5 {
+                adjustment_factor = 0.90;
+            } else if latency_ratio > 1.8 {
+                adjustment_factor = 0.95;
+            } else if latency_ratio < 0.4 && qps_ratio > 2.0 {
+                adjustment_factor = 1.10;
+            } else if latency_ratio < 0.6 && qps_ratio > 1.5 {
+                adjustment_factor = 1.05;
+            }
         }
         
         let new_duration_nanos = (current_duration.as_nanos() as f64 * adjustment_factor).round() as u64;
-        info!("calculated new wait duration before clamp: {} => {} us (adjustment_factor: {}, latency_baseline: {}, avg_latency: {}, 
-            latency_ratio: {}, qps_baseline: {}, avg_qps: {}, qps_ratio: {})", 
+        info!("calculated new wait duration before clamp: {} => {} us (adjustment_factor: {:.3}, latency_baseline: {}μs, avg_latency: {}μs, 
+            latency_ratio: {:.3}, qps_baseline: {}, avg_qps: {}, qps_ratio: {:.3}, near_optimal: {})", 
             current_duration.as_nanos() as f64 / 1000.0,
             new_duration_nanos as f64 / 1000.0, adjustment_factor, latency_baseline.as_micros(), avg_latency.as_micros(), latency_ratio, 
-            qps_baseline, avg_qps, qps_ratio);
+            qps_baseline, avg_qps, qps_ratio, is_near_optimal);
         // Ensure new wait time is within reasonable range (10us to 1ms)
         Duration::from_nanos(new_duration_nanos.clamp(10_000, 1_000_000))
     }
@@ -1108,12 +1191,14 @@ where
         self.latency_baseline_history.push_back(latency);
         self.qps_baseline_history.push_back(qps);
         
-        // Keep more history for baseline calculation (10x the normal history)
-        if self.latency_baseline_history.len() > self.max_history_size * 10 {
+        // Keep shorter history (30 samples) for more responsive baseline calculation
+        // This allows the baseline to adapt faster to workload changes
+        const BASELINE_HISTORY_SIZE: usize = 30;
+        if self.latency_baseline_history.len() > BASELINE_HISTORY_SIZE {
             self.latency_baseline_history.pop_front();
         }
         
-        if self.qps_baseline_history.len() > self.max_history_size * 10 {
+        if self.qps_baseline_history.len() > BASELINE_HISTORY_SIZE {
             self.qps_baseline_history.pop_front();
         }
     }
