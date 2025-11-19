@@ -184,6 +184,7 @@ fn bench_async_snapshot(b: &mut test::Bencher) {
     let mut kv = RaftKv::new(
         SyncBenchRouter::new(region.clone(), db.clone()),
         db,
+        None,
         Arc::new(RwLock::new(HashSet::default())),
     );
 
@@ -218,6 +219,7 @@ fn bench_async_write(b: &mut test::Bencher) {
     let kv = RaftKv::new(
         SyncBenchRouter::new(region.clone(), db.clone()),
         db,
+        None,
         Arc::new(RwLock::new(HashSet::default())),
     );
 

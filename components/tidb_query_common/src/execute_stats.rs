@@ -45,6 +45,13 @@ pub struct ExecSummaryCollectorEnabled {
     counts: ExecSummary,
 }
 
+impl ExecSummaryCollectorEnabled {
+    #[inline]
+    pub fn get_output_index(&self) -> usize {
+        self.output_index
+    }
+}
+
 impl ExecSummaryCollector for ExecSummaryCollectorEnabled {
     type DurationRecorder = tikv_util::time::Instant;
 
@@ -96,14 +103,6 @@ impl ExecSummaryCollector for ExecSummaryCollectorDisabled {
 
     #[inline]
     fn collect(&mut self, _target: &mut [ExecSummary]) {}
-}
-
-/// Combines an `ExecSummaryCollector` with another type. This inner type `T`
-/// typically `Executor`/`BatchExecutor`, such that `WithSummaryCollector<C, T>`
-/// would implement the same trait and collects the statistics into `C`.
-pub struct WithSummaryCollector<C: ExecSummaryCollector, T> {
-    pub summary_collector: C,
-    pub inner: T,
 }
 
 /// Execution statistics to be flowed between parent and child executors at once

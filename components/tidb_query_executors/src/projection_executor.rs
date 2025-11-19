@@ -54,6 +54,11 @@ fn get_schema_from_exprs(child_schema: &[FieldType], exprs: &[RpnExpression]) ->
 
 impl<Src: BatchExecutor> BatchProjectionExecutor<Src> {
     #[cfg(test)]
+    pub fn into_child(self) -> Src {
+        self.src
+    }
+
+    #[cfg(test)]
     pub fn new_for_test(src: Src, exprs: Vec<RpnExpression>) -> Self {
         let schema = get_schema_from_exprs(src.schema(), &exprs);
         let exprs_len = exprs.len();
@@ -147,6 +152,19 @@ impl<Src: BatchExecutor> BatchExecutor for BatchProjectionExecutor<Src> {
     #[inline]
     fn schema(&self) -> &[FieldType] {
         &self.schema
+    }
+
+    #[inline]
+    fn intermediate_schema(&self, index: usize) -> Result<&[FieldType]> {
+        self.src.intermediate_schema(index)
+    }
+
+    #[inline]
+    fn consume_and_fill_intermediate_results(
+        &mut self,
+        results: &mut [Vec<BatchExecuteResult>],
+    ) -> Result<()> {
+        self.src.consume_and_fill_intermediate_results(results)
     }
 
     #[inline]
