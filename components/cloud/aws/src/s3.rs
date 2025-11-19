@@ -13,7 +13,7 @@ use futures_util::{
     stream::TryStreamExt,
 };
 pub use kvproto::brpb::{Bucket as InputBucket, CloudDynamic, S3 as InputConfig};
-use rusoto_core::{request::DispatchSignedRequest, ByteStream, RusotoError};
+use rusoto_core::{request::DispatchSignedRequest, ByteStream, HttpDispatchError, RusotoError};
 use rusoto_credential::{ProvideAwsCredentials, StaticProvider};
 use rusoto_s3::{util::AddressingStyle, *};
 use thiserror::Error;
@@ -436,7 +436,20 @@ impl<'client> S3Uploader<'client> {
         .map_err(|_| {
             RusotoError::ParseError("timeout after 15mins for complete in s3 storage".to_owned())
         })?;
-        res.map(|_| ())
+        res.and_then(|output| {
+            println!("output: {:?}", output);
+            if output.bucket.is_none()
+                && output.e_tag.is_none()
+                && output.key.is_none()
+                && output.location.is_none()
+            {
+                Err(RusotoError::HttpDispatch(HttpDispatchError::new(
+                    "failed to parse the complete multipart upload output".to_owned(),
+                )))
+            } else {
+                Ok(())
+            }
+        })
     }
 
     /// Aborts the multipart upload process, deletes all uploaded parts.
@@ -679,7 +692,12 @@ mod tests {
             MockRequestDispatcher::with_status(200),
             MockRequestDispatcher::with_status(200),
             MockRequestDispatcher::with_status(200),
-            MockRequestDispatcher::with_status(200),
+            MockRequestDispatcher::with_status(200).with_body(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+               <root>
+                 <Bucket>bucket</Bucket>
+               </root>"#,
+            ),
         ]);
 
         let credentials_provider =
@@ -781,6 +799,68 @@ mod tests {
         .unwrap();
         fail::remove(s3_sleep_injected_fp);
         fail::remove(s3_timeout_injected_fp);
+    }
+
+    #[test]
+    fn test_s3_complete_multipart_upload_internal_error() {
+        let magic_contents = "abcd";
+        let bucket_name = StringNonEmpty::required("bucket".to_string()).unwrap();
+        let mut bucket = BucketConf::default(bucket_name);
+        bucket.region = StringNonEmpty::opt("ap-southeast-1".to_string());
+        bucket.prefix = StringNonEmpty::opt("prefix".to_string());
+        let mut config = Config::default(bucket);
+        config.force_path_style = false;
+        config.multi_part_size = 3;
+
+        let dispatcher = MultipleMockRequestDispatcher::new(vec![
+            MockRequestDispatcher::with_status(200)
+                .with_request_checker(|req: &SignedRequest| {
+                    assert_eq!(req.method, "POST");
+                    assert!(req.params.contains_key("uploads"));
+                })
+                .with_body(
+                    r#"<?xml version="1.0" encoding="UTF-8"?>
+               <root>
+                 <UploadId>1</UploadId>
+               </root>"#,
+                ),
+            MockRequestDispatcher::with_status(200).with_request_checker(|req: &SignedRequest| {
+                assert_eq!(req.method, "PUT");
+                assert!(req.params.contains_key("partNumber"));
+                assert!(req.params.contains_key("uploadId"));
+            }),
+            MockRequestDispatcher::with_status(200).with_request_checker(|req: &SignedRequest| {
+                assert_eq!(req.method, "PUT");
+                assert!(req.params.contains_key("partNumber"));
+                assert!(req.params.contains_key("uploadId"));
+            }),
+            MockRequestDispatcher::with_status(200).with_request_checker(|req: &SignedRequest| {
+                assert_eq!(req.method, "POST");
+                assert!(req.params.contains_key("uploadId"));
+                assert!(!req.params.contains_key("partNumber"))
+            }),
+            MockRequestDispatcher::with_status(200)
+                .with_request_checker(|req: &SignedRequest| {
+                    assert_eq!(req.method, "POST");
+                    assert!(req.params.contains_key("uploadId"));
+                    assert!(!req.params.contains_key("partNumber"))
+                })
+                .with_body(
+                    r#"<?xml version="1.0" encoding="UTF-8"?>
+               <root>
+                 <Bucket>bucket</Bucket>
+               </root>"#,
+                ),
+        ]);
+        let credentials_provider =
+            StaticProvider::new_minimal("abc".to_string(), "xyz".to_string());
+        let s = S3Storage::new_creds_dispatcher(config, dispatcher, credentials_provider).unwrap();
+        block_on_external_io(s.put(
+            "key",
+            PutResource(Box::new(magic_contents.as_bytes())),
+            magic_contents.len() as u64,
+        ))
+        .unwrap();
     }
 
     #[test]
