@@ -110,8 +110,7 @@ impl HibernateState {
         };
         hibernate_vote_peer_ids.extend(v.iter());
         vote_peer_ids.extend(hibernate_vote_peer_ids.iter());
-        let mut alive_non_voter_exist = false; // whether alive non-voter peer exists
-        let mut alive_non_voter_peer_id = 0;
+        let mut alive_non_hibernate_vote_peer = None; // whether alive non-hibernate-vote peer exists
         for peer in peers {
             let peer_id = peer.get_id();
             if peer_id == my_id {
@@ -119,23 +118,22 @@ impl HibernateState {
             }
             if !v.contains(&peer_id) && !down_peer_ids.contains(&peer_id) {
                 debug!(
-                    "peer is alive but not voted";
+                    "peer is alive but not voted for hibernate";
                     "peer_id" => peer_id,
                     "my_id" => my_id,
                     "region_id" => region.get_id(),
                 );
-                alive_non_voter_exist = true;
-                alive_non_voter_peer_id = peer_id;
+                alive_non_hibernate_vote_peer = Some(peer_id);
                 break;
             }
         }
         // 1 is for leader itself, which is not counted into votes.
         if v.len() + 1 < peers.len() {
-            if alive_non_voter_exist {
-                // There is some alive non-voter peer, cannot hibernate
+            if alive_non_hibernate_vote_peer.is_some() {
+                // There is some alive non-hibernate-vote peer, leader cannot hibernate
                 return false;
             } else if !has_quorum(&hibernate_vote_peer_ids) {
-                // No alive non-voter peer, but not enough votes to form a quorum
+                // No alive non-hibernate-voter peer, but not enough votes to form a quorum
                 return false;
             } else {
                 debug!(
