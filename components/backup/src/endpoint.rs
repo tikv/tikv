@@ -56,6 +56,13 @@ use crate::{
     *,
 };
 
+use crate::metrics::{
+    BACKUP_THREAD_POOL_SIZE_GAUGE,
+    BACKUP_SOFTLIMIT_GAUGE,
+    BACKUP_RAW_EXPIRED_COUNT,
+    BACKUP_SCAN_WAIT_FOR_WRITER_HISTOGRAM,
+};
+
 const BACKUP_BATCH_LIMIT: usize = 1024;
 // task yield duration when resource limit is on.
 const TASK_YIELD_DURATION: Duration = Duration::from_millis(10);
@@ -386,7 +393,7 @@ impl BackupRange {
                 return Err(e.into());
             }
         };
-        BACKUP_RANGE_HISTOGRAM_VEC
+        &BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["snapshot"])
             .observe(start_snapshot.saturating_elapsed().as_secs_f64());
 
@@ -478,7 +485,7 @@ impl BackupRange {
                 "stat" => ?stat,
             );
         }
-        BACKUP_RANGE_HISTOGRAM_VEC
+        &BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["scan"])
             .observe(take);
 
@@ -554,7 +561,7 @@ impl BackupRange {
                 return Err(e);
             }
         }
-        BACKUP_RANGE_HISTOGRAM_VEC
+        &BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["raw_scan"])
             .observe(start.saturating_elapsed().as_secs_f64());
         Ok(statistics)
@@ -2809,3 +2816,4 @@ pub mod tests {
         assert_eq!(TsSet::vec_from_u64s(locks), TsSet::Empty);
     }
 }
+ 
