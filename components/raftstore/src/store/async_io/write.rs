@@ -453,7 +453,7 @@ impl WriteTaskBatchRecorder {
         if len >= self.capacity && self.batch_size_hint > 0 {
             // The trend ranges from 0.5 to 2.0.
             let trend = self.avg as f64 / self.batch_size_hint as f64;
-            self.trend = trend.clamp(0.5, 2.0);
+            self.trend = trend.clamp(1.0, 2.0);
         } else {
             self.trend = 1.0;
         }
