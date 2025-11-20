@@ -635,7 +635,7 @@ impl Lock {
             LockType::Lock => (Op::Lock, None),
             LockType::Pessimistic => (Op::PessimisticLock, None),
             LockType::Shared => {
-                let shared_locks: Option<Vec<LockInfo>> = self.shared_lock_txns_info.map(|info| {
+                let shared_locks: Option<Vec<_>> = self.shared_lock_txns_info.map(|info| {
                     info.txn_info_segments
                         .iter()
                         .map(|(_, lock)| match lock {
