@@ -1899,6 +1899,34 @@ fn test_shared_exclusive_lock_conflict() {
         done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
     };
 
+    let prewrite_optimistic = |start_ts: u64| {
+        let (done_tx, done_rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::Prewrite::new(
+                    vec![
+                        Mutation::make_lock(Key::from_raw(&shared_key)),
+                    ],
+                    pk.clone(),
+                    start_ts.into(),
+                    3000,
+                    false,
+                    1,
+                    TimeStamp::default(),
+                    TimeStamp::default(),
+                    None,
+                    false,
+                    AssertionLevel::Off,
+                    Context::default(),
+                ),
+                Box::new(
+                    move |res: storage::Result<PrewriteResult>| done_tx.send(res).unwrap(),
+                ),
+            )
+            .unwrap();
+        done_rx.recv_timeout(Duration::from_secs(5)).unwrap()
+    };
+
     let commit = |start_ts: u64, commit_ts: u64| {
         let (done_tx, done_rx) = channel::<i32>();
         storage
@@ -2021,4 +2049,36 @@ fn test_shared_exclusive_lock_conflict() {
     // Now exclusive lock is committed, new shared locks can be acquired.
     acquire_lock(80, true).recv().unwrap().unwrap();
     acquire_lock(90, true).recv().unwrap().unwrap();
+    acquire_lock(100, true).recv().unwrap().unwrap();
+    prewrite(90, true);
+    commit(90, 120);
+    prewrite(100, true);
+
+    // start_ts  status
+    // 80        shared pessimistic lock
+    // 90        committed
+    // 100       shared prewrite lock
+    let prewrite_result = prewrite_optimistic(110).unwrap();
+    assert_eq!(prewrite_result.locks.len(), 1);
+    match prewrite_result.locks[0].as_ref().unwrap_err() {
+        storage::Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
+            box mvcc::ErrorInner::KeyIsLocked(lock),
+        ))))) => {
+            assert_eq!(lock.get_lock_type(), kvrpcpb::Op::SharedLock);
+            let shared_lock_infos = lock.get_shared_lock_infos();
+            assert_eq!(shared_lock_infos.len(), 2);
+            for shared_lock in shared_lock_infos {
+                assert_eq!(shared_lock.get_key(), &shared_key);
+                assert_eq!(shared_lock.get_primary_lock(), &pk);
+                let start_ts = shared_lock.get_lock_version();
+                assert!([80, 100].contains(&start_ts));
+                assert_eq!(shared_lock.get_lock_type(), match start_ts {
+                    80 => kvrpcpb::Op::SharedPessimisticLock,
+                    100 => kvrpcpb::Op::SharedLock,
+                    _ => unreachable!(),
+                });
+            }
+        }
+        other => panic!("unexpected lock error: {:?}", other),
+    }
 }

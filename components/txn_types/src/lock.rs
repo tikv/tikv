@@ -626,17 +626,40 @@ impl Lock {
         let mut info = LockInfo::default();
         info.set_primary_lock(self.primary);
         info.set_lock_version(self.ts.into_inner());
-        info.set_key(raw_key);
+        info.set_key(raw_key.clone());
         info.set_lock_ttl(self.ttl);
         info.set_txn_size(self.txn_size);
-        let lock_type = match self.lock_type {
-            LockType::Put => Op::Put,
-            LockType::Delete => Op::Del,
-            LockType::Lock => Op::Lock,
-            LockType::Pessimistic => Op::PessimisticLock,
-            LockType::Shared => Op::SharedLock,
+        let (lock_type, shared_lock_infos) = match self.lock_type {
+            LockType::Put => (Op::Put, None),
+            LockType::Delete => (Op::Del, None),
+            LockType::Lock => (Op::Lock, None),
+            LockType::Pessimistic => (Op::PessimisticLock, None),
+            LockType::Shared => {
+                let shared_locks: Option<Vec<LockInfo>> = self.shared_lock_txns_info.map(|info| {
+                    info.txn_info_segments
+                        .iter()
+                        .map(|(_, lock)| match lock {
+                            Either::Left(encoded) => Lock::parse(encoded).unwrap(),
+                            Either::Right(lock) => lock.clone(),
+                        })
+                        .map(|lock| lock.into_lock_info(raw_key.clone()))
+                        .map(|mut lock_info| {
+                            lock_info.lock_type = match lock_info.lock_type {
+                                Op::PessimisticLock => Op::SharedPessimisticLock,
+                                Op::Lock => Op::SharedLock,
+                                _ => unreachable!(),
+                            };
+                            lock_info
+                        })
+                        .collect()
+                });
+                (Op::SharedLock, shared_locks)
+            },
         };
         info.set_lock_type(lock_type);
+        if let Some(shared_lock_infos) = shared_lock_infos {
+            info.set_shared_lock_infos(shared_lock_infos.into());
+        }
         info.set_lock_for_update_ts(self.for_update_ts.into_inner());
         info.set_use_async_commit(self.use_async_commit);
         info.set_min_commit_ts(self.min_commit_ts.into_inner());
