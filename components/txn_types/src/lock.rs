@@ -629,7 +629,8 @@ impl Lock {
             LockType::Delete => Op::Del,
             LockType::Lock => Op::Lock,
             LockType::Pessimistic => Op::PessimisticLock,
-            LockType::Shared => Op::SharedLock,
+            // Lock struct should not have LockType::Shared; use SharedLocks instead.
+            LockType::Shared => unreachable!("use SharedLocks::into_lock_info for shared locks"),
         };
         info.set_lock_type(lock_type);
         info.set_lock_for_update_ts(self.for_update_ts.into_inner());
@@ -810,6 +811,7 @@ impl SharedLocks {
 
     pub fn into_lock_info(self, raw_key: Vec<u8>) -> LockInfo {
         let mut info = LockInfo::default();
+        info.lock_type = Op::SharedLock;
         let shared_locks: Vec<_> = self
             .txn_info_segments
             .values()
