@@ -18,11 +18,7 @@ use tidb_query_common::{
     storage::{FindRegionResult, IntervalRange, RegionStorageAccessor, StateRole, Storage},
 };
 use tidb_query_datatype::{
-    codec::{
-        batch::LazyBatchColumnVec,
-        data_type::{BATCH_MAX_SIZE, LogicalRows},
-        table::RowHandle,
-    },
+    codec::{batch::LazyBatchColumnVec, data_type::BATCH_MAX_SIZE, table::RowHandle},
     expr::{EvalConfig, EvalContext, EvalWarnings},
 };
 use tikv_util::{
@@ -728,32 +724,14 @@ where
                 orders.reserve(logical_rows_len);
             }
 
-            for (i, &handle_offset) in index_layout.handle_offsets.iter().enumerate() {
-                let columns_len = result.physical_columns.columns_len();
-                if handle_offset >= columns_len {
-                    return Err(other_err!(
-                        "Invalid handle offset {} for result columns len: {}",
-                        handle_offset,
-                        columns_len
-                    ));
-                }
-                result.physical_columns[handle_offset].ensure_decoded(
-                    ctx,
-                    &index_layout.handle_types[i],
-                    LogicalRows::from_slice(&result.logical_rows),
-                )?
-            }
-
-            let mut result_handles = Vec::with_capacity(logical_rows_len);
-            for (logical_row_index, &physical_row_index) in result.logical_rows.iter().enumerate() {
-                let handle = Handle::from_lazy_batch_column_vec(
-                    ctx,
-                    &result.physical_columns,
-                    physical_row_index,
-                    &index_layout.handle_offsets,
-                    &index_layout.handle_types,
-                )?;
-                result_handles.push(handle);
+            let result_handles = Handle::from_lazy_batch_column_vec(
+                ctx,
+                &mut result.physical_columns,
+                &result.logical_rows,
+                &index_layout.handle_offsets,
+                &index_layout.handle_types,
+            )?;
+            for logical_row_index in 0..result_handles.len() {
                 orders.push((result_index, logical_row_index));
             }
             handles.push(result_handles);
@@ -1036,7 +1014,7 @@ pub mod tests {
         codec::{
             Datum,
             batch::{LazyBatchColumn, LazyBatchColumnVec},
-            data_type::VectorValue,
+            data_type::{LogicalRows, VectorValue},
             datum::DatumEncoder,
             table::{IntHandle, encode_row, encode_row_key},
         },
