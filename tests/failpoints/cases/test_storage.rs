@@ -1904,9 +1904,7 @@ fn test_shared_exclusive_lock_conflict() {
         storage
             .sched_txn_command(
                 commands::Prewrite::new(
-                    vec![
-                        Mutation::make_lock(Key::from_raw(&shared_key)),
-                    ],
+                    vec![Mutation::make_lock(Key::from_raw(&shared_key))],
                     pk.clone(),
                     start_ts.into(),
                     3000,
@@ -1919,9 +1917,7 @@ fn test_shared_exclusive_lock_conflict() {
                     AssertionLevel::Off,
                     Context::default(),
                 ),
-                Box::new(
-                    move |res: storage::Result<PrewriteResult>| done_tx.send(res).unwrap(),
-                ),
+                Box::new(move |res: storage::Result<PrewriteResult>| done_tx.send(res).unwrap()),
             )
             .unwrap();
         done_rx.recv_timeout(Duration::from_secs(5)).unwrap()
@@ -2072,11 +2068,14 @@ fn test_shared_exclusive_lock_conflict() {
                 assert_eq!(shared_lock.get_primary_lock(), &pk);
                 let start_ts = shared_lock.get_lock_version();
                 assert!([80, 100].contains(&start_ts));
-                assert_eq!(shared_lock.get_lock_type(), match start_ts {
-                    80 => kvrpcpb::Op::SharedPessimisticLock,
-                    100 => kvrpcpb::Op::SharedLock,
-                    _ => unreachable!(),
-                });
+                assert_eq!(
+                    shared_lock.get_lock_type(),
+                    match start_ts {
+                        80 => kvrpcpb::Op::SharedPessimisticLock,
+                        100 => kvrpcpb::Op::SharedLock,
+                        _ => unreachable!(),
+                    }
+                );
             }
         }
         other => panic!("unexpected lock error: {:?}", other),

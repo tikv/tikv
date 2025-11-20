@@ -637,8 +637,8 @@ impl Lock {
             LockType::Shared => {
                 let shared_locks: Option<Vec<_>> = self.shared_lock_txns_info.map(|info| {
                     info.txn_info_segments
-                        .iter()
-                        .map(|(_, lock)| match lock {
+                        .values()
+                        .map(|lock| match lock {
                             Either::Left(encoded) => Lock::parse(encoded).unwrap(),
                             Either::Right(lock) => lock.clone(),
                         })
@@ -654,7 +654,7 @@ impl Lock {
                         .collect()
                 });
                 (Op::SharedLock, shared_locks)
-            },
+            }
         };
         info.set_lock_type(lock_type);
         if let Some(shared_lock_infos) = shared_lock_infos {
