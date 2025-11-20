@@ -17,7 +17,10 @@ use super::{
 };
 use crate::{
     FieldTypeTp,
-    codec::{batch::LazyBatchColumnVec, data_type::ScalarValueRef},
+    codec::{
+        batch::LazyBatchColumnVec,
+        data_type::{LogicalRows, ScalarValueRef},
+    },
     expr::EvalContext,
     prelude::*,
 };
@@ -188,7 +191,7 @@ pub fn encode_row_key(table_id: i64, handle: i64) -> Vec<u8> {
     key
 }
 
-pub fn encode_common_handle_for_test(table_id: i64, handle: &[u8]) -> Vec<u8> {
+pub fn encode_common_handle_row_key(table_id: i64, handle: &[u8]) -> Vec<u8> {
     let mut key = Vec::with_capacity(PREFIX_LEN + handle.len());
     key.append_table_record_prefix(table_id).unwrap();
     key.extend(handle);
@@ -555,14 +558,14 @@ pub fn generate_index_data_for_test(
 /// RowHandle is trait to provide a common interface for different types of row
 /// handles.
 pub trait RowHandle: Eq + Ord + Clone + Debug + Send + Sync {
-    /// creates a new handle from LazyBatchColumnVec
+    /// creates handles from LazyBatchColumnVec
     fn from_lazy_batch_column_vec(
-        ctx: &EvalContext,
-        rows: &LazyBatchColumnVec,
-        row_offset: usize,
-        col_offsets: &[usize],
-        col_types: &[FieldType],
-    ) -> Result<Self>;
+        ctx: &mut EvalContext,
+        cols: &mut LazyBatchColumnVec,
+        logical_rows: &Vec<usize>,
+        handle_offsets: &[usize],
+        handle_types: &[FieldType],
+    ) -> Result<Vec<Self>>;
     /// encode the row key for the handle in the give physical table ID.
     /// The return row key is in a raw format without mvcc comparable encoding.
     fn encode_row_key(&self, table_id: i64) -> Vec<u8>;
@@ -593,31 +596,31 @@ impl From<i64> for IntHandle {
 impl RowHandle for IntHandle {
     #[inline]
     fn from_lazy_batch_column_vec(
-        _ctx: &EvalContext,
-        vec: &LazyBatchColumnVec,
-        row_offset: usize,
-        col_offsets: &[usize],
-        col_types: &[FieldType],
-    ) -> Result<Self> {
-        if col_offsets.len() != 1 || col_types.len() != 1 {
+        ctx: &mut EvalContext,
+        cols: &mut LazyBatchColumnVec,
+        logical_rows: &Vec<usize>,
+        handle_offsets: &[usize],
+        handle_types: &[FieldType],
+    ) -> Result<Vec<Self>> {
+        if handle_offsets.len() != 1 || handle_types.len() != 1 {
             return Err(box_err!(
                 "The IntHandle columns len should be 1, but got col_offsets: {}, col_types: {}",
-                col_offsets.len(),
-                col_types.len()
+                handle_offsets.len(),
+                handle_types.len()
             ));
         }
 
-        let col_offset = col_offsets[0];
-        if col_offset > vec.columns_len() {
+        let col_offset = handle_offsets[0];
+        if col_offset > cols.columns_len() {
             return Err(box_err!(
                 "The column offset for IntHandle {} is out of range, the column count is {}",
                 col_offset,
-                vec.columns_len()
+                cols.columns_len()
             ));
         }
 
         if !matches!(
-            col_types[0].tp(),
+            handle_types[0].tp(),
             FieldTypeTp::Tiny
                 | FieldTypeTp::Short
                 | FieldTypeTp::Long
@@ -626,23 +629,29 @@ impl RowHandle for IntHandle {
         ) {
             return Err(box_err!(
                 "The column type for IntHandle should be int types, but got {:?}",
-                col_types[0].tp()
+                handle_types[0].tp()
             ));
         }
 
-        let col = &vec[col_offset];
-        if !col.is_decoded() {
-            return Err(box_err!("column {} not decoded", col_offsets[0]));
+        let col = &mut cols[col_offset];
+        col.ensure_decoded(ctx, &handle_types[0], LogicalRows::from_slice(logical_rows))?;
+
+        let mut handles = Vec::with_capacity(logical_rows.len());
+        for (_, &row_index) in logical_rows.iter().enumerate() {
+            let handle = match col.decoded().get_scalar_ref(row_index) {
+                ScalarValueRef::Int(Some(&val)) => IntHandle(val),
+                scalar => {
+                    return Err(box_err!(
+                        "column {} at row {} is not valid, col_type: {:?}, expect Int, but is other type or None",
+                        col_offset,
+                        row_index,
+                        scalar.eval_type()
+                    ));
+                }
+            };
+            handles.push(handle);
         }
-        match col.decoded().get_scalar_ref(row_offset) {
-            ScalarValueRef::Int(Some(&val)) => Ok(IntHandle(val)),
-            scalar => Err(box_err!(
-                "column {} at row {} is not valid, col_type: {:?}, expect Int, but is other type or None",
-                col_offset,
-                row_offset,
-                scalar.eval_type()
-            )),
-        }
+        Ok(handles)
     }
 
     #[inline]
@@ -660,6 +669,82 @@ impl RowHandle for IntHandle {
     #[inline]
     fn is_next_of(&self, prev: &Self) -> bool {
         self.0 == prev.0 + 1
+    }
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct CommonHandle {
+    encoded: Vec<u8>,
+}
+
+impl RowHandle for CommonHandle {
+    #[inline]
+    fn from_lazy_batch_column_vec(
+        ctx: &mut EvalContext,
+        cols: &mut LazyBatchColumnVec,
+        logical_rows: &Vec<usize>,
+        handle_offsets: &[usize],
+        handle_types: &[FieldType],
+    ) -> Result<Vec<Self>> {
+        if handle_offsets.len() == 0 || handle_offsets.len() != handle_types.len() {
+            return Err(box_err!(
+                "The CommonHandle columns len is unexpected, handle_offsets.len: {}, handle_types.len: {}",
+                handle_offsets.len(),
+                handle_types.len()
+            ));
+        }
+
+        let mut handle_columns = Vec::with_capacity(handle_offsets.len());
+        for (i, &offset) in handle_offsets.iter().enumerate() {
+            if offset >= cols.columns_len() || i >= handle_types.len() {
+                return Err(box_err!(
+                    "The column offset for CommonHandle {} is out of range, the column count is {}",
+                    offset,
+                    cols.columns_len()
+                ));
+            }
+            let col = cols[offset].into_column(ctx, &logical_rows, &handle_types[i])?;
+            handle_columns.push(col);
+        }
+
+        let mut handles = Vec::with_capacity(logical_rows.len());
+        let mut handle_datums = Vec::with_capacity(handle_offsets.len());
+        for row_index in 0..logical_rows.len() {
+            handle_datums.clear();
+            for (i, column) in handle_columns.iter().enumerate() {
+                let d = column.get_datum(row_index, &handle_types[i])?;
+                if d == Datum::Null {
+                    return Err(box_err!(
+                        "handle column {} at row {} is null",
+                        handle_offsets[i],
+                        row_index
+                    ));
+                }
+                handle_datums.push(d);
+            }
+            let handle_encoded_value = datum::encode_key(ctx, &handle_datums)?;
+            handles.push(CommonHandle {
+                encoded: handle_encoded_value,
+            });
+        }
+        Ok(handles)
+    }
+
+    #[inline]
+    fn encode_row_key(&self, table_id: i64) -> Vec<u8> {
+        encode_common_handle_row_key(table_id, &self.encoded)
+    }
+
+    #[inline]
+    fn encode_point_range_end(&self, table_id: i64) -> Vec<u8> {
+        let mut key = encode_common_handle_row_key(table_id, &self.encoded);
+        convert_to_prefix_next(&mut key);
+        key
+    }
+
+    #[inline]
+    fn is_next_of(&self, _: &Self) -> bool {
+        false
     }
 }
 
@@ -983,16 +1068,17 @@ mod tests {
             .into(),
         );
 
-        let vec =
+        let mut vec =
             LazyBatchColumnVec::from(vec![byte_values, int_values1, real_values, int_values2]);
-        let create_handle = |col_offset, row_offset| {
+        let mut create_handle = |col_offset, row_offset| {
             IntHandle::from_lazy_batch_column_vec(
-                &EvalContext::default(),
-                &vec,
-                row_offset,
+                &mut EvalContext::default(),
+                &mut vec,
+                vec![row_offset].as_ref(),
                 &[col_offset],
                 &[FieldTypeTp::Long.into()],
             )
+            .map(|handles| handles[0].clone())
         };
 
         // valid
@@ -1010,15 +1096,16 @@ mod tests {
         create_handle(3, 3).unwrap_err();
 
         // test col_offsets and col_types
-        let create_handle = |col_offsets, col_types: &[FieldTypeTp]| {
+        let mut create_handle = |col_offsets, col_types: &[FieldTypeTp]| {
             let tps = col_types.iter().map(|tp| (*tp).into()).collect::<Vec<_>>();
             IntHandle::from_lazy_batch_column_vec(
-                &EvalContext::default(),
-                &vec,
-                0,
+                &mut EvalContext::default(),
+                &mut vec,
+                vec![0].as_ref(),
                 col_offsets,
                 &tps,
             )
+            .map(|handles| handles[0].clone())
         };
 
         // valid col types
@@ -1103,5 +1190,310 @@ mod tests {
         assert!(!IntHandle::from(2).is_next_of(&IntHandle::from(3)));
         assert!(!IntHandle::from(3).is_next_of(&IntHandle::from(1)));
         assert!(!IntHandle::from(4).is_next_of(&IntHandle::from(6)));
+    }
+
+    #[test]
+    fn test_common_handle_from_lazy_batch_column_vec() {
+        // Test data for CommonHandle with multiple columns
+        let int_values = VectorValue::Int(vec![Some(123), Some(456), Some(789), None].into());
+        let string_values = VectorValue::Bytes(
+            vec![
+                Some("abc".as_bytes().to_vec()),
+                Some("def".as_bytes().to_vec()),
+                None,
+                Some("ghi".as_bytes().to_vec()),
+            ]
+            .into(),
+        );
+        let real_values = VectorValue::Real(
+            vec![
+                Real::new(5.0).ok(),
+                Real::new(7.0).ok(),
+                None,
+                Real::new(9.0).ok(),
+            ]
+            .into(),
+        );
+
+        let mut ctx = EvalContext::default();
+        let mut vec = LazyBatchColumnVec::from(vec![int_values, string_values, real_values]);
+
+        // Test single column CommonHandle (int)
+        let handles = CommonHandle::from_lazy_batch_column_vec(
+            &mut ctx,
+            &mut vec,
+            vec![0, 1, 2].as_ref(),
+            &[0],
+            &[FieldTypeTp::LongLong.into()],
+        )
+        .unwrap();
+        assert_eq!(handles.len(), 3);
+        let expected_int_handles = vec![
+            datum::encode_key(&mut ctx, vec![Datum::I64(123)].as_ref()).unwrap(),
+            datum::encode_key(&mut ctx, vec![Datum::I64(456)].as_ref()).unwrap(),
+            datum::encode_key(&mut ctx, vec![Datum::I64(789)].as_ref()).unwrap(),
+        ];
+        for i in 0..expected_int_handles.len() {
+            assert_eq!(handles[i].encoded, expected_int_handles[i]);
+        }
+
+        let handles1 = CommonHandle::from_lazy_batch_column_vec(
+            &mut ctx,
+            &mut vec,
+            vec![0].as_ref(),
+            &[0],
+            &[FieldTypeTp::LongLong.into()],
+        )
+        .unwrap();
+        assert!(!handles1[0].encoded.is_empty());
+        assert_eq!(handles1[0].encoded, expected_int_handles[0]);
+
+        // Test single column CommonHandle (string)
+        let handles = CommonHandle::from_lazy_batch_column_vec(
+            &mut ctx,
+            &mut vec,
+            vec![0, 1, 3].as_ref(),
+            &[1],
+            &[FieldTypeTp::VarChar.into()],
+        )
+        .unwrap();
+        assert_eq!(handles.len(), 3);
+        let expected_varchar_handles = vec![
+            datum::encode_key(
+                &mut ctx,
+                vec![Datum::from(Vec::from("abc".as_bytes()))].as_ref(),
+            )
+            .unwrap(),
+            datum::encode_key(
+                &mut ctx,
+                vec![Datum::from(Vec::from("def".as_bytes()))].as_ref(),
+            )
+            .unwrap(),
+            datum::encode_key(
+                &mut ctx,
+                vec![Datum::from(Vec::from("ghi".as_bytes()))].as_ref(),
+            )
+            .unwrap(),
+        ];
+        for i in 0..expected_varchar_handles.len() {
+            assert_eq!(handles[i].encoded, expected_varchar_handles[i]);
+        }
+
+        let handles2 = CommonHandle::from_lazy_batch_column_vec(
+            &mut ctx,
+            &mut vec,
+            vec![0].as_ref(),
+            &[1],
+            &[FieldTypeTp::VarChar.into()],
+        )
+        .unwrap();
+        assert!(!handles2[0].encoded.is_empty());
+        assert_eq!(handles2[0].encoded, expected_varchar_handles[0]);
+
+        // Test two column CommonHandle (int + string)
+        let handles = CommonHandle::from_lazy_batch_column_vec(
+            &mut ctx,
+            &mut vec,
+            vec![0, 1].as_ref(),
+            &[0, 1],
+            &[FieldTypeTp::LongLong.into(), FieldTypeTp::VarChar.into()],
+        )
+        .unwrap();
+        let expected_int_varchar_handles = vec![
+            datum::encode_key(
+                &mut ctx,
+                vec![Datum::I64(123), Datum::from(Vec::from("abc".as_bytes()))].as_ref(),
+            )
+            .unwrap(),
+            datum::encode_key(
+                &mut ctx,
+                vec![Datum::I64(456), Datum::from(Vec::from("def".as_bytes()))].as_ref(),
+            )
+            .unwrap(),
+        ];
+
+        for i in 0..expected_int_varchar_handles.len() {
+            assert_eq!(handles[i].encoded, expected_int_varchar_handles[i]);
+        }
+
+        let handles3 = CommonHandle::from_lazy_batch_column_vec(
+            &mut ctx,
+            &mut vec,
+            vec![0].as_ref(),
+            &[0, 1],
+            &[FieldTypeTp::LongLong.into(), FieldTypeTp::VarChar.into()],
+        )
+        .unwrap();
+        assert!(!handles3[0].encoded.is_empty());
+
+        // Test three column CommonHandle (int + string + real)
+        let handles4 = CommonHandle::from_lazy_batch_column_vec(
+            &mut ctx,
+            &mut vec,
+            vec![0].as_ref(),
+            &[0, 1, 2],
+            &[
+                FieldTypeTp::LongLong.into(),
+                FieldTypeTp::VarChar.into(),
+                FieldTypeTp::Double.into(),
+            ],
+        )
+        .unwrap();
+        assert!(!handles4[0].encoded.is_empty());
+
+        // Test with different row indices
+        let handles5 = CommonHandle::from_lazy_batch_column_vec(
+            &mut ctx,
+            &mut vec,
+            vec![1].as_ref(),
+            &[0],
+            &[FieldTypeTp::LongLong.into()],
+        )
+        .unwrap();
+        assert!(!handles5[0].encoded.is_empty());
+
+        // Test with NULL values (should fail)
+        CommonHandle::from_lazy_batch_column_vec(
+            &mut ctx,
+            &mut vec,
+            vec![3].as_ref(),
+            &[0],
+            &[FieldTypeTp::LongLong.into()],
+        )
+        .unwrap_err(); // int NULL
+
+        CommonHandle::from_lazy_batch_column_vec(
+            &mut ctx,
+            &mut vec,
+            vec![2].as_ref(),
+            &[1],
+            &[FieldTypeTp::VarChar.into()],
+        )
+        .unwrap_err(); // string NULL
+
+        CommonHandle::from_lazy_batch_column_vec(
+            &mut ctx,
+            &mut vec,
+            vec![2].as_ref(),
+            &[2],
+            &[FieldTypeTp::Double.into()],
+        )
+        .unwrap_err(); // real NULL
+
+        // Test mixed valid and NULL columns (should fail due to NULL)
+        CommonHandle::from_lazy_batch_column_vec(
+            &mut ctx,
+            &mut vec,
+            vec![2].as_ref(),
+            &[0, 1],
+            &[FieldTypeTp::LongLong.into(), FieldTypeTp::VarChar.into()],
+        )
+        .unwrap_err(); // string is NULL
+
+        // Test invalid column offsets
+        CommonHandle::from_lazy_batch_column_vec(
+            &mut ctx,
+            &mut vec,
+            vec![0].as_ref(),
+            &[3], // out of bounds
+            &[FieldTypeTp::LongLong.into()],
+        )
+        .unwrap_err();
+
+        CommonHandle::from_lazy_batch_column_vec(
+            &mut ctx,
+            &mut vec,
+            vec![0].as_ref(),
+            &[0, 3], // second offset out of bounds
+            &[FieldTypeTp::LongLong.into(), FieldTypeTp::VarChar.into()],
+        )
+        .unwrap_err();
+
+        // Test invalid col_types length mismatch
+        CommonHandle::from_lazy_batch_column_vec(
+            &mut ctx,
+            &mut vec,
+            vec![0].as_ref(),
+            &[0, 1],                         // 2 offsets
+            &[FieldTypeTp::LongLong.into()], // but 1 type
+        )
+        .unwrap_err();
+
+        // Test empty offsets and types
+        CommonHandle::from_lazy_batch_column_vec(&mut ctx, &mut vec, vec![0].as_ref(), &[], &[])
+            .unwrap_err(); // empty offsets should fail
+
+        // Verify handles are different for different values
+        let handles_a = CommonHandle::from_lazy_batch_column_vec(
+            &mut ctx,
+            &mut vec,
+            vec![0].as_ref(),
+            &[0],
+            &[FieldTypeTp::LongLong.into()],
+        )
+        .unwrap();
+        let handles_b = CommonHandle::from_lazy_batch_column_vec(
+            &mut ctx,
+            &mut vec,
+            vec![1].as_ref(),
+            &[0],
+            &[FieldTypeTp::LongLong.into()],
+        )
+        .unwrap();
+        assert_ne!(handles_a[0].encoded, handles_b[0].encoded);
+
+        // Verify handles are different for different column combinations
+        let handles_single = CommonHandle::from_lazy_batch_column_vec(
+            &mut ctx,
+            &mut vec,
+            vec![0].as_ref(),
+            &[0],
+            &[FieldTypeTp::LongLong.into()],
+        )
+        .unwrap();
+        let handles_multi = CommonHandle::from_lazy_batch_column_vec(
+            &mut ctx,
+            &mut vec,
+            vec![0].as_ref(),
+            &[0, 1],
+            &[FieldTypeTp::LongLong.into(), FieldTypeTp::VarChar.into()],
+        )
+        .unwrap();
+        assert_ne!(handles_single[0].encoded, handles_multi[0].encoded);
+    }
+
+    #[test]
+    fn test_common_handle_methods() {
+        // Create a CommonHandle for testing
+        let int_values = VectorValue::Int(vec![Some(123)].into());
+        let mut vec = LazyBatchColumnVec::from(vec![int_values]);
+
+        let handles = CommonHandle::from_lazy_batch_column_vec(
+            &mut EvalContext::default(),
+            &mut vec,
+            vec![0].as_ref(),
+            &[0],
+            &[FieldTypeTp::LongLong.into()],
+        )
+        .unwrap();
+
+        let handle = &handles[0];
+        let table_id = 42i64;
+
+        // Test encode_row_key
+        let key = handle.encode_row_key(table_id);
+        assert!(!key.is_empty());
+
+        // Verify the key can be decoded to get the table prefix
+        let decoded_table_id = decode_table_id(&key).unwrap();
+        assert_eq!(decoded_table_id, table_id);
+
+        // Verify the key is a valid record key
+        check_record_key(&key).unwrap();
+
+        // Test encode_point_range_end
+        let point_range_end = handle.encode_point_range_end(table_id);
+        assert!(!point_range_end.is_empty());
+        assert!(is_prefix_next(&key, &point_range_end));
     }
 }
