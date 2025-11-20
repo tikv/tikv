@@ -92,8 +92,7 @@ impl HibernateState {
         my_id: u64,
         region: &Region,
         down_peer_ids: &Vec<u64>,
-        vote_peer_ids: &mut Vec<u64>,
-    ) -> bool
+    ) -> (bool, Vec<u64>)
     where
         F: Fn(&HashSet<u64>) -> bool,
     {
@@ -103,13 +102,15 @@ impl HibernateState {
         let v = match &mut self.leader {
             LeaderState::Awaken => {
                 self.leader = LeaderState::Poll(Vec::with_capacity(peers.len()));
-                return false;
+                return (false, vec![]);
             }
             LeaderState::Poll(v) => v,
-            LeaderState::Hibernated => return true,
+            LeaderState::Hibernated => {
+                return (true, vec![]);
+            }
         };
         hibernate_vote_peer_ids.extend(v.iter());
-        vote_peer_ids.extend(hibernate_vote_peer_ids.iter());
+        let vote_peer_ids: Vec<u64> = hibernate_vote_peer_ids.iter().cloned().collect();
         let mut alive_non_hibernate_vote_peer = None; // whether alive non-hibernate-vote peer exists
         for peer in peers {
             let peer_id = peer.get_id();
@@ -131,10 +132,10 @@ impl HibernateState {
         if v.len() + 1 < peers.len() {
             if alive_non_hibernate_vote_peer.is_some() {
                 // There is some alive non-hibernate-vote peer, leader cannot hibernate
-                return false;
+                return (false, vote_peer_ids);
             } else if !has_quorum(&hibernate_vote_peer_ids) {
                 // No alive non-hibernate-voter peer, but not enough votes to form a quorum
-                return false;
+                return (false, vote_peer_ids);
             } else {
                 debug!(
                     "hibernate vote check passed by quorum with down peers";
@@ -150,9 +151,9 @@ impl HibernateState {
             p.get_id() == my_id || v.contains(&p.get_id()) || down_peer_ids.contains(&p.get_id())
         }) {
             self.leader = LeaderState::Hibernated;
-            true
+            (true, vote_peer_ids)
         } else {
-            false
+            (false, vote_peer_ids)
         }
     }
 }

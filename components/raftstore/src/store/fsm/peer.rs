@@ -415,17 +415,12 @@ where
         }
     }
 
-    pub fn maybe_hibernate(
-        &mut self,
-        down_peer_ids: &Vec<u64>,
-        vote_peer_ids: &mut Vec<u64>,
-    ) -> bool {
+    pub fn maybe_hibernate(&mut self, down_peer_ids: &Vec<u64>) -> (bool, Vec<u64>) {
         self.hibernate_state.maybe_hibernate(
             |vote_ids| self.peer.raft_group.raft.prs().has_quorum(vote_ids),
             self.peer.peer_id(),
             self.peer.region(),
             down_peer_ids,
-            vote_peer_ids,
         )
     }
 
@@ -3010,11 +3005,8 @@ where
     }
 
     fn agree_to_hibernate(&mut self, down_peer_ids: &Vec<u64>) -> bool {
-        let mut hibernate_vote_peer_ids = vec![];
-        if self
-            .fsm
-            .maybe_hibernate(down_peer_ids, hibernate_vote_peer_ids.as_mut())
-        {
+        let (result, hibernate_vote_peer_ids) = self.fsm.maybe_hibernate(down_peer_ids);
+        if result {
             return true;
         }
         if !self
