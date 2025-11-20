@@ -876,8 +876,8 @@ where
         }
         
         let now = Instant::now();
-        // Update parameters every 10s to allow for more stable metrics and reduce oscillations
-        if now.saturating_duration_since(self.last_adaptive_update) < Duration::from_secs(10) {
+        // Update parameters every 2s to allow for more stable metrics and reduce oscillations
+        if now.saturating_duration_since(self.last_adaptive_update) < Duration::from_secs(2) {
             return;
         }
         
@@ -901,10 +901,6 @@ where
         self.batch.update_config(
             self.batch.recorder.batch_size_hint, // Keep batch_size_hint unchanged
             new_wait_duration
-        );
-        info!("update adaptive parameters, avg_qps: {}, wait_duration: {}μs => {}μs", 
-            avg_qps,
-            current_wait_duration.as_micros(), new_wait_duration.as_micros()
         );
     }
     
@@ -954,7 +950,8 @@ where
         let target_duration_nanos = (current_duration.as_nanos() as f64 * adjustment_factor) as u64;
         let smoothed_duration_nanos = ((1.0 - SMOOTHING_FACTOR) * current_duration.as_nanos() as f64 
                                      + SMOOTHING_FACTOR * target_duration_nanos as f64) as u64;
-        
+        info!("[adaptive adjustment] update wait_duration, avg_qps: {}, target_duration: {}, wait_duration: {}μs => {}μs, self.batch.recorder.batch_size_hint: {}", 
+            avg_qps, current_duration.as_micros(), target_duration_nanos / 1_000, smoothed_duration_nanos / 1_000, self.batch.recorder.batch_size_hint);
         // Ensure new wait time is within reasonable range (10us to 1ms)
         Duration::from_nanos(smoothed_duration_nanos.clamp(10_000, 1_000_000))
     }
