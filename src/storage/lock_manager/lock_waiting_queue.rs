@@ -850,7 +850,7 @@ mod tests {
         ) -> TestLockWaitEntryHandle {
             let mut lock_info_pb = self.make_lock_info_pb(key, encountered_lock_ts);
             if shared {
-                lock_info_pb.set_lock_type(kvrpcpb::Op::SharedLock);
+                lock_info_pb.set_lock_type(kvrpcpb::Op::SharedPessimisticLock);
             }
             let (mut entry, handle) =
                 self.make_mock_lock_wait_entry(key, start_ts, lock_info_pb.clone());
