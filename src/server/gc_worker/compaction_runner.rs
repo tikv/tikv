@@ -101,9 +101,9 @@ pub struct CompactionCandidate {
     pub num_tombstones: u64,  // RocksDB tombstones
     pub num_discardable: u64, // Estimated discardable TiKV MVCC versions
     pub num_total_entries: u64,
-    pub num_rows: u64,              // TiKV rows
+    pub num_rows: u64, // TiKV rows
     pub mvcc_versions_scanned: u64, /* Average MVCC versions scanned per request from online
-                                     * traffic (indicates read overhead) */
+                        * traffic (indicates read overhead) */
     pub region: Region,
 }
 
@@ -719,8 +719,9 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
         }
 
         // Calculate MVCC read score based on throughput
-        // Regions with high mvcc_versions_scanned (versions/sec) benefit from compaction
-        // even if they have no redundant data, because compaction improves read performance
+        // Regions with high mvcc_versions_scanned (versions/sec) benefit from
+        // compaction even if they have no redundant data, because compaction
+        // improves read performance
         let mvcc_scan_threshold = config.auto_compaction.mvcc_scan_threshold;
         let mvcc_score = if mvcc_versions_scanned >= mvcc_scan_threshold {
             // Use ratio pattern similar to base_score calculation

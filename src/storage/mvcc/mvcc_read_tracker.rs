@@ -148,10 +148,10 @@ impl MvccReadTracker {
             .add_mvcc_versions(mvcc_versions_scanned);
     }
 
-    /// Get MVCC versions scanned per second for a region (for compaction scoring)
-    /// Returns total MVCC throughput: total_versions / elapsed_time
-    /// This captures both read intensity (mvcc/req) and read frequency (req/sec)
-    /// Resets counters after reading.
+    /// Get MVCC versions scanned per second for a region (for compaction
+    /// scoring) Returns total MVCC throughput: total_versions /
+    /// elapsed_time This captures both read intensity (mvcc/req) and read
+    /// frequency (req/sec) Resets counters after reading.
     pub fn get_mvcc_versions_scanned(&self, region_id: u64) -> u64 {
         self.stats
             .get(&region_id)
