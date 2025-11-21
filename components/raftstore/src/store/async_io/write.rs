@@ -66,6 +66,8 @@ const RAFT_WB_SPLIT_SIZE: usize = ReadableSize::gb(1).0 as usize;
 /// The default size of the raft write batch recorder.
 const RAFT_WB_DEFAULT_RECORDER_SIZE: usize = 30;
 
+const QPS_THRESHOLD: u64 = 1000;
+
 /// Notify the event to the specified region.
 pub trait PersistedNotifier: Clone + Send + 'static {
     fn notify(&self, region_id: u64, peer_id: u64, ready_number: u64);
@@ -435,7 +437,7 @@ impl WriteTaskBatchRecorder {
         self.wait_duration = wait_duration;
     }
 
-    fn record(&mut self, size: usize) {
+    fn record(&mut self, size: usize, adaptive_batch_enabled: bool) {
         self.history.push_back(size);
         self.sum += size;
 
@@ -451,7 +453,11 @@ impl WriteTaskBatchRecorder {
         if len >= self.capacity && self.batch_size_hint > 0 {
             // The trend ranges from 0.5 to 2.0.
             let trend = self.avg as f64 / self.batch_size_hint as f64;
-            self.trend = trend.clamp(0.5, 2.0);
+            if adaptive_batch_enabled {
+                self.trend = trend.clamp(1.0, 2.0);
+            } else {
+                self.trend = trend.clamp(0.5, 2.0);
+            }
         } else {
             self.trend = 1.0;
         }
@@ -540,7 +546,7 @@ where
     }
 
     /// Add write task to this batch
-    fn add_write_task(&mut self, raft_engine: &ER, mut task: WriteTask<EK, ER>) {
+    fn add_write_task(&mut self, raft_engine: &ER, mut task: WriteTask<EK, ER>, adaptive_batch_enabled: bool) {
         if let Err(e) = task.valid() {
             panic!("task is not valid: {:?}", e);
         }
@@ -600,7 +606,7 @@ where
         }
         self.tasks.push(task);
         // Record the size of the batch.
-        self.recorder.record(self.get_raft_size());
+        self.recorder.record(self.get_raft_size(), adaptive_batch_enabled);
     }
 
     fn clear(&mut self) {
@@ -691,6 +697,7 @@ where
     }
 }
 
+/// A writer that handles asynchronous writes to the storage engine.
 pub struct Worker<EK, ER, N, T>
 where
     EK: KvEngine,
@@ -711,6 +718,27 @@ where
     message_metrics: RaftSendMessageMetrics,
     perf_context: ER::PerfContext,
     pending_latency_inspect: Vec<(Instant, Vec<LatencyInspector>)>,
+    
+    // Adaptive batching related fields
+    /// Whether to enable adaptive batching
+    adaptive_batch_enabled: bool,
+    /// Write QPS history records
+    qps_history: VecDeque<u64>,
+    batch_task_count_history: VecDeque<u64>,
+    /// Last adaptive update time
+    last_adaptive_update: Instant,
+    /// Last QPS statistics time
+    last_qps_stat: Instant,
+    /// Write task count in current period
+    current_write_tasks: u64,
+    current_batch_write_tasks: u64,
+    wait_count: u64,
+    wasted_wait_count: u64, // For debug purpose
+    valid_wait_count: u64, // For debug purpose
+    /// Maximum history record count
+    max_history_size: usize,
+    /// QPS baseline value history records
+    qps_baseline_history: VecDeque<u64>,
 }
 
 impl<EK, ER, N, T> Worker<EK, ER, N, T>
@@ -753,6 +781,20 @@ where
             message_metrics: RaftSendMessageMetrics::default(),
             perf_context,
             pending_latency_inspect: vec![],
+            
+            // Adaptive batching initialization
+            adaptive_batch_enabled: cfg.value().adaptive_batch_enabled,
+            qps_history: VecDeque::with_capacity(100),     // Keep the latest 10 QPS samples
+            batch_task_count_history: VecDeque::with_capacity(10),     // Keep the latest 10 QPS samples
+            last_adaptive_update: Instant::now(),
+            last_qps_stat: Instant::now(),
+            current_write_tasks: 0,
+            current_batch_write_tasks: 0,
+            wait_count: 0,
+            wasted_wait_count: 0,
+            valid_wait_count: 0,
+            max_history_size: 100,
+            qps_baseline_history: VecDeque::with_capacity(10), // Keep the latest 10 baseline samples
         }
     }
 
@@ -768,19 +810,39 @@ where
                 Err(_) => return,
             };
 
+            // Update QPS statistics
+            self.current_write_tasks += 1;
+            self.current_batch_write_tasks += 1;
+            
+            // Check if QPS history needs to be updated
+            let now = Instant::now();
+            if now.saturating_duration_since(self.last_qps_stat) >= Duration::from_secs(1) {
+                self.update_qps_history();
+            }
+            let mut last_round_is_wait = false;
             while self.batch.get_raft_size() < self.raft_write_size_limit {
                 match self.receiver.try_recv() {
                     Ok(msg) => {
                         stopped |= self.handle_msg(msg);
+                        self.current_write_tasks += 1;
+                        self.current_batch_write_tasks += 1;
+                        if last_round_is_wait {
+                            self.valid_wait_count += 1;
+                            last_round_is_wait = false;
+                        }
                     }
                     Err(TryRecvError::Empty) => {
-                        // If the size of the batch is small enough, it will wait for
-                        // a while to make the batch larger. This can reduce the IOPS
-                        // amplification if there are many trivial writes.
+                        // If the batch size is not large enough, wait for a while to make the batch larger.
+                        // This can reduce IOPS amplification when there are many trivial writes.
                         if self.batch.should_wait() {
                             self.batch.wait_for_a_while();
+                            self.wait_count += 1;
+                            last_round_is_wait = true;
                             continue;
                         } else {
+                            if last_round_is_wait {
+                                self.wasted_wait_count += 1;
+                            }
                             break;
                         }
                     }
@@ -807,9 +869,159 @@ where
 
             STORE_WRITE_LOOP_DURATION_HISTOGRAM
                 .observe(duration_to_sec(handle_begin.saturating_elapsed()));
+            self.update_batch_task_count_history();
+            // Periodically update adaptive parameters
+            self.update_adaptive_parameters();
         }
     }
 
+    fn update_batch_task_count_history(&mut self) {
+        self.batch_task_count_history.push_back(self.current_batch_write_tasks);
+        // Keep history records within limit
+        if self.batch_task_count_history.len() > 10 {
+            self.batch_task_count_history.pop_front();
+        }
+        // Reset counter
+        self.current_batch_write_tasks = 0;
+    }
+
+    /// Update QPS history records
+    fn update_qps_history(&mut self) {
+        let now = Instant::now();
+        let duration = now.saturating_duration_since(self.last_qps_stat);
+        if !duration.is_zero() {
+            let qps = (self.current_write_tasks as f64 / duration.as_secs_f64()) as u64;
+            self.qps_history.push_back(qps);
+            
+            // Keep history records within limit
+            if self.qps_history.len() > self.max_history_size {
+                self.qps_history.pop_front();
+            }
+        }
+        
+        // Reset counter
+        self.current_write_tasks = 0;
+        self.last_qps_stat = now;
+    }
+    
+    /// Update adaptive parameters
+    fn update_adaptive_parameters(&mut self) {
+        // if !self.adaptive_batch_enabled || self.qps_history.is_empty() {
+        if self.qps_history.is_empty() {
+            return;
+        }
+        
+        let now = Instant::now();
+        // Update parameters every 2s to allow for more stable metrics and reduce oscillations
+        if now.saturating_duration_since(self.last_adaptive_update) < Duration::from_secs(2) {
+            return;
+        }
+        
+        self.last_adaptive_update = now;
+        
+        // Calculate median QPS for more stable metrics
+        let mut sorted_qps: Vec<u64> = self.qps_history.iter().cloned().collect();
+        sorted_qps.sort();
+        let avg_qps = sorted_qps[sorted_qps.len() / 2]; // Median
+        
+        // Update baseline history
+        self.update_baseline_history(avg_qps);
+        
+        // Get current configuration
+        let current_wait_duration = self.batch.recorder.wait_duration;
+        
+        // Calculate adjustment factors based on QPS
+        let new_wait_duration = self.calculate_adaptive_wait_duration(avg_qps, current_wait_duration);
+        
+        // Update configuration (only wait_duration)
+        if self.adaptive_batch_enabled {
+            self.batch.update_config(
+                self.batch.recorder.batch_size_hint, // Keep batch_size_hint unchanged
+                new_wait_duration
+            );
+        }
+        self.wait_count = 0;
+        self.wasted_wait_count = 0;
+        self.valid_wait_count = 0;
+    }
+    
+    /// Calculate adaptive wait duration based on QPS using exponential weighted moving average
+    fn calculate_adaptive_wait_duration(&self, avg_qps: u64, current_duration: Duration) -> Duration {
+        // Dynamically calculate QPS baseline
+        let qps_baseline = if self.qps_baseline_history.len() >= 10 {
+            let mut sorted_qps: Vec<u64> = self.qps_baseline_history.iter().cloned().collect();
+            sorted_qps.sort();
+            sorted_qps[sorted_qps.len() / 2]
+        } else if !self.qps_baseline_history.is_empty() {
+            // If we don't have enough samples, use the minimum value
+            *self.qps_baseline_history.iter().min().unwrap()
+        } else {
+            // Default baseline value is 1000 QPS
+            1000
+        };
+        
+        // Calculate QPS ratio (relative to baseline QPS)
+        let qps_ratio = if qps_baseline > 0 && avg_qps > QPS_THRESHOLD {
+            avg_qps as f64 / qps_baseline as f64
+        } else {
+            1.0
+        };
+        
+        let wasted_wait_ratio = if self.wait_count > 0 {
+            self.wasted_wait_count as f64 / self.wait_count as f64
+        } else {
+            0.0
+        };
+
+        // Use exponential weighted moving average for smoother transitions
+        // Smoothing factor (α) - higher values make quicker adjustments
+        const SMOOTHING_FACTOR: f64 = 0.2;
+        
+        let adjustment_factor = if wasted_wait_ratio > 0.2 {
+            // Too many wasted waits, reduce wait time
+            0.9
+        } else if qps_ratio >= 2.0 {
+            // QPS is high, increase wait time to aggregate more requests
+            2.0
+        } else if qps_ratio > 1.1 {
+            // QPS is slightly high, moderately increase wait time
+            qps_ratio
+        } else if qps_ratio < 0.5 {
+            // QPS is low, reduce wait time to maintain responsiveness
+            0.5 
+        } else if qps_ratio < 0.9 {
+            qps_ratio
+        } else {
+            // QPS is normal (0.9-1.1), keep current setting
+            1.0
+        };
+        
+        // Apply exponential weighted moving average for smoother transitions
+        let target_duration_nanos = (current_duration.as_nanos() as f64 * adjustment_factor) as u64;
+        let smoothed_duration_nanos = ((1.0 - SMOOTHING_FACTOR) * current_duration.as_nanos() as f64 
+                                     + SMOOTHING_FACTOR * target_duration_nanos as f64) as u64;
+        info!("[adaptive adjustment] adaptive_batch_enabled: {}, update wait_duration, wait_count: {}, wasted_wait_count: {}, \
+            valid_wait_count: {}, wasted_wait_ratio: {}, qps_baseline: {}, avg_qps: {}, qps_ratio: {}, adjustment_factor: {}, \
+            target_duration: {}, wait_duration: {}μs => {}μs, self.batch.recorder.batch_size_hint: {}, \
+            batch_task_count_history: {:?}", 
+            self.adaptive_batch_enabled, self.wait_count, self.wasted_wait_count, self.valid_wait_count, wasted_wait_ratio, qps_baseline, avg_qps, 
+            qps_ratio, adjustment_factor, target_duration_nanos / 1_000, current_duration.as_micros(), 
+            smoothed_duration_nanos / 1_000, self.batch.recorder.batch_size_hint,
+            self.batch_task_count_history);
+        // Ensure new wait time is within reasonable range (10us to 1ms)
+        Duration::from_nanos(smoothed_duration_nanos.clamp(10_000, 1_000_000))
+    }
+    
+    /// Update baseline value history records
+    fn update_baseline_history(&mut self, qps: u64) {
+        self.qps_baseline_history.push_back(qps);
+        
+        // Keep more history for baseline calculation (10x the normal history)
+        if self.qps_baseline_history.len() > self.max_history_size * 10 {
+            self.qps_baseline_history.pop_front();
+        }
+    }
+    
     // Returns whether it's a shutdown msg.
     fn handle_msg(&mut self, msg: WriteMsg<EK, ER>) -> bool {
         match msg {
@@ -846,7 +1058,7 @@ where
     }
 
     pub fn handle_write_task(&mut self, task: WriteTask<EK, ER>) {
-        self.batch.add_write_task(&self.raft_engine, task);
+        self.batch.add_write_task(&self.raft_engine, task, self.adaptive_batch_enabled);
     }
 
     pub fn write_to_db(&mut self, notify: bool) {
@@ -1022,11 +1234,15 @@ where
         // update config
         if let Some(incoming) = self.cfg_tracker.any_new() {
             self.raft_write_size_limit = incoming.raft_write_size_limit.0 as usize;
+            self.adaptive_batch_enabled = incoming.adaptive_batch_enabled;
             self.metrics.waterfall_metrics = incoming.waterfall_metrics;
-            self.batch.update_config(
-                incoming.raft_write_batch_size_hint.0 as usize,
-                incoming.raft_write_wait_duration.0,
-            );
+            // Update the batch configuration with new values if adaptive batching is disabled
+            if !self.adaptive_batch_enabled {
+                self.batch.update_config(
+                    incoming.raft_write_batch_size_hint.0 as usize,
+                    incoming.raft_write_wait_duration.0,
+                );
+            }
         }
     }
 
@@ -1215,7 +1431,7 @@ pub fn write_to_db_for_test<EK, ER>(
         0,
         Duration::default(),
     );
-    batch.add_write_task(&engines.raft, task);
+    batch.add_write_task(&engines.raft, task, false);
     let metrics = StoreWriteMetrics::new(false);
     batch.before_write_to_db(&metrics);
     if let ExtraBatchWrite::V1(kv_wb) = &mut batch.extra_batch_write {
