@@ -437,7 +437,7 @@ impl WriteTaskBatchRecorder {
         self.wait_duration = wait_duration;
     }
 
-    fn record(&mut self, size: usize) {
+    fn record(&mut self, size: usize, adaptive_batch_enabled: bool) {
         self.history.push_back(size);
         self.sum += size;
 
@@ -453,7 +453,11 @@ impl WriteTaskBatchRecorder {
         if len >= self.capacity && self.batch_size_hint > 0 {
             // The trend ranges from 0.5 to 2.0.
             let trend = self.avg as f64 / self.batch_size_hint as f64;
-            self.trend = trend.clamp(1.0, 2.0);
+            if adaptive_batch_enabled {
+                self.trend = trend.clamp(1.0, 2.0);
+            } else {
+                self.trend = trend.clamp(0.5, 2.0);
+            }
         } else {
             self.trend = 1.0;
         }
@@ -542,7 +546,7 @@ where
     }
 
     /// Add write task to this batch
-    fn add_write_task(&mut self, raft_engine: &ER, mut task: WriteTask<EK, ER>) {
+    fn add_write_task(&mut self, raft_engine: &ER, mut task: WriteTask<EK, ER>, adaptive_batch_enabled: bool) {
         if let Err(e) = task.valid() {
             panic!("task is not valid: {:?}", e);
         }
@@ -602,7 +606,7 @@ where
         }
         self.tasks.push(task);
         // Record the size of the batch.
-        self.recorder.record(self.get_raft_size());
+        self.recorder.record(self.get_raft_size(), adaptive_batch_enabled);
     }
 
     fn clear(&mut self) {
@@ -726,6 +730,7 @@ where
     last_qps_stat: Instant,
     /// Write task count in current period
     current_write_tasks: u64,
+    wait_count: u64,
     /// Maximum history record count
     max_history_size: usize,
     /// QPS baseline value history records
@@ -779,6 +784,7 @@ where
             last_adaptive_update: Instant::now(),
             last_qps_stat: Instant::now(),
             current_write_tasks: 0,
+            wait_count: 0,
             max_history_size: 100,
             qps_baseline_history: VecDeque::with_capacity(10), // Keep the latest 10 baseline samples
         }
@@ -816,6 +822,7 @@ where
                         // This can reduce IOPS amplification when there are many trivial writes.
                         if self.batch.should_wait() {
                             self.batch.wait_for_a_while();
+                            self.wait_count += 1;
                             continue;
                         } else {
                             break;
@@ -902,6 +909,7 @@ where
             self.batch.recorder.batch_size_hint, // Keep batch_size_hint unchanged
             new_wait_duration
         );
+        self.wait_count = 0;
     }
     
     /// Calculate adaptive wait duration based on QPS using exponential weighted moving average
@@ -950,8 +958,8 @@ where
         let target_duration_nanos = (current_duration.as_nanos() as f64 * adjustment_factor) as u64;
         let smoothed_duration_nanos = ((1.0 - SMOOTHING_FACTOR) * current_duration.as_nanos() as f64 
                                      + SMOOTHING_FACTOR * target_duration_nanos as f64) as u64;
-        info!("[adaptive adjustment] update wait_duration, avg_qps: {}, target_duration: {}, wait_duration: {}μs => {}μs, self.batch.recorder.batch_size_hint: {}", 
-            avg_qps, current_duration.as_micros(), target_duration_nanos / 1_000, smoothed_duration_nanos / 1_000, self.batch.recorder.batch_size_hint);
+        info!("[adaptive adjustment] update wait_duration, wait_count:{}, qps_baseline:{}, avg_qps: {}, qps_ratio:{}, adjustment_factor:{}, target_duration: {}, wait_duration: {}μs => {}μs, self.batch.recorder.batch_size_hint: {}", 
+            self.wait_count, qps_baseline, avg_qps, qps_ratio, adjustment_factor, target_duration_nanos / 1_000, current_duration.as_micros(), smoothed_duration_nanos / 1_000, self.batch.recorder.batch_size_hint);
         // Ensure new wait time is within reasonable range (10us to 1ms)
         Duration::from_nanos(smoothed_duration_nanos.clamp(10_000, 1_000_000))
     }
@@ -1002,7 +1010,7 @@ where
     }
 
     pub fn handle_write_task(&mut self, task: WriteTask<EK, ER>) {
-        self.batch.add_write_task(&self.raft_engine, task);
+        self.batch.add_write_task(&self.raft_engine, task, self.adaptive_batch_enabled);
     }
 
     pub fn write_to_db(&mut self, notify: bool) {
@@ -1375,7 +1383,7 @@ pub fn write_to_db_for_test<EK, ER>(
         0,
         Duration::default(),
     );
-    batch.add_write_task(&engines.raft, task);
+    batch.add_write_task(&engines.raft, task, false);
     let metrics = StoreWriteMetrics::new(false);
     batch.before_write_to_db(&metrics);
     if let ExtraBatchWrite::V1(kv_wb) = &mut batch.extra_batch_write {
