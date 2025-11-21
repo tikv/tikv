@@ -11,6 +11,7 @@ use std::{
 
 use dashmap::DashMap;
 use lazy_static::lazy_static;
+use tikv_util::sys::thread::StdThreadBuildWrapper;
 
 /// Default time window for MVCC read tracking (in seconds)
 const DEFAULT_MVCC_READ_WINDOW_SECS: u64 = 300; // same as compaction check interval
@@ -116,7 +117,7 @@ impl MvccReadTracker {
 
         thread::Builder::new()
             .name("mvcc-tracker-reset".to_string())
-            .spawn(move || {
+            .spawn_wrapper(move || {
                 while !stop_flag.load(Ordering::Relaxed) {
                     thread::sleep(Duration::from_secs(window_secs));
 
@@ -143,7 +144,7 @@ impl MvccReadTracker {
         // Lock-free: DashMap handles concurrency internally
         self.stats
             .entry(region_id)
-            .or_insert_with(RegionMvccReadStats::new)
+            .or_default()
             .add_mvcc_versions(mvcc_versions_scanned);
     }
 
