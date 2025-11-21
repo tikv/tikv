@@ -718,25 +718,25 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
             return base_score;
         }
 
-        // Calculate MVCC read intensity boost
-        // Regions with high mvcc_versions_scanned per request indicate reads are
-        // scanning many MVCC versions
+        // Calculate MVCC read score based on throughput
+        // Regions with high mvcc_versions_scanned (versions/sec) benefit from compaction
+        // even if they have no redundant data, because compaction improves read performance
         let mvcc_scan_threshold = config.auto_compaction.mvcc_scan_threshold;
-        let mvcc_read_intensity = if mvcc_versions_scanned >= mvcc_scan_threshold {
-            // Normalize by threshold to get intensity factor
-            (mvcc_versions_scanned as f64) / (mvcc_scan_threshold as f64)
+        let mvcc_score = if mvcc_versions_scanned >= mvcc_scan_threshold {
+            // Use ratio pattern similar to base_score calculation
+            // This gives quadratic growth for regions significantly above threshold
+            let ratio = (mvcc_versions_scanned as f64) / (mvcc_scan_threshold as f64);
+            let mvcc_read_weight = config.auto_compaction.mvcc_read_weight;
+            (mvcc_versions_scanned as f64) * ratio * mvcc_read_weight
         } else {
-            // Below threshold, no boost
+            // Below threshold, no MVCC-based score
             0.0
         };
 
-        // Apply MVCC read weight to boost priority for regions with read overhead
-        // Score formula: base_score * (1 + weight * intensity)
-        // This multiplicatively boosts regions that have both:
-        // 1. Redundant data (base_score > 0)
-        // 2. High MVCC read overhead (mvcc_versions_scanned high)
-        let mvcc_read_weight = config.auto_compaction.mvcc_read_weight;
-        base_score * (1.0 + mvcc_read_weight * mvcc_read_intensity)
+        // Use additive formula so regions with high MVCC overhead get compacted
+        // even when base_score = 0 (no redundant data)
+        // This allows compaction to improve read performance by reorganizing data
+        base_score + mvcc_score
     }
 
     fn sleep_or_stop(&mut self, timeout: Duration) -> bool {

@@ -148,23 +148,22 @@ impl MvccReadTracker {
             .add_mvcc_versions(mvcc_versions_scanned);
     }
 
-    /// Get MVCC versions per request per second for a region (for compaction
-    /// scoring) Resets counters after reading.
+    /// Get MVCC versions scanned per second for a region (for compaction scoring)
+    /// Returns total MVCC throughput: total_versions / elapsed_time
+    /// This captures both read intensity (mvcc/req) and read frequency (req/sec)
+    /// Resets counters after reading.
     pub fn get_mvcc_versions_scanned(&self, region_id: u64) -> u64 {
         self.stats
             .get(&region_id)
             .map(|stats| {
                 // Read and reset counters atomically
                 let total_versions = stats.total_mvcc_versions_scanned.swap(0, Ordering::Relaxed);
-                let total_requests = stats.total_requests.swap(0, Ordering::Relaxed);
+                let _total_requests = stats.total_requests.swap(0, Ordering::Relaxed);
                 let last_read_time_secs = stats.last_read_time_secs.swap(0, Ordering::Relaxed);
 
-                if total_requests == 0 {
+                if total_versions == 0 {
                     return 0;
                 }
-
-                // Calculate average versions per request
-                let avg_mvcc_per_request = total_versions / total_requests;
 
                 // Get current time
                 let now_secs = SystemTime::now()
@@ -189,8 +188,11 @@ impl MvccReadTracker {
                 // Store current time as last read time for next calculation
                 stats.last_read_time_secs.store(now_secs, Ordering::Relaxed);
 
-                // Calculate rate: (avg mvcc per request) / elapsed_time
-                avg_mvcc_per_request / elapsed_secs
+                // Calculate throughput: total_mvcc_versions / elapsed_time
+                // This naturally combines:
+                // - Read intensity: regions with high mvcc/req contribute more total_versions
+                // - Read frequency: regions with high req/sec accumulate more total_versions
+                total_versions / elapsed_secs
             })
             .unwrap_or(0)
     }
@@ -249,17 +251,17 @@ mod tests {
         let region1 = 1001;
         let region2 = 1002;
 
-        tracker.record_read(region1, 2000); // 1 request with 2000 versions
-        tracker.record_read(region2, 1000); // 1 request with 1000 versions
+        tracker.record_read(region1, 2000); // 2000 total MVCC versions
+        tracker.record_read(region2, 1000); // 1000 total MVCC versions
 
         assert_eq!(tracker.tracked_region_count(), 2);
 
         // Sleep to ensure elapsed time > 0
         thread::sleep(Duration::from_secs(2));
 
-        // Check rate (mvcc per request per second)
-        // region1: 2000 versions / 1 request / 2 secs = 1000/sec
-        // region2: 1000 versions / 1 request / 2 secs = 500/sec
+        // Check throughput (total mvcc versions per second)
+        // region1: 2000 versions / 2 secs = 1000 versions/sec
+        // region2: 1000 versions / 2 secs = 500 versions/sec
         let rate1 = tracker.get_mvcc_versions_scanned(region1);
         let rate2 = tracker.get_mvcc_versions_scanned(region2);
 
@@ -283,10 +285,10 @@ mod tests {
         let region = 2001;
 
         // Record multiple times - should accumulate both versions and requests
-        tracker.record_read(region, 50); // Request 1: 50 versions
-        tracker.record_read(region, 100); // Request 2: 100 versions
-        tracker.record_read(region, 200); // Request 3: 200 versions
-        tracker.record_read(region, 150); // Request 4: 150 versions
+        tracker.record_read(region, 50); // 50 versions
+        tracker.record_read(region, 100); // 100 versions
+        tracker.record_read(region, 200); // 200 versions
+        tracker.record_read(region, 150); // 150 versions
 
         // Verify accumulation (total should be 500 versions, 4 requests)
         let stats = tracker.stats.get(&region).unwrap();
@@ -296,9 +298,9 @@ mod tests {
         // Sleep to ensure elapsed time > 0
         thread::sleep(Duration::from_secs(2));
 
-        // Rate should be (500 versions / 4 requests) / 2 secs = 125 / 2 = 62.5 ≈ 62
+        // Throughput = 500 versions / 2 secs = 250 versions/sec
         let rate = tracker.get_mvcc_versions_scanned(region);
-        assert!(rate >= 50 && rate <= 75, "rate = {}", rate);
+        assert!(rate >= 225 && rate <= 275, "rate = {}", rate);
 
         // After reading, counters should be reset
         let stats = tracker.stats.get(&region).unwrap();
@@ -306,10 +308,10 @@ mod tests {
         assert_eq!(stats.get_total_requests(), 0);
 
         // Test rate calculation uses last_read_time_secs for subsequent reads
-        tracker.record_read(region, 100); // 1 request with 100 versions
+        tracker.record_read(region, 100); // 100 total versions
         thread::sleep(Duration::from_secs(1));
 
-        // Rate = 100 versions / 1 request / 1 sec = 100/sec
+        // Throughput = 100 versions / 1 sec = 100 versions/sec
         let rate2 = tracker.get_mvcc_versions_scanned(region);
         assert!(rate2 >= 80 && rate2 <= 120, "rate2 = {}", rate2);
     }
