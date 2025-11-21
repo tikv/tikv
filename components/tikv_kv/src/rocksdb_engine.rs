@@ -413,4 +413,8 @@ impl EngineIterator for RocksEngineIterator {
     fn value(&self) -> &[u8] {
         Iterator::value(self)
     }
+
+    fn size(&self) -> usize {
+        Iterator::key(self).len() + Iterator::value(self).len()
+    }
 }

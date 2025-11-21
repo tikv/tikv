@@ -198,6 +198,10 @@ impl<I: Iterator, F: KvFormat> Iterator for RawEncodeIterator<I, F> {
     fn value(&self) -> &[u8] {
         F::decode_raw_value(self.inner.value()).unwrap().user_value
     }
+
+    fn size(&self) -> usize {
+        self.inner.size()
+    }
 }
 
 pub struct RawEncodeIterMetricsCollector;

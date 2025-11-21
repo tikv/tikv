@@ -235,6 +235,11 @@ impl<I: Iterator> Iterator for RawMvccIterator<I> {
             .as_deref()
             .unwrap_or_else(|| self.inner.value())
     }
+
+    fn size(&self) -> usize {
+        self.cur_key.as_ref().map(|k| k.len()).unwrap_or(0)
+            + self.cur_value.as_ref().map(|v| v.len()).unwrap_or(0)
+    }
 }
 
 pub struct RawMvccIterMetricsCollector;
