@@ -7,7 +7,7 @@ use crate::storage::{
         ErrorInner, Key, MvccTxn, ReleasedLock, Result as MvccResult, SnapshotReader, TimeStamp,
     },
     txn::actions::check_txn_status::{
-        check_txn_status_missing_lock, rollback_lock, MissingLockAction,
+        check_txn_status_missing_lock, rollback_lock, rollback_shared_lock, MissingLockAction,
     },
     Snapshot, TxnStatus,
 };
@@ -31,22 +31,37 @@ pub fn cleanup<S: Snapshot>(
     ));
 
     match reader.load_lock(&key)? {
-        Some(ref lock) if lock.ts == reader.start_ts => {
+        Some(mut lock) if lock.contains_start_ts(reader.start_ts) => {
             // If current_ts is not 0, check the Lock's TTL.
             // If the lock is not expired, do not rollback it but report key is locked.
-            if !current_ts.is_zero() && lock.ts.physical() + lock.ttl >= current_ts.physical() {
-                return Err(
-                    ErrorInner::KeyIsLocked(lock.clone().into_lock_info(key.into_raw()?)).into(),
-                );
+            if !current_ts.is_zero() {
+                let expire_time = if lock.is_shared() {
+                    match lock.find_shared_lock_txn(reader.start_ts)? {
+                        Some(l) => l.ts.physical() + l.ttl,
+                        _ => unreachable!(), // since lock.contains_start_ts returned true
+                    }
+                } else {
+                    lock.ts.physical() + lock.ttl
+                };
+                if expire_time >= current_ts.physical() {
+                    return Err(ErrorInner::KeyIsLocked(
+                        lock.clone().into_lock_info(key.into_raw()?),
+                    )
+                    .into());
+                }
             }
-            rollback_lock(
-                txn,
-                reader,
-                key,
-                lock,
-                lock.is_pessimistic_txn(),
-                !protect_rollback,
-            )
+            if lock.is_shared() {
+                rollback_shared_lock(txn, reader, key, lock, reader.start_ts, !protect_rollback)
+            } else {
+                rollback_lock(
+                    txn,
+                    reader,
+                    key,
+                    &lock,
+                    lock.is_pessimistic_txn(),
+                    !protect_rollback,
+                )
+            }
         }
         l => match check_txn_status_missing_lock(
             txn,

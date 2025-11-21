@@ -896,8 +896,7 @@ pub mod tests {
         lock
     }
 
-    #[cfg(test)]
-    fn must_acquire_shared_lock<E: Engine>(
+    pub fn must_acquire_shared_lock<E: Engine>(
         engine: &mut E,
         key: &[u8],
         pk: &[u8],

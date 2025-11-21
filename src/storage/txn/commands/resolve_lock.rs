@@ -93,6 +93,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
         let mut released_locks = ReleasedLocks::new();
         let mut known_txn_status = vec![];
         for (current_key, current_lock) in key_locks {
+            // TODO(slock): handle shared locks
             txn.start_ts = current_lock.ts;
             reader.start_ts = current_lock.ts;
             let commit_ts = *txn_status

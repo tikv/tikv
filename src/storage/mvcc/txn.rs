@@ -213,6 +213,7 @@ impl MvccTxn {
         mut lock: Lock,
         is_protected: bool,
     ) {
+        // TODO(slock): what if it is a shared lock?
         assert_ne!(lock.ts, self.start_ts);
 
         if !is_protected {
