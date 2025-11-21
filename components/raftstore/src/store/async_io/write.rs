@@ -784,7 +784,7 @@ where
             
             // Adaptive batching initialization
             adaptive_batch_enabled: cfg.value().adaptive_batch_enabled,
-            qps_history: VecDeque::with_capacity(10),     // Keep the latest 10 QPS samples
+            qps_history: VecDeque::with_capacity(100),     // Keep the latest 10 QPS samples
             batch_task_count_history: VecDeque::with_capacity(10),     // Keep the latest 10 QPS samples
             last_adaptive_update: Instant::now(),
             last_qps_stat: Instant::now(),
@@ -878,7 +878,7 @@ where
     fn update_batch_task_count_history(&mut self) {
         self.batch_task_count_history.push_back(self.current_batch_write_tasks);
         // Keep history records within limit
-        if self.batch_task_count_history.len() > self.max_history_size {
+        if self.batch_task_count_history.len() > 10 {
             self.batch_task_count_history.pop_front();
         }
         // Reset counter
@@ -967,11 +967,23 @@ where
             1.0
         };
         
+        let wasted_wait_ratio = if self.wait_count > 0 {
+            self.wasted_wait_count as f64 / self.wait_count as f64
+        } else {
+            0.0
+        };
+
         // Use exponential weighted moving average for smoother transitions
         // Smoothing factor (α) - higher values make quicker adjustments
         const SMOOTHING_FACTOR: f64 = 0.2;
         
-        let adjustment_factor = if qps_ratio >= 2.0 {
+        let adjustment_factor = if wasted_wait_ratio > 0.2 {
+            // Too many wasted waits, reduce wait time
+            0.8
+        } else if wasted_wait_ratio > 0.1 {
+            // Some wasted waits, reduce wait time to improve performance
+            0.9
+        } else if qps_ratio >= 2.0 {
             // QPS is high, increase wait time to aggregate more requests
             2.0
         } else if qps_ratio > 1.1 {
@@ -991,11 +1003,11 @@ where
         let target_duration_nanos = (current_duration.as_nanos() as f64 * adjustment_factor) as u64;
         let smoothed_duration_nanos = ((1.0 - SMOOTHING_FACTOR) * current_duration.as_nanos() as f64 
                                      + SMOOTHING_FACTOR * target_duration_nanos as f64) as u64;
-        info!("[adaptive adjustment] update wait_duration, wait_count:{}, wasted_wait_count:{}, 
-            valid_wait_count:{}, qps_baseline:{}, avg_qps: {}, qps_ratio:{}, adjustment_factor:{}, 
-            target_duration: {}, wait_duration: {}μs => {}μs, self.batch.recorder.batch_size_hint: {},
+        info!("[adaptive adjustment] adaptive_batch_enabled: {}, update wait_duration, wait_count: {}, wasted_wait_count: {}, \
+            valid_wait_count: {}, wasted_wait_ratio: {}, qps_baseline: {}, avg_qps: {}, qps_ratio: {}, adjustment_factor: {}, \
+            target_duration: {}, wait_duration: {}μs => {}μs, self.batch.recorder.batch_size_hint: {}, \
             batch_task_count_history: {:?}", 
-            self.wait_count, self.wasted_wait_count, self.valid_wait_count, qps_baseline, avg_qps, 
+            self.adaptive_batch_enabled, self.wait_count, self.wasted_wait_count, self.valid_wait_count, wasted_wait_ratio, qps_baseline, avg_qps, 
             qps_ratio, adjustment_factor, target_duration_nanos / 1_000, current_duration.as_micros(), 
             smoothed_duration_nanos / 1_000, self.batch.recorder.batch_size_hint,
             self.batch_task_count_history);
