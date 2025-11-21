@@ -23,7 +23,7 @@ const DEFAULT_REDUNDANT_ROWS_THRESHOLD: u64 = 50000; // same as region_compact_m
 const DEFAULT_REDUNDANT_ROWS_PERCENT_THRESHOLD: u64 = 20; // same as region_compact_redundant_rows_percent
 
 // MVCC-read-aware compaction defaults
-const DEFAULT_MVCC_READ_AWARE_ENABLED: bool = true;
+const DEFAULT_MVCC_READ_AWARE_ENABLED: bool = false;
 const DEFAULT_MVCC_SCAN_THRESHOLD: u64 = 10000; // Minimum MVCC versions scanned per request to consider region hot
 const DEFAULT_MVCC_READ_WEIGHT: f64 = 3.0; // Weight multiplier for MVCC read activity in scoring
 
