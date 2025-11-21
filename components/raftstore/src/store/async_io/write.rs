@@ -979,9 +979,6 @@ where
         
         let adjustment_factor = if wasted_wait_ratio > 0.2 {
             // Too many wasted waits, reduce wait time
-            0.8
-        } else if wasted_wait_ratio > 0.1 {
-            // Some wasted waits, reduce wait time to improve performance
             0.9
         } else if qps_ratio >= 2.0 {
             // QPS is high, increase wait time to aggregate more requests
