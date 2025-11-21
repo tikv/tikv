@@ -1,5 +1,7 @@
 // Copyright 2025 TiKV Project Authors. Licensed under Apache-2.0.
 
+#[cfg(any(test, feature = "failpoints"))]
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{
     cmp::Reverse,
     collections::BinaryHeap,
@@ -41,6 +43,12 @@ make_static_metric! {
 
 }
 
+// Global variable for testing: stores the region_id of the first candidate
+// selected for compaction Used by failpoint tests to verify MVCC-aware
+// prioritization
+#[cfg(any(test, feature = "failpoints"))]
+pub static FIRST_COMPACTION_CANDIDATE_REGION: AtomicU64 = AtomicU64::new(0);
+
 lazy_static::lazy_static! {
     pub static ref AUTO_COMPACTION_DURATION_HISTOGRAM_VEC: AutoCompactionDurationHistogramVec = register_static_histogram_vec!(
         AutoCompactionDurationHistogramVec,
@@ -60,6 +68,30 @@ lazy_static::lazy_static! {
         "Number of pending compaction candidates"
     ).unwrap();
 
+    pub static ref AUTO_COMPACTION_NUM_TOMBSTONES_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_auto_compaction_num_tombstones",
+        "Histogram of number of tombstones in compaction candidates",
+        exponential_buckets(1.0, 2.0, 20).unwrap()
+    ).unwrap();
+
+    pub static ref AUTO_COMPACTION_NUM_DISCARDABLE_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_auto_compaction_num_discardable",
+        "Histogram of number of discardable MVCC versions in compaction candidates",
+        exponential_buckets(1.0, 2.0, 20).unwrap()
+    ).unwrap();
+
+    pub static ref AUTO_COMPACTION_MVCC_VERSIONS_SCANNED_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_auto_compaction_mvcc_versions_scanned",
+        "Histogram of average MVCC versions scanned per request for compaction candidates",
+        exponential_buckets(1.0, 2.0, 20).unwrap()
+    ).unwrap();
+
+    pub static ref AUTO_COMPACTION_SCORE_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_auto_compaction_score",
+        "Histogram of compaction scores for candidates",
+        exponential_buckets(0.1, 2.0, 20).unwrap()
+    ).unwrap();
+
 }
 
 /// A candidate for compaction with its priority score
@@ -69,7 +101,9 @@ pub struct CompactionCandidate {
     pub num_tombstones: u64,  // RocksDB tombstones
     pub num_discardable: u64, // Estimated discardable TiKV MVCC versions
     pub num_total_entries: u64,
-    pub num_rows: u64, // TiKV rows
+    pub num_rows: u64,              // TiKV rows
+    pub mvcc_versions_scanned: u64, /* Average MVCC versions scanned per request from online
+                                     * traffic (indicates read overhead) */
     pub region: Region,
 }
 
@@ -333,12 +367,11 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
         }
 
         // Convert heap to sorted vector (highest score first)
-        let mut candidates: Vec<CompactionCandidate> = candidates_heap
+        let candidates: Vec<CompactionCandidate> = candidates_heap
             .into_sorted_vec()
             .into_iter()
             .map(|reverse| reverse.0)
             .collect();
-        candidates.reverse(); // Min-heap gives us lowest first, we want highest first
 
         // Log details for top 10 candidates
         for (rank, candidate) in candidates.iter().take(10).enumerate() {
@@ -372,11 +405,22 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
         let mut processed_count = 0;
         let total_candidates = candidates.len();
         let check_interval = config.auto_compaction.check_interval.0;
-        fail_point!("gc_worker_auto_compaction_start_compacting");
 
         for (index, candidate) in candidates.into_iter().enumerate() {
             if self.check_stopped() {
                 return None; // Stopped
+            }
+
+            // Failpoint for testing: capture first candidate selected for compaction
+            // Log the region_id so test can verify which region was prioritized
+            #[cfg(any(test, feature = "failpoints"))]
+            if index == 0 {
+                let region_id = candidate.region.get_id();
+                info!("first compaction candidate selected"; "region_id" => region_id, "score" => candidate.score);
+
+                // Store region_id for test verification
+                FIRST_COMPACTION_CANDIDATE_REGION.store(region_id, Ordering::Relaxed);
+                fail_point!("gc_worker_auto_compaction_first_candidate");
             }
 
             // Check if we've exceeded the check interval, return to start next round
@@ -568,17 +612,38 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
             true
         });
 
-        let score =
-            self.get_compact_score(num_tombstones, num_discardable, num_total_entries, config);
+        // Get average mvcc_versions_scanned per request from actual online read traffic
+        let mvcc_versions_scanned = if config.auto_compaction.mvcc_read_aware_enabled {
+            use crate::storage::mvcc::mvcc_read_tracker::MVCC_READ_TRACKER;
+            MVCC_READ_TRACKER.get_mvcc_versions_scanned(region.get_id())
+        } else {
+            0
+        };
+
+        let score = self.get_compact_score(
+            num_tombstones,
+            num_discardable,
+            num_total_entries,
+            mvcc_versions_scanned,
+            config,
+        );
 
         if score > 0.0 {
             fail_point!("gc_worker_auto_compaction_candidate_found");
+
+            // Record metrics for this compaction candidate
+            AUTO_COMPACTION_NUM_TOMBSTONES_HISTOGRAM.observe(num_tombstones as f64);
+            AUTO_COMPACTION_NUM_DISCARDABLE_HISTOGRAM.observe(num_discardable as f64);
+            AUTO_COMPACTION_MVCC_VERSIONS_SCANNED_HISTOGRAM.observe(mvcc_versions_scanned as f64);
+            AUTO_COMPACTION_SCORE_HISTOGRAM.observe(score);
+
             Ok(Some(CompactionCandidate {
                 score,
                 num_tombstones,
                 num_discardable,
                 num_total_entries,
                 num_rows,
+                mvcc_versions_scanned,
                 region: region.clone(),
             }))
         } else {
@@ -613,19 +678,21 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
         (num_entries as f64 * portion).round() as u64
     }
 
-    /// Calculates compaction score based on tombstones and discardable entries
+    /// Calculates compaction score based on tombstones, discardable entries,
+    /// and MVCC read intensity
     fn get_compact_score(
         &self,
         num_tombstones: u64,
         num_discardable: u64,
         num_total_entries: u64,
+        mvcc_versions_scanned: u64,
         config: &GcConfig,
     ) -> f64 {
         if num_total_entries == 0 || num_total_entries < num_discardable {
             return 0.0;
         }
 
-        if !config.enable_compaction_filter {
+        let base_score = if !config.enable_compaction_filter {
             // Only consider deletes (tombstones)
             let ratio = num_tombstones as f64 / num_total_entries as f64;
             if num_tombstones < config.auto_compaction.tombstones_num_threshold
@@ -633,18 +700,43 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
             {
                 return 0.0;
             }
-            return num_tombstones as f64 * ratio;
+            num_tombstones as f64 * ratio
+        } else {
+            // When compaction filter is enabled, ignore tombstone threshold,
+            // just add deletes to redundant keys for scoring.
+            let ratio = (num_tombstones + num_discardable) as f64 / num_total_entries as f64;
+            if num_discardable < config.auto_compaction.redundant_rows_threshold
+                && ratio < config.auto_compaction.redundant_rows_percent_threshold as f64 / 100.0
+            {
+                return 0.0;
+            }
+            num_discardable as f64 * ratio
+        };
+
+        // If MVCC-read-aware compaction is disabled, return base score
+        if !config.auto_compaction.mvcc_read_aware_enabled {
+            return base_score;
         }
 
-        // When compaction filter is enabled, ignore tombstone threshold,
-        // just add deletes to redundant keys for scoring.
-        let ratio = (num_tombstones + num_discardable) as f64 / num_total_entries as f64;
-        if num_discardable < config.auto_compaction.redundant_rows_threshold
-            && ratio < config.auto_compaction.redundant_rows_percent_threshold as f64 / 100.0
-        {
-            return 0.0;
-        }
-        num_discardable as f64 * ratio
+        // Calculate MVCC read intensity boost
+        // Regions with high mvcc_versions_scanned per request indicate reads are
+        // scanning many MVCC versions
+        let mvcc_scan_threshold = config.auto_compaction.mvcc_scan_threshold;
+        let mvcc_read_intensity = if mvcc_versions_scanned >= mvcc_scan_threshold {
+            // Normalize by threshold to get intensity factor
+            (mvcc_versions_scanned as f64) / (mvcc_scan_threshold as f64)
+        } else {
+            // Below threshold, no boost
+            0.0
+        };
+
+        // Apply MVCC read weight to boost priority for regions with read overhead
+        // Score formula: base_score * (1 + weight * intensity)
+        // This multiplicatively boosts regions that have both:
+        // 1. Redundant data (base_score > 0)
+        // 2. High MVCC read overhead (mvcc_versions_scanned high)
+        let mvcc_read_weight = config.auto_compaction.mvcc_read_weight;
+        base_score * (1.0 + mvcc_read_weight * mvcc_read_intensity)
     }
 
     fn sleep_or_stop(&mut self, timeout: Duration) -> bool {

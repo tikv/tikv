@@ -47,7 +47,7 @@ path = "benches/memory/mod.rs"
 
 [features]
 default = ["failpoints", "testexport", "test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
-failpoints = ["fail/failpoints", "tikv/failpoints", "pd_client/failpoints"]
+failpoints = ["fail/failpoints", "tikv/failpoints", "pd_client/failpoints", "server/failpoints"]
 testexport = ["raftstore/testexport", "tikv/testexport", "pd_client/testexport"]
 profiling = ["profiler/profiling"]
 
