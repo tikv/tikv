@@ -724,12 +724,14 @@ where
     adaptive_batch_enabled: bool,
     /// Write QPS history records
     qps_history: VecDeque<u64>,
+    batch_task_count_history: VecDeque<u64>,
     /// Last adaptive update time
     last_adaptive_update: Instant,
     /// Last QPS statistics time
     last_qps_stat: Instant,
     /// Write task count in current period
     current_write_tasks: u64,
+    current_batch_write_tasks: u64,
     wait_count: u64,
     wasted_wait_count: u64, // For debug purpose
     valid_wait_count: u64, // For debug purpose
@@ -783,9 +785,11 @@ where
             // Adaptive batching initialization
             adaptive_batch_enabled: cfg.value().adaptive_batch_enabled,
             qps_history: VecDeque::with_capacity(10),     // Keep the latest 10 QPS samples
+            batch_task_count_history: VecDeque::with_capacity(10),     // Keep the latest 10 QPS samples
             last_adaptive_update: Instant::now(),
             last_qps_stat: Instant::now(),
             current_write_tasks: 0,
+            current_batch_write_tasks: 0,
             wait_count: 0,
             wasted_wait_count: 0,
             valid_wait_count: 0,
@@ -808,6 +812,7 @@ where
 
             // Update QPS statistics
             self.current_write_tasks += 1;
+            self.current_batch_write_tasks += 1;
             
             // Check if QPS history needs to be updated
             let now = Instant::now();
@@ -820,6 +825,7 @@ where
                     Ok(msg) => {
                         stopped |= self.handle_msg(msg);
                         self.current_write_tasks += 1;
+                        self.current_batch_write_tasks += 1;
                         if last_round_is_wait {
                             self.valid_wait_count += 1;
                             last_round_is_wait = false;
@@ -863,10 +869,20 @@ where
 
             STORE_WRITE_LOOP_DURATION_HISTOGRAM
                 .observe(duration_to_sec(handle_begin.saturating_elapsed()));
-                
+            self.update_batch_task_count_history();
             // Periodically update adaptive parameters
             self.update_adaptive_parameters();
         }
+    }
+
+    fn update_batch_task_count_history(&mut self) {
+        self.batch_task_count_history.push_back(self.current_batch_write_tasks);
+        // Keep history records within limit
+        if self.batch_task_count_history.len() > self.max_history_size {
+            self.batch_task_count_history.pop_front();
+        }
+        // Reset counter
+        self.current_batch_write_tasks = 0;
     }
 
     /// Update QPS history records
@@ -890,7 +906,8 @@ where
     
     /// Update adaptive parameters
     fn update_adaptive_parameters(&mut self) {
-        if !self.adaptive_batch_enabled || self.qps_history.is_empty() {
+        // if !self.adaptive_batch_enabled || self.qps_history.is_empty() {
+        if self.qps_history.is_empty() {
             return;
         }
         
@@ -917,10 +934,12 @@ where
         let new_wait_duration = self.calculate_adaptive_wait_duration(avg_qps, current_wait_duration);
         
         // Update configuration (only wait_duration)
-        self.batch.update_config(
-            self.batch.recorder.batch_size_hint, // Keep batch_size_hint unchanged
-            new_wait_duration
-        );
+        if self.adaptive_batch_enabled {
+            self.batch.update_config(
+                self.batch.recorder.batch_size_hint, // Keep batch_size_hint unchanged
+                new_wait_duration
+            );
+        }
         self.wait_count = 0;
         self.wasted_wait_count = 0;
         self.valid_wait_count = 0;
@@ -972,8 +991,14 @@ where
         let target_duration_nanos = (current_duration.as_nanos() as f64 * adjustment_factor) as u64;
         let smoothed_duration_nanos = ((1.0 - SMOOTHING_FACTOR) * current_duration.as_nanos() as f64 
                                      + SMOOTHING_FACTOR * target_duration_nanos as f64) as u64;
-        info!("[adaptive adjustment] update wait_duration, wait_count:{}, wasted_wait_count:{}, valid_wait_count:{}, qps_baseline:{}, avg_qps: {}, qps_ratio:{}, adjustment_factor:{}, target_duration: {}, wait_duration: {}μs => {}μs, self.batch.recorder.batch_size_hint: {}", 
-            self.wait_count, self.wasted_wait_count, self.valid_wait_count, qps_baseline, avg_qps, qps_ratio, adjustment_factor, target_duration_nanos / 1_000, current_duration.as_micros(), smoothed_duration_nanos / 1_000, self.batch.recorder.batch_size_hint);
+        info!("[adaptive adjustment] update wait_duration, wait_count:{}, wasted_wait_count:{}, 
+            valid_wait_count:{}, qps_baseline:{}, avg_qps: {}, qps_ratio:{}, adjustment_factor:{}, 
+            target_duration: {}, wait_duration: {}μs => {}μs, self.batch.recorder.batch_size_hint: {},
+            batch_task_count_history: {:?}", 
+            self.wait_count, self.wasted_wait_count, self.valid_wait_count, qps_baseline, avg_qps, 
+            qps_ratio, adjustment_factor, target_duration_nanos / 1_000, current_duration.as_micros(), 
+            smoothed_duration_nanos / 1_000, self.batch.recorder.batch_size_hint,
+            self.batch_task_count_history);
         // Ensure new wait time is within reasonable range (10us to 1ms)
         Duration::from_nanos(smoothed_duration_nanos.clamp(10_000, 1_000_000))
     }
