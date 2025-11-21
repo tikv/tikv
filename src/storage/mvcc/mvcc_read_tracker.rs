@@ -6,7 +6,7 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use dashmap::DashMap;
@@ -26,6 +26,8 @@ pub struct RegionMvccReadStats {
     total_mvcc_versions_scanned: AtomicU64,
     /// Total number of read requests (atomic for lock-free updates)
     total_requests: AtomicU64,
+    /// Timestamp (in seconds since epoch) of the last read
+    last_read_time_secs: AtomicU64,
 }
 
 impl RegionMvccReadStats {
@@ -33,6 +35,7 @@ impl RegionMvccReadStats {
         Self {
             total_mvcc_versions_scanned: AtomicU64::new(0),
             total_requests: AtomicU64::new(0),
+            last_read_time_secs: AtomicU64::new(0),
         }
     }
 
@@ -53,6 +56,11 @@ impl RegionMvccReadStats {
     pub fn get_total_requests(&self) -> u64 {
         self.total_requests.load(Ordering::Relaxed)
     }
+
+    /// Get timestamp of last read (in seconds since epoch)
+    pub fn get_last_read_time_secs(&self) -> u64 {
+        self.last_read_time_secs.load(Ordering::Relaxed)
+    }
 }
 
 impl Default for RegionMvccReadStats {
@@ -71,6 +79,8 @@ pub struct MvccReadTracker {
     stop_flag: Arc<AtomicBool>,
     /// Time window in seconds
     window_secs: u64,
+    /// Timestamp (in seconds since epoch) when stats were last reset
+    reset_time_secs: Arc<AtomicU64>,
 }
 
 impl MvccReadTracker {
@@ -79,10 +89,16 @@ impl MvccReadTracker {
     }
 
     pub fn with_window_secs(window_secs: u64) -> Self {
+        let now_secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
         let tracker = Self {
             stats: Arc::new(DashMap::new()),
             stop_flag: Arc::new(AtomicBool::new(false)),
             window_secs,
+            reset_time_secs: Arc::new(AtomicU64::new(now_secs)),
         };
 
         // Start background thread to reset stats every window
@@ -96,6 +112,7 @@ impl MvccReadTracker {
         let stats = Arc::clone(&self.stats);
         let stop_flag = Arc::clone(&self.stop_flag);
         let window_secs = self.window_secs;
+        let reset_time_secs = Arc::clone(&self.reset_time_secs);
 
         thread::Builder::new()
             .name("mvcc-tracker-reset".to_string())
@@ -105,6 +122,13 @@ impl MvccReadTracker {
 
                     // Clear all stats (reset the window)
                     stats.clear();
+
+                    // Update reset time
+                    let now_secs = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs();
+                    reset_time_secs.store(now_secs, Ordering::Relaxed);
                 }
             })
             .expect("Failed to spawn MVCC tracker reset thread");
@@ -123,21 +147,49 @@ impl MvccReadTracker {
             .add_mvcc_versions(mvcc_versions_scanned);
     }
 
-    /// Get average MVCC versions scanned per request for a region (for
-    /// compaction scoring)
+    /// Get MVCC versions per request per second for a region (for compaction
+    /// scoring) Resets counters after reading.
     pub fn get_mvcc_versions_scanned(&self, region_id: u64) -> u64 {
         self.stats
             .get(&region_id)
             .map(|stats| {
-                let total_versions = stats.get_total_mvcc_versions();
-                let total_requests = stats.get_total_requests();
+                // Read and reset counters atomically
+                let total_versions = stats.total_mvcc_versions_scanned.swap(0, Ordering::Relaxed);
+                let total_requests = stats.total_requests.swap(0, Ordering::Relaxed);
+                let last_read_time_secs = stats.last_read_time_secs.swap(0, Ordering::Relaxed);
 
                 if total_requests == 0 {
                     return 0;
                 }
 
                 // Calculate average versions per request
-                total_versions / total_requests
+                let avg_mvcc_per_request = total_versions / total_requests;
+
+                // Get current time
+                let now_secs = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs();
+
+                // Calculate elapsed time
+                let start_time_secs = if last_read_time_secs == 0 {
+                    // No previous read, use reset time
+                    self.reset_time_secs.load(Ordering::Relaxed)
+                } else {
+                    last_read_time_secs
+                };
+
+                let elapsed_secs = now_secs.saturating_sub(start_time_secs);
+
+                if elapsed_secs == 0 {
+                    return 0;
+                }
+
+                // Store current time as last read time for next calculation
+                stats.last_read_time_secs.store(now_secs, Ordering::Relaxed);
+
+                // Calculate rate: (avg mvcc per request) / elapsed_time
+                avg_mvcc_per_request / elapsed_secs
             })
             .unwrap_or(0)
     }
@@ -201,11 +253,22 @@ mod tests {
 
         assert_eq!(tracker.tracked_region_count(), 2);
 
-        // Check per-request averages (1 request each, so avg = total)
-        let avg1 = tracker.get_mvcc_versions_scanned(region1);
-        let avg2 = tracker.get_mvcc_versions_scanned(region2);
-        assert_eq!(avg1, 2000); // 2000 versions / 1 request
-        assert_eq!(avg2, 1000); // 1000 versions / 1 request
+        // Sleep to ensure elapsed time > 0
+        thread::sleep(Duration::from_secs(2));
+
+        // Check rate (mvcc per request per second)
+        // region1: 2000 versions / 1 request / 2 secs = 1000/sec
+        // region2: 1000 versions / 1 request / 2 secs = 500/sec
+        let rate1 = tracker.get_mvcc_versions_scanned(region1);
+        let rate2 = tracker.get_mvcc_versions_scanned(region2);
+
+        // Allow some tolerance for timing
+        assert!(rate1 >= 900 && rate1 <= 1100, "rate1 = {}", rate1);
+        assert!(rate2 >= 400 && rate2 <= 600, "rate2 = {}", rate2);
+
+        // After get_mvcc_versions_scanned, counters are reset
+        // So next call should return 0 (no new data)
+        assert_eq!(tracker.get_mvcc_versions_scanned(region1), 0);
 
         // Non-existent region
         assert_eq!(tracker.get_mvcc_versions_scanned(9999), 0);
@@ -229,9 +292,25 @@ mod tests {
         assert_eq!(stats.get_total_mvcc_versions(), 500);
         assert_eq!(stats.get_total_requests(), 4);
 
-        // Average should be 500 / 4 = 125 versions per request
-        let avg = tracker.get_mvcc_versions_scanned(region);
-        assert_eq!(avg, 125); // 500 versions / 4 requests
+        // Sleep to ensure elapsed time > 0
+        thread::sleep(Duration::from_secs(2));
+
+        // Rate should be (500 versions / 4 requests) / 2 secs = 125 / 2 = 62.5 ≈ 62
+        let rate = tracker.get_mvcc_versions_scanned(region);
+        assert!(rate >= 50 && rate <= 75, "rate = {}", rate);
+
+        // After reading, counters should be reset
+        let stats = tracker.stats.get(&region).unwrap();
+        assert_eq!(stats.get_total_mvcc_versions(), 0);
+        assert_eq!(stats.get_total_requests(), 0);
+
+        // Test rate calculation uses last_read_time_secs for subsequent reads
+        tracker.record_read(region, 100); // 1 request with 100 versions
+        thread::sleep(Duration::from_secs(1));
+
+        // Rate = 100 versions / 1 request / 1 sec = 100/sec
+        let rate2 = tracker.get_mvcc_versions_scanned(region);
+        assert!(rate2 >= 80 && rate2 <= 120, "rate2 = {}", rate2);
     }
 
     #[test]
