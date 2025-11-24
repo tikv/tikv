@@ -67,7 +67,7 @@ const RAFT_WB_SPLIT_SIZE: usize = ReadableSize::gb(1).0 as usize;
 const RAFT_WB_DEFAULT_RECORDER_SIZE: usize = 30;
 
 const QPS_THRESHOLD: u64 = 1000;
-const RAFT_WB_WAIT_DURATION_UPPER_BOUND_NS: u64 = 1000_000_000; // 1ms
+const RAFT_WB_WAIT_DURATION_UPPER_BOUND_NS: u64 = 1000_000; // 1ms
 const RAFT_WB_WAIT_DURATION_LOWER_BOUND_NS: u64 = 10_000; // 10us
 
 /// Notify the event to the specified region.
