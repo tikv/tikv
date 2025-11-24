@@ -67,6 +67,8 @@ const RAFT_WB_SPLIT_SIZE: usize = ReadableSize::gb(1).0 as usize;
 const RAFT_WB_DEFAULT_RECORDER_SIZE: usize = 30;
 
 const QPS_THRESHOLD: u64 = 1000;
+const RAFT_WB_WAIT_DURATION_UPPER_BOUND_NS: u64 = 1000_000_000; // 1ms
+const RAFT_WB_WAIT_DURATION_LOWER_BOUND_NS: u64 = 10_000; // 10us
 
 /// Notify the event to the specified region.
 pub trait PersistedNotifier: Clone + Send + 'static {
@@ -1009,7 +1011,7 @@ where
                 // Very high wasted wait ratio, but still in high QPS scenario
                 // Only slightly reduce to balance between aggregation and wasted waits
                 1.2
-                } else {
+            } else {
                 // High QPS with reasonable wasted wait ratio, increase wait time
                 1.5
             }
@@ -1031,7 +1033,7 @@ where
             if wasted_wait_ratio > 0.3 {
                 // High wasted wait ratio, keep current or slightly reduce
                 0.95
-        } else {
+            } else {
                 qps_ratio
             }
         } else if wasted_wait_ratio > 0.2 && qps_ratio < 1.0 {
@@ -1056,6 +1058,33 @@ where
         let target_duration_nanos = (current_duration.as_nanos() as f64 * adjustment_factor) as u64;
         let smoothed_duration_nanos = ((1.0 - SMOOTHING_FACTOR) * current_duration.as_nanos() as f64 
                                      + SMOOTHING_FACTOR * target_duration_nanos as f64) as u64;
+        
+        // Special handling: when wait_duration is at maximum (1ms) but batch_achievement_ratio
+        // is still below 0.8, it indicates that even with maximum wait time, we cannot achieve
+        // the target batch size (likely due to small request sizes and low client concurrency).
+        // In this case, we should reduce wait_duration to achieve lower latency instead of
+        // keeping it at maximum with no benefit.
+        let final_duration_nanos = if current_duration.as_nanos() as u64 >= RAFT_WB_WAIT_DURATION_UPPER_BOUND_NS * 9 / 10
+            && batch_achievement_ratio < 0.8 {
+            // If we're at or near maximum wait duration but still can't achieve good batching,
+            // reduce wait duration proportionally based on how far we are from the target.
+            // The reduction factor is based on batch_achievement_ratio: the lower the ratio,
+            // the more we reduce (but not too aggressively to avoid oscillation).
+            // When ratio < 0.5, reduce more aggressively; when 0.5 <= ratio < 0.8, reduce moderately.
+            let reduction_factor = if batch_achievement_ratio < 0.5 {
+                // For very low achievement ratio (< 0.5), reduce more aggressively
+                0.5 + batch_achievement_ratio * 0.3 // Range: [0.5, 0.65] when ratio < 0.5
+            } else {
+                // For moderate achievement ratio (0.5 <= ratio < 0.8), reduce moderately
+                0.65 + (batch_achievement_ratio - 0.5) * 0.7 // Range: [0.65, 0.96] when 0.5 <= ratio < 0.8
+            };
+            let reduced_duration = (smoothed_duration_nanos as f64 * reduction_factor) as u64;
+            // Ensure we don't reduce below a reasonable minimum (e.g., 30% of max)
+            reduced_duration.max(RAFT_WB_WAIT_DURATION_UPPER_BOUND_NS * 3 / 10)
+        } else {
+            smoothed_duration_nanos
+        };
+        
         info!("[adaptive adjustment] adaptive_batch_enabled: {}, update wait_duration, wait_count: {}, wasted_wait_count: {}, \
             valid_wait_count: {}, wasted_wait_ratio: {:.2}, qps_baseline: {}, avg_qps: {}, qps_ratio: {:.2}, \
             batch_achievement_ratio: {:.2}, adjustment_factor: {:.2}, target_duration: {}μs, \
@@ -1063,10 +1092,10 @@ where
             batch_task_count_history: {:?}", 
             self.adaptive_batch_enabled, self.wait_count, self.wasted_wait_count, self.valid_wait_count, 
             wasted_wait_ratio, qps_baseline, avg_qps, qps_ratio, batch_achievement_ratio, adjustment_factor, 
-            target_duration_nanos / 1_000, current_duration.as_micros(), smoothed_duration_nanos / 1_000, 
+            target_duration_nanos / 1_000, current_duration.as_micros(), final_duration_nanos / 1_000, 
             batch_size_hint, batch_avg, self.batch_task_count_history);
         // Ensure new wait time is within reasonable range (10us to 1ms)
-        Duration::from_nanos(smoothed_duration_nanos.clamp(10_000, 1_000_000))
+        Duration::from_nanos(final_duration_nanos.clamp(RAFT_WB_WAIT_DURATION_LOWER_BOUND_NS, RAFT_WB_WAIT_DURATION_UPPER_BOUND_NS))
     }
     
     /// Update baseline value history records
