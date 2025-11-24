@@ -4399,6 +4399,7 @@ def CoprocessorOverview() -> RowPanel:
         [
             graph_panel(
                 title="KV Cursor Operations",
+                yaxes=yaxes(left_format=UNITS.SHORT),
                 targets=[
                     target(
                         expr=expr_sum_rate(
@@ -4602,7 +4603,7 @@ def CoprocessorDetail() -> RowPanel:
             ),
             graph_panel(
                 title="Total Ops Details by CF (Index Scan)",
-                yaxes=yaxes(left_format=UNITS.OPS_PER_MIN),
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
                 targets=[
                     target(
                         expr=expr_sum_rate(
