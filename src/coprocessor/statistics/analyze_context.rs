@@ -180,6 +180,11 @@ impl<S: Snapshot, F: KvFormat> AnalyzeContext<S, F> {
                 }
             }
             fms.insert(&data);
+            eprintln!(
+                "analyze index data (hex): {} analyze index data (uint8): {:?}",
+                data.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(""),
+                data
+            );
             if stats_version == AnalyzeVersion::V2 {
                 hist.append(&data, true);
                 if cur_val.1 == data {
