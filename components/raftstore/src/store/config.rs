@@ -340,6 +340,11 @@ pub struct Config {
     #[doc(hidden)]
     pub raft_write_wait_duration: ReadableDuration,
 
+    /// Threshold of wasted wait ratio for decrease batch wait duration.
+    #[doc(hidden)]
+    #[online_config(hidden)]
+    pub wasted_wait_ratio_thd: f64,
+
     /// Whether to enable adaptive batch size and wait duration adjustment.
     #[doc(hidden)]
     pub adaptive_batch_enabled: bool,
@@ -549,6 +554,7 @@ impl Default for Config {
             raft_write_size_limit: ReadableSize::mb(1),
             raft_write_batch_size_hint: ReadableSize::kb(64),
             raft_write_wait_duration: ReadableDuration::micros(20),
+            wasted_wait_ratio_thd: 0.5,
             adaptive_batch_enabled: true,
             waterfall_metrics: true,
             io_reschedule_concurrent_max_count: 4,

@@ -722,6 +722,7 @@ where
     // Adaptive batching related fields
     /// Whether to enable adaptive batching
     adaptive_batch_enabled: bool,
+    wasted_wait_ratio_thd: f64,
     /// Write QPS history records
     qps_history: VecDeque<u64>,
     batch_task_count_history: VecDeque<u64>,
@@ -784,6 +785,7 @@ where
             
             // Adaptive batching initialization
             adaptive_batch_enabled: cfg.value().adaptive_batch_enabled,
+            wasted_wait_ratio_thd: cfg.value().wasted_wait_ratio_thd as f64,
             qps_history: VecDeque::with_capacity(100),     // Keep the latest 10 QPS samples
             batch_task_count_history: VecDeque::with_capacity(10),     // Keep the latest 10 QPS samples
             last_adaptive_update: Instant::now(),
@@ -977,7 +979,7 @@ where
         // Smoothing factor (α) - higher values make quicker adjustments
         const SMOOTHING_FACTOR: f64 = 0.2;
         
-        let adjustment_factor = if wasted_wait_ratio > 0.2 {
+        let adjustment_factor = if wasted_wait_ratio > self.wasted_wait_ratio_thd {
             // Too many wasted waits, reduce wait time
             0.9
         } else if qps_ratio >= 2.0 {
@@ -1000,11 +1002,11 @@ where
         let target_duration_nanos = (current_duration.as_nanos() as f64 * adjustment_factor) as u64;
         let smoothed_duration_nanos = ((1.0 - SMOOTHING_FACTOR) * current_duration.as_nanos() as f64 
                                      + SMOOTHING_FACTOR * target_duration_nanos as f64) as u64;
-        info!("[adaptive adjustment] adaptive_batch_enabled: {}, update wait_duration, wait_count: {}, wasted_wait_count: {}, \
+        info!("[adaptive adjustment] adaptive_batch_enabled: {}, wasted_wait_ratio_thd: {}, update wait_duration, wait_count: {}, wasted_wait_count: {}, \
             valid_wait_count: {}, wasted_wait_ratio: {}, qps_baseline: {}, avg_qps: {}, qps_ratio: {}, adjustment_factor: {}, \
             target_duration: {}, wait_duration: {}μs => {}μs, self.batch.recorder.batch_size_hint: {}, \
             batch_task_count_history: {:?}", 
-            self.adaptive_batch_enabled, self.wait_count, self.wasted_wait_count, self.valid_wait_count, wasted_wait_ratio, qps_baseline, avg_qps, 
+            self.adaptive_batch_enabled, self.wasted_wait_ratio_thd, self.wait_count, self.wasted_wait_count, self.valid_wait_count, wasted_wait_ratio, qps_baseline, avg_qps, 
             qps_ratio, adjustment_factor, target_duration_nanos / 1_000, current_duration.as_micros(), 
             smoothed_duration_nanos / 1_000, self.batch.recorder.batch_size_hint,
             self.batch_task_count_history);
@@ -1235,6 +1237,7 @@ where
         if let Some(incoming) = self.cfg_tracker.any_new() {
             self.raft_write_size_limit = incoming.raft_write_size_limit.0 as usize;
             self.adaptive_batch_enabled = incoming.adaptive_batch_enabled;
+            self.wasted_wait_ratio_thd = incoming.wasted_wait_ratio_thd as f64;
             self.metrics.waterfall_metrics = incoming.waterfall_metrics;
             // Update the batch configuration with new values if adaptive batching is disabled
             if !self.adaptive_batch_enabled {
