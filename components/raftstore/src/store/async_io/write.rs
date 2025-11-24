@@ -421,9 +421,14 @@ impl WriteTaskBatchRecorder {
         }
     }
 
-    #[cfg(test)]
-    fn get_avg(&self) -> usize {
+    #[inline]
+    pub fn get_avg(&self) -> usize {
         self.avg
+    }
+
+    #[inline]
+    pub fn get_batch_size_hint(&self) -> usize {
+        self.batch_size_hint
     }
 
     #[cfg(test)]
@@ -456,7 +461,7 @@ impl WriteTaskBatchRecorder {
             if adaptive_batch_enabled {
                 self.trend = trend.clamp(1.0, 2.0);
             } else {
-                self.trend = trend.clamp(0.5, 2.0);
+            self.trend = trend.clamp(0.5, 2.0);
             }
         } else {
             self.trend = 1.0;
@@ -969,23 +974,69 @@ where
         
         let wasted_wait_ratio = if self.wait_count > 0 {
             self.wasted_wait_count as f64 / self.wait_count as f64
-        } else {
+                } else {
             0.0
         };
 
+        // Calculate batch size achievement ratio
+        // This indicates how well we're achieving the target batch size
+        let batch_size_hint = self.batch.recorder.get_batch_size_hint();
+        let batch_avg = self.batch.recorder.get_avg();
+        let batch_achievement_ratio = if batch_size_hint > 0 && batch_avg > 0 {
+            batch_avg as f64 / batch_size_hint as f64
+        } else {
+            1.0
+        };
+        
         // Use exponential weighted moving average for smoother transitions
         // Smoothing factor (α) - higher values make quicker adjustments
         const SMOOTHING_FACTOR: f64 = 0.2;
         
-        let adjustment_factor = if wasted_wait_ratio > 0.2 {
-            // Too many wasted waits, reduce wait time
-            0.9
-        } else if qps_ratio >= 2.0 {
-            // QPS is high, increase wait time to aggregate more requests
-            2.0
+        // In high-concurrency scenarios, prioritize aggregation effectiveness over avoiding wasted waits
+        // The key insight: when QPS is very high, even if wasted_wait_ratio is high, we should
+        // still increase wait_duration to improve aggregation, because:
+        // 1. High QPS means there's a lot of work to aggregate
+        // 2. The benefit of better aggregation (larger batches) outweighs the cost of some wasted waits
+        // 3. Small batch sizes due to short wait_duration reduce IO efficiency significantly
+        
+        let adjustment_factor = if qps_ratio >= 2.0 {
+            // Very high QPS: prioritize aggregation effectiveness
+            // Even if wasted_wait_ratio is high, we need longer wait_duration to achieve better batching
+            if batch_achievement_ratio < 0.8 {
+                // Batch size is far below target, significantly increase wait time
+                1.5 + (1.0 - batch_achievement_ratio) * 0.5
+            } else if wasted_wait_ratio > 0.5 {
+                // Very high wasted wait ratio, but still in high QPS scenario
+                // Only slightly reduce to balance between aggregation and wasted waits
+                1.2
+                } else {
+                // High QPS with reasonable wasted wait ratio, increase wait time
+                1.5
+            }
+        } else if qps_ratio >= 1.5 {
+            // High QPS: balance aggregation and wasted waits
+            if batch_achievement_ratio < 0.7 {
+                // Batch size is far below target, increase wait time
+                1.3 + (1.0 - batch_achievement_ratio) * 0.3
+            } else if wasted_wait_ratio > 0.4 {
+                // High wasted wait ratio, but still in high QPS scenario
+                // Slightly reduce to balance
+                1.1
+            } else {
+                // High QPS with reasonable wasted wait ratio, moderately increase wait time
+                1.3
+            }
         } else if qps_ratio > 1.1 {
-            // QPS is slightly high, moderately increase wait time
-            qps_ratio
+            // Slightly high QPS: moderately increase wait time
+            if wasted_wait_ratio > 0.3 {
+                // High wasted wait ratio, keep current or slightly reduce
+                0.95
+        } else {
+                qps_ratio
+            }
+        } else if wasted_wait_ratio > 0.2 && qps_ratio < 1.0 {
+            // Low to normal QPS with high wasted wait ratio: reduce wait time
+            0.9
         } else if qps_ratio < 0.5 {
             // QPS is low, reduce wait time to maintain responsiveness
             0.5 
@@ -993,7 +1044,12 @@ where
             qps_ratio
         } else {
             // QPS is normal (0.9-1.1), keep current setting
-            1.0
+            // But if batch achievement is poor, slightly increase
+            if batch_achievement_ratio < 0.6 && wasted_wait_ratio < 0.3 {
+                1.1
+            } else {
+                1.0
+            }
         };
         
         // Apply exponential weighted moving average for smoother transitions
@@ -1001,13 +1057,14 @@ where
         let smoothed_duration_nanos = ((1.0 - SMOOTHING_FACTOR) * current_duration.as_nanos() as f64 
                                      + SMOOTHING_FACTOR * target_duration_nanos as f64) as u64;
         info!("[adaptive adjustment] adaptive_batch_enabled: {}, update wait_duration, wait_count: {}, wasted_wait_count: {}, \
-            valid_wait_count: {}, wasted_wait_ratio: {}, qps_baseline: {}, avg_qps: {}, qps_ratio: {}, adjustment_factor: {}, \
-            target_duration: {}, wait_duration: {}μs => {}μs, self.batch.recorder.batch_size_hint: {}, \
+            valid_wait_count: {}, wasted_wait_ratio: {:.2}, qps_baseline: {}, avg_qps: {}, qps_ratio: {:.2}, \
+            batch_achievement_ratio: {:.2}, adjustment_factor: {:.2}, target_duration: {}μs, \
+            wait_duration: {}μs => {}μs, batch_size_hint: {}, batch_avg: {}, \
             batch_task_count_history: {:?}", 
-            self.adaptive_batch_enabled, self.wait_count, self.wasted_wait_count, self.valid_wait_count, wasted_wait_ratio, qps_baseline, avg_qps, 
-            qps_ratio, adjustment_factor, target_duration_nanos / 1_000, current_duration.as_micros(), 
-            smoothed_duration_nanos / 1_000, self.batch.recorder.batch_size_hint,
-            self.batch_task_count_history);
+            self.adaptive_batch_enabled, self.wait_count, self.wasted_wait_count, self.valid_wait_count, 
+            wasted_wait_ratio, qps_baseline, avg_qps, qps_ratio, batch_achievement_ratio, adjustment_factor, 
+            target_duration_nanos / 1_000, current_duration.as_micros(), smoothed_duration_nanos / 1_000, 
+            batch_size_hint, batch_avg, self.batch_task_count_history);
         // Ensure new wait time is within reasonable range (10us to 1ms)
         Duration::from_nanos(smoothed_duration_nanos.clamp(10_000, 1_000_000))
     }
@@ -1021,7 +1078,7 @@ where
             self.qps_baseline_history.pop_front();
         }
     }
-    
+
     // Returns whether it's a shutdown msg.
     fn handle_msg(&mut self, msg: WriteMsg<EK, ER>) -> bool {
         match msg {
