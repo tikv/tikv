@@ -457,14 +457,10 @@ impl WriteTaskBatchRecorder {
         }
         self.avg = self.sum / len;
 
-        if len >= self.capacity && self.batch_size_hint > 0 {
+        if len >= self.capacity && self.batch_size_hint > 0 && !adaptive_batch_enabled {
             // The trend ranges from 0.5 to 2.0.
             let trend = self.avg as f64 / self.batch_size_hint as f64;
-            if adaptive_batch_enabled {
-                self.trend = trend.clamp(1.0, 2.0);
-            } else {
             self.trend = trend.clamp(0.5, 2.0);
-            }
         } else {
             self.trend = 1.0;
         }
@@ -1022,7 +1018,7 @@ where
                 1.3 + (1.0 - batch_achievement_ratio) * 0.3
             } else if wasted_wait_ratio > 0.4 {
                 // High wasted wait ratio, but still in high QPS scenario
-                // Slightly reduce to balance
+                // Slightly increase to balance
                 1.1
             } else {
                 // High QPS with reasonable wasted wait ratio, moderately increase wait time
@@ -1064,23 +1060,49 @@ where
         // the target batch size (likely due to small request sizes and low client concurrency).
         // In this case, we should reduce wait_duration to achieve lower latency instead of
         // keeping it at maximum with no benefit.
-        let final_duration_nanos = if current_duration.as_nanos() as u64 >= RAFT_WB_WAIT_DURATION_UPPER_BOUND_NS * 9 / 10
-            && batch_achievement_ratio < 0.8 {
-            // If we're at or near maximum wait duration but still can't achieve good batching,
-            // reduce wait duration proportionally based on how far we are from the target.
-            // The reduction factor is based on batch_achievement_ratio: the lower the ratio,
-            // the more we reduce (but not too aggressively to avoid oscillation).
-            // When ratio < 0.5, reduce more aggressively; when 0.5 <= ratio < 0.8, reduce moderately.
-            let reduction_factor = if batch_achievement_ratio < 0.5 {
-                // For very low achievement ratio (< 0.5), reduce more aggressively
-                0.5 + batch_achievement_ratio * 0.3 // Range: [0.5, 0.65] when ratio < 0.5
+        // Also, when batch_achievement_ratio > 2.0, it indicates that aggregation is already
+        // very effective, so we can reduce wait_duration to optimize latency while maintaining
+        // good aggregation efficiency.
+        let final_duration_nanos = if current_duration.as_nanos() as u64 >= RAFT_WB_WAIT_DURATION_UPPER_BOUND_NS * 9 / 10 { 
+            if batch_achievement_ratio < 0.8 {
+                // If we're at or near maximum wait duration but still can't achieve good batching,
+                // reduce wait duration proportionally based on how far we are from the target.
+                // The reduction factor is based on batch_achievement_ratio: the lower the ratio,
+                // the more we reduce (but not too aggressively to avoid oscillation).
+                // When ratio < 0.5, reduce more aggressively; when 0.5 <= ratio < 0.8, reduce moderately.
+                let reduction_factor = if batch_achievement_ratio < 0.5 {
+                    // For very low achievement ratio (< 0.5), reduce more aggressively
+                    0.5 + batch_achievement_ratio * 0.3 // Range: [0.5, 0.65] when ratio < 0.5
+                } else {
+                    // For moderate achievement ratio (0.5 <= ratio < 0.8), reduce moderately
+                    0.65 + (batch_achievement_ratio - 0.5) * 0.7 // Range: [0.65, 0.96] when 0.5 <= ratio < 0.8
+                };
+                let reduced_duration = (smoothed_duration_nanos as f64 * reduction_factor) as u64;
+                // Ensure we don't reduce below a reasonable minimum (e.g., 30% of max)
+                reduced_duration.max(RAFT_WB_WAIT_DURATION_UPPER_BOUND_NS * 3 / 10)
+            } else if batch_achievement_ratio > 2.0 {
+                // If we're at or near maximum wait duration and batch_achievement_ratio > 2.0,
+                // it means aggregation is already very effective (batch size is more than 2x the target).
+                // We can reduce wait_duration to optimize latency while still maintaining good aggregation.
+                // The higher the ratio, the more we can reduce (but not too aggressively).
+                // Reduction factor: when ratio > 2.0, reduce proportionally, with a cap to avoid over-reduction.
+                let reduction_factor = if batch_achievement_ratio > 3.0 {
+                    // For very high achievement ratio (> 3.0), reduce more aggressively
+                    // When ratio = 3.0, factor = 0.9; when ratio → ∞, factor → 0.7
+                    0.7 + (3.0 / batch_achievement_ratio) * 0.2 // Range: [0.7, 0.9] when ratio > 3.0
+                } else {
+                    // For high achievement ratio (2.0 < ratio <= 3.0), reduce moderately
+                    // Linear interpolation: when ratio = 2.0, factor = 0.95; when ratio = 3.0, factor = 0.9
+                    0.95 - 0.05 * (batch_achievement_ratio - 2.0) // Range: [0.9, 0.95] when 2.0 < ratio <= 3.0
+                };
+                let reduced_duration = (smoothed_duration_nanos as f64 * reduction_factor) as u64;
+                // Ensure we don't reduce below a reasonable minimum (e.g., 50% of max) to maintain some aggregation benefit
+                reduced_duration.max(RAFT_WB_WAIT_DURATION_UPPER_BOUND_NS / 2)
             } else {
-                // For moderate achievement ratio (0.5 <= ratio < 0.8), reduce moderately
-                0.65 + (batch_achievement_ratio - 0.5) * 0.7 // Range: [0.65, 0.96] when 0.5 <= ratio < 0.8
-            };
-            let reduced_duration = (smoothed_duration_nanos as f64 * reduction_factor) as u64;
-            // Ensure we don't reduce below a reasonable minimum (e.g., 30% of max)
-            reduced_duration.max(RAFT_WB_WAIT_DURATION_UPPER_BOUND_NS * 3 / 10)
+                // If we're at or near maximum wait duration and batch_achievement_ratio is in [0.8, 2.0],
+                // keep the current wait duration to maintain aggregation efficiency.
+                smoothed_duration_nanos 
+            }
         } else {
             smoothed_duration_nanos
         };
