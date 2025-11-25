@@ -909,8 +909,7 @@ where
     
     /// Update adaptive parameters
     fn update_adaptive_parameters(&mut self) {
-        // if !self.adaptive_batch_enabled || self.qps_history.is_empty() {
-        if self.qps_history.is_empty() {
+        if !self.adaptive_batch_enabled || self.qps_history.is_empty() {
             return;
         }
         
