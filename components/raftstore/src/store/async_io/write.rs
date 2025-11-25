@@ -998,14 +998,9 @@ where
         
         let adjustment_factor = if qps_ratio >= 2.0 {
             // Very high QPS: prioritize aggregation effectiveness
-            // Even if wasted_wait_ratio is high, we need longer wait_duration to achieve better batching
             if batch_achievement_ratio < 0.8 {
                 // Batch size is far below target, significantly increase wait time
                 1.5 + (1.0 - batch_achievement_ratio) * 0.5
-            } else if wasted_wait_ratio > 0.5 {
-                // Very high wasted wait ratio, but still in high QPS scenario
-                // Only slightly reduce to balance between aggregation and wasted waits
-                1.2
             } else {
                 // High QPS with reasonable wasted wait ratio, increase wait time
                 1.5
@@ -1015,25 +1010,13 @@ where
             if batch_achievement_ratio < 0.7 {
                 // Batch size is far below target, increase wait time
                 1.3 + (1.0 - batch_achievement_ratio) * 0.3
-            } else if wasted_wait_ratio > 0.4 {
-                // High wasted wait ratio, but still in high QPS scenario
-                // Slightly increase to balance
-                1.1
             } else {
                 // High QPS with reasonable wasted wait ratio, moderately increase wait time
                 1.3
             }
         } else if qps_ratio > 1.1 {
             // Slightly high QPS: moderately increase wait time
-            if wasted_wait_ratio > 0.3 {
-                // High wasted wait ratio, keep current or slightly reduce
-                0.95
-            } else {
                 qps_ratio
-            }
-        } else if wasted_wait_ratio > 0.2 && qps_ratio < 1.0 {
-            // Low to normal QPS with high wasted wait ratio: reduce wait time
-            0.9
         } else if qps_ratio < 0.5 {
             // QPS is low, reduce wait time to maintain responsiveness
             0.5 
@@ -1042,7 +1025,7 @@ where
         } else {
             // QPS is normal (0.9-1.1), keep current setting
             // But if batch achievement is poor, slightly increase
-            if batch_achievement_ratio < 0.6 && wasted_wait_ratio < 0.3 {
+            if batch_achievement_ratio < 0.6 {
                 1.1
             } else {
                 1.0
