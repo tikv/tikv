@@ -3,15 +3,13 @@
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicU64, Ordering},
     },
-    thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use dashmap::DashMap;
 use lazy_static::lazy_static;
-use tikv_util::sys::thread::StdThreadBuildWrapper;
 
 /// Default time window for MVCC read tracking (in seconds)
 const DEFAULT_MVCC_READ_WINDOW_SECS: u64 = 300; // same as compaction check interval
@@ -24,7 +22,7 @@ lazy_static! {
 #[derive(Debug)]
 pub struct RegionMvccReadStats {
     /// Total MVCC versions scanned (atomic for lock-free updates)
-    total_mvcc_versions_scanned: AtomicU64,
+    redundant_versions_scanned: AtomicU64,
     /// Total number of read requests (atomic for lock-free updates)
     total_requests: AtomicU64,
     /// Timestamp (in seconds since epoch) of the last read
@@ -34,7 +32,7 @@ pub struct RegionMvccReadStats {
 impl RegionMvccReadStats {
     pub fn new() -> Self {
         Self {
-            total_mvcc_versions_scanned: AtomicU64::new(0),
+            redundant_versions_scanned: AtomicU64::new(0),
             total_requests: AtomicU64::new(0),
             last_read_time_secs: AtomicU64::new(0),
         }
@@ -43,14 +41,14 @@ impl RegionMvccReadStats {
     /// Add MVCC versions scanned and increment request counter (lock-free
     /// atomic increment)
     fn add_mvcc_versions(&self, mvcc_versions: u64) {
-        self.total_mvcc_versions_scanned
+        self.redundant_versions_scanned
             .fetch_add(mvcc_versions, Ordering::Relaxed);
         self.total_requests.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Get total MVCC versions scanned in current window
     pub fn get_total_mvcc_versions(&self) -> u64 {
-        self.total_mvcc_versions_scanned.load(Ordering::Relaxed)
+        self.redundant_versions_scanned.load(Ordering::Relaxed)
     }
 
     /// Get total number of requests in current window
@@ -76,8 +74,6 @@ impl Default for RegionMvccReadStats {
 pub struct MvccReadTracker {
     /// Lock-free concurrent map from region_id to read statistics
     stats: Arc<DashMap<u64, RegionMvccReadStats>>,
-    /// Flag to stop background reset thread
-    stop_flag: Arc<AtomicBool>,
     /// Time window in seconds
     window_secs: u64,
     /// Timestamp (in seconds since epoch) when stats were last reset
@@ -95,44 +91,32 @@ impl MvccReadTracker {
             .unwrap()
             .as_secs();
 
-        let tracker = Self {
+        Self {
             stats: Arc::new(DashMap::new()),
-            stop_flag: Arc::new(AtomicBool::new(false)),
             window_secs,
             reset_time_secs: Arc::new(AtomicU64::new(now_secs)),
-        };
-
-        // Start background thread to reset stats every window
-        tracker.start_background_reset_thread();
-
-        tracker
+        }
     }
 
-    /// Start a background thread that clears all stats every window
-    fn start_background_reset_thread(&self) {
-        let stats = Arc::clone(&self.stats);
-        let stop_flag = Arc::clone(&self.stop_flag);
-        let window_secs = self.window_secs;
-        let reset_time_secs = Arc::clone(&self.reset_time_secs);
+    /// Reset stats if the time window has elapsed
+    /// Should be called periodically by the compaction runner
+    pub fn reset_if_needed(&self) {
+        let now_secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
 
-        thread::Builder::new()
-            .name("mvcc-tracker-reset".to_string())
-            .spawn_wrapper(move || {
-                while !stop_flag.load(Ordering::Relaxed) {
-                    thread::sleep(Duration::from_secs(window_secs));
+        let last_reset_secs = self.reset_time_secs.load(Ordering::Relaxed);
+        let elapsed_secs = now_secs.saturating_sub(last_reset_secs);
 
-                    // Clear all stats (reset the window)
-                    stats.clear();
+        // If window has elapsed, reset the stats
+        if elapsed_secs >= self.window_secs {
+            // Clear all stats (reset the window)
+            self.stats.clear();
 
-                    // Update reset time
-                    let now_secs = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs();
-                    reset_time_secs.store(now_secs, Ordering::Relaxed);
-                }
-            })
-            .expect("Failed to spawn MVCC tracker reset thread");
+            // Update reset time
+            self.reset_time_secs.store(now_secs, Ordering::Relaxed);
+        }
     }
 
     /// Record a read operation for a region
@@ -150,14 +134,13 @@ impl MvccReadTracker {
 
     /// Get MVCC versions scanned per second for a region (for compaction
     /// scoring) Returns total MVCC throughput: total_versions /
-    /// elapsed_time This captures both read intensity (mvcc/req) and read
-    /// frequency (req/sec) Resets counters after reading.
+    /// elapsed_time.
     pub fn get_mvcc_versions_scanned(&self, region_id: u64) -> u64 {
         self.stats
             .get(&region_id)
             .map(|stats| {
                 // Read and reset counters atomically
-                let total_versions = stats.total_mvcc_versions_scanned.swap(0, Ordering::Relaxed);
+                let total_versions = stats.redundant_versions_scanned.swap(0, Ordering::Relaxed);
                 let _total_requests = stats.total_requests.swap(0, Ordering::Relaxed);
                 let last_read_time_secs = stats.last_read_time_secs.swap(0, Ordering::Relaxed);
 
@@ -206,13 +189,6 @@ impl MvccReadTracker {
     #[cfg(test)]
     pub fn clear(&self) {
         self.stats.clear();
-    }
-}
-
-impl Drop for MvccReadTracker {
-    fn drop(&mut self) {
-        // Signal background thread to stop
-        self.stop_flag.store(true, Ordering::Relaxed);
     }
 }
 

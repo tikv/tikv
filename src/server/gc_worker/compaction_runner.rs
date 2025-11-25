@@ -366,6 +366,10 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
             }
         }
 
+        // Reset MVCC read tracker if time window has elapsed
+        use crate::storage::mvcc::mvcc_read_tracker::MVCC_READ_TRACKER;
+        MVCC_READ_TRACKER.reset_if_needed();
+
         // Convert heap to sorted vector (highest score first)
         let candidates: Vec<CompactionCandidate> = candidates_heap
             .into_sorted_vec()
