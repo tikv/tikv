@@ -34,14 +34,14 @@ permissions:
 
 jobs:
   check-trigger:
-    if: always()  # 修复：改为 always()，确保总是运行
+    if: always()
     runs-on: ubuntu-latest
     outputs:
       should_run: ${{ steps.check.outputs.trigger || 'false' }}
       pr_number: ${{ steps.get_pr.outputs.number || '' }}
     steps:
       - name: Get PR number from comment
-        if: github.event_name == 'issue_comment'  # 只在 issue_comment 时执行
+        if: github.event_name == 'issue_comment'
         id: get_pr
         uses: actions/github-script@v7
         with:
@@ -56,7 +56,7 @@ jobs:
             }
 
       - name: Check if comment triggers workflow
-        if: github.event_name == 'issue_comment'  # 只在 issue_comment 时执行
+        if: github.event_name == 'issue_comment'
         id: check
         run: |
           comment_body="${{ github.event.comment.body }}"
@@ -65,8 +65,6 @@ jobs:
           else
             echo "trigger=false" >> $GITHUB_OUTPUT
           fi
-
-      # 为非 issue_comment 事件设置默认输出
       - name: Set default outputs for non-comment events
         if: github.event_name != 'issue_comment'
         run: |
@@ -111,13 +109,15 @@ jobs:
               pull_number: prNumber
             });
             core.setOutput('sha', pr.head.sha);
-
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number != '' && format('refs/pull/{0}/merge', inputs.pr_number) || github.event_name == 'issue_comment' && steps.pr_info.outputs.pr_number != '' && format('refs/pull/{0}/merge', steps.pr_info.outputs.pr_number) || github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 1
-
+      - name: Install CMake
+        run: |
+          brew install cmake
+          cmake --version
       - name: Check for skip-ci
         id: skip
         run: |
