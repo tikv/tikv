@@ -201,6 +201,7 @@ impl Default for MvccReadTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{thread, time::Duration};
 
     #[test]
     fn test_region_mvcc_read_stats() {
