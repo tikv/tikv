@@ -28,7 +28,7 @@ permissions:
 jobs:
   clippy:
     name: Run Clippy on macOS
-    runs-on: macos-15-large
+    runs-on: macos-15-intel
     timeout-minutes: 120
 
     steps:
