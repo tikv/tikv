@@ -151,6 +151,12 @@ jobs:
           
           echo "skip=false" >> $GITHUB_OUTPUT
 
+      - name: Check disk usage (before)
+        if: steps.skip.outputs.skip != 'true'
+        run: |
+          echo "Disk usage before build:"
+          df -h
+
       - name: Set commit status (pending)
         if: steps.skip.outputs.skip != 'true'
         uses: actions/github-script@v7
@@ -188,6 +194,12 @@ jobs:
         if: steps.skip.outputs.skip != 'true'
         run: |
           make clippy
+
+      - name: Check disk usage (after)
+        if: always() && steps.skip.outputs.skip != 'true'
+        run: |
+          echo "Disk usage after build:"
+          df -h
 
       - name: Set commit status (success)
         if: success() && steps.skip.outputs.skip != 'true'
