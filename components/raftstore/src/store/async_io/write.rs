@@ -1041,7 +1041,7 @@ where
                 // reduce wait duration proportionally based on how far we are from the target.
                 // The reduction factor is based on batch_achievement_ratio: the lower the ratio,
                 // the more we reduce (but not too aggressively to avoid oscillation).
-                let reduction_factor = 0.95 + (batch_achievement_ratio - 0.5) * 0.5; // Range: [0.7, 0.95]
+                let reduction_factor = 0.95 + (batch_achievement_ratio - 0.5) * 0.3; // Range: [0.85, 0.95]
                 (adjust_duration_nanos as f64 * reduction_factor) as u64
             } else {
                 // If we're at or near maximum wait duration and batch_achievement_ratio is in [0.8, infinity),
