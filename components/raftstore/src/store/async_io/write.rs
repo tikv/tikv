@@ -985,10 +985,6 @@ where
             1.0
         };
         
-        // Use exponential weighted moving average for smoother transitions
-        // Smoothing factor (α) - higher values make quicker adjustments
-        const SMOOTHING_FACTOR: f64 = 0.2;
-        
         // In high-concurrency scenarios, prioritize aggregation effectiveness over avoiding wasted waits
         // The key insight: when QPS is very high, even if wasted_wait_ratio is high, we should
         // still increase wait_duration to improve aggregation, because:
@@ -1033,43 +1029,45 @@ where
         };
         
         // Apply exponential weighted moving average for smoother transitions
-        let target_duration_nanos = (current_duration.as_nanos() as f64 * adjustment_factor) as u64;
-        let smoothed_duration_nanos = ((1.0 - SMOOTHING_FACTOR) * current_duration.as_nanos() as f64 
-                                     + SMOOTHING_FACTOR * target_duration_nanos as f64) as u64;
-        
+        let adjust_duration_nanos = (current_duration.as_nanos() as f64 * adjustment_factor) as u64;
         // Special handling: when wait_duration is nearly at maximum (1ms) but batch_achievement_ratio
         // is still below 0.5, it indicates that even with maximum wait time, we cannot achieve
         // the target batch size (likely due to small request sizes and low client concurrency).
         // In this case, we should reduce wait_duration to achieve lower latency instead of
         // keeping it at maximum with no benefit.
-        let final_duration_nanos = if current_duration.as_nanos() as u64 >= RAFT_WB_WAIT_DURATION_UPPER_BOUND_NS * 9 / 10 { 
+        let target_duration_nanos = if current_duration.as_nanos() as u64 >= RAFT_WB_WAIT_DURATION_UPPER_BOUND_NS * 9 / 10 { 
             if batch_achievement_ratio < 0.5 {
                 // If we're at or near maximum wait duration but still can't achieve good batching,
                 // reduce wait duration proportionally based on how far we are from the target.
                 // The reduction factor is based on batch_achievement_ratio: the lower the ratio,
                 // the more we reduce (but not too aggressively to avoid oscillation).
-                let reduction_factor = 0.9 + (batch_achievement_ratio - 0.5) * 0.6; // Range: [0.6, 0.9]
-                (smoothed_duration_nanos as f64 * reduction_factor) as u64
+                let reduction_factor = 0.95 + (batch_achievement_ratio - 0.5) * 0.5; // Range: [0.7, 0.95]
+                (adjust_duration_nanos as f64 * reduction_factor) as u64
             } else {
                 // If we're at or near maximum wait duration and batch_achievement_ratio is in [0.8, infinity),
                 // keep the current wait duration to maintain aggregation efficiency.
-                smoothed_duration_nanos 
+                adjust_duration_nanos 
             }
         } else {
-            smoothed_duration_nanos
+            adjust_duration_nanos
         };
+        // Use exponential weighted moving average for smoother transitions
+        // Smoothing factor (α) - higher values make quicker adjustments
+        const SMOOTHING_FACTOR: f64 = 0.2;
+        let smoothed_duration_nanos = ((1.0 - SMOOTHING_FACTOR) * current_duration.as_nanos() as f64 
+                                     + SMOOTHING_FACTOR * target_duration_nanos as f64) as u64;
         
         info!("[adaptive adjustment] adaptive_batch_enabled: {}, update wait_duration, wait_count: {}, wasted_wait_count: {}, \
             valid_wait_count: {}, wasted_wait_ratio: {:.2}, qps_baseline: {}, avg_qps: {}, qps_ratio: {:.2}, \
-            batch_achievement_ratio: {:.2}, adjustment_factor: {:.2}, target_duration: {}μs, \
+            batch_achievement_ratio: {:.2}, adjustment_factor: {:.2}, adjust_duration: {}us, target_duration: {}μs, \
             wait_duration: {}μs => {}μs, batch_size_hint: {}, batch_avg: {}, \
             batch_task_count_history: {:?}", 
             self.adaptive_batch_enabled, self.wait_count, self.wasted_wait_count, self.valid_wait_count, 
             wasted_wait_ratio, qps_baseline, avg_qps, qps_ratio, batch_achievement_ratio, adjustment_factor, 
-            target_duration_nanos / 1_000, current_duration.as_micros(), final_duration_nanos / 1_000, 
+            adjust_duration_nanos / 1_000,target_duration_nanos / 1_000, current_duration.as_micros(), smoothed_duration_nanos / 1_000, 
             batch_size_hint, batch_avg, self.batch_task_count_history);
         // Ensure new wait time is within reasonable range (10us to 1ms)
-        Duration::from_nanos(final_duration_nanos.clamp(RAFT_WB_WAIT_DURATION_LOWER_BOUND_NS, RAFT_WB_WAIT_DURATION_UPPER_BOUND_NS))
+        Duration::from_nanos(smoothed_duration_nanos.clamp(RAFT_WB_WAIT_DURATION_LOWER_BOUND_NS, RAFT_WB_WAIT_DURATION_UPPER_BOUND_NS))
     }
     
     /// Update baseline value history records
