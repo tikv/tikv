@@ -13,7 +13,7 @@ use azure_core::{
 };
 use azure_identity::{
     AutoRefreshingTokenCredential, ClientSecretCredential, DefaultAzureCredential,
-    TokenCredentialOptions,
+    TokenCredentialOptions, authority_hosts::AZURE_CHINA,
 };
 use azure_storage::{ConnectionString, ConnectionStringBuilder, prelude::*};
 use azure_storage_blobs::{blob::operations::PutBlockBlobBuilder, prelude::*};
@@ -680,12 +680,20 @@ impl AzureStorage {
                 client_builder,
             })
         } else if let Some(credential_info) = config.credential_info.as_ref() {
+            let is_china = matches!(
+                config.get_location(account_name.clone(), StorageCredentials::Anonymous),
+                azure_storage::CloudLocation::China { .. }
+            );
+            let mut opts = TokenCredentialOptions::default();
+            if is_china {
+                opts.set_authority_host(AZURE_CHINA.to_string());
+            }
             let cred = Arc::new(ClientSecretCredential::new(
                 new_http_client(),
                 credential_info.tenant_id.clone(),
                 credential_info.client_id.to_string(),
                 credential_info.client_secret.secret().clone(),
-                TokenCredentialOptions::default(),
+                opts,
             ));
             let location = config.get_location(
                 account_name.clone(),
