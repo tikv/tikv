@@ -114,19 +114,21 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number != '' && format('refs/pull/{0}/merge', inputs.pr_number) || github.event_name == 'issue_comment' && steps.pr_info.outputs.pr_number != '' && format('refs/pull/{0}/merge', steps.pr_info.outputs.pr_number) || github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 1
-      - name: Install CMake
+      - name: Install CMake 3.28
         run: |
-          brew install cmake
-          BREW_PREFIX=$(brew --prefix)
-          CMAKE_PATH="$BREW_PREFIX/bin/cmake"
-          echo "$BREW_PREFIX/bin" >> $GITHUB_PATH
-          echo "CMAKE=$CMAKE_PATH" >> $GITHUB_ENV
+          cd /tmp
+          curl -L -o cmake.tar.gz "https://github.com/Kitware/CMake/releases/download/v3.28.0/cmake-3.28.0-macos-universal.tar.gz"
+          tar -xzf cmake.tar.gz
           
-          echo "CMake path: $CMAKE_PATH"
-          $CMAKE_PATH --version
+          sudo mkdir -p /usr/local
+          sudo cp -R cmake-3.28.0-macos-universal/CMake.app/Contents/bin/* /usr/local/bin/
+          sudo cp -R cmake-3.28.0-macos-universal/CMake.app/Contents/share/* /usr/local/share/ || true
           
-          CMAKE_VERSION=$($CMAKE_PATH --version | head -n1 | awk '{print $3}')
-          echo "CMake version: $CMAKE_VERSION"
+          echo "/usr/local/bin" >> $GITHUB_PATH
+          echo "CMAKE=/usr/local/bin/cmake" >> $GITHUB_ENV
+          
+          /usr/local/bin/cmake --version
+          echo "CMake 3.28 installed"
       - name: Check for skip-ci
         id: skip
         run: |
