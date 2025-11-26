@@ -2,7 +2,6 @@ name: Clippy (Darwin AMD64)
 
 env:
   CMAKE_VERSION: "3.28.0"
-  CMAKE_URL: "https://github.com/Kitware/CMake/releases/download/v3.28.0/cmake-3.28.0-macos-universal.tar.gz"
 
 on:
   pull_request:
@@ -38,18 +37,23 @@ jobs:
       - name: Install CMake 3.28
         env:
           CMAKE_VERSION: ${{ env.CMAKE_VERSION }}
-          CMAKE_URL: ${{ env.CMAKE_URL }}
         run: |
+          CMAKE_VERSION="${{ env.CMAKE_VERSION }}"
+          CMAKE_URL="https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-macos-universal.tar.gz"
+          
           cd /tmp
           curl -L -o cmake.tar.gz "${CMAKE_URL}"
           tar -xzf cmake.tar.gz
           
-          sudo mkdir -p /usr/local
+          sudo mkdir -p /usr/local/bin
+          sudo mkdir -p /usr/local/share
           sudo cp -R cmake-${CMAKE_VERSION}-macos-universal/CMake.app/Contents/bin/* /usr/local/bin/
           sudo cp -R cmake-${CMAKE_VERSION}-macos-universal/CMake.app/Contents/share/* /usr/local/share/ || true
           
           echo "/usr/local/bin" >> $GITHUB_PATH
           echo "CMAKE=/usr/local/bin/cmake" >> $GITHUB_ENV
+
+          rm -rf cmake.tar.gz "cmake-${CMAKE_VERSION}-macos-universal"
           
           /usr/local/bin/cmake --version
           echo "CMake ${CMAKE_VERSION} installed"
