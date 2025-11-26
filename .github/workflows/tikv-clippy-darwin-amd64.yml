@@ -216,7 +216,7 @@ jobs:
               repo: context.repo.repo,
               sha: sha,
               state: 'failure',
-              context: 'idc-jenkins-ci-tikv/clippy-darwin-amd64',
+              context: 'ci-tikv/clippy-darwin-amd64',
               description: 'Clippy check failed',
               target_url: '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
             });
