@@ -44,19 +44,22 @@ jobs:
           cd /tmp
           curl -L -o cmake.tar.gz "${CMAKE_URL}"
           tar -xzf cmake.tar.gz
-          
-          sudo mkdir -p /usr/local/bin
-          sudo mkdir -p /usr/local/share
-          sudo cp -R cmake-${CMAKE_VERSION}-macos-universal/CMake.app/Contents/bin/* /usr/local/bin/
-          sudo cp -R cmake-${CMAKE_VERSION}-macos-universal/CMake.app/Contents/share/* /usr/local/share/ || true
-          
+
+          CMAKE_INSTALL_DIR="/usr/local/cmake-${CMAKE_VERSION}"
+          sudo mkdir -p "${CMAKE_INSTALL_DIR}"
+          sudo cp -R "cmake-${CMAKE_VERSION}-macos-universal/CMake.app" "${CMAKE_INSTALL_DIR}/"
+          sudo ln -sf "${CMAKE_INSTALL_DIR}/CMake.app/Contents/bin/cmake" /usr/local/bin/cmake
+          sudo ln -sf "${CMAKE_INSTALL_DIR}/CMake.app/Contents/bin/ctest" /usr/local/bin/ctest
+          sudo ln -sf "${CMAKE_INSTALL_DIR}/CMake.app/Contents/bin/cpack" /usr/local/bin/cpack
+
           echo "/usr/local/bin" >> $GITHUB_PATH
-          echo "CMAKE=/usr/local/bin/cmake" >> $GITHUB_ENV
+          echo "CMAKE_ROOT=${CMAKE_INSTALL_DIR}/CMake.app/Contents" >> $GITHUB_ENV
+          echo "CMAKE=${CMAKE_INSTALL_DIR}/CMake.app/Contents/bin/cmake" >> $GITHUB_ENV
 
           rm -rf cmake.tar.gz "cmake-${CMAKE_VERSION}-macos-universal"
           
           /usr/local/bin/cmake --version
-          echo "CMake ${CMAKE_VERSION} installed"
+          echo "CMake ${CMAKE_VERSION} installed to ${CMAKE_INSTALL_DIR}"
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
