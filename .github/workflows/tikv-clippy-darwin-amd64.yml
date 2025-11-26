@@ -138,14 +138,14 @@ jobs:
           if [[ "${{ github.event.pull_request.title }}" =~ $skip_pattern ]] || 
              [[ "${{ github.event.pull_request.body }}" =~ $skip_pattern ]]; then
             echo "skip=true" >> $GITHUB_OUTPUT
-            echo "⏭️ Skipping clippy check due to skip-ci in PR title/body"
+            echo "Skipping clippy check due to skip-ci in PR title/body"
             exit 0
           fi
           
           # Check comment body (for issue_comment events)
           if [[ "${{ github.event.comment.body }}" =~ $skip_pattern ]]; then
             echo "skip=true" >> $GITHUB_OUTPUT
-            echo "⏭️ Skipping clippy check due to skip-ci in comment"
+            echo "Skipping clippy check due to skip-ci in comment"
             exit 0
           fi
           
@@ -233,6 +233,6 @@ jobs:
                 issue_number: parseInt(prNumber),
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                body: '❌ Clippy check failed on macOS. Please check the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).'
+                body: 'Clippy check failed on macOS. Please check the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).'
               });
             }
