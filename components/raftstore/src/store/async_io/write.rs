@@ -742,6 +742,8 @@ where
     max_history_size: usize,
     /// QPS baseline value history records
     qps_baseline_history: VecDeque<u64>,
+    /// Batch achievement ratio history records (for detecting consecutive low ratios)
+    batch_achievement_ratio_history: VecDeque<f64>,
 }
 
 impl<EK, ER, N, T> Worker<EK, ER, N, T>
@@ -798,6 +800,7 @@ where
             valid_wait_count: 0,
             max_history_size: 100,
             qps_baseline_history: VecDeque::with_capacity(10), // Keep the latest 10 baseline samples
+            batch_achievement_ratio_history: VecDeque::with_capacity(3), // Keep the latest 3 ratios for consecutive check
         }
     }
 
@@ -948,7 +951,7 @@ where
     }
     
     /// Calculate adaptive wait duration based on QPS using exponential weighted moving average
-    fn calculate_adaptive_wait_duration(&self, avg_qps: u64, current_duration: Duration) -> Duration {
+    fn calculate_adaptive_wait_duration(&mut self, avg_qps: u64, current_duration: Duration) -> Duration {
         // Dynamically calculate QPS baseline
         let qps_baseline = if self.qps_baseline_history.len() >= 10 {
             let mut sorted_qps: Vec<u64> = self.qps_baseline_history.iter().cloned().collect();
@@ -984,6 +987,13 @@ where
         } else {
             1.0
         };
+        
+        // Update batch achievement ratio history for consecutive low ratio detection
+        self.batch_achievement_ratio_history.push_back(batch_achievement_ratio);
+        // Keep only the latest 3 records
+        if self.batch_achievement_ratio_history.len() > 3 {
+            self.batch_achievement_ratio_history.pop_front();
+        }
         
         // In high-concurrency scenarios, prioritize aggregation effectiveness over avoiding wasted waits
         // The key insight: when QPS is very high, even if wasted_wait_ratio is high, we should
@@ -1031,21 +1041,27 @@ where
         // Apply exponential weighted moving average for smoother transitions
         let adjust_duration_nanos = (current_duration.as_nanos() as f64 * adjustment_factor) as u64;
         // Special handling: when wait_duration is nearly at maximum (1ms) but batch_achievement_ratio
-        // is still below 0.5, it indicates that even with maximum wait time, we cannot achieve
-        // the target batch size (likely due to small request sizes and low client concurrency).
+        // is still below 0.5 for three consecutive times, it indicates that even with maximum wait time,
+        // we cannot achieve the target batch size (likely due to small request sizes and low client concurrency).
         // In this case, we should reduce wait_duration to achieve lower latency instead of
         // keeping it at maximum with no benefit.
+        // We require three consecutive low ratios to avoid oscillation and jitter.
         let target_duration_nanos = if current_duration.as_nanos() as u64 >= RAFT_WB_WAIT_DURATION_UPPER_BOUND_NS * 9 / 10 { 
-            if batch_achievement_ratio < 0.5 {
-                // If we're at or near maximum wait duration but still can't achieve good batching,
-                // reduce wait duration proportionally based on how far we are from the target.
+            // Check if we have at least 3 history records and all of them are below 0.5
+            let consecutive_low_ratio = self.batch_achievement_ratio_history.len() >= 3
+                && self.batch_achievement_ratio_history.iter().all(|&ratio| ratio < 0.5);
+            
+            if consecutive_low_ratio {
+                // If we're at or near maximum wait duration and batch_achievement_ratio has been
+                // below 0.5 for three consecutive times, reduce wait duration proportionally
+                // based on how far we are from the target.
                 // The reduction factor is based on batch_achievement_ratio: the lower the ratio,
                 // the more we reduce (but not too aggressively to avoid oscillation).
                 let reduction_factor = 0.95 + (batch_achievement_ratio - 0.5) * 0.3; // Range: [0.85, 0.95]
                 (adjust_duration_nanos as f64 * reduction_factor) as u64
             } else {
-                // If we're at or near maximum wait duration and batch_achievement_ratio is in [0.8, infinity),
-                // keep the current wait duration to maintain aggregation efficiency.
+                // If we're at or near maximum wait duration but haven't seen three consecutive
+                // low ratios, keep the adjusted duration to avoid jitter.
                 adjust_duration_nanos 
             }
         } else {
