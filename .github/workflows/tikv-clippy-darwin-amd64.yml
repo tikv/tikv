@@ -117,9 +117,16 @@ jobs:
       - name: Install CMake
         run: |
           brew install cmake
-          brew link --overwrite cmake
-          echo "$(brew --prefix)/bin" >> $GITHUB_PATH
-          cmake --version
+          BREW_PREFIX=$(brew --prefix)
+          CMAKE_PATH="$BREW_PREFIX/bin/cmake"
+          echo "$BREW_PREFIX/bin" >> $GITHUB_PATH
+          echo "CMAKE=$CMAKE_PATH" >> $GITHUB_ENV
+          
+          echo "CMake path: $CMAKE_PATH"
+          $CMAKE_PATH --version
+          
+          CMAKE_VERSION=$($CMAKE_PATH --version | head -n1 | awk '{print $3}')
+          echo "CMake version: $CMAKE_VERSION"
       - name: Check for skip-ci
         id: skip
         run: |
