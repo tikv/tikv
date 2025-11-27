@@ -1,4 +1,4 @@
-name: Clippy (Darwin ARM64)
+name: Clippy (Darwin)
 
 env:
   CMAKE_VERSION: "3.28.0"
@@ -25,10 +25,17 @@ permissions:
   contents: read
 
 jobs:
-  clippy-darwin-arm64:
-    name: Run Clippy on macOS
-    runs-on: macos-15
+  clippy-darwin:
+    name: Run Clippy on macOS (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: macos-15-intel
+          - arch: arm64
+            runner: macos-15
 
     steps:
       - name: Checkout code
@@ -74,9 +81,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target/
-          key: ${{ runner.os }}-arm64-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ matrix.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-arm64-cargo-
+            ${{ runner.os }}-${{ matrix.arch }}-cargo-
 
       - name: Run Clippy
         run: |
