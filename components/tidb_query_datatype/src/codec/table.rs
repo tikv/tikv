@@ -562,7 +562,7 @@ pub trait RowHandle: Eq + Ord + Clone + Debug + Send + Sync {
     fn from_lazy_batch_column_vec(
         ctx: &mut EvalContext,
         cols: &mut LazyBatchColumnVec,
-        logical_rows: &Vec<usize>,
+        logical_rows: &[usize],
         handle_offsets: &[usize],
         handle_types: &[FieldType],
     ) -> Result<Vec<Self>>;
@@ -598,7 +598,7 @@ impl RowHandle for IntHandle {
     fn from_lazy_batch_column_vec(
         ctx: &mut EvalContext,
         cols: &mut LazyBatchColumnVec,
-        logical_rows: &Vec<usize>,
+        logical_rows:&[usize],
         handle_offsets: &[usize],
         handle_types: &[FieldType],
     ) -> Result<Vec<Self>> {
@@ -682,7 +682,7 @@ impl RowHandle for CommonHandle {
     fn from_lazy_batch_column_vec(
         ctx: &mut EvalContext,
         cols: &mut LazyBatchColumnVec,
-        logical_rows: &Vec<usize>,
+        logical_rows:&[usize],
         handle_offsets: &[usize],
         handle_types: &[FieldType],
     ) -> Result<Vec<Self>> {
@@ -705,6 +705,22 @@ impl RowHandle for CommonHandle {
             }
             let col = cols[offset].into_column(ctx, &logical_rows, &handle_types[i])?;
             handle_columns.push(col);
+        }
+
+        for tp in handle_types {
+            if matches!(
+                tp.tp(),
+                FieldTypeTp::NewDecimal
+                    | FieldTypeTp::Enum
+                    | FieldTypeTp::Set
+                    | FieldTypeTp::Bit
+                    | FieldTypeTp::Year
+            ) {
+                return Err(box_err!(
+                    "The column type {:?} for CommonHandle is unsupported.",
+                    tp.tp()
+                ));
+            }
         }
 
         let mut handles = Vec::with_capacity(logical_rows.len());
