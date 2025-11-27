@@ -264,13 +264,22 @@ impl LazyBatchColumn {
         field_type: &FieldType,
         output: &mut Vec<u8>,
     ) -> Result<()> {
-        let column = match self {
-            LazyBatchColumn::Raw(v) => Column::from_raw_datums(field_type, v, logical_rows, ctx)?,
-            LazyBatchColumn::Decoded(ref v) => {
-                Column::from_vector_value(field_type, v, logical_rows)?
-            }
-        };
+        let column = self.into_column(ctx, logical_rows, field_type)?;
         output.write_chunk_column(&column)
+    }
+
+    pub fn into_column(
+        &self,
+        ctx: &mut EvalContext,
+        logical_rows: &[usize],
+        field_type: &FieldType,
+    ) -> Result<Column> {
+        match self {
+            LazyBatchColumn::Raw(v) => Column::from_raw_datums(field_type, v, logical_rows, ctx),
+            LazyBatchColumn::Decoded(ref v) => {
+                Column::from_vector_value(field_type, v, logical_rows)
+            }
+        }
     }
 }
 

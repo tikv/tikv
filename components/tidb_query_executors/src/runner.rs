@@ -15,7 +15,7 @@ use tidb_query_common::{
 };
 use tidb_query_datatype::{
     EvalType, FieldTypeAccessor,
-    codec::table::IntHandle,
+    codec::table::{CommonHandle, IntHandle},
     expr::{EvalConfig, EvalContext, EvalWarnings},
 };
 use tikv_util::{
@@ -492,10 +492,19 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
                 }
 
                 let tbl_scan = child.take_tbl_scan();
-                if !tbl_scan.get_primary_column_ids().is_empty() {
-                    return Err(other_err!("Common handle is not supported in index lookup"));
-                } else {
+                if tbl_scan.get_primary_column_ids().is_empty() {
                     let e = build_index_lookup_executor::<_, IntHandle, F>(
+                        config.clone(),
+                        executor,
+                        ed.take_index_lookup(),
+                        tbl_scan,
+                        extra_storage_accessor.clone(),
+                        channel_ids[0],
+                        summary_slot_index - 1,
+                    )?;
+                    Box::new(e.collect_summary(summary_slot_index))
+                } else {
+                    let e = build_index_lookup_executor::<_, CommonHandle, F>(
                         config.clone(),
                         executor,
                         ed.take_index_lookup(),
