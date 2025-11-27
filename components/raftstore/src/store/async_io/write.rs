@@ -787,7 +787,7 @@ where
             
             // Adaptive batching initialization
             adaptive_batch_enabled: cfg.value().adaptive_batch_enabled,
-            qps_history: VecDeque::with_capacity(100),     // Keep the latest 10 QPS samples
+            qps_history: VecDeque::with_capacity(100),     // Keep the latest 100 QPS samples
             batch_task_count_history: VecDeque::with_capacity(10),     // Keep the latest 10 QPS samples
             last_adaptive_update: Instant::now(),
             last_qps_stat: Instant::now(),
@@ -1064,7 +1064,7 @@ where
             batch_task_count_history: {:?}", 
             self.adaptive_batch_enabled, self.wait_count, self.wasted_wait_count, self.valid_wait_count, 
             wasted_wait_ratio, qps_baseline, avg_qps, qps_ratio, batch_achievement_ratio, adjustment_factor, 
-            adjust_duration_nanos / 1_000,target_duration_nanos / 1_000, current_duration.as_micros(), smoothed_duration_nanos / 1_000, 
+            adjust_duration_nanos / 1_000, target_duration_nanos / 1_000, current_duration.as_micros(), smoothed_duration_nanos / 1_000, 
             batch_size_hint, batch_avg, self.batch_task_count_history);
         // Ensure new wait time is within reasonable range (10us to 1ms)
         Duration::from_nanos(smoothed_duration_nanos.clamp(RAFT_WB_WAIT_DURATION_LOWER_BOUND_NS, RAFT_WB_WAIT_DURATION_UPPER_BOUND_NS))
@@ -1074,8 +1074,8 @@ where
     fn update_baseline_history(&mut self, qps: u64) {
         self.qps_baseline_history.push_back(qps);
         
-        // Keep more history for baseline calculation (10x the normal history)
-        if self.qps_baseline_history.len() > self.max_history_size * 10 {
+        // Keep history for baseline calculation with same size as the history
+        if self.qps_baseline_history.len() > self.max_history_size {
             self.qps_baseline_history.pop_front();
         }
     }
