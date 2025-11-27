@@ -1125,6 +1125,7 @@ where
         router: RaftRouter<EK, ER>,
         scheduler: Scheduler<Task<EK>>,
         pd_client: Arc<T>,
+        split_auditor: SplitAuditor,
         mut region: metapb::Region,
         mut split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
@@ -1138,6 +1139,9 @@ where
         if split_keys.is_empty() {
             info!("empty split key, skip ask batch split";
                 "region_id" => region.get_id());
+            return;
+        }
+        if reason != pdpb::AutoSplitReason::Admin && split_auditor.is_disabled(region.get_id()) {
             return;
         }
         let resp = pd_client.ask_batch_split(region.clone(), split_keys.len(), reason);
@@ -2248,6 +2252,7 @@ where
                 self.router.clone(),
                 self.scheduler.clone(),
                 self.pd_client.clone(),
+                self.split_auditor.clone(),
                 region,
                 split_keys,
                 peer,
@@ -2263,6 +2268,7 @@ where
                 let router = self.router.clone();
                 let scheduler = self.scheduler.clone();
                 let remote = self.remote.clone();
+                let split_auditor = self.split_auditor.clone();
 
                 let f = async move {
                     for split_info in split_infos {
@@ -2277,6 +2283,7 @@ where
                                 router.clone(),
                                 scheduler.clone(),
                                 pd_client.clone(),
+                                split_auditor.clone(),
                                 region,
                                 vec![split_key],
                                 split_info.peer,
