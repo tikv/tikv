@@ -6573,8 +6573,8 @@ where
         }
         let region = self.fsm.peer.region();
         let auto_split_reason = match source {
-            "split checker by size" => AutoSplitReason::Size,
-            "split checker by load" => AutoSplitReason::Load,
+            "split_checker_by_size" => AutoSplitReason::Size,
+            "split_checker_by_load" => AutoSplitReason::Load,
             _ => AutoSplitReason::Admin,
         };
         let task = PdTask::AskBatchSplit {

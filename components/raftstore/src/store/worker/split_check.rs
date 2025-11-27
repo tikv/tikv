@@ -752,8 +752,8 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
 
             let region_epoch = region.get_region_epoch().clone();
             let source = match auto_split_reason {
-                AutoSplitReason::Size => "split checker by size",
-                AutoSplitReason::Load => "split checker by load",
+                AutoSplitReason::Size => "split_checker_by_size",
+                AutoSplitReason::Load => "split_checker_by_load",
                 _ => "split checker by admin",
             };
             self.router
