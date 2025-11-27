@@ -29,7 +29,9 @@ use tikv_util::{
 use crate::store::{
     metrics::*,
     util::build_key_range,
-    worker::{FlowStatistics, SplitAuditor, SplitConfig, SplitConfigManager, split_config::get_sample_num},
+    worker::{
+        FlowStatistics, SplitAuditor, SplitConfig, SplitConfigManager, split_config::get_sample_num,
+    },
 };
 
 const DEFAULT_MAX_SAMPLE_LOOP_COUNT: usize = 10000;
