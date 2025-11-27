@@ -41,7 +41,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         
-      - name: Install CMake 3.28
+      - name: Install CMake
         env:
           CMAKE_VERSION: ${{ env.CMAKE_VERSION }}
         run: |
