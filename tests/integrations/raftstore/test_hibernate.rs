@@ -10,7 +10,7 @@ use futures::executor::block_on;
 use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use test_raftstore::*;
-use tikv_util::{HandyRwLock, time::Instant};
+use tikv_util::{HandyRwLock, config::ReadableDuration, time::Instant};
 
 #[test]
 fn test_proposal_prevent_sleep() {
@@ -498,4 +498,277 @@ fn test_leader_demoted_when_hibernated() {
     // be demoted as learner.
     cluster.must_put(b"k1", b"v1");
     cluster.must_put(b"k2", b"v2");
+}
+
+/// Tests whether leader can hibernate when some voter is down.
+#[test]
+fn test_hibernate_quorum_feature_basic() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_hibernate(&mut cluster.cfg);
+    cluster.run();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    // Wait till leader peer goes to sleep.
+    thread::sleep(
+        cluster.cfg.raft_store.raft_base_tick_interval.0
+            * 3
+            * cluster.cfg.raft_store.raft_election_timeout_ticks as u32,
+    );
+    let awakened = Arc::new(AtomicBool::new(false));
+    let filter = Arc::new(AtomicBool::new(false));
+    let a = awakened.clone();
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(1, 1)
+            .direction(Direction::Send)
+            .set_msg_callback(Arc::new(move |_| {
+                a.store(true, Ordering::SeqCst);
+            }))
+            .when(filter.clone()),
+    ));
+    filter.store(true, Ordering::SeqCst);
+    thread::sleep(cluster.cfg.raft_store.raft_heartbeat_interval() * 2);
+    assert!(!awakened.load(Ordering::SeqCst));
+
+    // Put some data to make leader exit hibernation.
+    cluster.clear_send_filters(); // clear filters before putting data
+    cluster.must_put(b"k2", b"v2");
+    must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
+    // Must wait here for replication to finish before stopping node.
+    thread::sleep(Duration::from_millis(1000));
+
+    // Simulate one voter down.
+    cluster.stop_node(3);
+    thread::sleep(cluster.cfg.raft_store.max_peer_down_duration.0 * 2 as u32);
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    cluster.reset_leader_of_region(1);
+    assert_eq!(cluster.leader_of_region(1), Some(new_peer(1, 1)));
+
+    filter.store(false, Ordering::SeqCst);
+    awakened.store(false, Ordering::SeqCst);
+    let a = awakened.clone();
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(1, 1)
+            .direction(Direction::Send)
+            .set_msg_callback(Arc::new(move |_| {
+                a.store(true, Ordering::SeqCst);
+            }))
+            .when(filter.clone()),
+    ));
+    // Wait till leader peer goes to sleep.
+    thread::sleep(
+        cluster.cfg.raft_store.raft_base_tick_interval.0
+            * 3
+            * cluster.cfg.raft_store.raft_election_timeout_ticks as u32,
+    );
+    filter.store(true, Ordering::SeqCst);
+    thread::sleep(cluster.cfg.raft_store.raft_heartbeat_interval() * 2);
+    // Leader can go to sleep as voters can reach majority.
+    assert!(!awakened.load(Ordering::SeqCst));
+
+    // Start voter again.
+    cluster.clear_send_filters();
+    cluster.run_node(3).unwrap();
+    thread::sleep(cluster.cfg.raft_store.max_peer_down_duration.0 * 2 as u32);
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    cluster.reset_leader_of_region(1);
+    assert_eq!(cluster.leader_of_region(1), Some(new_peer(1, 1)));
+    // add send filter again
+    filter.store(false, Ordering::SeqCst);
+    awakened.store(false, Ordering::SeqCst);
+    let a = awakened.clone();
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(1, 1)
+            .direction(Direction::Send)
+            .set_msg_callback(Arc::new(move |_| {
+                a.store(true, Ordering::SeqCst);
+            }))
+            .when(filter.clone()),
+    ));
+    // Wait till leader peer goes to sleep.
+    thread::sleep(
+        cluster.cfg.raft_store.raft_base_tick_interval.0
+            * 3
+            * cluster.cfg.raft_store.raft_election_timeout_ticks as u32,
+    );
+    filter.store(true, Ordering::SeqCst);
+    thread::sleep(cluster.cfg.raft_store.raft_heartbeat_interval() * 2);
+    // Leader can go to sleep after down voter recover.
+    assert!(!awakened.load(Ordering::SeqCst));
+
+    cluster.clear_send_filters(); // clear filters before putting data
+    cluster.must_put(b"k4", b"v4");
+    must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
+}
+
+/// Tests whether leader can hibernate when one learner is down.
+#[test]
+fn test_hibernate_quorum_feature_down_learner() {
+    let mut cluster = new_server_cluster(0, 4);
+    configure_for_hibernate(&mut cluster.cfg);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(20);
+    cluster.pd_client.disable_default_operator();
+    cluster.run_conf_change();
+    cluster.pd_client.must_add_peer(1, new_peer(2, 2));
+    cluster.pd_client.must_add_peer(1, new_peer(3, 3));
+
+    cluster.pd_client.must_add_peer(1, new_learner_peer(4, 4));
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(4), b"k1", b"v1");
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    // Wait till leader peer goes to sleep.
+    thread::sleep(
+        cluster.cfg.raft_store.raft_base_tick_interval.0
+            * 3
+            * cluster.cfg.raft_store.raft_election_timeout_ticks as u32,
+    );
+    let awakened = Arc::new(AtomicBool::new(false));
+    let filter = Arc::new(AtomicBool::new(false));
+    let a = awakened.clone();
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(1, 1)
+            .direction(Direction::Send)
+            .set_msg_callback(Arc::new(move |_| {
+                a.store(true, Ordering::SeqCst);
+            }))
+            .when(filter.clone()),
+    ));
+    filter.store(true, Ordering::SeqCst);
+    thread::sleep(cluster.cfg.raft_store.raft_heartbeat_interval() * 2);
+    assert!(!awakened.load(Ordering::SeqCst));
+
+    // Simulate one learner down.
+    cluster.stop_node(4);
+    thread::sleep(cluster.cfg.raft_store.max_peer_down_duration.0 * 2 as u32);
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    cluster.reset_leader_of_region(1);
+    assert_eq!(cluster.leader_of_region(1), Some(new_peer(1, 1)));
+
+    filter.store(false, Ordering::SeqCst);
+    awakened.store(false, Ordering::SeqCst);
+    // Wait till leader peer goes to sleep.
+    thread::sleep(
+        cluster.cfg.raft_store.raft_base_tick_interval.0
+            * 3
+            * cluster.cfg.raft_store.raft_election_timeout_ticks as u32,
+    );
+    filter.store(true, Ordering::SeqCst);
+    thread::sleep(cluster.cfg.raft_store.raft_heartbeat_interval() * 2);
+    // Leader can go to sleep as voters can reach majority.
+    assert!(!awakened.load(Ordering::SeqCst));
+
+    // Start learner again.
+    cluster.clear_send_filters();
+    cluster.run_node(4).unwrap();
+    thread::sleep(cluster.cfg.raft_store.max_peer_down_duration.0 * 2 as u32);
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    cluster.reset_leader_of_region(1);
+    assert_eq!(cluster.leader_of_region(1), Some(new_peer(1, 1)));
+    // add send filter again
+    filter.store(false, Ordering::SeqCst);
+    awakened.store(false, Ordering::SeqCst);
+    let a = awakened.clone();
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(1, 1)
+            .direction(Direction::Send)
+            .set_msg_callback(Arc::new(move |_| {
+                a.store(true, Ordering::SeqCst);
+            }))
+            .when(filter.clone()),
+    ));
+    // Wait till leader peer goes to sleep.
+    thread::sleep(
+        cluster.cfg.raft_store.raft_base_tick_interval.0
+            * 3
+            * cluster.cfg.raft_store.raft_election_timeout_ticks as u32,
+    );
+    filter.store(true, Ordering::SeqCst);
+    thread::sleep(cluster.cfg.raft_store.raft_heartbeat_interval() * 2);
+    // Leader can go to sleep after down learner recover.
+    assert!(!awakened.load(Ordering::SeqCst));
+
+    cluster.clear_send_filters(); // clear filters before putting data
+    cluster.must_put(b"k3", b"v3");
+    must_get_equal(&cluster.get_engine(4), b"k3", b"v3");
+}
+
+/// Test senario: keep max_peer_down_duration unchanged and down one voter to
+/// check whether leader cannot hibernate in short time(before
+/// max_peer_down_duration elasped).
+#[test]
+fn test_hibernate_quorum_feature_voter_down_shortly() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_hibernate(&mut cluster.cfg);
+    cluster.cfg.raft_store.max_peer_down_duration = ReadableDuration::secs(600); // keep it unchanged
+    cluster.run();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    // Wait till leader peer goes to sleep.
+    thread::sleep(
+        cluster.cfg.raft_store.raft_base_tick_interval.0
+            * 3
+            * cluster.cfg.raft_store.raft_election_timeout_ticks as u32,
+    );
+    let awakened = Arc::new(AtomicBool::new(false));
+    let filter = Arc::new(AtomicBool::new(false));
+    let a = awakened.clone();
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(1, 1)
+            .direction(Direction::Send)
+            .set_msg_callback(Arc::new(move |_| {
+                a.store(true, Ordering::SeqCst);
+            }))
+            .when(filter.clone()),
+    ));
+    filter.store(true, Ordering::SeqCst);
+    thread::sleep(cluster.cfg.raft_store.raft_heartbeat_interval() * 2);
+    assert!(!awakened.load(Ordering::SeqCst));
+
+    cluster.clear_send_filters(); // clear filters before putting data
+    cluster.must_put(b"k2", b"v2");
+    must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
+    // Must wait for replication to finish before stopping node.
+    thread::sleep(Duration::from_millis(1000));
+
+    // Simulate one voter down.
+    cluster.stop_node(3);
+    // Ensure leader is node 1.
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    cluster.reset_leader_of_region(1);
+    assert_eq!(cluster.leader_of_region(1), Some(new_peer(1, 1)));
+    // change leader to node 2 to make sure leader knows node-3 is down
+    cluster.must_transfer_leader(1, new_peer(2, 2));
+    cluster.reset_leader_of_region(1);
+    assert_eq!(cluster.leader_of_region(1), Some(new_peer(2, 2)));
+    // Except changing leader, we can also put some data to make leader know voter
+    // is down. cluster.must_put(b"k3", b"v3");
+    // must_get_equal(&cluster.get_engine(1), b"k3", b"v3");
+    // add send filter again
+    filter.store(false, Ordering::SeqCst);
+    awakened.store(false, Ordering::SeqCst);
+    let a = awakened.clone();
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(1, 2)
+            .direction(Direction::Send)
+            .set_msg_callback(Arc::new(move |_| {
+                a.store(true, Ordering::SeqCst);
+            }))
+            .when(filter.clone()),
+    ));
+    // Wait till leader peer goes to sleep.
+    thread::sleep(
+        cluster.cfg.raft_store.raft_base_tick_interval.0
+            * 3
+            * cluster.cfg.raft_store.raft_election_timeout_ticks as u32,
+    );
+    filter.store(true, Ordering::SeqCst);
+    thread::sleep(cluster.cfg.raft_store.raft_heartbeat_interval() * 2);
+    // Leader is awake because down voter is not detected (need 10min).
+    assert!(awakened.load(Ordering::SeqCst));
+
+    cluster.clear_send_filters();
+    cluster.must_put(b"k3", b"v3");
+    must_get_equal(&cluster.get_engine(1), b"k3", b"v3");
 }
