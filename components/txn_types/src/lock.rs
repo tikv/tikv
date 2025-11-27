@@ -1003,8 +1003,8 @@ mod tests {
             ),
             (
                 Mutation::make_shared_lock(Key::from_raw(key)),
-                LockType::Shared,
-                FLAG_SHARED,
+                LockType::Lock,
+                FLAG_LOCK,
             ),
         ];
         for (i, (mutation, lock_type, flag)) in tests.drain(..).enumerate() {
