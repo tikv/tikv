@@ -1,7 +1,10 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{KvEngine, Range};
-use kvproto::{metapb::Region, pdpb::CheckPolicy};
+use kvproto::{
+    metapb::Region,
+    pdpb::{AutoSplitReason, CheckPolicy},
+};
 use tikv_util::{box_try, config::ReadableSize};
 
 use super::{
@@ -230,7 +233,7 @@ mod tests {
             region.clone(),
             Some(start_key),
             Some(end_key),
-            false,
+            AutoSplitReason::Admin,
             CheckPolicy::Scan,
             None,
         ));
@@ -242,7 +245,7 @@ mod tests {
             region.clone(),
             Some(start_key),
             Some(end_key),
-            false,
+            AutoSplitReason::Admin,
             CheckPolicy::Scan,
             None,
         ));
@@ -254,7 +257,7 @@ mod tests {
             region.clone(),
             Some(start_key),
             Some(end_key),
-            false,
+            AutoSplitReason::Admin,
             CheckPolicy::Scan,
             None,
         ));

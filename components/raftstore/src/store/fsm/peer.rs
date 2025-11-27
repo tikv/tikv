@@ -31,7 +31,7 @@ use kvproto::{
     import_sstpb::SwitchMode,
     kvrpcpb::DiskFullOpt,
     metapb::{self, Region, RegionEpoch},
-    pdpb::{self, CheckPolicy},
+    pdpb::{self, AutoSplitReason, CheckPolicy},
     raft_cmdpb::{
         AdminCmdType, AdminRequest, CmdType, PutRequest, RaftCmdRequest, RaftCmdResponse, Request,
         StatusCmdType, StatusResponse,
@@ -6572,6 +6572,11 @@ where
             return;
         }
         let region = self.fsm.peer.region();
+        let auto_split_reason = match source {
+            "split checker by size" => AutoSplitReason::Size,
+            "split checker by load" => AutoSplitReason::Load,
+            _ => AutoSplitReason::Admin,
+        };
         let task = PdTask::AskBatchSplit {
             region: region.clone(),
             split_keys,
@@ -6579,6 +6584,7 @@ where
             right_derive: self.ctx.cfg.right_derive_when_split,
             share_source_region_size,
             callback: cb,
+            auto_split_reason,
         };
         if let Err(ScheduleError::Stopped(t)) = self.ctx.pd_scheduler.schedule(task) {
             warn!(
@@ -6841,11 +6847,16 @@ where
         if source == "bucket" {
             return;
         }
+        let reason = if source == "auto_split" {
+            AutoSplitReason::Load
+        } else {
+            AutoSplitReason::Admin
+        };
         let task = SplitCheckTask::split_check_key_range(
             region.clone(),
             start_key,
             end_key,
-            false,
+            reason,
             policy,
             split_check_bucket_ranges,
         );
