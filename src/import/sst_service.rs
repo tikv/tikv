@@ -913,7 +913,6 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         }
         let importer = Arc::clone(&self.importer);
         let limiter = self.limiter.clone();
-        let mem_limit = self.mem_limit;
         let tablets = self.tablets.clone();
         let start = Instant::now();
         let resource_limiter = self.resource_manager.as_ref().and_then(|r| {
@@ -1022,7 +1021,6 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         }
         let importer = Arc::clone(&self.importer);
         let limiter = self.limiter.clone();
-        let mem_limit = self.mem_limit;
         let tablets = self.tablets.clone();
         let start = Instant::now();
         let resource_limiter = self.resource_manager.as_ref().and_then(|r| {
@@ -1040,16 +1038,6 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             sst_importer::metrics::IMPORTER_DOWNLOAD_DURATION
                 .with_label_values(&["queue"])
                 .observe(start.saturating_elapsed().as_secs_f64());
-
-            let mut resp = DownloadResponse::default();
-            match check_import_resources(mem_limit).await {
-                Ok(()) => (),
-                Err(e) => {
-                    resp.set_error(e.into());
-                    crate::send_rpc_response!(Ok(resp), sink, label, timer);
-                    return;
-                }
-            }
 
             // FIXME: batch_download() should be an async fn, to allow BR to cancel
             // a download task.
