@@ -6547,6 +6547,7 @@ dependencies = [
  "test_sst_importer",
  "test_util",
  "thiserror 1.0.40",
+ "tikv",
  "tikv_alloc",
  "tikv_util",
  "tokio",
