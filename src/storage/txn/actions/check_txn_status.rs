@@ -306,6 +306,7 @@ pub fn rollback_lock(
     is_pessimistic_txn: bool,
     collapse_rollback: bool,
 ) -> Result<Option<ReleasedLock>> {
+    assert!(!lock.is_shared());
     let overlapped_write = match reader.get_txn_commit_record(&key)? {
         TxnCommitRecord::None { overlapped_write } => overlapped_write,
         TxnCommitRecord::SingleRecord { write, commit_ts }
@@ -354,6 +355,67 @@ pub fn rollback_lock(
     }
 
     Ok(txn.unlock_key(key, is_pessimistic_txn, TimeStamp::zero()))
+}
+
+pub fn rollback_shared_lock(
+    txn: &mut MvccTxn,
+    reader: &mut SnapshotReader<impl Snapshot>,
+    key: Key,
+    mut shared_lock: Lock,
+    lock_ts: TimeStamp,
+    collapse_rollback: bool,
+) -> Result<Option<ReleasedLock>> {
+    assert!(shared_lock.is_shared());
+
+    let lock = match shared_lock.remove_shared_lock(lock_ts)? {
+        Some(l) => l,
+        None => {
+            // misuse of rollback_shared_lock? maybe print a warning with stack?
+            return Ok(None);
+        }
+    };
+
+    let overlapped_write = match reader.get_txn_commit_record(&key)? {
+        TxnCommitRecord::None { overlapped_write } => overlapped_write,
+        TxnCommitRecord::SingleRecord { write, commit_ts }
+            if write.write_type != WriteType::Rollback =>
+        {
+            panic!(
+                "txn record found but not expected: {:?} {} {:?} {:?} [region_id={}]",
+                write,
+                commit_ts,
+                txn,
+                lock,
+                reader.reader.snapshot_ext().get_region_id().unwrap_or(0)
+            )
+        }
+        _ => {
+            return if shared_lock.shared_lock_num() == 0 {
+                Ok(txn.unlock_key(key, true, TimeStamp::zero()))
+            } else {
+                txn.put_lock(key.clone(), &shared_lock, false);
+                Ok(None)
+            };
+        }
+    };
+
+    // `protected` is always false for a shared lock
+    assert!(!key.is_encoded_from(&lock.primary));
+    assert!(lock.generation == 0);
+    if let Some(write) = make_rollback(reader.start_ts, false, overlapped_write) {
+        txn.put_write(key.clone(), reader.start_ts, write.as_ref().to_bytes());
+    }
+
+    if collapse_rollback {
+        collapse_prev_rollback(txn, reader, &key)?;
+    }
+
+    if shared_lock.shared_lock_num() == 0 {
+        Ok(txn.unlock_key(key, true, TimeStamp::zero()))
+    } else {
+        txn.put_lock(key.clone(), &shared_lock, false);
+        Ok(None)
+    }
 }
 
 pub fn collapse_prev_rollback(

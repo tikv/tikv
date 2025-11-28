@@ -2081,3 +2081,96 @@ fn test_shared_exclusive_lock_conflict() {
         other => panic!("unexpected lock error: {:?}", other),
     }
 }
+
+#[test]
+#[allow(unused)]
+fn test_resolve_shared_locks() {
+    let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
+        .build()
+        .unwrap();
+    let shared_key = b"resolve-shared-lock".to_vec();
+    let pk = b"resolve-shared-lock-pk".to_vec();
+
+    let acquire_lock = |start_ts: u64, is_shared: bool| {
+        let (done_tx, done_rx) = channel();
+        storage
+            .sched_txn_command(
+                new_acquire_pessimistic_lock_command_with_pk_with_shared(
+                    vec![(Key::from_raw(&shared_key), false, is_shared)],
+                    Some(&pk.clone()),
+                    start_ts,
+                    start_ts,
+                    false,
+                    false,
+                ),
+                Box::new(
+                    move |res: storage::Result<
+                        std::result::Result<PessimisticLockResults, StorageError>,
+                    >| done_tx.send(res).unwrap(),
+                ),
+            )
+            .unwrap();
+        done_rx
+    };
+
+    for ts in [10, 20] {
+        acquire_lock(ts, true).recv().unwrap().unwrap();
+    }
+    let exclusive_lock = acquire_lock(30, false);
+    exclusive_lock.try_recv().unwrap_err();
+
+    let load_lock = || {
+        let snapshot = storage.get_engine().snapshot(Default::default()).unwrap();
+        let mut reader = MvccReader::new(snapshot, None, true);
+        reader.load_lock(&Key::from_raw(&shared_key)).unwrap()
+    };
+
+    let mut lock = load_lock().unwrap();
+    assert!(lock.is_shared());
+    assert_eq!(lock.shared_lock_num(), 2);
+
+    let resolve_lock = |txn_status: HashMap<TimeStamp, TimeStamp>,
+                        key_locks: Vec<(Key, txn_types::Lock)>| {
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::ResolveLock::new(txn_status, None, key_locks, Context::default()),
+                expect_ok_callback(tx, 0),
+            )
+            .unwrap();
+        rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    };
+
+    let mut txn_status = HashMap::default();
+    txn_status.insert(TimeStamp::from(10), 0.into());
+    resolve_lock(
+        txn_status,
+        vec![(
+            Key::from_raw(&shared_key),
+            lock.find_shared_lock_txn(TimeStamp::from(10))
+                .unwrap()
+                .unwrap()
+                .clone(),
+        )],
+    );
+    let mut lock = load_lock().unwrap();
+    assert!(lock.is_shared());
+    assert_eq!(lock.shared_lock_num(), 1);
+    assert!(lock.contains_start_ts(TimeStamp::from(20)));
+    exclusive_lock.try_recv().unwrap_err();
+
+    let mut txn_status = HashMap::default();
+    txn_status.insert(TimeStamp::from(20), 0.into());
+    resolve_lock(
+        txn_status,
+        vec![(
+            Key::from_raw(&shared_key),
+            lock.find_shared_lock_txn(TimeStamp::from(20))
+                .unwrap()
+                .unwrap()
+                .clone(),
+        )],
+    );
+    assert!(load_lock().is_none());
+    exclusive_lock.try_recv().unwrap();
+}

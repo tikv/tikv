@@ -72,7 +72,18 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
         ));
 
         let lock = match reader.load_lock(&self.primary_key)? {
-            Some(mut lock) if lock.ts == self.start_ts => {
+            Some(mut lock) if lock.contains_start_ts(self.start_ts) => {
+                let (mut lock, maybe_shared_lock) = if lock.is_shared() {
+                    match lock
+                        .remove_shared_lock(self.start_ts)
+                        .map_err(MvccError::from)?
+                    {
+                        Some(l) => (l, Some(lock)),
+                        _ => unreachable!(), // since lock.contains_start_ts returned true
+                    }
+                } else {
+                    (lock, None)
+                };
                 let mut updated = false;
 
                 if lock.ttl < self.advise_ttl {
@@ -89,10 +100,20 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
                 {
                     lock.min_commit_ts = self.min_commit_ts.into();
                     updated = true;
+                    if maybe_shared_lock.is_some() {
+                        return Err(box_err!(
+                            "pipelined transaction should not hold shared locks"
+                        ));
+                    }
                 }
 
                 if updated {
-                    txn.put_lock(self.primary_key.clone(), &lock, false);
+                    if let Some(mut shared_lock) = maybe_shared_lock {
+                        shared_lock.put_shared_lock(lock.clone());
+                        txn.put_lock(self.primary_key.clone(), &shared_lock, false);
+                    } else {
+                        txn.put_lock(self.primary_key.clone(), &lock, false);
+                    }
                 }
 
                 lock

@@ -12,8 +12,8 @@ use raftstore::store::{LocksStatus, PeerPessimisticLocks};
 use tikv_kv::{SnapshotExt, SEEK_BOUND};
 use tikv_util::time::Instant;
 use txn_types::{
-    Key, LastChange, Lock, OldValue, PessimisticLock, TimeStamp, TxnLockRef, Value, Write,
-    WriteRef, WriteType,
+    Key, LastChange, Lock, LockType, OldValue, PessimisticLock, TimeStamp, TxnLockRef, Value,
+    Write, WriteRef, WriteType,
 };
 
 use crate::storage::{
@@ -339,10 +339,23 @@ impl<S: EngineSnapshot> MvccReader<S> {
                         return Ok(None);
                     }
                 }
-                let lock = Lock::parse(cursor.value(&mut self.statistics.lock))?;
-                if filter(&key, TxnLockRef::Persisted(&lock)) {
-                    self.statistics.lock.processed_keys += 1;
-                    return Ok(Some((key, lock)));
+                let mut lock = Lock::parse(cursor.value(&mut self.statistics.lock))?;
+                match lock.lock_type {
+                    LockType::Shared => {
+                        lock.filter_shared_locks(|shared_lock| {
+                            filter(&key, TxnLockRef::Persisted(shared_lock))
+                        })?;
+                        if lock.shared_lock_num() > 0 {
+                            self.statistics.lock.processed_keys += 1;
+                            return Ok(Some((key, lock)));
+                        }
+                    }
+                    _ => {
+                        if filter(&key, TxnLockRef::Persisted(&lock)) {
+                            self.statistics.lock.processed_keys += 1;
+                            return Ok(Some((key, lock)));
+                        }
+                    }
                 }
                 cursor.next(&mut self.statistics.lock);
             }
@@ -730,13 +743,23 @@ impl<S: EngineSnapshot> MvccReader<S> {
                 }
             }
 
-            let lock = Lock::parse(cursor.value(&mut self.statistics.lock))?;
-            if filter(&key, &lock) {
-                locks.push((key, lock));
-                if limit > 0 && locks.len() == limit {
-                    has_remain = true;
-                    break;
+            let mut lock = Lock::parse(cursor.value(&mut self.statistics.lock))?;
+            match lock.lock_type {
+                LockType::Shared => {
+                    lock.filter_shared_locks(|shared_lock| filter(&key, shared_lock))?;
+                    if lock.shared_lock_num() > 0 {
+                        locks.push((key, lock));
+                    }
                 }
+                _ => {
+                    if filter(&key, &lock) {
+                        locks.push((key, lock));
+                    }
+                }
+            }
+            if limit > 0 && locks.len() == limit {
+                has_remain = true;
+                break;
             }
             cursor.next(&mut self.statistics.lock);
         }
