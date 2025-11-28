@@ -335,6 +335,44 @@ impl Lock {
             .put_lock(ts, lock);
     }
 
+    #[inline]
+    pub fn filter_shared_locks<F>(&mut self, mut f: F) -> Result<()>
+    where
+        F: FnMut(&Lock) -> bool,
+    {
+        if !self.is_shared() {
+            return Ok(());
+        }
+
+        let Some(info) = self.shared_lock_txns_info.as_mut() else {
+            return Ok(());
+        };
+
+        let mut to_remove = Vec::new();
+
+        for (ts, either) in info.txn_info_segments.iter_mut() {
+            let keep = match either {
+                Either::Right(lock) => match lock.lock_type {
+                    LockType::Lock | LockType::Pessimistic => f(lock),
+                    _ => unreachable!(),
+                },
+                Either::Left(encoded) => {
+                    let lock = Lock::parse(encoded)?;
+                    f(&lock)
+                }
+            };
+
+            if !keep {
+                to_remove.push(ts.clone());
+            }
+        }
+
+        for ts in to_remove {
+            info.txn_info_segments.remove(&ts);
+        }
+        Ok(())
+    }
+
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut b = Vec::with_capacity(self.pre_allocate_size());
         b.push(self.lock_type.to_u8());

@@ -79,16 +79,17 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
             ));
             let released_lock: MvccResult<_> = if let Some(mut lock) = reader.load_lock(&key)? {
                 match lock.lock_type {
-                    txn_types::LockType::Pessimistic => if lock.ts == self.start_ts
-                            && lock.for_update_ts <= self.for_update_ts
-                        {
+                    txn_types::LockType::Pessimistic => {
+                        if lock.ts == self.start_ts && lock.for_update_ts <= self.for_update_ts {
                             Ok(txn.unlock_key(key, true, TimeStamp::zero()))
                         } else {
                             Ok(None)
-                        },
+                        }
+                    }
                     txn_types::LockType::Shared => {
-                        if let Some(shared_lock) =
-                            lock.remove_shared_lock(self.start_ts).map_err(MvccError::from)?
+                        if let Some(shared_lock) = lock
+                            .remove_shared_lock(self.start_ts)
+                            .map_err(MvccError::from)?
                         {
                             assert!(shared_lock.is_pessimistic_lock());
                             if lock.shared_lock_num() == 0 {
@@ -100,10 +101,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
                         } else {
                             Ok(None)
                         }
-                    },
+                    }
                     _ => Ok(None),
                 }
-
             } else {
                 Ok(None)
             };
@@ -273,7 +273,12 @@ pub mod tests {
         must_success(&mut engine, key, 10, 30);
         let mut shared_lock = must_load_shared_lock(&mut engine, key);
         assert_eq!(shared_lock.shared_lock_num(), 1);
-        assert!(shared_lock.find_shared_lock_txn(20.into()).unwrap().is_some());
+        assert!(
+            shared_lock
+                .find_shared_lock_txn(20.into())
+                .unwrap()
+                .is_some()
+        );
 
         // Rolling back the last entry removes the lock entirely.
         must_success(&mut engine, key, 20, 20);
