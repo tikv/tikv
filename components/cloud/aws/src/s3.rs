@@ -437,7 +437,6 @@ impl<'client> S3Uploader<'client> {
             RusotoError::ParseError("timeout after 15mins for complete in s3 storage".to_owned())
         })?;
         res.and_then(|output| {
-            println!("output: {:?}", output);
             if output.bucket.is_none()
                 && output.e_tag.is_none()
                 && output.key.is_none()
