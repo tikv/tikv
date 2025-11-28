@@ -663,7 +663,7 @@ impl<E: Engine> GcRunnerCore<E> {
 
         while cursor.valid()? {
             gc_info.found_versions += 1;
-            let current_key = cursor.key(&mut statistics);
+            let current_key = cursor.key();
             if !Key::is_user_key_eq(current_key, key.as_encoded()) {
                 break;
             }
@@ -679,7 +679,7 @@ impl<E: Engine> GcRunnerCore<E> {
             } else {
                 remove_older = true;
 
-                let value = ApiV2::decode_raw_value(cursor.value(&mut statistics))?;
+                let value = ApiV2::decode_raw_value(cursor.value())?;
                 // It's deleted or expired.
                 if !value.is_valid(current_ts) {
                     latest_version_key = Some(Key::from_encoded_slice(current_key));

@@ -215,11 +215,11 @@ impl<'a, S: Snapshot, F: KvFormat> RawStoreInner<S, F> {
                 row_count = 0;
             }
             pairs.push(Ok((
-                cursor.key(statistics).to_owned(),
+                cursor.key().to_owned(),
                 if key_only {
                     vec![]
                 } else {
-                    cursor.value(statistics).to_owned()
+                    cursor.value().to_owned()
                 },
             )));
             if pairs.len() < limit {
@@ -267,11 +267,11 @@ impl<'a, S: Snapshot, F: KvFormat> RawStoreInner<S, F> {
                 row_count = 0;
             }
             pairs.push(Ok((
-                cursor.key(statistics).to_owned(),
+                cursor.key().to_owned(),
                 if key_only {
                     vec![]
                 } else {
-                    cursor.value(statistics).to_owned()
+                    cursor.value().to_owned()
                 },
             )));
             if pairs.len() < limit {
@@ -312,9 +312,9 @@ impl<'a, S: Snapshot, F: KvFormat> RawStoreInner<S, F> {
                     row_count = 0;
                 }
                 // Calculate checksum on user key, as timestamp is not visible on client side.
-                let v = cursor.value(cf_stats);
+                let v = cursor.value();
                 let (raw_key, _) =
-                    F::decode_raw_key_owned(Key::from_encoded_slice(cursor.key(cf_stats)), true)?;
+                    F::decode_raw_key_owned(Key::from_encoded_slice(cursor.key()), true)?;
                 checksum = checksum_crc64_xor(checksum, digest.clone(), &raw_key, v);
                 total_kvs += 1;
                 total_bytes += raw_key.len() + v.len();
