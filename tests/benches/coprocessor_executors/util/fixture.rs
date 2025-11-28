@@ -7,7 +7,7 @@ use criterion::measurement::Measurement;
 use rand::{seq::SliceRandom, Rng, SeedableRng};
 use rand_xorshift::XorShiftRng;
 use test_coprocessor::*;
-use tidb_query_common::storage::IntervalRange;
+use tidb_query_common::{storage::IntervalRange, Result};
 use tidb_query_datatype::{
     codec::{
         batch::{LazyBatchColumn, LazyBatchColumnVec},
@@ -291,6 +291,20 @@ impl BatchExecutor for BatchFixtureExecutor {
     #[inline]
     fn schema(&self) -> &[FieldType] {
         &self.schema
+    }
+
+    #[inline]
+    fn intermediate_schema(&self, _index: usize) -> Result<&[FieldType]> {
+        unreachable!()
+    }
+
+    #[inline]
+    fn consume_and_fill_intermediate_results(
+        &mut self,
+        _results: &mut [Vec<BatchExecuteResult>],
+    ) -> Result<()> {
+        // Do nothing
+        Ok(())
     }
 
     #[inline]
