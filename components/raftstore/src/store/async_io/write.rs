@@ -985,89 +985,75 @@ where
             1.0
         };
         
-        // Use a sliding scale based on QPS to smoothly transition between low and high concurrency strategies
-        // instead of a hard threshold. This handles edge cases (e.g., 45000-49000 QPS) much better.
-        // Lower the thresholds to trigger aggregation earlier. For TiKV, 30k QPS is already a very high load.
-        const LOW_CONCURRENCY_QPS_THRESHOLD: u64 = 10000;
-        const HIGH_CONCURRENCY_QPS_THRESHOLD: u64 = 30000;
+        // New strategy: Use batch_achievement_ratio as the primary signal for adjustment
+        // The key insight: low batch_achievement_ratio means we need MORE wait_duration to improve batching,
+        // not less! Only reduce wait_duration when batch_achievement_ratio is high (good batching already).
         
-        // Calculate concurrency factor (0.0 to 1.0)
-        // 0.0 means fully low concurrency strategy
-        // 1.0 means fully high concurrency strategy
-        let concurrency_factor = if avg_qps <= LOW_CONCURRENCY_QPS_THRESHOLD {
+        let current_duration_nanos = current_duration.as_nanos() as u64;
+        
+        // Calculate QPS pressure factor (0.0 to 1.0)
+        // This helps us understand if the system is under heavy load
+        // For QPS < 10000: factor = 0.0 (very light load, can be more aggressive with reduction)
+        // For QPS > 40000: factor = 1.0 (heavy load, need more batching)
+        let qps_pressure_factor = if avg_qps <= 10000 {
             0.0
-        } else if avg_qps >= HIGH_CONCURRENCY_QPS_THRESHOLD {
+        } else if avg_qps >= 40000 {
             1.0
         } else {
-            (avg_qps - LOW_CONCURRENCY_QPS_THRESHOLD) as f64 / (HIGH_CONCURRENCY_QPS_THRESHOLD - LOW_CONCURRENCY_QPS_THRESHOLD) as f64
+            (avg_qps - 10000) as f64 / 30000.0
         };
         
-        // Early detection: if batch_achievement_ratio is very low (< 0.5), it indicates that
-        // even with current wait_duration, we cannot achieve good batching.
-        let current_duration_nanos = current_duration.as_nanos() as u64;
-        let target_duration_nanos = if batch_achievement_ratio < 0.5 {
-            // Strategy 1: High Concurrency (Target -> 1000us)
-            // In high load scenarios, if batch is not full, it implies we are waiting too short.
-            // We should increase wait_duration to aggregate more requests.
-            let target_high = RAFT_WB_WAIT_DURATION_UPPER_BOUND_NS;
+        let target_duration_nanos = if batch_achievement_ratio >= 0.8 {
+            // Excellent batching (>= 80% of target)
+            // We can safely reduce wait_duration to improve latency
+            // But be careful if QPS is very high
+            let reduction = if qps_pressure_factor > 0.7 {
+                // High QPS pressure, reduce conservatively
+                0.9
+            } else {
+                // Lower QPS pressure, can reduce more
+                0.85
+            };
+            (current_duration_nanos as f64 * reduction) as u64
             
-            // Strategy 2: Low/Medium Concurrency (Aggressively Reduce)
-            // In low load scenarios, empty batch means insufficient traffic.
-            // Reduce wait_duration to improve latency.
-            let reduction_factor = if batch_achievement_ratio < 0.3 {
-                // Very poor batching: reduce significantly
-                0.2 + batch_achievement_ratio * 0.5 // Range: [0.2, 0.35]
+        } else if batch_achievement_ratio >= 0.6 {
+            // Good batching (60-80% of target)
+            // Maintain current wait_duration or reduce slightly
+            let adjustment = if qps_pressure_factor > 0.7 {
+                1.0 // Keep current
             } else {
-                // Moderate reduction
-                0.5 + (batch_achievement_ratio - 0.3) * 1.25 // Range: [0.5, 0.75]
+                0.95 // Slight reduction
             };
-            let reduced = (current_duration_nanos as f64 * reduction_factor) as u64;
-            let low_concurrency_target = reduced.min(500_000); // Cap at 500us
-
-            // Blend strategies based on QPS
-            // If QPS > 30k (concurrency_factor=1), we will use target_high (1000us)
-            // This will significantly reduce IOPS in 100/200/500 thread scenarios.
-            ((target_high as f64 * concurrency_factor) + 
-             (low_concurrency_target as f64 * (1.0 - concurrency_factor))) as u64
+            (current_duration_nanos as f64 * adjustment) as u64
+            
+        } else if batch_achievement_ratio >= 0.4 {
+            // Moderate batching (40-60% of target)
+            // Increase wait_duration moderately to improve batching
+            let increase = if qps_pressure_factor > 0.7 {
+                1.15 // More aggressive increase under high load
+            } else {
+                1.1 // Moderate increase
+            };
+            (current_duration_nanos as f64 * increase) as u64
+            
         } else {
-            // batch_achievement_ratio >= 0.5: we're achieving reasonable batching
-            // Use QPS ratio to adjust wait_duration
-            let adjustment_factor = if qps_ratio >= 2.0 {
-                // Very high QPS: prioritize aggregation effectiveness
-                if batch_achievement_ratio < 0.8 {
-                    // Batch size is far below target, significantly increase wait time
-                    1.5 + (1.0 - batch_achievement_ratio) * 0.5
-                } else {
-                    // High QPS with reasonable batch achievement, increase wait time
-                    1.5
-                }
-            } else if qps_ratio >= 1.5 {
-                // High QPS: balance aggregation and wasted waits
-                if batch_achievement_ratio < 0.7 {
-                    // Batch size is far below target, increase wait time
-                    1.3 + (1.0 - batch_achievement_ratio) * 0.3
-                } else {
-                    // High QPS with reasonable batch achievement, moderately increase wait time
-                    1.3
-                }
-            } else if qps_ratio > 1.1 {
-                // Slightly high QPS: moderately increase wait time
-                qps_ratio
-            } else if qps_ratio < 0.5 {
-                // QPS is low, reduce wait time to maintain responsiveness
-                0.5 
-            } else if qps_ratio < 0.9 {
-                qps_ratio
+            // Poor batching (< 40% of target)
+            // Aggressively increase wait_duration to improve IOPS efficiency
+            // Exception: If QPS is very low (< 10000), the issue is not batching but low traffic
+            if avg_qps < 10000 {
+                // Very low traffic, reduce wait_duration to improve responsiveness
+                (current_duration_nanos as f64 * 0.7) as u64
             } else {
-                // QPS is normal (0.9-1.1), keep current setting
-                // But if batch achievement is poor, slightly increase
-                if batch_achievement_ratio < 0.6 {
-                    1.1
+                // Normal to high traffic with poor batching -> need more wait time
+                let increase = if qps_pressure_factor > 0.8 {
+                    // Very high QPS with poor batching -> aggressively increase
+                    1.3
                 } else {
-                    1.0
-                }
-            };
-            (current_duration_nanos as f64 * adjustment_factor) as u64
+                    // Moderate increase
+                    1.2
+                };
+                (current_duration_nanos as f64 * increase) as u64
+            }
         };
         
         // Use exponential weighted moving average for smoother transitions
@@ -1078,11 +1064,11 @@ where
         
         info!("[adaptive adjustment] adaptive_batch_enabled: {}, update wait_duration, wait_count: {}, wasted_wait_count: {}, \
             valid_wait_count: {}, wasted_wait_ratio: {:.2}, qps_baseline: {}, avg_qps: {}, qps_ratio: {:.2}, \
-            batch_achievement_ratio: {:.2}, concurrency_factor: {:.2}, target_duration: {}μs, \
+            batch_achievement_ratio: {:.2}, qps_pressure_factor: {:.2}, target_duration: {}μs, \
             wait_duration: {}μs => {}μs, batch_size_hint: {}, batch_avg: {}, \
             batch_task_count_history: {:?}", 
             self.adaptive_batch_enabled, self.wait_count, self.wasted_wait_count, self.valid_wait_count, 
-            wasted_wait_ratio, qps_baseline, avg_qps, qps_ratio, batch_achievement_ratio, concurrency_factor, 
+            wasted_wait_ratio, qps_baseline, avg_qps, qps_ratio, batch_achievement_ratio, qps_pressure_factor, 
             target_duration_nanos / 1_000, current_duration.as_micros(), smoothed_duration_nanos / 1_000, 
             batch_size_hint, batch_avg, self.batch_task_count_history);
         // Ensure new wait time is within reasonable range (10us to 1ms)
