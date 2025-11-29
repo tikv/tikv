@@ -987,8 +987,9 @@ where
         
         // Use a sliding scale based on QPS to smoothly transition between low and high concurrency strategies
         // instead of a hard threshold. This handles edge cases (e.g., 45000-49000 QPS) much better.
-        const LOW_CONCURRENCY_QPS_THRESHOLD: u64 = 20000;
-        const HIGH_CONCURRENCY_QPS_THRESHOLD: u64 = 50000;
+        // Lower the thresholds to trigger aggregation earlier. For TiKV, 30k QPS is already a very high load.
+        const LOW_CONCURRENCY_QPS_THRESHOLD: u64 = 10000;
+        const HIGH_CONCURRENCY_QPS_THRESHOLD: u64 = 30000;
         
         // Calculate concurrency factor (0.0 to 1.0)
         // 0.0 means fully low concurrency strategy
@@ -1006,17 +1007,13 @@ where
         let current_duration_nanos = current_duration.as_nanos() as u64;
         let target_duration_nanos = if batch_achievement_ratio < 0.5 {
             // Strategy 1: High Concurrency (Target -> 1000us)
-            // Maintain wait_duration around 1000us to improve aggregation
+            // In high load scenarios, if batch is not full, it implies we are waiting too short.
+            // We should increase wait_duration to aggregate more requests.
             let target_high = RAFT_WB_WAIT_DURATION_UPPER_BOUND_NS;
-            // Smoothly approach the target
-            let high_concurrency_target = if current_duration_nanos < target_high * 8 / 10 {
-                ((current_duration_nanos as f64 * 0.9) + (target_high as f64 * 0.1)) as u64
-            } else {
-                target_high
-            };
-
+            
             // Strategy 2: Low/Medium Concurrency (Aggressively Reduce)
-            // Reduce wait_duration to improve latency
+            // In low load scenarios, empty batch means insufficient traffic.
+            // Reduce wait_duration to improve latency.
             let reduction_factor = if batch_achievement_ratio < 0.3 {
                 // Very poor batching: reduce significantly
                 0.2 + batch_achievement_ratio * 0.5 // Range: [0.2, 0.35]
@@ -1028,8 +1025,9 @@ where
             let low_concurrency_target = reduced.min(500_000); // Cap at 500us
 
             // Blend strategies based on QPS
-            // When QPS is 45000, factor is ~0.83, so result is dominated by high_concurrency_target
-            ((high_concurrency_target as f64 * concurrency_factor) + 
+            // If QPS > 30k (concurrency_factor=1), we will use target_high (1000us)
+            // This will significantly reduce IOPS in 100/200/500 thread scenarios.
+            ((target_high as f64 * concurrency_factor) + 
              (low_concurrency_target as f64 * (1.0 - concurrency_factor))) as u64
         } else {
             // batch_achievement_ratio >= 0.5: we're achieving reasonable batching
