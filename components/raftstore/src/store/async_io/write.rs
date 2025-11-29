@@ -1005,7 +1005,18 @@ where
         
         // Critical insight: Detect "futile waiting" - when wait_duration is high but batching is still poor
         // This indicates that the traffic pattern is inherently sparse, and more waiting won't help
-        let is_futile_waiting = current_duration_nanos >= 500_000 && batch_achievement_ratio < 0.4;
+        // Dynamic threshold: the worse the batching, the earlier we detect futile waiting
+        let futile_waiting_threshold = if batch_achievement_ratio < 0.2 {
+            // Extremely poor batching -> detect early
+            200_000 // 200us
+        } else if batch_achievement_ratio < 0.3 {
+            // Very poor batching -> detect moderately early
+            300_000 // 300us
+        } else {
+            // Poor batching -> standard threshold
+            400_000 // 400us
+        };
+        let is_futile_waiting = current_duration_nanos >= futile_waiting_threshold && batch_achievement_ratio < 0.4;
         
         let target_duration_nanos = if is_futile_waiting {
             // Futile waiting detected: high wait_duration but still poor batching
@@ -1048,7 +1059,7 @@ where
         } else if batch_achievement_ratio >= 0.4 {
             // Moderate batching (40-60% of target)
             // Only increase if wait_duration is still relatively low
-            if current_duration_nanos < 300_000 {
+            if current_duration_nanos < 200_000 {
                 // Still have room to increase
                 let increase = if qps_pressure_factor > 0.7 {
                     1.15
@@ -1057,7 +1068,7 @@ where
                 };
                 (current_duration_nanos as f64 * increase) as u64
             } else {
-                // Already waiting long enough, keep current
+                // Already waiting long enough (>= 200us), keep current
                 current_duration_nanos
             }
             
@@ -1066,20 +1077,21 @@ where
             if avg_qps < 10000 {
                 // Very low traffic, reduce wait_duration
                 (current_duration_nanos as f64 * 0.7) as u64
-            } else if current_duration_nanos < 200_000 {
-                // Wait duration is still low, try increasing to improve batching
+            } else if current_duration_nanos < 100_000 {
+                // Wait duration is very low (< 100us), try increasing
                 let increase = if qps_pressure_factor > 0.8 {
                     1.3
                 } else {
                     1.2
                 };
                 (current_duration_nanos as f64 * increase) as u64
-            } else if current_duration_nanos < 400_000 {
-                // Moderate wait duration, increase conservatively
+            } else if current_duration_nanos < 200_000 {
+                // Wait duration is moderate (100-200us), increase conservatively
                 (1.1 * current_duration_nanos as f64) as u64
             } else {
-                // Wait duration is already high (>= 400us) but batching still poor
-                // Stop increasing, keep current value and let futile_waiting logic kick in later
+                // Wait duration >= 200us but batching still poor
+                // Stop increasing, keep current and wait for futile_waiting to kick in
+                // This prevents getting stuck in the 400us "dead zone"
                 current_duration_nanos
             }
         };
