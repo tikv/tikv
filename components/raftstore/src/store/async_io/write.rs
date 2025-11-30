@@ -1004,19 +1004,19 @@ where
         };
         
         // Critical insight: Distinguish between low/medium/high concurrency scenarios
-        // High concurrency (>= 50k QPS) should be treated specially - even with low batch_ratio,
+        // High concurrency (>= 45k QPS) should be treated specially - even with low batch_ratio,
         // we should allow higher wait_duration to force aggregation and reduce IOPS
-        let is_very_high_concurrency = avg_qps >= 50000;
-        let is_high_concurrency = avg_qps >= 45000;
+        let is_very_high_concurrency = avg_qps >= 45000;
+        let is_high_concurrency = avg_qps >= 40000;
         
         // Detect "futile waiting" - when wait_duration is high but batching is still poor
         // BUT: in high concurrency scenarios, we should be more tolerant and allow higher wait_duration
         let futile_waiting_threshold = if is_very_high_concurrency {
-            // Very high concurrency (>= 50k QPS): allow wait_duration up to 600us before giving up
+            // Very high concurrency (>= 45k QPS): allow wait_duration up to 600us before giving up
             // Even with poor batch_ratio, the sheer volume of requests means aggregation is valuable
             600_000 // 600us
         } else if is_high_concurrency {
-            // High concurrency (45-50k QPS): allow up to 400us
+            // High concurrency (40-45k QPS): allow up to 400us
             400_000 // 400us
         } else if batch_achievement_ratio < 0.2 {
             // Low/medium concurrency with extremely poor batching -> detect early
