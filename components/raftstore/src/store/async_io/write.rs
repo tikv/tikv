@@ -1003,17 +1003,29 @@ where
             (avg_qps - 10000) as f64 / 30000.0
         };
         
-        // Critical insight: Detect "futile waiting" - when wait_duration is high but batching is still poor
-        // This indicates that the traffic pattern is inherently sparse, and more waiting won't help
-        // Dynamic threshold: the worse the batching, the earlier we detect futile waiting
-        let futile_waiting_threshold = if batch_achievement_ratio < 0.2 {
-            // Extremely poor batching -> detect early
+        // Critical insight: Distinguish between low/medium/high concurrency scenarios
+        // High concurrency (>= 50k QPS) should be treated specially - even with low batch_ratio,
+        // we should allow higher wait_duration to force aggregation and reduce IOPS
+        let is_very_high_concurrency = avg_qps >= 50000;
+        let is_high_concurrency = avg_qps >= 45000;
+        
+        // Detect "futile waiting" - when wait_duration is high but batching is still poor
+        // BUT: in high concurrency scenarios, we should be more tolerant and allow higher wait_duration
+        let futile_waiting_threshold = if is_very_high_concurrency {
+            // Very high concurrency (>= 50k QPS): allow wait_duration up to 600us before giving up
+            // Even with poor batch_ratio, the sheer volume of requests means aggregation is valuable
+            600_000 // 600us
+        } else if is_high_concurrency {
+            // High concurrency (45-50k QPS): allow up to 400us
+            400_000 // 400us
+        } else if batch_achievement_ratio < 0.2 {
+            // Low/medium concurrency with extremely poor batching -> detect early
             200_000 // 200us
         } else if batch_achievement_ratio < 0.3 {
-            // Very poor batching -> detect moderately early
+            // Low/medium concurrency with very poor batching
             300_000 // 300us
         } else {
-            // Poor batching -> standard threshold
+            // Standard threshold
             400_000 // 400us
         };
         let is_futile_waiting = current_duration_nanos >= futile_waiting_threshold && batch_achievement_ratio < 0.4;
@@ -1059,7 +1071,13 @@ where
         } else if batch_achievement_ratio >= 0.4 {
             // Moderate batching (40-60% of target)
             // Only increase if wait_duration is still relatively low
-            if current_duration_nanos < 200_000 {
+            let upper_limit = if is_very_high_concurrency {
+                400_000 // 400us for very high concurrency
+            } else {
+                200_000 // 200us for normal cases
+            };
+            
+            if current_duration_nanos < upper_limit {
                 // Still have room to increase
                 let increase = if qps_pressure_factor > 0.7 {
                     1.15
@@ -1068,17 +1086,32 @@ where
                 };
                 (current_duration_nanos as f64 * increase) as u64
             } else {
-                // Already waiting long enough (>= 200us), keep current
+                // Already waiting long enough, keep current
                 current_duration_nanos
             }
             
         } else {
             // Poor batching (< 40% of target)
+            // BUT: in high concurrency, we should still try to increase wait_duration to force aggregation
             if avg_qps < 10000 {
                 // Very low traffic, reduce wait_duration
                 (current_duration_nanos as f64 * 0.7) as u64
+            } else if is_very_high_concurrency {
+                // Very high concurrency (>= 50k QPS) with poor batching
+                // This is the key scenario for oltp_read_write 500 thread!
+                // Continue increasing wait_duration to force aggregation
+                if current_duration_nanos < 300_000 {
+                    // Can still increase significantly
+                    (1.2 * current_duration_nanos as f64) as u64
+                } else if current_duration_nanos < 500_000 {
+                    // Approaching upper bound, increase conservatively
+                    (1.1 * current_duration_nanos as f64) as u64
+                } else {
+                    // Already at 500us, stop increasing
+                    current_duration_nanos
+                }
             } else if current_duration_nanos < 100_000 {
-                // Wait duration is very low (< 100us), try increasing
+                // Normal concurrency: wait duration is very low (< 100us), try increasing
                 let increase = if qps_pressure_factor > 0.8 {
                     1.3
                 } else {
@@ -1086,12 +1119,10 @@ where
                 };
                 (current_duration_nanos as f64 * increase) as u64
             } else if current_duration_nanos < 200_000 {
-                // Wait duration is moderate (100-200us), increase conservatively
+                // Normal concurrency: wait duration is moderate (100-200us), increase conservatively
                 (1.1 * current_duration_nanos as f64) as u64
             } else {
-                // Wait duration >= 200us but batching still poor
-                // Stop increasing, keep current and wait for futile_waiting to kick in
-                // This prevents getting stuck in the 400us "dead zone"
+                // Normal concurrency: wait duration >= 200us, stop increasing
                 current_duration_nanos
             }
         };
