@@ -82,6 +82,7 @@ use tikv_util::{
     sys::thread::ThreadBuildWrapper,
     thd_name,
     worker::{Builder as WorkerBuilder, LazyWorker, Worker},
+    Either, HandyRwLock,
 };
 use tokio::runtime::{Builder as TokioBuilder, Handle};
 use txn_types::TxnExtraScheduler;
