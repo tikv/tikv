@@ -1955,7 +1955,7 @@ fn test_shared_exclusive_lock_conflict() {
     assert_eq!(shared_lock.shared_lock_num(), 1);
     assert!(
         shared_lock
-            .find_shared_lock_txn(TimeStamp::from(10))
+            .find_shared_lock_txn(&10.into())
             .unwrap()
             .is_some()
     );
@@ -1978,13 +1978,13 @@ fn test_shared_exclusive_lock_conflict() {
     assert_eq!(shared_lock.shared_lock_num(), 2);
     assert!(
         shared_lock
-            .find_shared_lock_txn(TimeStamp::from(10))
+            .find_shared_lock_txn(&10.into())
             .unwrap()
             .is_some()
     );
     assert!(
         shared_lock
-            .find_shared_lock_txn(TimeStamp::from(20))
+            .find_shared_lock_txn(&20.into())
             .unwrap()
             .is_some()
     );
@@ -2147,7 +2147,7 @@ fn test_resolve_shared_locks() {
         txn_status,
         vec![(
             Key::from_raw(&shared_key),
-            lock.find_shared_lock_txn(TimeStamp::from(10))
+            lock.find_shared_lock_txn(&10.into())
                 .unwrap()
                 .unwrap()
                 .clone(),
@@ -2156,7 +2156,7 @@ fn test_resolve_shared_locks() {
     let mut lock = load_lock().unwrap();
     assert!(lock.is_shared());
     assert_eq!(lock.shared_lock_num(), 1);
-    assert!(lock.contains_start_ts(TimeStamp::from(20)));
+    assert!(lock.contains_start_ts(&20.into()));
     exclusive_lock.try_recv().unwrap_err();
 
     let mut txn_status = HashMap::default();
@@ -2165,7 +2165,7 @@ fn test_resolve_shared_locks() {
         txn_status,
         vec![(
             Key::from_raw(&shared_key),
-            lock.find_shared_lock_txn(TimeStamp::from(20))
+            lock.find_shared_lock_txn(&20.into())
                 .unwrap()
                 .unwrap()
                 .clone(),

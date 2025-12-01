@@ -72,7 +72,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
         ));
 
         let lock = match reader.load_lock(&self.primary_key)? {
-            Some(mut lock) if lock.contains_start_ts(self.start_ts) => {
+            Some(mut lock) if lock.contains_start_ts(&self.start_ts) => {
                 let (mut lock, maybe_shared_lock) = if lock.is_shared() {
                     match lock
                         .remove_shared_lock(self.start_ts)

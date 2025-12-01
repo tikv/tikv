@@ -398,7 +398,7 @@ impl<'a> PrewriteMutation<'a> {
         expected_for_update_ts: Option<TimeStamp>,
         generation_to_write: u64,
     ) -> Result<LockStatus> {
-        if !lock.contains_start_ts(self.txn_props.start_ts) {
+        if !lock.contains_start_ts(&self.txn_props.start_ts) {
             // Abort on lock belonging to other transaction if
             // prewrites a pessimistic lock.
             if matches!(pessimistic_action, DoPessimisticCheck) {
@@ -713,7 +713,7 @@ impl<'a> PrewriteMutation<'a> {
                     #[cfg(debug_assertions)]
                     {
                         let sub_lock_type = shared_lock
-                            .find_shared_lock_txn(self.txn_props.start_ts)?
+                            .find_shared_lock_txn(&self.txn_props.start_ts)?
                             .map(|l| l.lock_type);
                         debug_assert!(
                             matches!(sub_lock_type, Some(LockType::Lock)),
@@ -2966,7 +2966,10 @@ pub mod tests {
         let mut shared_lock = must_load_shared_lock(&mut engine, key);
         assert!(shared_lock.is_shared());
         assert_eq!(shared_lock.shared_lock_num(), 1);
-        let sub_lock = shared_lock.find_shared_lock_txn(start_ts).unwrap().unwrap();
+        let sub_lock = shared_lock
+            .find_shared_lock_txn(&start_ts)
+            .unwrap()
+            .unwrap();
         assert_eq!(sub_lock.lock_type, LockType::Pessimistic);
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
@@ -2995,7 +2998,10 @@ pub mod tests {
         assert_eq!(shared_lock.shared_lock_num(), 1);
         assert!(shared_lock.is_shared());
         assert_eq!(shared_lock.shared_lock_num(), 1);
-        let sub_lock = shared_lock.find_shared_lock_txn(start_ts).unwrap().unwrap();
+        let sub_lock = shared_lock
+            .find_shared_lock_txn(&start_ts)
+            .unwrap()
+            .unwrap();
         assert_eq!(sub_lock.lock_type, LockType::Lock);
         assert_eq!(sub_lock.primary, pk);
         assert_eq!(sub_lock.for_update_ts, for_update_ts);

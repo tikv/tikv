@@ -31,12 +31,12 @@ pub fn cleanup<S: Snapshot>(
     ));
 
     match reader.load_lock(&key)? {
-        Some(mut lock) if lock.contains_start_ts(reader.start_ts) => {
+        Some(mut lock) if lock.contains_start_ts(&reader.start_ts) => {
             // If current_ts is not 0, check the Lock's TTL.
             // If the lock is not expired, do not rollback it but report key is locked.
             if !current_ts.is_zero() {
                 let expire_time = if lock.is_shared() {
-                    match lock.find_shared_lock_txn(reader.start_ts)? {
+                    match lock.find_shared_lock_txn(&reader.start_ts)? {
                         Some(l) => l.ts.physical() + l.ttl,
                         _ => unreachable!(), // since lock.contains_start_ts returned true
                     }
@@ -304,7 +304,7 @@ pub mod tests {
         let mut shared_lock = must_load_shared_lock(&mut engine, shared_lock_key);
         assert_eq!(shared_lock.shared_lock_num(), 1);
         let sub_lock = shared_lock
-            .find_shared_lock_txn(ts(30, 0))
+            .find_shared_lock_txn(&ts(30, 0))
             .unwrap()
             .unwrap()
             .clone();

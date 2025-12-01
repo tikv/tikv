@@ -275,7 +275,7 @@ pub mod tests {
         assert_eq!(shared_lock.shared_lock_num(), 1);
         assert!(
             shared_lock
-                .find_shared_lock_txn(20.into())
+                .find_shared_lock_txn(&20.into())
                 .unwrap()
                 .is_some()
         );

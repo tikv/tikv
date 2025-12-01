@@ -22,7 +22,7 @@ pub fn commit<S: Snapshot>(
     ));
 
     let (mut lock, shared_lock, commit) = match reader.load_lock(&key)? {
-        Some(mut lock) if lock.contains_start_ts(reader.start_ts) => {
+        Some(mut lock) if lock.contains_start_ts(&reader.start_ts) => {
             let (lock, shared_lock) = if lock.is_shared() {
                 match lock.remove_shared_lock(reader.start_ts)? {
                     Some(l) => (l, Some(lock)),
@@ -495,13 +495,13 @@ pub mod tests {
         assert_eq!(current_lock.shared_lock_num(), 2);
         assert!(
             current_lock
-                .find_shared_lock_txn(start_ts1)
+                .find_shared_lock_txn(&start_ts1)
                 .unwrap()
                 .is_some()
         );
         assert!(
             current_lock
-                .find_shared_lock_txn(start_ts2)
+                .find_shared_lock_txn(&start_ts2)
                 .unwrap()
                 .is_some()
         );
@@ -518,13 +518,13 @@ pub mod tests {
         assert_eq!(current_lock.shared_lock_num(), 1);
         assert!(
             current_lock
-                .find_shared_lock_txn(start_ts1)
+                .find_shared_lock_txn(&start_ts1)
                 .unwrap()
                 .is_none()
         );
         assert!(
             current_lock
-                .find_shared_lock_txn(start_ts2)
+                .find_shared_lock_txn(&start_ts2)
                 .unwrap()
                 .is_some()
         );

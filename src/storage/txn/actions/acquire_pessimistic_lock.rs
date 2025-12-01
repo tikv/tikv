@@ -119,7 +119,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                 )
                 .into());
             }
-            if lock.contains_start_ts(reader.start_ts) {
+            if lock.contains_start_ts(&reader.start_ts) {
                 return handle_existing_shared_lock(
                     txn,
                     reader,
@@ -464,7 +464,7 @@ fn handle_existing_shared_lock<S: Snapshot>(
     let (existing_for_update_ts, last_change, is_locked_with_conflict) = {
         debug_assert!(lock.is_shared());
         let sub_lock = lock
-            .find_shared_lock_txn(reader.start_ts)?
+            .find_shared_lock_txn(&reader.start_ts)?
             .expect("shared lock entry must exist for the current transaction");
         (
             sub_lock.for_update_ts,
@@ -2765,7 +2765,7 @@ pub mod tests {
         assert_eq!(shared_lock.for_update_ts, for_update_ts);
 
         let sub_lock = shared_lock
-            .find_shared_lock_txn(start_ts)
+            .find_shared_lock_txn(&start_ts)
             .unwrap()
             .expect("sub lock should exist");
         assert_eq!(sub_lock.lock_type, txn_types::LockType::Pessimistic);
@@ -2810,7 +2810,7 @@ pub mod tests {
         );
 
         let first = shared_lock
-            .find_shared_lock_txn(start_one)
+            .find_shared_lock_txn(&start_one)
             .unwrap()
             .expect("first sub lock missing");
         assert_eq!(first.lock_type, txn_types::LockType::Pessimistic);
@@ -2818,7 +2818,7 @@ pub mod tests {
         assert_eq!(first.primary, pk_one);
 
         let second = shared_lock
-            .find_shared_lock_txn(start_two)
+            .find_shared_lock_txn(&start_two)
             .unwrap()
             .expect("second sub lock missing");
         assert_eq!(second.lock_type, txn_types::LockType::Pessimistic);
@@ -2850,7 +2850,7 @@ pub mod tests {
         assert_eq!(shared_lock.shared_lock_num(), 1);
 
         let sub_lock = shared_lock
-            .find_shared_lock_txn(start_ts)
+            .find_shared_lock_txn(&start_ts)
             .unwrap()
             .expect("sub lock should exist");
         assert_eq!(sub_lock.lock_type, txn_types::LockType::Pessimistic);
