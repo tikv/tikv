@@ -1382,13 +1382,13 @@ mod tests {
         }
 
         let handle = datum::encode_key(&mut EvalContext::default(), &handle).unwrap();
-        let key = table::encode_common_handle_for_test(TABLE_ID, &handle);
+        let key = table::encode_common_handle(TABLE_ID, &handle);
         let value = table::encode_row(&mut EvalContext::default(), row, &column_ids).unwrap();
 
         // Constructs a range that includes the constructed key.
         let mut key_range = KeyRange::default();
-        let begin = table::encode_common_handle_for_test(TABLE_ID - 1, &handle);
-        let end = table::encode_common_handle_for_test(TABLE_ID + 1, &handle);
+        let begin = table::encode_common_handle(TABLE_ID - 1, &handle);
+        let end = table::encode_common_handle(TABLE_ID + 1, &handle);
         key_range.set_start(begin);
         key_range.set_end(end);
 
@@ -1563,13 +1563,13 @@ mod tests {
 
         let handle = datum::encode_key(&mut EvalContext::default(), &handle).unwrap();
 
-        let key = table::encode_common_handle_for_test(TABLE_ID, &handle);
+        let key = table::encode_common_handle(TABLE_ID, &handle);
         let value = table::encode_row(&mut EvalContext::default(), row, &column_ids).unwrap();
 
         // Constructs a range that includes the constructed key.
         let mut key_range = KeyRange::default();
-        let begin = table::encode_common_handle_for_test(TABLE_ID - 1, &handle);
-        let end = table::encode_common_handle_for_test(TABLE_ID + 1, &handle);
+        let begin = table::encode_common_handle(TABLE_ID - 1, &handle);
+        let end = table::encode_common_handle(TABLE_ID + 1, &handle);
         key_range.set_start(begin);
         key_range.set_end(end);
 
