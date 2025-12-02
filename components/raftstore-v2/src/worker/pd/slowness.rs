@@ -13,12 +13,8 @@ use health_controller::{
 };
 use kvproto::pdpb;
 use pd_client::PdClient;
-<<<<<<< HEAD
-use raftstore::store::{metrics::*, Config};
-=======
 use raftstore::store::{Config, metrics::*};
 use slog::warn;
->>>>>>> 2870bdebf1 (server: graceful shutdown tikv-impl (#18930))
 
 use super::Runner;
 use crate::router::{StoreMsg, StoreTick};

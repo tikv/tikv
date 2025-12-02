@@ -253,20 +253,11 @@ pub struct Config {
     /// `BatchCommands` gRPC stream. 0 to disable sending health feedback.
     pub health_feedback_interval: ReadableDuration,
 
-<<<<<<< HEAD
-=======
-    #[doc(hidden)]
-    #[online_config(hidden)]
-    // Interval to inspect the network latency between tikv and tikv for slow store detection.
-    // If it set to 0, it will disable the inspection.
-    pub inspect_network_interval: ReadableDuration,
-
     /// Timeout for leader eviction during graceful shutdown.
     /// After this timeout, TiKV will proceed with shutdown even if
     /// some regions haven't completed leader transfer.
     pub graceful_shutdown_timeout: ReadableDuration,
 
->>>>>>> 2870bdebf1 (server: graceful shutdown tikv-impl (#18930))
     // Server labels to specify some attributes about this server.
     #[online_config(skip)]
     pub labels: HashMap<String, String>,
@@ -489,21 +480,9 @@ impl Config {
             self.heavy_load_threshold = 75;
         }
 
-<<<<<<< HEAD
-=======
-        if self
-            .inspect_network_interval
-            .lt(&ReadableDuration::millis(10))
-            && self.inspect_network_interval.0 != Duration::from_millis(0)
-        {
-            return Err(box_err!(
-                "server.inspect-network-interval can't be less than 10ms and not zero."
-            ));
-        }
         if self.graceful_shutdown_timeout.0.as_secs() == 0 {
             warn!("graceful shutdown timeout is disabled");
         }
->>>>>>> 2870bdebf1 (server: graceful shutdown tikv-impl (#18930))
         Ok(())
     }
 

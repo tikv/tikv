@@ -11,13 +11,8 @@ use std::{
     mem,
     ops::{Deref, DerefMut},
     sync::{
-<<<<<<< HEAD
-        atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
-=======
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
->>>>>>> 2870bdebf1 (server: graceful shutdown tikv-impl (#18930))
     },
     time::{Duration, Instant, SystemTime},
     u64,

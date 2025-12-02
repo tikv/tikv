@@ -72,18 +72,12 @@ use raftstore::{
     router::{CdcRaftRouter, ServerRaftStoreRouter},
     store::{
         config::RaftstoreConfigManager,
-<<<<<<< HEAD
-        fsm,
-        fsm::store::{
-            RaftBatchSystem, RaftRouter, StoreMeta, MULTI_FILES_SNAPSHOT_FEATURE, PENDING_MSG_CAP,
-=======
         fsm::{
             self,
             store::{
                 MULTI_FILES_SNAPSHOT_FEATURE, PENDING_MSG_CAP, RaftBatchSystem, RaftRouter,
                 StoreMeta,
             },
->>>>>>> 2870bdebf1 (server: graceful shutdown tikv-impl (#18930))
         },
         memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE,
         snapshot_backup::PrepareDiskSnapObserver,

@@ -5,12 +5,7 @@ use std::{
     fmt::{self, Display, Formatter},
     io, mem,
     sync::{
-<<<<<<< HEAD
-        atomic::Ordering,
-=======
-        Arc, Mutex, RwLock,
         atomic::{AtomicBool, Ordering},
->>>>>>> 2870bdebf1 (server: graceful shutdown tikv-impl (#18930))
         mpsc::{self, Receiver, Sender, SyncSender},
         Arc, Mutex, RwLock,
     },
@@ -63,11 +58,8 @@ use crate::{
     coprocessor::CoprocessorHost,
     router::RaftStoreRouter,
     store::{
-<<<<<<< HEAD
-=======
         Callback, CasualMessage, Config, PeerMsg, RaftCmdExtraOpts, RaftCommand, RaftRouter,
         SnapManager, StoreMsg, StoreTick, TxnExt,
->>>>>>> 2870bdebf1 (server: graceful shutdown tikv-impl (#18930))
         cmd_resp::new_error,
         metrics::*,
         unsafe_recovery::{
@@ -78,8 +70,6 @@ use crate::{
             split_controller::{SplitInfo, TOP_N},
             AutoSplitController, ReadStats, SplitConfigChange, WriteStats,
         },
-        Callback, CasualMessage, Config, PeerMsg, RaftCmdExtraOpts, RaftCommand, RaftRouter,
-        SnapManager, StoreMsg, TxnExt,
     },
 };
 
