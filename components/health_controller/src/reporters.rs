@@ -11,10 +11,10 @@ use pdpb::SlowTrend as SlowTrendPb;
 use prometheus::IntGauge;
 
 use crate::{
-    HealthController, HealthControllerInner, RaftstoreDuration,
     slow_score::*,
     trend::{RequestPerSecRecorder, Trend},
     types::InspectFactor,
+    HealthController, HealthControllerInner, RaftstoreDuration,
 };
 
 /// The parameters for building a [`RaftstoreReporter`].
