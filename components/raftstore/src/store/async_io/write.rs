@@ -70,6 +70,16 @@ const QPS_THRESHOLD: u64 = 1000;
 const RAFT_WB_WAIT_DURATION_UPPER_BOUND_NS: u64 = 1000_000; // 1ms
 const RAFT_WB_WAIT_DURATION_LOWER_BOUND_NS: u64 = 10_000; // 10us
 
+// Adaptive batching QPS-related constants for calculate_adaptive_wait_duration()
+const ADAPTIVE_QPS_BASELINE_HISTORY_MIN_LEN: usize = 10;
+const ADAPTIVE_DEFAULT_QPS_BASELINE: u64 = 1000;
+const ADAPTIVE_QPS_PRESSURE_LOWER_BOUND: u64 = 10000;
+const ADAPTIVE_QPS_PRESSURE_UPPER_BOUND: u64 = 40000;
+const ADAPTIVE_QPS_PRESSURE_DENOMINATOR: f64 = 30000.0;
+const ADAPTIVE_VERY_HIGH_CONCURRENCY_QPS_LOWER_BOUND: u64 = 50000;
+const ADAPTIVE_HIGH_CONCURRENCY_QPS_LOWER_BOUND: u64 = 45000;
+const ADAPTIVE_LOW_TRAFFIC_QPS: u64 = ADAPTIVE_QPS_PRESSURE_LOWER_BOUND;
+
 /// Notify the event to the specified region.
 pub trait PersistedNotifier: Clone + Send + 'static {
     fn notify(&self, region_id: u64, peer_id: u64, ready_number: u64);
@@ -950,7 +960,7 @@ where
     /// Calculate adaptive wait duration based on QPS using exponential weighted moving average
     fn calculate_adaptive_wait_duration(&self, avg_qps: u64, current_duration: Duration) -> Duration {
         // Dynamically calculate QPS baseline
-        let qps_baseline = if self.qps_baseline_history.len() >= 10 {
+        let qps_baseline = if self.qps_baseline_history.len() >= ADAPTIVE_QPS_BASELINE_HISTORY_MIN_LEN {
             let mut sorted_qps: Vec<u64> = self.qps_baseline_history.iter().cloned().collect();
             sorted_qps.sort();
             sorted_qps[sorted_qps.len() / 2]
@@ -959,7 +969,7 @@ where
             *self.qps_baseline_history.iter().min().unwrap()
         } else {
             // Default baseline value is 1000 QPS
-            1000
+            ADAPTIVE_DEFAULT_QPS_BASELINE
         };
         
         // Calculate QPS ratio (relative to baseline QPS)
@@ -995,28 +1005,28 @@ where
         // This helps us understand if the system is under heavy load
         // For QPS < 10000: factor = 0.0 (very light load, can be more aggressive with reduction)
         // For QPS > 40000: factor = 1.0 (heavy load, need more batching)
-        let qps_pressure_factor = if avg_qps <= 10000 {
+        let qps_pressure_factor = if avg_qps <= ADAPTIVE_QPS_PRESSURE_LOWER_BOUND {
             0.0
-        } else if avg_qps >= 40000 {
+        } else if avg_qps >= ADAPTIVE_QPS_PRESSURE_UPPER_BOUND {
             1.0
         } else {
-            (avg_qps - 10000) as f64 / 30000.0
+            (avg_qps - ADAPTIVE_QPS_PRESSURE_LOWER_BOUND) as f64 / ADAPTIVE_QPS_PRESSURE_DENOMINATOR
         };
         
         // Critical insight: Distinguish between low/medium/high concurrency scenarios
-        // High concurrency (>= 50k QPS) should be treated specially - even with low batch_ratio,
+        // High concurrency (>= 48k QPS) should be treated specially - even with low batch_ratio,
         // we should allow higher wait_duration to force aggregation and reduce IOPS
-        let is_very_high_concurrency = avg_qps >= 50000;
-        let is_high_concurrency = avg_qps >= 45000;
+        let is_very_high_concurrency = avg_qps >= ADAPTIVE_VERY_HIGH_CONCURRENCY_QPS_LOWER_BOUND;
+        let is_high_concurrency = avg_qps >= ADAPTIVE_HIGH_CONCURRENCY_QPS_LOWER_BOUND;
         
         // Detect "futile waiting" - when wait_duration is high but batching is still poor
         // BUT: in high concurrency scenarios, we should be more tolerant and allow higher wait_duration
         let futile_waiting_threshold = if is_very_high_concurrency {
-            // Very high concurrency (>= 50k QPS): allow wait_duration up to 600us before giving up
+            // Very high concurrency (>= 48k QPS): allow wait_duration up to 600us before giving up
             // Even with poor batch_ratio, the sheer volume of requests means aggregation is valuable
             600_000 // 600us
         } else if is_high_concurrency {
-            // High concurrency (45-50k QPS): allow up to 400us
+            // High concurrency (40-48k QPS): allow up to 400us
             400_000 // 400us
         } else if batch_achievement_ratio < 0.2 {
             // Low/medium concurrency with extremely poor batching -> detect early
@@ -1093,11 +1103,11 @@ where
         } else {
             // Poor batching (< 40% of target)
             // BUT: in high concurrency, we should still try to increase wait_duration to force aggregation
-            if avg_qps < 10000 {
+            if avg_qps < ADAPTIVE_LOW_TRAFFIC_QPS {
                 // Very low traffic, reduce wait_duration
                 (current_duration_nanos as f64 * 0.7) as u64
             } else if is_very_high_concurrency {
-                // Very high concurrency (>= 50k QPS) with poor batching
+                // Very high concurrency (>= 48k QPS) with poor batching
                 // This is the key scenario for oltp_read_write 500 thread!
                 // Continue increasing wait_duration to force aggregation
                 if current_duration_nanos < 300_000 {
