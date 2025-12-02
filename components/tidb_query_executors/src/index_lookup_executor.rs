@@ -116,19 +116,33 @@ where
     table_scan_exec_summary: [ExecSummary; 1],
 }
 
+pub struct BuildIndexLookUpExecutorOptions<Src, Accessor> {
+    pub config: Arc<EvalConfig>,
+    pub src: Src,
+    pub index_lookup: IndexLookUp,
+    pub tbl_scan: TableScan,
+    pub accessor: Option<Accessor>,
+    pub intermediate_channel_index: usize,
+    pub table_scan_child_index: usize,
+}
+
 #[inline]
 pub fn build_index_lookup_executor<
     S: Storage + 'static,
     Handle: RowHandle + 'static,
     F: KvFormat,
+    Src: BatchExecutor<StorageStats = S::Statistics> + 'static,
+    Accessor: RegionStorageAccessor<Storage = S> + 'static,
 >(
-    config: Arc<EvalConfig>,
-    src: impl BatchExecutor<StorageStats = S::Statistics> + 'static,
-    mut index_lookup: IndexLookUp,
-    mut tbl_scan: TableScan,
-    accessor: Option<impl RegionStorageAccessor<Storage = S> + 'static>,
-    intermediate_channel_index: usize,
-    table_scan_child_index: usize,
+    BuildIndexLookUpExecutorOptions {
+        config,
+        src,
+        mut index_lookup,
+        mut tbl_scan,
+        accessor,
+        intermediate_channel_index,
+        table_scan_child_index,
+    }: BuildIndexLookUpExecutorOptions<Src, Accessor>,
 ) -> Result<impl BatchExecutor<StorageStats = S::Statistics>> {
     if index_lookup.get_keep_order() {
         return Err(other_err!(
@@ -744,16 +758,14 @@ where
                 )?
             }
 
-            let mut result_handles = Vec::with_capacity(logical_rows_len);
-            for (logical_row_index, &physical_row_index) in result.logical_rows.iter().enumerate() {
-                let handle = Handle::from_lazy_batch_column_vec(
-                    ctx,
-                    &result.physical_columns,
-                    physical_row_index,
-                    &index_layout.handle_offsets,
-                    &index_layout.handle_types,
-                )?;
-                result_handles.push(handle);
+            let result_handles = Handle::from_lazy_batch_column_vec(
+                &mut result.physical_columns,
+                result.logical_rows.as_slice(),
+                &index_layout.handle_offsets,
+                &index_layout.handle_types,
+            )?;
+
+            for logical_row_index in 0..result_handles.len() {
                 orders.push((result_index, logical_row_index));
             }
             handles.push(result_handles);

@@ -8,6 +8,7 @@ use tidb_query_datatype::codec::{
     data_type::*,
 };
 use tidb_query_expr::RpnStackNode;
+use tikv_util::error;
 use tipb::FieldType;
 
 /// TopNHeap is the common data structure used in TopN-like executors.
@@ -67,10 +68,23 @@ impl TopNHeap {
                 .clone_empty(self.heap.len());
         }
         // todo: check schema is equal
-        assert_eq!(
-            result.columns_len(),
-            sorted_items[0].source_data.physical_columns.columns_len(),
-        );
+        let one_physical_columns = &sorted_items[0].source_data.physical_columns;
+        assert_eq!(result.columns_len(), one_physical_columns.columns_len());
+
+        if one_physical_columns.has_extra_common_handle_keys() {
+            let keys = result.mut_extra_common_handle_keys();
+            for item in &sorted_items {
+                let src = &item.source_data.physical_columns;
+                keys.push(
+                    src.get_extra_common_handle_key(item.logical_row_index)
+                        .unwrap_or_else(|| {
+                            error!("extra common handle key is missing in TopN result");
+                            &[]
+                        })
+                        .to_vec(),
+                );
+            }
+        }
 
         for (column_index, result_column) in result.as_mut_slice().iter_mut().enumerate() {
             match result_column {
