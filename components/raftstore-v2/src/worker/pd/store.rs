@@ -2,7 +2,7 @@
 
 use std::{
     cmp,
-    sync::{Arc, atomic::Ordering},
+    sync::{atomic::Ordering, Arc},
 };
 
 use collections::{HashMap, HashSet};

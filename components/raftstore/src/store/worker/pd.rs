@@ -58,8 +58,6 @@ use crate::{
     coprocessor::CoprocessorHost,
     router::RaftStoreRouter,
     store::{
-        Callback, CasualMessage, Config, PeerMsg, RaftCmdExtraOpts, RaftCommand, RaftRouter,
-        SnapManager, StoreMsg, StoreTick, TxnExt,
         cmd_resp::new_error,
         metrics::*,
         unsafe_recovery::{
@@ -70,6 +68,8 @@ use crate::{
             split_controller::{SplitInfo, TOP_N},
             AutoSplitController, ReadStats, SplitConfigChange, WriteStats,
         },
+        Callback, CasualMessage, Config, PeerMsg, RaftCmdExtraOpts, RaftCommand, RaftRouter,
+        SnapManager, StoreMsg, StoreTick, TxnExt,
     },
 };
 

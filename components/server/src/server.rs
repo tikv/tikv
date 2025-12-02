@@ -75,8 +75,8 @@ use raftstore::{
         fsm::{
             self,
             store::{
-                MULTI_FILES_SNAPSHOT_FEATURE, PENDING_MSG_CAP, RaftBatchSystem, RaftRouter,
-                StoreMeta,
+                RaftBatchSystem, RaftRouter, StoreMeta, MULTI_FILES_SNAPSHOT_FEATURE,
+                PENDING_MSG_CAP,
             },
         },
         memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE,
