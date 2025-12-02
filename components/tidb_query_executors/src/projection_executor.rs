@@ -170,6 +170,17 @@ impl<Src: BatchExecutor> BatchExecutor for BatchProjectionExecutor<Src> {
     #[inline]
     async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         let mut src_result = self.src.next_batch(scan_rows).await;
+        if src_result.physical_columns.has_extra_common_handle_keys() {
+            return BatchExecuteResult {
+                physical_columns: LazyBatchColumnVec::empty(),
+                logical_rows: Vec::new(),
+                warnings: self.context.take_warnings(),
+                is_drained: Err(other_err!(
+                    "Not supported to handle extra_common_handle_key in Projection executor"
+                )),
+            };
+        }
+
         let child_schema = self.src.schema();
         let mut eval_result = Vec::with_capacity(self.schema().len());
         let BatchExecuteResult {
