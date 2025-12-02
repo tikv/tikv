@@ -1006,8 +1006,8 @@ where
         // Critical insight: Distinguish between low/medium/high concurrency scenarios
         // High concurrency (>= 50k QPS) should be treated specially - even with low batch_ratio,
         // we should allow higher wait_duration to force aggregation and reduce IOPS
-        let is_very_high_concurrency = avg_qps >= 50000;
-        let is_high_concurrency = avg_qps >= 45000;
+        let is_very_high_concurrency = avg_qps >= 48000;
+        let is_high_concurrency = avg_qps >= 40000;
         
         // Detect "futile waiting" - when wait_duration is high but batching is still poor
         // BUT: in high concurrency scenarios, we should be more tolerant and allow higher wait_duration
