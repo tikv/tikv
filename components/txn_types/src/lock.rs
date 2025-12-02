@@ -702,14 +702,6 @@ impl Lock {
                             Either::Right(lock) => lock.clone(),
                         })
                         .map(|lock| lock.into_lock_info(raw_key.clone()))
-                        .map(|mut lock_info| {
-                            lock_info.lock_type = match lock_info.lock_type {
-                                Op::PessimisticLock => Op::SharedPessimisticLock,
-                                Op::Lock => Op::SharedLock,
-                                _ => unreachable!(),
-                            };
-                            lock_info
-                        })
                         .collect()
                 });
                 (Op::SharedLock, shared_locks)

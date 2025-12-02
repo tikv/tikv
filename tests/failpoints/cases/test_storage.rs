@@ -2071,8 +2071,8 @@ fn test_shared_exclusive_lock_conflict() {
                 assert_eq!(
                     shared_lock.get_lock_type(),
                     match start_ts {
-                        80 => kvrpcpb::Op::SharedPessimisticLock,
-                        100 => kvrpcpb::Op::SharedLock,
+                        80 => kvrpcpb::Op::PessimisticLock,
+                        100 => kvrpcpb::Op::Lock,
                         _ => unreachable!(),
                     }
                 );
