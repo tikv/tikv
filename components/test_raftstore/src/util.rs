@@ -812,10 +812,12 @@ pub fn configure_for_hibernate(config: &mut Config) {
     // Uses long check interval to make leader keep sleeping during tests.
     config.raft_store.abnormal_leader_missing_duration = ReadableDuration::secs(20);
     config.raft_store.max_leader_missing_duration = ReadableDuration::secs(40);
-    config.raft_store.peer_stale_state_check_interval = ReadableDuration::secs(10);
+    config.raft_store.peer_stale_state_check_interval = ReadableDuration::secs(5);
     // speed up down peer detection
     config.raft_store.max_peer_down_duration = ReadableDuration::secs(5);
     config.raft_store.pd_heartbeat_tick_interval = ReadableDuration::secs(5);
+    // Avoid generation gc log during hibernation.
+    config.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(3600);
 }
 
 pub fn configure_for_snapshot(config: &mut Config) {

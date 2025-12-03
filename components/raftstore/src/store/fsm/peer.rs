@@ -415,7 +415,10 @@ where
         }
     }
 
-    pub fn maybe_hibernate(&mut self, down_peer_ids: &Vec<u64>) -> (bool, Vec<u64>) {
+    /// The condition for leader hibernation includes:
+    /// - all alive peers have voted for hibernate request
+    /// - enough hibernate votes to form a quorum
+    pub fn maybe_hibernate(&mut self, down_peer_ids: &[u64]) -> (bool, Vec<u64>) {
         self.hibernate_state.maybe_hibernate(
             |vote_ids| self.peer.raft_group.raft.prs().has_quorum(vote_ids),
             self.peer.peer_id(),
@@ -2435,12 +2438,7 @@ where
         self.check_force_leader();
 
         let mut res = None;
-        let mut down_peer_ids = vec![];
-        for (peer_id, _progress) in self.fsm.peer.raft_group.raft.prs().iter() {
-            if *peer_id != self.fsm.peer.peer_id() && self.fsm.peer.is_down_peer(*peer_id) {
-                down_peer_ids.push(*peer_id);
-            }
-        }
+        let down_peer_ids = self.fsm.peer.get_down_peer_ids();
         if self.ctx.cfg.hibernate_regions {
             if self.fsm.hibernate_state.group_state() == GroupState::Idle {
                 // missing_ticks should be less than election timeout ticks otherwise
@@ -3004,7 +3002,7 @@ where
         Ok(())
     }
 
-    fn agree_to_hibernate(&mut self, down_peer_ids: &Vec<u64>) -> bool {
+    fn agree_to_hibernate(&mut self, down_peer_ids: &[u64]) -> bool {
         let (result, hibernate_vote_peer_ids) = self.fsm.maybe_hibernate(down_peer_ids);
         if result {
             return true;
@@ -3020,6 +3018,8 @@ where
         // broadcasting hibernate request. Because non hibernate vote peers may
         // be down, and they have not been detected as down peers. Down peers
         // are expected to encounter heartbeat timeout and be in probe state.
+        // Using 3 times of raft_heartbeat_interval as heartbeat_timeout_duration to
+        // determine whether a peer is unreachable.
         let heartbeat_timeout_duration = self.ctx.cfg.raft_heartbeat_interval() * 3;
         if self.fsm.peer.all_non_hibernate_vote_peers_unreachable(
             &hibernate_vote_peer_ids,

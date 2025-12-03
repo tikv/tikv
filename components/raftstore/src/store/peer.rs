@@ -1561,9 +1561,11 @@ where
             let elapsed = instant.saturating_elapsed();
             if elapsed >= heartbeat_timeout_duration {
                 return true;
+            } else {
+                return false;
             }
         }
-        false
+        true // If no heartbeat record, consider it as timeout.
     }
 
     /// Check if all non hibernate vote peers are unreachable.
@@ -1586,11 +1588,11 @@ where
             }
             if !hibernate_vote_peer_ids.contains(id) {
                 if pr.state != ProgressState::Probe {
-                    // Found a non-vote peer not in probe state, return false
+                    // Found a non-hibernate-vote peer not in probe state, return false
                     return false;
                 }
                 if !self.is_peer_heartbeat_timeout(*id, heartbeat_timeout_duration) {
-                    // Found a non-vote peer not in heartbeat timeout, return false
+                    // Found a non-hibernate-vote peer not in heartbeat timeout, return false
                     return false;
                 }
             }
@@ -2193,8 +2195,12 @@ where
         down_peers
     }
 
-    pub fn is_down_peer(&self, peer_id: u64) -> bool {
-        self.down_peer_ids.contains(&peer_id)
+    /// Returns the current list of down peer ids.
+    ///
+    /// This clones the internal `down_peer_ids` vector so callers can use it
+    /// without borrowing `self` mutably.
+    pub fn get_down_peer_ids(&self) -> Vec<u64> {
+        self.down_peer_ids.clone()
     }
 
     /// Collects all pending peers and update `peers_start_pending_time`.

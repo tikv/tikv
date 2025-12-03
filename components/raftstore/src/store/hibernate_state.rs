@@ -91,7 +91,7 @@ impl HibernateState {
         has_quorum: F,
         my_id: u64,
         region: &Region,
-        down_peer_ids: &Vec<u64>,
+        down_peer_ids: &[u64],
     ) -> (bool, Vec<u64>)
     where
         F: Fn(&HashSet<u64>) -> bool,
@@ -137,6 +137,8 @@ impl HibernateState {
                 // No alive non-hibernate-voter peer, but not enough votes to form a quorum
                 return (false, vote_peer_ids);
             } else {
+                // No alive non-hibernate-voter peer, and enough votes to form a quorum.
+                // We can proceed to do the following final check.
                 debug!(
                     "hibernate vote check passed by quorum with down peers";
                     "my_id" => my_id,
