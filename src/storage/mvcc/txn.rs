@@ -210,7 +210,7 @@ impl MvccTxn {
         mut lock: Lock,
         is_protected: bool,
     ) {
-        assert_ne!(lock.ts, self.start_ts);
+        assert!(!lock.contains_start_ts(&self.start_ts));
 
         if !is_protected {
             // A non-protected rollback record is ok to be overwritten, so do nothing in

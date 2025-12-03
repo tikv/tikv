@@ -842,6 +842,35 @@ impl SharedLocks {
         Ok(())
     }
 
+    /// Filters shared locks, keeping only those for which `f` returns true.
+    pub fn filter_shared_locks<F>(&mut self, mut f: F) -> Result<()>
+    where
+        F: FnMut(&Lock) -> bool,
+    {
+        let mut to_remove = Vec::new();
+
+        for (ts, either) in self.txn_info_segments.iter_mut() {
+            let keep = match either {
+                Either::Right(lock) => f(lock),
+                Either::Left(encoded) => {
+                    let lock = Lock::parse(encoded)?;
+                    let keep = f(&lock);
+                    *either = Either::Right(lock);
+                    keep
+                }
+            };
+
+            if !keep {
+                to_remove.push(*ts);
+            }
+        }
+
+        for ts in to_remove {
+            self.txn_info_segments.remove(&ts);
+        }
+        Ok(())
+    }
+
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut b = Vec::with_capacity(self.pre_allocate_size());
         b.push(LockType::Shared.to_u8());

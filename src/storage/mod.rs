@@ -12202,4 +12202,67 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_scan_lock_with_shared_lock() {
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
+        let key = Key::from_raw(b"shared-lock");
+        let pk1 = b"shared-pk-1".to_vec();
+        let pk2 = b"shared-pk-2".to_vec();
+
+        for (start_ts, primary) in [(10, pk1.clone()), (20, pk2.clone())] {
+            storage
+                .sched_txn_command(
+                    new_acquire_pessimistic_lock_command_with_pk_with_shared(
+                        vec![(key.clone(), false, true)],
+                        Some(primary.as_slice()),
+                        start_ts,
+                        start_ts + 1,
+                        false,
+                        false,
+                    ),
+                    expect_ok_callback(tx.clone(), 0),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+        }
+        storage
+            .sched_txn_command(
+                commands::Prewrite::with_defaults(
+                    vec![txn_types::Mutation::make_shared_lock(key)],
+                    pk2.clone(),
+                    20.into(),
+                ),
+                expect_ok_callback(tx, 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        let locks =
+            block_on(storage.scan_lock(Context::default(), 30.into(), None, None, 10)).unwrap();
+        assert_eq!(locks.len(), 1);
+        let lock = &locks[0];
+        assert_eq!(lock.get_key(), b"shared-lock");
+        assert_eq!(lock.get_lock_type(), Op::SharedLock);
+
+        let mut shared_locks = HashMap::default();
+        for lock in lock.get_shared_lock_infos() {
+            shared_locks.insert(lock.get_lock_version(), lock);
+        }
+        assert_eq!(shared_locks.len(), 2);
+
+        for (ts, for_update_ts, primary, op) in [
+            (10, 11, pk1, Op::SharedPessimisticLock),
+            (20, 21, pk2, Op::SharedLock),
+        ] {
+            let shared_lock = shared_locks.get(&ts).expect("shared lock missing");
+            assert_eq!(shared_lock.get_key(), b"shared-lock");
+            assert_eq!(shared_lock.get_primary_lock(), primary.as_slice());
+            assert_eq!(shared_lock.get_lock_type(), op);
+            assert_eq!(shared_lock.get_lock_for_update_ts(), for_update_ts);
+        }
+    }
 }

@@ -342,16 +342,23 @@ impl<S: EngineSnapshot> MvccReader<S> {
                         return Ok(None);
                     }
                 }
-                let lock = txn_types::parse_lock(cursor.value(&mut self.statistics.lock))?;
-                let lock_ref = match &lock {
-                    Either::Left(lock) => lock,
-                    Either::Right(_shared_locks) => unimplemented!(
-                        "SharedLocks returned from txn_types::parse_lock is not supported here"
-                    ),
-                };
-                if filter(&key, TxnLockRef::Persisted(lock_ref)) {
-                    self.statistics.lock.processed_keys += 1;
-                    return Ok(Some((key, lock)));
+                let mut lock = txn_types::parse_lock(cursor.value(&mut self.statistics.lock))?;
+                match &mut lock {
+                    Either::Left(l) => {
+                        if filter(&key, TxnLockRef::Persisted(l)) {
+                            self.statistics.lock.processed_keys += 1;
+                            return Ok(Some((key, lock)));
+                        }
+                    }
+                    Either::Right(shared_locks) => {
+                        shared_locks.filter_shared_locks(|shared_lock| {
+                            filter(&key, TxnLockRef::Persisted(shared_lock))
+                        })?;
+                        if !shared_locks.is_empty() {
+                            self.statistics.lock.processed_keys += 1;
+                            return Ok(Some((key, lock)));
+                        }
+                    }
                 }
                 cursor.next(&mut self.statistics.lock);
             }
@@ -740,21 +747,23 @@ impl<S: EngineSnapshot> MvccReader<S> {
                 }
             }
 
-            let lock = txn_types::parse_lock(cursor.value(&mut self.statistics.lock))?;
-            let lock_ref = match &lock {
-                Either::Left(lock) => lock,
-                Either::Right(_shared_locks) => {
-                    unimplemented!(
-                        "SharedLocks returned from txn_types::parse_lock is not supported here"
-                    )
+            let mut lock = txn_types::parse_lock(cursor.value(&mut self.statistics.lock))?;
+            match &mut lock {
+                Either::Left(l) => {
+                    if filter(&key, l) {
+                        locks.push((key, lock));
+                    }
                 }
-            };
-            if filter(&key, lock_ref) {
-                locks.push((key, lock));
-                if limit > 0 && locks.len() == limit {
-                    has_remain = true;
-                    break;
+                Either::Right(shared_locks) => {
+                    shared_locks.filter_shared_locks(|shared_lock| filter(&key, shared_lock))?;
+                    if !shared_locks.is_empty() {
+                        locks.push((key, lock));
+                    }
                 }
+            }
+            if limit > 0 && locks.len() == limit {
+                has_remain = true;
+                break;
             }
             cursor.next(&mut self.statistics.lock);
         }

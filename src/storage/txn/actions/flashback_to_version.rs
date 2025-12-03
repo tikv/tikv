@@ -82,16 +82,20 @@ pub fn rollback_locks(
         if txn.write_size() >= MAX_TXN_WRITE_SIZE {
             return Ok(Some(key));
         }
-        // To guarantee rollback with start ts of the locks
-        reader.start_ts = lock.ts;
-        rollback_lock(
-            txn,
-            &mut reader,
-            key.clone(),
-            &lock,
-            lock.is_pessimistic_txn(),
-            true,
-        )?;
+        if lock.is_shared() {
+            todo!("rollback all inner locks");
+        } else {
+            // To guarantee rollback with start ts of the locks
+            reader.start_ts = lock.ts;
+            rollback_lock(
+                txn,
+                &mut reader,
+                key.clone(),
+                &lock,
+                lock.is_pessimistic_txn(),
+                true,
+            )?;
+        }
     }
     Ok(None)
 }

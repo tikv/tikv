@@ -257,7 +257,7 @@ impl ErrorCodeExt for Error {
 pub mod tests {
     pub use actions::{
         acquire_pessimistic_lock::tests::{
-            must_err as must_acquire_pessimistic_lock_err,
+            must_acquire_shared_pessimistic_lock, must_err as must_acquire_pessimistic_lock_err,
             must_err_return_value as must_acquire_pessimistic_lock_return_value_err,
             must_err_shared_lock as must_acquire_shared_lock_err, must_pessimistic_locked,
             must_succeed as must_acquire_pessimistic_lock,

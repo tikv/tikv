@@ -10,7 +10,7 @@ use crate::storage::{
     ProcessResult, Result as StorageResult, Snapshot,
     kv::WriteData,
     lock_manager::LockManager,
-    mvcc::{MvccTxn, Result as MvccResult, SnapshotReader},
+    mvcc::{Error as MvccError, MvccTxn, Result as MvccResult, SnapshotReader},
     txn::{
         Result,
         commands::{
@@ -79,19 +79,33 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
                 .into()
             ));
             let released_lock: MvccResult<_> = if let Some(lock) = reader.load_lock(&key)? {
-                let lock = match lock {
-                    Either::Left(lock) => lock,
-                    Either::Right(_shared_locks) => {
-                        unimplemented!("SharedLocks returned from load_lock is not supported here")
+                match lock {
+                    Either::Left(lock) => {
+                        if lock.is_pessimistic_lock()
+                            && lock.ts == self.start_ts
+                            && lock.for_update_ts <= self.for_update_ts
+                        {
+                            Ok(txn.unlock_key(key, true, TimeStamp::zero()))
+                        } else {
+                            Ok(None)
+                        }
                     }
-                };
-                if lock.is_pessimistic_lock()
-                    && lock.ts == self.start_ts
-                    && lock.for_update_ts <= self.for_update_ts
-                {
-                    Ok(txn.unlock_key(key, true, TimeStamp::zero()))
-                } else {
-                    Ok(None)
+                    Either::Right(mut shared_locks) => {
+                        if let Some(shared_lock) = shared_locks
+                            .remove_lock(&self.start_ts)
+                            .map_err(MvccError::from)?
+                        {
+                            assert!(shared_lock.is_pessimistic_lock());
+                            if shared_locks.is_empty() {
+                                Ok(txn.unlock_key(key, true, TimeStamp::zero()))
+                            } else {
+                                txn.put_shared_locks(key, &shared_locks, false);
+                                Ok(None)
+                            }
+                        } else {
+                            Ok(None)
+                        }
+                    }
                 }
             } else {
                 Ok(None)
@@ -245,5 +259,32 @@ pub mod tests {
         must_success(&mut engine, k, 3, 3);
         must_success(&mut engine, k, 3, 4);
         must_success(&mut engine, k, 3, 5);
+    }
+
+    #[test]
+    fn test_rollback_shared_pessimistic_lock() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let key = b"shared-rollback";
+        let pk1 = b"pk1";
+        let pk2 = b"pk2";
+
+        // Acquire two shared pessimistic locks on the same key.
+        must_acquire_shared_pessimistic_lock(&mut engine, key, pk1, 10, 30, 3000);
+        must_acquire_shared_pessimistic_lock(&mut engine, key, pk2, 20, 20, 3000);
+
+        // Rolling back one shared pessimistic lock keeps the other entry.
+        must_success(&mut engine, key, 10, 30);
+        let mut shared_lock = must_load_shared_lock(&mut engine, key);
+        assert_eq!(shared_lock.shared_lock_num(), 1);
+        assert!(
+            shared_lock
+                .find_shared_lock_txn(&20.into())
+                .unwrap()
+                .is_some()
+        );
+
+        // Rolling back the last entry removes the lock entirely.
+        must_success(&mut engine, key, 20, 20);
+        must_unlocked(&mut engine, key);
     }
 }
