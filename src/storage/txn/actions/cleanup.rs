@@ -7,7 +7,7 @@ use crate::storage::{
         ErrorInner, Key, MvccTxn, ReleasedLock, Result as MvccResult, SnapshotReader, TimeStamp,
     },
     txn::actions::check_txn_status::{
-        check_txn_status_missing_lock, rollback_lock, MissingLockAction,
+        check_txn_status_missing_lock, rollback_lock, rollback_shared_lock, MissingLockAction,
     },
     Snapshot, TxnStatus,
 };
@@ -31,22 +31,37 @@ pub fn cleanup<S: Snapshot>(
     ));
 
     match reader.load_lock(&key)? {
-        Some(ref lock) if lock.ts == reader.start_ts => {
+        Some(mut lock) if lock.contains_start_ts(&reader.start_ts) => {
             // If current_ts is not 0, check the Lock's TTL.
             // If the lock is not expired, do not rollback it but report key is locked.
-            if !current_ts.is_zero() && lock.ts.physical() + lock.ttl >= current_ts.physical() {
-                return Err(
-                    ErrorInner::KeyIsLocked(lock.clone().into_lock_info(key.into_raw()?)).into(),
-                );
+            if !current_ts.is_zero() {
+                let expire_time = if lock.is_shared() {
+                    match lock.find_shared_lock_txn(&reader.start_ts)? {
+                        Some(l) => l.ts.physical() + l.ttl,
+                        _ => unreachable!(), // since lock.contains_start_ts returned true
+                    }
+                } else {
+                    lock.ts.physical() + lock.ttl
+                };
+                if expire_time >= current_ts.physical() {
+                    return Err(ErrorInner::KeyIsLocked(
+                        lock.clone().into_lock_info(key.into_raw()?),
+                    )
+                    .into());
+                }
             }
-            rollback_lock(
-                txn,
-                reader,
-                key,
-                lock,
-                lock.is_pessimistic_txn(),
-                !protect_rollback,
-            )
+            if lock.is_shared() {
+                rollback_shared_lock(txn, reader, key, lock, reader.start_ts, !protect_rollback)
+            } else {
+                rollback_lock(
+                    txn,
+                    reader,
+                    key,
+                    &lock,
+                    lock.is_pessimistic_txn(),
+                    !protect_rollback,
+                )
+            }
         }
         l => match check_txn_status_missing_lock(
             txn,
@@ -88,11 +103,15 @@ pub mod tests {
     #[cfg(test)]
     use crate::storage::{
         mvcc::tests::{
-            must_get_rollback_protected, must_get_rollback_ts, must_locked, must_unlocked,
-            must_written,
+            must_get_rollback_protected, must_get_rollback_ts, must_load_shared_lock, must_locked,
+            must_unlocked, must_written,
         },
+        txn::actions::tests::must_shared_prewrite_lock,
         txn::commands::txn_heart_beat,
-        txn::tests::{must_acquire_pessimistic_lock, must_pessimistic_prewrite_put},
+        txn::tests::{
+            must_acquire_pessimistic_lock, must_acquire_shared_pessimistic_lock,
+            must_pessimistic_prewrite_put,
+        },
         TestEngineBuilder,
     };
     use crate::storage::{
@@ -245,5 +264,114 @@ pub mod tests {
         );
         must_succeed(&mut engine, k, ts(13, 1), ts(120, 0));
         must_get_rollback_protected(&mut engine, k, ts(13, 1), true);
+    }
+
+    #[test]
+    fn test_cleanup_shared_lock() {
+        let ts = TimeStamp::compose;
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let pk = b"pk";
+        let shared_lock_key = b"shared";
+
+        // Case 1: shared pessimistic lock cleaned up after TTL expiration.
+        must_acquire_shared_pessimistic_lock(
+            &mut engine,
+            shared_lock_key,
+            pk,
+            ts(20, 0),
+            ts(25, 0),
+            10,
+        );
+        let shared_lock = must_load_shared_lock(&mut engine, shared_lock_key);
+        assert_eq!(shared_lock.shared_lock_num(), 1);
+
+        must_err(&mut engine, shared_lock_key, ts(20, 0), ts(30, 0));
+        must_succeed(&mut engine, shared_lock_key, ts(20, 0), ts(40, 0));
+        must_unlocked(&mut engine, shared_lock_key);
+        must_get_rollback_protected(&mut engine, shared_lock_key, ts(20, 0), false);
+
+        // Case 2: prewritten shared lock cleaned up after TTL expiration.
+        must_acquire_shared_pessimistic_lock(
+            &mut engine,
+            shared_lock_key,
+            pk,
+            ts(30, 0),
+            ts(35, 0),
+            10,
+        );
+        must_shared_prewrite_lock(&mut engine, shared_lock_key, pk, ts(30, 0), ts(35, 0));
+
+        let mut shared_lock = must_load_shared_lock(&mut engine, shared_lock_key);
+        assert_eq!(shared_lock.shared_lock_num(), 1);
+        let sub_lock = shared_lock
+            .find_shared_lock_txn(&ts(30, 0))
+            .unwrap()
+            .unwrap()
+            .clone();
+        assert_eq!(sub_lock.lock_type, txn_types::LockType::Lock);
+        assert_eq!(sub_lock.ttl, 10);
+
+        must_err(&mut engine, shared_lock_key, ts(30, 0), ts(40, 0));
+        must_succeed(&mut engine, shared_lock_key, ts(30, 0), ts(45, 0));
+        must_unlocked(&mut engine, shared_lock_key);
+        must_get_rollback_protected(&mut engine, shared_lock_key, ts(30, 0), false);
+    }
+
+    #[test]
+    fn test_cleanup_shared_lock_returns_released_lock() {
+        let ts = TimeStamp::compose;
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let pk = b"pk";
+        let shared_lock_key = b"shared-release";
+
+        must_acquire_shared_pessimistic_lock(
+            &mut engine,
+            shared_lock_key,
+            pk,
+            ts(40, 0),
+            ts(45, 0),
+            10,
+        );
+        must_acquire_shared_pessimistic_lock(
+            &mut engine,
+            shared_lock_key,
+            pk,
+            ts(50, 0),
+            ts(55, 0),
+            10,
+        );
+        let shared_lock = must_load_shared_lock(&mut engine, shared_lock_key);
+        assert_eq!(shared_lock.shared_lock_num(), 2);
+
+        for start_ts in [40, 50] {
+            let last_lock = start_ts == 50;
+            let snapshot = engine.snapshot(Default::default()).unwrap();
+            let current_ts = ts(start_ts + 20, 0);
+            let start_ts = ts(start_ts, 0);
+            let cm = ConcurrencyManager::new(current_ts);
+            let mut txn = MvccTxn::new(start_ts, cm);
+            let mut reader = SnapshotReader::new(start_ts, snapshot, true);
+            let released = cleanup(
+                &mut txn,
+                &mut reader,
+                Key::from_raw(shared_lock_key),
+                current_ts,
+                true,
+            )
+            .unwrap();
+            write(&engine, &Context::default(), txn.into_modifies());
+            must_get_rollback_protected(&mut engine, shared_lock_key, start_ts, false);
+
+            if !last_lock {
+                assert!(released.is_none());
+                continue;
+            }
+            assert!(released.is_some());
+            let released = released.unwrap();
+            assert_eq!(released.start_ts, start_ts);
+            assert!(released.commit_ts.is_zero());
+            assert!(released.pessimistic);
+        }
+        must_unlocked(&mut engine, shared_lock_key);
     }
 }

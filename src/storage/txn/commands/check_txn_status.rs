@@ -6,14 +6,14 @@ use txn_types::{Key, TimeStamp};
 use crate::storage::{
     kv::WriteData,
     lock_manager::LockManager,
-    mvcc::{MvccTxn, SnapshotReader},
+    mvcc::{ErrorInner, MvccTxn, SnapshotReader},
     txn::{
         actions::check_txn_status::*,
         commands::{
             Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
             WriteCommand, WriteContext, WriteResult,
         },
-        Result,
+        Error, Result,
     },
     ProcessResult, Snapshot, TxnStatus,
 };
@@ -113,6 +113,18 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
         ));
 
         let (txn_status, released) = match reader.load_lock(&self.primary_key)? {
+            Some(lock) if lock.is_shared() => {
+                // a shared-locked key cannot be the primary key of a transaction thus reject
+                // the request directly.
+                warn!("reject check_txn_status on shared lock";
+                    "shared_lock" => ?&lock,
+                    "lock_ts" => self.lock_ts,
+                    "key" => ?&self.primary_key,
+                );
+                return Err(Error::from_mvcc(ErrorInner::PrimaryMismatch(
+                    lock.into_lock_info(self.primary_key.into_raw()?),
+                )));
+            }
             Some(lock) if lock.ts == self.lock_ts => check_txn_status_lock_exists(
                 &mut txn,
                 &mut reader,
@@ -1286,6 +1298,11 @@ pub mod tests {
             b"k2",
             kvrpcpb::Op::Put,
         );
+
+        must_acquire_shared_pessimistic_lock(&mut engine, b"k2", b"k3", 2, 2, 100);
+        let e = must_err(&mut engine, b"k2", 1, 3, 3, true, false, true);
+        // TODO(slock): may adjust according to the impl of shared_lock.into_lock_info
+        check_error(e, b"k2", b"", kvrpcpb::Op::SharedLock);
     }
 
     #[test]

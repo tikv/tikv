@@ -163,6 +163,7 @@ pub(crate) fn decode_write(key: &[u8], value: &[u8], is_apply: bool) -> Option<W
     }
 }
 
+#[cfg_attr(not(debug_assertions), allow(unused_variables))]
 pub(crate) fn decode_lock(key: &[u8], value: &[u8]) -> Option<Lock> {
     let lock_type = Lock::detect_lock_type(value).ok()?;
     match lock_type {
