@@ -1317,7 +1317,8 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             let mut end_next = req.get_range().get_end().to_owned();
             end_next.push(0);
             let end_next_data_key = keys::data_key(Key::from_raw(&end_next).as_encoded());
-            let opts = ManualCompactionOptions::new(false, 1, true);
+            let mut opts = ManualCompactionOptions::new(false, 1, true);
+            opts.set_check_range_overlap_on_bottom_level(true);
             for cf in [CF_WRITE, CF_DEFAULT] {
                 for rg in [(&*start, &*start_next_data_key), (&end, &end_next_data_key)] {
                     let start = Instant::now_coarse();
@@ -1588,7 +1589,7 @@ mod test {
     fn convert_write_batch_to_request_raftkv1(ctx: &Context, batch: WriteData) -> RaftCmdRequest {
         let reqs: Vec<Request> = batch.modifies.into_iter().map(Into::into).collect();
         let txn_extra = batch.extra;
-        let mut header = raftkv::new_request_header(ctx);
+        let mut header = raftkv::new_request_header(ctx, None);
         if batch.avoid_batch {
             header.set_uuid(uuid::Uuid::new_v4().as_bytes().to_vec());
         }

@@ -122,6 +122,19 @@ impl<S: Storage, F: KvFormat> BatchExecutor for BatchTableScanExecutor<S, F> {
     }
 
     #[inline]
+    fn intermediate_schema(&self, index: usize) -> Result<&[FieldType]> {
+        self.0.intermediate_schema(index)
+    }
+
+    #[inline]
+    fn consume_and_fill_intermediate_results(
+        &mut self,
+        results: &mut [Vec<BatchExecuteResult>],
+    ) -> Result<()> {
+        self.0.consume_and_fill_intermediate_results(results)
+    }
+
+    #[inline]
     async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         self.0.next_batch(scan_rows).await
     }
@@ -1369,13 +1382,13 @@ mod tests {
         }
 
         let handle = datum::encode_key(&mut EvalContext::default(), &handle).unwrap();
-        let key = table::encode_common_handle_for_test(TABLE_ID, &handle);
+        let key = table::encode_common_handle(TABLE_ID, &handle);
         let value = table::encode_row(&mut EvalContext::default(), row, &column_ids).unwrap();
 
         // Constructs a range that includes the constructed key.
         let mut key_range = KeyRange::default();
-        let begin = table::encode_common_handle_for_test(TABLE_ID - 1, &handle);
-        let end = table::encode_common_handle_for_test(TABLE_ID + 1, &handle);
+        let begin = table::encode_common_handle(TABLE_ID - 1, &handle);
+        let end = table::encode_common_handle(TABLE_ID + 1, &handle);
         key_range.set_start(begin);
         key_range.set_end(end);
 
@@ -1550,13 +1563,13 @@ mod tests {
 
         let handle = datum::encode_key(&mut EvalContext::default(), &handle).unwrap();
 
-        let key = table::encode_common_handle_for_test(TABLE_ID, &handle);
+        let key = table::encode_common_handle(TABLE_ID, &handle);
         let value = table::encode_row(&mut EvalContext::default(), row, &column_ids).unwrap();
 
         // Constructs a range that includes the constructed key.
         let mut key_range = KeyRange::default();
-        let begin = table::encode_common_handle_for_test(TABLE_ID - 1, &handle);
-        let end = table::encode_common_handle_for_test(TABLE_ID + 1, &handle);
+        let begin = table::encode_common_handle(TABLE_ID - 1, &handle);
+        let end = table::encode_common_handle(TABLE_ID + 1, &handle);
         key_range.set_start(begin);
         key_range.set_end(end);
 

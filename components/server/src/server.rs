@@ -505,6 +505,7 @@ where
                 ),
             ),
             engines.kv.clone(),
+            self.region_info_accessor.clone(),
             self.region_info_accessor.as_ref().unwrap().region_leaders(),
         );
 
@@ -896,6 +897,7 @@ where
             debug_thread_pool,
             health_controller,
             self.resource_manager.clone(),
+            self.core.background_worker.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
         cfg_controller.register(

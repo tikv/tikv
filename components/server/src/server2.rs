@@ -829,6 +829,7 @@ where
             debug_thread_pool,
             health_controller,
             self.resource_manager.clone(),
+            self.core.background_worker.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
         cfg_controller.register(
