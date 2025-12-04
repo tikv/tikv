@@ -15,6 +15,7 @@ use tikv_util::{
     debug,
     resource_control::{DEFAULT_RESOURCE_GROUP_NAME, TaskPriority},
     sys::{SysQuota, cpu_time::ProcessStat},
+    thread_name::{SCHEDULE_WORKER_PRIORITY_THREAD_PREFIX, UNIFIED_READ_POOL_THREAD_PREFIX},
     time::Instant,
     warn,
     yatp_pool::metrics::YATP_POOL_SCHEDULE_WAIT_DURATION_VEC,
@@ -548,7 +549,7 @@ struct PriorityLimiterStatsTracker {
 impl PriorityLimiterStatsTracker {
     fn new(limiter: Arc<ResourceLimiter>, priority: &'static str) -> Self {
         let task_wait_dur_trakcers =
-            ["unified-read-pool", "sched-worker-priority"].map(|pool_name| {
+            [UNIFIED_READ_POOL_THREAD_PREFIX, SCHEDULE_WORKER_PRIORITY_THREAD_PREFIX].map(|pool_name| {
                 HistogramTracker::new(
                     YATP_POOL_SCHEDULE_WAIT_DURATION_VEC
                         .get_metric_with_label_values(&[pool_name, priority])
@@ -591,7 +592,7 @@ impl PriorityLimiterStatsTracker {
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
-
+    use tikv_util::thread_name::BACKGROUND_WORKER_THREAD_PREFIX;
     use super::*;
     use crate::{resource_group::tests::*, resource_limiter::QuotaLimiter};
 
@@ -822,10 +823,10 @@ mod tests {
             .unwrap();
         assert_eq!(&*new_limiter as *const _, &*limiter as *const _);
 
-        let bg = new_background_resource_group_ru("background".into(), 1000, 15, vec!["br".into()]);
+        let bg = new_background_resource_group_ru(BACKGROUND_WORKER_THREAD_PREFIX.into(), 1000, 15, vec!["br".into()]);
         resource_ctl.add_resource_group(bg);
         let bg_limiter = resource_ctl
-            .get_background_resource_limiter("background", "br")
+            .get_background_resource_limiter(BACKGROUND_WORKER_THREAD_PREFIX, "br")
             .unwrap();
 
         reset_quota(&mut worker, 5.0, 7000.0, Duration::from_secs(1));
@@ -882,14 +883,14 @@ mod tests {
             },
         );
 
-        let bg = new_resource_group_ru("background".into(), 1000, 15);
+        let bg = new_resource_group_ru(BACKGROUND_WORKER_THREAD_PREFIX.into(), 1000, 15);
         resource_ctl.add_resource_group(bg);
 
         let new_bg =
-            new_background_resource_group_ru("background".into(), 1000, 15, vec!["br".into()]);
+            new_background_resource_group_ru(BACKGROUND_WORKER_THREAD_PREFIX.into(), 1000, 15, vec!["br".into()]);
         resource_ctl.add_resource_group(new_bg);
         let new_bg_limiter = resource_ctl
-            .get_background_resource_limiter("background", "br")
+            .get_background_resource_limiter(BACKGROUND_WORKER_THREAD_PREFIX, "br")
             .unwrap();
         assert_ne!(&*bg_limiter as *const _, &*new_bg_limiter as *const _);
         assert!(

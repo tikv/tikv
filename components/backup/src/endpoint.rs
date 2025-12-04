@@ -40,6 +40,7 @@ use tikv_util::{
     impl_display_as_debug, info,
     resizable_threadpool::ResizableRuntime,
     store::find_peer,
+    thread_name::{BACKUP_IO_THREAD_PREFIX, BACKUP_WORKER_THREAD_PREFIX},
     time::{Instant, Limiter},
     warn,
     worker::Runnable,
@@ -693,7 +694,7 @@ impl SoftLimitKeeper {
         let mut quota_val = num_threads;
         if enable_auto_tune {
             quota_val = cpu_quota
-                .get_quota(|s| s.contains("bkwkr"))
+                .get_quota(|s| s.contains(BACKUP_WORKER_THREAD_PREFIX))
                 .clamp(1, num_threads);
         }
 
@@ -897,11 +898,11 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
     ) -> Endpoint<E, R> {
         let pool = ResizableRuntime::new(
             config.num_threads,
-            "bkwkr",
+            BACKUP_WORKER_THREAD_PREFIX,
             Box::new(utils::create_tokio_runtime),
             Box::new(|new_size| BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64)),
         );
-        let rt = utils::create_tokio_runtime(config.io_thread_size, "backup-io").unwrap();
+        let rt = utils::create_tokio_runtime(config.io_thread_size, BACKUP_IO_THREAD_PREFIX).unwrap();
         let config_manager = ConfigManager(Arc::new(RwLock::new(config)));
         let soft_limit_keeper = SoftLimitKeeper::new(config_manager.clone());
         rt.spawn(soft_limit_keeper.clone().run());
@@ -1367,7 +1368,10 @@ pub mod tests {
             txn::tests::{must_commit, must_prewrite_put},
         },
     };
-    use tikv_util::{config::ReadableSize, info, store::new_peer};
+    use tikv_util::{
+        config::ReadableSize, info, store::new_peer,
+        thread_name::BACKUP_WORKER_THREAD_PREFIX,
+    };
     use tokio::time;
     use txn_types::SHORT_VALUE_MAX_LEN;
 
@@ -1537,7 +1541,7 @@ pub mod tests {
         let counter = Arc::new(AtomicU32::new(0));
         let mut pool = ResizableRuntime::new(
             3,
-            "bkwkr",
+            BACKUP_WORKER_THREAD_PREFIX,
             Box::new(utils::create_tokio_runtime),
             Box::new(|new_size: usize| BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64)),
         );
@@ -2761,7 +2765,7 @@ pub mod tests {
         // threads)
         let mut pool = ResizableRuntime::new(
             1,
-            "bkwkr",
+            BACKUP_WORKER_THREAD_PREFIX,
             Box::new(utils::create_tokio_runtime),
             Box::new(|new_size: usize| BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64)),
         );

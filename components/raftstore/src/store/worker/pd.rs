@@ -45,6 +45,7 @@ use tikv_util::{
     store::QueryStats,
     sys::{SysQuota, disk, thread::StdThreadBuildWrapper},
     thd_name,
+    thread_name::STATS_MONITOR_THREAD_PREFIX,
     time::{Instant as TiInstant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
     topn::TopN,
@@ -751,7 +752,7 @@ where
             interval != 0 && timer_cnt % interval == 0
         }
         let h = Builder::new()
-            .name(thd_name!("stats-monitor"))
+            .name(thd_name!(STATS_MONITOR_THREAD_PREFIX))
             .spawn_wrapper(move || {
                 tikv_util::thread_group::set_properties(props);
 

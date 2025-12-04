@@ -19,7 +19,10 @@ use kvproto::metapb::RegionEpoch;
 use pd_client::PdClient;
 use raftstore::coprocessor::CoprocessorHost;
 use security::SecurityManager;
-use tikv_util::worker::FutureWorker;
+use tikv_util::{
+    thread_name::{DEADLOCK_DETECTOR_THREAD_PREFIX, WAITER_MANAGER_THREAD_PREFIX},
+    worker::FutureWorker,
+};
 use txn_types::TimeStamp;
 
 pub use self::{
@@ -89,8 +92,8 @@ impl Clone for LockManager {
 
 impl LockManager {
     pub fn new(cfg: &Config) -> Self {
-        let waiter_mgr_worker = FutureWorker::new("waiter-manager");
-        let detector_worker = FutureWorker::new("deadlock-detector");
+        let waiter_mgr_worker = FutureWorker::new(WAITER_MANAGER_THREAD_PREFIX);
+        let detector_worker = FutureWorker::new(DEADLOCK_DETECTOR_THREAD_PREFIX);
 
         Self {
             waiter_mgr_scheduler: WaiterMgrScheduler::new(waiter_mgr_worker.scheduler()),

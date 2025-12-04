@@ -340,8 +340,11 @@ pub mod tests {
     };
     use protobuf::Message;
     use test_pd::{Server as MockServer, mocker::MetaStorage, util::*};
-    use tikv_util::{config::ReadableDuration, worker::Builder};
-
+    use tikv_util::{
+        config::ReadableDuration,
+        thread_name::BACKGROUND_WORKER_THREAD_PREFIX,
+        worker::Builder
+    };
     use crate::resource_group::tests::{
         new_background_resource_group_ru, new_resource_group, new_resource_group_ru,
     };
@@ -433,7 +436,7 @@ pub mod tests {
             );
         };
 
-        let background_worker = Builder::new("background").thread_count(1).create();
+        let background_worker = Builder::new(BACKGROUND_WORKER_THREAD_PREFIX).thread_count(1).create();
         let mut s_clone = s.clone();
         background_worker.spawn_async_task(async move {
             s_clone.watch_resource_groups().await;
@@ -468,7 +471,7 @@ pub mod tests {
         let resource_manager = ResourceGroupManager::default();
 
         let s = ResourceManagerService::new(Arc::new(resource_manager), Arc::new(client));
-        let background_worker = Builder::new("background").thread_count(1).create();
+        let background_worker = Builder::new(BACKGROUND_WORKER_THREAD_PREFIX).thread_count(1).create();
         let mut s_clone = s.clone();
         background_worker.spawn_async_task(async move {
             s_clone.watch_resource_groups().await;
@@ -521,7 +524,7 @@ pub mod tests {
         let resource_manager = ResourceGroupManager::default();
 
         let s = ResourceManagerService::new(Arc::new(resource_manager), Arc::new(client));
-        let bg = new_background_resource_group_ru("background".into(), 1000, 15, vec!["br".into()]);
+        let bg = new_background_resource_group_ru(BACKGROUND_WORKER_THREAD_PREFIX.into(), 1000, 15, vec!["br".into()]);
         s.manager.add_resource_group(bg);
 
         // Set controller config.
@@ -537,7 +540,7 @@ pub mod tests {
         store_controller_config(s.clone().meta_client, cfg);
 
         fail::cfg("set_report_duration", "return(10)").unwrap();
-        let background_worker = Builder::new("background").thread_count(1).create();
+        let background_worker = Builder::new(BACKGROUND_WORKER_THREAD_PREFIX).thread_count(1).create();
         let s_clone = s.clone();
         background_worker.spawn_async_task(async move {
             s_clone.report_ru_metrics().await;
@@ -545,7 +548,7 @@ pub mod tests {
         // Mock consume.
         let bg_limiter = s
             .manager
-            .get_background_resource_limiter("background", "br")
+            .get_background_resource_limiter(BACKGROUND_WORKER_THREAD_PREFIX, "br")
             .unwrap();
         bg_limiter.consume(
             Duration::from_secs(2),
@@ -558,15 +561,15 @@ pub mod tests {
         // Wait for report ru metrics.
         std::thread::sleep(Duration::from_millis(100));
         // Mock update version.
-        let bg = new_resource_group_ru("background".into(), 1000, 15);
+        let bg = new_resource_group_ru(BACKGROUND_WORKER_THREAD_PREFIX.into(), 1000, 15);
         s.manager.add_resource_group(bg);
 
         let background_group =
-            new_background_resource_group_ru("background".into(), 500, 8, vec!["lightning".into()]);
+            new_background_resource_group_ru(BACKGROUND_WORKER_THREAD_PREFIX.into(), 500, 8, vec!["lightning".into()]);
         s.manager.add_resource_group(background_group);
         let new_bg_limiter = s
             .manager
-            .get_background_resource_limiter("background", "lightning")
+            .get_background_resource_limiter(BACKGROUND_WORKER_THREAD_PREFIX, "lightning")
             .unwrap();
         new_bg_limiter.consume(
             Duration::from_secs(5),

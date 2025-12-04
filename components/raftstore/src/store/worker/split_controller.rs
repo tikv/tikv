@@ -22,6 +22,7 @@ use tikv_util::{
     debug, info,
     metrics::ThreadInfoStatistics,
     store::{QueryStats, is_read_query},
+    thread_name::{GRPC_SERVER_THREAD_PREFIX, UNIFIED_READ_POOL_THREAD_PREFIX},
     time::Instant,
     warn,
 };
@@ -768,8 +769,8 @@ impl AutoSplitController {
         // Prepare some diagnostic info.
         thread_stats.record();
         let (grpc_thread_usage, unified_read_pool_thread_usage) = (
-            Self::collect_thread_usage(thread_stats, "grpc-server"),
-            Self::collect_thread_usage(thread_stats, "unified-read-po"),
+            Self::collect_thread_usage(thread_stats, GRPC_SERVER_THREAD_PREFIX),
+            Self::collect_thread_usage(thread_stats, UNIFIED_READ_POOL_THREAD_PREFIX),
         );
         // Update first before calculating the latest average gRPC poll CPU usage.
         self.update_grpc_thread_usage(grpc_thread_usage);

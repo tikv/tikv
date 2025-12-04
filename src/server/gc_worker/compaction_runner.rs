@@ -18,7 +18,11 @@ use kvproto::metapb::Region;
 use prometheus::*;
 use prometheus_static_metric::*;
 use raftstore::coprocessor::RegionInfoProvider;
-use tikv_util::{box_err, debug, error, info, sys::thread::StdThreadBuildWrapper, warn};
+use tikv_util::{
+    box_err, debug, error, info, warn,
+    sys::thread::StdThreadBuildWrapper,
+    thread_name::COMPACTION_RUNNER_THREAD_PREFIX,
+};
 use txn_types::TimeStamp;
 
 use super::{
@@ -158,7 +162,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
 
         let props = tikv_util::thread_group::current_properties();
         let res: Result<_> = ThreadBuilder::new()
-            .name(tikv_util::thd_name!("compaction-runner"))
+            .name(tikv_util::thd_name!(COMPACTION_RUNNER_THREAD_PREFIX))
             .spawn_wrapper(move || {
                 tikv_util::thread_group::set_properties(props);
                 self.run();

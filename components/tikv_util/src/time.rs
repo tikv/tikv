@@ -20,7 +20,10 @@ use time::{Duration as TimeDuration, Timespec};
 /// Returns the monotonic raw time since some unspecified starting point.
 pub use self::inner::monotonic_raw_now;
 pub use self::inner::{monotonic_coarse_now, monotonic_now};
-use crate::sys::thread::StdThreadBuildWrapper;
+use crate::{
+    sys::thread::StdThreadBuildWrapper,
+    thread_name::TIME_MONITOR_THREAD_PREFIX,
+};
 
 const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
 const MILLISECONDS_PER_SECOND: u64 = 1_000;
@@ -165,7 +168,7 @@ impl Monitor {
         let props = crate::thread_group::current_properties();
         let (tx, rx) = mpsc::channel();
         let h = Builder::new()
-            .name(thd_name!("time-monitor"))
+            .name(thd_name!(TIME_MONITOR_THREAD_PREFIX))
             .spawn_wrapper(move || {
                 crate::thread_group::set_properties(props);
 

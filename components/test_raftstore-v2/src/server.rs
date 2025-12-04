@@ -80,6 +80,7 @@ use tikv_util::{
     quota_limiter::QuotaLimiter,
     sys::thread::ThreadBuildWrapper,
     thd_name,
+    thread_name::RESOLVED_TS_WORKER_THREAD_PREFIX,
     worker::{Builder as WorkerBuilder, LazyWorker, Worker},
 };
 use tokio::runtime::{Builder as TokioBuilder, Handle};
@@ -474,7 +475,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
         let txn_status_cache = Arc::new(TxnStatusCache::new_for_test());
         let rts_worker = if cfg.resolved_ts.enable {
             // Resolved ts worker
-            let mut rts_worker = LazyWorker::new("resolved-ts");
+            let mut rts_worker = LazyWorker::new(RESOLVED_TS_WORKER_THREAD_PREFIX);
             let rts_ob = resolved_ts::Observer::new(rts_worker.scheduler());
             rts_ob.register_to(&mut coprocessor_host);
             // resolved ts endpoint needs store id.

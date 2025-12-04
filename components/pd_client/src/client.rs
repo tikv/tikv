@@ -31,6 +31,7 @@ use kvproto::{
 use security::SecurityManager;
 use tikv_util::{
     Either, HandyRwLock, box_err, debug, error, info, thd_name, time::Instant,
+    thread_name::PD_MONITOR_THREAD_PREFIX,    
     timer::GLOBAL_TIMER_HANDLE, warn,
 };
 use txn_types::TimeStamp;
@@ -84,7 +85,7 @@ impl RpcClient {
             v => v.saturating_add(1),
         };
         let monitor = Arc::new(
-            yatp::Builder::new(thd_name!("pdmonitor"))
+            yatp::Builder::new(thd_name!(PD_MONITOR_THREAD_PREFIX))
                 .max_thread_count(1)
                 .build_future_pool(),
         );

@@ -48,6 +48,10 @@ use tikv_util::{
     config::{Tracker, VersionTrack},
     log::SlogFormat,
     sys::{SysQuota, disk::get_disk_status},
+    thread_name::{
+        APPLY_WORKER_THREAD_PREFIX, PURGE_WORKER_THREAD_PREFIX,
+        RAFTSTORE_THREAD_PREFIX, REFRESH_CONFIG_WORKER_THREAD_PREFIX,
+    },
     time::{Instant as TiInstant, Limiter, duration_to_sec, monotonic_raw_now},
     timer::{GLOBAL_TIMER_HANDLE, SteadyTimer},
     worker::{Builder, LazyWorker, Scheduler, Worker},
@@ -397,7 +401,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         let apply_pool = YatpPoolBuilder::new(DefaultTicker::default())
             .thread_count(1, pool_size, max_pool_size)
             .after_start(move || set_io_type(IoType::ForegroundWrite))
-            .name_prefix("apply")
+            .name_prefix(APPLY_WORKER_THREAD_PREFIX)
             .build_future_pool();
         let global_stat = GlobalStoreStat::default();
         StorePollerBuilder {
@@ -579,7 +583,7 @@ where
             pending_latency_inspect: vec![],
         };
         poll_ctx.update_ticks_timeout();
-        let cfg_tracker = self.cfg.clone().tracker("raftstore".to_string());
+        let cfg_tracker = self.cfg.clone().tracker(RAFTSTORE_THREAD_PREFIX.to_string());
         StorePoller::new(poll_ctx, cfg_tracker)
     }
 }
@@ -641,7 +645,7 @@ impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
             checkpoint,
             async_write: StoreWriters::new(resource_control),
             purge,
-            refresh_config_worker: LazyWorker::new("refreash-config-worker"),
+            refresh_config_worker: LazyWorker::new(REFRESH_CONFIG_WORKER_THREAD_PREFIX),
             background,
             high_priority_pool: YatpPoolBuilder::new(DefaultTicker::default())
                 .thread_count(1, 1, 1)
@@ -714,7 +718,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         let purge_worker = if raft_engine.need_manual_purge()
             && !cfg.value().raft_engine_purge_interval.0.is_zero()
         {
-            let worker = Worker::new("purge-worker");
+            let worker = Worker::new(PURGE_WORKER_THREAD_PREFIX);
             let raft_clone = raft_engine.clone();
             let logger = self.logger.clone();
             let router = router.clone();

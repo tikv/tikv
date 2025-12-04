@@ -40,6 +40,7 @@ use tikv_kv::RaftExtension;
 use tikv_util::{
     config::{Tracker, VersionTrack},
     lru::LruCache,
+    thread_name::RAFT_STREAM_THREAD_PREFIX,
     time::{InstantExt, duration_to_sec},
     timer::GLOBAL_TIMER_HANDLE,
     worker::{Scheduler, Worker},
@@ -1067,7 +1068,7 @@ where
         background_worker: Worker,
     ) -> Self {
         let future_pool = Arc::new(
-            yatp::Builder::new(thd_name!("raft-stream"))
+            yatp::Builder::new(thd_name!(RAFT_STREAM_THREAD_PREFIX))
                 .max_thread_count(1)
                 .build_future_pool(),
         );

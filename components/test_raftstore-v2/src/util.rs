@@ -37,6 +37,7 @@ use tikv::{
 };
 use tikv_util::{
     HandyRwLock, config::ReadableDuration, escape, future::block_on_timeout, time::InstantExt,
+    thread_name::SST_RECOVERY_THREAD_PREFIX,
     worker::LazyWorker,
 };
 use txn_types::Key;
@@ -71,7 +72,7 @@ pub fn create_test_engine(
         .build_shared_rocks_env(key_manager.clone(), limiter)
         .unwrap();
 
-    let sst_worker = LazyWorker::new("sst-recovery");
+    let sst_worker = LazyWorker::new(SST_RECOVERY_THREAD_PREFIX);
     let scheduler = sst_worker.scheduler();
 
     let (raft_engine, raft_statistics) = RaftTestEngine::build(&cfg, &env, &key_manager, &cache);

@@ -223,17 +223,17 @@ mod test_utils {
 mod tests {
     use futures::executor::block_on;
     use tokio::runtime;
-
+    use tikv_util::thread_name::{GRPC_SERVER_THREAD_PREFIX, RAFTSTORE_THREAD_PREFIX, SNAP_SENDER_THREAD_PREFIX};
     use super::*;
 
     #[test]
     fn test_extract_thread_name() {
         assert_eq!(&extract_thread_name("test-name-1"), "test-name");
-        assert_eq!(&extract_thread_name("grpc-server-5"), "grpc-server");
+        assert_eq!(&extract_thread_name("grpc-server-5"), GRPC_SERVER_THREAD_PREFIX);
         assert_eq!(&extract_thread_name("rocksdb:bg1000"), "rocksdb:bg");
-        assert_eq!(&extract_thread_name("raftstore-1-100"), "raftstore");
-        assert_eq!(&extract_thread_name("snap sender1000"), "snap-sender");
-        assert_eq!(&extract_thread_name("snap_sender1000"), "snap-sender");
+        assert_eq!(&extract_thread_name("raftstore-1-100"), RAFTSTORE_THREAD_PREFIX);
+        assert_eq!(&extract_thread_name("snap sender1000"), SNAP_SENDER_THREAD_PREFIX);
+        assert_eq!(&extract_thread_name("snap_sender1000"), SNAP_SENDER_THREAD_PREFIX);
     }
 
     // Test there is at most 1 concurrent profiling.
