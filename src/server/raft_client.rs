@@ -1537,7 +1537,7 @@ impl HealthChecker {
         let now = Instant::now();
         {
             let mut latencies = max_latencies.lock().unwrap();
-            latencies.entry(store_id).insert_entry((0.0, now));
+            latencies.insert(store_id, (0.0, now));
         }
         match health_client.check_async_opt(&req, call_opt) {
             Ok(resp_future) => {
