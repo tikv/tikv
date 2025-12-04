@@ -1208,8 +1208,10 @@ impl TemporaryRocks {
         let tmp = TempDir::new().map_err(|v| format!("failed to create tmp dir: {}", v))?;
         let opt = build_rocks_opts(cfg);
         let cf_opts = cfg.rocksdb.build_cf_opts(
-            &cfg.rocksdb
-                .build_cf_resources(cfg.storage.block_cache.build_shared_cache()),
+            &cfg.rocksdb.build_cf_resources(
+                cfg.storage.block_cache.build_shared_cache(),
+                Default::default(),
+            ),
             None,
             cfg.storage.api_version(),
             None,
