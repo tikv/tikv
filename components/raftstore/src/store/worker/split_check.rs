@@ -754,7 +754,7 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             let source = match split_reason {
                 SplitReason::Size => "split_checker_by_size",
                 SplitReason::Load => "split_checker_by_load",
-                _ => "split checker by admin",
+                _ => "split_checker_by_admin",
             };
             self.router
                 .ask_split(region_id, region_epoch, split_keys, source.into());
