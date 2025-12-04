@@ -15,11 +15,13 @@ use tidb_query_datatype::{
     EvalType, FieldTypeAccessor,
     codec::{
         batch::{LazyBatchColumn, LazyBatchColumnVec},
-        row, table,
+        row,
+        table::{self, EXTRA_COMMIT_TS_COL_ID},
     },
     expr::{EvalConfig, EvalContext},
 };
 use tipb::{ColumnInfo, FieldType, TableScan};
+use txn_types::TimeStamp;
 
 use super::util::scan_executor::*;
 use crate::interface::*;
@@ -89,6 +91,7 @@ impl<S: Storage, F: KvFormat> BatchTableScanExecutor<S, F> {
             // id are given, we will only preserve the *last* one.
         }
 
+        let load_commit_ts = column_id_index.get(&EXTRA_COMMIT_TS_COL_ID).is_some();
         let no_common_handle = primary_column_ids.is_empty();
         let imp = TableScanExecutorImpl {
             context: EvalContext::new(config),
@@ -107,6 +110,7 @@ impl<S: Storage, F: KvFormat> BatchTableScanExecutor<S, F> {
             is_key_only,
             accept_point_range: no_common_handle,
             is_scanned_range_aware,
+            load_commit_ts,
         })?;
         Ok(Self(wrapper))
     }
@@ -356,6 +360,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         key: &[u8],
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
+        commit_ts: Option<TimeStamp>,
     ) -> Result<()> {
         use tidb_query_datatype::codec::datum;
 
@@ -408,13 +413,22 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
             table::check_record_key(key)?;
         }
 
-        let some_physical_table_id_column_index = self
+        if let Some(idx) = self
             .column_id_index
-            .get(&table::EXTRA_PHYSICAL_TABLE_ID_COL_ID);
-        if let Some(idx) = some_physical_table_id_column_index {
+            .get(&table::EXTRA_PHYSICAL_TABLE_ID_COL_ID)
+        {
             let table_id = table::decode_table_id(key)?;
             columns[*idx].mut_decoded().push_int(Some(table_id));
             self.is_column_filled[*idx] = true;
+        }
+
+        if let Some(idx) = self.column_id_index.get(&table::EXTRA_COMMIT_TS_COL_ID) {
+            if let Some(ts) = commit_ts {
+                columns[*idx]
+                    .mut_decoded()
+                    .push_int(Some(ts.into_inner() as i64));
+                self.is_column_filled[*idx] = true;
+            }
         }
 
         // Some fields may be missing in the row, we push corresponding default value to
