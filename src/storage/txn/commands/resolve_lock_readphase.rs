@@ -77,7 +77,6 @@ impl<S: Snapshot> ReadCommand<S> for ResolveLockReadPhase {
             kv_pairs
         };
 
-
         if flatten_pairs.is_empty() {
             Ok(ProcessResult::Res)
         } else {

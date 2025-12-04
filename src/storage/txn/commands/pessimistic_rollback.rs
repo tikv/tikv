@@ -92,12 +92,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
                             .map_err(MvccError::from)?
                         {
                             assert!(shared_lock.is_pessimistic_lock());
-                            if lock.shared_lock_num() == 0 {
-                                Ok(txn.unlock_key(key, true, TimeStamp::zero()))
-                            } else {
-                                txn.put_lock(key, &lock, false);
-                                Ok(None)
-                            }
+                            Ok(txn.update_shared_locked_key(key, lock, TimeStamp::zero()))
                         } else {
                             Ok(None)
                         }
