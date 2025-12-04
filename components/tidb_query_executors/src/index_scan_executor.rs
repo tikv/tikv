@@ -27,6 +27,7 @@ use tidb_query_datatype::{
     expr::{EvalConfig, EvalContext},
 };
 use tipb::{ColumnInfo, FieldType, IndexScan};
+use txn_types::TimeStamp;
 
 use super::util::scan_executor::*;
 use crate::interface::*;
@@ -151,6 +152,7 @@ impl<S: Storage, F: KvFormat> BatchIndexScanExecutor<S, F> {
             is_key_only: false,
             accept_point_range: unique,
             is_scanned_range_aware,
+            load_commit_ts: false,
         })?;
         Ok(Self(wrapper))
     }
@@ -354,6 +356,7 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
         key: &[u8],
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
+        _commit_ts: Option<TimeStamp>,
     ) -> Result<()> {
         check_index_key(key)?;
         let key_payload = &key[table::PREFIX_LEN + table::ID_LEN..];

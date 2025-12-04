@@ -12,8 +12,8 @@ use tidb_query_common::{
     Result,
     error::StorageError,
     storage::{
-        FindRegionResult, IntervalRange, OwnedKvPair, PointRange, RegionStorageAccessor,
-        Result as StorageResult, StateRole, Storage,
+        FindRegionResult, IntervalRange, OwnedKvPair, OwnedKvPairEntry, PointRange,
+        RegionStorageAccessor, Result as StorageResult, StateRole, Storage,
     },
 };
 use tidb_query_datatype::{
@@ -218,20 +218,22 @@ impl Storage for MockStorage {
         &mut self,
         _is_backward_scan: bool,
         _is_key_only: bool,
+        _load_commit_ts: bool,
         _range: IntervalRange,
     ) -> StorageResult<()> {
         unimplemented!()
     }
 
-    fn scan_next(&mut self) -> StorageResult<Option<OwnedKvPair>> {
+    fn scan_next_entry(&mut self) -> StorageResult<Option<OwnedKvPairEntry>> {
         unimplemented!()
     }
 
-    fn get(
+    fn get_entry(
         &mut self,
+        _load_commit_ts: bool,
         _is_key_only: bool,
         _range: PointRange,
-    ) -> StorageResult<Option<OwnedKvPair>> {
+    ) -> StorageResult<Option<OwnedKvPairEntry>> {
         unimplemented!()
     }
 
