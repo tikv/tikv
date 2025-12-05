@@ -1662,6 +1662,7 @@ where
                 let region_id = resp.get_region_id();
                 let epoch = resp.take_region_epoch();
                 let peer = resp.take_target_peer();
+
                 if resp.has_change_split() {
                     if resp.get_change_split().get_auto_split_enabled() {
                         split_auditor.enable(region_id);
