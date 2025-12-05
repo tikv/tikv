@@ -1,5 +1,1 @@
-<<<<<<< HEAD
-ddf1d175f430b1c3cb7aff5676f026e0586e92a0d569d54e0feb2ed99fb5efd2  ./metrics/grafana/tikv_details.json
-=======
-d67220b596b040f744352460e3db53d0f15ad407f5c02b7cfccc280115670c5e  ./metrics/grafana/tikv_details.json
->>>>>>> 49d59253dd (metrics: fix some grafana panels' settings (#19132))
+a6d7f4cdbf32ea0056137c23da94c078f7a262122a2ee01edaa82b975acb3740  ./metrics/grafana/tikv_details.json

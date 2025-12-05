@@ -79,8 +79,8 @@ impl Chunk {
         RowIterator::new(self)
     }
 
-    #[cfg(test)]
-    pub fn decode(
+    /// Only use for test
+    pub fn decode_for_test(
         buf: &mut tikv_util::codec::BytesSlice<'_>,
         field_types: &[FieldType],
     ) -> Result<Chunk> {
@@ -90,7 +90,7 @@ impl Chunk {
         for ft in field_types {
             chunk
                 .columns
-                .push(Column::decode(buf, ft.as_accessor().tp())?);
+                .push(Column::decode_for_test(buf, ft.as_accessor().tp())?);
         }
         Ok(chunk)
     }
@@ -145,7 +145,7 @@ pub struct RowIterator<'a> {
 }
 
 impl<'a> RowIterator<'a> {
-    fn new(chunk: &'a Chunk) -> RowIterator<'a> {
+    pub fn new(chunk: &'a Chunk) -> RowIterator<'a> {
         RowIterator { c: chunk, idx: 0 }
     }
 }
@@ -359,7 +359,7 @@ mod tests {
         }
         let mut data = vec![];
         data.write_chunk(&chunk).unwrap();
-        let got = Chunk::decode(&mut data.as_slice(), &fields).unwrap();
+        let got = Chunk::decode_for_test(&mut data.as_slice(), &fields).unwrap();
         assert_eq!(got.num_cols(), fields.len());
         assert_eq!(got.num_rows(), rows);
         for row_id in 0..rows {

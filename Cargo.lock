@@ -3692,7 +3692,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?branch=release-8.5#97d984880071228de123095a1550a9236e92d224"
+source = "git+https://github.com/pingcap/kvproto.git?branch=release-8.5#16ca15dcacd0546392d6fac41267928c4ca4ccc7"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -7187,6 +7187,7 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "api_version",
+ "async-trait",
  "byteorder",
  "derive_more",
  "error_code",
@@ -7196,6 +7197,7 @@ dependencies = [
  "log_wrappers",
  "prometheus",
  "prometheus-static-metric",
+ "raft",
  "serde_json",
  "thiserror 1.0.40",
  "tikv_util",
@@ -7273,6 +7275,7 @@ dependencies = [
  "tikv_util",
  "tipb",
  "tipb_helper",
+ "txn_types",
 ]
 
 [[package]]
@@ -7722,7 +7725,7 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#cf70966bef25e205cb845c19265301542d1238d1"
+source = "git+https://github.com/pingcap/tipb.git?branch=release-8.5#097db0b2c02a9a3e964a35403aa05b7c9bc0f6c2"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
