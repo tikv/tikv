@@ -51,6 +51,10 @@ pub struct ExecutionConfig {
     pub from_ts: u64,
     /// Filter out files doesn't contain any record with TS less than this.
     pub until_ts: u64,
+    /// The max count of running prefetch tasks.
+    pub prefetch_running_count: u64,
+    /// The max count of saved prefetch tasks in the queue.
+    pub prefetch_buffer_count: u64,
     /// The compress algorithm we are going to use for output.
     pub compression: SstCompressionType,
     /// The compress level we are going to use.
@@ -153,11 +157,12 @@ impl Execution {
     async fn run_prepared(&self, cx: &mut ExecuteCtx<'_, impl ExecHooks>) -> Result<()> {
         let mut ext = LoadFromExt::default();
         let next_compaction = trace_span!("next_compaction");
-        ext.max_concurrent_fetch = 128;
         ext.loading_content_span = Some(trace_span!(
             parent: next_compaction.clone(),
             "load_meta_file_names"
         ));
+        ext.prefetch_running_count = self.cfg.prefetch_running_count as usize;
+        ext.prefetch_buffer_count = self.cfg.prefetch_buffer_count as usize;
 
         let ExecuteCtx {
             ref storage,
