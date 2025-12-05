@@ -812,7 +812,9 @@ pub fn configure_for_hibernate(config: &mut Config) {
     // Uses long check interval to make leader keep sleeping during tests.
     config.raft_store.abnormal_leader_missing_duration = ReadableDuration::secs(20);
     config.raft_store.max_leader_missing_duration = ReadableDuration::secs(40);
-    config.raft_store.peer_stale_state_check_interval = ReadableDuration::secs(10);
+    config.raft_store.peer_stale_state_check_interval = ReadableDuration::secs(5);
+    // speed up down peer detection
+    config.raft_store.max_peer_down_duration = ReadableDuration::secs(5);
 }
 
 pub fn configure_for_snapshot(config: &mut Config) {
