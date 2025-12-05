@@ -14,6 +14,7 @@ mod read;
 mod refresh_config;
 mod region;
 mod snap_gen;
+mod split_auditor;
 mod split_check;
 mod split_config;
 mod split_controller;
@@ -43,6 +44,7 @@ pub use self::{
     },
     region::{Runner as RegionRunner, Task as RegionTask},
     snap_gen::{Runner as SnapGenRunner, SNAP_GENERATOR_MAX_POOL_SIZE, Task as SnapGenTask},
+    split_auditor::SplitAuditor,
     split_check::{
         Bucket, BucketRange, BucketStatsInfo, KeyEntry, Runner as SplitCheckRunner,
         Task as SplitCheckTask,
