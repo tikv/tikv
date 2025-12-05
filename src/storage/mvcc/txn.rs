@@ -174,6 +174,23 @@ impl MvccTxn {
         Some(released)
     }
 
+    /// Update a shared locked key: either unlock the key if there is no lock
+    /// left or write the updated shared lock back.
+    pub(crate) fn update_shared_locked_key(
+        &mut self,
+        key: Key,
+        lock: Lock,
+        commit_ts: TimeStamp,
+    ) -> Option<ReleasedLock> {
+        assert!(lock.is_shared());
+        if lock.shared_lock_num() == 0 {
+            self.unlock_key(key, true, commit_ts)
+        } else {
+            self.put_lock(key, &lock, false);
+            None
+        }
+    }
+
     pub(crate) fn put_value(&mut self, key: Key, ts: TimeStamp, value: Value) {
         let write = Modify::Put(CF_DEFAULT, key.append_ts(ts), value);
         self.write_size += write.size();

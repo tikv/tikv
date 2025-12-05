@@ -390,12 +390,7 @@ pub fn rollback_shared_lock(
             )
         }
         _ => {
-            return if shared_lock.shared_lock_num() == 0 {
-                Ok(txn.unlock_key(key, true, TimeStamp::zero()))
-            } else {
-                txn.put_lock(key.clone(), &shared_lock, false);
-                Ok(None)
-            };
+            return Ok(txn.update_shared_locked_key(key, shared_lock, TimeStamp::zero()));
         }
     };
 
@@ -410,12 +405,7 @@ pub fn rollback_shared_lock(
         collapse_prev_rollback(txn, reader, &key)?;
     }
 
-    if shared_lock.shared_lock_num() == 0 {
-        Ok(txn.unlock_key(key, true, TimeStamp::zero()))
-    } else {
-        txn.put_lock(key.clone(), &shared_lock, false);
-        Ok(None)
-    }
+    Ok(txn.update_shared_locked_key(key, shared_lock, TimeStamp::zero()))
 }
 
 pub fn collapse_prev_rollback(
