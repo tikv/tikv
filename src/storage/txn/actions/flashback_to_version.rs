@@ -204,6 +204,7 @@ pub fn commit_flashback_key(
     flashback_commit_ts: TimeStamp,
 ) -> TxnResult<()> {
     if let Some(mut lock) = reader.load_lock(key_to_commit)? {
+        // TODO(slock): handle shared lock.
         txn.put_write(
             key_to_commit.clone(),
             flashback_commit_ts,
