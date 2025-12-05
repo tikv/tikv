@@ -10141,6 +10141,25 @@ def SlowTrendStatistics() -> RowPanel:
             ),
         ]
     )
+    layout.row(
+        [
+            graph_panel(
+                title="Inspected network duration per server",
+                description="The duration that recorded by inspecting network. Note: it will be collected only when duration is greater than 100ms, to avoid collect too many metrics.",
+                yaxes=yaxes(left_format=UNITS.MILLI_SECONDS),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.8,
+                            "tikv_raftstore_inspect_network_duration_seconds",
+                            by_labels=["source", "type"],
+                        ),
+                        legend_format="{{source}}-{{target}}",
+                    ),
+                ],
+            ),
+        ]
+    )
     return layout.row_panel
 
 
