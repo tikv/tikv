@@ -163,9 +163,11 @@ impl<S: Stream<Item = Result<LogFile>>> Stream for CollectSubcompaction<S> {
 mod test {
     use std::sync::Arc;
 
+    use bytes::Bytes;
     use engine_traits::CF_WRITE;
     use futures::stream::{self, StreamExt, TryStreamExt};
     use kvproto::brpb;
+    use protobuf::Chars;
 
     use super::{CollectSubcompaction, CollectSubcompactionConfig, SubcompactionCollectKey};
     use crate::{
@@ -177,7 +179,7 @@ mod test {
     fn log_file(name: &str, len: u64, key: SubcompactionCollectKey) -> LogFile {
         LogFile {
             id: LogFileId {
-                name: Arc::from(name.to_owned().into_boxed_str()),
+                name: Chars::from(name),
                 offset: 0,
                 length: len,
             },
@@ -187,8 +189,8 @@ mod test {
             file_real_size: len,
             min_ts: 0,
             max_ts: 0,
-            min_key: Arc::from([]),
-            max_key: Arc::from([]),
+            min_key: Bytes::new(),
+            max_key: Bytes::new(),
             is_meta: key.is_meta,
             region_id: key.region_id,
             cf: key.cf,
@@ -196,7 +198,7 @@ mod test {
             min_start_ts: 0,
             table_id: 0,
             resolved_ts: 0,
-            sha256: Arc::from([]),
+            sha256: Bytes::new(),
             region_start_key: None,
             region_end_key: None,
             region_epoches: None,
