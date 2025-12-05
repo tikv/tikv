@@ -1564,7 +1564,7 @@ where
         true // If no heartbeat record, consider it as timeout.
     }
 
-    /// Check if all non hibernate vote peers are unreachable.
+    /// Checks if all peers that have not sent a hibernate vote are unreachable.
     /// If one peer is unreachable, it must be in probe state and encounter
     /// heartbeat timeout.
     pub fn all_non_hibernate_vote_peers_unreachable(

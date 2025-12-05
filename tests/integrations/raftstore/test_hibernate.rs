@@ -807,11 +807,10 @@ fn test_hibernate_quorum_feature_voter_down_shortly() {
 
 fn make_cb(cmd: &RaftCmdRequest) -> (Callback<RocksSnapshot>, CbReceivers) {
     let (proposed_tx, proposed_rx) = mpsc::channel();
-    let (committed_tx, _committed_rx) = mpsc::channel();
     let (cb, _applied_rx) = make_cb_ext::<RocksEngine>(
         cmd,
         Some(Box::new(move || proposed_tx.send(()).unwrap())),
-        Some(Box::new(move || committed_tx.send(()).unwrap())),
+        None,
     );
     (
         cb,
