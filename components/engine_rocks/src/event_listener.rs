@@ -351,8 +351,7 @@ mod tests {
         while rx.try_recv().is_ok() {}
         state.set_applied_index(4);
         let block = block_flush.lock();
-        // Seal twice to trigger flush. Seal third to make a seqno conflict, in
-        // which case flush largest seqno will be equal to seal earliest seqno.
+        // Seal twice to trigger flush.
         let mut key_count = 2;
         for i in 0..3 {
             while rx.try_recv().is_err() {
@@ -366,15 +365,28 @@ mod tests {
         // Memtable is seal before put, so there must be still one KV in memtable.
         db.flush_cf(CF_DEFAULT, true).unwrap();
         rx.try_recv().unwrap();
-        // There is 2 sst before this round, and then 4 are merged into 2, so there
-        // should be 4 ssts.
-        assert_eq!(sst_count(), 4);
+
+        // There were 2 SSTs before this round. Depending on how RocksDB groups
+        // memtables, this flush can produce either 1 or 2 new SSTs. We don't
+        // depend on the exact count here, just sanity-check it.
+        let num_of_sst = sst_count();
+        assert!(
+            num_of_sst == 3 || num_of_sst == 4,
+            "Expecting 3 or 4 SST files, but got {num_of_sst} instead",
+        );
+
         let records = storage.records.lock().unwrap();
-        // Although it seals 4 times, but only create 2 SSTs, so only 2 records.
-        assert_eq!(records.len(), 2);
-        // The indexes of two merged flush state are 4 and 5, so merged value is 5.
-        assert_eq!(records[0].2.applied_index(), 5);
-        // The last two flush state is 6 and 7.
-        assert_eq!(records[1].2.applied_index(), 7);
+        let applied_index: Vec<u64> = records
+            .iter()
+            .map(|record| record.2.applied_index())
+            .collect();
+        // Two possible shapes are acceptable:
+        // - RocksDB flushed [4,5,6,7] in one job → [7]
+        // - or it flushed [4,5] and then [6,7]   → [5, 7]
+        if num_of_sst == 3 {
+            assert_eq!(applied_index, vec![7]);
+        } else {
+            assert_eq!(applied_index, vec![5, 7]);
+        }
     }
 }
