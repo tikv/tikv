@@ -1,19 +1,19 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{atomic::*, mpsc::TryRecvError, *},
+    sync::{atomic::*, *},
     thread,
     time::Duration,
 };
 
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use futures::executor::block_on;
-use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
+use kvproto::raft_cmdpb::RaftCmdRequest;
 use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raftstore::store::msg::*;
 use test_raftstore::*;
-use tikv_util::{HandyRwLock, config::ReadableDuration, mpsc::future, time::Instant};
+use tikv_util::{HandyRwLock, config::ReadableDuration, time::Instant};
 
 #[test]
 fn test_proposal_prevent_sleep() {
@@ -807,8 +807,8 @@ fn test_hibernate_quorum_feature_voter_down_shortly() {
 
 fn make_cb(cmd: &RaftCmdRequest) -> (Callback<RocksSnapshot>, CbReceivers) {
     let (proposed_tx, proposed_rx) = mpsc::channel();
-    let (committed_tx, committed_rx) = mpsc::channel();
-    let (cb, applied_rx) = make_cb_ext::<RocksEngine>(
+    let (committed_tx, _committed_rx) = mpsc::channel();
+    let (cb, _applied_rx) = make_cb_ext::<RocksEngine>(
         cmd,
         Some(Box::new(move || proposed_tx.send(()).unwrap())),
         Some(Box::new(move || committed_tx.send(()).unwrap())),
@@ -817,8 +817,6 @@ fn make_cb(cmd: &RaftCmdRequest) -> (Callback<RocksSnapshot>, CbReceivers) {
         cb,
         CbReceivers {
             proposed: proposed_rx,
-            committed: committed_rx,
-            applied: applied_rx,
         },
     )
 }
@@ -838,45 +836,9 @@ fn make_write_req(cluster: &mut Cluster<NodeCluster>, k: &[u8], v: &[u8]) -> Raf
 
 struct CbReceivers {
     proposed: mpsc::Receiver<()>,
-    committed: mpsc::Receiver<()>,
-    applied: future::Receiver<RaftCmdResponse>,
 }
 
 impl CbReceivers {
-    fn assert_not_ready(&mut self) {
-        sleep_ms(100);
-        assert_eq!(self.proposed.try_recv().unwrap_err(), TryRecvError::Empty);
-        assert_eq!(self.committed.try_recv().unwrap_err(), TryRecvError::Empty);
-        assert_eq!(
-            self.applied.try_recv().unwrap_err(),
-            crossbeam::channel::TryRecvError::Empty
-        );
-    }
-
-    fn assert_ok(&mut self) {
-        self.assert_applied_ok();
-        // proposed and committed should be invoked before applied
-        self.proposed.try_recv().unwrap();
-        self.committed.try_recv().unwrap();
-    }
-
-    // When fails to propose, only applied callback will be invoked.
-    fn assert_err(&mut self) {
-        let resp = self.applied.recv_timeout(Duration::from_secs(1)).unwrap();
-        assert!(resp.get_header().has_error(), "{:?}", resp);
-        self.proposed.try_recv().unwrap_err();
-        self.committed.try_recv().unwrap_err();
-    }
-
-    fn assert_applied_ok(&mut self) {
-        let resp = self.applied.recv_timeout(Duration::from_secs(1)).unwrap();
-        assert!(
-            !resp.get_header().has_error(),
-            "{:?}",
-            resp.get_header().get_error()
-        );
-    }
-
     fn assert_proposed_ok(&self) {
         self.proposed.recv_timeout(Duration::from_secs(1)).unwrap();
     }
@@ -950,7 +912,7 @@ fn test_hibernate_not_enough_matched_peers() {
     cluster.add_recv_filter_on_node(1, recv_filter);
 
     let write_req = make_write_req(&mut cluster, b"k2", b"v2");
-    let (cb, mut cb_receivers) = make_cb(&write_req);
+    let (cb, cb_receivers) = make_cb(&write_req);
     cluster
         .sim
         .rl()
