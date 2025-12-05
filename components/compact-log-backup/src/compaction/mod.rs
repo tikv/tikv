@@ -121,7 +121,7 @@ struct UnformedSubcompaction {
 impl UnformedSubcompaction {
     /// create the initial state by a singleton file.
     fn by_file(file: &LogFile) -> Self {
-        // The interior mutability type is "bytes::Bytes", 
+        // The interior mutability type is "bytes::Bytes",
         // which should be ignored by default.
         #[allow(clippy::mutable_key_type)]
         let epoch_hints = file.epoch_hints().collect();
