@@ -20,7 +20,7 @@ use pd_client::PdClient;
 use raftstore::coprocessor::CoprocessorHost;
 use security::SecurityManager;
 use tikv_util::{
-    thread_name::{DEADLOCK_DETECTOR_THREAD_PREFIX, WAITER_MANAGER_THREAD_PREFIX},
+    thread_name_prefix::{DEADLOCK_DETECTOR_THREAD_PREFIX, WAITER_MANAGER_THREAD_PREFIX},
     worker::FutureWorker,
 };
 use txn_types::TimeStamp;

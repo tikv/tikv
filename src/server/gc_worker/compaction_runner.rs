@@ -21,7 +21,7 @@ use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::{
     box_err, debug, error, info, warn,
     sys::thread::StdThreadBuildWrapper,
-    thread_name::COMPACTION_RUNNER_THREAD_PREFIX,
+    thread_name_prefix::COMPACTION_RUNNER_THREAD_PREFIX,
 };
 use txn_types::TimeStamp;
 

@@ -33,7 +33,7 @@ use security::SecurityManager;
 use tikv_util::{
     info,
     sys::thread::ThreadBuildWrapper,
-    thread_name::ADVANCED_TS_THREAD_PREFIX,
+    thread_name_prefix::ADVANCED_TS_THREAD_PREFIX,
     time::{Instant, SlowTimer},
     timer::SteadyTimer,
     worker::Scheduler,

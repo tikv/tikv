@@ -14,7 +14,7 @@ use grpcio::{CallOption, ChannelBuilder, Environment, WriteFlags};
 use kvproto::resource_usage_agent::{ResourceUsageAgentClient, ResourceUsageRecord};
 use tikv_util::{
     warn,
-    thread_name::RESOURCE_METERING_SINGLE_TARGET_DATA_SINK_THREAD_PREFIX,
+    thread_name_prefix::RESOURCE_METERING_SINGLE_TARGET_DATA_SINK_THREAD_PREFIX,
     worker::{Builder as WorkerBuilder, LazyWorker, Runnable, Scheduler},
 };
 

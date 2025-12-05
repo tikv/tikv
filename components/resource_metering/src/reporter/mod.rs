@@ -14,7 +14,7 @@ use std::{
 use collections::HashMap;
 use kvproto::resource_usage_agent::ResourceUsageRecord;
 use tikv_util::{
-    thread_name::RESOURCE_METERING_RECORDER_THREAD_PREFIX,
+    thread_name_prefix::RESOURCE_METERING_RECORDER_THREAD_PREFIX,
     time::Duration,
     warn,
     worker::{Builder as WorkerBuilder, LazyWorker, Runnable, RunnableWithTimer, Scheduler},

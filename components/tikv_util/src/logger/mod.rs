@@ -23,7 +23,7 @@ use slog_term::{Decorator, PlainDecorator, RecordDecorator};
 use self::file_log::{RotateBySize, RotatingFileLogger, RotatingFileLoggerBuilder};
 use crate::{
     config::{ReadableDuration, ReadableSize},
-    thread_name::SLOGGER_THREAD_PREFIX,
+    thread_name_prefix::SLOGGER_THREAD_PREFIX,
 };
 
 // Default is 128.

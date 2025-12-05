@@ -40,7 +40,7 @@ use tikv_kv::RaftExtension;
 use tikv_util::{
     config::{Tracker, VersionTrack},
     lru::LruCache,
-    thread_name::RAFT_STREAM_THREAD_PREFIX,
+    thread_name_prefix::RAFT_STREAM_THREAD_PREFIX,
     time::{InstantExt, duration_to_sec},
     timer::GLOBAL_TIMER_HANDLE,
     worker::{Scheduler, Worker},

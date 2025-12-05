@@ -1423,7 +1423,7 @@ pub mod tests {
     use tempfile::{Builder, TempDir};
     use tikv_util::{
         store::{new_peer, new_witness_peer},
-        thread_name::{RAFTLOG_FETCH_WORKER_THREAD_PREFIX, SNAP_GENERATOR_THREAD_PREFIX},
+        thread_name_prefix::{RAFTLOG_FETCH_WORKER_THREAD_PREFIX, SNAP_GENERATOR_THREAD_PREFIX},
         worker::{LazyWorker, Scheduler, Worker, dummy_scheduler},
     };
 

@@ -37,7 +37,7 @@ use tikv_util::{
     debug, defer, error, info,
     memory::MemoryQuota,
     sys::thread::ThreadBuildWrapper,
-    thread_name::BACKUP_STREAM_THREAD_PREFIX,
+    thread_name_prefix::BACKUP_STREAM_THREAD_PREFIX,
     time::{Instant, Limiter},
     warn,
     worker::{Runnable, Scheduler},

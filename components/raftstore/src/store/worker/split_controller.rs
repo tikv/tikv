@@ -22,7 +22,7 @@ use tikv_util::{
     debug, info,
     metrics::ThreadInfoStatistics,
     store::{QueryStats, is_read_query},
-    thread_name::{GRPC_SERVER_THREAD_PREFIX, UNIFIED_READ_POOL_THREAD_PREFIX},
+    thread_name_prefix::{GRPC_SERVER_THREAD_PREFIX, UNIFIED_READ_POOL_THREAD_PREFIX},
     time::Instant,
     warn,
 };

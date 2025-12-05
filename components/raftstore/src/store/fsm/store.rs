@@ -68,7 +68,7 @@ use tikv_util::{
         cpu_time::ProcessStat,
         disk::{DiskUsage, get_disk_status},
     },
-    thread_name::{
+    thread_name_prefix::{
         APPLY_WORKER_THREAD_PREFIX, CLEANUP_WORKER_THREAD_PREFIX,
         PURGE_WORKER_THREAD_PREFIX, RAFTLOG_FETCH_WORKER_THREAD_PREFIX,
         RAFTSTORE_THREAD_PREFIX, REFRESH_CONFIG_WORKER_THREAD_PREFIX,

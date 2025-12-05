@@ -47,7 +47,7 @@ use tikv_util::{
     mpsc::bounded,
     slow_log,
     sys::thread::ThreadBuildWrapper,
-    thread_name::{CDC_WORKER_THREAD_PREFIX, TSO_THREAD_PREFIX},
+    thread_name_prefix::{CDC_WORKER_THREAD_PREFIX, TSO_THREAD_PREFIX},
     time::{Instant, Limiter, SlowTimer},
     timer::SteadyTimer,
     warn,

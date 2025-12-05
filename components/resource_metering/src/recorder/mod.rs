@@ -9,7 +9,7 @@ use std::{
 use collections::{HashMap, HashSet};
 use tikv_util::{
     sys::thread::{self, Pid},
-    thread_name::RESOURCE_METERING_RECORDER_THREAD_PREFIX,
+    thread_name_prefix::RESOURCE_METERING_RECORDER_THREAD_PREFIX,
     time::Instant,
     warn,
     worker::{Builder as WorkerBuilder, LazyWorker, Runnable, RunnableWithTimer, Scheduler},

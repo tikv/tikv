@@ -15,7 +15,7 @@ use tikv_util::{
     debug,
     resource_control::{DEFAULT_RESOURCE_GROUP_NAME, TaskPriority},
     sys::{SysQuota, cpu_time::ProcessStat},
-    thread_name::{SCHEDULE_WORKER_PRIORITY_THREAD_PREFIX, UNIFIED_READ_POOL_THREAD_PREFIX},
+    thread_name_prefix::{SCHEDULE_WORKER_PRIORITY_THREAD_PREFIX, UNIFIED_READ_POOL_THREAD_PREFIX},
     time::Instant,
     warn,
     yatp_pool::metrics::YATP_POOL_SCHEDULE_WAIT_DURATION_VEC,
@@ -592,7 +592,7 @@ impl PriorityLimiterStatsTracker {
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
-    use tikv_util::thread_name::BACKGROUND_WORKER_THREAD_PREFIX;
+    use tikv_util::thread_name_prefix::BACKGROUND_WORKER_THREAD_PREFIX;
     use super::*;
     use crate::{resource_group::tests::*, resource_limiter::QuotaLimiter};
 

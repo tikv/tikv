@@ -223,7 +223,7 @@ mod test_utils {
 mod tests {
     use futures::executor::block_on;
     use tokio::runtime;
-    use tikv_util::thread_name::{GRPC_SERVER_THREAD_PREFIX, RAFTSTORE_THREAD_PREFIX, SNAP_SENDER_THREAD_PREFIX};
+    use tikv_util::thread_name_prefix::{GRPC_SERVER_THREAD_PREFIX, RAFTSTORE_THREAD_PREFIX, SNAP_SENDER_THREAD_PREFIX};
     use super::*;
 
     #[test]

@@ -85,7 +85,7 @@ use tikv_util::{
     config::VersionTrack,
     quota_limiter::QuotaLimiter,
     sys::thread::ThreadBuildWrapper,
-    thread_name::RESOLVED_TS_WORKER_THREAD_PREFIX,
+    thread_name_prefix::RESOLVED_TS_WORKER_THREAD_PREFIX,
     time::ThreadReadId,
     worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
 };

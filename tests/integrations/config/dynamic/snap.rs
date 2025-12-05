@@ -22,7 +22,7 @@ use tikv::{
 };
 use tikv_util::{
     config::{ReadableSize, VersionTrack},
-    thread_name::SNAP_HANDLER_THREAD_PREFIX,
+    thread_name_prefix::SNAP_HANDLER_THREAD_PREFIX,
     worker::{LazyWorker, Scheduler, Worker},
 };
 

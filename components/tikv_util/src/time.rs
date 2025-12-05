@@ -22,7 +22,7 @@ pub use self::inner::monotonic_raw_now;
 pub use self::inner::{monotonic_coarse_now, monotonic_now};
 use crate::{
     sys::thread::StdThreadBuildWrapper,
-    thread_name::TIME_MONITOR_THREAD_PREFIX,
+    thread_name_prefix::TIME_MONITOR_THREAD_PREFIX,
 };
 
 const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;

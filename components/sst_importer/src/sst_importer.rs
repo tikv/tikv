@@ -43,7 +43,7 @@ use tikv_util::{
     memory::{MemoryQuota, OwnedAllocated},
     resizable_threadpool::DeamonRuntimeHandle,
     sys::{SysQuota, thread::ThreadBuildWrapper},
-    thread_name::SST_IMPORT_MISC_THREAD_PREFIX,
+    thread_name_prefix::SST_IMPORT_MISC_THREAD_PREFIX,
     time::{Instant, Limiter},
 };
 use tokio::{runtime::Runtime, sync::OnceCell};

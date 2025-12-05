@@ -342,7 +342,7 @@ pub mod tests {
     use test_pd::{Server as MockServer, mocker::MetaStorage, util::*};
     use tikv_util::{
         config::ReadableDuration,
-        thread_name::BACKGROUND_WORKER_THREAD_PREFIX,
+        thread_name_prefix::BACKGROUND_WORKER_THREAD_PREFIX,
         worker::Builder
     };
     use crate::resource_group::tests::{

@@ -40,7 +40,7 @@ use tikv_util::{
     debug, info, slow_log,
     sys::thread::StdThreadBuildWrapper,
     thd_name,
-    thread_name::STORE_WRITER_THREAD_PREFIX,
+    thread_name_prefix::STORE_WRITER_THREAD_PREFIX,
     time::{Duration, Instant, duration_to_sec, setup_for_spin_interval, spin_at_least},
     warn,
 };

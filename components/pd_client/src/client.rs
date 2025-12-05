@@ -31,7 +31,7 @@ use kvproto::{
 use security::SecurityManager;
 use tikv_util::{
     Either, HandyRwLock, box_err, debug, error, info, thd_name, time::Instant,
-    thread_name::PD_MONITOR_THREAD_PREFIX,    
+    thread_name_prefix::PD_MONITOR_THREAD_PREFIX,
     timer::GLOBAL_TIMER_HANDLE, warn,
 };
 use txn_types::TimeStamp;

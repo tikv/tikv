@@ -16,7 +16,7 @@ use kvproto::{
 use pd_client::PdClient;
 use tikv_util::{
     box_err, defer, info, warn,
-    thread_name::BACKUP_STREAM_THREAD_PREFIX,
+    thread_name_prefix::BACKUP_STREAM_THREAD_PREFIX,
     worker::Scheduler
 };
 use tracing::instrument;
@@ -618,7 +618,7 @@ pub mod tests {
     use grpcio::{RpcStatus, RpcStatusCode};
     use kvproto::{logbackuppb::SubscribeFlushEventResponse, metapb::*};
     use pd_client::{PdClient, PdFuture};
-    use tikv_util::thread_name::BACKUP_STREAM_THREAD_PREFIX;
+    use tikv_util::thread_name_prefix::BACKUP_STREAM_THREAD_PREFIX;
     use txn_types::TimeStamp;
 
     use super::{BasicFlushObserver, FlushObserver, RegionIdWithVersion};

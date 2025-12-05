@@ -21,7 +21,7 @@ use tikv_util::{
     config::VersionTrack,
     smoother::{SMOOTHER_STALE_RECORD_THRESHOLD, SMOOTHER_TIME_RANGE_THRESHOLD, Smoother, Trend},
     sys::thread::StdThreadBuildWrapper,
-    thread_name::FLOW_CHECKER_THREAD_PREFIX,
+    thread_name_prefix::FLOW_CHECKER_THREAD_PREFIX,
     time::{Instant, Limiter},
 };
 

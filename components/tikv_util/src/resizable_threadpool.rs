@@ -8,7 +8,7 @@ use tokio::{
     runtime::{Builder, Runtime},
 };
 use tokio_util::task::task_tracker::TaskTracker;
-use crate::thread_name::RUNTIME_KEEPER_THREAD_PREFIX;
+use crate::thread_name_prefix::RUNTIME_KEEPER_THREAD_PREFIX;
 
 struct DeamonRuntime {
     inner: Option<Runtime>,

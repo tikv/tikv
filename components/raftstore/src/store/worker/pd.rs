@@ -45,7 +45,7 @@ use tikv_util::{
     store::QueryStats,
     sys::{SysQuota, disk, thread::StdThreadBuildWrapper},
     thd_name,
-    thread_name::STATS_MONITOR_THREAD_PREFIX,
+    thread_name_prefix::STATS_MONITOR_THREAD_PREFIX,
     time::{Instant as TiInstant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
     topn::TopN,

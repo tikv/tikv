@@ -958,7 +958,7 @@ pub(crate) mod tests {
     use tempfile::Builder;
     use tikv_util::{
         config::{ReadableDuration, ReadableSize},
-        thread_name::{REGION_WORKER_THREAD_PREFIX, SNAP_GENERATOR_THREAD_PREFIX},
+        thread_name_prefix::{REGION_WORKER_THREAD_PREFIX, SNAP_GENERATOR_THREAD_PREFIX},
         worker::{LazyWorker, Worker},
     };
 

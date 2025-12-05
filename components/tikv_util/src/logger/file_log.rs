@@ -11,7 +11,7 @@ use chrono::{DateTime, Duration, Local};
 
 use crate::{
     config::{ReadableDuration, ReadableSize},
-    thread_name::ARCHIVE_WORKER_THREAD_PREFIX,
+    thread_name_prefix::ARCHIVE_WORKER_THREAD_PREFIX,
     worker::{LazyWorker, Runnable},
 };
 

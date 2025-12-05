@@ -40,7 +40,7 @@ use tikv_kv::RaftExtension;
 use tikv_util::{
     DeferContext, box_err,
     config::{MIB, Tracker, VersionTrack},
-    thread_name::SNAP_SENDER_THREAD_PREFIX,
+    thread_name_prefix::SNAP_SENDER_THREAD_PREFIX,
     time::{Instant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
     worker::Runnable,

@@ -16,7 +16,7 @@ use tikv::storage::{
 };
 use tikv_util::{
     sys::thread::ThreadBuildWrapper,
-    thread_name::RESOLVED_TS_SCANNER_THREAD_PREFIX,
+    thread_name_prefix::RESOLVED_TS_SCANNER_THREAD_PREFIX,
     time::Instant, timer::GLOBAL_TIMER_HANDLE, worker::Scheduler,
 };
 use tokio::{

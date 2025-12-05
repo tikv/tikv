@@ -46,7 +46,7 @@ use tikv_util::{
         disk::{DiskUsage, get_disk_status},
         get_global_memory_usage,
     },
-    thread_name::IMPORT_SST_WORKER_THREAD_PREFIX,
+    thread_name_prefix::IMPORT_SST_WORKER_THREAD_PREFIX,
     time::{Instant, Limiter},
 };
 use tokio::time::sleep;

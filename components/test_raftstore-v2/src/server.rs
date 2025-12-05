@@ -80,7 +80,7 @@ use tikv_util::{
     quota_limiter::QuotaLimiter,
     sys::thread::ThreadBuildWrapper,
     thd_name,
-    thread_name::RESOLVED_TS_WORKER_THREAD_PREFIX,
+    thread_name_prefix::RESOLVED_TS_WORKER_THREAD_PREFIX,
     worker::{Builder as WorkerBuilder, LazyWorker, Worker},
 };
 use tokio::runtime::{Builder as TokioBuilder, Handle};

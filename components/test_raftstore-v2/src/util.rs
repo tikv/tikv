@@ -37,7 +37,7 @@ use tikv::{
 };
 use tikv_util::{
     HandyRwLock, config::ReadableDuration, escape, future::block_on_timeout, time::InstantExt,
-    thread_name::SST_RECOVERY_THREAD_PREFIX,
+    thread_name_prefix::SST_RECOVERY_THREAD_PREFIX,
     worker::LazyWorker,
 };
 use txn_types::Key;

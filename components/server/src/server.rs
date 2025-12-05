@@ -135,7 +135,7 @@ use tikv_util::{
     quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
     sys::{SysQuota, disk, path_in_diff_mount_point, register_memory_usage_high_water},
     thread_group::GroupProperties,
-    thread_name::{
+    thread_name_prefix::{
         BACKGROUND_WORKER_THREAD_PREFIX, BACKUP_STREAM_THREAD_PREFIX,
         CDC_THREAD_PREFIX, CHECK_LEADER_THREAD_PREFIX,
         DEBUGGER_THREAD_PREFIX, GRPC_SERVER_THREAD_PREFIX, PD_WORKER_THREAD_PREFIX,

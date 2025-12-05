@@ -20,7 +20,7 @@ use tokio_timer::{
 use crate::{
     sys::thread::StdThreadBuildWrapper,
     time::{Instant, monotonic_raw_now},
-    thread_name::{STEADY_TIMER_THREAD_PREFIX, TIMER_THREAD_PREFIX},
+    thread_name_prefix::{STEADY_TIMER_THREAD_PREFIX, TIMER_THREAD_PREFIX},
 };
 
 pub struct Timer<T> {
@@ -268,7 +268,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 
     use futures::{compat::Future01CompatExt, executor::block_on};
-    use crate::thread_name::TIMER_THREAD_PREFIX;
+    use crate::thread_name_prefix::TIMER_THREAD_PREFIX;
     use super::*;
 
     #[derive(Debug, PartialEq, Copy, Clone)]

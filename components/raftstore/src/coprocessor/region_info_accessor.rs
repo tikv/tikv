@@ -19,7 +19,7 @@ use pd_client::RegionStat;
 use raft::StateRole;
 use tikv_util::{
     box_err, debug, info, warn,
-    thread_name::REGION_COLLECTOR_WORKER_THREAD_PREFIX,
+    thread_name_prefix::REGION_COLLECTOR_WORKER_THREAD_PREFIX,
     worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer, Scheduler, Worker},
 };
 

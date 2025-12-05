@@ -68,7 +68,7 @@ use tikv_util::{
     escape,
     future::block_on_timeout,
     mpsc::future,
-    thread_name::SST_RECOVERY_THREAD_PREFIX,
+    thread_name_prefix::SST_RECOVERY_THREAD_PREFIX,
     time::{Instant, ThreadReadId},
     worker::LazyWorker,
 };

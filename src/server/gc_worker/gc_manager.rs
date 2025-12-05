@@ -17,7 +17,7 @@ use pd_client::FeatureGate;
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::{
     store::find_peer,
-    thread_name::GC_MANAGER_THREAD_PREFIX,
+    thread_name_prefix::GC_MANAGER_THREAD_PREFIX,
     time::Instant, worker::Scheduler,
 };
 use txn_types::{Key, TimeStamp};
@@ -690,7 +690,7 @@ mod tests {
     use tikv_util::{
         store::new_peer,
         sys::thread::StdThreadBuildWrapper,
-        thread_name::GC_MANAGER_THREAD_PREFIX,
+        thread_name_prefix::GC_MANAGER_THREAD_PREFIX,
         worker::{Builder as WorkerBuilder, LazyWorker, Runnable},
     };
 

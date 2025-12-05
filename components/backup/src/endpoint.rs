@@ -40,7 +40,7 @@ use tikv_util::{
     impl_display_as_debug, info,
     resizable_threadpool::ResizableRuntime,
     store::find_peer,
-    thread_name::{BACKUP_IO_THREAD_PREFIX, BACKUP_WORKER_THREAD_PREFIX},
+    thread_name_prefix::{BACKUP_IO_THREAD_PREFIX, BACKUP_WORKER_THREAD_PREFIX},
     time::{Instant, Limiter},
     warn,
     worker::Runnable,
@@ -1370,7 +1370,7 @@ pub mod tests {
     };
     use tikv_util::{
         config::ReadableSize, info, store::new_peer,
-        thread_name::BACKUP_WORKER_THREAD_PREFIX,
+        thread_name_prefix::BACKUP_WORKER_THREAD_PREFIX,
     };
     use tokio::time;
     use txn_types::SHORT_VALUE_MAX_LEN;

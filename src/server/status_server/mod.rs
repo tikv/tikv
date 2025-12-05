@@ -59,7 +59,7 @@ use tikv_util::{
     GLOBAL_SERVER_READINESS,
     logger::set_log_level,
     metrics::{dump, dump_to},
-    thread_name::STATUS_SERVER_THREAD_PREFIX,
+    thread_name_prefix::STATUS_SERVER_THREAD_PREFIX,
     timer::GLOBAL_TIMER_HANDLE,
 };
 use tokio::{

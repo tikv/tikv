@@ -31,7 +31,7 @@ use tikv_util::{
     config::{Tracker, VersionTrack},
     set_panic_context,
     store::find_peer,
-    thread_name::GC_WORKER_THREAD_PREFIX,
+    thread_name_prefix::GC_WORKER_THREAD_PREFIX,
     time::{Instant, Limiter, SlowTimer, duration_to_sec},
     worker::{Builder as WorkerBuilder, LazyWorker, Runnable, ScheduleError, Scheduler},
 };
