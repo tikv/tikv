@@ -2498,7 +2498,7 @@ where
         // hibernate timeout.
         if res.is_none() /* hibernate_region is false */ ||
             !self.fsm.peer.check_after_tick(self.fsm.hibernate_state.group_state(), res.unwrap()) ||
-            (self.fsm.peer.is_leader() && !self.agree_to_hibernate(&down_peer_ids))
+            (self.fsm.peer.is_leader() && !self.quorum_agree_to_hibernate(&down_peer_ids))
         {
             self.register_raft_base_tick();
             // We need pd heartbeat tick to collect down peers and pending peers.
@@ -3002,7 +3002,7 @@ where
         Ok(())
     }
 
-    fn agree_to_hibernate(&mut self, down_peer_ids: &[u64]) -> bool {
+    fn quorum_agree_to_hibernate(&mut self, down_peer_ids: &[u64]) -> bool {
         let (result, hibernate_vote_peer_ids) = self.fsm.maybe_hibernate(down_peer_ids);
         if result {
             return true;

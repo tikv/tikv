@@ -1559,11 +1559,7 @@ where
     ) -> bool {
         if let Some(instant) = self.peer_heartbeats.get(&peer_id) {
             let elapsed = instant.saturating_elapsed();
-            if elapsed >= heartbeat_timeout_duration {
-                return true;
-            } else {
-                return false;
-            }
+            return elapsed >= heartbeat_timeout_duration;
         }
         true // If no heartbeat record, consider it as timeout.
     }
@@ -1573,7 +1569,7 @@ where
     /// heartbeat timeout.
     pub fn all_non_hibernate_vote_peers_unreachable(
         &self,
-        hibernate_vote_peer_ids: &Vec<u64>,
+        hibernate_vote_peer_ids: &[u64],
         heartbeat_timeout_duration: Duration,
     ) -> bool {
         let status = self.raft_group.status();
