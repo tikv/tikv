@@ -2069,6 +2069,7 @@ where
         let slow_score_tick_result = self
             .health_reporter
             .tick(self.store_stat.maybe_busy(), factor);
+
         if let Some(score) = slow_score_tick_result.updated_score {
             STORE_SLOW_SCORE_GAUGE
                 .with_label_values(&[factor.as_str()])
@@ -2138,16 +2139,21 @@ where
                     }),
                 ),
                 InspectFactor::Network => {
-                    let duration = std::collections::HashMap::<u64, Duration>::new();
+                    let network_durations = self.health_reporter.record_network_duration(id);
 
-                    for (store_id, network_duration) in &duration {
-                        STORE_INSPECT_NETWORK_DURATION_HISTOGRAM
-                            .with_label_values(&[&store_id.to_string()])
-                            .observe(tikv_util::time::duration_to_sec(*network_duration));
+                    // To avoid recording too many metrics, we only record durations
+                    // that exceed a certain threshold.
+                    const METRIC_THRESHOLD: Duration = Duration::from_millis(100);
+                    for (store_id, network_duration) in &network_durations {
+                        if *network_duration > METRIC_THRESHOLD {
+                            STORE_INSPECT_NETWORK_DURATION_HISTOGRAM
+                                .with_label_values(&[
+                                    &store_id.to_string(),
+                                    &self.store_id.to_string(),
+                                ])
+                                .observe(tikv_util::time::duration_to_sec(*network_duration));
+                        }
                     }
-
-                    self.health_reporter.record_network_duration(id, duration);
-
                     return;
                 }
             }
