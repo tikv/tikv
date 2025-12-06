@@ -261,16 +261,11 @@ mod tests {
 
     struct FlushTrack {
         sealed: Mutex<Sender<()>>,
-        block_flush: Arc<Mutex<()>>,
     }
 
     impl rocksdb::EventListener for FlushTrack {
         fn on_memtable_sealed(&self, _: &MemTableInfo) {
             let _ = self.sealed.lock().unwrap().send(());
-        }
-
-        fn on_flush_begin(&self, _: &FlushJobInfo) {
-            drop(self.block_flush.lock().unwrap())
         }
     }
 
@@ -288,11 +283,9 @@ mod tests {
             PersistenceListener::new(region_id, tablet_index, state.clone(), storage.clone());
         let mut db_opt = RocksDbOptions::default();
         db_opt.add_event_listener(RocksPersistenceListener::new(listener));
-        let (tx, rx) = mpsc::channel();
-        let block_flush = Arc::new(Mutex::new(()));
+        let (sealed_tx, sealed_rx) = mpsc::channel();
         db_opt.add_event_listener(FlushTrack {
-            sealed: Mutex::new(tx),
-            block_flush: block_flush.clone(),
+            sealed: Mutex::new(sealed_tx),
         });
 
         let mut cf_opts: Vec<_> = DATA_CFS
@@ -348,45 +341,22 @@ mod tests {
         // Detail check of `FlushProgress` will be done in raftstore-v2 tests.
 
         // Drain all the events.
-        while rx.try_recv().is_ok() {}
-        state.set_applied_index(4);
-        let block = block_flush.lock();
+        while sealed_rx.try_recv().is_ok() {}
         // Seal twice to trigger flush.
         let mut key_count = 2;
-        for i in 0..3 {
-            while rx.try_recv().is_err() {
+        for i in 0..2 {
+            state.set_applied_index(4 + i);
+            while sealed_rx.try_recv().is_err() {
                 db.put(format!("k{key_count}").as_bytes(), &[0; 512])
                     .unwrap();
                 key_count += 1;
             }
-            state.set_applied_index(5 + i);
         }
-        drop(block);
-        // Memtable is seal before put, so there must be still one KV in memtable.
         db.flush_cf(CF_DEFAULT, true).unwrap();
-        rx.try_recv().unwrap();
-
-        // There were 2 SSTs before this round. Depending on how RocksDB groups
-        // memtables, this flush can produce either 1 or 2 new SSTs. We don't
-        // depend on the exact count here, just sanity-check it.
-        let num_of_sst = sst_count();
-        assert!(
-            num_of_sst == 3 || num_of_sst == 4,
-            "Expecting 3 or 4 SST files, but got {num_of_sst} instead",
-        );
-
+        assert_eq!(sst_count(), 3);
         let records = storage.records.lock().unwrap();
-        let applied_index: Vec<u64> = records
-            .iter()
-            .map(|record| record.2.applied_index())
-            .collect();
-        // Two possible shapes are acceptable:
-        // - RocksDB flushed [4,5,6,7] in one job → [7]
-        // - or it flushed [4,5] and then [6,7]   → [5, 7]
-        if num_of_sst == 3 {
-            assert_eq!(applied_index, vec![7]);
-        } else {
-            assert_eq!(applied_index, vec![5, 7]);
-        }
+        assert_eq!(records.len(), 1);
+        let applied_index = records.last().unwrap().2.applied_index();
+        assert_eq!(applied_index, 5);
     }
 }
