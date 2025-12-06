@@ -76,12 +76,14 @@ impl TopNHeap {
             for item in &sorted_items {
                 let src = &item.source_data.physical_columns;
                 keys.push(
-                    src.get_extra_common_handle_key(item.logical_row_index)
-                        .unwrap_or_else(|| {
-                            error!("extra common handle key is missing in TopN result");
-                            &[]
-                        })
-                        .to_vec(),
+                    src.get_extra_common_handle_key(
+                        item.source_data.logical_rows[item.logical_row_index],
+                    )
+                    .unwrap_or_else(|| {
+                        error!("extra common handle key is missing in TopN result");
+                        &[]
+                    })
+                    .to_vec(),
                 );
             }
         }

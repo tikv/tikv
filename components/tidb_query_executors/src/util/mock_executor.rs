@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    mem,
     ops::DerefMut,
     sync::{Arc, Mutex},
 };
@@ -64,6 +65,19 @@ impl MockExecutor {
 
     pub fn set_next_intermediate_results(&mut self, results: Vec<BatchExecuteResult>) {
         self.intermediate_results = vec![results].into_iter();
+    }
+
+    pub fn set_extra_common_handle_keys(&mut self, mut keys: Vec<Vec<Vec<u8>>>) {
+        let v = mem::take(&mut self.results)
+            .enumerate()
+            .map(|(i, mut r)| {
+                let extra_keys = r.physical_columns.mut_extra_common_handle_keys();
+                extra_keys.clear();
+                extra_keys.append(&mut keys[i]);
+                r
+            })
+            .collect::<Vec<_>>();
+        self.results = v.into_iter();
     }
 }
 
