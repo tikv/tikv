@@ -758,15 +758,15 @@ where
     ///   target peer.
     /// - all read requests must be rejected.
     pub pending_remove: Option<PendingRemoveReason>,
-    /// Currently it's used to indicate whether the witness -> non-witess
-    /// convertion operation is complete. The meaning of completion is that
+    /// Currently it's used to indicate whether the witness -> non-witness
+    /// conversion operation is complete. The meaning of completion is that
     /// this peer must contain the applied data, then PD can consider that
     /// the conversion operation is complete, and can continue to schedule
     /// other operators to prevent the existence of multiple witnesses in
     /// the same time period.
     pub wait_data: bool,
 
-    /// When the witness becomes non-witness, it need to actively request a
+    /// When the witness becomes non-witness, it needs to actively request a
     /// snapshot from the leader, but the request may fail, so we need to save
     /// the request index for retrying.
     pub request_index: u64,
@@ -778,7 +778,7 @@ where
     /// the successful transfer of leadership.
     pub delay_clean_data: bool,
 
-    /// When the witness becomes non-witness, it need to actively request a
+    /// When the witness becomes non-witness, it needs to actively request a
     /// snapshot from the leader, In order to avoid log lag, we need to reject
     /// the leader's `MsgAppend` request unless the `term` of the `last index`
     /// is less than the peer's current `term`.

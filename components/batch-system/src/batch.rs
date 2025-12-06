@@ -391,7 +391,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
         // `self.max_batch_size`.
         let mut run = true;
         while run && self.fetch_fsm(&mut batch) {
-            // If there is some region wait to be deal, we must deal with it even if it has
+            // If there is a region that waits to be dealt, we must deal with it even if it has
             // overhead max size of batch. It's helpful to protect regions from becoming
             // hungry if some regions are hot points.
             let mut max_batch_size = std::cmp::max(self.max_batch_size, batch.normals.len());
