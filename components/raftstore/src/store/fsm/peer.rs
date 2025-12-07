@@ -415,9 +415,16 @@ where
         }
     }
 
-    pub fn maybe_hibernate(&mut self) -> bool {
-        self.hibernate_state
-            .maybe_hibernate(self.peer.peer_id(), self.peer.region())
+    /// The condition for leader hibernation includes:
+    /// - all alive peers have voted for hibernate request
+    /// - enough hibernate votes to form a quorum
+    pub fn maybe_hibernate(&mut self, down_peer_ids: &[u64]) -> (bool, Vec<u64>) {
+        self.hibernate_state.maybe_hibernate(
+            |vote_ids| self.peer.raft_group.raft.prs().has_quorum(vote_ids),
+            self.peer.peer_id(),
+            self.peer.region(),
+            down_peer_ids,
+        )
     }
 
     pub fn update_memory_trace(&mut self, event: &mut TraceEvent) {
@@ -2431,6 +2438,7 @@ where
         self.check_force_leader();
 
         let mut res = None;
+        let down_peer_ids = self.fsm.peer.get_down_peer_ids();
         if self.ctx.cfg.hibernate_regions {
             if self.fsm.hibernate_state.group_state() == GroupState::Idle {
                 // missing_ticks should be less than election timeout ticks otherwise
@@ -2463,7 +2471,11 @@ where
                 }
                 return;
             }
-            res = Some(self.fsm.peer.check_before_tick(&self.ctx.cfg));
+            res = Some(
+                self.fsm
+                    .peer
+                    .check_before_tick(&self.ctx.cfg, &down_peer_ids),
+            );
             if self.fsm.missing_ticks > 0 {
                 for _ in 0..self.fsm.missing_ticks {
                     if self.fsm.peer.raft_group.tick() {
@@ -2486,7 +2498,7 @@ where
         // hibernate timeout.
         if res.is_none() /* hibernate_region is false */ ||
             !self.fsm.peer.check_after_tick(self.fsm.hibernate_state.group_state(), res.unwrap()) ||
-            (self.fsm.peer.is_leader() && !self.all_agree_to_hibernate())
+            (self.fsm.peer.is_leader() && !self.quorum_agree_to_hibernate(&down_peer_ids))
         {
             self.register_raft_base_tick();
             // We need pd heartbeat tick to collect down peers and pending peers.
@@ -2990,8 +3002,9 @@ where
         Ok(())
     }
 
-    fn all_agree_to_hibernate(&mut self) -> bool {
-        if self.fsm.maybe_hibernate() {
+    fn quorum_agree_to_hibernate(&mut self, down_peer_ids: &[u64]) -> bool {
+        let (result, hibernate_vote_peer_ids) = self.fsm.maybe_hibernate(down_peer_ids);
+        if result {
             return true;
         }
         if !self
@@ -3001,6 +3014,21 @@ where
         {
             return false;
         }
+        // If non hibernate vote peers are all unreachable, leader can skip
+        // broadcasting hibernate request. Because non hibernate vote peers may
+        // be down, and they have not been detected as down peers. Down peers
+        // are expected to encounter heartbeat timeout and be in probe state.
+        // Using 3 times of raft_heartbeat_interval as heartbeat_timeout_duration to
+        // determine whether a peer is unreachable.
+        let heartbeat_timeout_duration = self.ctx.cfg.raft_heartbeat_interval() * 3;
+        if self.fsm.peer.all_non_hibernate_vote_peers_unreachable(
+            &hibernate_vote_peer_ids,
+            heartbeat_timeout_duration,
+        ) {
+            // Skip broadcast hibernate request.
+            return false;
+        }
+        // Broadcast hibernate request to all peers.
         for peer in self.fsm.peer.region().get_peers() {
             if peer.get_id() == self.fsm.peer.peer_id() {
                 continue;
