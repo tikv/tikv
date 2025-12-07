@@ -1548,10 +1548,54 @@ where
         &self.region_buckets_info
     }
 
+    fn is_peer_heartbeat_timeout(
+        &self,
+        peer_id: u64,
+        heartbeat_timeout_duration: Duration,
+    ) -> bool {
+        if let Some(instant) = self.peer_heartbeats.get(&peer_id) {
+            let elapsed = instant.saturating_elapsed();
+            return elapsed >= heartbeat_timeout_duration;
+        }
+        true // If no heartbeat record, consider it as timeout.
+    }
+
+    /// Checks if all peers that have not sent a hibernate vote are unreachable.
+    /// If one peer is unreachable, it must be in probe state and encounter
+    /// heartbeat timeout.
+    pub fn all_non_hibernate_vote_peers_unreachable(
+        &self,
+        hibernate_vote_peer_ids: &[u64],
+        heartbeat_timeout_duration: Duration,
+    ) -> bool {
+        let status = self.raft_group.status();
+        let progress = match status.progress {
+            Some(progress) => progress,
+            None => return false,
+        };
+        // Check each peer in the raft group
+        for (id, pr) in progress.iter() {
+            if *id == self.peer.get_id() {
+                continue;
+            }
+            if !hibernate_vote_peer_ids.contains(id) {
+                if pr.state != ProgressState::Probe {
+                    // Found a non-hibernate-vote peer not in probe state, return false
+                    return false;
+                }
+                if !self.is_peer_heartbeat_timeout(*id, heartbeat_timeout_duration) {
+                    // Found a non-hibernate-vote peer not in heartbeat timeout, return false
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
     /// Check whether the peer can be hibernated.
     ///
     /// This should be used with `check_after_tick` to get a correct conclusion.
-    pub fn check_before_tick(&self, cfg: &Config) -> CheckTickResult {
+    pub fn check_before_tick(&self, cfg: &Config, down_peer_ids: &[u64]) -> CheckTickResult {
         let mut res = CheckTickResult::default();
         if !self.is_leader() {
             return res;
@@ -1562,17 +1606,29 @@ where
         }
         let status = self.raft_group.status();
         let last_index = self.raft_group.raft.raft_log.last_index();
+        let mut matched_peer_ids = HashSet::default();
+        matched_peer_ids.insert(self.peer.get_id());
         for (id, pr) in status.progress.unwrap().iter() {
-            // Even a recent inactive node is also considered. If we put leader into sleep,
-            // followers or learners may not sync its logs for a long time and become
-            // unavailable. We choose availability instead of performance in this case.
+            // Leader can sleep when every alive peer is in sync and all alive peers reach
+            // majority. If we put leader into sleep when some alive peer lags,
+            // followers or learners may not sync its logs for a long time and
+            // become unavailable. We choose availability instead of performance in this
+            // case.
             if *id == self.peer.get_id() {
                 continue;
             }
-            if pr.matched != last_index {
+            if pr.matched != last_index && !down_peer_ids.contains(id) {
+                // Prevent leader from sleeping when some alive peer is still replicating logs.
                 res.reason = "replication";
                 return res;
             }
+            if pr.matched == last_index {
+                matched_peer_ids.insert(*id);
+            }
+        }
+        if !self.raft_group.raft.prs().has_quorum(&matched_peer_ids) {
+            res.reason = "not enough matched peers";
+            return res;
         }
         if self.raft_group.raft.pending_read_count() > 0 {
             res.reason = "pending read";
@@ -2120,6 +2176,14 @@ where
             self.refill_disk_full_peers(ctx);
         }
         down_peers
+    }
+
+    /// Returns the current list of down peer ids.
+    ///
+    /// This clones the internal `down_peer_ids` vector so callers can use it
+    /// without borrowing `self` mutably.
+    pub fn get_down_peer_ids(&self) -> Vec<u64> {
+        self.down_peer_ids.clone()
     }
 
     /// Collects all pending peers and update `peers_start_pending_time`.
