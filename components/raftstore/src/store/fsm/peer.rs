@@ -2264,6 +2264,9 @@ where
         if let Some(r) = role {
             if StateRole::Leader == r {
                 self.fsm.missing_ticks = 0;
+                // reset region approximate size/keys stats to avoid region
+                // heartbeat with outdated stats.
+                self.fsm.peer.split_check_trigger.on_clear_region_size();
                 self.register_split_region_check_tick();
                 self.fsm.peer.heartbeat_pd(self.ctx);
                 self.register_pd_heartbeat_tick();
