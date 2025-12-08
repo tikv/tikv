@@ -826,10 +826,18 @@ impl PdCluster {
         }
         self.leaders.insert(region.get_id(), leader.clone());
 
-        self.region_approximate_size
-            .insert(region.get_id(), region_stat.approximate_size);
-        self.region_approximate_keys
-            .insert(region.get_id(), region_stat.approximate_keys);
+        // only update region approximate size/keys when the stats data > 0.
+        // 0 value means the stats data is uninitialized.
+        // The equvalent logic in pd is: https://github.com/tikv/pd/blob/23550ebb90464948a2d6539d9dc9d6d067924d79/pkg/core/region.go#L275
+        if region_stat.approximate_size > 0 {
+            self.region_approximate_size
+                .insert(region.get_id(), region_stat.approximate_size);
+        }
+        if region_stat.approximate_keys > 0 {
+            self.region_approximate_keys
+                .insert(region.get_id(), region_stat.approximate_keys);
+        }
+
         self.region_last_report_ts
             .insert(region.get_id(), region_stat.last_report_ts);
         self.region_last_report_term.insert(region.get_id(), term);
