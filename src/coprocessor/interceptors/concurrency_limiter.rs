@@ -52,9 +52,8 @@ where
 
 enum LimitationState<'a> {
     NotLimited,
-    Acquiring,
-    #[allow(dead_code)]
-    Acuqired(SemaphorePermit<'a>),
+    Acquiring(Instant),
+    Acquired(SemaphorePermit<'a>),
 }
 
 impl<'a, PF, F> ConcurrencyLimiter<'a, PF, F>
@@ -87,21 +86,22 @@ where
             LimitationState::NotLimited if this.execution_time > this.time_limit_without_permit => {
                 match this.permit_fut.poll(cx) {
                     Poll::Ready(permit) => {
-                        *this.state = LimitationState::Acuqired(permit);
+                        *this.state = LimitationState::Acquired(permit);
                         COPR_ACQUIRE_SEMAPHORE_TYPE.acquired.inc();
                     }
                     Poll::Pending => {
-                        *this.state = LimitationState::Acquiring;
+                        *this.state = LimitationState::Acquiring(Instant::now());
                         COPR_WAITING_FOR_SEMAPHORE.inc();
                         return Poll::Pending;
                     }
                 }
             }
-            LimitationState::Acquiring => match this.permit_fut.poll(cx) {
+            LimitationState::Acquiring(wait_start) => match this.permit_fut.poll(cx) {
                 Poll::Ready(permit) => {
-                    *this.state = LimitationState::Acuqired(permit);
+                    COPR_SEMAPHORE_WAIT_TIME.observe(wait_start.saturating_elapsed().as_secs_f64());
                     COPR_WAITING_FOR_SEMAPHORE.dec();
                     COPR_ACQUIRE_SEMAPHORE_TYPE.acquired.inc();
+                    *this.state = LimitationState::Acquired(permit);
                 }
                 Poll::Pending => {
                     return Poll::Pending;

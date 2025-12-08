@@ -4753,6 +4753,34 @@ def CoprocessorDetail() -> RowPanel:
             metric="tikv_coprocessor_mem_lock_check_duration_seconds",
         ),
     )
+    layout.row(
+        heatmap_panel_graph_panel_histogram_quantile_pairs(
+            heatmap_title="Semaphore waiting duration",
+            heatmap_description="The time consumed on waiting for semaphore permits for heavy coprocessor requests",
+            graph_title="Semaphore waiting duration",
+            graph_description="The time consumed on waiting for semaphore permits for heavy coprocessor requests",
+            yaxis_format=UNITS.SECONDS,
+            metric="tikv_coprocessor_semaphore_wait_time_duration_seconds",
+        ),
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Semaphore waiting tasks count",
+                description="The number of cop tasks waiting for semaphore permits.",
+                targets=[
+                    target(
+                        expr=expr_sum_aggr_over_time(
+                            "tikv_coprocessor_waiting_for_semaphore",
+                            "avg",
+                            "30s",
+                        ),
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
+        ]
+    )
     return layout.row_panel
 
 
