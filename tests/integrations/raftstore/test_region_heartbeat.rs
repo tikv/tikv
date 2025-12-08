@@ -253,17 +253,20 @@ fn test_region_heartbeat_leader_change() {
             size >= 2000
         },
     );
+    let approximate_size = cluster
+        .pd_client
+        .get_region_approximate_size(region_id)
+        .unwrap_or_default();
 
     // transfer leader back to the old leader and the region approximate size
     // should not change.
     cluster.must_transfer_leader(region_id, new_peer(1, 1));
     sleep_ms(100);
-    // the first region heartbeat after leader transfer will report with 0 value.
-    // Real pd with ignore this 0 value while the current test pd-client just keep
-    // this 0 value.
+    // after `must_transfer_leader` the new leader must have already sent a new
+    // region heartbeat.
     let size = cluster
         .pd_client
         .get_region_approximate_size(region_id)
         .unwrap_or_default();
-    assert_eq!(size, 0);
+    assert_eq!(size, approximate_size);
 }
