@@ -67,7 +67,7 @@ use crate::{
         },
         util::{KeysInfoFormatter, is_epoch_stale},
         worker::{
-            AutoSplitController, ReadStats, SplitConfigChange, WriteStats,
+            AutoSplitController, ReadStats, SplitAuditor, SplitConfigChange, WriteStats,
             split_controller::{SplitInfo, TOP_N},
         },
     },
@@ -701,6 +701,7 @@ where
         &mut self,
         mut auto_split_controller: AutoSplitController,
         collector_reg_handle: CollectorRegHandle,
+        split_auditor: SplitAuditor,
     ) -> Result<(), io::Error> {
         if self.collect_tick_interval
             < cmp::min(
@@ -763,6 +764,7 @@ where
                 let mut region_cpu_records_collector = None;
                 let mut auto_split_controller_ctx =
                     AutoSplitControllerContext::new(STATS_CHANNEL_CAPACITY_LIMIT);
+                let split_auditor = split_auditor;
                 // Register the region CPU records collector.
                 if auto_split_controller
                     .cfg
@@ -791,6 +793,7 @@ where
                             &reporter,
                             &collector_reg_handle,
                             &mut region_cpu_records_collector,
+                            &split_auditor,
                         );
                     }
                     if is_enable_tick(timer_cnt, update_raftdisk_latency_stats_interval) {
@@ -828,6 +831,7 @@ where
         reporter: &T,
         collector_reg_handle: &CollectorRegHandle,
         region_cpu_records_collector: &mut Option<CollectorGuard>,
+        split_auditor: &SplitAuditor,
     ) {
         let start_time = TiInstant::now();
         match auto_split_controller.refresh_and_check_cfg() {
@@ -848,6 +852,7 @@ where
             read_stats_receiver,
             cpu_stats_receiver,
             thread_stats,
+            split_auditor,
         );
         auto_split_controller.clear();
         auto_split_controller_ctx.maybe_gc();
@@ -962,6 +967,8 @@ where
 
     // Graceful shutdown state for evict leader during shutdown
     graceful_shutdown_state: Arc<AtomicBool>,
+
+    split_auditor: SplitAuditor,
 }
 
 impl<EK, ER, T> Runner<EK, ER, T>
@@ -998,7 +1005,12 @@ where
             cfg.inspect_network_interval.0,
             WrappedScheduler(scheduler.clone()),
         );
-        if let Err(e) = stats_monitor.start(auto_split_controller, collector_reg_handle) {
+        let split_auditor = SplitAuditor::new();
+        if let Err(e) = stats_monitor.start(
+            auto_split_controller,
+            collector_reg_handle,
+            split_auditor.clone(),
+        ) {
             error!("failed to start stats collector, error = {:?}", e);
         }
 
@@ -1053,6 +1065,7 @@ where
             causal_ts_provider,
             grpc_service_manager,
             graceful_shutdown_state,
+            split_auditor,
         }
     }
 
@@ -1116,6 +1129,7 @@ where
         router: RaftRouter<EK, ER>,
         scheduler: Scheduler<Task<EK>>,
         pd_client: Arc<T>,
+        split_auditor: SplitAuditor,
         mut region: metapb::Region,
         mut split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
@@ -1129,6 +1143,9 @@ where
         if split_keys.is_empty() {
             info!("empty split key, skip ask batch split";
                 "region_id" => region.get_id());
+            return;
+        }
+        if reason != pdpb::SplitReason::Admin && split_auditor.is_disabled(region.get_id()) {
             return;
         }
         let resp = pd_client.ask_batch_split(region.clone(), split_keys.len(), reason);
@@ -1638,12 +1655,21 @@ where
     fn schedule_heartbeat_receiver(&mut self) {
         let router = self.router.clone();
         let store_id = self.store_id;
+        let split_auditor = self.split_auditor.clone();
 
         let fut = self.pd_client
             .handle_region_heartbeat_response(self.store_id, move |mut resp| {
                 let region_id = resp.get_region_id();
                 let epoch = resp.take_region_epoch();
                 let peer = resp.take_target_peer();
+
+                if resp.has_change_split() {
+                    if resp.get_change_split().get_auto_split_enabled() {
+                        split_auditor.enable(region_id);
+                    } else {
+                        split_auditor.disable(region_id);
+                    }
+                }
 
                 if resp.has_change_peer() {
                     PD_HEARTBEAT_COUNTER_VEC
@@ -2231,6 +2257,7 @@ where
                 self.router.clone(),
                 self.scheduler.clone(),
                 self.pd_client.clone(),
+                self.split_auditor.clone(),
                 region,
                 split_keys,
                 peer,
@@ -2246,6 +2273,7 @@ where
                 let router = self.router.clone();
                 let scheduler = self.scheduler.clone();
                 let remote = self.remote.clone();
+                let split_auditor = self.split_auditor.clone();
 
                 let f = async move {
                     for split_info in split_infos {
@@ -2260,6 +2288,7 @@ where
                                 router.clone(),
                                 scheduler.clone(),
                                 pd_client.clone(),
+                                split_auditor.clone(),
                                 region,
                                 vec![split_key],
                                 split_info.peer,
@@ -2719,6 +2748,7 @@ mod tests {
                 if let Err(e) = stats_monitor.start(
                     AutoSplitController::default(),
                     CollectorRegHandle::new_for_test(),
+                    SplitAuditor::new(),
                 ) {
                     error!("failed to start stats collector, error = {:?}", e);
                 }
@@ -2969,6 +2999,7 @@ mod tests {
             .start(
                 AutoSplitController::default(),
                 CollectorRegHandle::new_for_test(),
+                SplitAuditor::new(),
             )
             .unwrap();
         // Add some read stats and cpu stats to the stats monitor.
