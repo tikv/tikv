@@ -202,6 +202,9 @@ fn test_region_heartbeat_term() {
     panic!("reported term should be updated");
 }
 
+/// `test_region_heartbeat_leader_change` test when region leadership changes,
+/// region approximate size/keys should be reset so pd won't receive outdated
+/// stats data. See: https://github.com/tikv/tikv/issues/19180 for more details.
 #[test]
 fn test_region_heartbeat_leader_change() {
     let mut cluster = new_server_cluster(0, 3);
@@ -214,8 +217,6 @@ fn test_region_heartbeat_leader_change() {
     pd_client.disable_default_operator();
     let region_id = cluster.run_conf_change();
 
-    // insert 20 key value pairs into the cluster.
-    // from 000000001 to 000000020
     let mut range = 1..;
     put_till_size(&mut cluster, 1000, &mut range);
     sleep_ms(100);
