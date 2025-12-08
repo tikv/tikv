@@ -13,11 +13,7 @@ use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raftstore::store::msg::*;
 use test_raftstore::*;
-<<<<<<< HEAD
-use tikv_util::{time::Instant, HandyRwLock};
-=======
-use tikv_util::{HandyRwLock, config::ReadableDuration, time::Instant};
->>>>>>> 666b9ea31d (raftstore: optimize hibernate condition (#19082))
+use tikv_util::{config::ReadableDuration, time::Instant, HandyRwLock};
 
 #[test]
 fn test_proposal_prevent_sleep() {

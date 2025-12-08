@@ -130,11 +130,10 @@ impl HibernateState {
         }
         // 1 is for leader itself, which is not counted into votes.
         if v.len() + 1 < peers.len() {
-            if alive_non_hibernate_vote_peer.is_some() {
-                // There is some alive non-hibernate-vote peer, leader cannot hibernate
-                return (false, vote_peer_ids);
-            } else if !has_quorum(&hibernate_vote_peer_ids) {
-                // No alive non-hibernate-voter peer, but not enough votes to form a quorum
+            if alive_non_hibernate_vote_peer.is_some() || !has_quorum(&hibernate_vote_peer_ids) {
+                // Either:
+                // - There is some alive non-hibernate-vote peer, leader cannot hibernate
+                // - No alive non-hibernate-voter peer, but not enough votes to form a quorum
                 return (false, vote_peer_ids);
             } else {
                 // No alive non-hibernate-voter peer, and enough votes to form a quorum.
