@@ -201,3 +201,68 @@ fn test_region_heartbeat_term() {
     }
     panic!("reported term should be updated");
 }
+
+#[test]
+fn test_region_heartbeat_leader_change() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.raft_store.right_derive_when_split = true;
+    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
+    // Set a very big interval to avoid regular heartbeat.
+    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::secs(1000);
+    cluster.cfg.raft_store.region_split_check_diff = Some(ReadableSize(10));
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+    let region_id = cluster.run_conf_change();
+
+    // insert 20 key value pairs into the cluster.
+    // from 000000001 to 000000020
+    let mut range = 1..;
+    put_till_size(&mut cluster, 1000, &mut range);
+    sleep_ms(100);
+
+    // add a peer to trigger region heartbeat.
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    test_util::eventually(
+        Duration::from_millis(100),
+        Duration::from_millis(3000),
+        || {
+            let size = cluster
+                .pd_client
+                .get_region_approximate_size(region_id)
+                .unwrap_or_default();
+            size >= 1000
+        },
+    );
+
+    cluster.must_transfer_leader(region_id, new_peer(2, 2));
+
+    put_till_size(&mut cluster, 1000, &mut range);
+    sleep_ms(100);
+
+    // add a new peer to trigger heartbeat pd.
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+    test_util::eventually(
+        Duration::from_millis(100),
+        Duration::from_millis(3000),
+        || {
+            let size = cluster
+                .pd_client
+                .get_region_approximate_size(region_id)
+                .unwrap_or_default();
+            size >= 2000
+        },
+    );
+
+    // transfer leader back to the old leader and the region approximate size
+    // should not change.
+    cluster.must_transfer_leader(region_id, new_peer(1, 1));
+    sleep_ms(100);
+    // the first region heartbeat after leader transfer will report with 0 value.
+    // Real pd with ignore this 0 value while the current test pd-client just keep
+    // this 0 value.
+    let size = cluster
+        .pd_client
+        .get_region_approximate_size(region_id)
+        .unwrap_or_default();
+    assert_eq!(size, 0);
+}
