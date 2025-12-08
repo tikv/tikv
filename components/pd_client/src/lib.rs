@@ -20,7 +20,7 @@ use std::{cmp::Ordering, ops::Deref, sync::Arc, time::Duration};
 use futures::future::BoxFuture;
 use kvproto::{
     metapb,
-    pdpb::{self, UpdateServiceGcSafePointRequest, UpdateServiceGcSafePointResponse},
+    pdpb::{self, GcState, UpdateServiceGcSafePointRequest, UpdateServiceGcSafePointResponse},
     replication_modepb::{RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus},
     resource_manager::TokenBucketsRequest,
 };
@@ -472,6 +472,10 @@ pub trait PdClient: Send + Sync {
     }
 
     fn get_gc_safe_point(&self) -> PdFuture<u64> {
+        unimplemented!();
+    }
+
+    fn get_gc_state(&self) -> PdFuture<GcState> {
         unimplemented!();
     }
 
