@@ -804,7 +804,9 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
 
         let mut read_runner = ReadRunner::new(router.clone(), raft_engine.clone());
         read_runner.set_snap_mgr(snap_mgr.clone());
-        let read_scheduler = workers.async_read.start("async-read-worker", read_runner);
+        let read_scheduler = workers
+            .async_read
+            .start(ASYNC_READ_WORKER_THREAD, read_runner);
 
         workers.pd.start(pd::Runner::new(
             store_id,
