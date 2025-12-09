@@ -23,7 +23,7 @@ use slog_term::{Decorator, PlainDecorator, RecordDecorator};
 use self::file_log::{RotateBySize, RotatingFileLogger, RotatingFileLoggerBuilder};
 use crate::{
     config::{ReadableDuration, ReadableSize},
-    thread_name_prefix::SLOGGER_THREAD_PREFIX,
+    thread_name_prefix::SLOGGER_THREAD,
 };
 
 // Default is 128.
@@ -97,7 +97,7 @@ where
         let (async_log, guard) = Async::new(LogAndFuse(drain))
             .chan_size(SLOG_CHANNEL_SIZE)
             .overflow_strategy(SLOG_CHANNEL_OVERFLOW_STRATEGY)
-            .thread_name(thd_name!(SLOGGER_THREAD_PREFIX))
+            .thread_name(thd_name!(SLOGGER_THREAD))
             .build_with_guard();
         let drain = async_log.fuse();
         let drain = build_log_drain(drain, slow_threshold, filter);

@@ -11,7 +11,8 @@ use futures::{
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, WriteFlags};
 use kvproto::deadlock::*;
 use security::SecurityManager;
-use tikv_util::thread_name_prefix::DEADLOCK_CLIENT_THREAD_PREFIX;
+use tikv_util::thread_name_prefix::DEADLOCK_CLIENT_THREAD;
+
 use super::{Error, Result};
 
 type DeadlockFuture<T> = BoxFuture<'static, Result<T>>;
@@ -26,7 +27,7 @@ pub fn env() -> Arc<Environment> {
     Arc::new(
         EnvBuilder::new()
             .cq_count(CQ_COUNT)
-            .name_prefix(thd_name!(DEADLOCK_CLIENT_THREAD_PREFIX))
+            .name_prefix(thd_name!(DEADLOCK_CLIENT_THREAD))
             .build(),
     )
 }

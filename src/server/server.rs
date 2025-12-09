@@ -26,9 +26,7 @@ use tikv_util::{
     Either,
     config::VersionTrack,
     sys::{get_global_memory_usage, record_global_memory_usage},
-    thread_name_prefix::{
-        GRPC_SERVER_THREAD_PREFIX, SNAP_HANDLER_THREAD_PREFIX, STATS_THREAD_PREFIX,
-    },
+    thread_name_prefix::{GRPC_SERVER_THREAD, SNAP_HANDLER_THREAD, STATS_THREAD},
     timer::GLOBAL_TIMER_HANDLE,
     worker::{LazyWorker, Scheduler, Worker},
 };
@@ -194,7 +192,7 @@ where
         let stats_pool = if cfg.value().stats_concurrency > 0 {
             Some(
                 RuntimeBuilder::new_multi_thread()
-                    .thread_name(STATS_THREAD_PREFIX)
+                    .thread_name(STATS_THREAD)
                     .worker_threads(cfg.value().stats_concurrency)
                     .with_sys_hooks()
                     .build()
@@ -207,8 +205,8 @@ where
             cfg.value().heavy_load_threshold,
         ));
 
-        let snap_worker = Worker::new(SNAP_HANDLER_THREAD_PREFIX);
-        let lazy_worker = snap_worker.lazy_build(SNAP_HANDLER_THREAD_PREFIX);
+        let snap_worker = Worker::new(SNAP_HANDLER_THREAD);
+        let lazy_worker = snap_worker.lazy_build(SNAP_HANDLER_THREAD);
         let raft_ext = storage.get_engine().raft_extension();
 
         let health_feedback_interval = if cfg.value().health_feedback_interval.0.is_zero() {
@@ -385,7 +383,7 @@ where
         // Note this should be called only after grpc server is started.
         let mut grpc_load_stats = {
             let tl = Arc::clone(&self.grpc_thread_load);
-            ThreadLoadStatistics::new(LOAD_STATISTICS_SLOTS, GRPC_SERVER_THREAD_PREFIX, tl)
+            ThreadLoadStatistics::new(LOAD_STATISTICS_SLOTS, GRPC_SERVER_THREAD, tl)
         };
         if let Some(ref p) = self.stats_pool {
             let mut delay = self
@@ -575,8 +573,7 @@ mod tests {
     use resource_metering::ResourceTagFactory;
     use security::SecurityConfig;
     use tikv_util::{
-        config::ReadableDuration, quota_limiter::QuotaLimiter,
-        thread_name_prefix::DEBUGGER_THREAD_PREFIX,
+        config::ReadableDuration, quota_limiter::QuotaLimiter, thread_name_prefix::DEBUGGER_THREAD,
     };
     use tokio::runtime::Builder as TokioBuilder;
 
@@ -658,7 +655,7 @@ mod tests {
         let env = Arc::new(
             EnvBuilder::new()
                 .cq_count(1)
-                .name_prefix(thd_name!(GRPC_SERVER_THREAD_PREFIX))
+                .name_prefix(thd_name!(GRPC_SERVER_THREAD))
                 .build(),
         );
 
@@ -692,7 +689,7 @@ mod tests {
         let copr_v2 = coprocessor_v2::Endpoint::new(&coprocessor_v2::Config::default());
         let debug_thread_pool = Arc::new(
             TokioBuilder::new_multi_thread()
-                .thread_name(thd_name!(DEBUGGER_THREAD_PREFIX))
+                .thread_name(thd_name!(DEBUGGER_THREAD))
                 .worker_threads(1)
                 .with_sys_hooks()
                 .build()

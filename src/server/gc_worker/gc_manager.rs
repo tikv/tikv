@@ -16,8 +16,7 @@ use kvproto::metapb::Region;
 use pd_client::FeatureGate;
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::{
-    store::find_peer, thread_name_prefix::GC_MANAGER_THREAD_PREFIX, time::Instant,
-    worker::Scheduler,
+    store::find_peer, thread_name_prefix::GC_MANAGER_THREAD, time::Instant, worker::Scheduler,
 };
 use txn_types::{Key, TimeStamp};
 
@@ -294,7 +293,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
         self.gc_manager_ctx.set_stop_signal_receiver(rx);
         let props = tikv_util::thread_group::current_properties();
         let res: Result<_> = ThreadBuilder::new()
-            .name(thd_name!(GC_MANAGER_THREAD_PREFIX))
+            .name(thd_name!(GC_MANAGER_THREAD))
             .spawn_wrapper(move || {
                 tikv_util::thread_group::set_properties(props);
 
@@ -689,7 +688,7 @@ mod tests {
     use tikv_util::{
         store::new_peer,
         sys::thread::StdThreadBuildWrapper,
-        thread_name_prefix::GC_MANAGER_THREAD_PREFIX,
+        thread_name_prefix::GC_MANAGER_THREAD,
         worker::{Builder as WorkerBuilder, LazyWorker, Runnable},
     };
 
@@ -768,12 +767,12 @@ mod tests {
                 .thread_count(2)
                 .create();
             let scheduler = worker.start(
-                GC_MANAGER_THREAD_PREFIX,
+                GC_MANAGER_THREAD,
                 MockGcRunner {
                     tx: gc_task_sender.clone(),
                 },
             );
-            worker.start(GC_MANAGER_THREAD_PREFIX, MockGcRunner { tx: gc_task_sender });
+            worker.start(GC_MANAGER_THREAD, MockGcRunner { tx: gc_task_sender });
 
             let (safe_point_sender, safe_point_receiver) = channel();
 
@@ -797,7 +796,7 @@ mod tests {
             );
             Self {
                 gc_manager: Some(gc_manager),
-                worker: worker.lazy_build(GC_MANAGER_THREAD_PREFIX),
+                worker: worker.lazy_build(GC_MANAGER_THREAD),
                 safe_point_sender,
                 gc_task_receiver,
             }

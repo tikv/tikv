@@ -69,10 +69,9 @@ use tikv_util::{
         disk::{DiskUsage, get_disk_status},
     },
     thread_name_prefix::{
-        APPLY_WORKER_THREAD_PREFIX, CLEANUP_WORKER_THREAD_PREFIX, PURGE_WORKER_THREAD_PREFIX,
-        RAFTLOG_FETCH_WORKER_THREAD_PREFIX, RAFTSTORE_THREAD_PREFIX,
-        REFRESH_CONFIG_WORKER_THREAD_PREFIX, REGION_WORKER_THREAD_PREFIX,
-        SNAP_GENERATOR_THREAD_PREFIX, STORE_WRITER_THREAD_PREFIX,
+        APPLY_WORKER_THREAD, CLEANUP_WORKER_THREAD, PURGE_WORKER_THREAD,
+        RAFTLOG_FETCH_WORKER_THREAD, RAFTSTORE_THREAD, REFRESH_CONFIG_WORKER_THREAD,
+        REGION_WORKER_THREAD, SNAP_GENERATOR_THREAD, STORE_WRITER_THREAD,
     },
     time::{Instant as TiInstant, SlowTimer, duration_to_sec, monotonic_raw_now},
     timer::SteadyTimer,
@@ -1713,7 +1712,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let purge_worker = if engines.raft.need_manual_purge()
             && !cfg.value().raft_engine_purge_interval.0.is_zero()
         {
-            let worker = Worker::new(PURGE_WORKER_THREAD_PREFIX);
+            let worker = Worker::new(PURGE_WORKER_THREAD);
             let raft_clone = engines.raft.clone();
             let router_clone = self.router();
             worker.spawn_interval_task(cfg.value().raft_engine_purge_interval.0, move || {
@@ -1739,20 +1738,20 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             None
         };
         let bgworker_remote = background_worker.remote();
-        let snap_gen_worker = WorkerBuilder::new(SNAP_GENERATOR_THREAD_PREFIX)
+        let snap_gen_worker = WorkerBuilder::new(SNAP_GENERATOR_THREAD)
             .thread_count(cfg.value().snap_generator_pool_size)
             .thread_count_limits(1, SNAP_GENERATOR_MAX_POOL_SIZE)
             .create();
         let mut workers = Workers {
             pd_worker,
             background_worker,
-            cleanup_worker: Worker::new(CLEANUP_WORKER_THREAD_PREFIX),
+            cleanup_worker: Worker::new(CLEANUP_WORKER_THREAD),
             snap_gen_worker,
-            region_worker: Worker::new(REGION_WORKER_THREAD_PREFIX),
+            region_worker: Worker::new(REGION_WORKER_THREAD),
             purge_worker,
-            raftlog_fetch_worker: Worker::new(RAFTLOG_FETCH_WORKER_THREAD_PREFIX),
+            raftlog_fetch_worker: Worker::new(RAFTLOG_FETCH_WORKER_THREAD),
             coprocessor_host: coprocessor_host.clone(),
-            refresh_config_worker: LazyWorker::new(REFRESH_CONFIG_WORKER_THREAD_PREFIX),
+            refresh_config_worker: LazyWorker::new(REFRESH_CONFIG_WORKER_THREAD),
             on_stop_hooks: vec![],
         };
         // Ideally, we should not stop split_check_scheduler when Workers stop, since
@@ -1788,10 +1787,10 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let snap_generator_pool = workers.snap_gen_worker.pool();
         let snap_gen_scheduler: Scheduler<SnapGenTask<<EK as KvEngine>::Snapshot>> = workers
             .snap_gen_worker
-            .start(SNAP_GENERATOR_THREAD_PREFIX, snap_gen_runner);
+            .start(SNAP_GENERATOR_THREAD, snap_gen_runner);
         let region_scheduler = workers
             .region_worker
-            .start_with_timer(REGION_WORKER_THREAD_PREFIX, region_runner);
+            .start_with_timer(REGION_WORKER_THREAD, region_runner);
         // Same as split_check_scheduler, region worker also runs a infinite
         // loop, that will not stop when shutting down the threadpool, causing the
         // reference to the kv engine inside the scheduler to be dangle. So we need
@@ -1817,7 +1816,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         }));
 
         let raftlog_fetch_scheduler = workers.raftlog_fetch_worker.start(
-            RAFTLOG_FETCH_WORKER_THREAD_PREFIX,
+            RAFTLOG_FETCH_WORKER_THREAD,
             ReadRunner::new(self.router.clone(), engines.raft.clone()),
         );
 
@@ -1832,7 +1831,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             CleanupRunner::new(compact_runner, cleanup_sst_runner, gc_snapshot_runner);
         let cleanup_scheduler: Scheduler<CleanupTask> = workers
             .cleanup_worker
-            .start(CLEANUP_WORKER_THREAD_PREFIX, cleanup_runner);
+            .start(CLEANUP_WORKER_THREAD, cleanup_runner);
         let consistency_check_runner =
             ConsistencyCheckRunner::<EK, _>::new(self.router.clone(), coprocessor_host.clone());
         let consistency_check_scheduler = workers
@@ -1945,7 +1944,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
 
         let (raft_builder, apply_builder) = (builder.clone(), apply_poller_builder.clone());
 
-        let tag = format!("{}-{}", RAFTSTORE_THREAD_PREFIX, store.get_id());
+        let tag = format!("{}-{}", RAFTSTORE_THREAD, store.get_id());
         let coprocessor_host = builder.coprocessor_host.clone();
         self.system.spawn(tag, builder);
         let mut mailboxes = Vec::with_capacity(region_peers.len());
@@ -1970,7 +1969,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             .unwrap();
 
         self.apply_system
-            .spawn(APPLY_WORKER_THREAD_PREFIX.to_owned(), apply_poller_builder);
+            .spawn(APPLY_WORKER_THREAD.to_owned(), apply_poller_builder);
 
         let refresh_config_runner = RefreshConfigRunner::new(
             StoreWritersContext {
@@ -2059,7 +2058,7 @@ pub fn create_raft_batch_system<EK: KvEngine, ER: RaftEngine>(
         cfg,
         resource_manager
             .as_ref()
-            .map(|m| m.derive_controller(APPLY_WORKER_THREAD_PREFIX.to_owned(), false)),
+            .map(|m| m.derive_controller(APPLY_WORKER_THREAD.to_owned(), false)),
     );
     let (router, system) = batch_system::create_system(
         &cfg.store_batch_system,
@@ -2077,7 +2076,7 @@ pub fn create_raft_batch_system<EK: KvEngine, ER: RaftEngine>(
         store_writers: StoreWriters::new(
             resource_manager
                 .as_ref()
-                .map(|m| m.derive_controller(STORE_WRITER_THREAD_PREFIX.to_owned(), false)),
+                .map(|m| m.derive_controller(STORE_WRITER_THREAD.to_owned(), false)),
         ),
         node_start_time: monotonic_raw_now(),
     };

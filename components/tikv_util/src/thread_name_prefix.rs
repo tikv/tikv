@@ -18,133 +18,133 @@
 //! Constants are ordered by when TiKV creates these threads during server
 //! startup.
 
-pub const ARCHIVE_WORKER_THREAD_PREFIX: &str = "archive-worker";
+pub const ARCHIVE_WORKER_THREAD: &str = "archive-worker";
 
-pub const SLOGGER_THREAD_PREFIX: &str = "slogger";
+pub const SLOGGER_THREAD: &str = "slogger";
 
-pub const TIME_MONITOR_THREAD_PREFIX: &str = "time-monitor";
+pub const TIME_MONITOR_THREAD: &str = "time-monitor";
 
-pub const GRPC_SERVER_THREAD_PREFIX: &str = "grpc-server";
+pub const GRPC_SERVER_THREAD: &str = "grpc-server";
 
-pub const PD_MONITOR_THREAD_PREFIX: &str = "pdmonitor";
+pub const PD_MONITOR_THREAD: &str = "pdmonitor";
 
-pub const TSO_WORKER_THREAD_PREFIX: &str = "tso-worker";
+pub const TSO_WORKER_THREAD: &str = "tso-worker";
 
-pub const TIMER_THREAD_PREFIX: &str = "timer";
+pub const TIMER_THREAD: &str = "timer";
 
-pub const BACKTRACE_LOADER_THREAD_PREFIX: &str = "backtrace-loader";
+pub const BACKTRACE_LOADER_THREAD: &str = "backtrace-loader";
 
-pub const BACKGROUND_WORKER_THREAD_PREFIX: &str = "background";
+pub const BACKGROUND_WORKER_THREAD: &str = "background";
 
-pub const CHECK_LEADER_THREAD_PREFIX: &str = "check-leader";
+pub const CHECK_LEADER_THREAD: &str = "check-leader";
 
-pub const REGION_COLLECTOR_WORKER_THREAD_PREFIX: &str = "region-collector-worker";
+pub const REGION_COLLECTOR_WORKER_THREAD: &str = "region-collector-worker";
 
-pub const SST_RECOVERY_THREAD_PREFIX: &str = "sst-recovery";
+pub const SST_RECOVERY_THREAD: &str = "sst-recovery";
 
-pub const FLOW_CHECKER_THREAD_PREFIX: &str = "flow-checker";
+pub const FLOW_CHECKER_THREAD: &str = "flow-checker";
 
-pub const GC_WORKER_THREAD_PREFIX: &str = "gc-worker";
+pub const GC_WORKER_THREAD: &str = "gc-worker";
 
-pub const CDC_THREAD_PREFIX: &str = "cdc";
+pub const CDC_THREAD: &str = "cdc";
 
-pub const PD_WORKER_THREAD_PREFIX: &str = "pd-worker";
+pub const PD_WORKER_THREAD: &str = "pd-worker";
 
-pub const UNIFIED_READ_POOL_THREAD_PREFIX: &str = "unified-read-pool";
+pub const UNIFIED_READ_POOL_THREAD: &str = "unified-read-pool";
 
-pub const DEBUGGER_THREAD_PREFIX: &str = "debugger";
+pub const DEBUGGER_THREAD: &str = "debugger";
 
-pub const RESOURCE_METERING_RECORDER_THREAD_PREFIX: &str = "resource-metering-recorder";
+pub const RESOURCE_METERING_RECORDER_THREAD: &str = "resource-metering-recorder";
 
-pub const RESOURCE_METERING_SINGLE_TARGET_DATA_SINK_THREAD_PREFIX: &str =
+pub const RESOURCE_METERING_SINGLE_TARGET_THREAD: &str =
     "resource-metering-single-target-data-sink";
 
-pub const SCHEDULE_WORKER_POOL_THREAD_PREFIX: &str = "sched-worker-pool";
+pub const SCHEDULE_WORKER_POOL_THREAD: &str = "sched-worker-pool";
 
-pub const SCHEDULE_WORKER_HIGH_PRIORITY_THREAD_PREFIX: &str = "sched-worker-high";
+pub const SCHEDULE_WORKER_HIGH_PRI_THREAD: &str = "sched-worker-high";
 
-pub const SCHEDULE_WORKER_PRIORITY_THREAD_PREFIX: &str = "sched-worker-priority";
+pub const SCHEDULE_WORKER_PRIORITY_THREAD: &str = "sched-worker-priority";
 
-pub const RESOLVED_TS_WORKER_THREAD_PREFIX: &str = "resolved-ts-worker";
+pub const RESOLVED_TS_WORKER_THREAD: &str = "resolved-ts-worker";
 
-pub const STATS_THREAD_PREFIX: &str = "transport-stats";
+pub const STATS_THREAD: &str = "transport-stats";
 
-pub const SNAP_HANDLER_THREAD_PREFIX: &str = "snap-handler";
+pub const SNAP_HANDLER_THREAD: &str = "snap-handler";
 
-pub const RAFT_STREAM_THREAD_PREFIX: &str = "raft-stream";
+pub const RAFT_STREAM_THREAD: &str = "raft-stream";
 
-pub const BACKUP_STREAM_THREAD_PREFIX: &str = "backup-stream";
+pub const BACKUP_STREAM_THREAD: &str = "backup-stream";
 
-pub const LOG_BACKUP_SCAN_THREAD_PREFIX: &str = "log-backup-scan";
+pub const LOG_BACKUP_SCAN_THREAD: &str = "log-backup-scan";
 
-pub const SST_IMPORT_MISC_THREAD_PREFIX: &str = "sst-import-misc";
+pub const SST_IMPORT_MISC_THREAD: &str = "sst-import-misc";
 
-pub const PURGE_WORKER_THREAD_PREFIX: &str = "purge-worker";
+pub const PURGE_WORKER_THREAD: &str = "purge-worker";
 
-pub const CHECKPOINT_WORKER_THREAD_PREFIX: &str = "checkpoint-worker";
+pub const CHECKPOINT_WORKER_THREAD: &str = "checkpoint-worker";
 
-pub const ASYNC_READ_WORKER_THREAD_PREFIX: &str = "async-read-worker";
+pub const ASYNC_READ_WORKER_THREAD: &str = "async-read-worker";
 
-pub const STORE_BACKGROUND_WORKER_THREAD_PREFIX: &str = "store-bg";
+pub const STORE_BACKGROUND_WORKER_THREAD: &str = "store-bg";
 
-pub const TABLET_WORKER_THREAD_PREFIX: &str = "tablet-worker";
+pub const TABLET_WORKER_THREAD: &str = "tablet-worker";
 
-pub const TABLET_HIGH_PRIORITY_WORKER_THREAD_PREFIX: &str = "tablet-high";
+pub const TABLET_HIGH_PRIORITY_WORKER_THREAD: &str = "tablet-high";
 
-pub const TABLET_BACKGROUND_WORKER_THREAD_PREFIX: &str = "tablet-bg";
+pub const TABLET_BACKGROUND_WORKER_THREAD: &str = "tablet-bg";
 
-pub const SNAP_GENERATOR_THREAD_PREFIX: &str = "snap-generator";
+pub const SNAP_GENERATOR_THREAD: &str = "snap-generator";
 
-pub const CLEANUP_WORKER_THREAD_PREFIX: &str = "cleanup-worker";
+pub const CLEANUP_WORKER_THREAD: &str = "cleanup-worker";
 
-pub const REGION_WORKER_THREAD_PREFIX: &str = "region-worker";
+pub const REGION_WORKER_THREAD: &str = "region-worker";
 
-pub const RAFTLOG_FETCH_WORKER_THREAD_PREFIX: &str = "raftlog-fetch-worker";
+pub const RAFTLOG_FETCH_WORKER_THREAD: &str = "raftlog-fetch-worker";
 
-pub const REFRESH_CONFIG_WORKER_THREAD_PREFIX: &str = "refresh-config-worker";
+pub const REFRESH_CONFIG_WORKER_THREAD: &str = "refresh-config-worker";
 
-pub const STORE_WRITER_THREAD_PREFIX: &str = "store-writer";
+pub const STORE_WRITER_THREAD: &str = "store-writer";
 
-pub const STEADY_TIMER_THREAD_PREFIX: &str = "steady-timer";
+pub const STEADY_TIMER_THREAD: &str = "steady-timer";
 
-pub const RAFTSTORE_THREAD_PREFIX: &str = "raftstore";
+pub const RAFTSTORE_THREAD: &str = "raftstore";
 
-pub const RAFTSTORE_V2_THREAD_PREFIX: &str = "rs";
+pub const RAFTSTORE_V2_THREAD: &str = "rs";
 
-pub const APPLY_WORKER_THREAD_PREFIX: &str = "apply";
+pub const APPLY_WORKER_THREAD: &str = "apply";
 
-pub const STATS_MONITOR_THREAD_PREFIX: &str = "stats-monitor";
+pub const STATS_MONITOR_THREAD: &str = "stats-monitor";
 
-pub const GC_MANAGER_THREAD_PREFIX: &str = "gc-manager";
+pub const GC_MANAGER_THREAD: &str = "gc-manager";
 
-pub const COMPACTION_RUNNER_THREAD_PREFIX: &str = "compaction-runner";
+pub const COMPACTION_RUNNER_THREAD: &str = "compaction-runner";
 
-pub const CDC_WORKER_THREAD_PREFIX: &str = "cdc-worker";
+pub const CDC_WORKER_THREAD: &str = "cdc-worker";
 
-pub const TSO_THREAD_PREFIX: &str = "tso";
+pub const TSO_THREAD: &str = "tso";
 
-pub const ADVANCED_TS_THREAD_PREFIX: &str = "advanced-ts";
+pub const ADVANCED_TS_THREAD: &str = "advanced-ts";
 
-pub const RESOLVED_TS_SCANNER_THREAD_PREFIX: &str = "resolved-ts-scanner";
+pub const RESOLVED_TS_SCANNER_THREAD: &str = "resolved-ts-scanner";
 
-pub const SNAP_BROADCAST_BACKUP_PREPARE_THREAD_PREFIX: &str = "snap-br-backup-prepare";
+pub const SNAP_BROADCAST_THREAD: &str = "snap-br-backup-prepare";
 
-pub const RUNTIME_KEEPER_THREAD_PREFIX: &str = "runtime-keeper";
+pub const RUNTIME_KEEPER_THREAD: &str = "runtime-keeper";
 
-pub const IMPORT_SST_WORKER_THREAD_PREFIX: &str = "import-sst-worker";
+pub const IMPORT_SST_WORKER_THREAD: &str = "import-sst-worker";
 
-pub const WAITER_MANAGER_THREAD_PREFIX: &str = "waiter-manager";
+pub const WAITER_MANAGER_THREAD: &str = "waiter-manager";
 
-pub const DEADLOCK_DETECTOR_THREAD_PREFIX: &str = "deadlock-detector";
+pub const DEADLOCK_DETECTOR_THREAD: &str = "deadlock-detector";
 
-pub const DEADLOCK_CLIENT_THREAD_PREFIX: &str = "deadlock-client";
+pub const DEADLOCK_CLIENT_THREAD: &str = "deadlock-client";
 
-pub const BACKUP_WORKER_THREAD_PREFIX: &str = "backup-worker";
+pub const BACKUP_WORKER_THREAD: &str = "backup-worker";
 
-pub const BACKUP_IO_THREAD_PREFIX: &str = "backup-io";
+pub const BACKUP_IO_THREAD: &str = "backup-io";
 
-pub const SNAP_SENDER_THREAD_PREFIX: &str = "snap-sender";
+pub const SNAP_SENDER_THREAD: &str = "snap-sender";
 
-pub const TABLET_SNAP_SENDER_THREAD_PREFIX: &str = "tablet-snap-sender";
+pub const TABLET_SNAP_SENDER_THREAD: &str = "tablet-snap-sender";
 
-pub const STATUS_SERVER_THREAD_PREFIX: &str = "status-server";
+pub const STATUS_SERVER_THREAD: &str = "status-server";

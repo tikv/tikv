@@ -59,7 +59,7 @@ use tikv_util::{
     GLOBAL_SERVER_READINESS,
     logger::set_log_level,
     metrics::{dump, dump_to},
-    thread_name_prefix::STATUS_SERVER_THREAD_PREFIX,
+    thread_name_prefix::STATUS_SERVER_THREAD,
     timer::GLOBAL_TIMER_HANDLE,
 };
 use tokio::{
@@ -122,7 +122,7 @@ where
         let thread_pool = Builder::new_multi_thread()
             .enable_all()
             .worker_threads(status_thread_pool_size)
-            .thread_name(STATUS_SERVER_THREAD_PREFIX)
+            .thread_name(STATUS_SERVER_THREAD)
             .with_sys_and_custom_hooks(
                 || debug!("Status server started"),
                 || debug!("stopping status server"),

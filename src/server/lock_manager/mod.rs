@@ -20,7 +20,7 @@ use pd_client::PdClient;
 use raftstore::coprocessor::CoprocessorHost;
 use security::SecurityManager;
 use tikv_util::{
-    thread_name_prefix::{DEADLOCK_DETECTOR_THREAD_PREFIX, WAITER_MANAGER_THREAD_PREFIX},
+    thread_name_prefix::{DEADLOCK_DETECTOR_THREAD, WAITER_MANAGER_THREAD},
     worker::FutureWorker,
 };
 use txn_types::TimeStamp;
@@ -92,8 +92,8 @@ impl Clone for LockManager {
 
 impl LockManager {
     pub fn new(cfg: &Config) -> Self {
-        let waiter_mgr_worker = FutureWorker::new(WAITER_MANAGER_THREAD_PREFIX);
-        let detector_worker = FutureWorker::new(DEADLOCK_DETECTOR_THREAD_PREFIX);
+        let waiter_mgr_worker = FutureWorker::new(WAITER_MANAGER_THREAD);
+        let detector_worker = FutureWorker::new(DEADLOCK_DETECTOR_THREAD);
 
         Self {
             waiter_mgr_scheduler: WaiterMgrScheduler::new(waiter_mgr_worker.scheduler()),

@@ -21,7 +21,7 @@ use tikv_util::{
     config::VersionTrack,
     smoother::{SMOOTHER_STALE_RECORD_THRESHOLD, SMOOTHER_TIME_RANGE_THRESHOLD, Smoother, Trend},
     sys::thread::StdThreadBuildWrapper,
-    thread_name_prefix::FLOW_CHECKER_THREAD_PREFIX,
+    thread_name_prefix::FLOW_CHECKER_THREAD,
     time::{Instant, Limiter},
 };
 
@@ -501,7 +501,7 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
 
     fn start(self, rx: Receiver<Msg>, flow_info_receiver: Receiver<FlowInfo>) -> JoinHandle<()> {
         Builder::new()
-            .name(thd_name!(FLOW_CHECKER_THREAD_PREFIX))
+            .name(thd_name!(FLOW_CHECKER_THREAD))
             .spawn_wrapper(move || {
                 let mut checker = self;
                 let mut deadline = std::time::Instant::now();

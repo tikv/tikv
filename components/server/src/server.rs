@@ -99,8 +99,8 @@ use tikv::{
         ReadPool, ReadPoolConfigManager, UPDATE_EWMA_TIME_SLICE_INTERVAL, build_yatp_read_pool,
     },
     server::{
-        CPU_CORES_QUOTA_GAUGE, KvEngineFactoryBuilder, MEMORY_LIMIT_GAUGE,
-        MultiRaftServer, RaftKv, Server,
+        CPU_CORES_QUOTA_GAUGE, KvEngineFactoryBuilder, MEMORY_LIMIT_GAUGE, MultiRaftServer, RaftKv,
+        Server,
         config::{Config as ServerConfig, ServerConfigManager},
         debug::{Debugger, DebuggerImpl},
         gc_worker::{AutoGcConfig, GcWorker},
@@ -136,10 +136,9 @@ use tikv_util::{
     sys::{SysQuota, disk, path_in_diff_mount_point, register_memory_usage_high_water},
     thread_group::GroupProperties,
     thread_name_prefix::{
-        BACKGROUND_WORKER_THREAD_PREFIX, BACKUP_STREAM_THREAD_PREFIX, CDC_THREAD_PREFIX,
-        CHECK_LEADER_THREAD_PREFIX, DEBUGGER_THREAD_PREFIX, GRPC_SERVER_THREAD_PREFIX,
-        PD_WORKER_THREAD_PREFIX, RESOLVED_TS_WORKER_THREAD_PREFIX, SST_RECOVERY_THREAD_PREFIX,
-        UNIFIED_READ_POOL_THREAD_PREFIX,
+        BACKGROUND_WORKER_THREAD, BACKUP_STREAM_THREAD, CDC_THREAD, CHECK_LEADER_THREAD,
+        DEBUGGER_THREAD, GRPC_SERVER_THREAD, PD_WORKER_THREAD, RESOLVED_TS_WORKER_THREAD,
+        SST_RECOVERY_THREAD, UNIFIED_READ_POOL_THREAD,
     },
     time::{Instant, Monitor},
     worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
@@ -342,7 +341,7 @@ where
         let env = Arc::new(
             EnvBuilder::new()
                 .cq_count(config.server.grpc_concurrency)
-                .name_prefix(thd_name!(GRPC_SERVER_THREAD_PREFIX))
+                .name_prefix(thd_name!(GRPC_SERVER_THREAD))
                 .after_start(move || {
                     tikv_util::thread_group::set_properties(props.clone());
 
@@ -392,7 +391,7 @@ where
         let store_path = Path::new(&config.storage.data_dir).to_owned();
 
         let thread_count = config.server.background_thread_count;
-        let background_worker = WorkerBuilder::new(BACKGROUND_WORKER_THREAD_PREFIX)
+        let background_worker = WorkerBuilder::new(BACKGROUND_WORKER_THREAD)
             .thread_count(thread_count)
             .create();
 
@@ -464,7 +463,9 @@ where
 
         // Run check leader in a dedicate thread, because it is time sensitive
         // and crucial to TiCDC replication lag.
-        let check_leader_worker = WorkerBuilder::new(CHECK_LEADER_THREAD_PREFIX).thread_count(1).create();
+        let check_leader_worker = WorkerBuilder::new(CHECK_LEADER_THREAD)
+            .thread_count(1)
+            .create();
 
         TikvServer {
             core: TikvServerCore {
@@ -581,7 +582,7 @@ where
         let cdc_memory_quota = Arc::new(MemoryQuota::new(
             self.core.config.cdc.sink_memory_quota.0 as _,
         ));
-        let mut cdc_worker = Box::new(LazyWorker::new(CDC_THREAD_PREFIX));
+        let mut cdc_worker = Box::new(LazyWorker::new(CDC_THREAD));
         let cdc_scheduler = cdc_worker.scheduler();
         let txn_extra_scheduler =
             cdc::CdcTxnExtraScheduler::new(cdc_scheduler.clone(), cdc_memory_quota.clone());
@@ -601,7 +602,7 @@ where
 
         let engines = self.engines.as_ref().unwrap();
 
-        let pd_worker = LazyWorker::new(PD_WORKER_THREAD_PREFIX);
+        let pd_worker = LazyWorker::new(PD_WORKER_THREAD);
         let pd_sender = pd_worker.scheduler();
 
         if let Some(sst_worker) = &mut self.sst_worker {
@@ -622,7 +623,7 @@ where
             let resource_ctl = self
                 .resource_manager
                 .as_ref()
-                .map(|m| m.derive_controller(UNIFIED_READ_POOL_THREAD_PREFIX.into(), true));
+                .map(|m| m.derive_controller(UNIFIED_READ_POOL_THREAD.into(), true));
             Some(build_yatp_read_pool(
                 &self.core.config.readpool.unified,
                 pd_sender.clone(),
@@ -648,7 +649,7 @@ where
         let props = tikv_util::thread_group::current_properties();
         let debug_thread_pool = Arc::new(
             Builder::new_multi_thread()
-                .thread_name(thd_name!(DEBUGGER_THREAD_PREFIX))
+                .thread_name(thd_name!(DEBUGGER_THREAD))
                 .enable_time()
                 .worker_threads(1)
                 .with_sys_and_custom_hooks(
@@ -828,7 +829,7 @@ where
 
         // Create resolved ts worker
         let rts_worker = if self.core.config.resolved_ts.enable {
-            let worker = Box::new(LazyWorker::new(RESOLVED_TS_WORKER_THREAD_PREFIX));
+            let worker = Box::new(LazyWorker::new(RESOLVED_TS_WORKER_THREAD));
             // Register the resolved ts observer
             let resolved_ts_ob = resolved_ts::Observer::new(worker.scheduler());
             resolved_ts_ob.register_to(self.coprocessor_host.as_mut().unwrap());
@@ -850,7 +851,7 @@ where
         );
         let check_leader_scheduler = self
             .check_leader_worker
-            .start(CHECK_LEADER_THREAD_PREFIX, check_leader_runner);
+            .start(CHECK_LEADER_THREAD, check_leader_runner);
 
         let server_config = Arc::new(VersionTrack::new(self.core.config.server.clone()));
 
@@ -942,7 +943,7 @@ where
         // Start backup stream
         let backup_stream_scheduler = if self.core.config.log_backup.enable {
             // Create backup stream.
-            let mut backup_stream_worker = Box::new(LazyWorker::new(BACKUP_STREAM_THREAD_PREFIX));
+            let mut backup_stream_worker = Box::new(LazyWorker::new(BACKUP_STREAM_THREAD));
             let backup_stream_scheduler = backup_stream_worker.scheduler();
 
             // Register backup-stream observer.
@@ -1573,7 +1574,7 @@ where
             .background_error_recovery_window
             .is_zero()
         {
-            let sst_worker = Box::new(LazyWorker::new(SST_RECOVERY_THREAD_PREFIX));
+            let sst_worker = Box::new(LazyWorker::new(SST_RECOVERY_THREAD));
             let scheduler = sst_worker.scheduler();
             self.sst_worker = Some(sst_worker);
             Some(scheduler)

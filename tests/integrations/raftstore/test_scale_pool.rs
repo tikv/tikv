@@ -15,7 +15,7 @@ use tikv_util::{
     HandyRwLock,
     config::ReadableDuration,
     sys::thread::{self, Pid},
-    thread_name_prefix::RAFTSTORE_V2_THREAD_PREFIX,
+    thread_name_prefix::RAFTSTORE_V2_THREAD,
     time::Instant,
 };
 
@@ -123,7 +123,7 @@ fn get_poller_thread_ids() -> Vec<Pid> {
 }
 
 fn get_raft_poller_thread_ids() -> Vec<Pid> {
-    let prefix = format!("{}-", RAFTSTORE_V2_THREAD_PREFIX);
+    let prefix = format!("{}-", RAFTSTORE_V2_THREAD);
     get_poller_thread_ids_by_prefix(vec![prefix.as_str()])
 }
 

@@ -33,8 +33,7 @@ use raftstore::store::{
     },
 };
 use tikv_util::{
-    Either, sys::thread::ThreadBuildWrapper,
-    thread_name_prefix::SNAP_BROADCAST_BACKUP_PREPARE_THREAD_PREFIX, warn,
+    Either, sys::thread::ThreadBuildWrapper, thread_name_prefix::SNAP_BROADCAST_THREAD, warn,
 };
 use tokio::{
     runtime::{Handle, Runtime},
@@ -200,7 +199,7 @@ impl<SR: SnapshotBrHandle> Env<SR> {
             .worker_threads(DEFAULT_RT_THREADS)
             .enable_all()
             .with_sys_hooks()
-            .thread_name(SNAP_BROADCAST_BACKUP_PREPARE_THREAD_PREFIX)
+            .thread_name(SNAP_BROADCAST_THREAD)
             .build()
             .unwrap();
         Arc::new(rt)

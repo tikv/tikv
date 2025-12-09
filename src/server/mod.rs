@@ -26,7 +26,8 @@ pub mod transport;
 pub mod ttl;
 
 pub use engine_factory::{KvEngineFactory, KvEngineFactoryBuilder};
-pub use tikv_util::thread_name_prefix::GRPC_SERVER_THREAD_PREFIX;
+pub use tikv_util::thread_name_prefix::GRPC_SERVER_THREAD;
+
 #[cfg(any(test, feature = "testexport"))]
 pub use self::server::test_router::TestRaftStoreRouter;
 pub use self::{

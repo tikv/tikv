@@ -20,7 +20,7 @@ use prometheus_static_metric::*;
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::{
     box_err, debug, error, info, sys::thread::StdThreadBuildWrapper,
-    thread_name_prefix::COMPACTION_RUNNER_THREAD_PREFIX, warn,
+    thread_name_prefix::COMPACTION_RUNNER_THREAD, warn,
 };
 use txn_types::TimeStamp;
 
@@ -161,7 +161,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
 
         let props = tikv_util::thread_group::current_properties();
         let res: Result<_> = ThreadBuilder::new()
-            .name(tikv_util::thd_name!(COMPACTION_RUNNER_THREAD_PREFIX))
+            .name(tikv_util::thd_name!(COMPACTION_RUNNER_THREAD))
             .spawn_wrapper(move || {
                 tikv_util::thread_group::set_properties(props);
                 self.run();

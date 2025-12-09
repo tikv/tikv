@@ -40,7 +40,7 @@ use tikv_util::{
     debug, info, slow_log,
     sys::thread::StdThreadBuildWrapper,
     thd_name,
-    thread_name_prefix::STORE_WRITER_THREAD_PREFIX,
+    thread_name_prefix::STORE_WRITER_THREAD,
     time::{Duration, Instant, duration_to_sec, setup_for_spin_interval, spin_at_least},
     warn,
 };
@@ -1171,7 +1171,7 @@ where
             .update(move |writers: &mut SharedSenders<EK, ER>| -> Result<()> {
                 let mut cached_senders = writers.get();
                 for i in current_size..size {
-                    let tag = format!("{}-{}", STORE_WRITER_THREAD_PREFIX, i);
+                    let tag = format!("{}-{}", STORE_WRITER_THREAD, i);
                     let (tx, rx) = bounded(
                         resource_ctl.clone(),
                         writer_meta.cfg.value().store_io_notify_capacity,

@@ -18,7 +18,7 @@ use online_config::{ConfigChange, OnlineConfig};
 use rand::Rng;
 use tikv_util::{
     config::VersionTrack, sys::thread::StdThreadBuildWrapper,
-    thread_name_prefix::FLOW_CHECKER_THREAD_PREFIX, time::Limiter,
+    thread_name_prefix::FLOW_CHECKER_THREAD, time::Limiter,
 };
 
 use super::singleton_flow_controller::{
@@ -137,7 +137,7 @@ impl FlowInfoDispatcher {
         global_discard_ratio: Arc<AtomicU32>,
     ) -> JoinHandle<()> {
         Builder::new()
-            .name(thd_name!(FLOW_CHECKER_THREAD_PREFIX))
+            .name(thd_name!(FLOW_CHECKER_THREAD))
             .spawn_wrapper(move || {
                 let mut deadline = std::time::Instant::now();
                 let engine = TabletFlowFactorStore::new(registry.clone());

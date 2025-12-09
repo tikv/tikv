@@ -54,9 +54,9 @@ impl<F: Future> Future for ControlledFuture<F> {
     }
 }
 
-// `LimitedFuture` wraps a Future with ResourceLimiter, it will automatically get
-// statistics of the cpu time and io bytes consumed by the future, and do async
-// waiting according the configuration of the ResourceLimiter.
+// `LimitedFuture` wraps a Future with ResourceLimiter, it will automatically
+// get statistics of the cpu time and io bytes consumed by the future, and do
+// async waiting according the configuration of the ResourceLimiter.
 #[pin_project]
 pub struct LimitedFuture<F: Future> {
     #[pin]
