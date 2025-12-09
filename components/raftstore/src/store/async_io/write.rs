@@ -66,7 +66,6 @@ const RAFT_WB_SPLIT_SIZE: usize = ReadableSize::gb(1).0 as usize;
 /// The default size of the raft write batch recorder.
 const RAFT_WB_DEFAULT_RECORDER_SIZE: usize = 30;
 
-const QPS_THRESHOLD: u64 = 1000;
 const RAFT_WB_WAIT_DURATION_UPPER_BOUND_NS: u64 = 1000_000; // 1ms
 const RAFT_WB_WAIT_DURATION_LOWER_BOUND_NS: u64 = 10_000; // 10us
 const HIGH_CONCURRENCY_FUTILE_THRESHOLD_NS: u64 = 100_000; // 100us
@@ -443,11 +442,6 @@ impl WriteTaskBatchRecorder {
     #[inline]
     pub fn get_avg(&self) -> usize {
         self.avg
-    }
-
-    #[inline]
-    pub fn get_batch_size_hint(&self) -> usize {
-        self.batch_size_hint
     }
 
     #[cfg(test)]
@@ -991,7 +985,7 @@ where
             let mut sorted_qps: Vec<u64> = self.qps_baseline_history.iter().cloned().collect();
             sorted_qps.sort();
 
-            // Use P50 (median, 50th percentile) as baseline for qps_ratio and other logic
+            // Use P50 (median, 50th percentile) as baseline
             let p50_qps = sorted_qps[sorted_qps.len() / 2];
 
             // Use P90 (90th percentile) to update high_concurrency_qps_threshold
@@ -1016,14 +1010,7 @@ where
             // Default baseline value is 1000 QPS
             ADAPTIVE_DEFAULT_QPS_BASELINE
         };
-        
-        // Calculate QPS ratio (relative to baseline QPS)
-        let qps_ratio = if qps_baseline > 0 && avg_qps > QPS_THRESHOLD {
-            avg_qps as f64 / qps_baseline as f64
-        } else {
-            1.0
-        };
-        
+         
         let wasted_wait_ratio = if self.wait_count > 0 {
             self.wasted_wait_count as f64 / self.wait_count as f64
                 } else {
@@ -1067,7 +1054,18 @@ where
         // High concurrency should be treated specially - even with low batch_ratio,
         // we should allow higher wait_duration to force aggregation and reduce IOPS
         let is_very_high_concurrency = qps_pressure_factor >= ADAPTIVE_VERY_HIGH_CONCURRENCY_MULTIPLIER;
-        let is_high_concurrency = qps_pressure_factor >= 1.0;
+
+        // High concurrency detection uses dual conditions to handle edge cases:
+        // Condition 1: qps_pressure_factor >= 1.0 (avg_qps >= high_concurrency_qps_threshold)
+        // Condition 2: avg_qps is near qps_baseline (within 5%) AND qps_pressure_factor >= 0.85
+        //   This catches scenarios where P90-based threshold is higher than avg_qps,
+        //   but avg_qps is still at sustained high level (near P50 baseline)
+        // Example: avg_qps=46840, baseline(P50)=48062, threshold(P90)=48670
+        //   Condition 1: 46840/48670=0.95 < 1.0 → false
+        //   Condition 2: 46840 >= 48062*0.95 (45659) → true AND 0.95 >= 0.85 → true
+        //   Result: is_high_concurrency = true ✓
+        let is_high_concurrency = qps_pressure_factor >= 1.0
+            || (avg_qps as f64 >= qps_baseline as f64 * 0.95 && qps_pressure_factor >= 0.85);
         
         // Detect "futile waiting" - when wait_duration is high but batching remains poor
         // Use consecutive low batch_ratio count to prevent oscillation from transient dips
@@ -1165,13 +1163,13 @@ where
                                      + SMOOTHING_FACTOR * target_duration_nanos as f64) as u64;
         
         info!("[adaptive adjustment] adaptive_batch_enabled: {}, update wait_duration, wait_count: {}, wasted_wait_count: {}, \
-            valid_wait_count: {}, wasted_wait_ratio: {:.2}, qps_baseline(P50): {}, avg_qps: {}, qps_ratio: {:.2}, \
+            valid_wait_count: {}, wasted_wait_ratio: {:.2}, qps_baseline(P50): {}, avg_qps: {}, \
             batch_achievement_ratio: {:.2}, qps_pressure_factor: {:.2}, high_concurrency_qps_threshold: {}, \
             is_high_concurrency: {}, is_very_high_concurrency: {}, \
             consecutive_low_batch_ratio_count: {}, target_duration: {}us, wait_duration: {}us => {}us, \
             batch_size_hint: {}, batch_avg: {}, wait_duration_hint: {}us, batch_task_count_history: {:?}",
             self.adaptive_batch_enabled, self.wait_count, self.wasted_wait_count, self.valid_wait_count,
-            wasted_wait_ratio, qps_baseline, avg_qps, qps_ratio, batch_achievement_ratio, qps_pressure_factor,
+            wasted_wait_ratio, qps_baseline, avg_qps, batch_achievement_ratio, qps_pressure_factor,
             self.high_concurrency_qps_threshold, is_high_concurrency, is_very_high_concurrency,
             self.consecutive_low_batch_ratio_count, target_duration_nanos / 1_000,
             current_wait_duration_nanos / 1_000, smoothed_duration_nanos / 1_000,
