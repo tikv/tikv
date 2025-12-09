@@ -49,8 +49,10 @@ use tikv_util::{
     log::SlogFormat,
     sys::{SysQuota, disk::get_disk_status},
     thread_name_prefix::{
-        APPLY_WORKER_THREAD_PREFIX, PURGE_WORKER_THREAD_PREFIX,
-        RAFTSTORE_THREAD_PREFIX, REFRESH_CONFIG_WORKER_THREAD_PREFIX,
+        APPLY_WORKER_THREAD_PREFIX, ASYNC_READ_WORKER_THREAD_PREFIX,
+        CHECKPOINT_WORKER_THREAD_PREFIX, PURGE_WORKER_THREAD_PREFIX, RAFTSTORE_THREAD_PREFIX,
+        RAFTSTORE_V2_THREAD_PREFIX, REFRESH_CONFIG_WORKER_THREAD_PREFIX,
+        STORE_BACKGROUND_WORKER_THREAD_PREFIX, TABLET_WORKER_THREAD_PREFIX,
     },
     time::{Instant as TiInstant, Limiter, duration_to_sec, monotonic_raw_now},
     timer::{GLOBAL_TIMER_HANDLE, SteadyTimer},
@@ -637,11 +639,13 @@ impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
         purge: Option<Worker>,
         resource_control: Option<Arc<ResourceController>>,
     ) -> Self {
-        let checkpoint = Builder::new("checkpoint-worker").thread_count(2).create();
+        let checkpoint = Builder::new(CHECKPOINT_WORKER_THREAD_PREFIX)
+            .thread_count(2)
+            .create();
         Self {
-            async_read: Worker::new("async-read-worker"),
+            async_read: Worker::new(ASYNC_READ_WORKER_THREAD_PREFIX),
             pd,
-            tablet: Worker::new("tablet-worker"),
+            tablet: Worker::new(TABLET_WORKER_THREAD_PREFIX),
             checkpoint,
             async_write: StoreWriters::new(resource_control),
             purge,
@@ -650,7 +654,7 @@ impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
             high_priority_pool: YatpPoolBuilder::new(DefaultTicker::default())
                 .thread_count(1, 1, 1)
                 .after_start(move || set_io_type(IoType::ForegroundWrite))
-                .name_prefix("store-bg")
+                .name_prefix(STORE_BACKGROUND_WORKER_THREAD_PREFIX)
                 .build_future_pool(),
         }
     }
@@ -834,7 +838,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         );
 
         let tablet_scheduler = workers.tablet.start_with_timer(
-            "tablet-worker",
+            TABLET_WORKER_THREAD_PREFIX,
             tablet::Runner::new(
                 tablet_registry.clone(),
                 sst_importer.clone(),
@@ -877,7 +881,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         let peers = builder.init()?;
         // Choose a different name so we know what version is actually used. rs stands
         // for raft store.
-        let tag = format!("rs-{}", store_id);
+        let tag = format!("{}-{}", RAFTSTORE_V2_THREAD_PREFIX, store_id);
         self.system.spawn(tag, builder.clone());
 
         let writer_control = WriterContoller::new(

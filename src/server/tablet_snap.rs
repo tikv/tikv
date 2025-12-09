@@ -63,6 +63,7 @@ use tikv_kv::RaftExtension;
 use tikv_util::{
     DeferContext, Either,
     config::{ReadableSize, Tracker, VersionTrack},
+    thread_name_prefix::TABLET_SNAP_SENDER_THREAD_PREFIX,
     time::Instant,
     worker::Runnable,
 };
@@ -842,7 +843,7 @@ impl<B, R: RaftExtension> TabletRunner<B, R> {
             env,
             snap_mgr,
             pool: RuntimeBuilder::new_multi_thread()
-                .thread_name(thd_name!("tablet-snap-sender"))
+                .thread_name(thd_name!(TABLET_SNAP_SENDER_THREAD_PREFIX))
                 .with_sys_hooks()
                 .worker_threads(DEFAULT_POOL_SIZE)
                 .build()

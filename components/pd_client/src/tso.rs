@@ -24,8 +24,7 @@ use futures::{
 use grpcio::{CallOption, WriteFlags};
 use kvproto::pdpb::{PdClient, TsoRequest, TsoResponse};
 use tikv_util::{
-    box_err, info, sys::thread::StdThreadBuildWrapper,
-    thread_name_prefix::TSO_WORKER_THREAD_PREFIX,
+    box_err, info, sys::thread::StdThreadBuildWrapper, thread_name_prefix::TSO_WORKER_THREAD_PREFIX,
 };
 use tokio::sync::{mpsc, oneshot, watch};
 use txn_types::TimeStamp;

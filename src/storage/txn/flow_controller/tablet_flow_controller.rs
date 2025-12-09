@@ -18,9 +18,9 @@ use online_config::{ConfigChange, OnlineConfig};
 use rand::Rng;
 use tikv_util::{
     config::VersionTrack, sys::thread::StdThreadBuildWrapper,
-    thread_name_prefix::FLOW_CHECKER_THREAD_PREFIX,
-    time::Limiter
+    thread_name_prefix::FLOW_CHECKER_THREAD_PREFIX, time::Limiter,
 };
+
 use super::singleton_flow_controller::{
     FlowChecker, FlowControlFactorStore, Msg, RATIO_SCALE_FACTOR, TICK_DURATION,
 };

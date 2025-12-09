@@ -13,8 +13,8 @@ use futures::SinkExt;
 use grpcio::{CallOption, ChannelBuilder, Environment, WriteFlags};
 use kvproto::resource_usage_agent::{ResourceUsageAgentClient, ResourceUsageRecord};
 use tikv_util::{
-    warn,
     thread_name_prefix::RESOURCE_METERING_SINGLE_TARGET_DATA_SINK_THREAD_PREFIX,
+    warn,
     worker::{Builder as WorkerBuilder, LazyWorker, Runnable, Scheduler},
 };
 
@@ -256,10 +256,11 @@ pub fn init_single_target(
     env: Arc<Environment>,
     data_sink_reg: DataSinkRegHandle,
 ) -> (AddressChangeNotifier, Box<LazyWorker<Task>>) {
-    let mut single_target_worker = WorkerBuilder::new(RESOURCE_METERING_SINGLE_TARGET_DATA_SINK_THREAD_PREFIX)
-        .pending_capacity(10)
-        .create()
-        .lazy_build(RESOURCE_METERING_SINGLE_TARGET_DATA_SINK_THREAD_PREFIX);
+    let mut single_target_worker =
+        WorkerBuilder::new(RESOURCE_METERING_SINGLE_TARGET_DATA_SINK_THREAD_PREFIX)
+            .pending_capacity(10)
+            .create()
+            .lazy_build(RESOURCE_METERING_SINGLE_TARGET_DATA_SINK_THREAD_PREFIX);
     let single_target_scheduler = single_target_worker.scheduler();
     let single_target =
         SingleTargetDataSink::new(address, env, data_sink_reg, single_target_scheduler.clone());

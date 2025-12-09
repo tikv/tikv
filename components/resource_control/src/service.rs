@@ -341,10 +341,10 @@ pub mod tests {
     use protobuf::Message;
     use test_pd::{Server as MockServer, mocker::MetaStorage, util::*};
     use tikv_util::{
-        config::ReadableDuration,
-        thread_name_prefix::BACKGROUND_WORKER_THREAD_PREFIX,
-        worker::Builder
+        config::ReadableDuration, thread_name_prefix::BACKGROUND_WORKER_THREAD_PREFIX,
+        worker::Builder,
     };
+
     use crate::resource_group::tests::{
         new_background_resource_group_ru, new_resource_group, new_resource_group_ru,
     };

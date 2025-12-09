@@ -19,8 +19,8 @@ use tokio_timer::{
 
 use crate::{
     sys::thread::StdThreadBuildWrapper,
-    time::{Instant, monotonic_raw_now},
     thread_name_prefix::{STEADY_TIMER_THREAD_PREFIX, TIMER_THREAD_PREFIX},
+    time::{Instant, monotonic_raw_now},
 };
 
 pub struct Timer<T> {
@@ -101,7 +101,8 @@ impl Now for SystemClock {
 }
 
 lazy_static! {
-    pub static ref GLOBAL_TIMER_HANDLE: Handle = start_timer_thread(TIMER_THREAD_PREFIX, SystemClock);
+    pub static ref GLOBAL_TIMER_HANDLE: Handle =
+        start_timer_thread(TIMER_THREAD_PREFIX, SystemClock);
 }
 
 /// A struct that marks the *zero* time.
@@ -268,8 +269,9 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 
     use futures::{compat::Future01CompatExt, executor::block_on};
-    use crate::thread_name_prefix::TIMER_THREAD_PREFIX;
+
     use super::*;
+    use crate::thread_name_prefix::TIMER_THREAD_PREFIX;
 
     #[derive(Debug, PartialEq, Copy, Clone)]
     enum Task {

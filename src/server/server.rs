@@ -26,7 +26,9 @@ use tikv_util::{
     Either,
     config::VersionTrack,
     sys::{get_global_memory_usage, record_global_memory_usage},
-    thread_name_prefix::{GRPC_SERVER_THREAD_PREFIX, SNAP_HANDLER_THREAD_PREFIX, STATS_THREAD_PREFIX},
+    thread_name_prefix::{
+        GRPC_SERVER_THREAD_PREFIX, SNAP_HANDLER_THREAD_PREFIX, STATS_THREAD_PREFIX,
+    },
     timer::GLOBAL_TIMER_HANDLE,
     worker::{LazyWorker, Scheduler, Worker},
 };
@@ -573,9 +575,8 @@ mod tests {
     use resource_metering::ResourceTagFactory;
     use security::SecurityConfig;
     use tikv_util::{
-        config::ReadableDuration,
+        config::ReadableDuration, quota_limiter::QuotaLimiter,
         thread_name_prefix::DEBUGGER_THREAD_PREFIX,
-        quota_limiter::QuotaLimiter,
     };
     use tokio::runtime::Builder as TokioBuilder;
 

@@ -15,7 +15,8 @@
 //! Threads created by external libraries (e.g., RocksDB, gRPC, Prometheus) are
 //! excluded since TiKV cannot rename them.
 //!
-//! Constants are ordered by when TiKV creates these threads during server startup.
+//! Constants are ordered by when TiKV creates these threads during server
+//! startup.
 
 pub const ARCHIVE_WORKER_THREAD_PREFIX: &str = "archive-worker";
 
@@ -30,6 +31,8 @@ pub const PD_MONITOR_THREAD_PREFIX: &str = "pdmonitor";
 pub const TSO_WORKER_THREAD_PREFIX: &str = "tso-worker";
 
 pub const TIMER_THREAD_PREFIX: &str = "timer";
+
+pub const BACKTRACE_LOADER_THREAD_PREFIX: &str = "backtrace-loader";
 
 pub const BACKGROUND_WORKER_THREAD_PREFIX: &str = "background";
 
@@ -53,7 +56,8 @@ pub const DEBUGGER_THREAD_PREFIX: &str = "debugger";
 
 pub const RESOURCE_METERING_RECORDER_THREAD_PREFIX: &str = "resource-metering-recorder";
 
-pub const RESOURCE_METERING_SINGLE_TARGET_DATA_SINK_THREAD_PREFIX: &str = "resource-metering-single-target-data-sink";
+pub const RESOURCE_METERING_SINGLE_TARGET_DATA_SINK_THREAD_PREFIX: &str =
+    "resource-metering-single-target-data-sink";
 
 pub const SCHEDULE_WORKER_POOL_THREAD_PREFIX: &str = "sched-worker-pool";
 
@@ -77,6 +81,18 @@ pub const SST_IMPORT_MISC_THREAD_PREFIX: &str = "sst-import-misc";
 
 pub const PURGE_WORKER_THREAD_PREFIX: &str = "purge-worker";
 
+pub const CHECKPOINT_WORKER_THREAD_PREFIX: &str = "checkpoint-worker";
+
+pub const ASYNC_READ_WORKER_THREAD_PREFIX: &str = "async-read-worker";
+
+pub const STORE_BACKGROUND_WORKER_THREAD_PREFIX: &str = "store-bg";
+
+pub const TABLET_WORKER_THREAD_PREFIX: &str = "tablet-worker";
+
+pub const TABLET_HIGH_PRIORITY_WORKER_THREAD_PREFIX: &str = "tablet-high";
+
+pub const TABLET_BACKGROUND_WORKER_THREAD_PREFIX: &str = "tablet-bg";
+
 pub const SNAP_GENERATOR_THREAD_PREFIX: &str = "snap-generator";
 
 pub const CLEANUP_WORKER_THREAD_PREFIX: &str = "cleanup-worker";
@@ -92,6 +108,8 @@ pub const STORE_WRITER_THREAD_PREFIX: &str = "store-writer";
 pub const STEADY_TIMER_THREAD_PREFIX: &str = "steady-timer";
 
 pub const RAFTSTORE_THREAD_PREFIX: &str = "raftstore";
+
+pub const RAFTSTORE_V2_THREAD_PREFIX: &str = "rs";
 
 pub const APPLY_WORKER_THREAD_PREFIX: &str = "apply";
 
@@ -109,6 +127,8 @@ pub const ADVANCED_TS_THREAD_PREFIX: &str = "advanced-ts";
 
 pub const RESOLVED_TS_SCANNER_THREAD_PREFIX: &str = "resolved-ts-scanner";
 
+pub const SNAP_BROADCAST_BACKUP_PREPARE_THREAD_PREFIX: &str = "snap-br-backup-prepare";
+
 pub const RUNTIME_KEEPER_THREAD_PREFIX: &str = "runtime-keeper";
 
 pub const IMPORT_SST_WORKER_THREAD_PREFIX: &str = "import-sst-worker";
@@ -124,5 +144,7 @@ pub const BACKUP_WORKER_THREAD_PREFIX: &str = "backup-worker";
 pub const BACKUP_IO_THREAD_PREFIX: &str = "backup-io";
 
 pub const SNAP_SENDER_THREAD_PREFIX: &str = "snap-sender";
+
+pub const TABLET_SNAP_SENDER_THREAD_PREFIX: &str = "tablet-snap-sender";
 
 pub const STATUS_SERVER_THREAD_PREFIX: &str = "status-server";

@@ -15,8 +15,7 @@ use tikv::storage::{
     mvcc::MvccReader,
 };
 use tikv_util::{
-    sys::thread::ThreadBuildWrapper,
-    thread_name_prefix::RESOLVED_TS_SCANNER_THREAD_PREFIX,
+    sys::thread::ThreadBuildWrapper, thread_name_prefix::RESOLVED_TS_SCANNER_THREAD_PREFIX,
     time::Instant, timer::GLOBAL_TIMER_HANDLE, worker::Scheduler,
 };
 use tokio::{

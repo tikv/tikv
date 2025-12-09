@@ -548,14 +548,17 @@ struct PriorityLimiterStatsTracker {
 
 impl PriorityLimiterStatsTracker {
     fn new(limiter: Arc<ResourceLimiter>, priority: &'static str) -> Self {
-        let task_wait_dur_trakcers =
-            [UNIFIED_READ_POOL_THREAD_PREFIX, SCHEDULE_WORKER_PRIORITY_THREAD_PREFIX].map(|pool_name| {
-                HistogramTracker::new(
-                    YATP_POOL_SCHEDULE_WAIT_DURATION_VEC
-                        .get_metric_with_label_values(&[pool_name, priority])
-                        .unwrap(),
-                )
-            });
+        let task_wait_dur_trakcers = [
+            UNIFIED_READ_POOL_THREAD_PREFIX,
+            SCHEDULE_WORKER_PRIORITY_THREAD_PREFIX,
+        ]
+        .map(|pool_name| {
+            HistogramTracker::new(
+                YATP_POOL_SCHEDULE_WAIT_DURATION_VEC
+                    .get_metric_with_label_values(&[pool_name, priority])
+                    .unwrap(),
+            )
+        });
         let last_stats = limiter.get_limit_statistics(ResourceType::Cpu);
         Self {
             priority,
@@ -592,7 +595,9 @@ impl PriorityLimiterStatsTracker {
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
+
     use tikv_util::thread_name_prefix::BACKGROUND_WORKER_THREAD_PREFIX;
+
     use super::*;
     use crate::{resource_group::tests::*, resource_limiter::QuotaLimiter};
 
@@ -823,7 +828,12 @@ mod tests {
             .unwrap();
         assert_eq!(&*new_limiter as *const _, &*limiter as *const _);
 
-        let bg = new_background_resource_group_ru(BACKGROUND_WORKER_THREAD_PREFIX.into(), 1000, 15, vec!["br".into()]);
+        let bg = new_background_resource_group_ru(
+            BACKGROUND_WORKER_THREAD_PREFIX.into(),
+            1000,
+            15,
+            vec!["br".into()],
+        );
         resource_ctl.add_resource_group(bg);
         let bg_limiter = resource_ctl
             .get_background_resource_limiter(BACKGROUND_WORKER_THREAD_PREFIX, "br")
@@ -886,8 +896,12 @@ mod tests {
         let bg = new_resource_group_ru(BACKGROUND_WORKER_THREAD_PREFIX.into(), 1000, 15);
         resource_ctl.add_resource_group(bg);
 
-        let new_bg =
-            new_background_resource_group_ru(BACKGROUND_WORKER_THREAD_PREFIX.into(), 1000, 15, vec!["br".into()]);
+        let new_bg = new_background_resource_group_ru(
+            BACKGROUND_WORKER_THREAD_PREFIX.into(),
+            1000,
+            15,
+            vec!["br".into()],
+        );
         resource_ctl.add_resource_group(new_bg);
         let new_bg_limiter = resource_ctl
             .get_background_resource_limiter(BACKGROUND_WORKER_THREAD_PREFIX, "br")

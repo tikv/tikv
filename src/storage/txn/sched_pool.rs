@@ -18,8 +18,7 @@ use resource_control::{
 use tikv_util::{
     sys::SysQuota,
     thread_name_prefix::{
-        SCHEDULE_WORKER_HIGH_PRIORITY_THREAD_PREFIX,
-        SCHEDULE_WORKER_POOL_THREAD_PREFIX,
+        SCHEDULE_WORKER_HIGH_PRIORITY_THREAD_PREFIX, SCHEDULE_WORKER_POOL_THREAD_PREFIX,
         SCHEDULE_WORKER_PRIORITY_THREAD_PREFIX,
     },
     yatp_pool::{Full, FuturePool, PoolTicker, YatpPoolBuilder},

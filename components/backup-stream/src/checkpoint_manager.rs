@@ -15,9 +15,7 @@ use kvproto::{
 };
 use pd_client::PdClient;
 use tikv_util::{
-    box_err, defer, info, warn,
-    thread_name_prefix::BACKUP_STREAM_THREAD_PREFIX,
-    worker::Scheduler
+    box_err, defer, info, thread_name_prefix::BACKUP_STREAM_THREAD_PREFIX, warn, worker::Scheduler,
 };
 use tracing::instrument;
 use txn_types::TimeStamp;

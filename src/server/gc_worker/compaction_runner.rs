@@ -19,9 +19,8 @@ use prometheus::*;
 use prometheus_static_metric::*;
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::{
-    box_err, debug, error, info, warn,
-    sys::thread::StdThreadBuildWrapper,
-    thread_name_prefix::COMPACTION_RUNNER_THREAD_PREFIX,
+    box_err, debug, error, info, sys::thread::StdThreadBuildWrapper,
+    thread_name_prefix::COMPACTION_RUNNER_THREAD_PREFIX, warn,
 };
 use txn_types::TimeStamp;
 

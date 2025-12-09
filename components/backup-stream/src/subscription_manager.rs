@@ -14,9 +14,8 @@ use raftstore::{
 use rand::Rng;
 use tikv::storage::Statistics;
 use tikv_util::{
-    box_err, debug, info, memory::MemoryQuota, sys::thread::ThreadBuildWrapper, time::Instant,
-    thread_name_prefix::LOG_BACKUP_SCAN_THREAD_PREFIX,
-    warn, worker::Scheduler,
+    box_err, debug, info, memory::MemoryQuota, sys::thread::ThreadBuildWrapper,
+    thread_name_prefix::LOG_BACKUP_SCAN_THREAD_PREFIX, time::Instant, warn, worker::Scheduler,
 };
 use tokio::sync::mpsc::{Receiver, Sender, WeakSender, channel, error::SendError};
 use tracing::instrument;
