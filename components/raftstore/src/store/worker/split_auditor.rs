@@ -37,7 +37,16 @@ where
 
     #[inline]
     pub fn is_disabled(&self, region_id: u64) -> bool {
-        self.disabled_region_ids.contains_key(&region_id)
+        let Some(entry) = self.disabled_region_ids.get(&region_id) else {
+            return false;
+        };
+
+        if (self.gc_filter)(&entry) {
+            entry.remove();
+            return false;
+        }
+
+        true
     }
 
     #[inline]
@@ -154,6 +163,15 @@ mod tests {
     }
 
     #[test]
+    fn test_expired() {
+        let auditor = SplitAuditorCore::new(|e| e.key() & 1 == 0, 300);
+        auditor.disable(1);
+        assert!(auditor.is_disabled(1));
+        auditor.disable(2);
+        assert!(!auditor.is_disabled(2));
+    }
+
+    #[test]
     fn test_gc_removes_expired_entries() {
         let auditor = SplitAuditorCore::new(|e| e.key() & 1 == 0, 300);
         for i in 0..200 {
@@ -162,7 +180,7 @@ mod tests {
         auditor.gc();
         assert_eq!(*auditor.gc_offset.lock().unwrap(), 0);
         assert_eq!(auditor.disabled_region_ids.len(), 200);
-        for i in 0..100 {
+        for i in 200..300 {
             auditor.disabled_region_ids.insert(i, Instant::now());
         }
         auditor.gc();
@@ -175,6 +193,25 @@ mod tests {
         auditor.gc();
         assert_eq!(*auditor.gc_offset.lock().unwrap(), 0);
         assert_eq!(auditor.disabled_region_ids.len(), 150);
+    }
+
+    #[test]
+    fn test_disable_trigger_gc() {
+        let auditor = SplitAuditorCore::new(|e| e.key() & 1 == 0, 300);
+        for i in 0..200 {
+            auditor.disable(i);
+        }
+        assert_eq!(auditor.disabled_region_ids.len(), 200);
+        for i in 200..300 {
+            auditor.disable(i);
+        }
+        assert_eq!(auditor.disabled_region_ids.len(), 236);
+        auditor.disable(300);
+        assert_eq!(auditor.disabled_region_ids.len(), 173);
+        auditor.disable(301);
+        assert_eq!(auditor.disabled_region_ids.len(), 151);
+        auditor.disable(302);
+        assert_eq!(auditor.disabled_region_ids.len(), 152);
     }
 
     #[bench]
