@@ -31,11 +31,8 @@ mod all {
     use encryption::{FileConfig, MasterKeyConfig};
     use futures::executor::block_on;
     use kvproto::encryptionpb::EncryptionMethod;
-<<<<<<< HEAD
-=======
     use raftstore::coprocessor::ObserveHandle;
     use serde_json::Value;
->>>>>>> 8e3607e281 (log-backup: implemented pause v2 (#18272))
     use tempfile::TempDir;
     use tikv_util::{
         box_err,
