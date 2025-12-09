@@ -7,9 +7,13 @@ use std::{
 
 use crossbeam_skiplist::{SkipMap, map::Entry};
 
+// CAPACITY is the cache capacity. When it is exceeded, GC will be triggered.
 const CAPACITY: usize = 0x2000;
+// GC_ENTRY_LIMIT is the number of iterations during a single GC operation.
 const GC_ENTRY_LIMIT: usize = 0x80;
+// GC_LIFETIME is the effective time of the cache, in seconds.
 const GC_LIFETIME: u64 = 600;
+
 struct SplitAuditorCore<P> {
     disabled_region_ids: SkipMap<u64, Instant>,
     capacity: usize,
@@ -19,7 +23,7 @@ struct SplitAuditorCore<P> {
 
 impl<P> SplitAuditorCore<P>
 where
-    P: Fn(&Entry<u64, Instant>) -> bool,
+    P: Fn(&Entry<'_, u64, Instant>) -> bool,
 {
     #[inline]
     pub fn new(gc_filter: P, capacity: usize) -> Self {
@@ -39,12 +43,12 @@ where
     #[inline]
     pub fn disable(&self, region_id: u64) {
         self.disabled_region_ids.insert(region_id, Instant::now());
+        self.gc()
     }
 
     #[inline]
     pub fn enable(&self, region_id: u64) {
         self.disabled_region_ids.remove(&region_id);
-        self.gc();
     }
 
     fn gc(&self) {
@@ -75,7 +79,7 @@ where
 
 #[derive(Clone)]
 pub struct SplitAuditor {
-    core: Arc<SplitAuditorCore<fn(&Entry<u64, Instant>) -> bool>>,
+    core: Arc<SplitAuditorCore<fn(&Entry<'_, u64, Instant>) -> bool>>,
 }
 
 impl SplitAuditor {
@@ -102,6 +106,12 @@ impl SplitAuditor {
     #[inline]
     pub fn enable(&self, region_id: u64) {
         self.core.enable(region_id);
+    }
+}
+
+impl Default for SplitAuditor {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
