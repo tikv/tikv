@@ -78,8 +78,10 @@ const ADAPTIVE_QPS_PRESSURE_LOWER_BOUND: u64 = 10000;
 const ADAPTIVE_MIN_HIGH_CONCURRENCY_QPS: u64 = 45000;
 // EWMA smoothing factor for high_concurrency_qps_threshold update
 const ADAPTIVE_HIGH_CONCURRENCY_EWMA_ALPHA: f64 = 0.2; // 0.8*old + 0.2*new
-// Very high concurrency multiplier (1.2x of high_concurrency_qps_threshold)
-const ADAPTIVE_VERY_HIGH_CONCURRENCY_MULTIPLIER: f64 = 1.2;
+// High concurrency multiplier (0.9x of high_concurrency_qps_threshold)
+const ADAPTIVE_HIGH_CONCURRENCY_MULTIPLIER: f64 = 0.9;
+// Very high concurrency multiplier (0.95x of high_concurrency_qps_threshold)
+const ADAPTIVE_VERY_HIGH_CONCURRENCY_MULTIPLIER: f64 = 0.95;
 const BATCH_ACHIEVEMENT_RATIO_LOW_THRESHOLD: f64 = 0.3;
 // Consecutive low batch_ratio count threshold for futile waiting detection (< 0.3)
 const CONSECUTIVE_LOW_BATCH_RATIO_THRESHOLD: u32 = 2; // Require 2 consecutive times < 0.3
@@ -988,15 +990,19 @@ where
             // Use P50 (median, 50th percentile) as baseline
             let p50_qps = sorted_qps[sorted_qps.len() / 2];
 
-            // Use P90 (90th percentile) to update high_concurrency_qps_threshold
-            let p90_index = (sorted_qps.len() as f64 * 0.9) as usize;
-            let p90_qps = sorted_qps[p90_index.min(sorted_qps.len() - 1)];
+            // Use P75 (75th percentile) to update high_concurrency_qps_threshold
+            // P75 better captures sustained high load without being inflated by peak spikes
+            // P90 was consistently higher than avg_qps, preventing proper high concurrency detection
+            // Example: avg_qps=64022, P50=63896, P90=72993 → pressure=0.86 (too low)
+            //          With P75≈67000 → pressure≈0.96 (more accurate)
+            let p75_index = (sorted_qps.len() as f64 * 0.75) as usize;
+            let p75_qps = sorted_qps[p75_index.min(sorted_qps.len() - 1)];
 
-            // Update high_concurrency_qps_threshold using EWMA if P90 > current threshold
-            if p90_qps > self.high_concurrency_qps_threshold {
+            // Update high_concurrency_qps_threshold using EWMA if P75 > current threshold
+            if p75_qps > self.high_concurrency_qps_threshold {
                 self.high_concurrency_qps_threshold = (
                     (1.0 - ADAPTIVE_HIGH_CONCURRENCY_EWMA_ALPHA) * self.high_concurrency_qps_threshold as f64
-                    + ADAPTIVE_HIGH_CONCURRENCY_EWMA_ALPHA * p90_qps as f64
+                    + ADAPTIVE_HIGH_CONCURRENCY_EWMA_ALPHA * p75_qps as f64
                 ) as u64;
             }
             // Ensure it doesn't drop below minimum
@@ -1050,23 +1056,20 @@ where
                 / (self.high_concurrency_qps_threshold - ADAPTIVE_QPS_PRESSURE_LOWER_BOUND) as f64
         };
 
-        // Critical insight: Distinguish between low/medium/high concurrency scenarios
-        // High concurrency should be treated specially - even with low batch_ratio,
-        // we should allow higher wait_duration to force aggregation and reduce IOPS
-        let is_very_high_concurrency = qps_pressure_factor >= ADAPTIVE_VERY_HIGH_CONCURRENCY_MULTIPLIER;
-
         // High concurrency detection uses dual conditions to handle edge cases:
         // Condition 1: qps_pressure_factor >= 1.0 (avg_qps >= high_concurrency_qps_threshold)
         // Condition 2: avg_qps is near qps_baseline (within 5%) AND qps_pressure_factor >= 0.85
         //   This catches scenarios where P90-based threshold is higher than avg_qps,
         //   but avg_qps is still at sustained high level (near P50 baseline)
         // Example: avg_qps=46840, baseline(P50)=48062, threshold(P90)=48670
-        //   Condition 1: 46840/48670=0.95 < 1.0 → false
-        //   Condition 2: 46840 >= 48062*0.95 (45659) → true AND 0.95 >= 0.85 → true
+        //   Condition 1: 46840/48670=0.95 < 1.0 → true
         //   Result: is_high_concurrency = true ✓
-        let is_high_concurrency = qps_pressure_factor >= 1.0
-            || (avg_qps as f64 >= qps_baseline as f64 * 0.95 && qps_pressure_factor >= 0.85);
-        
+        let is_high_concurrency = qps_pressure_factor >= ADAPTIVE_HIGH_CONCURRENCY_MULTIPLIER;
+        // Critical insight: Distinguish between low/medium/high concurrency scenarios
+        // High concurrency should be treated specially - even with low batch_ratio,
+        // we should allow higher wait_duration to force aggregation and reduce IOPS
+        let is_very_high_concurrency = qps_pressure_factor >= ADAPTIVE_VERY_HIGH_CONCURRENCY_MULTIPLIER;
+
         // Detect "futile waiting" - when wait_duration is high but batching remains poor
         // Use consecutive low batch_ratio count to prevent oscillation from transient dips
         // Trigger futile waiting only if batch_ratio < 0.3 for >= 2 CONSECUTIVE periods
@@ -1146,7 +1149,19 @@ where
             } else if is_high_concurrency {
                 // High concurrency with poor batching
                 // Continue increasing wait_duration to force aggregation
-                (1.1 * current_wait_duration_nanos as f64) as u64
+                // Use adaptive adjustment based on how long poor batching has persisted
+                let adjustment_factor = if self.consecutive_low_batch_ratio_count >= 10 {
+                    // Severe persistent poor batching (10+ periods): aggressive increase
+                    // Example: consecutive=15, need to grow from 13us to 100us quickly
+                    1.3  // +30% per period
+                } else if self.consecutive_low_batch_ratio_count >= 5 {
+                    // Moderate persistence (5-9 periods): moderate increase
+                    1.2  // +20% per period
+                } else {
+                    // Initial poor batching (< 5 periods): conservative increase
+                    1.1  // +10% per period (original behavior)
+                };
+                (adjustment_factor * current_wait_duration_nanos as f64) as u64
             } else if current_wait_duration_nanos < wait_duration_hint_nanos {
                 // Normal concurrency: wait duration is moderate, increase conservatively
                 (1.1 * current_wait_duration_nanos as f64) as u64
@@ -1155,23 +1170,39 @@ where
                 current_wait_duration_nanos as u64
             }
         };
-        
+
         // Use exponential weighted moving average for smoother transitions
         // Smoothing factor (α) - higher values make quicker adjustments
-        const SMOOTHING_FACTOR: f64 = 0.2;
-        let smoothed_duration_nanos = ((1.0 - SMOOTHING_FACTOR) * current_wait_duration_nanos as f64 
-                                     + SMOOTHING_FACTOR * target_duration_nanos as f64) as u64;
-        
+        // Use adaptive smoothing: when poor batching persists under high concurrency,
+        // reduce smoothing (increase α) to respond faster
+        let smoothing_factor = if is_high_concurrency
+            && batch_achievement_ratio < BATCH_ACHIEVEMENT_RATIO_LOW_THRESHOLD
+            && self.consecutive_low_batch_ratio_count >= 10 {
+            // Severe persistent poor batching: minimal smoothing for fast response
+            // Example: consecutive=15, batch_ratio=0.10, need quick growth
+            0.4  // 40% weight on target, 60% on current
+        } else if is_high_concurrency
+            && batch_achievement_ratio < BATCH_ACHIEVEMENT_RATIO_LOW_THRESHOLD
+            && self.consecutive_low_batch_ratio_count >= 5 {
+            // Moderate persistence: moderate smoothing
+            0.3  // 30% weight on target, 70% on current
+        } else {
+            // Default: conservative smoothing for stability
+            0.2  // 20% weight on target, 80% on current
+        };
+        let smoothed_duration_nanos = ((1.0 - smoothing_factor) * current_wait_duration_nanos as f64
+                                     + smoothing_factor * target_duration_nanos as f64) as u64;
+
         info!("[adaptive adjustment] adaptive_batch_enabled: {}, update wait_duration, wait_count: {}, wasted_wait_count: {}, \
             valid_wait_count: {}, wasted_wait_ratio: {:.2}, qps_baseline(P50): {}, avg_qps: {}, \
             batch_achievement_ratio: {:.2}, qps_pressure_factor: {:.2}, high_concurrency_qps_threshold: {}, \
             is_high_concurrency: {}, is_very_high_concurrency: {}, \
-            consecutive_low_batch_ratio_count: {}, target_duration: {}us, wait_duration: {}us => {}us, \
+            consecutive_low_batch_ratio_count: {}, smoothing_factor: {:.2}, target_duration: {}us, wait_duration: {}us => {}us, \
             batch_size_hint: {}, batch_avg: {}, wait_duration_hint: {}us, batch_task_count_history: {:?}",
             self.adaptive_batch_enabled, self.wait_count, self.wasted_wait_count, self.valid_wait_count,
             wasted_wait_ratio, qps_baseline, avg_qps, batch_achievement_ratio, qps_pressure_factor,
             self.high_concurrency_qps_threshold, is_high_concurrency, is_very_high_concurrency,
-            self.consecutive_low_batch_ratio_count, target_duration_nanos / 1_000,
+            self.consecutive_low_batch_ratio_count, smoothing_factor, target_duration_nanos / 1_000,
             current_wait_duration_nanos / 1_000, smoothed_duration_nanos / 1_000,
             batch_size_hint, batch_avg, wait_duration_hint_nanos / 1_000, self.batch_task_count_history);
         // Ensure new wait time is within reasonable range (10us to 1ms)
