@@ -91,11 +91,21 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
                         }
                     }
                     Either::Right(mut shared_locks) => {
-                        if let Some(shared_lock) = shared_locks
-                            .remove_lock(&self.start_ts)
+                        // First check if the lock exists and meets conditions
+                        let should_rollback = shared_locks
+                            .get_lock(&self.start_ts)
                             .map_err(MvccError::from)?
-                        {
-                            assert!(shared_lock.is_pessimistic_lock());
+                            .map(|lock| {
+                                lock.is_pessimistic_lock()
+                                    && lock.for_update_ts <= self.for_update_ts
+                            })
+                            .unwrap_or(false);
+
+                        if should_rollback {
+                            // Remove the lock
+                            shared_locks
+                                .remove_lock(&self.start_ts)
+                                .map_err(MvccError::from)?;
                             if shared_locks.is_empty() {
                                 Ok(txn.unlock_key(key, true, TimeStamp::zero()))
                             } else {

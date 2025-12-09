@@ -181,9 +181,18 @@ pub fn commit<S: Snapshot>(
     if !commit {
         // Rollback a stale pessimistic lock. This function must be called by
         // resolve-lock in this case.
-        // TODO: for shared lock, we should not remove the other shared locks.
         assert!(lock.is_pessimistic_lock());
-        return Ok(txn.unlock_key(key, lock.is_pessimistic_txn(), TimeStamp::zero()));
+        return match shared_locks {
+            Some(shared_locks) => {
+                if shared_locks.is_empty() {
+                    Ok(txn.unlock_key(key, true, TimeStamp::zero()))
+                } else {
+                    txn.put_shared_locks(key, &shared_locks, false);
+                    Ok(None)
+                }
+            }
+            None => Ok(txn.unlock_key(key, lock.is_pessimistic_txn(), TimeStamp::zero())),
+        };
     }
 
     let mut write = Write::new(
