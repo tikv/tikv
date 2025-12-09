@@ -75,7 +75,7 @@ const ADAPTIVE_QPS_BASELINE_HISTORY_MIN_LEN: usize = 10;
 const ADAPTIVE_DEFAULT_QPS_BASELINE: u64 = 1000;
 const ADAPTIVE_QPS_PRESSURE_LOWER_BOUND: u64 = 10000;
 // Dynamic threshold for high concurrency - initial and minimum value
-const ADAPTIVE_MIN_HIGH_CONCURRENCY_QPS: u64 = 45000;
+const ADAPTIVE_MIN_HIGH_CONCURRENCY_QPS: u64 = 50000;
 // EWMA smoothing factor for high_concurrency_qps_threshold update
 const ADAPTIVE_HIGH_CONCURRENCY_EWMA_ALPHA: f64 = 0.2; // 0.8*old + 0.2*new
 // High concurrency multiplier (0.9x of high_concurrency_qps_threshold)
@@ -998,13 +998,16 @@ where
             let p75_index = (sorted_qps.len() as f64 * 0.75) as usize;
             let p75_qps = sorted_qps[p75_index.min(sorted_qps.len() - 1)];
 
-            // Update high_concurrency_qps_threshold using EWMA if P75 > current threshold
-            if p75_qps > self.high_concurrency_qps_threshold {
-                self.high_concurrency_qps_threshold = (
-                    (1.0 - ADAPTIVE_HIGH_CONCURRENCY_EWMA_ALPHA) * self.high_concurrency_qps_threshold as f64
-                    + ADAPTIVE_HIGH_CONCURRENCY_EWMA_ALPHA * p75_qps as f64
-                ) as u64;
-            }
+            // Update high_concurrency_qps_threshold using P75 and EWMA (bidirectional adjustment)
+            // Threshold adapts to both increases and decreases in workload, providing better
+            // adaptivity to daily traffic patterns and machine capacity changes
+            // EWMA smoothing (α=0.2) prevents overreaction to short-term fluctuations
+            // Minimum bound (45k) prevents threshold from dropping too low during off-peak
+            self.high_concurrency_qps_threshold = (
+                (1.0 - ADAPTIVE_HIGH_CONCURRENCY_EWMA_ALPHA) * self.high_concurrency_qps_threshold as f64
+                + ADAPTIVE_HIGH_CONCURRENCY_EWMA_ALPHA * p75_qps as f64
+            ) as u64;
+
             // Ensure it doesn't drop below minimum
             self.high_concurrency_qps_threshold = self.high_concurrency_qps_threshold.max(ADAPTIVE_MIN_HIGH_CONCURRENCY_QPS);
 
@@ -1057,13 +1060,7 @@ where
         };
 
         // High concurrency detection uses dual conditions to handle edge cases:
-        // Condition 1: qps_pressure_factor >= 1.0 (avg_qps >= high_concurrency_qps_threshold)
-        // Condition 2: avg_qps is near qps_baseline (within 5%) AND qps_pressure_factor >= 0.85
-        //   This catches scenarios where P90-based threshold is higher than avg_qps,
-        //   but avg_qps is still at sustained high level (near P50 baseline)
-        // Example: avg_qps=46840, baseline(P50)=48062, threshold(P90)=48670
-        //   Condition 1: 46840/48670=0.95 < 1.0 → true
-        //   Result: is_high_concurrency = true ✓
+        // qps_pressure_factor >= 0.9
         let is_high_concurrency = qps_pressure_factor >= ADAPTIVE_HIGH_CONCURRENCY_MULTIPLIER;
         // Critical insight: Distinguish between low/medium/high concurrency scenarios
         // High concurrency should be treated specially - even with low batch_ratio,
