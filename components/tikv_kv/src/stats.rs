@@ -54,6 +54,10 @@ impl<'a, T: IterMetricsCollector> StatsCollector<'a, T> {
             raw_value_tombstone: RAW_VALUE_TOMBSTONE.with(|m| *m.borrow()),
         }
     }
+
+    pub fn add_size(&mut self, size: usize) {
+        self.stats.flow_stats.read_bytes += size;
+    }
 }
 
 impl<T: IterMetricsCollector> Drop for StatsCollector<'_, T> {
@@ -62,6 +66,7 @@ impl<T: IterMetricsCollector> Drop for StatsCollector<'_, T> {
             RAW_VALUE_TOMBSTONE.with(|m| *m.borrow()) - self.raw_value_tombstone;
         let internal_tombstone =
             self.collector.internal_delete_skipped_count() as usize - self.internal_tombstone;
+        self.stats.flow_stats.read_keys += 1;
         match self.kind {
             StatsKind::Next => {
                 self.stats.next += 1;

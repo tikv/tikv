@@ -108,13 +108,13 @@ impl<S: Snapshot> BackwardKvScanner<S> {
         loop {
             let (current_user_key, mut has_write, has_lock) = {
                 let w_key = if self.write_cursor.valid()? {
-                    Some(self.write_cursor.key(&mut self.statistics.write))
+                    Some(self.write_cursor.key())
                 } else {
                     None
                 };
                 let l_key = if let Some(lock_cursor) = self.lock_cursor.as_mut() {
                     if lock_cursor.valid()? {
-                        Some(lock_cursor.key(&mut self.statistics.lock))
+                        Some(lock_cursor.key())
                     } else {
                         None
                     }
@@ -157,11 +157,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
             if has_lock {
                 if need_check_locks(self.cfg.isolation_level) {
                     let lock = {
-                        let lock_value = self
-                            .lock_cursor
-                            .as_mut()
-                            .unwrap()
-                            .value(&mut self.statistics.lock);
+                        let lock_value = self.lock_cursor.as_mut().unwrap().value();
                         Lock::parse(lock_value)?
                     };
                     if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
@@ -252,7 +248,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
 
             let mut is_done = false;
             {
-                let current_key = self.write_cursor.key(&mut self.statistics.write);
+                let current_key = self.write_cursor.key();
                 last_checked_commit_ts = Key::decode_ts_from(current_key)?;
 
                 if !Key::is_user_key_eq(current_key, user_key.as_encoded().as_slice()) {
@@ -284,8 +280,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                 return self.handle_last_version(last_version, user_key);
             }
 
-            let write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))
-                .map_err(Error::from)?;
+            let write = WriteRef::parse(self.write_cursor.value()).map_err(Error::from)?;
 
             match write.write_type {
                 WriteType::Put | WriteType::Delete => last_version = Some(write.to_owned()),
@@ -300,7 +295,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                 // move cursor backward again to check whether there are larger ts.
                 self.write_cursor.prev(&mut self.statistics.write);
                 if self.write_cursor.valid()? {
-                    let current_key = self.write_cursor.key(&mut self.statistics.write);
+                    let current_key = self.write_cursor.key();
                     if Key::is_user_key_eq(current_key, user_key.as_encoded().as_slice()) {
                         self.met_newer_ts_data = NewerTsCheckState::Met;
                     } else {
@@ -327,7 +322,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
             seek_key = seek_key.truncate_ts()?;
             use_near_seek = true;
 
-            let current_key = self.write_cursor.key(&mut self.statistics.write);
+            let current_key = self.write_cursor.key();
             debug_assert!(Key::is_user_key_eq(
                 current_key,
                 user_key.as_encoded().as_slice()
@@ -355,7 +350,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
             // again. It means we have checked all versions for this user key.
             // We use `last_version` as return.
             let current_ts = {
-                let current_key = self.write_cursor.key(&mut self.statistics.write);
+                let current_key = self.write_cursor.key();
                 // We should never reach another user key.
                 debug_assert!(Key::is_user_key_eq(
                     current_key,
@@ -368,7 +363,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                 return self.handle_last_version(last_version, user_key);
             }
 
-            let write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))?;
+            let write = WriteRef::parse(self.write_cursor.value())?;
 
             if !write.check_gc_fence_as_latest_version(self.cfg.ts) {
                 return Ok(None);
@@ -459,7 +454,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                 return Ok(());
             }
             {
-                let current_key = self.write_cursor.key(&mut self.statistics.write);
+                let current_key = self.write_cursor.key();
                 if !Key::is_user_key_eq(current_key, current_user_key.as_encoded().as_slice()) {
                     // Found another user key. We are done here.
                     return Ok(());

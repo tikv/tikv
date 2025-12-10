@@ -524,8 +524,8 @@ impl BackupRange {
         let current_ts = ttl_current_ts();
         loop {
             while cursor.valid()? && batch.len() < BACKUP_BATCH_LIMIT {
-                let key = cursor.key(cfstatistics);
-                let value = cursor.value(cfstatistics);
+                let key = cursor.key();
+                let value = cursor.value();
                 let (is_valid, expired) = self.codec.is_valid_raw_value(key, value, current_ts)?;
                 if is_valid {
                     batch.push(Ok((
