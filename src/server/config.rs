@@ -253,6 +253,11 @@ pub struct Config {
     /// `BatchCommands` gRPC stream. 0 to disable sending health feedback.
     pub health_feedback_interval: ReadableDuration,
 
+    /// Timeout for leader eviction during graceful shutdown.
+    /// After this timeout, TiKV will proceed with shutdown even if
+    /// some regions haven't completed leader transfer.
+    pub graceful_shutdown_timeout: ReadableDuration,
+
     #[doc(hidden)]
     #[online_config(hidden)]
     // Interval to inspect the network latency between tikv and tikv for slow store detection.
@@ -291,6 +296,7 @@ impl Default for Config {
             cluster_id: DEFAULT_CLUSTER_ID,
             addr: DEFAULT_LISTENING_ADDR.to_owned(),
             labels: HashMap::default(),
+            graceful_shutdown_timeout: ReadableDuration::secs(20),
             advertise_addr: DEFAULT_ADVERTISE_LISTENING_ADDR.to_owned(),
             status_addr: DEFAULT_STATUS_ADDR.to_owned(),
             advertise_status_addr: DEFAULT_ADVERTISE_LISTENING_ADDR.to_owned(),
@@ -479,6 +485,10 @@ impl Config {
             // The configuration has been changed to describe CPU usage of a single thread
             // instead of all threads. So migrate from the old style.
             self.heavy_load_threshold = 75;
+        }
+
+        if self.graceful_shutdown_timeout.0.as_secs() == 0 {
+            warn!("graceful shutdown timeout is disabled");
         }
 
         if self

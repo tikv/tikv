@@ -681,6 +681,9 @@ impl RowHandle for CommonHandle {
         _handle_offsets: &[usize],
         _handle_types: &[FieldType],
     ) -> Result<Vec<Self>> {
+        if rows.is_empty() {
+            return Ok(vec![]);
+        }
         if let Some(mut keys) = vec.take_extra_common_handle_keys() {
             let keys_len = keys.len();
             let mut handles = Vec::with_capacity(keys_len);
@@ -1207,7 +1210,7 @@ mod tests {
             vec![Some(123), None, Some(234), Some(567)].into(),
         )]);
 
-        // valid case
+        // normal case
         vec.mut_extra_common_handle_keys().append(&mut vec![
             vec![1u8, 2u8, 3u8],
             vec![11u8, 12u8, 13u8],
@@ -1224,6 +1227,11 @@ mod tests {
                 CommonHandle(vec![11u8, 12u8, 13u8]),
             ]
         );
+
+        // normal case, None extra_common_handle_keys is allowed when rows is empty
+        assert!(vec.take_extra_common_handle_keys().is_none());
+        let handles = CommonHandle::from_lazy_batch_column_vec(&mut vec, &[], &[], &[]).unwrap();
+        assert_eq!(handles, vec![]);
 
         // invalid case, row offset out of bounds
         vec.mut_extra_common_handle_keys().append(&mut vec![

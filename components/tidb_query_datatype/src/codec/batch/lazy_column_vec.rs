@@ -94,6 +94,17 @@ impl LazyBatchColumnVec {
         }
     }
 
+    #[inline]
+    pub fn with_columns_and_extra_common_handle_keys(
+        columns: Vec<LazyBatchColumn>,
+        extra_common_handle_keys: Option<Vec<Vec<u8>>>,
+    ) -> Self {
+        LazyBatchColumnVec {
+            columns,
+            extra_common_handle_keys,
+        }
+    }
+
     /// Returns the number of columns.
     ///
     /// It might be possible that there is no row but multiple columns.

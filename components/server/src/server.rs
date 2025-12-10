@@ -72,9 +72,12 @@ use raftstore::{
     router::{CdcRaftRouter, ServerRaftStoreRouter},
     store::{
         config::RaftstoreConfigManager,
-        fsm,
-        fsm::store::{
-            RaftBatchSystem, RaftRouter, StoreMeta, MULTI_FILES_SNAPSHOT_FEATURE, PENDING_MSG_CAP,
+        fsm::{
+            self,
+            store::{
+                RaftBatchSystem, RaftRouter, StoreMeta, MULTI_FILES_SNAPSHOT_FEATURE,
+                PENDING_MSG_CAP,
+            },
         },
         memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE,
         snapshot_backup::PrepareDiskSnapObserver,
@@ -169,6 +172,7 @@ fn run_impl<CER, F>(
     // Must be called after `TikvServer::init`.
     let memory_limit = tikv.core.config.memory_usage_limit.unwrap().0;
     let high_water = (tikv.core.config.memory_usage_high_water * memory_limit as f64) as u64;
+    let config_controller = tikv.cfg_controller.clone().unwrap();
     register_memory_usage_high_water(high_water);
 
     tikv.core.check_conflict_addr();
@@ -199,6 +203,7 @@ fn run_impl<CER, F>(
                 Some(engines),
                 kv_statistics,
                 raft_statistics,
+                config_controller,
                 Some(service_event_tx),
             )
         });
@@ -211,6 +216,10 @@ fn run_impl<CER, F>(
                 }
                 ServiceEvent::ResumeGrpc => {
                     tikv.resume();
+                }
+                ServiceEvent::GracefulShutdown => {
+                    tikv.graceful_shutdown();
+                    break;
                 }
                 ServiceEvent::Exit => {
                     break;
@@ -833,13 +842,13 @@ where
         let server_config = Arc::new(VersionTrack::new(self.core.config.server.clone()));
 
         self.core.config.raft_store.optimize_for(false);
-        self.core
-            .config
-            .raft_store
-            .optimize_inspector(path_in_diff_mount_point(
+        self.core.config.raft_store.tune_inspector_configs(
+            path_in_diff_mount_point(
                 engines.engines.raft.get_engine_path().to_string().as_str(),
                 engines.engines.kv.path(),
-            ));
+            ),
+            self.core.config.server.inspect_network_interval,
+        );
         self.core
             .config
             .raft_store
@@ -1597,7 +1606,7 @@ where
         if status_enabled {
             let mut status_server = match StatusServer::new(
                 self.core.config.server.status_thread_pool_size,
-                self.cfg_controller.take().unwrap(),
+                self.cfg_controller.clone().unwrap(),
                 Arc::new(self.core.config.security.clone()),
                 self.engines.as_ref().unwrap().engine.raft_extension(),
                 self.resource_manager.clone(),
@@ -1667,6 +1676,62 @@ where
                 "failed to resume the server";
                 "err" => ?e
             );
+        }
+    }
+
+    fn graceful_shutdown(&mut self) {
+        let now = Instant::now();
+        self.set_state(true);
+        self.wait_for_leader_eviction(now);
+        // set state to false to trigger a storeheartbeat and let PD remove the
+        // evict-leader scheduler.
+        self.set_state(false);
+        std::thread::sleep(Duration::from_millis(200));
+        info!("Graceful shutdown completed");
+    }
+
+    fn wait_for_leader_eviction(&self, now: Instant) {
+        let timeout = self
+            .cfg_controller
+            .as_ref()
+            .unwrap()
+            .get_current()
+            .server
+            .graceful_shutdown_timeout
+            .0;
+        let region_info_accessor = self.region_info_accessor.as_ref().unwrap();
+        let check_interval = Duration::from_secs(1);
+
+        loop {
+            let leaders_count = region_info_accessor.region_leaders().read().unwrap().len();
+
+            if leaders_count == 0 {
+                info!("All leaders evicted, completing graceful shutdown");
+                break;
+            }
+
+            if now.saturating_elapsed() >= timeout {
+                warn!(
+                    "Graceful shutdown timeout reached with {} leaders remaining",
+                    leaders_count
+                );
+                break;
+            }
+
+            info!("Waiting for leader eviction"; 
+                  "leaders_count" => leaders_count, 
+                  "elapsed" => ?now.saturating_elapsed());
+            std::thread::sleep(check_interval);
+        }
+    }
+
+    fn set_state(&self, state: bool) {
+        if let Some(server) = &self.servers {
+            let scheduler = server.raft_server.pd_scheduler();
+            let task = raftstore::store::PdTask::GracefulShutdownState { state };
+            if let Err(e) = scheduler.schedule(task) {
+                warn!("Failed to set graceful shutdown state for PD worker"; "error" => ?e);
+            }
         }
     }
 }
@@ -1860,9 +1925,9 @@ mod test {
     fn test_engines_resource_info_update() {
         let mut config = TikvConfig::default();
         config.rocksdb.defaultcf.disable_auto_compactions = true;
-        config.rocksdb.defaultcf.soft_pending_compaction_bytes_limit = Some(ReadableSize(1));
-        config.rocksdb.writecf.soft_pending_compaction_bytes_limit = Some(ReadableSize(1));
-        config.rocksdb.lockcf.soft_pending_compaction_bytes_limit = Some(ReadableSize(1));
+        config.rocksdb.defaultcf.soft_pending_compaction_bytes_limit = ReadableSize(1);
+        config.rocksdb.writecf.soft_pending_compaction_bytes_limit = ReadableSize(1);
+        config.rocksdb.lockcf.soft_pending_compaction_bytes_limit = ReadableSize(1);
         let env = Arc::new(Env::default());
         let path = Builder::new().prefix("test-update").tempdir().unwrap();
         config.validate().unwrap();

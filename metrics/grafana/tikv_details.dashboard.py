@@ -4413,6 +4413,7 @@ def CoprocessorOverview() -> RowPanel:
         [
             graph_panel(
                 title="KV Cursor Operations",
+                yaxes=yaxes(left_format=UNITS.SHORT),
                 targets=[
                     target(
                         expr=expr_sum_rate(
@@ -4616,7 +4617,7 @@ def CoprocessorDetail() -> RowPanel:
             ),
             graph_panel(
                 title="Total Ops Details by CF (Index Scan)",
-                yaxes=yaxes(left_format=UNITS.OPS_PER_MIN),
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
                 targets=[
                     target(
                         expr=expr_sum_rate(
@@ -10149,6 +10150,25 @@ def SlowTrendStatistics() -> RowPanel:
                         expr=expr_sum(
                             "tikv_raftstore_slow_trend_result_value",
                         ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Inspected network duration per server",
+                description="The duration that recorded by inspecting network. Note: it will be collected only when duration is greater than 100ms, to avoid collect too many metrics.",
+                yaxes=yaxes(left_format=UNITS.MILLI_SECONDS),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.8,
+                            "tikv_raftstore_inspect_network_duration_seconds",
+                            by_labels=["source", "type"],
+                        ),
+                        legend_format="{{source}}-{{target}}",
                     ),
                 ],
             ),
