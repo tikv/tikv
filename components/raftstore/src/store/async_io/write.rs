@@ -1054,12 +1054,31 @@ where
         };
 
         // High concurrency detection uses dual conditions to handle edge cases:
-        // qps_pressure_factor >= 0.95
-        let is_high_concurrency = qps_pressure_factor >= ADAPTIVE_HIGH_CONCURRENCY_MULTIPLIER;
-        // Critical insight: Distinguish between low/medium/high concurrency scenarios
-        // High concurrency should be treated specially - even with low batch_ratio,
-        // we should allow higher wait_duration to force aggregation and reduce IOPS
-        let is_very_high_concurrency = qps_pressure_factor >= ADAPTIVE_VERY_HIGH_CONCURRENCY_MULTIPLIER;
+        // Initial detection based on qps_pressure_factor
+        let qps_indicates_high_concurrency = qps_pressure_factor >= ADAPTIVE_HIGH_CONCURRENCY_MULTIPLIER;
+        let qps_indicates_very_high_concurrency = qps_pressure_factor >= ADAPTIVE_VERY_HIGH_CONCURRENCY_MULTIPLIER;
+
+        // Dynamic exit strategy: if high concurrency assumption is proven wrong by poor batching,
+        // gracefully downgrade to normal concurrency to prevent excessive wait_duration
+        // Conditions for downgrade:
+        // 1. Batching has been poor (< 0.3) for 5+ consecutive periods
+        // 2. Wait_duration is already at or above hint (we've waited long enough)
+        // This ensures we don't waste time waiting for requests that won't arrive
+        let should_exit_high_concurrency = self.consecutive_low_batch_ratio_count >= 5
+            && batch_achievement_ratio < BATCH_ACHIEVEMENT_RATIO_LOW_THRESHOLD
+            && current_wait_duration_nanos >= wait_duration_hint_nanos;
+
+        // Apply dynamic downgrade: accept QPS signal only if batching is acceptable
+        let is_high_concurrency = qps_indicates_high_concurrency && !should_exit_high_concurrency;
+        let is_very_high_concurrency = qps_indicates_very_high_concurrency && !should_exit_high_concurrency;
+
+        // Log when downgrade is triggered
+        if should_exit_high_concurrency && qps_indicates_high_concurrency {
+            info!("[adaptive] High concurrency downgrade: consecutive_low_batch_count={}, batch_ratio={:.2}, \
+                   wait_duration={}us, hint={}us, qps_pressure={:.2}, switching to normal concurrency mode",
+                  self.consecutive_low_batch_ratio_count, batch_achievement_ratio,
+                  current_wait_duration_nanos / 1000, wait_duration_hint_nanos / 1000, qps_pressure_factor);
+        }
 
         // Detect "futile waiting" - when wait_duration is high but batching remains poor
         // Use consecutive low batch_ratio count to prevent oscillation from transient dips
@@ -1164,11 +1183,25 @@ where
 
         // Use exponential weighted moving average for smoother transitions
         // Smoothing factor (α) - higher values make quicker adjustments
-        // Use adaptive smoothing: when poor batching persists under high concurrency,
-        // reduce smoothing (increase α) to respond faster
-        let smoothing_factor = if is_high_concurrency
+        // Use adaptive smoothing strategies:
+        // 1. When poor batching persists under high concurrency: increase α for faster response
+        // 2. When in downgrade mode: also use faster response to quickly reduce wait_duration
+        // 3. When batching has been poor for 10+ periods: use even faster response
+        let smoothing_factor = if should_exit_high_concurrency && self.consecutive_low_batch_ratio_count >= 10 {
+            // Downgrade with severe persistence: use aggressive smoothing for fast recovery
+            0.35  // 35% weight on target, 65% on current (even faster response)
+        } else if should_exit_high_concurrency && self.consecutive_low_batch_ratio_count >= 5 {
+            // Downgrade with moderate persistence: use moderate smoothing for faster response
+            0.3  // 30% weight on target, 70% on current
+        } else if is_high_concurrency
+            && batch_achievement_ratio < BATCH_ACHIEVEMENT_RATIO_LOW_THRESHOLD
+            && self.consecutive_low_batch_ratio_count >= 10 {
+            // Still in high concurrency but severe persistence: use aggressive smoothing
+            0.35  // 35% weight on target, 65% on current
+        } else if is_high_concurrency
             && batch_achievement_ratio < BATCH_ACHIEVEMENT_RATIO_LOW_THRESHOLD
             && self.consecutive_low_batch_ratio_count >= 5 {
+            // Still in high concurrency with moderate persistence: use moderate smoothing
             0.3  // 30% weight on target, 70% on current
         } else {
             // Default: conservative smoothing for stability
