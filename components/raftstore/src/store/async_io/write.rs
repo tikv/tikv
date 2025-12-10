@@ -1170,14 +1170,7 @@ where
         // reduce smoothing (increase α) to respond faster
         let smoothing_factor = if is_high_concurrency
             && batch_achievement_ratio < BATCH_ACHIEVEMENT_RATIO_LOW_THRESHOLD
-            && self.consecutive_low_batch_ratio_count >= 10 {
-            // Severe persistent poor batching: minimal smoothing for fast response
-            // Example: consecutive=15, batch_ratio=0.10, need quick growth
-            0.4  // 40% weight on target, 60% on current
-        } else if is_high_concurrency
-            && batch_achievement_ratio < BATCH_ACHIEVEMENT_RATIO_LOW_THRESHOLD
             && self.consecutive_low_batch_ratio_count >= 5 {
-            // Moderate persistence: moderate smoothing
             0.3  // 30% weight on target, 70% on current
         } else {
             // Default: conservative smoothing for stability
