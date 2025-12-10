@@ -78,10 +78,10 @@ const ADAPTIVE_QPS_PRESSURE_LOWER_BOUND: u64 = 10000;
 const ADAPTIVE_MIN_HIGH_CONCURRENCY_QPS: u64 = 50000;
 // EWMA smoothing factor for high_concurrency_qps_threshold update
 const ADAPTIVE_HIGH_CONCURRENCY_EWMA_ALPHA: f64 = 0.2; // 0.8*old + 0.2*new
-// High concurrency multiplier (0.9x of high_concurrency_qps_threshold)
-const ADAPTIVE_HIGH_CONCURRENCY_MULTIPLIER: f64 = 0.9;
-// Very high concurrency multiplier (0.95x of high_concurrency_qps_threshold)
-const ADAPTIVE_VERY_HIGH_CONCURRENCY_MULTIPLIER: f64 = 0.95;
+// High concurrency multiplier (0.95 of high_concurrency_qps_threshold)
+const ADAPTIVE_HIGH_CONCURRENCY_MULTIPLIER: f64 = 0.95;
+// Very high concurrency multiplier (1x of high_concurrency_qps_threshold)
+const ADAPTIVE_VERY_HIGH_CONCURRENCY_MULTIPLIER: f64 = 1.0;
 const BATCH_ACHIEVEMENT_RATIO_LOW_THRESHOLD: f64 = 0.3;
 // Consecutive low batch_ratio count threshold for futile waiting detection (< 0.3)
 const CONSECUTIVE_LOW_BATCH_RATIO_THRESHOLD: u32 = 2; // Require 2 consecutive times < 0.3
@@ -1054,7 +1054,7 @@ where
         };
 
         // High concurrency detection uses dual conditions to handle edge cases:
-        // qps_pressure_factor >= 0.9
+        // qps_pressure_factor >= 0.95
         let is_high_concurrency = qps_pressure_factor >= ADAPTIVE_HIGH_CONCURRENCY_MULTIPLIER;
         // Critical insight: Distinguish between low/medium/high concurrency scenarios
         // High concurrency should be treated specially - even with low batch_ratio,
