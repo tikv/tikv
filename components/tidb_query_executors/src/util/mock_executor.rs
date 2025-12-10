@@ -12,8 +12,8 @@ use tidb_query_common::{
     Result,
     error::StorageError,
     storage::{
-        FindRegionResult, IntervalRange, OwnedKvPair, OwnedKvPairEntry, PointRange,
-        RegionStorageAccessor, Result as StorageResult, StateRole, Storage,
+        FindRegionResult, IntervalRange, OwnedKvPairEntry, PointRange, RegionStorageAccessor,
+        Result as StorageResult, StateRole, Storage,
     },
 };
 use tidb_query_datatype::{

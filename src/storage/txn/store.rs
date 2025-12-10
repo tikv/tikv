@@ -1078,7 +1078,7 @@ mod tests {
         let key = format!("{}{}", KEY_PREFIX, START_ID);
         let start_key = Key::from_raw(key.as_bytes());
         let mut scanner = snapshot_store
-            .scanner(false, false, false, false, Some(start_key), None)
+            .scanner(false, false, false, false, Some(start_key.clone()), None)
             .unwrap();
 
         let half = (key_num / 2) as usize;
@@ -1090,6 +1090,15 @@ mod tests {
             .map(|k| Some((k.clone().into_bytes(), k.clone().into_bytes())))
             .collect();
         assert_eq!(result, expect, "expect {:?}, but got {:?}", expect, result);
+
+        // cover load commit ts
+        let mut scanner1 = snapshot_store
+            .scanner(false, false, false, true, Some(start_key.clone()), None)
+            .unwrap();
+        while let Some((_k, v)) = scanner1.next_entry().unwrap() {
+            // load commit ts is true, so commit_ts must not be None
+            assert!(v.commit_ts.is_some());
+        }
     }
 
     #[test]
@@ -1103,7 +1112,7 @@ mod tests {
         let start_key = Key::from_raw(key.as_bytes());
         let expect = &store.keys[0..half - 1];
         let mut scanner = snapshot_store
-            .scanner(true, false, false, false, None, Some(start_key))
+            .scanner(true, false, false, false, None, Some(start_key.clone()))
             .unwrap();
 
         let result = scanner.scan(half, 0).unwrap();
@@ -1116,6 +1125,15 @@ mod tests {
         expect.reverse();
 
         assert_eq!(result, expect, "expect {:?}, but got {:?}", expect, result);
+
+        // cover load commit ts
+        let mut scanner1 = snapshot_store
+            .scanner(true, false, false, true, Some(start_key.clone()), None)
+            .unwrap();
+        while let Some((_k, v)) = scanner1.next_entry().unwrap() {
+            // load commit ts is true, so commit_ts must not be None
+            assert!(v.commit_ts.is_some());
+        }
     }
 
     #[test]
