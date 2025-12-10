@@ -91,7 +91,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
                             .remove_shared_lock(self.start_ts)
                             .map_err(MvccError::from)?
                         {
-                            if shared_lock.is_pessimistic_lock() && shared_lock.for_update_ts <= self.for_update_ts {
+                            if shared_lock.is_pessimistic_lock()
+                                && shared_lock.for_update_ts <= self.for_update_ts
+                            {
                                 Ok(txn.update_shared_locked_key(key, lock, TimeStamp::zero()))
                             } else {
                                 Ok(None)

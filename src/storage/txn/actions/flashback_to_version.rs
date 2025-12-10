@@ -4,7 +4,11 @@ use txn_types::{Key, Lock, LockType, TimeStamp, Write, WriteType};
 
 use crate::storage::{
     mvcc::{self, MvccReader, MvccTxn, SnapshotReader, MAX_TXN_WRITE_SIZE},
-    txn::{self, actions::check_txn_status::rollback_lock, Result as TxnResult},
+    txn::{
+        self,
+        actions::check_txn_status::{rollback_lock, rollback_shared_lock},
+        Error as TxnError, Result as TxnResult,
+    },
     Snapshot,
 };
 
@@ -66,12 +70,24 @@ pub fn rollback_locks(
     key_locks: Vec<(Key, Lock)>,
 ) -> TxnResult<Option<Key>> {
     let mut reader = SnapshotReader::new(txn.start_ts, snapshot, false);
-    for (key, lock) in key_locks {
+    for (key, mut lock) in key_locks {
         if txn.write_size() >= MAX_TXN_WRITE_SIZE {
             return Ok(Some(key));
         }
         if lock.is_shared() {
-            todo!("rollback all inner locks");
+            // The `lock` is built from read phase and only contains sub-locks
+            // to be rolled back (lock.ts != flashback_start_ts). Since
+            // flashback itself doesn't acquire shared locks, `lock` and
+            // `current_lock` should be the same, so all sub-locks shall be
+            // rolled back in this step.
+            if let Some(mut current_lock) = reader.load_lock(&key)? {
+                assert!(current_lock.is_shared());
+                for lock in lock.flatten_shared_locks().map_err(TxnError::from_mvcc)? {
+                    reader.start_ts = lock.ts;
+                    rollback_shared_lock(txn, &mut reader, &key, &mut current_lock, true)?;
+                }
+                txn.update_shared_locked_key(key, current_lock, TimeStamp::zero());
+            }
         } else {
             // To guarantee rollback with start ts of the locks
             reader.start_ts = lock.ts;
@@ -204,7 +220,8 @@ pub fn commit_flashback_key(
     flashback_commit_ts: TimeStamp,
 ) -> TxnResult<()> {
     if let Some(mut lock) = reader.load_lock(key_to_commit)? {
-        // TODO(slock): handle shared lock.
+        //  `WriteType::from_lock_type.unwrap` garantees the lock type must not be
+        // Pessimistic or Shared.
         txn.put_write(
             key_to_commit.clone(),
             flashback_commit_ts,
@@ -312,7 +329,10 @@ pub mod tests {
                 commit::tests::must_succeed as must_commit,
                 tests::{must_prewrite_delete, must_prewrite_put, must_rollback},
             },
-            tests::{must_acquire_pessimistic_lock, must_pessimistic_prewrite_put_err},
+            tests::{
+                must_acquire_pessimistic_lock, must_acquire_shared_pessimistic_lock,
+                must_pessimistic_prewrite_put_err,
+            },
         },
         Engine, TestEngineBuilder,
     };
@@ -689,5 +709,37 @@ pub mod tests {
                 .unwrap(),
             Key::from_raw(prewrite_key)
         );
+    }
+
+    #[test]
+    fn test_flashback_write_to_version_rollback_shared_locks() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let k = b"k";
+        let pk1 = b"pk1";
+        let pk2 = b"pk2";
+        let (v1, v2) = (b"v1", b"v2");
+        // Prewrite and commit Put(k -> v1) with stat_ts = 10, commit_ts = 15.
+        must_prewrite_put(&mut engine, k, v1, k, 10);
+        must_commit(&mut engine, k, 10, 15);
+        // Prewrite and commit Put(k -> v2) with stat_ts = 20, commit_ts = 25.
+        must_prewrite_put(&mut engine, k, v2, k, 20);
+        must_commit(&mut engine, k, 20, 25);
+
+        // Acquire two shared pessimistic locks on the same key from different
+        // transactions.
+        must_acquire_shared_pessimistic_lock(&mut engine, k, pk1, 30, 30, 3000);
+        must_acquire_shared_pessimistic_lock(&mut engine, k, pk2, 35, 35, 3000);
+
+        // Flashback to version 17 with start_ts = 40, commit_ts = 45.
+        // This should rollback both shared locks, put 2 rollback records to write CF
+        // and delete 1 lock on `k`.
+        assert_eq!(must_rollback_lock(&mut engine, k, 40), 3);
+        assert_eq!(
+            must_flashback_write_to_version(&mut engine, k, 17, 40, 45),
+            1
+        );
+
+        // After flashback, the key should have the value at version 17, which is v1.
+        must_get(&mut engine, k, 50, v1);
     }
 }
