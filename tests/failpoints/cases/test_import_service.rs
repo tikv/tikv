@@ -125,7 +125,8 @@ fn test_concurrent_download_sst_with_fail() {
 #[test]
 fn test_concurrent_download_sst() {
     let mut config = TikvConfig::default();
-    config.import.num_threads = 4;
+    // neet set server threads to a large number;
+    config.import.num_threads = 10;
     let (_cluster, ctx, tikv, import) = open_cluster_and_tikv_import_client(Some(config));
     let temp_dir = Builder::new()
         .prefix("test_concurrent_download_sst")
