@@ -990,22 +990,18 @@ where
             // Use P50 (median, 50th percentile) as baseline
             let p50_qps = sorted_qps[sorted_qps.len() / 2];
 
-            // Use P75 (75th percentile) to update high_concurrency_qps_threshold
-            // P75 better captures sustained high load without being inflated by peak spikes
-            // P90 was consistently higher than avg_qps, preventing proper high concurrency detection
-            // Example: avg_qps=64022, P50=63896, P90=72993 → pressure=0.86 (too low)
-            //          With P75≈67000 → pressure≈0.96 (more accurate)
-            let p75_index = (sorted_qps.len() as f64 * 0.75) as usize;
-            let p75_qps = sorted_qps[p75_index.min(sorted_qps.len() - 1)];
+            // Use P90 (90th percentile) to update high_concurrency_qps_threshold
+            let p90_index = (sorted_qps.len() as f64 * 0.9) as usize;
+            let p90_qps = sorted_qps[p90_index.min(sorted_qps.len() - 1)];
 
-            // Update high_concurrency_qps_threshold using P75 and EWMA (bidirectional adjustment)
+            // Update high_concurrency_qps_threshold using P90 and EWMA (bidirectional adjustment)
             // Threshold adapts to both increases and decreases in workload, providing better
             // adaptivity to daily traffic patterns and machine capacity changes
             // EWMA smoothing (α=0.2) prevents overreaction to short-term fluctuations
             // Minimum bound (45k) prevents threshold from dropping too low during off-peak
             self.high_concurrency_qps_threshold = (
                 (1.0 - ADAPTIVE_HIGH_CONCURRENCY_EWMA_ALPHA) * self.high_concurrency_qps_threshold as f64
-                + ADAPTIVE_HIGH_CONCURRENCY_EWMA_ALPHA * p75_qps as f64
+                + ADAPTIVE_HIGH_CONCURRENCY_EWMA_ALPHA * p90_qps as f64
             ) as u64;
 
             // Ensure it doesn't drop below minimum
