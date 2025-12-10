@@ -31,7 +31,6 @@ mod all {
     use encryption::{FileConfig, MasterKeyConfig};
     use futures::executor::block_on;
     use kvproto::encryptionpb::EncryptionMethod;
-    use raftstore::coprocessor::ObserveHandle;
     use serde_json::Value;
     use tempfile::TempDir;
     use tikv_util::{
