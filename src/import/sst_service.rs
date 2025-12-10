@@ -42,8 +42,9 @@ use tikv_util::{
     resizable_threadpool::{DeamonRuntimeHandle, ResizableRuntime},
     sys::{
         disk::{get_disk_status, DiskUsage},
+        get_global_memory_usage,
         thread::ThreadBuildWrapper,
-        get_global_memory_usage, SysQuota,
+        SysQuota,
     },
     time::{Instant, Limiter},
     HandyRwLock,
