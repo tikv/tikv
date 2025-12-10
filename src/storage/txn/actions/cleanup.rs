@@ -51,7 +51,8 @@ pub fn cleanup<S: Snapshot>(
                 }
             }
             if lock.is_shared() {
-                rollback_shared_lock(txn, reader, key, lock, reader.start_ts, !protect_rollback)
+                rollback_shared_lock(txn, reader, &key, &mut lock, !protect_rollback)?;
+                Ok(txn.update_shared_locked_key(key, lock, TimeStamp::zero()))
             } else {
                 rollback_lock(
                     txn,

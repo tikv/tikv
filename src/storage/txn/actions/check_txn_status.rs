@@ -357,25 +357,29 @@ pub fn rollback_lock(
     Ok(txn.unlock_key(key, is_pessimistic_txn, TimeStamp::zero()))
 }
 
+/// `rollback_shared_lock` likes `rollback_lock` but for shared locks. It
+/// considers reader.start_ts as the lock ts, removes the corresponding lock
+/// from the `shared_lock`, and writes a rollback if necessary. It does not
+/// write the `shared_lock` back to txn so that the caller can rollback multiple
+/// sub-locks and then call `txn.update_shared_locked_key` once in the end.
 pub fn rollback_shared_lock(
     txn: &mut MvccTxn,
     reader: &mut SnapshotReader<impl Snapshot>,
-    key: Key,
-    mut shared_lock: Lock,
-    lock_ts: TimeStamp,
+    key: &Key,
+    shared_lock: &mut Lock,
     collapse_rollback: bool,
-) -> Result<Option<ReleasedLock>> {
+) -> Result<()> {
     assert!(shared_lock.is_shared());
 
-    let lock = match shared_lock.remove_shared_lock(lock_ts)? {
+    let lock = match shared_lock.remove_shared_lock(reader.start_ts)? {
         Some(l) => l,
         None => {
             // misuse of rollback_shared_lock? maybe print a warning with stack?
-            return Ok(None);
+            return Ok(());
         }
     };
 
-    let overlapped_write = match reader.get_txn_commit_record(&key)? {
+    let overlapped_write = match reader.get_txn_commit_record(key)? {
         TxnCommitRecord::None { overlapped_write } => overlapped_write,
         TxnCommitRecord::SingleRecord { write, commit_ts }
             if write.write_type != WriteType::Rollback =>
@@ -390,7 +394,7 @@ pub fn rollback_shared_lock(
             )
         }
         _ => {
-            return Ok(txn.update_shared_locked_key(key, shared_lock, TimeStamp::zero()));
+            return Ok(());
         }
     };
 
@@ -402,10 +406,10 @@ pub fn rollback_shared_lock(
     }
 
     if collapse_rollback {
-        collapse_prev_rollback(txn, reader, &key)?;
+        collapse_prev_rollback(txn, reader, key)?;
     }
 
-    Ok(txn.update_shared_locked_key(key, shared_lock, TimeStamp::zero()))
+    Ok(())
 }
 
 pub fn collapse_prev_rollback(
