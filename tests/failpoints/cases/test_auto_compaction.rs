@@ -495,9 +495,12 @@ fn test_mvcc_aware_compaction_prioritization() {
 
     // We record 100 requests, each scanning 20000 MVCC versions on average
     for _ in 0..100 {
-        MVCC_READ_TRACKER.record_read(region2.get_id(), 20000);
+        MVCC_READ_TRACKER
+            .get()
+            .unwrap()
+            .record_read(region2.get_id(), 20000);
     }
-    //sleep
+    // sleep
     thread::sleep(Duration::from_millis(5000));
     // start execution of auto compaction thread
     fail::remove(fp_compaction_start);
@@ -523,6 +526,7 @@ fn test_mvcc_aware_compaction_prioritization() {
     // This is the actual verification that proves MVCC-aware prioritization works
     let first_region_id = FIRST_COMPACTION_CANDIDATE_REGION.load(Ordering::Relaxed);
 
+    let tracker = MVCC_READ_TRACKER.get().unwrap();
     assert_eq!(
         first_region_id,
         region2_id,
@@ -531,8 +535,8 @@ fn test_mvcc_aware_compaction_prioritization() {
          Region 1 has {} MVCC versions/req, Region 2 has {} MVCC versions/req, Region 3 has {} MVCC versions/req",
         region2_id,
         first_region_id,
-        MVCC_READ_TRACKER.get_mvcc_versions_scanned(region1_id),
-        MVCC_READ_TRACKER.get_mvcc_versions_scanned(region2_id),
-        MVCC_READ_TRACKER.get_mvcc_versions_scanned(region3_id)
+        tracker.get_mvcc_versions_scanned(region1_id),
+        tracker.get_mvcc_versions_scanned(region2_id),
+        tracker.get_mvcc_versions_scanned(region3_id)
     );
 }

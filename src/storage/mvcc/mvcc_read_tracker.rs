@@ -128,7 +128,8 @@ impl MvccReadTracker {
     }
 
     /// Record a read operation for a region
-    /// Only records stats when mvcc_versions_scanned exceeds mvcc_scan_threshold
+    /// Only records stats when mvcc_versions_scanned exceeds
+    /// mvcc_scan_threshold
     pub fn record_read(&self, region_id: u64, mvcc_versions_scanned: u64) {
         let threshold = self.cfg_tracker.value().auto_compaction.mvcc_scan_threshold;
         if mvcc_versions_scanned <= threshold {
@@ -202,14 +203,13 @@ impl MvccReadTracker {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::{sync::Arc, thread, time::Duration};
 
     use tikv_util::config::VersionTrack;
 
+    use super::*;
     use crate::server::gc_worker::GcConfig;
 
     fn create_test_config_manager_with_threshold(threshold: u64) -> GcWorkerConfigManager {
