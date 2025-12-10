@@ -549,7 +549,7 @@ impl Default for Config {
             raft_write_size_limit: ReadableSize::mb(1),
             raft_write_batch_size_hint: ReadableSize::kb(64),
             raft_write_wait_duration: ReadableDuration::micros(20),
-            adaptive_batch_enabled: true,
+            adaptive_batch_enabled: false,
             waterfall_metrics: true,
             io_reschedule_concurrent_max_count: 4,
             io_reschedule_hotpot_duration: ReadableDuration::secs(5),

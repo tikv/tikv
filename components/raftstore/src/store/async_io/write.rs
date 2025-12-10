@@ -1039,17 +1039,15 @@ where
         //   reduce wait_duration when batching is poor (futile waiting) or excellent (>= 80%)
         // - Use consecutive_low_batch_ratio_count to prevent oscillation from transient dips
                 
-        // Calculate QPS pressure factor (range: 0.0 to potentially > 1.0)
+        // Calculate QPS pressure factor (range: 0.0 to 1.0)
         // This normalized metric indicates system load relative to dynamic high_concurrency_qps_threshold
         // - QPS <= 10000: factor = 0.0 (very light load, prioritize latency over batching)
         // - 10000 < QPS < high_concurrency_qps_threshold: factor scales linearly from 0.0 to 1.0
-        // - QPS >= high_concurrency_qps_threshold: factor = avg_qps / threshold (can exceed 1.0)
-        //   * factor >= 1.0: high concurrency, prioritize batching to reduce IOPS
-        //   * factor >= 1.2: very high concurrency, aggressively batch even with poor batch_ratio
+        // - QPS >= high_concurrency_qps_threshold: factor = 1.0
         let qps_pressure_factor = if avg_qps <= ADAPTIVE_QPS_PRESSURE_LOWER_BOUND {
             0.0
         } else if avg_qps >= self.high_concurrency_qps_threshold {
-            avg_qps as f64 / self.high_concurrency_qps_threshold as f64
+            1.0
         } else {
             (avg_qps - ADAPTIVE_QPS_PRESSURE_LOWER_BOUND) as f64
                 / (self.high_concurrency_qps_threshold - ADAPTIVE_QPS_PRESSURE_LOWER_BOUND) as f64
