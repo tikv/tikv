@@ -368,7 +368,9 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
 
         // Reset MVCC read tracker if time window has elapsed
         use crate::storage::mvcc::mvcc_read_tracker::MVCC_READ_TRACKER;
-        MVCC_READ_TRACKER.reset_if_needed();
+        if let Some(tracker) = MVCC_READ_TRACKER.get() {
+            tracker.reset_if_needed();
+        }
 
         // Convert heap to sorted vector (highest score first)
         let candidates: Vec<CompactionCandidate> = candidates_heap
@@ -619,7 +621,10 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
         // Get average mvcc_versions_scanned per request from actual online read traffic
         let mvcc_versions_scanned = if config.auto_compaction.mvcc_read_aware_enabled {
             use crate::storage::mvcc::mvcc_read_tracker::MVCC_READ_TRACKER;
-            MVCC_READ_TRACKER.get_mvcc_versions_scanned(region.get_id())
+            MVCC_READ_TRACKER
+                .get()
+                .map(|tracker| tracker.get_mvcc_versions_scanned(region.get_id()))
+                .unwrap_or(0)
         } else {
             0
         };
@@ -726,17 +731,10 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
         // Regions with high mvcc_versions_scanned (versions/sec) benefit from
         // compaction even if they have no redundant data, because compaction
         // improves read performance
-        let mvcc_scan_threshold = config.auto_compaction.mvcc_scan_threshold;
-        let mvcc_score = if mvcc_versions_scanned >= mvcc_scan_threshold {
-            // Use ratio pattern similar to base_score calculation
-            // This gives quadratic growth for regions significantly above threshold
-            let ratio = (mvcc_versions_scanned as f64) / (mvcc_scan_threshold as f64);
-            let mvcc_read_weight = config.auto_compaction.mvcc_read_weight;
-            (mvcc_versions_scanned as f64) * ratio * mvcc_read_weight
-        } else {
-            // Below threshold, no MVCC-based score
-            0.0
-        };
+        // Note: mvcc_versions_scanned is only non-zero for regions that exceeded
+        // mvcc_scan_threshold during record_read()
+        let mvcc_read_weight = config.auto_compaction.mvcc_read_weight;
+        let mvcc_score = (mvcc_versions_scanned as f64) * mvcc_read_weight;
 
         // Use additive formula so regions with high MVCC overhead get compacted
         // even when base_score = 0 (no redundant data)
