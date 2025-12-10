@@ -309,6 +309,10 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
             .column_id_index
             .get(&table::EXTRA_PHYSICAL_TABLE_ID_COL_ID)
             .copied();
+        let commit_ts_column_idx = self
+            .column_id_index
+            .get(&table::EXTRA_COMMIT_TS_COL_ID)
+            .copied();
         let mut last_index = 0usize;
         for handle_index in &self.handle_indices {
             // `handle_indices` is expected to be sorted.
@@ -342,6 +346,11 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         // [non-pk, non-pk]
         for i in last_index..columns_len {
             if Some(i) == physical_table_id_column_idx {
+                columns.push(LazyBatchColumn::decoded_with_capacity_and_tp(
+                    scan_rows,
+                    EvalType::Int,
+                ));
+            } else if Some(i) == commit_ts_column_idx {
                 columns.push(LazyBatchColumn::decoded_with_capacity_and_tp(
                     scan_rows,
                     EvalType::Int,
@@ -421,7 +430,6 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
             columns[*idx].mut_decoded().push_int(Some(table_id));
             self.is_column_filled[*idx] = true;
         }
-
         if let Some(idx) = self.column_id_index.get(&table::EXTRA_COMMIT_TS_COL_ID) {
             if let Some(ts) = commit_ts {
                 columns[*idx]
@@ -461,7 +469,6 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
                 self.is_column_filled[i] = false;
             }
         }
-
         Ok(())
     }
 }
