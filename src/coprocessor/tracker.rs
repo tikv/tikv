@@ -411,7 +411,9 @@ impl<E: Engine> Tracker<E> {
                 + tracker.metrics.deleted_key_skipped_count;
             if versions_scanned > 0 {
                 use crate::storage::mvcc::mvcc_read_tracker::MVCC_READ_TRACKER;
-                MVCC_READ_TRACKER.record_read(region_id, versions_scanned);
+                if let Some(tracker) = MVCC_READ_TRACKER.get() {
+                    tracker.record_read(region_id, versions_scanned);
+                }
             }
         });
 
