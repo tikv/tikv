@@ -41,7 +41,11 @@ use tikv_util::{
     resizable_threadpool::{DeamonRuntimeHandle, ResizableRuntime},
     sys::{
         disk::{get_disk_status, DiskUsage},
+<<<<<<< HEAD
         thread::ThreadBuildWrapper,
+=======
+        memory_usage_reaches_high_water,
+>>>>>>> 7aafc38fe4 (importer: add memory limit for importers to avoid OOM (#18192))
     },
     time::{Instant, Limiter},
     HandyRwLock,
@@ -92,10 +96,32 @@ const WRITER_GC_INTERVAL: Duration = Duration::from_secs(300);
 const SUSPEND_REQUEST_MAX_SECS: u64 = // 6h
     6 * 60 * 60;
 
+<<<<<<< HEAD
 // the default TTL seconds of force partition range.
 // the TTL is to ensure all force partition ranges can be
 // cleaned up eventually.
 const DEFAULT_FORCE_PARTITION_RANGE_TTL_SECONDS: u64 = 3600;
+=======
+/// Check if the system has enough resources for import tasks
+fn check_import_resources() -> Result<()> {
+    // Check disk space first
+    if get_disk_status(0) != DiskUsage::Normal {
+        return Err(Error::DiskSpaceNotEnough);
+    }
+
+    // Check memory usage
+    // high water is 90% of the memory limit by default
+    let mut usage = 0;
+    if memory_usage_reaches_high_water(&mut usage) {
+        return Err(Error::ResourceNotEnough(format!(
+            "Memory usage too high: {} bytes",
+            usage
+        )));
+    }
+
+    Ok(())
+}
+>>>>>>> 7aafc38fe4 (importer: add memory limit for importers to avoid OOM (#18192))
 
 fn transfer_error(err: storage::Error) -> ImportPbError {
     let mut e = ImportPbError::default();
@@ -633,11 +659,7 @@ macro_rules! impl_write {
                         .try_fold(
                             (writer, resource_limiter),
                             |(mut writer, limiter), req| async move {
-                                if get_disk_status(0) != DiskUsage::Normal {
-                                    warn!("Upload failed due to not enough disk space");
-                                    return Err(Error::DiskSpaceNotEnough);
-                                }
-
+                                check_import_resources()?;
                                 let batch = match req.chunk {
                                     Some($chunk_ty::Batch(b)) => b,
                                     _ => return Err(Error::InvalidChunk),
@@ -791,9 +813,12 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 let file = import.create(meta)?;
                 let mut file = rx
                     .try_fold(file, |mut file, chunk| async move {
-                        if get_disk_status(0) != DiskUsage::Normal {
-                            warn!("Upload failed due to not enough disk space");
-                            return Err(Error::DiskSpaceNotEnough);
+                        match check_import_resources() {
+                            Ok(()) => (),
+                            Err(e) => {
+                                warn!("Upload failed due to not enough resource {:?}", e);
+                                return Err(e);
+                            }
                         }
 
                         let start = Instant::now_coarse();
@@ -869,9 +894,12 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 .observe(start.saturating_elapsed().as_secs_f64());
 
             let mut resp = ApplyResponse::default();
-            if get_disk_status(0) != DiskUsage::Normal {
-                resp.set_error(Error::DiskSpaceNotEnough.into());
-                return send_rpc_response!(Ok(resp), sink, label, start);
+            match check_import_resources() {
+                Ok(()) => (),
+                Err(e) => {
+                    resp.set_error(e.into());
+                    return crate::send_rpc_response!(Ok(resp), sink, label, start);
+                }
             }
 
             match Self::do_apply(req, importer, applier, limiter, max_raft_size).await {
@@ -930,10 +958,14 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             sst_importer::metrics::IMPORTER_DOWNLOAD_DURATION
                 .with_label_values(&["queue"])
                 .observe(start.saturating_elapsed().as_secs_f64());
-            if get_disk_status(0) != DiskUsage::Normal {
-                let mut resp = DownloadResponse::default();
-                resp.set_error(Error::DiskSpaceNotEnough.into());
-                return crate::send_rpc_response!(Ok(resp), sink, label, timer);
+
+            let mut resp = DownloadResponse::default();
+            match check_import_resources() {
+                Ok(()) => (),
+                Err(e) => {
+                    resp.set_error(e.into());
+                    return crate::send_rpc_response!(Ok(resp), sink, label, timer);
+                }
             }
 
             // FIXME: download() should be an async fn, to allow BR to cancel
