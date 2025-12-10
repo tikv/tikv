@@ -1,12 +1,15 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use tikv_util::Either;
-use txn_types::{Key, Lock, LockType, TimeStamp, Write, WriteType};
+use txn_types::{Key, Lock, LockType, SharedLocks, TimeStamp, Write, WriteType};
 
 use crate::storage::{
     Snapshot,
     mvcc::{self, MAX_TXN_WRITE_SIZE, MvccReader, MvccTxn, SnapshotReader},
-    txn::{self, Result as TxnResult, actions::check_txn_status::rollback_lock},
+    txn::{
+        self, Result as TxnResult,
+        actions::check_txn_status::{rollback_lock, rollback_shared_lock},
+    },
 };
 
 pub const FLASHBACK_BATCH_SIZE: usize = 256 + 1 /* To store the next key for multiple batches */;
@@ -16,7 +19,7 @@ pub fn flashback_to_version_read_lock(
     next_lock_key: Key,
     end_key: Option<&Key>,
     flashback_start_ts: TimeStamp,
-) -> TxnResult<Vec<(Key, Lock)>> {
+) -> TxnResult<Vec<(Key, Either<Lock, SharedLocks>)>> {
     let result = reader.scan_locks_from_storage(
         Some(&next_lock_key),
         end_key,
@@ -25,18 +28,7 @@ pub fn flashback_to_version_read_lock(
         FLASHBACK_BATCH_SIZE,
     );
     let (key_locks, _) = result?;
-    Ok(key_locks
-        .into_iter()
-        .map(|(key, lock)| {
-            let lock = match lock {
-                Either::Left(lock) => lock,
-                Either::Right(_shared_locks) => unimplemented!(
-                    "SharedLocks returned from scan_locks_from_storage is not supported here"
-                ),
-            };
-            (key, lock)
-        })
-        .collect())
+    Ok(key_locks)
 }
 
 pub fn flashback_to_version_read_write(
@@ -75,23 +67,44 @@ pub fn flashback_to_version_read_write(
 pub fn rollback_locks(
     txn: &mut MvccTxn,
     snapshot: impl Snapshot,
-    key_locks: Vec<(Key, Lock)>,
+    key_locks: Vec<(Key, Either<Lock, SharedLocks>)>,
 ) -> TxnResult<Option<Key>> {
     let mut reader = SnapshotReader::new(txn.start_ts, snapshot, false);
-    for (key, lock) in key_locks {
+    for (key, lock_or_shared) in key_locks {
         if txn.write_size() >= MAX_TXN_WRITE_SIZE {
             return Ok(Some(key));
         }
-        // To guarantee rollback with start ts of the locks
-        reader.start_ts = lock.ts;
-        rollback_lock(
-            txn,
-            &mut reader,
-            key.clone(),
-            &lock,
-            lock.is_pessimistic_txn(),
-            true,
-        )?;
+        match lock_or_shared {
+            Either::Left(lock) => {
+                // To guarantee rollback with start ts of the locks
+                reader.start_ts = lock.ts;
+                rollback_lock(
+                    txn,
+                    &mut reader,
+                    key.clone(),
+                    &lock,
+                    lock.is_pessimistic_txn(),
+                    true,
+                )?;
+            }
+            Either::Right(shared_locks) => {
+                // The `shared_locks` is built from read phase and only contains sub-locks
+                // to be rolled back (lock.ts != flashback_start_ts). Since
+                // flashback itself doesn't acquire shared locks, all sub-locks shall be
+                // rolled back in this step.
+                for lock_ts in shared_locks.iter_ts().cloned().collect::<Vec<_>>() {
+                    reader.start_ts = lock_ts;
+                    rollback_shared_lock(
+                        txn,
+                        &mut reader,
+                        key.clone(),
+                        shared_locks.clone(),
+                        lock_ts,
+                        true,
+                    )?;
+                }
+            }
+        }
     }
     Ok(None)
 }
@@ -212,6 +225,8 @@ pub fn commit_flashback_key(
     flashback_commit_ts: TimeStamp,
 ) -> TxnResult<()> {
     if let Some(lock) = reader.load_lock(key_to_commit)? {
+        // `WriteType::from_lock_type.unwrap` guarantees the lock type must not be
+        // Pessimistic or Shared.
         let mut lock = match lock {
             Either::Left(lock) => lock,
             Either::Right(_shared_locks) => {
@@ -333,7 +348,10 @@ pub mod tests {
                 commit::tests::must_succeed as must_commit,
                 tests::{must_prewrite_delete, must_prewrite_put, must_rollback},
             },
-            tests::{must_acquire_pessimistic_lock, must_pessimistic_prewrite_put_err},
+            tests::{
+                must_acquire_pessimistic_lock, must_acquire_shared_pessimistic_lock,
+                must_pessimistic_prewrite_put_err,
+            },
         },
     };
 
@@ -709,5 +727,37 @@ pub mod tests {
                 .unwrap(),
             Key::from_raw(prewrite_key)
         );
+    }
+
+    #[test]
+    fn test_flashback_write_to_version_rollback_shared_locks() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let k = b"k";
+        let pk1 = b"pk1";
+        let pk2 = b"pk2";
+        let (v1, v2) = (b"v1", b"v2");
+        // Prewrite and commit Put(k -> v1) with stat_ts = 10, commit_ts = 15.
+        must_prewrite_put(&mut engine, k, v1, k, 10);
+        must_commit(&mut engine, k, 10, 15);
+        // Prewrite and commit Put(k -> v2) with stat_ts = 20, commit_ts = 25.
+        must_prewrite_put(&mut engine, k, v2, k, 20);
+        must_commit(&mut engine, k, 20, 25);
+
+        // Acquire two shared pessimistic locks on the same key from different
+        // transactions.
+        must_acquire_shared_pessimistic_lock(&mut engine, k, pk1, 30, 30, 3000);
+        must_acquire_shared_pessimistic_lock(&mut engine, k, pk2, 35, 35, 3000);
+
+        // Flashback to version 17 with start_ts = 40, commit_ts = 45.
+        // This should rollback both shared locks, put 2 rollback records to write CF
+        // and delete 1 lock on `k`.
+        assert_eq!(must_rollback_lock(&mut engine, k, 40), 3);
+        assert_eq!(
+            must_flashback_write_to_version(&mut engine, k, 17, 40, 45),
+            1
+        );
+
+        // After flashback, the key should have the value at version 17, which is v1.
+        must_get(&mut engine, k, 50, v1);
     }
 }

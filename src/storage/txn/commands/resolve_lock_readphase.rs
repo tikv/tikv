@@ -57,7 +57,7 @@ impl<S: Snapshot> ReadCommand<S> for ResolveLockReadPhase {
             None,
             // Filter function: for Lock, check if ts is in txn_status;
             // for SharedLocks, the filter is applied during scan and returns only matching locks
-            |_, lock| txn_status.keys().any(|ts| lock.ts == *ts),
+            |_, lock| txn_status.contains_key(&lock.ts),
             RESOLVE_LOCK_BATCH_SIZE,
         );
         statistics.add(&reader.statistics);

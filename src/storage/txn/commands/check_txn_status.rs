@@ -1308,7 +1308,6 @@ pub mod tests {
 
         must_acquire_shared_pessimistic_lock(&mut engine, b"k2", b"k3", 2, 2, 100);
         let e = must_err(&mut engine, b"k2", 1, 3, 3, true, false, true);
-        // TODO(slock): may adjust according to the impl of shared_lock.into_lock_info
         check_error(e, b"k2", b"", kvrpcpb::Op::SharedLock);
     }
 

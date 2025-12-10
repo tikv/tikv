@@ -356,6 +356,11 @@ pub fn rollback_lock(
     Ok(txn.unlock_key(key, is_pessimistic_txn, TimeStamp::zero()))
 }
 
+/// `rollback_shared_lock` likes `rollback_lock` but for shared locks. It
+/// considers reader.start_ts as the lock ts, removes the corresponding lock
+/// from the `shared_lock`, and writes a rollback if necessary. It does not
+/// write the `shared_lock` back to txn so that the caller can rollback multiple
+/// sub-locks and then call `txn.update_shared_locked_key` once in the end.
 pub fn rollback_shared_lock(
     txn: &mut MvccTxn,
     reader: &mut SnapshotReader<impl Snapshot>,
