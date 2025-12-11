@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use api_version::{ApiV1, KvFormat, RawValue, dispatch_api_version, keyspace::KvPair};
+use api_version::{ApiV1, KvFormat, RawValue, dispatch_api_version, keyspace::KvPairEntry};
 use backup::Task;
 use collections::HashMap;
 // NOTE: Perhaps we'd better use test engine here. But it seems for now we cannot initialize a

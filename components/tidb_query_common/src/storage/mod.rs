@@ -21,9 +21,9 @@ pub struct OwnedKvPairEntry {
     pub commit_ts: Option<u64>,
 }
 
-impl Into<OwnedKvPair> for OwnedKvPairEntry {
-    fn into(self) -> OwnedKvPair {
-        (self.key, self.value)
+impl From<OwnedKvPairEntry> for OwnedKvPair {
+    fn from(val: OwnedKvPairEntry) -> Self {
+        (val.key, val.value)
     }
 }
 

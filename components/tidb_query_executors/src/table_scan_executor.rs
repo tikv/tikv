@@ -91,7 +91,7 @@ impl<S: Storage, F: KvFormat> BatchTableScanExecutor<S, F> {
             // id are given, we will only preserve the *last* one.
         }
 
-        let load_commit_ts = column_id_index.get(&EXTRA_COMMIT_TS_COL_ID).is_some();
+        let load_commit_ts = column_id_index.contains_key(&EXTRA_COMMIT_TS_COL_ID);
         let no_common_handle = primary_column_ids.is_empty();
         let imp = TableScanExecutorImpl {
             context: EvalContext::new(config),
@@ -345,12 +345,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         // on 0..columns_len. For the example above, this loop will push:
         // [non-pk, non-pk]
         for i in last_index..columns_len {
-            if Some(i) == physical_table_id_column_idx {
-                columns.push(LazyBatchColumn::decoded_with_capacity_and_tp(
-                    scan_rows,
-                    EvalType::Int,
-                ));
-            } else if Some(i) == commit_ts_column_idx {
+            if Some(i) == physical_table_id_column_idx || Some(i) == commit_ts_column_idx {
                 columns.push(LazyBatchColumn::decoded_with_capacity_and_tp(
                     scan_rows,
                     EvalType::Int,
@@ -825,7 +820,7 @@ mod tests {
         }
 
         // cover EXTRA_COMMIT_TS_COL_ID
-        let columns_info = helper.columns_info_by_idx(&vec![0, 3]);
+        let columns_info = helper.columns_info_by_idx(&[0, 3]);
         let mut executor = BatchTableScanExecutor::<_, ApiV1>::new(
             helper.store(),
             Arc::new(EvalConfig::default()),
@@ -838,9 +833,9 @@ mod tests {
         )
         .unwrap();
         let result = block_on(executor.next_batch(5));
-        assert!(result.physical_columns[1].len() > 0);
+        assert!(!result.physical_columns[1].is_empty());
         let ts_slice = result.physical_columns[1].decoded().to_int_vec();
-        assert!(ts_slice.len() > 0);
+        assert!(!ts_slice.is_empty());
         assert!(ts_slice[0].unwrap() > 0);
     }
 
