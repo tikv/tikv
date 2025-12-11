@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use api_version::{KvFormat, keyspace::KvPair};
+use api_version::{KvFormat, keyspace::KvPairEntry};
 use async_trait::async_trait;
 use kvproto::coprocessor::KeyRange;
 use tidb_query_common::{
@@ -12,6 +12,7 @@ use tidb_query_common::{
 };
 use tidb_query_datatype::{codec::batch::LazyBatchColumnVec, expr::EvalContext};
 use tipb::{ColumnInfo, FieldType};
+use txn_types::TimeStamp;
 
 use crate::interface::*;
 
@@ -35,6 +36,7 @@ pub trait ScanExecutorImpl: Send {
         key: &[u8],
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
+        commit_ts: Option<TimeStamp>,
     ) -> Result<()>;
 }
 
@@ -62,6 +64,7 @@ pub struct ScanExecutorOptions<S, I> {
     pub is_key_only: bool,
     pub accept_point_range: bool,
     pub is_scanned_range_aware: bool,
+    pub load_commit_ts: bool,
 }
 
 impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> ScanExecutor<S, I, F> {
@@ -74,6 +77,7 @@ impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> ScanExecutor<S, I, F> {
             is_key_only,
             accept_point_range,
             is_scanned_range_aware,
+            load_commit_ts,
         }: ScanExecutorOptions<S, I>,
     ) -> Result<Self> {
         tidb_query_datatype::codec::table::check_table_ranges::<F>(&key_ranges)?;
@@ -91,6 +95,7 @@ impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> ScanExecutor<S, I, F> {
                 scan_backward_in_range: is_backward,
                 is_key_only,
                 is_scanned_range_aware,
+                load_commit_ts,
             }),
             is_ended: false,
         })
@@ -113,7 +118,10 @@ impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> ScanExecutor<S, I, F> {
                 // Retrieved one row from point range or non-point range.
 
                 let (key, value) = row.kv();
-                if let Err(e) = self.imp.process_kv_pair(key, value, columns) {
+                if let Err(e) = self
+                    .imp
+                    .process_kv_pair(key, value, columns, row.commit_ts())
+                {
                     // When there are errors in `process_kv_pair`, columns' length may not be
                     // identical. For example, the filling process may be partially done so that
                     // first several columns have N rows while the rest have N-1 rows. Since we do

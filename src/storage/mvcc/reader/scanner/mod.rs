@@ -9,7 +9,7 @@ use std::ops::Bound;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE, CfName};
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
 use txn_types::{
-    Key, Lock, LockType, OldValue, TimeStamp, TsSet, Value, Write, WriteRef, WriteType,
+    Key, Lock, LockType, OldValue, TimeStamp, TsSet, Value, ValueEntry, Write, WriteRef, WriteType,
 };
 
 pub use self::forward::{DeltaScanner, EntryScanner, test_util};
@@ -148,6 +148,16 @@ impl<S: Snapshot> ScannerBuilder<S> {
         self
     }
 
+    /// Set whether to load commit timestamp when scanning.
+    ///
+    /// Default is false.
+    #[inline]
+    #[must_use]
+    pub fn load_commit_ts(mut self, enabled: bool) -> Self {
+        self.0.load_commit_ts = enabled;
+        self
+    }
+
     /// Build `Scanner` from the current configuration.
     pub fn build(mut self) -> Result<Scanner<S>> {
         let lock_cursor = self.build_lock_cursor()?;
@@ -224,7 +234,7 @@ pub enum Scanner<S: Snapshot> {
 }
 
 impl<S: Snapshot> StoreScanner for Scanner<S> {
-    fn next(&mut self) -> TxnResult<Option<(Key, Value)>> {
+    fn next_entry(&mut self) -> TxnResult<Option<(Key, ValueEntry)>> {
         fail_point!("scanner_next");
 
         match self {
@@ -255,6 +265,7 @@ pub struct ScannerConfig<S: Snapshot> {
     snapshot: S,
     fill_cache: bool,
     omit_value: bool,
+    load_commit_ts: bool,
     isolation_level: IsolationLevel,
 
     /// `lower_bound` and `upper_bound` is used to create `default_cursor`.
@@ -293,6 +304,7 @@ impl<S: Snapshot> ScannerConfig<S> {
             bypass_locks: Default::default(),
             access_locks: Default::default(),
             check_has_newer_ts_data: false,
+            load_commit_ts: false,
         }
     }
 

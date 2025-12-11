@@ -27,6 +27,7 @@ use tidb_query_datatype::{
     expr::{EvalConfig, EvalContext},
 };
 use tipb::{ColumnInfo, FieldType, IndexScan};
+use txn_types::TimeStamp;
 
 use super::util::scan_executor::*;
 use crate::interface::*;
@@ -151,6 +152,7 @@ impl<S: Storage, F: KvFormat> BatchIndexScanExecutor<S, F> {
             is_key_only: false,
             accept_point_range: unique,
             is_scanned_range_aware,
+            load_commit_ts: false,
         })?;
         Ok(Self(wrapper))
     }
@@ -354,6 +356,7 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
         key: &[u8],
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
+        _commit_ts: Option<TimeStamp>,
     ) -> Result<()> {
         check_index_key(key)?;
         let key_payload = &key[table::PREFIX_LEN + table::ID_LEN..];
@@ -2106,6 +2109,7 @@ mod tests {
                 ],
                 &[0x30],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2121,6 +2125,7 @@ mod tests {
                 ],
                 &[0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2156,6 +2161,7 @@ mod tests {
                 ],
                 &[0x30],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2171,6 +2177,7 @@ mod tests {
                 ],
                 &[0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2206,6 +2213,7 @@ mod tests {
                 ],
                 &[0x0, 0x80, 0x0, 0x1, 0x0, 0x0, 0x0, 0x3, 0x1, 0x0, 0x41],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2224,6 +2232,7 @@ mod tests {
                     0x0, 0x0, 0x0, 0x1,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2268,6 +2277,7 @@ mod tests {
                     0x0, 0x1, 0x61, 0x41,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2296,6 +2306,7 @@ mod tests {
                     0x0, 0x1, 0x61, 0x41, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2344,6 +2355,7 @@ mod tests {
                 ],
                 &[0x30],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2359,6 +2371,7 @@ mod tests {
                 ],
                 &[0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2396,6 +2409,7 @@ mod tests {
                     0x0, 0x80, 0x0, 0x1, 0x0, 0x0, 0x0, 0x2, 0x2, 0x0, 0x61, 0x20,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2414,6 +2428,7 @@ mod tests {
                     0x0, 0x0, 0x0, 0x0, 0x1,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2451,6 +2466,7 @@ mod tests {
                     0x0, 0x80, 0x0, 0x1, 0x0, 0x0, 0x0, 0x3, 0x2, 0x0, 0x41, 0x20,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2469,6 +2485,7 @@ mod tests {
                     0x0, 0x0, 0x0, 0x0, 0x1,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2513,6 +2530,7 @@ mod tests {
                     0x0, 0x1, 0x61, 0x20, 0x41, 0x20,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2541,6 +2559,7 @@ mod tests {
                     0x0, 0x1, 0x61, 0x20, 0x41, 0x20, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2638,6 +2657,7 @@ mod tests {
                     0x0, 0x4, 0x0, 0x41, 0x1, 0x41, 0x20,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2678,6 +2698,7 @@ mod tests {
                     0x0, 0x3, 0x4, 0x5, 0x1, 0x0, 0x2, 0x0, 0x4, 0x0, 0x41, 0x1, 0x41, 0x20,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2754,6 +2775,7 @@ mod tests {
                     0x0, 0x4, 0x0, 0x41, 0x1, 0x41, 0x20,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2794,6 +2816,7 @@ mod tests {
                     0x0, 0x3, 0x4, 0x5, 0x1, 0x0, 0x2, 0x0, 0x4, 0x0, 0x41, 0x1, 0x41, 0x20,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2870,6 +2893,7 @@ mod tests {
                     0x0, 0x4, 0x0, 0x41, 0x1, 0x41, 0x20,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2910,6 +2934,7 @@ mod tests {
                     0x0, 0x3, 0x4, 0x5, 0x1, 0x0, 0x2, 0x0, 0x4, 0x0, 0x41, 0x1, 0x41, 0x20,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2986,6 +3011,7 @@ mod tests {
                     0x0, 0x4, 0x0, 0x41, 0x1, 0x41, 0x20,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -3026,6 +3052,7 @@ mod tests {
                     0x0, 0x3, 0x4, 0x5, 0x1, 0x0, 0x2, 0x0, 0x4, 0x0, 0x41, 0x1, 0x41, 0x20,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -3102,6 +3129,7 @@ mod tests {
                     0x0, 0x4, 0x0, 0x41, 0x1, 0x41, 0x20,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -3142,6 +3170,7 @@ mod tests {
                     0x0, 0x3, 0x4, 0x5, 0x1, 0x0, 0x2, 0x0, 0x4, 0x0, 0x41, 0x1, 0x41, 0x20,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -3233,6 +3262,7 @@ mod tests {
                     0x0, 0x4, 0x0, 0x41, 0x1, 0x41, 0x20,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -3292,6 +3322,7 @@ mod tests {
                     0x0, 0x3, 0x4, 0x5, 0x1, 0x0, 0x2, 0x0, 0x4, 0x0, 0x41, 0x1, 0x41, 0x20,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -3379,6 +3410,7 @@ mod tests {
                 ],
                 &[0x0, 0x7d, 0x1],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -3448,6 +3480,7 @@ mod tests {
                     0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, // _tidb_rowid
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -3503,6 +3536,7 @@ mod tests {
                     0x0, 0x7d, 0x1, 0x80, 0x0, 0x1, 0x0, 0x0, 0x0, 0x1, 0x1, 0x0, 0x0,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(

@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use api_version::{ApiV1, KvFormat, RawValue, dispatch_api_version, keyspace::KvPair};
+use api_version::{ApiV1, KvFormat, RawValue, dispatch_api_version, keyspace::KvPairEntry};
 use backup::Task;
 use collections::HashMap;
 // NOTE: Perhaps we'd better use test engine here. But it seems for now we cannot initialize a
@@ -365,6 +365,7 @@ impl TestSuite {
             scan_backward_in_range: false,
             is_key_only: false,
             is_scanned_range_aware: false,
+            load_commit_ts: false,
         });
         let digest = crc64fast::Digest::new();
         while let Some(row) = block_on(scanner.next()).unwrap() {
