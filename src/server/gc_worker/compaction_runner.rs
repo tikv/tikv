@@ -723,7 +723,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
         };
 
         // If MVCC-read-aware compaction is disabled, return base score
-        if !config.auto_compaction.mvcc_read_aware_enabled {
+        if !config.auto_compaction.mvcc_read_aware_enabled || (num_discardable == 0 && num_tombstones == 0) {
             return base_score;
         }
 
