@@ -49332,7 +49332,7 @@
           },
           "gridPos": {
             "h": 7,
-            "w": 12,
+            "w": 8,
             "x": 0,
             "y": 7
           },
@@ -49469,8 +49469,8 @@
           },
           "gridPos": {
             "h": 7,
-            "w": 12,
-            "x": 12,
+            "w": 8,
+            "x": 8,
             "y": 7
           },
           "heatmap": {},
@@ -49549,6 +49549,139 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The number of concurrently running threads in the yatp thread pool.",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 8,
+            "x": 16,
+            "y": 7
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 353,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(avg_over_time(\n    tikv_unified_read_pool_thread_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [1m]\n)) by (instance, $additional_groupby) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{instance}} {{$additional_groupby}}",
+              "metric": "",
+              "query": "sum(avg_over_time(\n    tikv_unified_read_pool_thread_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [1m]\n)) by (instance, $additional_groupby) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Running threads",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "none",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "Task execution time during one schedule.",
           "editable": true,
           "error": false,
@@ -49576,7 +49709,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 353,
+          "id": 354,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -49777,7 +49910,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 354,
+          "id": 355,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -49978,7 +50111,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 355,
+          "id": 356,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -50182,7 +50315,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 356,
+      "id": 357,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -50221,7 +50354,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 357,
+          "id": 358,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -50369,7 +50502,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 358,
+          "id": 359,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -50570,7 +50703,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 359,
+          "id": 360,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -50771,7 +50904,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 360,
+          "id": 361,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -50972,7 +51105,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 361,
+          "id": 362,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -51173,7 +51306,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 362,
+          "id": 363,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -51306,7 +51439,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 363,
+          "id": 364,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -51439,7 +51572,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 364,
+          "id": 365,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -51572,7 +51705,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 365,
+          "id": 366,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -51705,7 +51838,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 366,
+          "id": 367,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -51906,7 +52039,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 367,
+          "id": 368,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52114,7 +52247,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 368,
+          "id": 369,
           "interval": null,
           "legend": {
             "show": false
@@ -52215,7 +52348,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 369,
+      "id": 370,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -52261,7 +52394,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 370,
+          "id": 371,
           "interval": null,
           "legend": {
             "show": false
@@ -52359,7 +52492,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 371,
+          "id": 372,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52560,7 +52693,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 372,
+          "id": 373,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52693,7 +52826,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 373,
+          "id": 374,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52826,7 +52959,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 374,
+          "id": 375,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52959,7 +53092,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 375,
+          "id": 376,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53160,7 +53293,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 376,
+          "id": 377,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53293,7 +53426,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 377,
+          "id": 378,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53426,7 +53559,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 378,
+          "id": 379,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53562,7 +53695,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 379,
+      "id": 380,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -53601,7 +53734,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 380,
+          "id": 381,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53802,7 +53935,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 381,
+          "id": 382,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54003,7 +54136,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 382,
+          "id": 383,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54204,7 +54337,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 383,
+          "id": 384,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54405,7 +54538,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 384,
+          "id": 385,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54538,7 +54671,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 385,
+          "id": 386,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54671,7 +54804,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 386,
+          "id": 387,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54804,7 +54937,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 387,
+          "id": 388,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54937,7 +55070,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 388,
+          "id": 389,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55070,7 +55203,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 389,
+          "id": 390,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55210,7 +55343,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 390,
+          "id": 391,
           "interval": null,
           "legend": {
             "show": false
@@ -55308,7 +55441,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 391,
+          "id": 392,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55516,7 +55649,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 398,
+          "id": 393,
           "interval": null,
           "legend": {
             "show": false
@@ -55614,7 +55747,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 399,
+          "id": 394,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55815,7 +55948,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 400,
+          "id": 395,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55951,11 +56084,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 392,
-=======
-      "id": 401,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+      "id": 396,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -55994,11 +56123,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 393,
-=======
-          "id": 402,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 397,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -56131,11 +56256,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 394,
-=======
-          "id": 403,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 398,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -56262,17 +56383,13 @@
           },
           "gridPos": {
             "h": 7,
-            "w": 12,
+            "w": 8,
             "x": 0,
             "y": 7
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 395,
-=======
-          "id": 404,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 399,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -56403,8 +56520,8 @@
           },
           "gridPos": {
             "h": 7,
-            "w": 12,
-            "x": 12,
+            "w": 8,
+            "x": 8,
             "y": 7
           },
           "heatmap": {},
@@ -56412,11 +56529,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 396,
-=======
-          "id": 405,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 400,
           "interval": null,
           "legend": {
             "show": false
@@ -56487,8 +56600,6 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-<<<<<<< HEAD
-=======
           "description": "The number of concurrently running threads in the yatp thread pool.",
           "editable": true,
           "error": false,
@@ -56516,7 +56627,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 406,
+          "id": 401,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -56622,7 +56733,6 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
           "description": "Task execution time during one schedule.",
           "editable": true,
           "error": false,
@@ -56650,11 +56760,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 397,
-=======
-          "id": 407,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 402,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -56855,11 +56961,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 398,
-=======
-          "id": 408,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 403,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57060,11 +57162,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 399,
-=======
-          "id": 409,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 404,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57268,11 +57366,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 400,
-=======
-      "id": 410,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+      "id": 405,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -57311,11 +57405,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 401,
-=======
-          "id": 411,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 406,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57493,11 +57583,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 402,
-=======
-          "id": 412,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 407,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57698,11 +57784,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 403,
-=======
-          "id": 413,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 408,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57835,11 +57917,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 404,
-=======
-          "id": 414,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 409,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57972,11 +58050,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 405,
-=======
-          "id": 415,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 410,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -58109,11 +58183,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 406,
-=======
-          "id": 416,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 411,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -58246,11 +58316,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 407,
-=======
-          "id": 417,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 412,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -58383,11 +58449,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 408,
-=======
-          "id": 418,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 413,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -58516,11 +58578,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 409,
-=======
-          "id": 419,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 414,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -58595,11 +58653,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 410,
-=======
-          "id": 420,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 415,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -58678,11 +58732,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 411,
-=======
-          "id": 421,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 416,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -58935,11 +58985,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 412,
-=======
-          "id": 422,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 417,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59072,11 +59118,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 413,
-=======
-          "id": 423,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 418,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59209,11 +59251,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 414,
-=======
-          "id": 424,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 419,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59414,11 +59452,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 415,
-=======
-          "id": 425,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 420,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59569,11 +59603,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 416,
-=======
-      "id": 426,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+      "id": 421,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -59612,11 +59642,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 417,
-=======
-          "id": 427,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 422,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59764,11 +59790,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 418,
-=======
-          "id": 428,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 423,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59901,11 +59923,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 419,
-=======
-          "id": 429,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 424,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60106,11 +60124,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 420,
-=======
-          "id": 430,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 425,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60258,11 +60272,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 421,
-=======
-          "id": 431,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 426,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60463,11 +60473,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 422,
-=======
-          "id": 432,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 427,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60600,11 +60606,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 423,
-=======
-          "id": 433,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 428,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60737,11 +60739,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 424,
-=======
-          "id": 434,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 429,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60874,11 +60872,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 425,
-=======
-          "id": 435,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 430,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61011,11 +61005,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 426,
-=======
-          "id": 436,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 431,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61155,11 +61145,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 427,
-=======
-          "id": 437,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 432,
           "interval": null,
           "legend": {
             "show": false
@@ -61257,11 +61243,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 428,
-=======
-          "id": 438,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 433,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61465,11 +61447,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 429,
-=======
-      "id": 439,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+      "id": 434,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -61508,11 +61486,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 430,
-=======
-          "id": 440,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 435,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61645,11 +61619,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 431,
-=======
-          "id": 441,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 436,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61782,11 +61752,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 432,
-=======
-          "id": 442,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 437,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61919,11 +61885,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 433,
-=======
-          "id": 443,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 438,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62059,11 +62021,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 434,
-=======
-      "id": 444,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+      "id": 439,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -62102,11 +62060,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 435,
-=======
-          "id": 445,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 440,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62239,11 +62193,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 436,
-=======
-          "id": 446,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 441,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62376,11 +62326,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 437,
-=======
-          "id": 447,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 442,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62528,11 +62474,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 438,
-=======
-          "id": 448,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 443,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62665,11 +62607,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 439,
-=======
-          "id": 449,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 444,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62802,11 +62740,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 440,
-=======
-          "id": 450,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 445,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62939,11 +62873,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 441,
-=======
-          "id": 451,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 446,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63079,11 +63009,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 442,
-=======
-      "id": 452,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+      "id": 447,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -63122,11 +63048,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 443,
-=======
-          "id": 453,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 448,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63259,11 +63181,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 444,
-=======
-          "id": 454,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 449,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63396,11 +63314,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 445,
-=======
-          "id": 455,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 450,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63533,11 +63447,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 446,
-=======
-          "id": 456,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 451,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63670,11 +63580,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 447,
-=======
-          "id": 457,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 452,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63807,11 +63713,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 448,
-=======
-          "id": 458,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 453,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63944,7 +63846,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 449,
+          "id": 454,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64080,11 +63982,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 450,
-=======
-      "id": 459,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+      "id": 455,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -64123,11 +64021,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 451,
-=======
-          "id": 460,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 456,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64260,11 +64154,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 452,
-=======
-          "id": 461,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 457,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64397,11 +64287,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 453,
-=======
-          "id": 462,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 458,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64549,11 +64435,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 454,
-=======
-          "id": 463,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 459,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64716,11 +64598,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 455,
-=======
-          "id": 464,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 460,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64853,11 +64731,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 456,
-=======
-          "id": 465,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 461,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64990,11 +64864,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 457,
-=======
-          "id": 466,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 462,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65157,11 +65027,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 458,
-=======
-          "id": 467,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 463,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65309,11 +65175,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 459,
-=======
-          "id": 468,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 464,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65449,11 +65311,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 460,
-=======
-      "id": 469,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+      "id": 465,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -65492,11 +65350,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 461,
-=======
-          "id": 470,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 466,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65629,11 +65483,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 462,
-=======
-          "id": 471,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 467,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65766,11 +65616,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 463,
-=======
-          "id": 472,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 468,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65903,11 +65749,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 464,
-=======
-          "id": 473,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 469,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66040,11 +65882,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 465,
-=======
-          "id": 474,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 470,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66177,11 +66015,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 466,
-=======
-          "id": 475,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 471,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66314,11 +66148,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 467,
-=======
-          "id": 476,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 472,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66451,11 +66281,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 468,
-=======
-          "id": 477,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 473,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66588,11 +66414,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 469,
-=======
-          "id": 478,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 474,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66732,11 +66554,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 470,
-=======
-          "id": 479,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 475,
           "interval": null,
           "legend": {
             "show": false
@@ -66834,11 +66652,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 471,
-=======
-          "id": 480,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 476,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66971,11 +66785,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 472,
-=======
-          "id": 481,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 477,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67123,11 +66933,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 473,
-=======
-          "id": 482,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 478,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67275,11 +67081,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 474,
-=======
-          "id": 483,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 479,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67419,11 +67221,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 475,
-=======
-          "id": 484,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 480,
           "interval": null,
           "legend": {
             "show": false
@@ -67521,11 +67319,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 476,
-=======
-          "id": 485,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 481,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67658,11 +67452,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 477,
-=======
-          "id": 486,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 482,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67798,11 +67588,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 478,
-=======
-      "id": 487,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+      "id": 483,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -67841,11 +67627,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 479,
-=======
-          "id": 488,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 484,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67978,11 +67760,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 480,
-=======
-          "id": 489,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 485,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68145,11 +67923,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 481,
-=======
-          "id": 490,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 486,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68297,11 +68071,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 482,
-=======
-          "id": 491,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 487,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68434,11 +68204,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 483,
-=======
-          "id": 492,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 488,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68578,11 +68344,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 484,
-=======
-          "id": 493,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 489,
           "interval": null,
           "legend": {
             "show": false
@@ -68687,11 +68449,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 485,
-=======
-          "id": 494,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 490,
           "interval": null,
           "legend": {
             "show": false
@@ -68796,11 +68554,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 486,
-=======
-          "id": 495,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 491,
           "interval": null,
           "legend": {
             "show": false
@@ -68898,11 +68652,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 487,
-=======
-          "id": 496,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 492,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69042,11 +68792,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 488,
-=======
-          "id": 497,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 493,
           "interval": null,
           "legend": {
             "show": false
@@ -69151,11 +68897,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 489,
-=======
-          "id": 498,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 494,
           "interval": null,
           "legend": {
             "show": false
@@ -69260,11 +69002,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 490,
-=======
-          "id": 499,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 495,
           "interval": null,
           "legend": {
             "show": false
@@ -69362,11 +69100,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 491,
-=======
-          "id": 500,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 496,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69499,11 +69233,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 492,
-=======
-          "id": 501,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 497,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69636,11 +69366,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 493,
-=======
-          "id": 502,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 498,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69780,11 +69506,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 494,
-=======
-          "id": 503,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 499,
           "interval": null,
           "legend": {
             "show": false
@@ -69882,11 +69604,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 495,
-=======
-          "id": 504,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 500,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -70022,11 +69740,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 496,
-=======
-      "id": 505,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+      "id": 501,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -70065,11 +69779,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 497,
-=======
-          "id": 506,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 502,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -70232,11 +69942,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 498,
-=======
-          "id": 507,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 503,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -70369,11 +70075,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 499,
-=======
-          "id": 508,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 504,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -70513,11 +70215,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 500,
-=======
-          "id": 509,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 505,
           "interval": null,
           "legend": {
             "show": false
@@ -70622,11 +70320,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 501,
-=======
-          "id": 510,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 506,
           "interval": null,
           "legend": {
             "show": false
@@ -70724,11 +70418,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 502,
-=======
-          "id": 511,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 507,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -70883,11 +70573,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 503,
-=======
-          "id": 512,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 508,
           "interval": null,
           "legend": {
             "show": false
@@ -70992,11 +70678,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 504,
-=======
-          "id": 513,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 509,
           "interval": null,
           "legend": {
             "show": false
@@ -71101,11 +70783,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 505,
-=======
-          "id": 514,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 510,
           "interval": null,
           "legend": {
             "show": false
@@ -71203,11 +70881,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 506,
-=======
-          "id": 515,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 511,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71377,11 +71051,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 507,
-=======
-          "id": 516,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 512,
           "interval": null,
           "legend": {
             "show": false
@@ -71479,11 +71149,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 508,
-=======
-          "id": 517,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 513,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71684,11 +71350,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 509,
-=======
-          "id": 518,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 514,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71889,11 +71551,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 510,
-=======
-          "id": 519,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 515,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -72026,11 +71684,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 511,
-=======
-          "id": 520,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 516,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -72193,11 +71847,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 512,
-=======
-          "id": 521,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 517,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -72330,11 +71980,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 513,
-=======
-          "id": 522,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 518,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -72467,11 +72113,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 514,
-=======
-          "id": 523,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 519,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -72672,11 +72314,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 515,
-=======
-          "id": 524,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 520,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -72809,11 +72447,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 516,
-=======
-          "id": 525,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 521,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -72953,11 +72587,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 517,
-=======
-          "id": 526,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 522,
           "interval": null,
           "legend": {
             "show": false
@@ -73062,11 +72692,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 518,
-=======
-          "id": 527,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 523,
           "interval": null,
           "legend": {
             "show": false
@@ -73171,11 +72797,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 519,
-=======
-          "id": 528,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 524,
           "interval": null,
           "legend": {
             "show": false
@@ -73280,11 +72902,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 520,
-=======
-          "id": 529,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 525,
           "interval": null,
           "legend": {
             "show": false
@@ -73389,11 +73007,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 521,
-=======
-          "id": 530,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 526,
           "interval": null,
           "legend": {
             "show": false
@@ -73498,11 +73112,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 522,
-=======
-          "id": 531,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 527,
           "interval": null,
           "legend": {
             "show": false
@@ -73607,11 +73217,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 523,
-=======
-          "id": 532,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 528,
           "interval": null,
           "legend": {
             "show": false
@@ -73709,11 +73315,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 524,
-=======
-          "id": 533,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 529,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -73861,11 +73463,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 525,
-=======
-          "id": 534,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 530,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -73998,11 +73596,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 526,
-=======
-          "id": 535,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 531,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -74135,11 +73729,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 527,
-=======
-          "id": 536,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 532,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -74287,11 +73877,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 528,
-=======
-          "id": 537,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 533,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -74427,11 +74013,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 529,
-=======
-      "id": 538,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+      "id": 534,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -74482,11 +74064,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 530,
-=======
-          "id": 539,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 535,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -74582,11 +74160,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 531,
-=======
-          "id": 540,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 536,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -74661,11 +74235,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 532,
-=======
-          "id": 541,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 537,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -74740,11 +74310,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 533,
-=======
-          "id": 542,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 538,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -74819,11 +74385,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 534,
-=======
-          "id": 543,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 539,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -74898,11 +74460,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 535,
-=======
-          "id": 544,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 540,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -74977,11 +74535,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 536,
-=======
-          "id": 545,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 541,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -75056,11 +74610,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 537,
-=======
-          "id": 546,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 542,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -75139,11 +74689,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 538,
-=======
-          "id": 547,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 543,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -75276,11 +74822,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 539,
-=======
-          "id": 548,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 544,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -75413,11 +74955,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 540,
-=======
-          "id": 549,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 545,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -75550,11 +75088,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 541,
-=======
-          "id": 550,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 546,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -75687,11 +75221,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 542,
-=======
-          "id": 551,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 547,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -75824,11 +75354,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 543,
-=======
-          "id": 552,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 548,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -75976,11 +75502,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 544,
-=======
-          "id": 553,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 549,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -76113,11 +75635,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 545,
-=======
-          "id": 554,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 550,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -76250,11 +75768,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 546,
-=======
-          "id": 555,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 551,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -76420,11 +75934,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 547,
-=======
-          "id": 556,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 552,
           "interval": null,
           "legend": {
             "show": false
@@ -76529,11 +76039,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 548,
-=======
-          "id": 557,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 553,
           "interval": null,
           "legend": {
             "show": false
@@ -76638,11 +76144,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 549,
-=======
-          "id": 558,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 554,
           "interval": null,
           "legend": {
             "show": false
@@ -76747,11 +76249,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 550,
-=======
-          "id": 559,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 555,
           "interval": null,
           "legend": {
             "show": false
@@ -76856,11 +76354,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 551,
-=======
-          "id": 560,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 556,
           "interval": null,
           "legend": {
             "show": false
@@ -76965,11 +76459,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 552,
-=======
-          "id": 561,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 557,
           "interval": null,
           "legend": {
             "show": false
@@ -77074,11 +76564,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 553,
-=======
-          "id": 562,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 558,
           "interval": null,
           "legend": {
             "show": false
@@ -77183,11 +76669,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 554,
-=======
-          "id": 563,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 559,
           "interval": null,
           "legend": {
             "show": false
@@ -77285,11 +76767,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 555,
-=======
-          "id": 564,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 560,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -77422,11 +76900,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 556,
-=======
-          "id": 565,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 561,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -77559,11 +77033,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 557,
-=======
-          "id": 566,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 562,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -77696,11 +77166,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 558,
-=======
-          "id": 567,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 563,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -77833,11 +77299,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 559,
-=======
-          "id": 568,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 564,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -77970,11 +77432,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 560,
-=======
-          "id": 569,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 565,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78107,11 +77565,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 561,
-=======
-          "id": 570,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 566,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78217,277 +77671,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-<<<<<<< HEAD
           "description": "",
-=======
-          "description": "The memory usage of buffer file (stores logs about to be flushed to external storage) cache.",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            }
-          },
-          "fill": 1,
-          "fillGradient": 1,
-          "grid": {
-            "threshold1": null,
-            "threshold1Color": "rgba(216, 200, 27, 0.27)",
-            "threshold2": null,
-            "threshold2Color": "rgba(234, 112, 112, 0.22)"
-          },
-          "gridPos": {
-            "h": 7,
-            "w": 8,
-            "x": 0,
-            "y": 77
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 571,
-          "interval": null,
-          "isNew": true,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "max",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "maxDataPoints": null,
-          "maxPerRow": null,
-          "minSpan": null,
-          "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true,
-            "dataLinks": []
-          },
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "repeat": null,
-          "repeatDirection": null,
-          "seriesOverrides": [],
-          "span": null,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum((\n    tikv_log_backup_temp_file_memory_usage\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{instance}}",
-              "metric": "",
-              "query": "sum((\n    tikv_log_backup_temp_file_memory_usage\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Buffer File Cache Mem Usage",
-          "tooltip": {
-            "msResolution": true,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "transformations": [],
-          "transparent": false,
-          "type": "graph",
-          "xaxis": {
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "decimals": null,
-              "format": "bytes",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "decimals": null,
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": 0
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "cacheTimeout": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The number of temporary buffer files.",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            }
-          },
-          "fill": 1,
-          "fillGradient": 1,
-          "grid": {
-            "threshold1": null,
-            "threshold1Color": "rgba(216, 200, 27, 0.27)",
-            "threshold2": null,
-            "threshold2Color": "rgba(234, 112, 112, 0.22)"
-          },
-          "gridPos": {
-            "h": 7,
-            "w": 8,
-            "x": 8,
-            "y": 77
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 572,
-          "interval": null,
-          "isNew": true,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "max",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "maxDataPoints": null,
-          "maxPerRow": null,
-          "minSpan": null,
-          "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true,
-            "dataLinks": []
-          },
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "repeat": null,
-          "repeatDirection": null,
-          "seriesOverrides": [],
-          "span": null,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum((\n    tikv_log_backup_temp_file_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{instance}}",
-              "metric": "",
-              "query": "sum((\n    tikv_log_backup_temp_file_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Buffer File Count",
-          "tooltip": {
-            "msResolution": true,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "transformations": [],
-          "transparent": false,
-          "type": "graph",
-          "xaxis": {
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "decimals": null,
-              "format": "none",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "decimals": null,
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": 0
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "cacheTimeout": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The total size of buffer files that are swapped out to disk.",
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -78514,11 +77698,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 562,
-=======
-          "id": 573,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 567,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78658,11 +77838,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 563,
-=======
-          "id": 574,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 568,
           "interval": null,
           "legend": {
             "show": false
@@ -78767,11 +77943,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 564,
-=======
-          "id": 575,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 569,
           "interval": null,
           "legend": {
             "show": false
@@ -78869,11 +78041,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 565,
-=======
-          "id": 576,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 570,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79006,11 +78174,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 566,
-=======
-          "id": 577,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 571,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79143,11 +78307,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 567,
-=======
-          "id": 578,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 572,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79280,11 +78440,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 568,
-=======
-          "id": 579,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 573,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79363,543 +78519,7 @@
           "yaxes": [
             {
               "decimals": null,
-<<<<<<< HEAD
               "format": "s",
-=======
-              "format": "none",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "decimals": null,
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": 0
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "cacheTimeout": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The leader of the region with minimal checkpoint.",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            }
-          },
-          "fill": 1,
-          "fillGradient": 1,
-          "grid": {
-            "threshold1": null,
-            "threshold1Color": "rgba(216, 200, 27, 0.27)",
-            "threshold2": null,
-            "threshold2Color": "rgba(234, 112, 112, 0.22)"
-          },
-          "gridPos": {
-            "h": 7,
-            "w": 8,
-            "x": 16,
-            "y": 98
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 580,
-          "interval": null,
-          "isNew": true,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "max",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "maxDataPoints": null,
-          "maxPerRow": null,
-          "minSpan": null,
-          "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true,
-            "dataLinks": []
-          },
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "repeat": null,
-          "repeatDirection": null,
-          "seriesOverrides": [],
-          "span": null,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_log_backup_store_last_checkpoint_ts\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  / 262144",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{ instance }}",
-              "metric": "",
-              "query": "((\n    tikv_log_backup_store_last_checkpoint_ts\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  / 262144",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Current Last Region Leader Store ID",
-          "tooltip": {
-            "msResolution": true,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "transformations": [],
-          "transparent": false,
-          "type": "graph",
-          "xaxis": {
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "decimals": null,
-              "format": "none",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "decimals": null,
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": 0
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "cacheTimeout": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The region with minimal checkpoint of each store.",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            }
-          },
-          "fill": 1,
-          "fillGradient": 1,
-          "grid": {
-            "threshold1": null,
-            "threshold1Color": "rgba(216, 200, 27, 0.27)",
-            "threshold2": null,
-            "threshold2Color": "rgba(234, 112, 112, 0.22)"
-          },
-          "gridPos": {
-            "h": 7,
-            "w": 8,
-            "x": 0,
-            "y": 105
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 581,
-          "interval": null,
-          "isNew": true,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "max",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "maxDataPoints": null,
-          "maxPerRow": null,
-          "minSpan": null,
-          "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true,
-            "dataLinks": []
-          },
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "repeat": null,
-          "repeatDirection": null,
-          "seriesOverrides": [],
-          "span": null,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_log_backup_store_last_checkpoint_region_id\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{ instance }}",
-              "metric": "",
-              "query": "((\n    tikv_log_backup_store_last_checkpoint_region_id\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Current Last Region ID per Store",
-          "tooltip": {
-            "msResolution": true,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "transformations": [],
-          "transparent": false,
-          "type": "graph",
-          "xaxis": {
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "decimals": null,
-              "format": "none",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "decimals": null,
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": 0
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "cacheTimeout": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The minimal checkpoint TS of each store.",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            }
-          },
-          "fill": 1,
-          "fillGradient": 1,
-          "grid": {
-            "threshold1": null,
-            "threshold1Color": "rgba(216, 200, 27, 0.27)",
-            "threshold2": null,
-            "threshold2Color": "rgba(234, 112, 112, 0.22)"
-          },
-          "gridPos": {
-            "h": 7,
-            "w": 8,
-            "x": 8,
-            "y": 105
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 582,
-          "interval": null,
-          "isNew": true,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "max",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "maxDataPoints": null,
-          "maxPerRow": null,
-          "minSpan": null,
-          "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true,
-            "dataLinks": []
-          },
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "repeat": null,
-          "repeatDirection": null,
-          "seriesOverrides": [],
-          "span": null,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_log_backup_store_last_checkpoint_ts\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{ instance }}",
-              "metric": "",
-              "query": "((\n    tikv_log_backup_store_last_checkpoint_ts\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Current Last Checkpoint TS per Store",
-          "tooltip": {
-            "msResolution": true,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "transformations": [],
-          "transparent": false,
-          "type": "graph",
-          "xaxis": {
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "decimals": null,
-              "format": "ms",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "decimals": null,
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": 0
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "cacheTimeout": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The active progress subscription from each store",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            }
-          },
-          "fill": 1,
-          "fillGradient": 1,
-          "grid": {
-            "threshold1": null,
-            "threshold1Color": "rgba(216, 200, 27, 0.27)",
-            "threshold2": null,
-            "threshold2Color": "rgba(234, 112, 112, 0.22)"
-          },
-          "gridPos": {
-            "h": 7,
-            "w": 8,
-            "x": 16,
-            "y": 105
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 583,
-          "interval": null,
-          "isNew": true,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "max",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "maxDataPoints": null,
-          "maxPerRow": null,
-          "minSpan": null,
-          "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true,
-            "dataLinks": []
-          },
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "repeat": null,
-          "repeatDirection": null,
-          "seriesOverrides": [],
-          "span": null,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_log_backup_active_subscription_number\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{instance}}",
-              "metric": "",
-              "query": "((\n    tikv_log_backup_active_subscription_number\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Active Progress Subscrption Per Store",
-          "tooltip": {
-            "msResolution": true,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "transformations": [],
-          "transparent": false,
-          "type": "graph",
-          "xaxis": {
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "decimals": null,
-              "format": "none",
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
               "label": null,
               "logBase": 1,
               "max": null,
@@ -79953,11 +78573,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 569,
-=======
-          "id": 584,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 574,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80090,11 +78706,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 570,
-=======
-          "id": 585,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 575,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80230,11 +78842,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 571,
-=======
-      "id": 586,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+      "id": 576,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -80273,11 +78881,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 572,
-=======
-          "id": 587,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 577,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80425,11 +79029,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 573,
-=======
-          "id": 588,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 578,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80562,11 +79162,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 574,
-=======
-          "id": 589,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 579,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80699,11 +79295,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 575,
-=======
-          "id": 590,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 580,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80839,11 +79431,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 576,
-=======
-      "id": 591,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+      "id": 581,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -80882,11 +79470,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 577,
-=======
-          "id": 592,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 582,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81019,11 +79603,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 578,
-=======
-          "id": 593,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 583,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81156,11 +79736,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 579,
-=======
-          "id": 594,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 584,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81293,11 +79869,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 580,
-=======
-          "id": 595,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 585,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81430,11 +80002,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 581,
-=======
-          "id": 596,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 586,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81567,11 +80135,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 582,
-=======
-          "id": 597,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 587,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81707,11 +80271,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 583,
-=======
-      "id": 598,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+      "id": 588,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -81750,11 +80310,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 584,
-=======
-          "id": 599,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 589,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81887,11 +80443,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 585,
-=======
-          "id": 600,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 590,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82027,11 +80579,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 586,
-=======
-      "id": 601,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+      "id": 591,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -82070,11 +80618,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 587,
-=======
-          "id": 602,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 592,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82275,11 +80819,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 588,
-=======
-          "id": 603,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 593,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82415,11 +80955,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 589,
-=======
-      "id": 604,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+      "id": 594,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -82458,11 +80994,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 590,
-=======
-          "id": 605,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 595,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82595,11 +81127,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 591,
-=======
-          "id": 606,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 596,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82732,11 +81260,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 592,
-=======
-          "id": 607,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 597,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82869,11 +81393,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 593,
-=======
-          "id": 608,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 598,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -83006,11 +81526,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 594,
-=======
-          "id": 609,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 599,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -83158,11 +81674,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 595,
-=======
-          "id": 610,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 600,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -83366,11 +81878,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 596,
-=======
-      "id": 611,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+      "id": 601,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -83409,11 +81917,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 597,
-=======
-          "id": 612,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 602,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -83546,11 +82050,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 598,
-=======
-          "id": 613,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 603,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -83683,11 +82183,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 599,
-=======
-          "id": 614,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 604,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -83820,11 +82316,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 600,
-=======
-          "id": 615,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 605,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -83957,11 +82449,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 601,
-=======
-          "id": 616,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 606,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -84158,11 +82646,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 602,
-=======
-          "id": 617,
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
+          "id": 607,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -84220,519 +82704,6 @@
       "transformations": [],
       "transparent": false,
       "type": "row"
-<<<<<<< HEAD
-=======
-    },
-    {
-      "cacheTimeout": null,
-      "collapsed": true,
-      "datasource": null,
-      "description": null,
-      "editable": true,
-      "error": false,
-      "fieldConfig": {
-        "defaults": {
-          "thresholds": {
-            "mode": "absolute",
-            "steps": []
-          }
-        }
-      },
-      "gridPos": {
-        "h": 7,
-        "w": 24,
-        "x": 0,
-        "y": 0
-      },
-      "height": null,
-      "hideTimeOverride": false,
-      "id": 618,
-      "interval": null,
-      "links": [],
-      "maxDataPoints": 100,
-      "maxPerRow": null,
-      "minSpan": null,
-      "panels": [
-        {
-          "cacheTimeout": null,
-          "color": {
-            "mode": "thresholds"
-          },
-          "columns": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "TiKV RocksDB DB Configuration",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "align": "auto",
-                "displayMode": "auto",
-                "filterable": false
-              },
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            },
-            "overrides": [
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Field"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Option"
-                  },
-                  {
-                    "id": "custom.align",
-                    "value": null
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Last (not null)"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Value"
-                  }
-                ]
-              }
-            ]
-          },
-          "fontSize": "100%",
-          "gridPos": {
-            "h": 7,
-            "w": 24,
-            "x": 0,
-            "y": 0
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 619,
-          "interval": null,
-          "links": [],
-          "mappings": [],
-          "maxDataPoints": 100,
-          "maxPerRow": null,
-          "minSpan": null,
-          "options": {
-            "showHeader": true
-          },
-          "repeat": null,
-          "repeatDirection": null,
-          "span": 6,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_config_rocksdb_db\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "format": "table",
-              "hide": false,
-              "instant": true,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": null,
-              "metric": "",
-              "query": "((\n    tikv_config_rocksdb_db\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "RocksDB DB Config",
-          "transformations": [
-            {
-              "id": "organize",
-              "options": {
-                "excludeByName": {
-                  "Time": true,
-                  "__name__": true,
-                  "job": true
-                },
-                "indexByName": {},
-                "renameByName": {
-                  "Time": "",
-                  "Value #A": "Value",
-                  "job": "",
-                  "name": "Option"
-                }
-              }
-            }
-          ],
-          "transparent": false,
-          "type": "table"
-        },
-        {
-          "cacheTimeout": null,
-          "color": {
-            "mode": "thresholds"
-          },
-          "columns": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "TiKV RocksDB CF Configuration",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "align": "auto",
-                "displayMode": "auto",
-                "filterable": false
-              },
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            },
-            "overrides": [
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Field"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Option"
-                  },
-                  {
-                    "id": "custom.align",
-                    "value": null
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Last (not null)"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Value"
-                  }
-                ]
-              }
-            ]
-          },
-          "fontSize": "100%",
-          "gridPos": {
-            "h": 7,
-            "w": 24,
-            "x": 0,
-            "y": 7
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 620,
-          "interval": null,
-          "links": [],
-          "mappings": [],
-          "maxDataPoints": 100,
-          "maxPerRow": null,
-          "minSpan": null,
-          "options": {
-            "showHeader": true
-          },
-          "repeat": null,
-          "repeatDirection": null,
-          "span": 6,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_config_rocksdb_cf\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))   or (tikv_config_rocksdb unless tikv_config_rocksdb_cf)",
-              "format": "table",
-              "hide": false,
-              "instant": true,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": null,
-              "metric": "",
-              "query": "((\n    tikv_config_rocksdb_cf\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))   or (tikv_config_rocksdb unless tikv_config_rocksdb_cf)",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "RocksDB CF Config",
-          "transformations": [
-            {
-              "id": "organize",
-              "options": {
-                "excludeByName": {
-                  "Time": true,
-                  "__name__": true,
-                  "job": true
-                },
-                "indexByName": {},
-                "renameByName": {
-                  "Time": "",
-                  "Value #A": "Value",
-                  "job": "",
-                  "name": "Option"
-                }
-              }
-            }
-          ],
-          "transparent": false,
-          "type": "table"
-        },
-        {
-          "cacheTimeout": null,
-          "color": {
-            "mode": "thresholds"
-          },
-          "columns": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "TiKV Flow Control Configuration",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "align": "auto",
-                "displayMode": "auto",
-                "filterable": false
-              },
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            },
-            "overrides": [
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Field"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Option"
-                  },
-                  {
-                    "id": "custom.align",
-                    "value": null
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Last (not null)"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Value"
-                  }
-                ]
-              }
-            ]
-          },
-          "fontSize": "100%",
-          "gridPos": {
-            "h": 7,
-            "w": 24,
-            "x": 0,
-            "y": 14
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 621,
-          "interval": null,
-          "links": [],
-          "mappings": [],
-          "maxDataPoints": 100,
-          "maxPerRow": null,
-          "minSpan": null,
-          "options": {
-            "showHeader": true
-          },
-          "repeat": null,
-          "repeatDirection": null,
-          "span": 6,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_config_flow_control\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "format": "table",
-              "hide": false,
-              "instant": true,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": null,
-              "metric": "",
-              "query": "((\n    tikv_config_flow_control\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Flow Control Config",
-          "transformations": [
-            {
-              "id": "organize",
-              "options": {
-                "excludeByName": {
-                  "Time": true,
-                  "__name__": true,
-                  "job": true
-                },
-                "indexByName": {},
-                "renameByName": {
-                  "Time": "",
-                  "Value #A": "Value",
-                  "job": "",
-                  "name": "Option"
-                }
-              }
-            }
-          ],
-          "transparent": false,
-          "type": "table"
-        },
-        {
-          "cacheTimeout": null,
-          "color": {
-            "mode": "thresholds"
-          },
-          "columns": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "TiKV Raftstore Configuration",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "align": "auto",
-                "displayMode": "auto",
-                "filterable": false
-              },
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            },
-            "overrides": [
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Field"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Option"
-                  },
-                  {
-                    "id": "custom.align",
-                    "value": null
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Last (not null)"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Value"
-                  }
-                ]
-              }
-            ]
-          },
-          "fontSize": "100%",
-          "gridPos": {
-            "h": 7,
-            "w": 24,
-            "x": 0,
-            "y": 21
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 622,
-          "interval": null,
-          "links": [],
-          "mappings": [],
-          "maxDataPoints": 100,
-          "maxPerRow": null,
-          "minSpan": null,
-          "options": {
-            "showHeader": true
-          },
-          "repeat": null,
-          "repeatDirection": null,
-          "span": 6,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_config_raftstore\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "format": "table",
-              "hide": false,
-              "instant": true,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": null,
-              "metric": "",
-              "query": "((\n    tikv_config_raftstore\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Raftstore Config",
-          "transformations": [
-            {
-              "id": "organize",
-              "options": {
-                "excludeByName": {
-                  "Time": true,
-                  "__name__": true,
-                  "job": true
-                },
-                "indexByName": {},
-                "renameByName": {
-                  "Time": "",
-                  "Value #A": "Value",
-                  "job": "",
-                  "name": "Option"
-                }
-              }
-            }
-          ],
-          "transparent": false,
-          "type": "table"
-        }
-      ],
-      "repeat": null,
-      "repeatDirection": null,
-      "span": null,
-      "targets": [],
-      "timeFrom": null,
-      "timeShift": null,
-      "title": "Config",
-      "transformations": [],
-      "transparent": false,
-      "type": "row"
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
     }
   ],
   "refresh": "1m",
