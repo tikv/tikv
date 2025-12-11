@@ -2904,6 +2904,9 @@ where
             self.fsm
                 .peer
                 .update_last_leader_committed_idx(committed_index);
+            // If the peer is already hibernating, run the `busy_on_apply` check now to
+            // avoid missing updates after refreshing the leader committed index.
+            self.on_check_peer_complete_apply_logs();
         }
 
         if msg.has_extra_msg() {
@@ -3055,6 +3058,10 @@ where
             // Ignore the message means rejecting implicitly.
             return;
         }
+        // At this point the peer has caught up with the leader's raft logs.
+        // Before entering hibernation, ensure any pending "busy_on_apply" check
+        // has completed.
+        self.on_check_peer_complete_apply_logs();
         let mut extra = ExtraMessage::default();
         extra.set_type(ExtraMessageType::MsgHibernateResponse);
         self.fsm
