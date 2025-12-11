@@ -260,8 +260,8 @@ mod tests {
         let rate2 = tracker.get_mvcc_versions_scanned(region2);
 
         // Allow some tolerance for timing
-        assert!(rate1 >= 900 && rate1 <= 1100, "rate1 = {}", rate1);
-        assert!(rate2 >= 400 && rate2 <= 600, "rate2 = {}", rate2);
+        assert!((900..=1100).contains(&rate1), "rate1 = {}", rate1);
+        assert!((400..=600).contains(&rate2), "rate2 = {}", rate2);
 
         // After get_mvcc_versions_scanned, counters are reset
         // So next call should return 0 (no new data)
@@ -299,7 +299,7 @@ mod tests {
 
         // Throughput = 500 versions / 2 secs = 250 versions/sec
         let rate = tracker.get_mvcc_versions_scanned(region);
-        assert!(rate >= 225 && rate <= 275, "rate = {}", rate);
+        assert!((225..=275).contains(&rate), "rate = {}", rate);
 
         // After reading, counters should be reset
         {
@@ -314,7 +314,7 @@ mod tests {
 
         // Throughput = 100 versions / 1 sec = 100 versions/sec
         let rate2 = tracker.get_mvcc_versions_scanned(region);
-        assert!(rate2 >= 80 && rate2 <= 120, "rate2 = {}", rate2);
+        assert!((80..=120).contains(&rate2), "rate2 = {}", rate2);
     }
 
     #[test]
