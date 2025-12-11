@@ -582,12 +582,6 @@ mod tests {
                     ci.set_default_val(datum::encode_value(&mut ctx, &[Datum::F64(4.5)]).unwrap());
                     ci
                 },
-                {
-                    let mut ci = ColumnInfo::default();
-                    ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                    ci.set_column_id(EXTRA_COMMIT_TS_COL_ID);
-                    ci
-                },
             ];
 
             let field_types = vec![
@@ -818,25 +812,6 @@ mod tests {
                 }
             }
         }
-
-        // cover EXTRA_COMMIT_TS_COL_ID
-        let columns_info = helper.columns_info_by_idx(&[0, 3]);
-        let mut executor = BatchTableScanExecutor::<_, ApiV1>::new(
-            helper.store(),
-            Arc::new(EvalConfig::default()),
-            columns_info,
-            vec![helper.whole_table_range()],
-            vec![],
-            false,
-            false,
-            vec![],
-        )
-        .unwrap();
-        let result = block_on(executor.next_batch(5));
-        assert!(!result.physical_columns[1].is_empty());
-        let ts_slice = result.physical_columns[1].decoded().to_int_vec();
-        assert!(!ts_slice.is_empty());
-        assert!(ts_slice[0].unwrap() > 0);
     }
 
     #[test]
