@@ -52,13 +52,8 @@ where
 
 enum LimitationState<'a> {
     NotLimited,
-<<<<<<< HEAD
-    Acquiring,
-    Acuqired(SemaphorePermit<'a>),
-=======
     Acquiring(Instant),
     Acquired { _permit: SemaphorePermit<'a> },
->>>>>>> 294b472f3b (copr: improve observability of total suspend time (#19178))
 }
 
 impl<'a, PF, F> ConcurrencyLimiter<'a, PF, F>
