@@ -5,6 +5,7 @@
 
 mod consistency_check;
 pub(super) mod metrics;
+pub mod mvcc_read_tracker;
 pub(crate) mod reader;
 pub(super) mod txn;
 
