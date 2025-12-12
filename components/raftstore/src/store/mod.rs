@@ -93,8 +93,9 @@ pub use self::{
         FlowStatsReporter, FullCompactController, KeyEntry, LocalReadContext, LocalReader,
         LocalReaderCore, NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT, PdStatsMonitor, PdTask,
         REGION_CPU_OVERLOAD_THRESHOLD_RATIO, ReadDelegate, ReadExecutor, ReadExecutorProvider,
-        ReadProgress, ReadStats, RefreshConfigTask, RegionTask, SnapGenTask, SplitCheckRunner,
-        SplitCheckTask, SplitConfig, SplitConfigManager, SplitInfo, StoreMetaDelegate,
-        StoreStatsReporter, TrackVer, WriteStats, WriterContoller, metrics as worker_metrics,
+        ReadProgress, ReadStats, RefreshConfigTask, RegionTask, SnapGenTask, SplitAuditor,
+        SplitCheckRunner, SplitCheckTask, SplitConfig, SplitConfigManager, SplitInfo,
+        StoreMetaDelegate, StoreStatsReporter, TrackVer, WriteStats, WriterContoller,
+        metrics as worker_metrics,
     },
 };
