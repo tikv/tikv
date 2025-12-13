@@ -11,6 +11,7 @@ use chrono::{DateTime, Duration, Local};
 
 use crate::{
     config::{ReadableDuration, ReadableSize},
+    thread_name_prefix::ARCHIVE_WORKER_THREAD,
     worker::{LazyWorker, Runnable},
 };
 
@@ -98,7 +99,7 @@ impl RotatingFileLoggerBuilder {
 
     pub fn build(mut self) -> io::Result<RotatingFileLogger> {
         let file = open_log_file(&self.path)?;
-        let mut worker = LazyWorker::new("archive-worker");
+        let mut worker = LazyWorker::new(ARCHIVE_WORKER_THREAD);
         assert!(worker.start(Runner::new(&self.path, self.max_backups, self.max_days)));
         worker.scheduler().schedule(Task::Archive).unwrap();
 

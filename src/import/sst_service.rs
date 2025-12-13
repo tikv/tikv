@@ -46,6 +46,7 @@ use tikv_util::{
         disk::{DiskUsage, get_disk_status},
         get_global_memory_usage,
     },
+    thread_name_prefix::IMPORT_SST_WORKER_THREAD,
     time::{Instant, Limiter},
 };
 use tokio::time::sleep;
@@ -419,7 +420,7 @@ impl<E: Engine> ImportSstService<E> {
 
         let threads = ResizableRuntime::new(
             4,
-            "impwkr",
+            IMPORT_SST_WORKER_THREAD,
             Box::new(create_tokio_runtime),
             Box::new(|_| ()),
         );

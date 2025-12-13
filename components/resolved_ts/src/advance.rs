@@ -33,6 +33,7 @@ use security::SecurityManager;
 use tikv_util::{
     info,
     sys::thread::ThreadBuildWrapper,
+    thread_name_prefix::ADVANCED_TS_THREAD,
     time::{Instant, SlowTimer},
     timer::SteadyTimer,
     worker::Scheduler,
@@ -69,7 +70,7 @@ impl AdvanceTsWorker {
         concurrency_manager: ConcurrencyManager,
     ) -> Self {
         let worker = Builder::new_multi_thread()
-            .thread_name("advance-ts")
+            .thread_name(ADVANCED_TS_THREAD)
             .worker_threads(1)
             .enable_time()
             .with_sys_hooks()

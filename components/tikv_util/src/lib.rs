@@ -38,7 +38,7 @@ use nix::{
 };
 use serde::Serialize;
 
-use crate::sys::thread::StdThreadBuildWrapper;
+use crate::{sys::thread::StdThreadBuildWrapper, thread_name_prefix::BACKTRACE_LOADER_THREAD};
 
 #[macro_use]
 pub mod log;
@@ -66,6 +66,7 @@ pub mod store;
 pub mod stream;
 pub mod sys;
 pub mod thread_group;
+pub mod thread_name_prefix;
 pub mod time;
 pub mod timer;
 pub mod topn;
@@ -523,7 +524,7 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
     //           src/symbolize/libbacktrace.rs#L126-L159
     // Caching is slow, spawn it in another thread to speed up.
     thread::Builder::new()
-        .name(thd_name!("backtrace-loader"))
+        .name(thd_name!(BACKTRACE_LOADER_THREAD))
         .spawn_wrapper(::backtrace::Backtrace::new)
         .unwrap();
 

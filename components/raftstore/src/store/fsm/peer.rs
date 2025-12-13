@@ -687,11 +687,11 @@ where
         };
 
         for m in msgs.drain(..) {
-            // skip handling remain messages if fsm is destroyed. This can aviod handling
-            // arbitary messages(e.g. CasualMessage::ForceCompactRaftLogs) that may need
+            // skip handling remain messages if fsm is destroyed. This can avoid handling
+            // arbitrary messages(e.g. CasualMessage::ForceCompactRaftLogs) that may need
             // to read raft logs which maybe lead to panic.
-            // We do not skip RaftCommand because raft commond callback should always be
-            // handled or it will cause panic.
+            // We do not skip RaftCommand because raft command callback should always be
+            // handled, otherwise it will cause panic.
             if self.fsm.stopped && !matches!(&m, PeerMsg::RaftCommand(_)) {
                 continue;
             }
@@ -2377,7 +2377,7 @@ where
         let peer_id = self.fsm.peer.peer_id();
         let cb = Box::new(move || {
             // This can happen only when the peer is about to be destroyed
-            // or the node is shutting down. So it's OK to not to clean up
+            // or the node is shutting down. So it's OK to not clean up
             // registry.
             if let Err(e) = mb.force_send(PeerMsg::Tick(tick)) {
                 debug!(
@@ -6448,7 +6448,7 @@ where
                 );
             }
         } else {
-            // If a leader change occurs after switch to non-witness, it should be
+            // If a leader change occurs after switch to non-witness, it should
             // continue processing `MsgAppend` until `last_term == term`, then retry
             // to request snapshot.
             self.fsm.peer.should_reject_msgappend = false;

@@ -46,7 +46,7 @@ const MEDIUM_PRIORITY: u32 = 8;
 #[cfg(test)]
 const HIGH_PRIORITY: u32 = 16;
 
-// the global maxinum of virtual time is u64::MAX / 16, so when the virtual
+// the global maximum of virtual time is u64::MAX / 16, so when the virtual
 // time of all groups are bigger than half of this value, we rest them to avoid
 // virtual time overflow.
 const RESET_VT_THRESHOLD: u64 = (u64::MAX >> 4) / 2;
@@ -414,7 +414,7 @@ pub struct ResourceController {
     #[allow(dead_code)]
     name: String,
     // We handle the priority differently between read and write request:
-    // 1. the priority factor is calculate based on read/write RU settings.
+    // 1. the priority factor is calculated based on read/write RU settings.
     // 2. for read request, we increase a constant virtual time delta at each `get_priority` call
     //    because the cost can't be calculated at start, so we only increase a constant delta and
     //    increase the real cost after task is executed; but don't increase it at write because the
@@ -424,7 +424,7 @@ pub struct ResourceController {
     // factor = max_ru_quota / group_ru_quota * 10.0
     // We use mutex here to ensure when we need to change this value and do adjust all resource
     // groups' factors, it can't be changed concurrently.
-    // NOTE: becuase the ru config for "default" group is very large and it can cause very big
+    // NOTE: because the ru config for "default" group is very large, and it can cause very big
     // group weight, we will not count this value by default.
     max_ru_quota: Mutex<u64>,
     // record consumption of each resource group, name --> resource_group
@@ -433,7 +433,7 @@ pub struct ResourceController {
     last_min_vt: AtomicU64,
     // the last time min vt is overflow
     last_rest_vt_time: Cell<Instant>,
-    // whether the settings is customized by user
+    // whether the settings are customized by user
     customized: AtomicBool,
 }
 
@@ -842,7 +842,7 @@ pub(crate) mod tests {
         assert!(group3.current_vt() >= group1_vt / 2);
         drop(group3);
 
-        // test resource gorup resource limiter.
+        // test resource group resource limiter.
         let group1 = resource_manager.get_resource_group("test").unwrap();
         assert!(group1.limiter.is_none());
         assert!(

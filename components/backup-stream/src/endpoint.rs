@@ -37,6 +37,7 @@ use tikv_util::{
     debug, defer, error, info,
     memory::MemoryQuota,
     sys::thread::ThreadBuildWrapper,
+    thread_name_prefix::BACKUP_STREAM_THREAD,
     time::{Instant, Limiter},
     warn,
     worker::{Runnable, Scheduler},
@@ -137,7 +138,7 @@ where
         txn_status_cache: Arc<TxnStatusCache>,
     ) -> Self {
         crate::metrics::STREAM_ENABLED.inc();
-        let pool = create_tokio_runtime((config.num_threads / 2).max(1), "backup-stream")
+        let pool = create_tokio_runtime((config.num_threads / 2).max(1), BACKUP_STREAM_THREAD)
             .expect("failed to create tokio runtime for backup stream worker.");
 
         let meta_client = MetadataClient::new(store, store_id);
