@@ -2336,6 +2336,11 @@ where
 
         // Update the state whether the peer is pending on applying raft
         // logs if necesssary.
+        fail_point!(
+            "on_check_peer_complete_apply_1003",
+            self.fsm.region_id() == 1 && self.fsm.peer_id() == 1003,
+            |_| {}
+        );
         self.on_check_peer_complete_apply_logs();
 
         // If the peer is busy on apply and missing the last leader committed index,
@@ -2810,6 +2815,11 @@ where
         if self.fsm.peer.needs_update_last_leader_committed_idx()
             && (MessageType::MsgAppend == msg_type || MessageType::MsgReadIndexResp == msg_type)
         {
+            fail_point!(
+                "on_check_peer_complete_apply_1003_skip",
+                self.store_id() == 3 && self.fsm.peer_id() == 1003,
+                |_| Ok(())
+            );
             let committed_index = cmp::max(
                 msg.get_message().get_commit(), // from MsgAppend
                 msg.get_message().get_index(),  // from MsgReadIndexResp
@@ -2817,6 +2827,14 @@ where
             self.fsm
                 .peer
                 .update_last_leader_committed_idx(committed_index);
+            // If the peer is already hibernating, run the `busy_on_apply` check now to
+            // avoid missing updates after refreshing the leader committed index.
+            fail_point!(
+                "on_check_peer_complete_apply_1003",
+                self.fsm.region_id() == 1 && self.fsm.peer_id() == 1003,
+                |_| Ok(())
+            );
+            self.on_check_peer_complete_apply_logs();
         }
 
         if msg.has_extra_msg() {
@@ -2968,6 +2986,10 @@ where
             // Ignore the message means rejecting implicitly.
             return;
         }
+        // At this point the peer has caught up with the leader's raft logs.
+        // Before entering hibernation, ensure any pending "busy_on_apply" check
+        // has completed.
+        self.on_check_peer_complete_apply_logs();
         let mut extra = ExtraMessage::default();
         extra.set_type(ExtraMessageType::MsgHibernateResponse);
         self.fsm
