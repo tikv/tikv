@@ -3,15 +3,11 @@
 use std::{str, sync::Arc, time::Duration};
 
 use azure_core::{
-<<<<<<< HEAD
-    auth::{AccessToken, TokenCredential, TokenResponse},
-=======
     HttpClient, Method, Request,
     auth::{AccessToken, TokenCredential},
->>>>>>> 0f6bbbe060 (br: Update azure sdk to support managed identity (#19005))
     base64, content_type,
     error::{Error, ErrorKind},
-    headers, new_http_client, HttpClient, Method, Request,
+    headers, new_http_client,
 };
 use openssl::{
     error::ErrorStack,

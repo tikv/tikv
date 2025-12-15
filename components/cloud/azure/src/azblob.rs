@@ -7,21 +7,9 @@ use std::{
 };
 
 use async_trait::async_trait;
-<<<<<<< HEAD
-use azure_core::{
-    auth::{TokenCredential, TokenResponse},
-    new_http_client,
-};
-use azure_identity::{
-    AutoRefreshingTokenCredential, ClientSecretCredential, DefaultAzureCredential,
-    TokenCredentialOptions,
-};
-use azure_storage::{prelude::*, ConnectionString, ConnectionStringBuilder};
-=======
 use azure_core::auth::{AccessToken, TokenCredential};
 use azure_identity::{ClientSecretCredential, DefaultAzureCredential};
 use azure_storage::{ConnectionString, ConnectionStringBuilder, prelude::*};
->>>>>>> 0f6bbbe060 (br: Update azure sdk to support managed identity (#19005))
 use azure_storage_blobs::{blob::operations::PutBlockBlobBuilder, prelude::*};
 use cloud::{
     blob::{

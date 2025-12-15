@@ -3,17 +3,9 @@
 use std::{ops::Deref, sync::Arc};
 
 use async_trait::async_trait;
-<<<<<<< HEAD
-use azure_core::{auth::TokenCredential, new_http_client, Error as AzureError};
-use azure_identity::{
-    AutoRefreshingTokenCredential, ClientSecretCredential, TokenCredentialOptions,
-};
-use azure_security_keyvault::{prelude::*, KeyClient};
-=======
 use azure_core::{Error as AzureError, auth::TokenCredential};
 use azure_identity::ClientSecretCredential;
 use azure_security_keyvault::{KeyClient, prelude::*};
->>>>>>> 0f6bbbe060 (br: Update azure sdk to support managed identity (#19005))
 use cloud::{
     error::{Error as CloudError, KmsError, OtherError, Result},
     kms::{Config, CryptographyType, DataKeyPair, EncryptedKey, KeyId, KmsProvider, PlainKey},

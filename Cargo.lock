@@ -757,13 +757,8 @@ dependencies = [
  "oauth2",
  "pin-project",
  "serde",
-<<<<<<< HEAD
- "serde_json",
- "time 0.3.20",
-=======
  "time 0.3.41",
  "tz-rs",
->>>>>>> 0f6bbbe060 (br: Update azure sdk to support managed identity (#19005))
  "url",
  "uuid 1.7.0",
 ]
@@ -779,12 +774,7 @@ dependencies = [
  "futures 0.3.15",
  "serde",
  "serde_json",
-<<<<<<< HEAD
- "time 0.3.20",
- "url",
-=======
  "time 0.3.41",
->>>>>>> 0f6bbbe060 (br: Update azure sdk to support managed identity (#19005))
 ]
 
 [[package]]
@@ -801,12 +791,7 @@ dependencies = [
  "log",
  "serde",
  "serde_derive",
-<<<<<<< HEAD
- "serde_json",
- "time 0.3.20",
-=======
  "time 0.3.41",
->>>>>>> 0f6bbbe060 (br: Update azure sdk to support managed identity (#19005))
  "url",
  "uuid 1.7.0",
 ]
@@ -7813,13 +7798,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cd0cbfecb4d19b5ea75bb31ad904eb5b9fa13f21079c3b92017ebdf4999a5890"
 dependencies = [
  "itoa 1.0.1",
-<<<<<<< HEAD
- "libc 0.2.151",
-=======
  "js-sys",
  "libc 0.2.176",
  "num-conv",
->>>>>>> 0f6bbbe060 (br: Update azure sdk to support managed identity (#19005))
  "num_threads",
  "serde",
  "time-core",
