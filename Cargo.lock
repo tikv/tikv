@@ -757,7 +757,7 @@ dependencies = [
  "oauth2",
  "pin-project",
  "serde",
- "time 0.3.41",
+ "time 0.3.20",
  "tz-rs",
  "url",
  "uuid 1.7.0",
@@ -774,7 +774,7 @@ dependencies = [
  "futures 0.3.15",
  "serde",
  "serde_json",
- "time 0.3.41",
+ "time 0.3.20",
 ]
 
 [[package]]
@@ -791,7 +791,7 @@ dependencies = [
  "log",
  "serde",
  "serde_derive",
- "time 0.3.41",
+ "time 0.3.20",
  "url",
  "uuid 1.7.0",
 ]
@@ -830,7 +830,7 @@ dependencies = [
  "once_cell",
  "serde",
  "serde_json",
- "time 0.3.41",
+ "time 0.3.20",
 ]
 
 [[package]]
@@ -4913,7 +4913,7 @@ dependencies = [
  "cfg-if 1.0.0",
  "findshlibs",
  "inferno",
- "libc 0.2.151",
+ "libc 0.2.176",
  "log",
  "nix 0.26.2",
  "once_cell",
@@ -7800,7 +7800,6 @@ dependencies = [
  "itoa 1.0.1",
  "js-sys",
  "libc 0.2.176",
- "num-conv",
  "num_threads",
  "serde",
  "time-core",
@@ -8195,12 +8194,6 @@ name = "unicode-width"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7007dbd421b92cc6e28410fe7362e2e0a2503394908f417b68ec8d1c364c4e20"
-
-[[package]]
-name = "unicode-xid"
-version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f962df74c8c05a667b5ee8bcf162993134c104e96440b663c8daa176dc772d8c"
 
 [[package]]
 name = "url"
