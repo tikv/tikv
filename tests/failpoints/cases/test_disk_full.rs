@@ -598,7 +598,7 @@ fn test_reject_follower_read_index_when_disk_ful() {
     // To ensure the thread has full store disk usage infomation.
     cluster.cfg.raft_store.store_batch_system.pool_size = 1;
     cluster.pd_client.disable_default_operator();
-    let _ = cluster.run();
+    cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));
     cluster.must_put(b"k1", b"v1");
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
