@@ -2,18 +2,26 @@
 
 use std::{
     sync::{Arc, Mutex},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use crossbeam_skiplist::{SkipMap, map::Entry};
 
 // CAPACITY is the cache capacity. When it is exceeded, GC will be triggered.
-const CAPACITY: usize = 0x2000;
+// If each Region is counted as 128 MiB, the total size needed to fully exhaust
+// CAPACITY would be 4 TiB, which is practically impossible to reach in real
+// workloads.
+const CAPACITY: usize = 0x8000;
 // GC_ENTRY_LIMIT is the number of iterations during a single GC operation.
 const GC_ENTRY_LIMIT: usize = 0x80;
 // GC_LIFETIME is the effective time of the cache, in seconds.
-const GC_LIFETIME: u64 = 600;
+const GC_LIFETIME: Duration = Duration::from_secs(600);
 
+// SplitValidator can disable split for a specific Region within GC_LIFETIME via
+// disable(regionID). It uses a SkipMap internally for concurrent access. When
+// the number of entries exceeds CAPACITY, a full GC round is triggered, and
+// each GC in `disable` scans at most GC_ENTRY_LIMIT entries to avoid excessively
+// long execution time.
 struct SplitValidatorCore<P> {
     disabled_region_ids: SkipMap<u64, Instant>,
     capacity: usize,
@@ -96,7 +104,7 @@ impl SplitValidator {
     pub fn new() -> Self {
         Self {
             core: Arc::new(SplitValidatorCore::new(
-                |e| e.value().elapsed().as_secs() > GC_LIFETIME,
+                |e| e.value().elapsed() > GC_LIFETIME,
                 CAPACITY,
             )),
         }
