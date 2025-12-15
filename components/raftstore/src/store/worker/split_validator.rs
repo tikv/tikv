@@ -14,14 +14,14 @@ const GC_ENTRY_LIMIT: usize = 0x80;
 // GC_LIFETIME is the effective time of the cache, in seconds.
 const GC_LIFETIME: u64 = 600;
 
-struct SplitAuditorCore<P> {
+struct SplitValidatorCore<P> {
     disabled_region_ids: SkipMap<u64, Instant>,
     capacity: usize,
     gc_offset: Mutex<u64>,
     gc_filter: P,
 }
 
-impl<P> SplitAuditorCore<P>
+impl<P> SplitValidatorCore<P>
 where
     P: Fn(&Entry<'_, u64, Instant>) -> bool,
 {
@@ -87,15 +87,15 @@ where
 }
 
 #[derive(Clone)]
-pub struct SplitAuditor {
-    core: Arc<SplitAuditorCore<fn(&Entry<'_, u64, Instant>) -> bool>>,
+pub struct SplitValidator {
+    core: Arc<SplitValidatorCore<fn(&Entry<'_, u64, Instant>) -> bool>>,
 }
 
-impl SplitAuditor {
+impl SplitValidator {
     #[inline]
     pub fn new() -> Self {
         Self {
-            core: Arc::new(SplitAuditorCore::new(
+            core: Arc::new(SplitValidatorCore::new(
                 |e| e.value().elapsed().as_secs() > GC_LIFETIME,
                 CAPACITY,
             )),
@@ -118,7 +118,7 @@ impl SplitAuditor {
     }
 }
 
-impl Default for SplitAuditor {
+impl Default for SplitValidator {
     fn default() -> Self {
         Self::new()
     }
@@ -132,104 +132,104 @@ mod tests {
     use super::*;
     #[test]
     fn test_multiple_regions_management() {
-        let auditor = SplitAuditor::new();
+        let validator = SplitValidator::new();
         let region1 = 1;
         let region2 = 2;
 
-        assert!(!auditor.is_disabled(region1));
-        assert!(!auditor.is_disabled(region2));
-        assert!(auditor.core.disabled_region_ids.is_empty());
+        assert!(!validator.is_disabled(region1));
+        assert!(!validator.is_disabled(region2));
+        assert!(validator.core.disabled_region_ids.is_empty());
 
-        auditor.disable(region1);
-        auditor.disable(region2);
-        assert!(auditor.is_disabled(region1));
-        assert!(auditor.is_disabled(region2));
-        assert_eq!(auditor.core.disabled_region_ids.len(), 2);
+        validator.disable(region1);
+        validator.disable(region2);
+        assert!(validator.is_disabled(region1));
+        assert!(validator.is_disabled(region2));
+        assert_eq!(validator.core.disabled_region_ids.len(), 2);
 
-        auditor.enable(region1);
-        assert!(!auditor.is_disabled(region1));
-        assert!(auditor.is_disabled(region2));
-        assert_eq!(auditor.core.disabled_region_ids.len(), 1);
+        validator.enable(region1);
+        assert!(!validator.is_disabled(region1));
+        assert!(validator.is_disabled(region2));
+        assert_eq!(validator.core.disabled_region_ids.len(), 1);
     }
 
     #[test]
     fn test_enable_non_disabled_region() {
-        let auditor = SplitAuditor::new();
+        let validator = SplitValidator::new();
         let region_id = 1;
 
-        auditor.enable(region_id);
-        assert!(!auditor.is_disabled(region_id));
-        assert!(auditor.core.disabled_region_ids.is_empty());
+        validator.enable(region_id);
+        assert!(!validator.is_disabled(region_id));
+        assert!(validator.core.disabled_region_ids.is_empty());
     }
 
     #[test]
     fn test_expired() {
-        let auditor = SplitAuditorCore::new(|e| e.key() & 1 == 0, 300);
-        auditor.disable(1);
-        assert!(auditor.is_disabled(1));
-        auditor.disable(2);
-        assert!(!auditor.is_disabled(2));
+        let validator = SplitValidatorCore::new(|e| e.key() & 1 == 0, 300);
+        validator.disable(1);
+        assert!(validator.is_disabled(1));
+        validator.disable(2);
+        assert!(!validator.is_disabled(2));
     }
 
     #[test]
     fn test_gc_removes_expired_entries() {
-        let auditor = SplitAuditorCore::new(|e| e.key() & 1 == 0, 300);
+        let validator = SplitValidatorCore::new(|e| e.key() & 1 == 0, 300);
         for i in 0..200 {
-            auditor.disabled_region_ids.insert(i, Instant::now());
+            validator.disabled_region_ids.insert(i, Instant::now());
         }
-        auditor.gc();
-        assert_eq!(*auditor.gc_offset.lock().unwrap(), 0);
-        assert_eq!(auditor.disabled_region_ids.len(), 200);
+        validator.gc();
+        assert_eq!(*validator.gc_offset.lock().unwrap(), 0);
+        assert_eq!(validator.disabled_region_ids.len(), 200);
         for i in 200..300 {
-            auditor.disabled_region_ids.insert(i, Instant::now());
+            validator.disabled_region_ids.insert(i, Instant::now());
         }
-        auditor.gc();
-        assert_eq!(*auditor.gc_offset.lock().unwrap(), 128);
-        auditor.gc();
-        assert_eq!(*auditor.gc_offset.lock().unwrap(), 256);
-        auditor.gc();
-        assert_eq!(*auditor.gc_offset.lock().unwrap(), 0);
-        assert_eq!(auditor.disabled_region_ids.len(), 150);
-        auditor.gc();
-        assert_eq!(*auditor.gc_offset.lock().unwrap(), 0);
-        assert_eq!(auditor.disabled_region_ids.len(), 150);
+        validator.gc();
+        assert_eq!(*validator.gc_offset.lock().unwrap(), 128);
+        validator.gc();
+        assert_eq!(*validator.gc_offset.lock().unwrap(), 256);
+        validator.gc();
+        assert_eq!(*validator.gc_offset.lock().unwrap(), 0);
+        assert_eq!(validator.disabled_region_ids.len(), 150);
+        validator.gc();
+        assert_eq!(*validator.gc_offset.lock().unwrap(), 0);
+        assert_eq!(validator.disabled_region_ids.len(), 150);
     }
 
     #[test]
     fn test_disable_trigger_gc() {
-        let auditor = SplitAuditorCore::new(|e| e.key() & 1 == 0, 300);
+        let validator = SplitValidatorCore::new(|e| e.key() & 1 == 0, 300);
         for i in 0..200 {
-            auditor.disable(i);
+            validator.disable(i);
         }
-        assert_eq!(auditor.disabled_region_ids.len(), 200);
+        assert_eq!(validator.disabled_region_ids.len(), 200);
         for i in 200..300 {
-            auditor.disable(i);
+            validator.disable(i);
         }
-        assert_eq!(auditor.disabled_region_ids.len(), 236);
-        auditor.disable(300);
-        assert_eq!(auditor.disabled_region_ids.len(), 173);
-        auditor.disable(301);
-        assert_eq!(auditor.disabled_region_ids.len(), 151);
-        auditor.disable(302);
-        assert_eq!(auditor.disabled_region_ids.len(), 152);
+        assert_eq!(validator.disabled_region_ids.len(), 236);
+        validator.disable(300);
+        assert_eq!(validator.disabled_region_ids.len(), 173);
+        validator.disable(301);
+        assert_eq!(validator.disabled_region_ids.len(), 151);
+        validator.disable(302);
+        assert_eq!(validator.disabled_region_ids.len(), 152);
     }
 
     #[bench]
     fn bench_1m_regions_mixed_ops(b: &mut Bencher) {
         const TOTAL_REGIONS: u64 = 1_000_000;
 
-        let auditor = SplitAuditor::new();
+        let validator = SplitValidator::new();
         let mut rng = rand::thread_rng();
 
         for i in 0..=TOTAL_REGIONS {
-            auditor.disable(i);
+            validator.disable(i);
         }
         b.iter(|| {
             let region_id = rng.gen_range(0..TOTAL_REGIONS);
             if rng.gen() {
-                auditor.disable(black_box(region_id));
+                validator.disable(black_box(region_id));
             } else {
-                auditor.enable(black_box(region_id));
+                validator.enable(black_box(region_id));
             }
         });
     }

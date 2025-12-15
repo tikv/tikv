@@ -14,10 +14,10 @@ mod read;
 mod refresh_config;
 mod region;
 mod snap_gen;
-mod split_auditor;
 mod split_check;
 mod split_config;
 mod split_controller;
+mod split_validator;
 
 pub use self::{
     check_leader::{Runner as CheckLeaderRunner, Task as CheckLeaderTask},
@@ -44,7 +44,6 @@ pub use self::{
     },
     region::{Runner as RegionRunner, Task as RegionTask},
     snap_gen::{Runner as SnapGenRunner, SNAP_GENERATOR_MAX_POOL_SIZE, Task as SnapGenTask},
-    split_auditor::SplitAuditor,
     split_check::{
         Bucket, BucketRange, BucketStatsInfo, KeyEntry, Runner as SplitCheckRunner,
         Task as SplitCheckTask,
@@ -55,4 +54,5 @@ pub use self::{
         REGION_CPU_OVERLOAD_THRESHOLD_RATIO, SplitConfig, SplitConfigManager,
     },
     split_controller::{AutoSplitController, ReadStats, SplitConfigChange, SplitInfo, WriteStats},
+    split_validator::SplitValidator,
 };
