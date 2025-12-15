@@ -20,8 +20,8 @@ const GC_LIFETIME: Duration = Duration::from_secs(600);
 // SplitValidator can disable split for a specific Region within GC_LIFETIME via
 // disable(regionID). It uses a SkipMap internally for concurrent access. When
 // the number of entries exceeds CAPACITY, a full GC round is triggered, and
-// each GC in `disable` scans at most GC_ENTRY_LIMIT entries to avoid excessively
-// long execution time.
+// each GC in `disable` scans at most GC_ENTRY_LIMIT entries to avoid
+// excessively long execution time.
 struct SplitValidatorCore<P> {
     disabled_region_ids: SkipMap<u64, Instant>,
     capacity: usize,
