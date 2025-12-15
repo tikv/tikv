@@ -431,6 +431,10 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
                     .mut_decoded()
                     .push_int(Some(ts.into_inner() as i64));
                 self.is_column_filled[*idx] = true;
+            } else {
+                return Err(other_err!(
+                    "Query asks for _tidb_commit_ts, but the data is missing"
+                ));
             }
         }
 

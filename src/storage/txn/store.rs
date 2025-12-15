@@ -449,7 +449,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
             .bypass_locks(self.bypass_locks.clone())
             .access_locks(self.access_locks.clone())
             .check_has_newer_ts_data(check_has_newer_ts_data)
-            .load_commit_ts(load_commit_ts)
+            .set_load_commit_ts(load_commit_ts)
             .build()?;
 
         Ok(scanner)
