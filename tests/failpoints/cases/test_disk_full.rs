@@ -591,3 +591,34 @@ fn test_down_node_when_disk_full() {
         fail::remove(get_fp(DiskUsage::AlmostFull, i));
     }
 }
+
+#[test]
+fn test_reject_follower_read_index_when_disk_ful() {
+    let mut cluster = new_node_cluster(0, 2);
+    // To ensure the thread has full store disk usage infomation.
+    cluster.cfg.raft_store.store_batch_system.pool_size = 1;
+    cluster.pd_client.disable_default_operator();
+    let _ = cluster.run();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+
+    let region = cluster.get_region(b"k1");
+    fail::cfg(get_fp(DiskUsage::AlmostFull, 2), "return").unwrap();
+    ensure_disk_usage_is_reported!(&mut cluster, 2, 2, &region);
+
+    // replica read on disk-full peer should be reject.
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_get_cf_cmd("default", b"k1")],
+        false,
+    );
+    let p2 = new_peer(2, 2);
+    request.mut_header().set_peer(p2);
+    request.mut_header().set_replica_read(true);
+    let mut rx = async_command_on_node(&mut cluster, 2, request);
+    // Must timeout here
+    let res = block_on_timeout(rx.as_mut(), Duration::from_millis(500)).unwrap();
+    assert!(res.get_header().get_error().has_disk_full(), "{:?}", res);
+}

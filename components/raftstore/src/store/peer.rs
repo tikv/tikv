@@ -4320,6 +4320,13 @@ where
             }
         } else {
             fail_point!("propose_readindex_from_follower");
+            // reject read_index request on follower when the disk is full.
+            if poll_ctx.self_disk_usage != DiskUsage::Normal {
+                let msg = "reject follower read_index when self disk is full".to_string();
+                cmd_resp::bind_error(&mut err_resp, Error::DiskFull(vec![poll_ctx.store.id], msg));
+                cb.report_error(err_resp);
+                return false;
+            }
         }
 
         if !self.is_leader() && self.leader_id() == INVALID_ID {
