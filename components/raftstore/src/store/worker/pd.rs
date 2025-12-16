@@ -155,6 +155,7 @@ where
         right_derive: bool,
         share_source_region_size: bool,
         callback: Callback<EK::Snapshot>,
+        split_reason: pdpb::SplitReason,
     },
     AutoSplit {
         split_infos: Vec<SplitInfo>,
@@ -1123,13 +1124,14 @@ where
         callback: Callback<EK::Snapshot>,
         task: String,
         remote: Remote<yatp::task::future::TaskCell>,
+        reason: pdpb::SplitReason,
     ) {
         if split_keys.is_empty() {
             info!("empty split key, skip ask batch split";
                 "region_id" => region.get_id());
             return;
         }
-        let resp = pd_client.ask_batch_split(region.clone(), split_keys.len());
+        let resp = pd_client.ask_batch_split(region.clone(), split_keys.len(), reason);
         let f = async move {
             match resp.await {
                 Ok(mut resp) => {
@@ -2224,6 +2226,7 @@ where
                 right_derive,
                 share_source_region_size,
                 callback,
+                split_reason,
             } => Self::handle_ask_batch_split(
                 self.router.clone(),
                 self.scheduler.clone(),
@@ -2236,6 +2239,7 @@ where
                 callback,
                 String::from("batch_split"),
                 self.remote.clone(),
+                split_reason,
             ),
             Task::AutoSplit { split_infos } => {
                 let pd_client = self.pd_client.clone();
@@ -2264,6 +2268,7 @@ where
                                 Callback::None,
                                 String::from("auto_split"),
                                 remote.clone(),
+                                pdpb::SplitReason::Load,
                             );
                         // Try to split the region on half within the given key
                         // range if there is no `split_key` been given.

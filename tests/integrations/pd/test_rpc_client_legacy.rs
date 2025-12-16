@@ -132,7 +132,8 @@ fn test_rpc_client() {
         None,
     ))
     .unwrap();
-    block_on(client.ask_batch_split(metapb::Region::default(), 1)).unwrap();
+    block_on(client.ask_batch_split(metapb::Region::default(), 1, pdpb::SplitReason::Admin))
+        .unwrap();
     block_on(client.report_batch_split(vec![metapb::Region::default(), metapb::Region::default()]))
         .unwrap();
 
@@ -388,7 +389,8 @@ fn test_incompatible_version() {
 
     let client = new_client(eps, None);
 
-    let resp = block_on(client.ask_batch_split(metapb::Region::default(), 2));
+    let resp =
+        block_on(client.ask_batch_split(metapb::Region::default(), 2, pdpb::SplitReason::Admin));
     assert_eq!(
         resp.unwrap_err().to_string(),
         PdError::Incompatible.to_string()

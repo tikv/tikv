@@ -129,7 +129,7 @@ mod tests {
     use engine_traits::{MiscExt, SyncMutable, ALL_CFS, CF_DEFAULT, LARGE_CFS};
     use kvproto::{
         metapb::{Peer, Region},
-        pdpb::CheckPolicy,
+        pdpb::{CheckPolicy, SplitReason},
     };
     use tempfile::Builder;
     use tikv_util::{config::ReadableSize, escape, worker::Runnable};
@@ -230,7 +230,7 @@ mod tests {
             region.clone(),
             Some(start_key),
             Some(end_key),
-            false,
+            SplitReason::Admin,
             CheckPolicy::Scan,
             None,
         ));
@@ -242,7 +242,7 @@ mod tests {
             region.clone(),
             Some(start_key),
             Some(end_key),
-            false,
+            SplitReason::Admin,
             CheckPolicy::Scan,
             None,
         ));
@@ -254,7 +254,7 @@ mod tests {
             region.clone(),
             Some(start_key),
             Some(end_key),
-            false,
+            SplitReason::Admin,
             CheckPolicy::Scan,
             None,
         ));

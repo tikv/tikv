@@ -7,7 +7,7 @@ use std::{
 };
 
 use grpcio::EnvBuilder;
-use kvproto::metapb::*;
+use kvproto::{metapb::*, pdpb};
 use pd_client::{PdClient, RegionInfo, RegionStat, RpcClient};
 use security::{SecurityConfig, SecurityManager};
 use test_pd::{mocker::*, util::*, Server as MockServer};
@@ -65,7 +65,7 @@ fn test_pd_client_deadlock() {
         request!(client => block_on(get_region_by_id(0))),
         request!(client => block_on(region_heartbeat(0, Region::default(), Peer::default(), RegionStat::default(), None))),
         request!(client => block_on(ask_split(Region::default()))),
-        request!(client => block_on(ask_batch_split(Region::default(), 1))),
+        request!(client => block_on(ask_batch_split(Region::default(), 1, pdpb::SplitReason::Admin))),
         request!(client => block_on(store_heartbeat(Default::default(), None, None))),
         request!(client => block_on(report_batch_split(vec![]))),
         request!(client => scatter_region(RegionInfo::new(Region::default(), None))),
