@@ -61,6 +61,7 @@ fn test_cdc_double_scan_deregister_impl<F: KvFormat>() {
     // wait for the second connection register to the delegate.
     suite.must_wait_delegate_condition(
         1,
+        1,
         Arc::new(|d: Option<&Delegate>| d.unwrap().downstreams().len() == 2),
     );
 

@@ -621,6 +621,7 @@ impl Delegate {
         let locks = match &self.lock_tracker {
             LockTracker::Prepared { locks, .. } => locks,
             _ => {
+                advance.blocked_on_scan += self.downstreams.len();
                 let now = Instant::now_coarse();
                 let elapsed = now.duration_since(self.created);
                 if elapsed > WARN_LAG_THRESHOLD
