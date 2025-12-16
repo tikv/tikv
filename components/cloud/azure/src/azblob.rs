@@ -9,7 +9,7 @@ use std::{
 use async_trait::async_trait;
 use azure_core::auth::{AccessToken, TokenCredential};
 use azure_identity::{ClientSecretCredential, DefaultAzureCredential};
-use azure_storage::{ConnectionString, ConnectionStringBuilder, prelude::*};
+use azure_storage::{prelude::*, ConnectionString, ConnectionStringBuilder};
 use azure_storage_blobs::{blob::operations::PutBlockBlobBuilder, prelude::*};
 use cloud::{
     blob::{

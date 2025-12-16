@@ -7,7 +7,7 @@ license = "Apache-2.0"
 
 [dependencies]
 async-trait = "0.1"
-azure_core = { version = "0.18", default-features = false, features = ["hmac_openssl"]}
+azure_core = { version = "0.18", default-features = false, features = ["hmac_openssl"] }
 azure_identity = "0.18"
 azure_security_keyvault = { version = "0.18", default-features = false }
 azure_storage = { version = "0.18", default-features = false }

@@ -3,11 +3,10 @@
 use std::{str, sync::Arc, time::Duration};
 
 use azure_core::{
-    HttpClient, Method, Request,
     auth::{AccessToken, TokenCredential},
     base64, content_type,
     error::{Error, ErrorKind},
-    headers, new_http_client,
+    headers, new_http_client, HttpClient, Method, Request,
 };
 use openssl::{
     error::ErrorStack,
