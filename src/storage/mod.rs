@@ -1594,8 +1594,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         false,
                     );
 
-                    let mut scanner =
-                        snap_store.scanner(reverse_scan, key_only, false, start_key, end_key)?;
+                    let mut scanner = snap_store.scanner(
+                        reverse_scan,
+                        key_only,
+                        false,
+                        false,
+                        start_key,
+                        end_key,
+                    )?;
                     let res = scanner.scan(limit, sample_step);
 
                     let statistics = scanner.take_statistics();
