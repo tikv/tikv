@@ -608,6 +608,7 @@ pub trait PdClient {
         &mut self,
         region: metapb::Region,
         count: usize,
+        reason: pdpb::SplitReason,
     ) -> PdFuture<pdpb::AskBatchSplitResponse>;
 
     fn store_heartbeat(
@@ -1098,12 +1099,14 @@ impl PdClient for RpcClient {
         &mut self,
         region: metapb::Region,
         count: usize,
+        reason: pdpb::SplitReason,
     ) -> PdFuture<pdpb::AskBatchSplitResponse> {
         let timer = Instant::now_coarse();
 
         let mut req = pdpb::AskBatchSplitRequest::default();
         req.set_region(region);
         req.set_split_count(count as u32);
+        req.set_reason(reason);
 
         let mut raw_client = self.raw_client.clone();
         Box::pin(async move {
