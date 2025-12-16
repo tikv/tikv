@@ -1,10 +1,17 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{cmp::Ordering, sync::Arc};
+
 use async_trait::async_trait;
 use tidb_query_common::{Result, storage::IntervalRange};
 use tipb::FieldType;
+use tidb_query_datatype::{
+    codec::{batch::LazyBatchColumnVec, data_type::*},
+    expr::{EvalConfig, EvalContext, EvalWarnings},
+};
+use tidb_query_expr::{RpnStackNode, RpnExpression};
 
-use crate::interface::*;
+use crate::{interface::*, util::{ensure_columns_decoded, eval_exprs_decoded_no_lifetime}};
 
 /// Executor that retrieves rows from the source executor
 /// and only produces part of the rows.
@@ -12,14 +19,31 @@ pub struct BatchLimitExecutor<Src: BatchExecutor> {
     src: Src,
     remaining_rows: usize,
     is_src_scan_executor: bool,
+
+    context: EvalContext,
+    
+    prefix_keys_exps: Vec<RpnExpression>,
+    prefix_keys_field_type: Vec<FieldType>,
+    prefix_key_num: usize,
+    
+    /// Stores previous prefix keys
+    prev_prefix_keys: Vec<ScalarValue>,
+
+    /// Stores current prefix keys
+    /// It is just used to reduce allocations. The lifetime is not really
+    /// 'static. The elements are only valid in the same batch where they
+    /// are added.
+    current_prefix_keys_unsafe: Vec<RpnStackNode<'static>>,
 }
 
 impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
-    pub fn new(src: Src, limit: usize, is_src_scan_executor: bool) -> Result<Self> {
+    pub fn new(src: Src, limit: usize, is_src_scan_executor: bool, config: Arc<EvalConfig>,) -> Result<Self> {
         Ok(Self {
             src,
             remaining_rows: limit,
             is_src_scan_executor,
+            context: EvalContext::new(config),
+            // TODO initialize some fields
         })
     }
 
@@ -53,22 +77,123 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
 
     #[inline]
     async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
-        let real_scan_rows = if self.is_src_scan_executor {
-            std::cmp::min(scan_rows, self.remaining_rows)
-        } else {
-            scan_rows
-        };
-        let mut result = self.src.next_batch(real_scan_rows).await;
-        if result.logical_rows.len() < self.remaining_rows {
-            self.remaining_rows -= result.logical_rows.len();
-        } else {
-            // We don't need to touch the physical data.
-            result.logical_rows.truncate(self.remaining_rows);
-            result.is_drained = Ok(BatchExecIsDrain::Drain);
-            self.remaining_rows = 0;
-        }
+        if self.prefix_keys_exps.len() > 0 {            
+            if self.remaining_rows == 0 {
+                return BatchExecuteResult {
+                        physical_columns: LazyBatchColumnVec::empty(),
+                        logical_rows: Vec::new(),
+                        warnings: EvalWarnings::default(),
+                        is_drained: Ok(BatchExecIsDrain::Drain)
+                    };
+            }
+            
+            let mut result = self.src.next_batch(scan_rows).await;
+            
+            let src_schema = self.src.schema();
+            // Decode columns with mutable input first, so subsequent access to input can be
+            // immutable (and the borrow checker will be happy)
+            let mut res = ensure_columns_decoded(
+                &mut self.context,
+                &self.prefix_keys_exps,
+                src_schema,
+                &mut result.physical_columns,
+                &result.logical_rows,
+            );
+            match res {
+                Ok(_) => {},
+                Err(err) => {return BatchExecuteResult{is_drained:Err(err), physical_columns: result.physical_columns, logical_rows: result.logical_rows, warnings: EvalWarnings::default()};}
+            }
 
-        result
+            assert!(self.current_prefix_keys_unsafe.is_empty());
+            unsafe {
+                res = eval_exprs_decoded_no_lifetime(
+                    &mut self.context,
+                    &self.prefix_keys_exps,
+                    src_schema,
+                    &mut result.physical_columns,
+                    &result.logical_rows,
+                    &mut self.current_prefix_keys_unsafe,
+                );
+
+                match res {
+                    Ok(_) => {},
+                    Err(err) => {return BatchExecuteResult{is_drained:Err(err), physical_columns: result.physical_columns, logical_rows: result.logical_rows, warnings: EvalWarnings::default()};}
+                }
+            }
+
+            let mut cur_prefix_keys_ref = Vec::with_capacity(self.prefix_keys_exps.len());
+            let logical_rows_len = result.logical_rows.len();
+            for logical_row_idx in 0..logical_rows_len {
+                for cur_prefix_key_result in &self.current_prefix_keys_unsafe {
+                    cur_prefix_keys_ref.push(cur_prefix_key_result.get_logical_scalar_ref(logical_row_idx));
+                }
+
+                if self.prev_prefix_keys.len() == 0 {
+                    self.prev_prefix_keys.extend(cur_prefix_keys_ref.drain(..).map(ScalarValueRef::to_owned));
+                    cur_prefix_keys_ref.clear();
+                    continue;
+                }
+
+                let prefix_key_match = || -> Result<bool> {
+                    match self.prev_prefix_keys.chunks_exact(self.prefix_key_num).next() {
+                        Some(current_key) => {
+                            for preifx_key_col_index in 0..self.prefix_key_num {
+                                if current_key[preifx_key_col_index]
+                                    .as_scalar_value_ref()
+                                    .cmp_sort_key(
+                                        &cur_prefix_keys_ref[preifx_key_col_index],
+                                        &self.prefix_keys_field_type[preifx_key_col_index],
+                                    )?
+                                    != Ordering::Equal
+                                {
+                                    return Ok(false);
+                                }
+                            }
+                            Ok(true)
+                        }
+                        _ => Ok(false),
+                    }
+                };
+
+                let res = prefix_key_match();
+                match res {
+                    Ok(v) => {
+                        if v {
+                            cur_prefix_keys_ref.clear();
+                        } else {
+                            self.remaining_rows -= 1;
+                            if self.remaining_rows == 0 {
+                                result.logical_rows.truncate(logical_row_idx);
+                                result.is_drained = Ok(BatchExecIsDrain::Drain);
+                                return result;
+                            } else {
+                                self.prev_prefix_keys.clear();
+                                self.prev_prefix_keys.extend(cur_prefix_keys_ref.drain(..).map(ScalarValueRef::to_owned));
+                            }
+                        }
+                    },
+                    Err(err) => {return BatchExecuteResult{is_drained:Err(err), physical_columns: result.physical_columns, logical_rows: result.logical_rows, warnings: EvalWarnings::default()};}
+                }
+            }
+            return result;
+        } else {
+            let real_scan_rows = if self.is_src_scan_executor {
+                std::cmp::min(scan_rows, self.remaining_rows)
+            } else {
+                scan_rows
+            };
+            let mut result = self.src.next_batch(real_scan_rows).await;
+            if result.logical_rows.len() < self.remaining_rows {
+                self.remaining_rows -= result.logical_rows.len();
+            } else {
+                // We don't need to touch the physical data.
+                result.logical_rows.truncate(self.remaining_rows);
+                result.is_drained = Ok(BatchExecIsDrain::Drain);
+                self.remaining_rows = 0;
+            }
+
+            result
+        }
     }
 
     #[inline]
