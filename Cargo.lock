@@ -184,17 +184,17 @@ dependencies = [
 
 [[package]]
 name = "async-compression"
-version = "0.4.12"
+version = "0.4.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fec134f64e2bc57411226dfc4e52dec859ddfc7e711fc5e07b612584f000e4aa"
+checksum = "ddb939d66e4ae03cee6091612804ba446b12878410cfa17f785f4dd67d4014e8"
 dependencies = [
  "futures-core",
  "futures-io",
  "memchr",
  "pin-project-lite",
  "tokio",
- "zstd",
- "zstd-safe",
+ "zstd 0.13.2",
+ "zstd-safe 7.2.1",
 ]
 
 [[package]]
@@ -649,6 +649,7 @@ dependencies = [
  "http-body 0.4.5",
  "http-body 1.0.0",
  "http-body-util",
+ "hyper",
  "itoa 1.0.1",
  "num-integer",
  "pin-project-lite",
@@ -876,10 +877,12 @@ version = "0.1.0"
 dependencies = [
  "async-compression",
  "async-trait",
+ "base64 0.13.0",
  "chrono",
  "concurrency_manager",
  "crc64fast",
  "dashmap",
+ "derive_more",
  "encryption",
  "encryption_export",
  "engine_panic",
@@ -907,6 +910,8 @@ dependencies = [
  "raftstore",
  "rand 0.8.5",
  "resolved_ts",
+ "serde",
+ "serde_json",
  "slog",
  "slog-global",
  "tempdir",
@@ -1455,8 +1460,10 @@ dependencies = [
  "async-trait",
  "derive_more",
  "error_code",
+ "fail",
  "futures 0.3.15",
  "futures-io",
+ "futures-util",
  "kvproto",
  "lazy_static",
  "pin-project",
@@ -1511,6 +1518,54 @@ version = "0.1.0"
 dependencies = [
  "fxhash",
  "tikv_alloc",
+]
+
+[[package]]
+name = "compact-log-backup"
+version = "0.1.0"
+dependencies = [
+ "async-compression",
+ "bytes",
+ "chrono",
+ "cloud",
+ "codec",
+ "crc64fast",
+ "dashmap",
+ "derive_more",
+ "encryption",
+ "engine_rocks",
+ "engine_traits",
+ "external_storage",
+ "fail",
+ "file_system",
+ "futures 0.3.15",
+ "futures-io",
+ "hex 0.4.3",
+ "keys",
+ "kvproto",
+ "lazy_static",
+ "pin-project",
+ "pprof 0.13.0",
+ "prometheus",
+ "protobuf 2.8.0",
+ "serde",
+ "serde_json",
+ "slog",
+ "slog-global",
+ "tempdir",
+ "test_util",
+ "thiserror 1.0.40",
+ "tidb_query_datatype",
+ "tikv_alloc",
+ "tikv_util",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tracing",
+ "tracing-active-tree",
+ "txn_types",
+ "uuid 0.8.2",
+ "zstd 0.11.2+zstd.1.5.2",
 ]
 
 [[package]]
@@ -2997,6 +3052,7 @@ dependencies = [
 name = "health_controller"
 version = "0.1.0"
 dependencies = [
+ "collections",
  "grpcio-health",
  "kvproto",
  "ordered-float",
@@ -3689,8 +3745,9 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#b6a98c6bf02d1864e74029f31ff99951719d96c1"
+source = "git+https://github.com/pingcap/kvproto.git?branch=release-8.5#90db5eaa107c12a93ac75d51007b063a9e2a2d48"
 dependencies = [
+ "bytes",
  "futures 0.3.15",
  "grpcio",
  "protobuf 2.8.0",
@@ -3760,7 +3817,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#755d152ec4eb443039296ceecf9a072a1142e014"
+source = "git+https://github.com/tikv/rust-rocksdb.git#a6b0bb0483986cbcec14530064f53b7f14facfa2"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -3779,7 +3836,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#755d152ec4eb443039296ceecf9a072a1142e014"
+source = "git+https://github.com/tikv/rust-rocksdb.git#a6b0bb0483986cbcec14530064f53b7f14facfa2"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3897,11 +3954,11 @@ dependencies = [
 
 [[package]]
 name = "matchers"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8263075bb86c5a1b1427b5ae862e8889656f126e9f77c484496e8b47cf5c5558"
+checksum = "d1525a2a28c7f4fa0fc98bb91ae755d1e2d1505079e05539e35bc876b5d65ae9"
 dependencies = [
- "regex-automata 0.1.8",
+ "regex-automata 0.4.3",
 ]
 
 [[package]]
@@ -4254,12 +4311,11 @@ dependencies = [
 
 [[package]]
 name = "nu-ansi-term"
-version = "0.46.0"
+version = "0.50.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77a8165726e8236064dbb45459242600304b42a5ea24ee2948e18e023bf7ba84"
+checksum = "d4a28e057d01f97e61255210fcff094d74ed0466038633e95017f5beb68e4399"
 dependencies = [
- "overload",
- "winapi 0.3.9",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4542,12 +4598,6 @@ name = "outref"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4030760ffd992bef45b0ae3f10ce1aba99e33464c90d14dd7c039884963ddc7a"
-
-[[package]]
-name = "overload"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b15813163c1d831bf4a13c3610c05c0d03b39feb07f7e09fa234dac9b15aaf39"
 
 [[package]]
 name = "page_size"
@@ -4839,6 +4889,29 @@ dependencies = [
 
 [[package]]
 name = "pprof"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef5c97c51bd34c7e742402e216abdeb44d415fbe6ae41d56b114723e953711cb"
+dependencies = [
+ "backtrace",
+ "cfg-if 1.0.0",
+ "findshlibs",
+ "inferno",
+ "libc 0.2.151",
+ "log",
+ "nix 0.26.2",
+ "once_cell",
+ "parking_lot 0.12.1",
+ "protobuf 2.8.0",
+ "protobuf-codegen-pure",
+ "smallvec",
+ "symbolic-demangle",
+ "tempfile",
+ "thiserror 1.0.40",
+]
+
+[[package]]
+name = "pprof"
 version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "38a01da47675efa7673b032bf8efd8214f1917d89685e07e395ab125ea42b187"
@@ -5024,7 +5097,7 @@ dependencies = [
  "rand 0.8.5",
  "rand_chacha 0.3.0",
  "rand_xorshift",
- "regex-syntax 0.8.2",
+ "regex-syntax",
  "rusty-fork",
  "tempfile",
  "unarray",
@@ -5033,7 +5106,7 @@ dependencies = [
 [[package]]
 name = "protobuf"
 version = "2.8.0"
-source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#6d445fe5ff4e99621a800be0f2c54dc96f056bac"
+source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#de31a47f395c2f46dbfea2545517ea1b27ad0096"
 dependencies = [
  "atomic",
  "bytes",
@@ -5069,7 +5142,7 @@ dependencies = [
 [[package]]
 name = "protobuf-codegen"
 version = "2.8.0"
-source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#6d445fe5ff4e99621a800be0f2c54dc96f056bac"
+source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#de31a47f395c2f46dbfea2545517ea1b27ad0096"
 dependencies = [
  "heck 0.3.1",
  "protobuf 2.8.0",
@@ -5088,6 +5161,16 @@ dependencies = [
  "regex",
  "tempfile",
  "thiserror 1.0.40",
+]
+
+[[package]]
+name = "protobuf-codegen-pure"
+version = "2.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "00993dc5fbbfcf9d8a005f6b6c29fd29fd6d86deba3ae3f41fd20c624c414616"
+dependencies = [
+ "protobuf 2.8.0",
+ "protobuf-codegen 2.8.0",
 ]
 
 [[package]]
@@ -5161,7 +5244,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#0d01b20312f74889a5e44ad4180aade5da2f16fa"
+source = "git+https://github.com/tikv/raft-rs?branch=master#1fd05e000fb094015507c5c985849d370100fb72"
 dependencies = [
  "bytes",
  "fxhash",
@@ -5220,7 +5303,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#0d01b20312f74889a5e44ad4180aade5da2f16fa"
+source = "git+https://github.com/tikv/raft-rs?branch=master#1fd05e000fb094015507c5c985849d370100fb72"
 dependencies = [
  "bytes",
  "protobuf 2.8.0",
@@ -5561,7 +5644,7 @@ dependencies = [
  "aho-corasick",
  "memchr",
  "regex-automata 0.4.3",
- "regex-syntax 0.8.2",
+ "regex-syntax",
 ]
 
 [[package]]
@@ -5571,8 +5654,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92b73c2a1770c255c240eaa4ee600df1704a38dc3feaa6e949e7fcd4f8dc09f9"
 dependencies = [
  "byteorder",
- "regex-syntax 0.6.29",
- "utf8-ranges",
 ]
 
 [[package]]
@@ -5583,7 +5664,7 @@ checksum = "5f804c7828047e88b2d32e2d7fe5a105da8ee3264f01902f796c8e067dc2483f"
 dependencies = [
  "aho-corasick",
  "memchr",
- "regex-syntax 0.8.2",
+ "regex-syntax",
 ]
 
 [[package]]
@@ -5591,12 +5672,6 @@ name = "regex-lite"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "30b661b2f27137bdbc16f00eda72866a92bb28af1753ffbd56744fb6e2e9cd8e"
-
-[[package]]
-name = "regex-syntax"
-version = "0.6.29"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f162c6dd7b008981e4d40210aca20b4bd0f9b60ca9271061b07f78537722f2e1"
 
 [[package]]
 name = "regex-syntax"
@@ -5778,7 +5853,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#755d152ec4eb443039296ceecf9a072a1142e014"
+source = "git+https://github.com/tikv/rust-rocksdb.git#a6b0bb0483986cbcec14530064f53b7f14facfa2"
 dependencies = [
  "libc 0.2.151",
  "librocksdb_sys",
@@ -6457,6 +6532,7 @@ dependencies = [
  "engine_traits",
  "error_code",
  "external_storage",
+ "fail",
  "file_system",
  "futures 0.3.15",
  "futures-util",
@@ -6478,6 +6554,7 @@ dependencies = [
  "test_sst_importer",
  "test_util",
  "thiserror 1.0.40",
+ "tikv",
  "tikv_alloc",
  "tikv_util",
  "tokio",
@@ -7198,6 +7275,7 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "api_version",
+ "async-trait",
  "byteorder",
  "derive_more",
  "error_code",
@@ -7207,6 +7285,7 @@ dependencies = [
  "log_wrappers",
  "prometheus",
  "prometheus-static-metric",
+ "raft",
  "serde_json",
  "thiserror 1.0.40",
  "tikv_util",
@@ -7284,6 +7363,7 @@ dependencies = [
  "tikv_util",
  "tipb",
  "tipb_helper",
+ "txn_types",
 ]
 
 [[package]]
@@ -7394,7 +7474,7 @@ dependencies = [
  "pd_client",
  "pin-project",
  "pnet_datalink",
- "pprof",
+ "pprof 0.15.0",
  "prometheus",
  "prometheus-static-metric",
  "protobuf 2.8.0",
@@ -7454,9 +7534,11 @@ name = "tikv-ctl"
 version = "0.0.1"
 dependencies = [
  "api_version",
+ "base64 0.13.0",
  "cc",
  "clap 2.33.0",
  "collections",
+ "compact-log-backup",
  "crypto",
  "encryption_export",
  "engine_rocks",
@@ -7484,6 +7566,7 @@ dependencies = [
  "slog",
  "slog-global",
  "structopt",
+ "tempfile",
  "tikv",
  "tikv_util",
  "time 0.1.43",
@@ -7733,7 +7816,7 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#cf70966bef25e205cb845c19265301542d1238d1"
+source = "git+https://github.com/pingcap/tipb.git?branch=release-8.5#097db0b2c02a9a3e964a35403aa05b7c9bc0f6c2"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -7872,9 +7955,9 @@ checksum = "b6bc1c9ce2b5135ac7f93c72918fc37feb872bdc6a5533a8b85eb4b86bfdae52"
 
 [[package]]
 name = "tracing"
-version = "0.1.40"
+version = "0.1.41"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3523ab5a71916ccf420eebdf5521fcef02141234bbc0b8a49f2fdc4544364ef"
+checksum = "784e0ac535deb450455cbfa28a6f0df145ea1bb7ae51b821cf5e7927fdcfbdd0"
 dependencies = [
  "pin-project-lite",
  "tracing-attributes",
@@ -7897,9 +7980,9 @@ dependencies = [
 
 [[package]]
 name = "tracing-attributes"
-version = "0.1.27"
+version = "0.1.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34704c8d6ebcbc939824180af020566b01a7c01f80641264eba0999f6c2b6be7"
+checksum = "81383ab64e72a7a8b8e13130c49e3dab29def6d0c7d76a03087b3cf71c5c6903"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -7908,9 +7991,9 @@ dependencies = [
 
 [[package]]
 name = "tracing-core"
-version = "0.1.32"
+version = "0.1.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c06d3da6113f116aaee68e4d601191614c9053067f9ab7f6edbcb161237daa54"
+checksum = "b9d12581f227e93f094d3af2ae690a574abb8a2b9b7a96e7cfe9647b2b617678"
 dependencies = [
  "once_cell",
  "valuable",
@@ -7929,9 +8012,9 @@ dependencies = [
 
 [[package]]
 name = "tracing-serde"
-version = "0.1.3"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc6b213177105856957181934e4920de57730fc69bf42c37ee5bb664d406d9e1"
+checksum = "704b1aeb7be0d0a84fc9828cae51dab5970fee5088f83d1dd7ee6f6246fc6ff1"
 dependencies = [
  "serde",
  "tracing-core",
@@ -7939,14 +8022,14 @@ dependencies = [
 
 [[package]]
 name = "tracing-subscriber"
-version = "0.3.18"
+version = "0.3.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ad0f048c97dbd9faa9b7df56362b8ebcaa52adb06b498c050d2f4e32f90a7a8b"
+checksum = "2054a14f5307d601f88daf0553e1cbf472acc4f2c51afab632431cdcd72124d5"
 dependencies = [
  "matchers",
  "nu-ansi-term",
  "once_cell",
- "regex",
+ "regex-automata 0.4.3",
  "serde",
  "serde_json",
  "sharded-slab",
@@ -8089,12 +8172,6 @@ name = "utf16_iter"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8232dd3cdaed5356e0f716d285e4b40b932ac434100fe9b7e0e8e935b9e6246"
-
-[[package]]
-name = "utf8-ranges"
-version = "1.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7fcfc827f90e53a02eaef5e535ee14266c1d569214c6aa70133a624d8a3164ba"
 
 [[package]]
 name = "utf8_iter"
@@ -8769,11 +8846,30 @@ dependencies = [
 
 [[package]]
 name = "zstd"
+version = "0.11.2+zstd.1.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "20cc960326ece64f010d2d2107537f26dc589a6573a316bd5b1dba685fa5fde4"
+dependencies = [
+ "zstd-safe 5.0.2+zstd.1.5.2",
+]
+
+[[package]]
+name = "zstd"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fcf2b778a664581e31e389454a7072dab1647606d44f7feea22cd5abb9c9f3f9"
 dependencies = [
- "zstd-safe",
+ "zstd-safe 7.2.1",
+]
+
+[[package]]
+name = "zstd-safe"
+version = "5.0.2+zstd.1.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d2a5585e04f9eea4b2a3d1eca508c4dee9592a89ef6f450c11719da0726f4db"
+dependencies = [
+ "libc 0.2.151",
+ "zstd-sys",
 ]
 
 [[package]]

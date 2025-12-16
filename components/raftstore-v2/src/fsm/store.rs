@@ -267,7 +267,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
             StoreTick::CleanupImportSst,
             self.store_ctx.cfg.cleanup_import_sst_interval.0,
         );
-        self.register_compact_check_tick();
 
         self.schedule_tick(
             StoreTick::SnapGc,
@@ -297,7 +296,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
         match tick {
             StoreTick::PdStoreHeartbeat => self.on_pd_store_heartbeat(),
             StoreTick::CleanupImportSst => self.on_cleanup_import_sst(),
-            StoreTick::CompactCheck => self.on_compact_check_tick(),
             StoreTick::SnapGc => self.on_snapshot_gc(),
             _ => slog_panic!(
                 self.store_ctx.logger,

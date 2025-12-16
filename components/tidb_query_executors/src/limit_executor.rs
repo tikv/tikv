@@ -22,6 +22,11 @@ impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
             is_src_scan_executor,
         })
     }
+
+    #[cfg(test)]
+    pub fn into_child(self) -> Src {
+        self.src
+    }
 }
 
 #[async_trait]
@@ -31,6 +36,19 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.src.schema()
+    }
+
+    #[inline]
+    fn intermediate_schema(&self, index: usize) -> Result<&[FieldType]> {
+        self.src.intermediate_schema(index)
+    }
+
+    #[inline]
+    fn consume_and_fill_intermediate_results(
+        &mut self,
+        results: &mut [Vec<BatchExecuteResult>],
+    ) -> Result<()> {
+        self.src.consume_and_fill_intermediate_results(results)
     }
 
     #[inline]
@@ -273,6 +291,52 @@ mod tests {
             assert!(r.is_drained.unwrap().is_remain());
         }
         let r = block_on(exec.next_batch(1));
+        assert!(r.is_drained.unwrap().stop());
+    }
+
+    #[test]
+    fn test_extra_common_handle_keys() {
+        let src = MockExecutor::new(
+            vec![FieldTypeTp::LongLong.into(), FieldTypeTp::LongLong.into()],
+            vec![BatchExecuteResult {
+                physical_columns: LazyBatchColumnVec::with_columns_and_extra_common_handle_keys(
+                    vec![
+                        VectorValue::Int(
+                            vec![Some(10), Some(11), Some(12), Some(13), Some(14)].into(),
+                        )
+                        .into(),
+                        VectorValue::Int(
+                            vec![Some(20), Some(21), Some(22), Some(23), Some(24)].into(),
+                        )
+                        .into(),
+                    ],
+                    Some(vec![
+                        b"h00".to_vec(),
+                        b"h01".to_vec(),
+                        b"h02".to_vec(),
+                        b"h03".to_vec(),
+                        b"h04".to_vec(),
+                    ]),
+                ),
+                logical_rows: vec![4, 0, 2, 1, 3],
+                warnings: EvalWarnings::default(),
+                is_drained: Ok(BatchExecIsDrain::Drain),
+            }],
+        );
+
+        let mut exec = BatchLimitExecutor::new(src, 3, true).unwrap();
+        let mut r = block_on(exec.next_batch(100));
+        assert_eq!(r.logical_rows, &[4, 0, 2]);
+        assert_eq!(
+            r.physical_columns.take_extra_common_handle_keys(),
+            Some(vec![
+                b"h00".to_vec(),
+                b"h01".to_vec(),
+                b"h02".to_vec(),
+                b"h03".to_vec(),
+                b"h04".to_vec(),
+            ]),
+        );
         assert!(r.is_drained.unwrap().stop());
     }
 }

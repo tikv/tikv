@@ -153,6 +153,7 @@ fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(
     // Must be called after `TikvServer::init`.
     let memory_limit = tikv.core.config.memory_usage_limit.unwrap().0;
     let high_water = (tikv.core.config.memory_usage_high_water * memory_limit as f64) as u64;
+    let config_controller = tikv.cfg_controller.clone().unwrap();
     register_memory_usage_high_water(high_water);
 
     tikv.core.check_conflict_addr();
@@ -182,6 +183,7 @@ fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(
                 None as Option<Engines<RocksEngine, CER>>,
                 kv_statistics,
                 raft_statistics,
+                config_controller,
                 Some(service_event_tx),
             )
         });
@@ -194,6 +196,10 @@ fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(
                 }
                 ServiceEvent::ResumeGrpc => {
                     tikv.resume();
+                }
+                ServiceEvent::GracefulShutdown => {
+                    tikv.graceful_shutdown();
+                    break;
                 }
                 ServiceEvent::Exit => {
                     break;
@@ -649,8 +655,10 @@ where
                     unified_read_pool.as_ref().unwrap().handle(),
                     unified_read_pool_scale_notifier,
                     &self.core.background_worker,
+                    self.core.config.readpool.unified.min_thread_count,
                     self.core.config.readpool.unified.max_thread_count,
                     self.core.config.readpool.unified.auto_adjust_pool_size,
+                    self.core.config.readpool.unified.cpu_threshold,
                 )),
             );
             unified_read_pool_scale_receiver = Some(rx);
@@ -827,6 +835,7 @@ where
             debug_thread_pool,
             health_controller,
             self.resource_manager.clone(),
+            self.core.background_worker.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
         cfg_controller.register(
@@ -1030,6 +1039,7 @@ where
             Some(self.router.as_ref().unwrap().store_meta().clone()),
             self.resource_manager.clone(),
             Arc::new(region_info_accessor),
+            Default::default(),
         );
         let import_cfg_mgr = import_service.get_config_manager();
 
@@ -1379,6 +1389,7 @@ where
                 self.resource_manager.clone(),
                 self.grpc_service_mgr.clone(),
                 None,
+                Default::default(),
             ) {
                 Ok(status_server) => Box::new(status_server),
                 Err(e) => {
@@ -1506,6 +1517,54 @@ where
             );
         }
     }
+
+    fn graceful_shutdown(&mut self) {
+        let now = Instant::now();
+        self.set_state(true);
+        self.wait_for_leader_eviction(now);
+        self.set_state(false);
+        std::thread::sleep(Duration::from_millis(200));
+        info!("Graceful shutdown completed");
+    }
+
+    fn wait_for_leader_eviction(&self, now: Instant) {
+        let timeout = self.core.config.server.graceful_shutdown_timeout.0;
+        let region_info_accessor = self.region_info_accessor.as_ref().unwrap();
+        let check_interval = Duration::from_secs(1);
+
+        loop {
+            let leaders_count = region_info_accessor.region_leaders().read().unwrap().len();
+
+            if leaders_count == 0 {
+                info!("All leaders evicted, completing graceful shutdown");
+                break;
+            }
+
+            if now.saturating_elapsed() >= timeout {
+                warn!(
+                    "Graceful shutdown timeout reached with {} leaders remaining",
+                    leaders_count
+                );
+                break;
+            }
+
+            info!("Waiting for leader eviction"; 
+                  "leaders_count" => leaders_count, 
+                  "elapsed" => ?now.saturating_elapsed());
+            std::thread::sleep(check_interval);
+        }
+    }
+
+    fn set_state(&self, state: bool) {
+        if let Some(node) = self.node.as_ref() {
+            let system = node.system();
+            let task = raftstore_v2::PdTask::GracefulShutdownState { state };
+
+            if let Err(e) = system.pd_scheduler().schedule(task) {
+                warn!("Failed to set graceful shutdown state for PD worker"; "error" => ?e);
+            }
+        }
+    }
 }
 
 impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
@@ -1538,6 +1597,7 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
             &self.core.config,
             block_cache,
             self.core.encryption_key_manager.clone(),
+            Default::default(),
         )
         .sst_recovery_sender(self.init_sst_recovery_sender())
         .flow_listener(flow_listener);
@@ -1673,14 +1733,15 @@ mod test {
     fn test_engines_resource_info_update() {
         let mut config = TikvConfig::default();
         config.rocksdb.defaultcf.disable_auto_compactions = true;
-        config.rocksdb.defaultcf.soft_pending_compaction_bytes_limit = Some(ReadableSize(1));
-        config.rocksdb.writecf.soft_pending_compaction_bytes_limit = Some(ReadableSize(1));
-        config.rocksdb.lockcf.soft_pending_compaction_bytes_limit = Some(ReadableSize(1));
+        config.rocksdb.defaultcf.soft_pending_compaction_bytes_limit = ReadableSize(1);
+        config.rocksdb.writecf.soft_pending_compaction_bytes_limit = ReadableSize(1);
+        config.rocksdb.lockcf.soft_pending_compaction_bytes_limit = ReadableSize(1);
         let env = Arc::new(Env::default());
         let path = Builder::new().prefix("test-update").tempdir().unwrap();
         let cache = config.storage.block_cache.build_shared_cache();
 
-        let factory = KvEngineFactoryBuilder::new(env, &config, cache, None).build();
+        let factory =
+            KvEngineFactoryBuilder::new(env, &config, cache, None, Default::default()).build();
         let reg = TabletRegistry::new(Box::new(factory), path.path().join("tablets")).unwrap();
 
         for i in 1..6 {

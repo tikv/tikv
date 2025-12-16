@@ -232,9 +232,9 @@ impl RegionChangeObserver for RegionEventListener {
                 RaftStoreEvent::UpdateRegionBuckets { region, buckets }
             }
         };
-        self.scheduler
-            .schedule(RegionInfoQuery::RaftStoreEvent(event))
-            .unwrap();
+        let _ = self
+            .scheduler
+            .schedule(RegionInfoQuery::RaftStoreEvent(event));
     }
 }
 
@@ -247,9 +247,9 @@ impl RoleObserver for RegionEventListener {
             role,
             initialized: role_change.initialized,
         };
-        self.scheduler
-            .schedule(RegionInfoQuery::RaftStoreEvent(event))
-            .unwrap();
+        let _ = self
+            .scheduler
+            .schedule(RegionInfoQuery::RaftStoreEvent(event));
     }
 }
 
@@ -266,9 +266,9 @@ impl RegionHeartbeatObserver for RegionEventListener {
             activity: RegionActivity { region_stat },
         };
 
-        self.scheduler
-            .schedule(RegionInfoQuery::RaftStoreEvent(event))
-            .unwrap();
+        let _ = self
+            .scheduler
+            .schedule(RegionInfoQuery::RaftStoreEvent(event));
     }
 }
 
@@ -1080,6 +1080,16 @@ impl MockRegionInfoProvider {
                 .map(|region| RegionInfo::new(region, StateRole::Leader))
                 .collect_vec(),
         ))
+    }
+
+    pub fn set_role(&self, region_id: u64, role: StateRole) {
+        let mut region_infos = self.0.lock().unwrap();
+        if let Some(region_info) = region_infos
+            .iter_mut()
+            .find(|info| info.region.get_id() == region_id)
+        {
+            region_info.role = role;
+        }
     }
 }
 

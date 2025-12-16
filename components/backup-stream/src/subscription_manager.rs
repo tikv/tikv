@@ -400,9 +400,9 @@ where
                 info!("backup stream: on_modify_observe"; "op" => ?op);
             }
             match op {
-                ObserveOp::Start { region, handle } => {
+                ObserveOp::Start { region } => {
                     fail::fail_point!("delay_on_start_observe");
-                    self.start_observe(region, handle).await;
+                    self.start_observe(region, ObserveHandle::new()).await;
                     metrics::INITIAL_SCAN_REASON
                         .with_label_values(&["leader-changed"])
                         .inc();
@@ -530,16 +530,11 @@ where
             "mem_usage" => %self.memory_manager.used_ratio(),
             "mem_max" => %self.memory_manager.capacity());
         if let Some(region) = act_region {
-            self.schedule_start_observe(delay, region, None);
+            self.schedule_start_observe(delay, region);
         }
     }
 
-    fn schedule_start_observe(
-        &self,
-        backoff: Duration,
-        region: Region,
-        handle: Option<ObserveHandle>,
-    ) {
+    fn schedule_start_observe(&self, backoff: Duration, region: Region) {
         let tx = self.messenger.upgrade();
         let region_id = region.id;
         if tx.is_none() {
@@ -551,11 +546,10 @@ where
         let tx = tx.unwrap();
         // tikv_util::Instant cannot be converted to std::time::Instant :(
         let start = tokio::time::Instant::now();
-        debug!("Scheduing subscription."; utils::slog_region(&region), "after" => ?backoff, "handle" => ?handle);
+        debug!("Scheduing subscription."; utils::slog_region(&region), "after" => ?backoff);
         let scheduled = async move {
             tokio::time::sleep_until(start + backoff).await;
-            let handle = handle.unwrap_or_else(|| ObserveHandle::new());
-            if let Err(err) = tx.send(ObserveOp::Start { region, handle }).await {
+            if let Err(err) = tx.send(ObserveOp::Start { region }).await {
                 warn!("log backup failed to schedule start observe."; "err" => %err);
             }
         };
@@ -744,7 +738,7 @@ where
             warn!("give up retry retion."; utils::slog_region(&region), "handle" => ?handle);
             return Ok(false);
         }
-        self.schedule_start_observe(backoff_for_start_observe(failure_count), region, None);
+        self.schedule_start_observe(backoff_for_start_observe(failure_count), region);
         metrics::INITIAL_SCAN_REASON
             .with_label_values(&["retry"])
             .inc();
@@ -1144,10 +1138,7 @@ mod test {
         }
 
         fn start_region(&self, region: Region) {
-            self.run(ObserveOp::Start {
-                region,
-                handle: ObserveHandle::new(),
-            })
+            self.run(ObserveOp::Start { region })
         }
 
         fn insert_region(&self, region: Region) {

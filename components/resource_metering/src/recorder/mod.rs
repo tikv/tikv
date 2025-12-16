@@ -364,9 +364,14 @@ mod tests {
             records: &mut RawRecords,
             _thread_stores: &mut HashMap<Pid, LocalStorage>,
         ) {
-            let mut tag = TagInfos::default();
-            tag.extra_attachment.push(1);
-            records.records.entry(Arc::new(tag)).or_default().cpu_time = 2;
+            let tag = Arc::new(TagInfos {
+                store_id: 0,
+                region_id: 0,
+                peer_id: 0,
+                key_ranges: vec![],
+                extra_attachment: [1].to_vec().into(),
+            });
+            records.records.entry(tag).or_default().cpu_time = 2;
         }
 
         fn pause(
@@ -445,7 +450,7 @@ mod tests {
         assert_eq!(records.records.len(), 1);
         assert_eq!(
             &records.records.keys().next().unwrap().extra_attachment,
-            &[1]
+            &Arc::new([1].to_vec())
         );
 
         // deregister collector
@@ -510,7 +515,7 @@ mod tests {
         assert_eq!(records.records.len(), 1);
         assert_eq!(
             &records.records.keys().next().unwrap().extra_attachment,
-            &[1]
+            &Arc::new([1].to_vec())
         );
         assert_eq!(records, {
             collector2.records.lock().unwrap().take().unwrap()
@@ -565,7 +570,7 @@ mod tests {
         assert_eq!(records.records.len(), 1);
         assert_eq!(
             &records.records.keys().next().unwrap().extra_attachment,
-            &[1]
+            &Arc::new([1].to_vec())
         );
         assert_eq!(records, {
             observer.records.lock().unwrap().take().unwrap()

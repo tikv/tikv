@@ -1163,8 +1163,8 @@ impl StreamTaskHandler {
             for f in fg.data_files_info.iter_mut() {
                 if let Some((epoches, start_key, end_key)) = rmap.get(&(f.region_id as _)) {
                     f.set_region_epoch(epoches.iter().copied().cloned().collect::<Vec<_>>().into());
-                    f.set_region_start_key(start_key.to_vec());
-                    f.set_region_end_key(end_key.to_vec());
+                    f.set_region_start_key(start_key.to_vec().into());
+                    f.set_region_end_key(end_key.to_vec().into());
                 }
             }
         }
@@ -1257,6 +1257,7 @@ impl StreamTaskHandler {
         metadata: &mut MetadataInfo,
         is_meta: bool,
     ) -> Result<()> {
+        let start = Instant::now();
         let mut data_files_open = Vec::new();
         let mut data_file_infos = Vec::new();
         let mut merged_file_info = DataFileGroup::new();
@@ -1293,12 +1294,8 @@ impl StreamTaskHandler {
         }
         let min_ts = min_ts.unwrap_or_default();
         let max_ts = max_ts.unwrap_or_default();
-        merged_file_info.set_path(TempFileKey::file_name(
-            metadata.store_id,
-            min_ts,
-            max_ts,
-            is_meta,
-        ));
+        merged_file_info
+            .set_path(TempFileKey::file_name(metadata.store_id, min_ts, max_ts, is_meta).into());
         merged_file_info.set_data_files_info(data_file_infos.into());
         merged_file_info.set_length(stat_length);
         merged_file_info.set_max_ts(max_ts);
@@ -1318,8 +1315,9 @@ impl StreamTaskHandler {
 
         match ret {
             Ok(_) => {
-                debug!(
+                info!(
                     "backup stream flush success";
+                    "duration" => ?start.saturating_elapsed(),
                     "storage_file" => ?filepath,
                     "est_len" => ?stat_length,
                 );
@@ -1453,9 +1451,10 @@ impl StreamTaskHandler {
                 .await?;
 
             fail::fail_point!("after_moving_to_flushing_files");
+            let generate_meta_dur = sw.lap();
             crate::metrics::FLUSH_DURATION
                 .with_label_values(&["generate_metadata"])
-                .observe(sw.lap().as_secs_f64());
+                .observe(generate_meta_dur.as_secs_f64());
 
             // flush log file to storage.
             self.flush_log(&mut backup_metadata).await?;
@@ -1478,15 +1477,17 @@ impl StreamTaskHandler {
             // flush backup metadata to external storage.
             self.flush_backup_metadata(backup_metadata, cx.flush_ts)
                 .await?;
+            let save_files_dur = sw.lap();
             crate::metrics::FLUSH_DURATION
                 .with_label_values(&["save_files"])
-                .observe(sw.lap().as_secs_f64());
+                .observe(save_files_dur.as_secs_f64());
 
             // clear flushing files
             self.clear_flushing_files().await;
+            let remove_tmp_dur = sw.lap();
             crate::metrics::FLUSH_DURATION
                 .with_label_values(&["clear_temp_files"])
-                .observe(sw.lap().as_secs_f64());
+                .observe(remove_tmp_dur.as_secs_f64());
             file_size_vec
                 .iter()
                 .for_each(|(size, _)| crate::metrics::FLUSH_FILE_SIZE.observe(*size as _));
@@ -1495,6 +1496,9 @@ impl StreamTaskHandler {
                 "files" => %file_size_vec.iter().map(|(_, v)| v).sum::<usize>(),
                 "total_size" => %file_size_vec.iter().map(|(v, _)| v).sum::<u64>(), // the size of the merged files after compressed
                 "take" => ?begin.saturating_elapsed(),
+                "generate_meta_takes" => ?generate_meta_dur,
+                "save_files_takes" => ?save_files_dur,
+                "remove_tmp_takes" => ?remove_tmp_dur,
             );
             Ok(rts)
         }
@@ -1899,7 +1903,8 @@ impl DataFile {
             self.sha256
                 .finish()
                 .map(|bytes| bytes.to_vec())
-                .map_err(|err| Error::Other(box_err!("openssl hasher failed to init: {}", err)))?,
+                .map_err(|err| Error::Other(box_err!("openssl hasher failed to init: {}", err)))?
+                .into(),
         );
         meta.set_crc64xor(self.crc64xor);
         meta.set_number_of_entries(self.number_of_entries as _);
@@ -1910,13 +1915,13 @@ impl DataFile {
             self.min_begin_ts
                 .map_or(self.min_ts.into_inner(), |ts| ts.into_inner()),
         );
-        meta.set_start_key(std::mem::take(&mut self.start_key));
-        meta.set_end_key(std::mem::take(&mut self.end_key));
+        meta.set_start_key(std::mem::take(&mut self.start_key).into());
+        meta.set_end_key(std::mem::take(&mut self.end_key).into());
         meta.set_length(self.file_size as _);
 
         meta.set_is_meta(file_key.is_meta);
         meta.set_table_id(file_key.table_id);
-        meta.set_cf(file_key.cf.to_owned());
+        meta.set_cf(file_key.cf.to_owned().into());
         meta.set_region_id(file_key.region_id as i64);
         meta.set_type(file_key.get_file_type());
 

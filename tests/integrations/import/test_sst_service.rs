@@ -1,6 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::time::Duration;
+use std::{path::Path, time::Duration};
 
 use futures::{executor::block_on, stream::StreamExt};
 use kvproto::{import_sstpb::*, kvrpcpb::Context, tikvpb::*};
@@ -46,6 +46,16 @@ fn test_upload_sst() {
         "DiskSpaceNotEnough"
     );
     set_disk_status(DiskUsage::Normal);
+
+    // high memory usage
+    fail::cfg("mock_memory_usage", "return(10307921510)").unwrap(); // 9.5G
+    fail::cfg("mock_memory_limit", "return(10737418240)").unwrap(); // 10G
+    assert_to_string_contains!(
+        send_upload_sst(&import, &meta, &data).unwrap_err(),
+        "Memory usage too high"
+    );
+    fail::remove("mock_memory_usage");
+    fail::remove("mock_memory_limit");
 
     let mut meta = new_sst_meta(crc32, length);
     meta.set_region_id(ctx.get_region_id());
@@ -97,11 +107,18 @@ fn test_write_sst() {
 }
 
 #[test]
-fn test_write_sst_when_disk_full() {
+fn test_write_sst_when_resource_full() {
     set_disk_status(DiskUsage::AlmostFull);
     let (_cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client();
     run_test_write_sst(ctx, tikv, import, "DiskSpaceNotEnough");
     set_disk_status(DiskUsage::Normal);
+
+    fail::cfg("mock_memory_usage", "return(10307921510)").unwrap(); // 9.5G
+    fail::cfg("mock_memory_limit", "return(10737418240)").unwrap(); // 10G
+    let (_cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client();
+    run_test_write_sst(ctx, tikv, import, "Memory usage too high");
+    fail::remove("mock_memory_usage");
+    fail::remove("mock_memory_limit");
 }
 
 #[test]
@@ -180,6 +197,14 @@ fn test_switch_mode_v2() {
     let mut cfg = TikvConfig::default();
     cfg.server.grpc_concurrency = 1;
     cfg.rocksdb.writecf.disable_auto_compactions = true;
+    // `ingest_maybe_slowdown_writes` uses `stop_writes_trigger` to check if ingest
+    // may cause a write stall. We also set `slowdown_writes_trigger` because
+    // RocksDB ignores `stop_writes_trigger` when it is smaller than
+    // `slowdown_writes_trigger`
+    cfg.rocksdb.defaultcf.level0_slowdown_writes_trigger = 4;
+    cfg.rocksdb.writecf.level0_slowdown_writes_trigger = 4;
+    cfg.rocksdb.defaultcf.level0_stop_writes_trigger = Some(4);
+    cfg.rocksdb.writecf.level0_stop_writes_trigger = Some(4);
     cfg.raft_store.right_derive_when_split = true;
     // cfg.rocksdb.writecf.level0_slowdown_writes_trigger = Some(2);
     let (mut cluster, mut ctx, _tikv, import) = open_cluster_and_tikv_import_client_v2(Some(cfg));
@@ -666,7 +691,17 @@ fn test_suspend_import() {
 
 #[test]
 fn test_concurrent_ingest_admission_control() {
-    let (_cluster, ctx, _tikv, import) = new_cluster_and_tikv_import_client();
+    let mut cfg = TikvConfig::default();
+    cfg.server.grpc_concurrency = 1;
+    // `ingest_maybe_slowdown_writes` uses `stop_writes_trigger` to check if ingest
+    // may cause a write stall. We also set `slowdown_writes_trigger` because
+    // RocksDB ignores `stop_writes_trigger` when it is smaller than
+    // `slowdown_writes_trigger`
+    cfg.rocksdb.defaultcf.level0_slowdown_writes_trigger = 4;
+    cfg.rocksdb.writecf.level0_slowdown_writes_trigger = 4;
+    cfg.rocksdb.defaultcf.level0_stop_writes_trigger = Some(4);
+    cfg.rocksdb.writecf.level0_stop_writes_trigger = Some(4);
+    let (_cluster, ctx, _tikv, import) = open_cluster_and_tikv_import_client(Some(cfg));
     let temp_dir = Builder::new().prefix("test_ingest_sst").tempdir().unwrap();
     let sst_path = temp_dir.path().join("test.sst");
     let mut metas = Vec::new();
@@ -709,4 +744,58 @@ fn test_concurrent_ingest_admission_control() {
             .iter()
             .any(|e| e.contains("too many sst files are ingesting"))
     );
+}
+
+#[track_caller]
+fn check_sst_num(dir: &Path, expected_count: usize) {
+    let mut real_count = 0;
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_name().to_str().unwrap().ends_with(".sst") {
+            real_count += 1;
+        }
+    }
+    assert_eq!(
+        real_count, expected_count,
+        "expected: {}, got: {}",
+        expected_count, real_count
+    );
+}
+
+#[test]
+fn test_force_partition_range() {
+    let (cluster, ctx, _tikv, import) = new_cluster_and_tikv_import_client();
+    let temp_dir = Builder::new()
+        .prefix("test_force_partition_range")
+        .tempdir()
+        .unwrap();
+    let sst_path = temp_dir.path().join("test.sst");
+
+    // ingest a sst with a big range
+    let (mut meta, data) =
+        gen_sst_file_with_tidb_kvs(sst_path.clone(), &[(b"a", b"a"), (b"z", b"z")], None);
+    meta.set_region_id(ctx.get_region_id());
+    meta.set_region_epoch(ctx.get_region_epoch().clone());
+    meta.set_cf_name("write".to_string());
+    send_upload_sst(&import, &meta, &data).unwrap();
+    ingest_sst(&import, ctx, meta);
+
+    let db_path = cluster.paths[0].path().join("db");
+    println!("{:?}", &db_path);
+    check_sst_num(&db_path, 1);
+
+    let mut partition_range_req = AddPartitionRangeRequest::default();
+    let mut range = Range::default();
+    // set a smaller force partition range to trigger compact.
+    range.set_start(b"b".to_vec());
+    range.set_end(b"c".to_vec());
+    partition_range_req.set_range(range);
+    partition_range_req.set_ttl_seconds(3600);
+    import
+        .add_force_partition_range(&partition_range_req)
+        .unwrap();
+
+    // force partition should trigger a manual compact and split the original sst to
+    // 2 sst.
+    check_sst_num(&db_path, 2);
 }

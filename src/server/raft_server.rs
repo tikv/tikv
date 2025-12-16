@@ -174,7 +174,7 @@ where
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         disk_check_runner: DiskCheckRunner,
         grpc_service_mgr: GrpcServiceManager,
-        safe_point: Arc<AtomicU64>,
+        gc_safe_point: Arc<AtomicU64>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -214,7 +214,7 @@ where
             causal_ts_provider,
             disk_check_runner,
             grpc_service_mgr,
-            safe_point,
+            gc_safe_point,
         )?;
 
         Ok(())
@@ -234,6 +234,10 @@ where
     /// start.
     pub fn refresh_config_scheduler(&mut self) -> Scheduler<RefreshConfigTask> {
         self.system.refresh_config_scheduler()
+    }
+
+    pub fn pd_scheduler(&self) -> Scheduler<PdTask<EK>> {
+        self.system.pd_scheduler()
     }
 
     /// Gets a transmission end of a channel which is used to send `Msg` to the
@@ -425,7 +429,7 @@ where
                     }
                 },
                 // TODO: should we clean region for other errors too?
-                Err(e) => error!(?e; "bootstrap cluster"; "cluster_id" => self.cluster_id,),
+                Err(e) => warn!("bootstrap cluster"; "cluster_id" => self.cluster_id, "err" => ?e),
             }
             retry += 1;
             thread::sleep(CHECK_CLUSTER_BOOTSTRAPPED_RETRY_INTERVAL);
@@ -464,7 +468,7 @@ where
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         disk_check_runner: DiskCheckRunner,
         grpc_service_mgr: GrpcServiceManager,
-        safe_point: Arc<AtomicU64>,
+        gc_safe_point: Arc<AtomicU64>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -500,7 +504,7 @@ where
             causal_ts_provider,
             disk_check_runner,
             grpc_service_mgr,
-            safe_point,
+            gc_safe_point,
         )?;
         Ok(())
     }

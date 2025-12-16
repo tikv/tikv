@@ -11,6 +11,7 @@ pub struct ManualCompactionOptions {
     pub exclusive_manual: bool,
     pub max_subcompactions: u32,
     pub bottommost_level_force: bool,
+    pub check_range_overlap_on_bottom_level: bool,
 }
 
 impl ManualCompactionOptions {
@@ -23,7 +24,12 @@ impl ManualCompactionOptions {
             exclusive_manual,
             max_subcompactions,
             bottommost_level_force,
+            check_range_overlap_on_bottom_level: false,
         }
+    }
+
+    pub fn set_check_range_overlap_on_bottom_level(&mut self, v: bool) {
+        self.check_range_overlap_on_bottom_level = v;
     }
 }
 
@@ -96,6 +102,8 @@ pub trait CompactExt: CfNamesExt {
 }
 
 pub trait CompactedEvent: Send {
+    fn get_key_range(&self) -> (Vec<u8>, Vec<u8>);
+
     fn total_bytes_declined(&self) -> u64;
 
     fn is_size_declining_trivial(&self, split_check_diff: u64) -> bool;

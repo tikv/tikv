@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::HashSet, sync::Arc};
+use std::{collections::HashSet, mem, sync::Arc};
 
 use async_trait::async_trait;
 use tidb_query_common::{storage::IntervalRange, Result};
@@ -53,6 +53,11 @@ fn get_schema_from_exprs(child_schema: &[FieldType], exprs: &[RpnExpression]) ->
 }
 
 impl<Src: BatchExecutor> BatchProjectionExecutor<Src> {
+    #[cfg(test)]
+    pub fn into_child(self) -> Src {
+        self.src
+    }
+
     #[cfg(test)]
     pub fn new_for_test(src: Src, exprs: Vec<RpnExpression>) -> Self {
         let schema = get_schema_from_exprs(src.schema(), &exprs);
@@ -150,6 +155,19 @@ impl<Src: BatchExecutor> BatchExecutor for BatchProjectionExecutor<Src> {
     }
 
     #[inline]
+    fn intermediate_schema(&self, index: usize) -> Result<&[FieldType]> {
+        self.src.intermediate_schema(index)
+    }
+
+    #[inline]
+    fn consume_and_fill_intermediate_results(
+        &mut self,
+        results: &mut [Vec<BatchExecuteResult>],
+    ) -> Result<()> {
+        self.src.consume_and_fill_intermediate_results(results)
+    }
+
+    #[inline]
     async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         let mut src_result = self.src.next_batch(scan_rows).await;
         let child_schema = self.src.schema();
@@ -161,6 +179,8 @@ impl<Src: BatchExecutor> BatchExecutor for BatchProjectionExecutor<Src> {
             ..
         } = src_result;
         let logical_len = logical_rows.len();
+        let extra_common_keys = src_result.physical_columns.take_extra_common_handle_keys();
+        let mut new_extra_common_keys = None;
 
         if is_drained.is_ok() && logical_len != 0 {
             if self.no_dup_column_ref_only {
@@ -174,6 +194,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchProjectionExecutor<Src> {
                         .push(LazyBatchColumn::from(VectorValue::Int(vec![None].into())));
                     eval_result.push(src_result.physical_columns.swap_remove(*offset));
                 }
+                new_extra_common_keys = extra_common_keys;
             } else {
                 for expr in &self.exprs {
                     match expr.eval(
@@ -203,6 +224,13 @@ impl<Src: BatchExecutor> BatchExecutor for BatchProjectionExecutor<Src> {
                 }
 
                 if !self.exprs.is_empty() && is_drained.is_ok() {
+                    if let Some(mut keys) = extra_common_keys {
+                        let mut new_keys = Vec::with_capacity(logical_len);
+                        for &idx in logical_rows.iter() {
+                            new_keys.push(mem::take(&mut keys[idx]));
+                        }
+                        new_extra_common_keys = Some(new_keys);
+                    }
                     logical_rows.clear();
                     logical_rows.extend(0..logical_len);
                 }
@@ -210,8 +238,12 @@ impl<Src: BatchExecutor> BatchExecutor for BatchProjectionExecutor<Src> {
         }
 
         warnings.merge(&mut self.context.warnings);
+        let physical_columns = LazyBatchColumnVec::with_columns_and_extra_common_handle_keys(
+            eval_result,
+            new_extra_common_keys,
+        );
         BatchExecuteResult {
-            physical_columns: LazyBatchColumnVec::from(eval_result),
+            physical_columns,
             logical_rows,
             is_drained,
             warnings,
@@ -616,5 +648,115 @@ mod tests {
         let r: BatchExecuteResult = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         r.is_drained.unwrap_err();
+    }
+
+    #[test]
+    fn test_extra_handle_columns() {
+        fn make_exec(exprs: Vec<RpnExpression>) -> BatchProjectionExecutor<MockExecutor> {
+            let mut src_exec = make_src_executor_using_fixture_1();
+            src_exec.set_extra_common_handle_keys(vec![
+                vec![
+                    b"h0".to_vec(),
+                    b"h1".to_vec(),
+                    b"h2".to_vec(),
+                    b"h3".to_vec(),
+                    b"h4".to_vec(),
+                ],
+                vec![b"h10".to_vec()],
+                vec![b"h20".to_vec(), b"h21".to_vec()],
+            ]);
+
+            BatchProjectionExecutor::new_for_test(src_exec, exprs)
+        }
+
+        // no_dup_column_ref_only = true
+        let mut exec = make_exec(vec![
+            RpnExpressionBuilder::new_for_test()
+                .push_column_ref_for_test(0)
+                .build_for_test(),
+        ]);
+        let mut r = block_on(exec.next_batch(1));
+        assert_eq!(&r.logical_rows, &[2, 0]);
+        assert_eq!(r.physical_columns.columns_len(), 1);
+        assert_eq!(
+            r.physical_columns[0].decoded().to_int_vec(),
+            vec![None, None, Some(1), None, Some(5)]
+        );
+        assert!(r.is_drained.unwrap().is_remain());
+        assert_eq!(
+            r.physical_columns.take_extra_common_handle_keys(),
+            Some(vec![
+                b"h0".to_vec(),
+                b"h1".to_vec(),
+                b"h2".to_vec(),
+                b"h3".to_vec(),
+                b"h4".to_vec()
+            ])
+        );
+
+        let mut r = block_on(exec.next_batch(1));
+        assert!(r.logical_rows.is_empty());
+        assert_eq!(r.physical_columns.columns_len(), 0);
+        assert!(r.is_drained.unwrap().is_remain());
+        assert_eq!(
+            r.physical_columns
+                .take_extra_common_handle_keys()
+                .unwrap_or(vec![]),
+            Vec::<Vec<u8>>::new(),
+        );
+
+        let mut r = block_on(exec.next_batch(1));
+        assert_eq!(&r.logical_rows, &[1]);
+        assert_eq!(r.physical_columns.columns_len(), 1);
+        assert_eq!(
+            r.physical_columns[0].decoded().to_int_vec(),
+            vec![Some(1), None]
+        );
+        assert!(r.is_drained.unwrap().stop());
+        assert_eq!(
+            r.physical_columns.take_extra_common_handle_keys(),
+            Some(vec![b"h20".to_vec(), b"h21".to_vec()])
+        );
+
+        // no_dup_column_ref_only = false
+        let mut exec = make_exec(vec![
+            RpnExpressionBuilder::new_for_test()
+                .push_constant_for_test(1i64)
+                .build_for_test(),
+        ]);
+
+        let mut r = block_on(exec.next_batch(1));
+        assert_eq!(&r.logical_rows, &[0, 1]);
+        assert_eq!(r.physical_columns.columns_len(), 1);
+        assert_eq!(
+            r.physical_columns[0].decoded().to_int_vec(),
+            vec![Some(1), Some(1)]
+        );
+        assert!(r.is_drained.unwrap().is_remain());
+        assert_eq!(
+            r.physical_columns.take_extra_common_handle_keys(),
+            Some(vec![b"h2".to_vec(), b"h0".to_vec()])
+        );
+
+        let mut r = block_on(exec.next_batch(1));
+        assert!(r.logical_rows.is_empty());
+        assert_eq!(r.physical_columns.columns_len(), 0);
+        assert!(r.is_drained.unwrap().is_remain());
+        assert_eq!(
+            r.physical_columns
+                .take_extra_common_handle_keys()
+                .unwrap_or(vec![]),
+            Vec::<Vec<u8>>::new(),
+        );
+
+        let mut r = block_on(exec.next_batch(1));
+        assert_eq!(&r.logical_rows, &[0]);
+        assert_eq!(r.physical_columns.columns_len(), 1);
+        assert_eq!(r.physical_columns[0].decoded().to_int_vec(), vec![Some(1)]);
+        assert!(r.is_drained.unwrap().stop());
+        assert_eq!(
+            r.physical_columns.take_extra_common_handle_keys(),
+            Some(vec![b"h21".to_vec()])
+        );
     }
 }

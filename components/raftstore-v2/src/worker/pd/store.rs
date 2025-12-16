@@ -1,6 +1,9 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp, sync::Arc};
+use std::{
+    cmp,
+    sync::{atomic::Ordering, Arc},
+};
 
 use collections::{HashMap, HashSet};
 use engine_traits::{KvEngine, RaftEngine};
@@ -268,6 +271,8 @@ where
         // Update slowness statistics
         self.update_slowness_in_store_stats(&mut stats, last_query_sum);
 
+        stats.set_is_stopping(self.graceful_shutdown_state.load(Ordering::SeqCst));
+
         let resp = self.pd_client.store_heartbeat(stats, store_report, None);
         let logger = self.logger.clone();
         let router = self.router.clone();
@@ -366,7 +371,7 @@ where
                     }
                 }
                 Err(e) => {
-                    error!(logger, "store heartbeat failed"; "err" => ?e);
+                    warn!(logger, "store heartbeat failed"; "err" => ?e);
                 }
             }
         };

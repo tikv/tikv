@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use engine_traits::{CompactExt, CF_DEFAULT, CF_WRITE};
+use engine_traits::{CompactExt, ManualCompactionOptions, CF_DEFAULT, CF_WRITE};
 use file_system::{set_io_type, IoType};
 use futures::{sink::SinkExt, stream::TryStreamExt, FutureExt, TryFutureExt};
 use grpcio::{
@@ -25,10 +25,11 @@ use kvproto::{
 };
 use raftstore::{
     coprocessor::{RegionInfo, RegionInfoProvider},
-    store::util::is_epoch_stale,
+    store::{util::is_epoch_stale, ForcePartitionRangeManager},
     RegionInfoAccessor,
 };
 use raftstore_v2::StoreMeta;
+use rand::Rng;
 use resource_control::{with_resource_limiter, ResourceGroupManager};
 use sst_importer::{
     error_inc, metrics::*, sst_importer::DownloadExt, Config, ConfigManager, Error, Result,
@@ -41,7 +42,9 @@ use tikv_util::{
     resizable_threadpool::{DeamonRuntimeHandle, ResizableRuntime},
     sys::{
         disk::{get_disk_status, DiskUsage},
+        get_global_memory_usage,
         thread::ThreadBuildWrapper,
+        SysQuota,
     },
     time::{Instant, Limiter},
     HandyRwLock,
@@ -92,6 +95,69 @@ const WRITER_GC_INTERVAL: Duration = Duration::from_secs(300);
 const SUSPEND_REQUEST_MAX_SECS: u64 = // 6h
     6 * 60 * 60;
 
+// the default TTL seconds of force partition range.
+// the TTL is to ensure all force partition ranges can be
+// cleaned up eventually.
+const DEFAULT_FORCE_PARTITION_RANGE_TTL_SECONDS: u64 = 3600;
+/// Check if the system has enough resources for import tasks
+const REJECT_SERVE_MEMORY_USAGE: u64 = 1024 * 1024 * 1024; //1G
+// consider block cache and raft store. the memory usage will be
+const HIGH_IMPORT_MEMORY_WATER_RATIO: f64 = 0.95;
+
+/// Check if the system has enough resources for import tasks
+async fn check_import_resources(mem_limit: u64) -> Result<()> {
+    #[cfg(feature = "failpoints")]
+    let mem_limit = (|| {
+        fail_point!("mock_memory_limit", |t| {
+            t.unwrap().parse::<u64>().unwrap()
+        });
+        mem_limit
+    })();
+    #[cfg(not(feature = "failpoints"))]
+    let mem_limit = mem_limit;
+
+    // these error(memory or disk) cannot be recover at a short time,
+    // in case client retry immediately, sleep for a while
+    async fn sleep_with_jitter() {
+        let jitter = rand::thread_rng().gen_range(1000, 2000);
+        tokio::time::sleep(Duration::from_millis(jitter)).await;
+    }
+    // Check disk space first
+    if get_disk_status(0) != DiskUsage::Normal {
+        sleep_with_jitter().await;
+        return Err(Error::DiskSpaceNotEnough);
+    }
+
+    let usage = get_global_memory_usage();
+
+    if mem_limit == 0 || mem_limit < usage {
+        // make it through when cannot get correct memory
+        warn!(
+            "Memory limit isn't correct. skip next check, limit is {} bytes, usage is {} bytes",
+            mem_limit, usage
+        );
+        return Ok(());
+    }
+
+    let available_memory = mem_limit - usage;
+    let min_required_memory = std::cmp::min(
+        REJECT_SERVE_MEMORY_USAGE,
+        ((1.0 - HIGH_IMPORT_MEMORY_WATER_RATIO) * mem_limit as f64) as u64,
+    );
+
+    // Reject ONLY if BOTH:
+    // - Available memory is below REJECT_SERVE_MEMORY_USAGE
+    // - Memory usage ratio is 95%+
+    if available_memory < min_required_memory {
+        sleep_with_jitter().await;
+        return Err(Error::ResourceNotEnough(format!(
+            "Memory usage too high, usage: {} bytes, mem limit {} bytes",
+            usage, mem_limit
+        )));
+    }
+    Ok(())
+}
+
 fn transfer_error(err: storage::Error) -> ImportPbError {
     let mut e = ImportPbError::default();
     if let Some(region_error) = extract_region_error_from_error(&err) {
@@ -140,6 +206,9 @@ pub struct ImportSstService<E: Engine> {
 
     // When less than now, don't accept any requests.
     suspend: Arc<SuspendDeadline>,
+
+    force_partition_range_mgr: ForcePartitionRangeManager,
+    mem_limit: u64,
 }
 
 struct RequestCollector {
@@ -326,6 +395,7 @@ impl<E: Engine> ImportSstService<E> {
         store_meta: Option<Arc<Mutex<StoreMeta<E::Local>>>>,
         resource_manager: Option<Arc<ResourceGroupManager>>,
         region_info_accessor: Arc<RegionInfoAccessor>,
+        force_partition_range_mgr: ForcePartitionRangeManager,
     ) -> Self {
         let eng = Arc::new(Mutex::new(engine.clone()));
         let create_tokio_runtime = move |thread_count: usize, thread_name: &str| {
@@ -376,6 +446,7 @@ impl<E: Engine> ImportSstService<E> {
         // Drop the initial pool to accept new tasks
         threads_clone.lock().unwrap().adjust_with(num_threads);
 
+        let mem_limit = SysQuota::memory_limit_in_bytes();
         ImportSstService {
             cfg: cfg_mgr,
             tablets,
@@ -392,6 +463,8 @@ impl<E: Engine> ImportSstService<E> {
             store_meta,
             resource_manager,
             suspend: Arc::default(),
+            force_partition_range_mgr,
+            mem_limit,
         }
     }
 
@@ -541,6 +614,7 @@ macro_rules! impl_write {
         ) {
             let import = self.importer.clone();
             let tablets = self.tablets.clone();
+            let mem_limit = self.mem_limit;
             let region_info_accessor = self.region_info_accessor.clone();
             let (rx, buf_driver) =
                 create_stream_with_buffer(stream, self.cfg.rl().stream_channel_window);
@@ -612,6 +686,10 @@ macro_rules! impl_write {
                             );
                         }
                     };
+                    if let Err(e) = check_import_resources(mem_limit).await {
+                        warn!("Write failed due to not enough resource {:?}", e);
+                        return (Err(e), Some(rx));
+                    }
 
                     let writer = match import.$writer_fn(&*tablet, meta) {
                         Ok(w) => w,
@@ -624,11 +702,6 @@ macro_rules! impl_write {
                         .try_fold(
                             (writer, resource_limiter),
                             |(mut writer, limiter), req| async move {
-                                if get_disk_status(0) != DiskUsage::Normal {
-                                    warn!("Upload failed due to not enough disk space");
-                                    return Err(Error::DiskSpaceNotEnough);
-                                }
-
                                 let batch = match req.chunk {
                                     Some($chunk_ty::Batch(b)) => b,
                                     _ => return Err(Error::InvalidChunk),
@@ -744,10 +817,10 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             match handle.await.map_err(|e| Error::Io(e.into())) {
                 Ok(res) => match res {
                     Ok(_) => info!("switch mode"; "mode" => ?req_mode),
-                    Err(ref e) => error!(%*e; "switch mode failed"; "mode" => ?req_mode,),
+                    Err(ref e) => warn!("switch mode failed"; "mode" => ?req_mode, "err" => %e),
                 },
                 Err(ref e) => {
-                    error!(%*e; "joining the background job failed"; "mode" => ?req_mode,)
+                    warn!("joining the background job failed"; "mode" => ?req_mode, "err" => %e)
                 }
             }
             defer! { IMPORT_RPC_COUNT.with_label_values(&[label]).dec() }
@@ -766,6 +839,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let label = "upload";
         let timer = Instant::now_coarse();
         let import = self.importer.clone();
+        let mem_limit = self.mem_limit;
         let (rx, buf_driver) =
             create_stream_with_buffer(stream, self.cfg.rl().stream_channel_window);
         let mut map_rx = rx.map_err(Error::from);
@@ -780,13 +854,12 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                     _ => return Err(Error::InvalidChunk),
                 };
                 let file = import.create(meta)?;
+                if let Err(e) = check_import_resources(mem_limit).await {
+                    warn!("Upload failed due to not enough resource {:?}", e);
+                    return Err(e);
+                }
                 let mut file = rx
                     .try_fold(file, |mut file, chunk| async move {
-                        if get_disk_status(0) != DiskUsage::Normal {
-                            warn!("Upload failed due to not enough disk space");
-                            return Err(Error::DiskSpaceNotEnough);
-                        }
-
                         let start = Instant::now_coarse();
                         let data = chunk.get_data();
                         if data.is_empty() {
@@ -849,6 +922,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let start = Instant::now();
         let importer = self.importer.clone();
         let limiter = self.limiter.clone();
+        let mem_limit = self.mem_limit;
         let max_raft_size = self.raft_entry_max_size.0 as usize;
         let applier = self.writer.clone();
 
@@ -860,9 +934,13 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 .observe(start.saturating_elapsed().as_secs_f64());
 
             let mut resp = ApplyResponse::default();
-            if get_disk_status(0) != DiskUsage::Normal {
-                resp.set_error(Error::DiskSpaceNotEnough.into());
-                return send_rpc_response!(Ok(resp), sink, label, start);
+            match check_import_resources(mem_limit).await {
+                Ok(()) => (),
+                Err(e) => {
+                    resp.set_error(e.into());
+                    crate::send_rpc_response!(Ok(resp), sink, label, start);
+                    return;
+                }
             }
 
             match Self::do_apply(req, importer, applier, limiter, max_raft_size).await {
@@ -887,9 +965,24 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let label = "download";
         IMPORT_RPC_COUNT.with_label_values(&[label]).inc();
         let timer = Instant::now_coarse();
+
+        // download method only handles single file downloads
+        // Check that this is indeed a single-file request
+        if !req.get_ssts().is_empty() {
+            let error = sst_importer::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "download method only accepts single-file requests, use batch_download for multi-file requests",
+            ));
+            let mut resp = DownloadResponse::default();
+            resp.set_error(error.into());
+            let _ = sink
+                .success(resp)
+                .map_err(|e| warn!("send rpc response"; "err" => %e));
+            return;
+        }
         let importer = Arc::clone(&self.importer);
         let limiter = self.limiter.clone();
-        let region_id = req.get_sst().get_region_id();
+        let mem_limit = self.mem_limit;
         let tablets = self.tablets.clone();
         let start = Instant::now();
         let resource_limiter = self.resource_manager.as_ref().and_then(|r| {
@@ -907,10 +1000,15 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             sst_importer::metrics::IMPORTER_DOWNLOAD_DURATION
                 .with_label_values(&["queue"])
                 .observe(start.saturating_elapsed().as_secs_f64());
-            if get_disk_status(0) != DiskUsage::Normal {
-                let mut resp = DownloadResponse::default();
-                resp.set_error(Error::DiskSpaceNotEnough.into());
-                return crate::send_rpc_response!(Ok(resp), sink, label, timer);
+
+            let mut resp = DownloadResponse::default();
+            match check_import_resources(mem_limit).await {
+                Ok(()) => (),
+                Err(e) => {
+                    resp.set_error(e.into());
+                    crate::send_rpc_response!(Ok(resp), sink, label, timer);
+                    return;
+                }
             }
 
             // FIXME: download() should be an async fn, to allow BR to cancel
@@ -923,6 +1021,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 .into_option()
                 .filter(|c| c.cipher_type != EncryptionMethod::Plaintext);
 
+            let region_id = req.get_sst().get_region_id();
             let tablet = match tablets.get(region_id) {
                 Some(tablet) => tablet,
                 None => {
@@ -932,7 +1031,8 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                     ));
                     let mut resp = DownloadResponse::default();
                     resp.set_error(error.into());
-                    return crate::send_rpc_response!(Ok(resp), sink, label, timer);
+                    crate::send_rpc_response!(Ok(resp), sink, label, timer);
+                    return;
                 }
             };
 
@@ -950,9 +1050,136 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                         .req_type(req.get_request_type()),
                 ),
                 resource_limiter,
-            );
+            )
+            .await;
             let mut resp = DownloadResponse::default();
-            match res.await {
+            match res {
+                Ok(range) => match range {
+                    Some(r) => resp.set_range(r),
+                    None => resp.set_is_empty(true),
+                },
+                Err(e) => resp.set_error(e.into()),
+            }
+            crate::send_rpc_response!(Ok(resp), sink, label, timer);
+        };
+
+        self.threads.spawn(handle_task);
+    }
+
+    /// Batch downloads multiple files and performs key-rewrite for later
+    /// ingesting. This method is specifically designed for multi-file
+    /// downloads with merging. NOTE: This method will be activated once
+    /// kvproto defines the batch_download RPC.
+    #[allow(dead_code)]
+    fn batch_download(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        req: DownloadRequest,
+        sink: UnarySink<DownloadResponse>,
+    ) {
+        let label = "batch_download";
+        IMPORT_RPC_COUNT.with_label_values(&[label]).inc();
+        let timer = Instant::now_coarse();
+
+        // batch_download specifically handles multi-file downloads
+        // Check that this is indeed a multi-file request
+        if req.get_ssts().is_empty() {
+            let error = sst_importer::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "batch_download method only accepts multi-file requests, use download for single-file requests",
+            ));
+            let mut resp = DownloadResponse::default();
+            resp.set_error(error.into());
+            let _ = sink
+                .success(resp)
+                .map_err(|e| warn!("send rpc response"; "err" => %e));
+            return;
+        }
+        let importer = Arc::clone(&self.importer);
+        let limiter = self.limiter.clone();
+        let tablets = self.tablets.clone();
+        let start = Instant::now();
+        let resource_limiter = self.resource_manager.as_ref().and_then(|r| {
+            r.get_background_resource_limiter(
+                req.get_context()
+                    .get_resource_control_context()
+                    .get_resource_group_name(),
+                req.get_context().get_request_source(),
+            )
+        });
+
+        let handle_task = async move {
+            defer! { IMPORT_RPC_COUNT.with_label_values(&[label]).dec() }
+            // Records how long the batch download task waits to be scheduled.
+            sst_importer::metrics::IMPORTER_DOWNLOAD_DURATION
+                .with_label_values(&["queue"])
+                .observe(start.saturating_elapsed().as_secs_f64());
+
+            // FIXME: batch_download() should be an async fn, to allow BR to cancel
+            // a download task.
+            // Unfortunately, this currently can't happen because the S3Storage
+            // is not Send + Sync. See the documentation of S3Storage for reason.
+            let cipher = req
+                .cipher_info
+                .to_owned()
+                .into_option()
+                .filter(|c| c.cipher_type != EncryptionMethod::Plaintext);
+
+            let basic_meta = match download_request_dispatcher(&req) {
+                Ok(Some(meta)) => meta,
+                Ok(None) => {
+                    // This should never happen since we've already checked ssts is not empty
+                    let error = sst_importer::Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "internal error: download_request_dispatcher returned None despite non-empty ssts",
+                    ));
+                    let mut resp = DownloadResponse::default();
+                    resp.set_error(error.into());
+                    crate::send_rpc_response!(Ok(resp), sink, label, timer);
+                    return;
+                }
+                Err(error) => {
+                    let mut resp = DownloadResponse::default();
+                    resp.set_error(error.into());
+                    crate::send_rpc_response!(Ok(resp), sink, label, timer);
+                    return;
+                }
+            };
+
+            let region_id = basic_meta.get_region_id();
+            let tablet = match tablets.get(region_id) {
+                Some(tablet) => tablet,
+                None => {
+                    let error = sst_importer::Error::Engine(box_err!(
+                        "region {} not found, maybe it's not a replica of this store",
+                        region_id
+                    ));
+                    let mut resp = DownloadResponse::default();
+                    resp.set_error(error.into());
+                    crate::send_rpc_response!(Ok(resp), sink, label, timer);
+                    return;
+                }
+            };
+
+            let res = with_resource_limiter(
+                importer.download_files_ext(
+                    &basic_meta,
+                    req.get_ssts(),
+                    req.get_storage_backend(),
+                    req.get_rewrite_rule(),
+                    cipher,
+                    limiter,
+                    tablet.into_owned(),
+                    DownloadExt::default()
+                        .cache_key(req.get_storage_cache_id())
+                        .req_type(req.get_request_type()),
+                ),
+                resource_limiter,
+            )
+            .await;
+
+            let mut resp = DownloadResponse::default();
+            match res {
                 Ok(range) => match range {
                     Some(r) => resp.set_range(r),
                     None => resp.set_is_empty(true),
@@ -1246,6 +1473,110 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         resp.set_already_suspended(suspended);
         ctx.spawn(async move { send_rpc_response!(Ok(resp), sink, label, timer) });
     }
+
+    fn add_force_partition_range(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        req: AddPartitionRangeRequest,
+        sink: UnarySink<AddPartitionRangeResponse>,
+    ) {
+        let label = "add_force_partition_range";
+        let timer = Instant::now_coarse();
+        let kv_engine = self.engine.kv_engine();
+        let force_partition_range_mgr = self.force_partition_range_mgr.clone();
+
+        let handle_task = async move {
+            let resp = AddPartitionRangeResponse::default();
+            let engine = if let Some(eng) = kv_engine {
+                eng
+            } else {
+                info!("ignore add_force_partition_range request on raftstore-v2 cluster");
+                // engine is none means this is raftstore-v2, then we can just return.
+                send_rpc_response!(Ok(resp), sink, label, timer);
+                return;
+            };
+            let start = keys::data_key(Key::from_raw(req.get_range().get_start()).as_encoded());
+            let end = keys::data_end_key(Key::from_raw(req.get_range().get_end()).as_encoded());
+            let mut ttl_seconds = req.get_ttl_seconds();
+            if ttl_seconds == 0 {
+                // default value if the ttl is not set, 1h is big enough for most cases.
+                ttl_seconds = DEFAULT_FORCE_PARTITION_RANGE_TTL_SECONDS;
+            }
+            if start >= end {
+                send_rpc_response!(
+                    Err(Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!(
+                            "start keys must be smaller than end key, start: {:?}, end: {:?}",
+                            req.get_range().get_start(),
+                            req.get_range().get_end()
+                        )
+                    ))),
+                    sink,
+                    label,
+                    timer
+                );
+                return;
+            }
+
+            let added =
+                force_partition_range_mgr.add_range(start.clone(), end.clone(), ttl_seconds);
+
+            // here, we don't compact the whole range directly because it's possible that
+            // the task is restart from a checkpoint, thus, there may be already
+            // many SST files, but there's no need to compact them. Instaed, we
+            // try to compact a range that won't overlap with any real data kv
+            // at both side of the range. These 2 ranges won't overlap with any real
+            // data kv, but can trigger a compact if a SST with huge range overlaps with the
+            // input range.
+            let mut start_next = req.get_range().get_start().to_owned();
+            start_next.push(0);
+            let start_next_data_key = keys::data_key(Key::from_raw(&start_next).as_encoded());
+            let mut end_next = req.get_range().get_end().to_owned();
+            end_next.push(0);
+            let end_next_data_key = keys::data_key(Key::from_raw(&end_next).as_encoded());
+            let mut opts = ManualCompactionOptions::new(false, 1, true);
+            opts.set_check_range_overlap_on_bottom_level(true);
+            for cf in [CF_WRITE, CF_DEFAULT] {
+                for rg in [(&*start, &*start_next_data_key), (&end, &end_next_data_key)] {
+                    let start = Instant::now_coarse();
+                    let start_key = log_wrappers::Value::key(req.get_range().get_start());
+                    let end_key = log_wrappers::Value::key(req.get_range().get_end());
+                    let res = engine.compact_range_cf(cf, Some(rg.0), Some(rg.1), opts.clone());
+                    let dur = start.saturating_elapsed();
+                    if let Err(e) = res {
+                        warn!("manual compact range failed"; "cf" => cf, "start" => ?start_key, "end" => ?end_key, "err" => ?e, "dur" => ?dur);
+                    } else {
+                        info!("manual compact range success"; "cf" => cf, "start" => ?start_key, "end" => ?end_key, "dur" => ?dur);
+                    }
+                }
+            }
+
+            info!("add force_partition range"; "start" => ?log_wrappers::Value::key(req.get_range().get_start()),
+                    "end" => ?log_wrappers::Value::key(req.get_range().get_end()), "ttl" => ttl_seconds, "added" => added);
+            send_rpc_response!(Ok(resp), sink, label, timer);
+        };
+
+        self.threads.spawn(handle_task);
+    }
+    fn remove_force_partition_range(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: RemovePartitionRangeRequest,
+        sink: UnarySink<RemovePartitionRangeResponse>,
+    ) {
+        let label = "remove_force_partition_range";
+        let timer = Instant::now_coarse();
+
+        let start = keys::data_key(Key::from_raw(req.get_range().get_start()).as_encoded());
+        let end = keys::data_end_key(Key::from_raw(req.get_range().get_end()).as_encoded());
+        let removed = self.force_partition_range_mgr.remove_range(&start, &end);
+        info!("remove force_partition range"; "start" => log_wrappers::Value::key(req.get_range().get_start()),
+                "end" => log_wrappers::Value::key(req.get_range().get_end()), "removed" => removed);
+
+        let resp = RemovePartitionRangeResponse::default();
+        ctx.spawn(async move { send_rpc_response!(Ok(resp), sink, label, timer) });
+    }
 }
 
 fn write_needs_restore(write: &[u8]) -> bool {
@@ -1271,6 +1602,72 @@ fn write_needs_restore(write: &[u8]) -> bool {
             false
         }
     }
+}
+
+fn download_request_dispatcher(req: &DownloadRequest) -> Result<Option<SstMeta>> {
+    if req.get_ssts().is_empty() {
+        return Ok(None);
+    }
+    let mut basic_meta = req.get_sst().clone();
+    for meta in req.get_ssts().values() {
+        if basic_meta.get_region_id() != meta.get_region_id() {
+            let error = sst_importer::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "region id mismatch in different sst meta, one is {} and another is {}",
+                    basic_meta.get_region_id(),
+                    meta.get_region_id()
+                ),
+            ));
+            return Err(error);
+        }
+        if basic_meta.get_region_epoch() != meta.get_region_epoch() {
+            let error = sst_importer::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "region epoch mismatch in different sst meta, one is {:?} and another is {:?}",
+                    basic_meta.get_region_epoch(),
+                    meta.get_region_epoch()
+                ),
+            ));
+            return Err(error);
+        }
+        if basic_meta.get_cf_name() != meta.get_cf_name() {
+            let error = sst_importer::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "cf mismatch in different sst meta, one is {} and another is {}",
+                    basic_meta.get_cf_name(),
+                    meta.get_cf_name()
+                ),
+            ));
+            return Err(error);
+        }
+        if basic_meta.get_end_key_exclusive() != meta.get_end_key_exclusive() {
+            let error = sst_importer::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "end key exclusive mismatch in different sst meta, one is {} and another is {}",
+                    basic_meta.get_end_key_exclusive(),
+                    meta.get_end_key_exclusive()
+                ),
+            ));
+            return Err(error);
+        }
+        if basic_meta.get_range().get_start() > meta.get_range().get_start() {
+            basic_meta
+                .mut_range()
+                .set_start(meta.get_range().get_start().to_owned());
+        }
+        if !basic_meta.get_range().get_end().is_empty()
+            && basic_meta.get_range().get_end() < meta.get_range().get_end()
+        {
+            basic_meta
+                .mut_range()
+                .set_end(meta.get_range().get_end().to_owned());
+        }
+    }
+    Ok(Some(basic_meta))
 }
 
 #[cfg(test)]
@@ -1476,7 +1873,7 @@ mod test {
     fn convert_write_batch_to_request_raftkv1(ctx: &Context, batch: WriteData) -> RaftCmdRequest {
         let reqs: Vec<Request> = batch.modifies.into_iter().map(Into::into).collect();
         let txn_extra = batch.extra;
-        let mut header = raftkv::new_request_header(ctx);
+        let mut header = raftkv::new_request_header(ctx, None);
         if batch.avoid_batch {
             header.set_uuid(uuid::Uuid::new_v4().as_bytes().to_vec());
         }
