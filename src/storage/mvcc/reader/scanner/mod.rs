@@ -1185,6 +1185,6 @@ mod tests {
 
         // meet lock, load_commit_ts is set, so even access_locks is set, it should be
         // ignored
-        assert!(scanner.next_entry().is_err());
+        scanner.next_entry().unwrap_err();
     }
 }
