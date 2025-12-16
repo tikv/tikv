@@ -203,10 +203,11 @@ impl ProvideCredentials for DefaultCredentialsProvider {
 
 #[cfg(test)]
 mod tests {
-    #[allow(unused_imports)]
-    use super::*;
     use aws_smithy_runtime_api::http::StatusCode;
     use aws_smithy_types::body::SdkBody;
+
+    #[allow(unused_imports)]
+    use super::*;
 
     #[test]
     fn test_is_retryable_response_error_5xx() {
@@ -242,7 +243,8 @@ mod tests {
 
     #[test]
     fn test_is_retryable_service_error_5xx() {
-        // Test that ServiceError with 5xx status codes are retryable (e.g., S3 SlowDown)
+        // Test that ServiceError with 5xx status codes are retryable (e.g., S3
+        // SlowDown)
         let response = HttpResponse::new(StatusCode::try_from(503).unwrap(), SdkBody::empty());
         let err = SdkError::<(), _>::service_error((), response);
         assert!(is_retryable(&err));
