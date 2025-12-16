@@ -1325,7 +1325,7 @@ mod tests {
         let effective_size = std::cmp::max(multi_part_size as u64, min_part_size);
         // Should be at least 6MB to fit in 10000 parts
         assert!(effective_size > multi_part_size as u64);
-        assert!((est_len + effective_size - 1) / effective_size <= MAX_PARTS);
+        assert!(est_len.div_ceil(effective_size) <= MAX_PARTS);
 
         // Test case 3: Very large file (100GB)
         let est_len = 100 * 1024 * 1024 * 1024u64; // 100GB
