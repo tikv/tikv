@@ -31,7 +31,7 @@ use tikv::{
 use tikv_util::{
     config::ReadableDuration,
     memory::MemoryQuota,
-    worker::{Builder, LazyWorker},
+    worker::{Builder, LazyWorker, Runnable},
     HandyRwLock,
 };
 use txn_types::TimeStamp;
