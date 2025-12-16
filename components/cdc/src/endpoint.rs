@@ -157,6 +157,7 @@ type InitCallback = Box<dyn FnOnce() + Send>;
 pub enum Validate {
     Region(u64, Box<dyn FnOnce(Option<&Delegate>) + Send>),
     OldValueCache(Box<dyn FnOnce(&OldValueCache) + Send>),
+    UnresolvedRegion(Box<dyn FnOnce(usize) + Send>),
 }
 
 pub enum Task {
@@ -286,6 +287,7 @@ impl fmt::Debug for Task {
             Task::Validate(validate) => match validate {
                 Validate::Region(region_id, _) => de.field("region_id", &region_id).finish(),
                 Validate::OldValueCache(_) => de.finish(),
+                Validate::UnresolvedRegion(_) => de.finish(),
             },
             Task::ChangeConfig(change) => de
                 .field("type", &"change_config")
@@ -712,19 +714,21 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         fail_point!("cdc_before_handle_deregister", |_| {});
         match deregister {
             Deregister::Conn(conn_id) => {
-                let conn = self.connections.remove(&conn_id).unwrap();
-                conn.iter_downstreams(|_, region_id, downstream_id, _| {
-                    self.deregister_downstream(region_id, downstream_id, None);
-                });
+                if let Some(conn) = self.connections.remove(&conn_id) {
+                    conn.iter_downstreams(|_, region_id, downstream_id, _| {
+                        self.deregister_downstream(region_id, downstream_id, None);
+                    });
+                }
             }
             Deregister::Request {
                 conn_id,
                 request_id,
             } => {
-                let conn = self.connections.get_mut(&conn_id).unwrap();
-                for (region_id, downstream) in conn.unsubscribe_request(request_id) {
-                    let err = Some(Error::Other("region not found".into()));
-                    self.deregister_downstream(region_id, downstream, err);
+                if let Some(conn) = self.connections.get_mut(&conn_id) {
+                    for (region_id, downstream) in conn.unsubscribe_request(request_id) {
+                        let err = Some(Error::Other("region not found".into()));
+                        self.deregister_downstream(region_id, downstream, err);
+                    }
                 }
             }
             Deregister::Region {
@@ -732,10 +736,11 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 request_id,
                 region_id,
             } => {
-                let conn = self.connections.get_mut(&conn_id).unwrap();
-                if let Some(downstream) = conn.unsubscribe(request_id, region_id) {
-                    let err = Some(Error::Other("region not found".into()));
-                    self.deregister_downstream(region_id, downstream, err);
+                if let Some(conn) = self.connections.get_mut(&conn_id) {
+                    if let Some(downstream) = conn.unsubscribe(request_id, region_id) {
+                        let err = Some(Error::Other("region not found".into()));
+                        self.deregister_downstream(region_id, downstream, err);
+                    }
                 }
             }
             Deregister::Downstream {
@@ -1287,6 +1292,9 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                 }
                 Validate::OldValueCache(validate) => {
                     validate(&self.old_value_cache);
+                }
+                Validate::UnresolvedRegion(validate) => {
+                    validate(self.unresolved_region_count);
                 }
             },
             Task::ChangeConfig(change) => self.on_change_cfg(change),

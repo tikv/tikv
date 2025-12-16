@@ -1350,6 +1350,7 @@ where
         let cdc_service = cdc::Service::new(
             servers.cdc_scheduler.clone(),
             servers.cdc_memory_quota.clone(),
+            Arc::new(self.core.background_worker.clone()),
         );
         if servers
             .server
