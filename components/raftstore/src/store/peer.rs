@@ -4320,9 +4320,13 @@ where
             }
         } else {
             fail_point!("propose_readindex_from_follower");
-            // reject read_index request on follower when the disk is full.
-            if poll_ctx.self_disk_usage != DiskUsage::Normal {
-                let msg = "reject follower read_index when self disk is full".to_string();
+            let request = req.get_requests();
+            let is_read_index_request =
+                request.len() == 1 && request[0].get_cmd_type() == CmdType::ReadIndex;
+            // reject read request(e.g. snapshot) on follower when the disk is full.
+            // allow readIndex request here because it can be used in other functions.
+            if !is_read_index_request && poll_ctx.self_disk_usage != DiskUsage::Normal {
+                let msg = "reject follower read request when self disk is full".to_string();
                 cmd_resp::bind_error(&mut err_resp, Error::DiskFull(vec![poll_ctx.store.id], msg));
                 cb.report_error(err_resp);
                 return false;

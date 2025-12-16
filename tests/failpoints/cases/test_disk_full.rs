@@ -60,7 +60,7 @@ macro_rules! ensure_disk_usage_is_reported {
     ($cluster:expr, $peer_id:expr, $store_id:expr, $region:expr) => {{
         let peer = new_peer($store_id, $peer_id);
         let key = $region.get_start_key();
-        let ch = async_read_on_peer($cluster, peer, $region.clone(), key, true, true);
+        let ch = async_read_index_on_peer($cluster, peer, $region.clone(), key, true);
         block_on_timeout(ch, Duration::from_secs(1)).unwrap();
     }};
 }
@@ -333,6 +333,7 @@ fn test_majority_disk_full() {
     opts.disk_full_opt = DiskFullOpt::AllowedOnAlmostFull;
     let ch = cluster.async_request_with_opts(put, opts).unwrap();
     let resp = block_on_timeout(ch, Duration::from_secs(10)).unwrap();
+    println!("{:?}", resp);
     assert_eq!(disk_full_stores(&resp), vec![2, 3]);
 
     // Peer 2 disk usage changes from already full to almost full.
