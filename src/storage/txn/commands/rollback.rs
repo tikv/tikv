@@ -86,9 +86,10 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Rollback {
 mod tests {
     use kvproto::kvrpcpb::PrewriteRequestPessimisticAction::*;
 
-    use crate::storage::{txn::tests::*, TestEngineBuilder};
-    use crate::storage::mvcc::tests::{
-        must_get_rollback_protected, must_load_shared_lock, must_unlocked,
+    use crate::storage::{
+        mvcc::tests::{must_get_rollback_protected, must_load_shared_lock, must_unlocked},
+        txn::tests::*,
+        TestEngineBuilder,
     };
 
     #[test]
@@ -125,15 +126,19 @@ mod tests {
 
         shared_lock = must_load_shared_lock(&mut engine, key);
         assert_eq!(shared_lock.shared_lock_num(), 1);
-        assert!(shared_lock
-            .find_shared_lock_txn(&start_ts1)
-            .unwrap()
-            .is_none());
-        assert!(shared_lock
-            .find_shared_lock_txn(&start_ts2)
-            .unwrap()
-            .is_some());
-        
+        assert!(
+            shared_lock
+                .find_shared_lock_txn(&start_ts1)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            shared_lock
+                .find_shared_lock_txn(&start_ts2)
+                .unwrap()
+                .is_some()
+        );
+
         must_rollback(&mut engine, key, start_ts2, false);
         must_unlocked(&mut engine, key);
 

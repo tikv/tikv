@@ -86,12 +86,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                 "multiple keys in a single request with allowed_lock_with_conflict set is not allowed"
             ))));
         }
-        if self.allow_lock_with_conflict {
-            let has_shared_lock = self.keys.iter().find(|(_, _, shared)| *shared).is_some();
-            if has_shared_lock {
-                panic!("allow_lock_with_conflict with shared lock is not supported: {:?}", self);
-            }
-        }
 
         let (start_ts, ctx, keys) = (self.start_ts, self.ctx, self.keys);
         let mut txn = MvccTxn::new(start_ts, context.concurrency_manager);

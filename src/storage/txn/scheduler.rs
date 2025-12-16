@@ -2045,6 +2045,9 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         lock_info: WriteResultLockInfo,
         cb: PessimisticLockKeyCallback,
     ) -> Box<LockWaitEntry> {
+        // the resuming process may contains lock info from other transactions, so
+        // this assertion need to be changed when force locking is compatible with
+        // shared locks.
         assert!(lock_info.lock_info_pb.lock_type != kvrpcpb::Op::SharedLock);
         Box::new(LockWaitEntry {
             key: lock_info.key,

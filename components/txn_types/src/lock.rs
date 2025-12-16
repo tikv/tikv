@@ -1515,6 +1515,16 @@ mod tests {
             IsolationLevel::Si,
         )
         .unwrap_err();
+
+        lock.lock_type = LockType::Shared;
+        Lock::check_ts_conflict(
+            Cow::Borrowed(&lock),
+            &key,
+            160.into(),
+            &empty,
+            IsolationLevel::Si,
+        )
+        .unwrap();
     }
 
     #[test]
