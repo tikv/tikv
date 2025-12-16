@@ -474,7 +474,7 @@ impl<'client> S3Uploader<'client> {
         est_len: u64,
     ) -> Result<(), UploadError> {
         let effective_part_size = if est_len > self.multi_part_size as u64 {
-            let min_part_size_for_limit = (est_len + MAX_PARTS - 1) / MAX_PARTS;
+            let min_part_size_for_limit = est_len.div_ceil(MAX_PARTS);
             let adjusted_size =
                 std::cmp::max(self.multi_part_size as u64, min_part_size_for_limit) as usize;
 
@@ -484,7 +484,7 @@ impl<'client> S3Uploader<'client> {
                     self.multi_part_size,
                     adjusted_size,
                     est_len,
-                    (est_len + adjusted_size as u64 - 1) / adjusted_size as u64
+                    est_len.div_ceil(adjusted_size as u64)
                 );
             }
             adjusted_size
@@ -1314,14 +1314,14 @@ mod tests {
         let multi_part_size = MINIMUM_PART_SIZE; // 5MB
 
         // Test case 1: Small file, no adjustment needed
-        let est_len = 10 * 1024 * 1024; // 10MB
-        let min_part_size = (est_len + MAX_PARTS - 1) / MAX_PARTS;
+        let est_len = 10u64 * 1024 * 1024; // 10MB
+        let min_part_size = est_len.div_ceil(MAX_PARTS);
         let effective_size = std::cmp::max(multi_part_size as u64, min_part_size);
         assert_eq!(effective_size, multi_part_size as u64);
 
         // Test case 2: File that would exceed 10000 parts with 5MB part size
-        let est_len = 60 * 1024 * 1024 * 1024; // 60GB
-        let min_part_size = (est_len + MAX_PARTS - 1) / MAX_PARTS;
+        let est_len = 60u64 * 1024 * 1024 * 1024; // 60GB
+        let min_part_size = est_len.div_ceil(MAX_PARTS);
         let effective_size = std::cmp::max(multi_part_size as u64, min_part_size);
         // Should be at least 6MB to fit in 10000 parts
         assert!(effective_size > multi_part_size as u64);
@@ -1329,14 +1329,14 @@ mod tests {
 
         // Test case 3: Very large file (100GB)
         let est_len = 100 * 1024 * 1024 * 1024u64; // 100GB
-        let min_part_size = (est_len + MAX_PARTS - 1) / MAX_PARTS;
+        let min_part_size = est_len.div_ceil(MAX_PARTS);
         let effective_size = std::cmp::max(multi_part_size as u64, min_part_size);
         // Should be at least ~10MB to fit in 10000 parts
         assert!(effective_size > multi_part_size as u64);
-        assert!((est_len + effective_size - 1) / effective_size <= MAX_PARTS);
+        assert!(est_len.div_ceil(effective_size) <= MAX_PARTS);
 
         // Verify the estimated parts count
-        let estimated_parts = (est_len + effective_size - 1) / effective_size;
+        let estimated_parts = est_len.div_ceil(effective_size);
         assert!(
             estimated_parts <= MAX_PARTS,
             "estimated parts {} exceeds maximum {}",
