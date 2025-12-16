@@ -3,7 +3,7 @@
 use std::{
     sync::{mpsc, Arc},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use api_version::{test_kv_format_impl, KvFormat};
