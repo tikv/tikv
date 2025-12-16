@@ -723,8 +723,6 @@ fn test_cdc_pipeline_dml() {
     assert_eq!(entries[0].value, vec![b'x'; 16]);
     assert_eq!(entries[1].r_type, EventLogType::Initialized);
 }
-<<<<<<< HEAD
-=======
 
 #[test]
 fn test_cdc_unresolved_region_count_before_finish_scan_lock() {
@@ -903,4 +901,3 @@ fn test_cdc_watchdog_idle_timeout() {
     drop(event_feed);
     suite.stop();
 }
->>>>>>> a01b4143de (cdc: add watchdog for cdc conn (#18757))

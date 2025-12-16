@@ -31,12 +31,7 @@ use tikv::{
 use tikv_util::{
     config::ReadableDuration,
     memory::MemoryQuota,
-<<<<<<< HEAD
-    worker::{LazyWorker, Runnable},
-    HandyRwLock,
-=======
     worker::{Builder, LazyWorker, Runnable},
->>>>>>> a01b4143de (cdc: add watchdog for cdc conn (#18757))
 };
 use txn_types::TimeStamp;
 static INIT: Once = Once::new();

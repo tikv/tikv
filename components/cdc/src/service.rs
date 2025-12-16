@@ -1,17 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-<<<<<<< HEAD
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
-=======
 use std::{
     sync::{
-        Arc,
         atomic::{AtomicUsize, Ordering},
+        Arc,
     },
     time::{Duration, Instant},
->>>>>>> a01b4143de (cdc: add watchdog for cdc conn (#18757))
 };
 
 use collections::{HashMap, HashMapEntry};
@@ -43,6 +37,7 @@ static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 const CDC_WATCHDOG_CHECK_INTERVAL_SECS: u64 = 2;
 const CDC_IDLE_WARNING_THRESHOLD_SECS: u64 = 60;
 const CDC_IDLE_DEREGISTER_THRESHOLD_SECS: u64 = 60 * 20; // 20 minutes
+const CDC_MEMORY_QUOTA_ABORT_THRESHOLD: f64 = 0.999;
 
 pub fn validate_kv_api(kv_api: ChangeDataRequestKvApi, api_version: ApiVersion) -> bool {
     kv_api == ChangeDataRequestKvApi::TiDb
@@ -539,6 +534,7 @@ impl Service {
             conn_id,
             cancel_tx,
             forward_exit_rx,
+            self.memory_quota.clone(),
         );
     }
 
@@ -554,6 +550,7 @@ impl Service {
         conn_id: ConnId,
         cancel_tx: tokio::sync::oneshot::Sender<()>,
         mut forward_exit_rx: tokio::sync::oneshot::Receiver<()>,
+        memory_quota: Arc<MemoryQuota>,
     ) {
         let last_flush_time_clone = last_flush_time.clone();
         let peer_clone = peer.clone();
@@ -574,16 +571,6 @@ impl Service {
                         break;
                     }
                     _ = interval.next() => {
-                        let elapsed = last_flush_time_clone.load().elapsed();
-
-                        // Check if last flush was more than the warning threshold
-                        if elapsed > Duration::from_secs(CDC_IDLE_WARNING_THRESHOLD_SECS) {
-                            warn!("cdc connection idle too long";
-                                  "downstream" => peer_clone.clone(),
-                                  "conn_id" => ?conn_id,
-                                  "seconds_since_last_flush" => elapsed.as_secs());
-                        }
-
                         let _idle_threshold = CDC_IDLE_DEREGISTER_THRESHOLD_SECS;
 
                         #[cfg(feature = "failpoints")]
@@ -600,7 +587,12 @@ impl Service {
                         };
 
                         // Check if last flush was more than the deregister threshold
-                        if elapsed > Duration::from_secs(_idle_threshold) {
+                        // To prevent the case that the connection idle since there are a lot of
+                        // incremental scan tasks queueing so won't send events, also check on the
+                        // memory usage, if the memory quota is almost used up, we abort the connection.
+                        let elapsed = last_flush_time_clone.load().elapsed();
+                        if elapsed > Duration::from_secs(_idle_threshold) &&
+                        memory_quota.used_ratio() >= CDC_MEMORY_QUOTA_ABORT_THRESHOLD{
                             error!("cdc connection idle for too long, aborting connection";
                                    "downstream" => peer_clone.clone(),
                                    "conn_id" => ?conn_id,
