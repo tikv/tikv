@@ -436,6 +436,7 @@ pub trait PdClient: Send + Sync {
         &self,
         _region: metapb::Region,
         _count: usize,
+        _reason: pdpb::SplitReason,
     ) -> PdFuture<pdpb::AskBatchSplitResponse> {
         unimplemented!();
     }

@@ -16,7 +16,7 @@ use file_system::{IoType, WithIoType};
 use itertools::Itertools;
 use kvproto::{
     metapb::{Region, RegionEpoch},
-    pdpb::CheckPolicy,
+    pdpb::{CheckPolicy, SplitReason},
 };
 use online_config::{ConfigChange, OnlineConfig};
 use pd_client::{BucketMeta, BucketStat};
@@ -376,7 +376,7 @@ where
         region: Region,
         start_key: Option<Vec<u8>>,
         end_key: Option<Vec<u8>>,
-        auto_split: bool,
+        split_reason: SplitReason,
         policy: CheckPolicy,
         bucket_ranges: Option<Vec<BucketRange>>,
     },
@@ -405,7 +405,11 @@ where
             region,
             start_key: None,
             end_key: None,
-            auto_split,
+            split_reason: if auto_split {
+                SplitReason::Size
+            } else {
+                SplitReason::Admin
+            },
             policy,
             bucket_ranges,
         }
@@ -415,7 +419,7 @@ where
         region: Region,
         start_key: Option<Vec<u8>>,
         end_key: Option<Vec<u8>>,
-        auto_split: bool,
+        split_reason: SplitReason,
         policy: CheckPolicy,
         bucket_ranges: Option<Vec<BucketRange>>,
     ) -> Self {
@@ -423,7 +427,7 @@ where
             region,
             start_key,
             end_key,
-            auto_split,
+            split_reason,
             policy,
             bucket_ranges,
         }
@@ -440,15 +444,15 @@ where
                 region,
                 start_key,
                 end_key,
-                auto_split,
+                split_reason,
                 ..
             } => write!(
                 f,
-                "[split check worker] Split Check Task for {}, start_key: {:?}, end_key: {:?}, auto_split: {:?}",
+                "[split check worker] Split Check Task for {}, start_key: {:?}, end_key: {:?}, split_reason: {:?}",
                 region.get_id(),
                 start_key,
                 end_key,
-                auto_split
+                split_reason
             ),
             Task::ChangeConfig(_) => write!(f, "[split check worker] Change Config Task"),
             Task::CompactedEvent { .. } => {
@@ -602,10 +606,11 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         region: &Region,
         start_key: Option<Vec<u8>>,
         end_key: Option<Vec<u8>>,
-        auto_split: bool,
+        split_reason: SplitReason,
         policy: CheckPolicy,
         bucket_ranges: Option<Vec<BucketRange>>,
     ) {
+        let auto_split = split_reason != SplitReason::Admin;
         let mut cached;
         let tablet = match &self.engine {
             Either::Left(e) => e,
@@ -746,8 +751,13 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             );
 
             let region_epoch = region.get_region_epoch().clone();
+            let source = match split_reason {
+                SplitReason::Size => "split_checker_by_size",
+                SplitReason::Load => "split_checker_by_load",
+                _ => "split_checker_by_admin",
+            };
             self.router
-                .ask_split(region_id, region_epoch, split_keys, "split checker".into());
+                .ask_split(region_id, region_epoch, split_keys, source.into());
             CHECK_SPILT_COUNTER.success.inc();
         } else {
             debug!(
@@ -973,14 +983,14 @@ where
                 region,
                 start_key,
                 end_key,
-                auto_split,
+                split_reason,
                 policy,
                 bucket_ranges,
             } => self.check_split_and_bucket(
                 &region,
                 start_key,
                 end_key,
-                auto_split,
+                split_reason,
                 policy,
                 bucket_ranges,
             ),

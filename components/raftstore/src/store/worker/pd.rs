@@ -68,7 +68,7 @@ use crate::{
         },
         util::{KeysInfoFormatter, is_epoch_stale},
         worker::{
-            AutoSplitController, ReadStats, SplitConfigChange, WriteStats,
+            AutoSplitController, ReadStats, SplitConfigChange, SplitValidator, WriteStats,
             split_controller::{SplitInfo, TOP_N},
         },
     },
@@ -156,6 +156,7 @@ where
         right_derive: bool,
         share_source_region_size: bool,
         callback: Callback<EK::Snapshot>,
+        split_reason: pdpb::SplitReason,
     },
     AutoSplit {
         split_infos: Vec<SplitInfo>,
@@ -692,6 +693,7 @@ where
         &mut self,
         mut auto_split_controller: AutoSplitController,
         collector_reg_handle: CollectorRegHandle,
+        split_validator: SplitValidator,
     ) -> Result<(), io::Error> {
         if self.collect_tick_interval
             < cmp::min(
@@ -751,6 +753,7 @@ where
                 let mut region_cpu_records_collector = None;
                 let mut auto_split_controller_ctx =
                     AutoSplitControllerContext::new(STATS_CHANNEL_CAPACITY_LIMIT);
+                let split_validator = split_validator;
                 // Register the region CPU records collector.
                 if auto_split_controller
                     .cfg
@@ -779,6 +782,7 @@ where
                             &reporter,
                             &collector_reg_handle,
                             &mut region_cpu_records_collector,
+                            &split_validator,
                         );
                     }
                     if is_enable_tick(timer_cnt, update_raftdisk_latency_stats_interval) {
@@ -813,6 +817,7 @@ where
         reporter: &T,
         collector_reg_handle: &CollectorRegHandle,
         region_cpu_records_collector: &mut Option<CollectorGuard>,
+        split_validator: &SplitValidator,
     ) {
         let start_time = TiInstant::now();
         match auto_split_controller.refresh_and_check_cfg() {
@@ -833,6 +838,7 @@ where
             read_stats_receiver,
             cpu_stats_receiver,
             thread_stats,
+            split_validator,
         );
         auto_split_controller.clear();
         auto_split_controller_ctx.maybe_gc();
@@ -944,6 +950,8 @@ where
 
     // Service manager for grpc service.
     grpc_service_manager: GrpcServiceManager,
+
+    split_validator: SplitValidator,
 }
 
 impl<EK, ER, T> Runner<EK, ER, T>
@@ -978,7 +986,12 @@ where
             cfg.inspect_kvdb_interval.0,
             WrappedScheduler(scheduler.clone()),
         );
-        if let Err(e) = stats_monitor.start(auto_split_controller, collector_reg_handle) {
+        let split_validator = SplitValidator::new();
+        if let Err(e) = stats_monitor.start(
+            auto_split_controller,
+            collector_reg_handle,
+            split_validator.clone(),
+        ) {
             error!("failed to start stats collector, error = {:?}", e);
         }
 
@@ -1031,6 +1044,7 @@ where
             coprocessor_host,
             causal_ts_provider,
             grpc_service_manager,
+            split_validator,
         }
     }
 
@@ -1094,6 +1108,7 @@ where
         router: RaftRouter<EK, ER>,
         scheduler: Scheduler<Task<EK>>,
         pd_client: Arc<T>,
+        split_validator: SplitValidator,
         mut region: metapb::Region,
         mut split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
@@ -1102,13 +1117,17 @@ where
         callback: Callback<EK::Snapshot>,
         task: String,
         remote: Remote<yatp::task::future::TaskCell>,
+        reason: pdpb::SplitReason,
     ) {
         if split_keys.is_empty() {
             info!("empty split key, skip ask batch split";
                 "region_id" => region.get_id());
             return;
         }
-        let resp = pd_client.ask_batch_split(region.clone(), split_keys.len());
+        if reason != pdpb::SplitReason::Admin && split_validator.is_disabled(region.get_id()) {
+            return;
+        }
+        let resp = pd_client.ask_batch_split(region.clone(), split_keys.len(), reason);
         let f = async move {
             match resp.await {
                 Ok(mut resp) => {
@@ -1593,12 +1612,21 @@ where
     fn schedule_heartbeat_receiver(&mut self) {
         let router = self.router.clone();
         let store_id = self.store_id;
+        let split_validator = self.split_validator.clone();
 
         let fut = self.pd_client
             .handle_region_heartbeat_response(self.store_id, move |mut resp| {
                 let region_id = resp.get_region_id();
                 let epoch = resp.take_region_epoch();
                 let peer = resp.take_target_peer();
+
+                if resp.has_change_split() {
+                    if resp.get_change_split().get_auto_split_enabled() {
+                        split_validator.enable(region_id);
+                    } else {
+                        split_validator.disable(region_id);
+                    }
+                }
 
                 if resp.has_change_peer() {
                     PD_HEARTBEAT_COUNTER_VEC
@@ -2161,10 +2189,12 @@ where
                 right_derive,
                 share_source_region_size,
                 callback,
+                split_reason,
             } => Self::handle_ask_batch_split(
                 self.router.clone(),
                 self.scheduler.clone(),
                 self.pd_client.clone(),
+                self.split_validator.clone(),
                 region,
                 split_keys,
                 peer,
@@ -2173,12 +2203,14 @@ where
                 callback,
                 String::from("batch_split"),
                 self.remote.clone(),
+                split_reason,
             ),
             Task::AutoSplit { split_infos } => {
                 let pd_client = self.pd_client.clone();
                 let router = self.router.clone();
                 let scheduler = self.scheduler.clone();
                 let remote = self.remote.clone();
+                let split_validator = self.split_validator.clone();
 
                 let f = async move {
                     for split_info in split_infos {
@@ -2193,6 +2225,7 @@ where
                                 router.clone(),
                                 scheduler.clone(),
                                 pd_client.clone(),
+                                split_validator.clone(),
                                 region,
                                 vec![split_key],
                                 split_info.peer,
@@ -2201,6 +2234,7 @@ where
                                 Callback::None,
                                 String::from("auto_split"),
                                 remote.clone(),
+                                pdpb::SplitReason::Load,
                             );
                         // Try to split the region on half within the given key
                         // range if there is no `split_key` been given.
@@ -2647,6 +2681,7 @@ mod tests {
                 if let Err(e) = stats_monitor.start(
                     AutoSplitController::default(),
                     CollectorRegHandle::new_for_test(),
+                    SplitValidator::new(),
                 ) {
                     error!("failed to start stats collector, error = {:?}", e);
                 }
@@ -2892,6 +2927,7 @@ mod tests {
             .start(
                 AutoSplitController::default(),
                 CollectorRegHandle::new_for_test(),
+                SplitValidator::new(),
             )
             .unwrap();
         // Add some read stats and cpu stats to the stats monitor.
