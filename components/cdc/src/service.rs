@@ -35,7 +35,6 @@ static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
 // CDC connection monitoring constants in seconds
 const CDC_WATCHDOG_CHECK_INTERVAL_SECS: u64 = 2;
-const CDC_IDLE_WARNING_THRESHOLD_SECS: u64 = 60;
 const CDC_IDLE_DEREGISTER_THRESHOLD_SECS: u64 = 60 * 20; // 20 minutes
 const CDC_MEMORY_QUOTA_ABORT_THRESHOLD: f64 = 0.999;
 
@@ -630,9 +629,6 @@ impl ChangeData for Service {
 
 #[cfg(feature = "failpoints")]
 async fn sleep_before_drain_change_event() {
-    use std::time::{Duration, Instant};
-
-    use tikv_util::timer::GLOBAL_TIMER_HANDLE;
     let should_sleep = || {
         fail::fail_point!("cdc_sleep_before_drain_change_event", |_| true);
         false
