@@ -1,1 +1,5 @@
+<<<<<<< HEAD
 29897bbf59b421c77ed30446664c6a788659bde27be6b82722becb78d8d8fa51  ./metrics/grafana/tikv_details.json
+=======
+0530a044731e012e584de509b9ff8f88b909a19bfe7b82098067df07b0e2f9c7  ./metrics/grafana/tikv_details.json
+>>>>>>> 0a497de28 (dashboard)
