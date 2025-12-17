@@ -1121,22 +1121,36 @@ where
             (current_wait_duration_nanos as f64 * 0.6) as u64
         } else if batch_achievement_ratio >= 0.8 {
             // Excellent batching (>= 80% of target)
-            // We can safely reduce wait_duration to improve latency
-            let reduction = if qps_pressure_factor > 0.7 {
-                0.9
+            // Strategy: Respect wait_duration_hint in high concurrency scenarios to pursue higher throughput
+            // Only reduce wait_duration when we've reached or exceeded the hint
+            if current_wait_duration_nanos < wait_duration_hint_nanos && is_high_concurrency {
+                // Haven't reached hint yet, maintain or increase slightly to pursue higher throughput
+                // This allows larger batches and better overall system throughput
+                (current_wait_duration_nanos as f64 * 1.05) as u64
             } else {
-                0.85
-            };
-            (current_wait_duration_nanos as f64 * reduction) as u64
+                // Already at or above hint, can reduce to improve latency
+                let reduction = if qps_pressure_factor > 0.7 {
+                    0.9
+                } else {
+                    0.85
+                };
+                (current_wait_duration_nanos as f64 * reduction) as u64
+            }
         } else if batch_achievement_ratio >= 0.6 {
             // Good batching (60-80% of target)
-            // Maintain current wait_duration or reduce slightly
-            let adjustment = if qps_pressure_factor > 0.7 {
-                1.0
+            // Strategy: In high concurrency, still pursue hint if not reached yet
+            if current_wait_duration_nanos < wait_duration_hint_nanos && is_high_concurrency {
+                // Haven't reached hint yet, increase slightly to pursue higher throughput
+                (current_wait_duration_nanos as f64 * 1.08) as u64
             } else {
-                0.95
-            };
-            (current_wait_duration_nanos as f64 * adjustment) as u64
+                // Already at or above hint, maintain or reduce slightly
+                let adjustment = if qps_pressure_factor > 0.7 {
+                    1.0
+                } else {
+                    0.95
+                };
+                (current_wait_duration_nanos as f64 * adjustment) as u64
+            }
         } else if batch_achievement_ratio >= BATCH_ACHIEVEMENT_RATIO_LOW_THRESHOLD {
             // Moderate batching (30-60% of target)
             // Only increase if wait_duration is still relatively low
