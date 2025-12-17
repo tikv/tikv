@@ -28,6 +28,7 @@ use tidb_query_datatype::{
 use tikv_util::{
     Either,
     Either::{Left, Right},
+    error,
 };
 use tipb::{ColumnInfo, FieldType, IndexLookUp, TableScan};
 use txn_types::Key;
@@ -656,6 +657,8 @@ where
 
 pub struct TableTask<S> {
     storage: S,
+    // key ranges for the table scan
+    // The `KeyRange.start` and `KeyRange.end` are raw keys without MVCC encoding.
     key_ranges: Vec<KeyRange>,
 }
 
@@ -928,7 +931,19 @@ where
             // handle this case, just use the region end as the end of the key range to
             // avoid error.
             if !Self::is_key_before_or_eq_region_end(key_range.get_end(), end_exclusive) {
-                key_range.end = end_exclusive.to_vec();
+                let end_exclusive = Key::from_encoded(end_exclusive.to_vec());
+                match end_exclusive.to_raw() {
+                    Ok(end_key) => {
+                        key_range.end = end_key;
+                    }
+                    Err(err) => {
+                        // Set `region` to None to avoid generating a table task.
+                        // The related rows will be looked up on the TiDB side.
+                        region = None;
+                        error!("failed to decode region end key"; "end_key" => ?end_exclusive, "error" => ?err);
+                        debug_assert!(false, "region end should always be in MVCC format");
+                    }
+                }
             }
         }
 
@@ -1307,7 +1322,9 @@ pub mod tests {
         let mut expected_ranges = vec![make_scan_key_range(13, 15)];
         // The end key of the range should be the region end because the point range end
         // of handle 14 exceeds the region.
-        expected_ranges.last_mut().unwrap().end = region.get_end_key().to_vec();
+        expected_ranges.last_mut().unwrap().end = Key::from_encoded(region.get_end_key().to_vec())
+            .to_raw()
+            .unwrap();
         assert_eq!(task.storage, MockStorage(region, expected_ranges.clone()));
         assert_eq!(task.key_ranges, expected_ranges);
         assert_eq!(iter.cursor_in_handle_orders, 5);
@@ -1331,7 +1348,11 @@ pub mod tests {
         let mut expected_range = make_scan_key_range(15, 16);
         // The end key of the range should be the region end because the point range end
         // of handle 15 exceeds the region.
-        expected_range.set_end(region.get_end_key().to_vec());
+        expected_range.set_end(
+            Key::from_encoded(region.get_end_key().to_vec())
+                .to_raw()
+                .unwrap(),
+        );
         let expected_ranges = vec![expected_range];
         assert_eq!(task.storage, MockStorage(region, expected_ranges.clone()));
         assert_eq!(task.key_ranges, expected_ranges.clone());
