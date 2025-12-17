@@ -26,9 +26,8 @@ use tidb_query_datatype::{
     expr::{EvalConfig, EvalContext, EvalWarnings},
 };
 use tikv_util::{
-    Either,
+    error, Either,
     Either::{Left, Right},
-    error,
 };
 use tipb::{ColumnInfo, FieldType, IndexLookUp, TableScan};
 use txn_types::Key;
