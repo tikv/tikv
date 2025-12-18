@@ -246,7 +246,7 @@ pub mod tests {
     };
     use kvproto::{
         metapb::{Peer, Region},
-        pdpb::CheckPolicy,
+        pdpb::{CheckPolicy, SplitReason},
     };
     use tempfile::Builder;
     use tikv_util::{config::ReadableSize, worker::Runnable};
@@ -613,7 +613,8 @@ pub mod tests {
             None,
         ));
 
-        let host = cop_host.new_split_checker_host(&region, &engine, true, CheckPolicy::Scan);
+        let host =
+            cop_host.new_split_checker_host(&region, &engine, SplitReason::Size, CheckPolicy::Scan);
         assert_eq!(host.policy(), CheckPolicy::Approximate);
 
         if !mvcc {
@@ -643,7 +644,8 @@ pub mod tests {
             CheckPolicy::Approximate,
             Some(vec![BucketRange(start.clone(), end.clone())]),
         ));
-        let host = cop_host.new_split_checker_host(&region, &engine, true, CheckPolicy::Scan);
+        let host =
+            cop_host.new_split_checker_host(&region, &engine, SplitReason::Size, CheckPolicy::Scan);
         assert_eq!(host.policy(), CheckPolicy::Approximate);
 
         if !mvcc {
@@ -726,12 +728,14 @@ pub mod tests {
         }
 
         let cop_host = CoprocessorHost::new(tx.clone(), cfg.clone());
-        let host = cop_host.new_split_checker_host(&region, &engine, true, CheckPolicy::Scan);
+        let host =
+            cop_host.new_split_checker_host(&region, &engine, SplitReason::Size, CheckPolicy::Scan);
         assert_eq!(host.policy(), CheckPolicy::Scan);
 
         cfg.prefer_approximate_bucket = true;
         let cop_host = CoprocessorHost::new(tx, cfg);
-        let host = cop_host.new_split_checker_host(&region, &engine, true, CheckPolicy::Scan);
+        let host =
+            cop_host.new_split_checker_host(&region, &engine, SplitReason::Size, CheckPolicy::Scan);
         assert_eq!(host.policy(), CheckPolicy::Approximate);
     }
 
