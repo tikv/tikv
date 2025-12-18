@@ -130,6 +130,11 @@ impl<'a, E> Host<'a, E> {
     pub fn region_bucket_size(&self) -> u64 {
         self.cfg.region_bucket_size.0
     }
+
+    #[cfg(test)]
+    pub fn checkers_count(&self) -> usize {
+        self.checkers.len()
+    }
 }
 
 #[inline]
