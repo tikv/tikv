@@ -6,7 +6,7 @@ use std::{borrow::Cow, marker::PhantomData, mem, ops::Deref, option::Option::Som
 use engine_traits::{CfName, KvEngine, WriteBatch};
 use kvproto::{
     metapb::{Region, RegionEpoch},
-    pdpb::CheckPolicy,
+    pdpb::{CheckPolicy, SplitReason},
     raft_cmdpb::{CmdType, ComputeHashRequest, RaftCmdRequest},
     raft_serverpb::RaftMessage,
 };
@@ -846,10 +846,10 @@ impl<E: KvEngine> CoprocessorHost<E> {
         &'a self,
         region: &Region,
         engine: &E,
-        auto_split: bool,
+        reason: SplitReason,
         policy: CheckPolicy,
     ) -> SplitCheckerHost<'a, E> {
-        let mut host = SplitCheckerHost::new(auto_split, &self.cfg);
+        let mut host = SplitCheckerHost::new(reason, &self.cfg);
         loop_ob!(
             region,
             &self.registry.split_check_observers,

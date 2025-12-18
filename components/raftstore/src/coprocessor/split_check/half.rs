@@ -1,7 +1,10 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{KvEngine, Range};
-use kvproto::{metapb::Region, pdpb::CheckPolicy};
+use kvproto::{
+    metapb::Region,
+    pdpb::{CheckPolicy, SplitReason},
+};
 use tikv_util::{box_try, config::ReadableSize};
 
 use super::{
@@ -86,7 +89,7 @@ where
         _: &E,
         policy: CheckPolicy,
     ) {
-        if host.auto_split() {
+        if host.split_reason() == SplitReason::Size {
             return;
         }
         host.add_checker(Box::new(Checker::new(
@@ -333,7 +336,8 @@ mod tests {
             Some(vec![bucket_range]),
         ));
 
-        let host = cop_host.new_split_checker_host(&region, &engine, true, CheckPolicy::Scan);
+        let host =
+            cop_host.new_split_checker_host(&region, &engine, SplitReason::Size, CheckPolicy::Scan);
         assert_eq!(host.policy(), CheckPolicy::Scan);
 
         must_generate_buckets(&rx, &exp_bucket_keys);
@@ -359,7 +363,8 @@ mod tests {
             CheckPolicy::Scan,
             Some(vec![bucket_range]),
         ));
-        let host = cop_host.new_split_checker_host(&region, &engine, true, CheckPolicy::Scan);
+        let host =
+            cop_host.new_split_checker_host(&region, &engine, SplitReason::Size, CheckPolicy::Scan);
         assert_eq!(host.policy(), CheckPolicy::Scan);
 
         must_generate_buckets(&rx, &exp_bucket_keys);

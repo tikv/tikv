@@ -2,7 +2,10 @@
 
 use engine_traits::{KvEngine, Range};
 use error_code::ErrorCodeExt;
-use kvproto::{metapb::Region, pdpb::CheckPolicy};
+use kvproto::{
+    metapb::Region,
+    pdpb::{CheckPolicy, SplitReason},
+};
 use tikv_util::{box_try, debug, info, warn};
 
 use super::{
@@ -613,7 +616,8 @@ pub mod tests {
             None,
         ));
 
-        let host = cop_host.new_split_checker_host(&region, &engine, true, CheckPolicy::Scan);
+        let host =
+            cop_host.new_split_checker_host(&region, &engine, SplitReason::Size, CheckPolicy::Scan);
         assert_eq!(host.policy(), CheckPolicy::Approximate);
 
         if !mvcc {
@@ -643,7 +647,8 @@ pub mod tests {
             CheckPolicy::Approximate,
             Some(vec![BucketRange(start.clone(), end.clone())]),
         ));
-        let host = cop_host.new_split_checker_host(&region, &engine, true, CheckPolicy::Scan);
+        let host =
+            cop_host.new_split_checker_host(&region, &engine, SplitReason::Size, CheckPolicy::Scan);
         assert_eq!(host.policy(), CheckPolicy::Approximate);
 
         if !mvcc {
@@ -726,12 +731,14 @@ pub mod tests {
         }
 
         let cop_host = CoprocessorHost::new(tx.clone(), cfg.clone());
-        let host = cop_host.new_split_checker_host(&region, &engine, true, CheckPolicy::Scan);
+        let host =
+            cop_host.new_split_checker_host(&region, &engine, SplitReason::Size, CheckPolicy::Scan);
         assert_eq!(host.policy(), CheckPolicy::Scan);
 
         cfg.prefer_approximate_bucket = true;
         let cop_host = CoprocessorHost::new(tx, cfg);
-        let host = cop_host.new_split_checker_host(&region, &engine, true, CheckPolicy::Scan);
+        let host =
+            cop_host.new_split_checker_host(&region, &engine, SplitReason::Size, CheckPolicy::Scan);
         assert_eq!(host.policy(), CheckPolicy::Approximate);
     }
 
