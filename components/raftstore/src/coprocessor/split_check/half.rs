@@ -144,8 +144,8 @@ mod tests {
     };
     use crate::{
         coprocessor::{
-            BoxSplitCheckObserver, Config, CoprocessorHost, KeysCheckObserver, SizeCheckObserver,
-            dispatcher::SchedTask,
+            dispatcher::SchedTask, BoxSplitCheckObserver, Config, CoprocessorHost,
+            KeysCheckObserver, SizeCheckObserver,
         },
         store::{BucketRange, SplitCheckRunner, SplitCheckTask},
     };
