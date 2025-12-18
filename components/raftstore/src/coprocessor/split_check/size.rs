@@ -2,10 +2,7 @@
 
 use engine_traits::{KvEngine, Range};
 use error_code::ErrorCodeExt;
-use kvproto::{
-    metapb::Region,
-    pdpb::{CheckPolicy, SplitReason},
-};
+use kvproto::{metapb::Region, pdpb::CheckPolicy};
 use tikv_util::{box_try, debug, info, warn};
 
 use super::{
@@ -249,7 +246,7 @@ pub mod tests {
     };
     use kvproto::{
         metapb::{Peer, Region},
-        pdpb::CheckPolicy,
+        pdpb::{CheckPolicy, SplitReason},
     };
     use tempfile::Builder;
     use tikv_util::{config::ReadableSize, worker::Runnable};
