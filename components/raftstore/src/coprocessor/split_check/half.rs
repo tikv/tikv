@@ -143,14 +143,10 @@ mod tests {
         *,
     };
     use crate::{
-<<<<<<< HEAD
-        coprocessor::{dispatcher::SchedTask, Config, CoprocessorHost},
-=======
         coprocessor::{
             BoxSplitCheckObserver, Config, CoprocessorHost, KeysCheckObserver, SizeCheckObserver,
             dispatcher::SchedTask,
         },
->>>>>>> b4c7c02b29 (raftstore: use SplitReason in SplitCheckerHost (#19221))
         store::{BucketRange, SplitCheckRunner, SplitCheckTask},
     };
 
