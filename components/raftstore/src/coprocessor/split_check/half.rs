@@ -144,13 +144,14 @@ mod tests {
     };
     use crate::{
         coprocessor::{
-            BoxSplitCheckObserver, Config, CoprocessorHost, KeysCheckObserver,
-            SizeCheckObserver, dispatcher::SchedTask,
+            BoxSplitCheckObserver, Config, CoprocessorHost, KeysCheckObserver, SizeCheckObserver,
+            dispatcher::SchedTask,
         },
         store::{BucketRange, SplitCheckRunner, SplitCheckTask},
     };
 
-    /// SplitCheckerHost should pick Half/Size/Keys observers based on SplitReason
+    /// SplitCheckerHost should pick Half/Size/Keys observers based on
+    /// SplitReason
     #[test]
     fn test_new_split_checker_host_with_different_split_reasons() {
         let mut region = Region::default();
@@ -206,10 +207,8 @@ mod tests {
             ..Default::default()
         };
         let mut host = CoprocessorHost::new(tx.clone(), cfg);
-        host.registry.register_split_check_observer(
-            100,
-            BoxSplitCheckObserver::new(HalfCheckObserver),
-        );
+        host.registry
+            .register_split_check_observer(100, BoxSplitCheckObserver::new(HalfCheckObserver));
         host.registry.register_split_check_observer(
             200,
             BoxSplitCheckObserver::new(SizeCheckObserver::new(tx.clone())),
