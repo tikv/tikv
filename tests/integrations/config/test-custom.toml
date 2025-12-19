@@ -648,6 +648,10 @@ enable-compaction-filter = false
 compaction-filter-skip-version-check = true
 num-threads = 2
 
+[gc.auto-compaction]
+mvcc-read-aware-enabled = true
+mvcc-scan-threshold = 10000
+
 [pessimistic-txn]
 enabled = false                # test backward compatibility
 wait-for-lock-timeout = "10ms"
