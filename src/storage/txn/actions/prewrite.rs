@@ -128,6 +128,14 @@ pub fn prewrite_with_generation<S: Snapshot>(
             )?;
             (shared_lock, lock_status)
         }
+        None if mutation.is_shared_lock => {
+            return Err(ErrorInner::PessimisticLockNotFound {
+                start_ts: reader.start_ts,
+                key: mutation.key.clone().into_raw()?,
+                reason: PessimisticLockNotFoundReason::LockMissingAmendFail,
+            }
+            .into());
+        }
         None if matches!(pessimistic_action, DoPessimisticCheck) => {
             // pipelined DML can't go into this. Otherwise, assertions may need to be
             // skipped for non-first flushes.
