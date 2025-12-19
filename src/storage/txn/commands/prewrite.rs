@@ -1007,7 +1007,7 @@ mod tests {
     use engine_rocks::ReadPerfInstant;
     use engine_traits::CF_WRITE;
     use kvproto::kvrpcpb::{Assertion, Context, ExtraOp};
-    use txn_types::{Key, LastChange, Mutation, TimeStamp};
+    use txn_types::{Key, LastChange, Mutation, PessimisticLock, TimeStamp};
 
     use super::*;
     use crate::storage::{
@@ -2989,5 +2989,73 @@ mod tests {
         must_locked(&mut engine, k1, 10);
         must_locked(&mut engine, k2, 10);
         must_locked(&mut engine, k3, 10);
+    }
+
+    #[test]
+    fn test_shared_lock_prewrite_cannot_amend_pessimistic_lock() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let cm = ConcurrencyManager::new(1.into());
+        let mut statistics = Statistics::default();
+
+        let key = b"shared-lock-key";
+        let cmd = PrewritePessimistic::with_defaults(
+            vec![(
+                Mutation::make_shared_lock(Key::from_raw(key)),
+                DoPessimisticCheck,
+            )],
+            key.to_vec(),
+            10.into(),
+            10.into(),
+        );
+        // cannot amend pessimistic lock when there is no shared lock.
+        let err = prewrite_command(&mut engine, cm.clone(), &mut statistics, cmd).unwrap_err();
+        assert!(matches!(
+            err,
+            Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::PessimisticLockNotFound {
+                ..
+            })))
+        ));
+
+        {
+            let other_start_ts: TimeStamp = 11.into();
+            let other_for_update_ts: TimeStamp = 11.into();
+            let cm2 = ConcurrencyManager::new(other_for_update_ts);
+            let mut txn = crate::storage::mvcc::MvccTxn::new(other_start_ts, cm2);
+            txn.put_shared_pessimistic_lock(
+                Key::from_raw(key),
+                None,
+                PessimisticLock {
+                    primary: key.to_vec().into_boxed_slice(),
+                    start_ts: other_start_ts,
+                    ttl: 2000,
+                    for_update_ts: other_for_update_ts,
+                    min_commit_ts: TimeStamp::zero(),
+                    last_change: LastChange::Unknown,
+                    is_locked_with_conflict: false,
+                },
+            );
+            write(&engine, &Context::default(), txn.into_modifies());
+            must_load_shared_lock(&mut engine, key);
+        }
+
+        let cmd = PrewritePessimistic::with_defaults(
+            vec![(
+                Mutation::make_shared_lock(Key::from_raw(key)),
+                DoPessimisticCheck,
+            )],
+            key.to_vec(),
+            10.into(),
+            10.into(),
+        );
+        // cannot amend pessimistic lock when there is shared lock belong to another
+        // transaction.
+        let err = prewrite_command(&mut engine, cm, &mut statistics, cmd).unwrap_err();
+        assert!(matches!(
+            err,
+            Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::PessimisticLockNotFound {
+                ..
+            })))
+        ));
+        must_load_shared_lock(&mut engine, key);
     }
 }

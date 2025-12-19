@@ -2103,7 +2103,8 @@ fn test_shared_exclusive_lock_conflict() {
     }
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 #[allow(unused)]
 fn test_resolve_shared_locks() {
     let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
@@ -2192,4 +2193,122 @@ fn test_resolve_shared_locks() {
     );
     assert!(load_lock().is_none());
     exclusive_lock.try_recv().unwrap();
+}
+
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
+fn test_scan_lock_shared_lock_infos_filtered_by_max_ts() {
+    let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
+        .build()
+        .unwrap();
+    let key = b"scan-shared-lock-key".to_vec();
+    let pk = b"scan-shared-lock-pk".to_vec();
+
+    let pessimistic_lock_shared_lock = |start_ts: u64| {
+        let (done_tx, done_rx) = channel();
+        storage
+            .sched_txn_command(
+                new_acquire_pessimistic_lock_command_with_pk_with_shared(
+                    vec![(Key::from_raw(&key), false, true)],
+                    Some(&pk),
+                    start_ts,
+                    start_ts + 1,
+                    false,
+                    false,
+                ),
+                Box::new(
+                    move |res: storage::Result<
+                        std::result::Result<PessimisticLockResults, StorageError>,
+                    >| done_tx.send(res).unwrap(),
+                ),
+            )
+            .unwrap();
+        done_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    };
+
+    let prewrite_shared_lock = |start_ts: u64| {
+        let (done_tx, done_rx) = channel::<i32>();
+        storage
+            .sched_txn_command(
+                commands::PrewritePessimistic::new(
+                    vec![(
+                        Mutation::make_shared_lock(Key::from_raw(&key)),
+                        DoPessimisticCheck,
+                    )],
+                    pk.clone(),
+                    start_ts.into(),
+                    3000,
+                    (start_ts + 1).into(),
+                    1,
+                    TimeStamp::default(),
+                    TimeStamp::default(),
+                    None,
+                    false,
+                    AssertionLevel::Off,
+                    vec![],
+                    Context::default(),
+                ),
+                expect_ok_callback(done_tx, 0),
+            )
+            .unwrap();
+        done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    };
+
+    let scan_lock_start_ts_set = |max_ts: u64| -> Vec<(u64, Op)> {
+        let mut locks = block_on(storage.scan_lock(
+            Context::default(),
+            max_ts.into(),
+            Some(Key::from_raw(&key)),
+            None,
+            100,
+        ))
+        .unwrap();
+        assert_eq!(locks.len(), 1);
+        let lock = locks.pop().unwrap();
+        assert_eq!(lock.get_key(), &key);
+        assert_eq!(lock.get_lock_type(), Op::SharedLock);
+        let mut start_ts_set: Vec<_> = lock
+            .get_shared_lock_infos()
+            .iter()
+            .map(|l| (l.get_lock_version(), l.get_lock_type()))
+            .collect();
+        start_ts_set.sort_by_key(|(ts, _)| *ts);
+        start_ts_set
+    };
+
+    pessimistic_lock_shared_lock(10);
+    pessimistic_lock_shared_lock(20);
+    pessimistic_lock_shared_lock(30);
+
+    assert_eq!(scan_lock_start_ts_set(15), vec![(10, Op::PessimisticLock)]);
+    assert_eq!(
+        scan_lock_start_ts_set(25),
+        vec![(10, Op::PessimisticLock), (20, Op::PessimisticLock)]
+    );
+    assert_eq!(
+        scan_lock_start_ts_set(35),
+        vec![
+            (10, Op::PessimisticLock),
+            (20, Op::PessimisticLock),
+            (30, Op::PessimisticLock)
+        ]
+    );
+
+    prewrite_shared_lock(10);
+    prewrite_shared_lock(20);
+    prewrite_shared_lock(30);
+
+    assert_eq!(scan_lock_start_ts_set(15), vec![(10, Op::Lock)]);
+    assert_eq!(
+        scan_lock_start_ts_set(25),
+        vec![(10, Op::Lock), (20, Op::Lock)]
+    );
+    assert_eq!(
+        scan_lock_start_ts_set(35),
+        vec![(10, Op::Lock), (20, Op::Lock), (30, Op::Lock)]
+    );
 }
