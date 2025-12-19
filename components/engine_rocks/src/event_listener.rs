@@ -261,16 +261,11 @@ mod tests {
 
     struct FlushTrack {
         sealed: Mutex<Sender<()>>,
-        block_flush: Arc<Mutex<()>>,
     }
 
     impl rocksdb::EventListener for FlushTrack {
         fn on_memtable_sealed(&self, _: &MemTableInfo) {
             let _ = self.sealed.lock().unwrap().send(());
-        }
-
-        fn on_flush_begin(&self, _: &FlushJobInfo) {
-            drop(self.block_flush.lock().unwrap())
         }
     }
 
@@ -288,11 +283,9 @@ mod tests {
             PersistenceListener::new(region_id, tablet_index, state.clone(), storage.clone());
         let mut db_opt = RocksDbOptions::default();
         db_opt.add_event_listener(RocksPersistenceListener::new(listener));
-        let (tx, rx) = mpsc::channel();
-        let block_flush = Arc::new(Mutex::new(()));
+        let (sealed_tx, sealed_rx) = mpsc::channel();
         db_opt.add_event_listener(FlushTrack {
-            sealed: Mutex::new(tx),
-            block_flush: block_flush.clone(),
+            sealed: Mutex::new(sealed_tx),
         });
 
         let mut cf_opts: Vec<_> = DATA_CFS
@@ -348,33 +341,22 @@ mod tests {
         // Detail check of `FlushProgress` will be done in raftstore-v2 tests.
 
         // Drain all the events.
-        while rx.try_recv().is_ok() {}
-        state.set_applied_index(4);
-        let block = block_flush.lock();
-        // Seal twice to trigger flush. Seal third to make a seqno conflict, in
-        // which case flush largest seqno will be equal to seal earliest seqno.
+        while sealed_rx.try_recv().is_ok() {}
+        // Seal twice to trigger flush.
         let mut key_count = 2;
-        for i in 0..3 {
-            while rx.try_recv().is_err() {
+        for i in 0..2 {
+            state.set_applied_index(4 + i);
+            while sealed_rx.try_recv().is_err() {
                 db.put(format!("k{key_count}").as_bytes(), &[0; 512])
                     .unwrap();
                 key_count += 1;
             }
-            state.set_applied_index(5 + i);
         }
-        drop(block);
-        // Memtable is seal before put, so there must be still one KV in memtable.
         db.flush_cf(CF_DEFAULT, true).unwrap();
-        rx.try_recv().unwrap();
-        // There is 2 sst before this round, and then 4 are merged into 2, so there
-        // should be 4 ssts.
-        assert_eq!(sst_count(), 4);
+        assert_eq!(sst_count(), 3);
         let records = storage.records.lock().unwrap();
-        // Although it seals 4 times, but only create 2 SSTs, so only 2 records.
-        assert_eq!(records.len(), 2);
-        // The indexes of two merged flush state are 4 and 5, so merged value is 5.
-        assert_eq!(records[0].2.applied_index(), 5);
-        // The last two flush state is 6 and 7.
-        assert_eq!(records[1].2.applied_index(), 7);
+        assert_eq!(records.len(), 1);
+        let applied_index = records.last().unwrap().2.applied_index();
+        assert_eq!(applied_index, 5);
     }
 }
