@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use api_version::{dispatch_api_version, KvFormat};
+use api_version::{KvFormat, dispatch_api_version};
 use causal_ts::CausalTsProviderImpl;
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
@@ -15,13 +15,13 @@ use encryption_export::DataKeyManager;
 use engine_rocks::RocksEngine;
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
-use futures::{executor::block_on, future::BoxFuture, Future};
+use futures::{Future, executor::block_on, future::BoxFuture};
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
 use grpcio_health::HealthService;
 use health_controller::HealthController;
 use kvproto::{
     deadlock_grpc::create_deadlock,
-    debugpb_grpc::{create_debug, DebugClient},
+    debugpb_grpc::{DebugClient, create_debug},
     diagnosticspb_grpc::create_diagnostics,
     import_sstpb_grpc::create_import_sst,
     kvrpcpb::{ApiVersion, Context},
@@ -32,15 +32,15 @@ use kvproto::{
 };
 use pd_client::PdClient;
 use raftstore::{
+    RegionInfoAccessor,
     coprocessor::CoprocessorHost,
     errors::Error as RaftError,
     store::{
-        region_meta, AutoSplitController, CheckLeaderRunner, FlowStatsReporter, ReadStats,
-        RegionSnapshot, TabletSnapManager, WriteStats,
+        AutoSplitController, CheckLeaderRunner, FlowStatsReporter, ReadStats, RegionSnapshot,
+        TabletSnapManager, WriteStats, region_meta,
     },
-    RegionInfoAccessor,
 };
-use raftstore_v2::{router::RaftRouter, StateStorage, StoreMeta, StoreRouter};
+use raftstore_v2::{StateStorage, StoreMeta, StoreRouter, router::RaftRouter};
 use resource_control::ResourceGroupManager;
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use security::SecurityManager;
@@ -48,13 +48,15 @@ use service::service_manager::GrpcServiceManager;
 use slog_global::debug;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
-use test_raftstore::{filter_send, AddressMap, Config, Filter};
+use test_raftstore::{AddressMap, Config, Filter, filter_send};
 use tikv::{
     config::ConfigController,
     coprocessor, coprocessor_v2,
     import::{ImportSstService, SstImporter},
     read_pool::ReadPool,
     server::{
+        ConnectionBuilder, Error, Extension, NodeV2, PdStoreAddrResolver, RaftClient, RaftKv2,
+        Result as ServerResult, Server, ServerTransport,
         debug2::DebuggerImplV2,
         gc_worker::GcWorker,
         load_statistics::ThreadLoadPool,
@@ -62,27 +64,23 @@ use tikv::{
         raftkv::ReplicaReadLockChecker,
         resolve,
         service::{DebugService, DefaultGrpcMessageFilter, DiagnosticsService},
-        ConnectionBuilder, Error, Extension, NodeV2, PdStoreAddrResolver, RaftClient, RaftKv2,
-        Result as ServerResult, Server, ServerTransport,
     },
     storage::{
-        self,
+        self, Engine, Storage,
         kv::{FakeExtension, LocalTablets, RaftExtension, SnapContext},
         txn::{
             flow_controller::{EngineFlowController, FlowController},
             txn_status_cache::TxnStatusCache,
         },
-        Engine, Storage,
     },
 };
 use tikv_util::{
-    box_err,
+    Either, HandyRwLock, box_err,
     config::VersionTrack,
     quota_limiter::QuotaLimiter,
     sys::thread::ThreadBuildWrapper,
     thd_name,
-    worker::{Builder as WorkerBuilder, LazyWorker},
-    Either, HandyRwLock,
+    worker::{Builder as WorkerBuilder, LazyWorker, Worker},
 };
 use tokio::runtime::{Builder as TokioBuilder, Handle};
 use txn_types::TxnExtraScheduler;
@@ -582,6 +580,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
             Some(store_meta),
             resource_manager.clone(),
             Arc::new(region_info_accessor.clone()),
+            Default::default(),
         );
 
         // Create deadlock service.
@@ -647,6 +646,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
                 Arc::new(DefaultGrpcMessageFilter::new(
                     server_cfg.value().reject_messages_on_memory_ratio,
                 )),
+                Worker::new("test-background-worker"),
             )
             .unwrap();
             svr.register_service(create_diagnostics(diag_service.clone()));
@@ -748,7 +748,12 @@ impl<EK: KvEngine> ServerCluster<EK> {
         self.concurrency_managers
             .insert(node_id, concurrency_manager);
 
-        let client = RaftClient::new(node_id, self.conn_builder.clone());
+        let client = RaftClient::new(
+            node_id,
+            self.conn_builder.clone(),
+            Duration::from_millis(10),
+            Worker::new("test-worker"),
+        );
         self.raft_clients.insert(node_id, client);
         Ok(node_id)
     }
@@ -766,7 +771,10 @@ impl<EK: KvEngine> ServerCluster<EK> {
         cfg: &resource_metering::Config,
     ) -> (ResourceTagFactory, CollectorRegHandle, Box<dyn FnOnce()>) {
         let (_, collector_reg_handle, resource_tag_factory, recorder_worker) =
-            resource_metering::init_recorder(cfg.precision.as_millis());
+            resource_metering::init_recorder(
+                cfg.precision.as_millis(),
+                cfg.enable_network_io_collection,
+            );
         let (_, data_sink_reg_handle, reporter_worker) =
             resource_metering::init_reporter(cfg.clone(), collector_reg_handle.clone());
         let (_, single_target_worker) = resource_metering::init_single_target(

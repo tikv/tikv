@@ -6,7 +6,7 @@ use std::{
 };
 
 use causal_ts::CausalTsProvider;
-use cdc::{recv_timeout, CdcObserver, Delegate, FeatureGate, Task, Validate};
+use cdc::{CdcObserver, Delegate, FeatureGate, Task, Validate, recv_timeout};
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
@@ -16,7 +16,7 @@ use grpcio::{
     Environment, MetadataBuilder,
 };
 use kvproto::{
-    cdcpb::{create_change_data, ChangeDataClient, ChangeDataEvent, ChangeDataRequest},
+    cdcpb::{ChangeDataClient, ChangeDataEvent, ChangeDataRequest, create_change_data},
     kvrpcpb::{PrewriteRequestPessimisticAction::*, *},
     tikvpb::TikvClient,
 };
@@ -29,10 +29,10 @@ use tikv::{
     storage::kv::LocalTablets,
 };
 use tikv_util::{
+    HandyRwLock,
     config::ReadableDuration,
     memory::MemoryQuota,
-    worker::{LazyWorker, Runnable},
-    HandyRwLock,
+    worker::{Builder, LazyWorker, Runnable},
 };
 use txn_types::TimeStamp;
 static INIT: Once = Once::new();
@@ -185,11 +185,16 @@ impl TestSuiteBuilder {
             let memory_quota = Arc::new(MemoryQuota::new(memory_quota));
             let memory_quota_ = memory_quota.clone();
             let scheduler = worker.scheduler();
+            let pool = Arc::new(Builder::new("cdc-watchdog-test").thread_count(1).create());
             sim.pending_services
                 .entry(id)
                 .or_default()
                 .push(Box::new(move || {
-                    create_change_data(cdc::Service::new(scheduler.clone(), memory_quota_.clone()))
+                    create_change_data(cdc::Service::new(
+                        scheduler.clone(),
+                        memory_quota_.clone(),
+                        pool.clone(),
+                    ))
                 }));
             sim.txn_extra_schedulers.insert(
                 id,
@@ -343,51 +348,6 @@ impl TestSuite {
             prewrite_resp.errors.is_empty(),
             "{:?}",
             prewrite_resp.get_errors()
-        );
-    }
-
-    pub fn must_kv_flush(
-        &mut self,
-        region_id: u64,
-        muts: Vec<Mutation>,
-        pk: Vec<u8>,
-        ts: TimeStamp,
-        generation: u64,
-    ) {
-        self.must_kv_flush_with_source(region_id, muts, pk, ts, generation, 0);
-    }
-
-    pub fn must_kv_flush_with_source(
-        &mut self,
-        region_id: u64,
-        muts: Vec<Mutation>,
-        pk: Vec<u8>,
-        ts: TimeStamp,
-        generation: u64,
-        txn_source: u64,
-    ) {
-        let mut flush_req = FlushRequest::default();
-        let mut context = self.get_context(region_id);
-        context.set_txn_source(txn_source);
-        flush_req.set_context(context);
-        flush_req.set_mutations(muts.into_iter().collect());
-        flush_req.primary_key = pk;
-        flush_req.start_ts = ts.into_inner();
-        flush_req.generation = generation;
-        flush_req.lock_ttl = flush_req.start_ts + 1;
-        let flush_resp = self
-            .get_tikv_client(region_id)
-            .kv_flush(&flush_req)
-            .unwrap();
-        assert!(
-            !flush_resp.has_region_error(),
-            "{:?}",
-            flush_resp.get_region_error()
-        );
-        assert!(
-            flush_resp.errors.is_empty(),
-            "{:?}",
-            flush_resp.get_errors()
         );
     }
 

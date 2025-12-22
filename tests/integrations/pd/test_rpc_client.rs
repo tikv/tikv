@@ -3,12 +3,12 @@
 use std::{sync::Arc, thread, time::Duration};
 
 use error_code::ErrorCodeExt;
-use futures::{executor::block_on, StreamExt};
+use futures::{StreamExt, executor::block_on};
 use grpcio::{EnvBuilder, Error as GrpcError, RpcStatus, RpcStatusCode};
 use kvproto::{metapb, pdpb};
 use pd_client::{Error as PdError, Feature, PdClientV2, PdConnector, RpcClientV2};
 use security::{SecurityConfig, SecurityManager};
-use test_pd::{mocker::*, util::*, Server as MockServer};
+use test_pd::{Server as MockServer, mocker::*, util::*};
 use tikv_util::{config::ReadableDuration, mpsc::future::WakePolicy, thd_name};
 use tokio::runtime::{Builder, Runtime};
 use txn_types::TimeStamp;
@@ -142,7 +142,8 @@ fn test_rpc_client() {
         None,
     ))
     .unwrap();
-    block_on(client.ask_batch_split(metapb::Region::default(), 1)).unwrap();
+    block_on(client.ask_batch_split(metapb::Region::default(), 1, pdpb::SplitReason::Admin))
+        .unwrap();
     block_on(client.report_batch_split(vec![metapb::Region::default(), metapb::Region::default()]))
         .unwrap();
 
@@ -327,7 +328,8 @@ fn test_incompatible_version() {
 
     let mut client = new_client_v2(eps, None);
 
-    let resp = block_on(client.ask_batch_split(metapb::Region::default(), 2));
+    let resp =
+        block_on(client.ask_batch_split(metapb::Region::default(), 2, pdpb::SplitReason::Admin));
     assert_eq!(
         resp.unwrap_err().to_string(),
         PdError::Incompatible.to_string()

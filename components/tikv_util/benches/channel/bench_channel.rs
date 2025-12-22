@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{sync::mpsc::channel, thread, usize};
+use std::{sync::mpsc::channel, thread};
 
 use crossbeam::channel;
 use futures::{executor::block_on, stream::StreamExt};

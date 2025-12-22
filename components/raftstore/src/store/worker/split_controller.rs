@@ -1,10 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cmp::{min, Ordering},
+    cmp::{Ordering, min},
     collections::{BinaryHeap, HashSet},
     slice::{Iter, IterMut},
-    sync::{mpsc::Receiver, Arc},
+    sync::{Arc, mpsc::Receiver},
     time::{Duration, SystemTime},
 };
 
@@ -21,7 +21,7 @@ use tikv_util::{
     config::Tracker,
     debug, info,
     metrics::ThreadInfoStatistics,
-    store::{is_read_query, QueryStats},
+    store::{QueryStats, is_read_query},
     time::Instant,
     warn,
 };
@@ -29,7 +29,10 @@ use tikv_util::{
 use crate::store::{
     metrics::*,
     util::build_key_range,
-    worker::{split_config::get_sample_num, FlowStatistics, SplitConfig, SplitConfigManager},
+    worker::{
+        FlowStatistics, SplitConfig, SplitConfigManager, SplitValidator,
+        split_config::get_sample_num,
+    },
 };
 
 const DEFAULT_MAX_SAMPLE_LOOP_COUNT: usize = 10000;
@@ -760,6 +763,7 @@ impl AutoSplitController {
         read_stats_receiver: &Receiver<ReadStats>,
         cpu_stats_receiver: &Receiver<Arc<RawRecords>>,
         thread_stats: &mut ThreadInfoStatistics,
+        split_validator: &SplitValidator,
     ) -> (Vec<usize>, Vec<SplitInfo>) {
         let mut top_cpu_usage = vec![];
         let mut top_qps = BinaryHeap::with_capacity(TOP_N);
@@ -791,6 +795,9 @@ impl AutoSplitController {
         // Start to record the read stats info.
         let mut split_infos = vec![];
         for (region_id, region_infos) in region_infos_map {
+            if split_validator.is_disabled(region_id) {
+                continue;
+            }
             let qps_prefix_sum = prefix_sum(region_infos.iter(), RegionInfo::get_read_qps);
             // region_infos is not empty, so it's safe to unwrap here.
             let qps = *qps_prefix_sum.last().unwrap();
@@ -1330,6 +1337,7 @@ mod tests {
                 &read_stats_receiver,
                 &cpu_stats_receiver,
                 &mut ThreadInfoStatistics::default(),
+                &SplitValidator::new(),
             );
             if (i + 1) % hub.cfg.detect_times != 0 {
                 continue;
@@ -1369,6 +1377,7 @@ mod tests {
                 &read_stats_receiver,
                 &cpu_stats_receiver,
                 &mut ThreadInfoStatistics::default(),
+                &SplitValidator::new(),
             );
             if (i + 1) % hub.cfg.detect_times != 0 {
                 continue;
@@ -1409,7 +1418,7 @@ mod tests {
                 region_id,
                 peer_id: 0,
                 key_ranges: vec![(key_range.start_key.clone(), key_range.end_key.clone())],
-                extra_attachment: vec![],
+                extra_attachment: Arc::new(vec![]),
             });
             raw_records.records.insert(
                 key_range_tag.clone(),
@@ -1417,6 +1426,10 @@ mod tests {
                     cpu_time: cpu_times[idx],
                     read_keys: 0,
                     write_keys: 0,
+                    network_in_bytes: 0,
+                    network_out_bytes: 0,
+                    logical_read_bytes: 0,
+                    logical_write_bytes: 0,
                 },
             );
         }
@@ -1461,6 +1474,7 @@ mod tests {
                 &read_stats_receiver,
                 &cpu_stats_receiver,
                 &mut ThreadInfoStatistics::default(),
+                &SplitValidator::new(),
             );
         }
 
@@ -1482,6 +1496,7 @@ mod tests {
             &read_stats_receiver,
             &cpu_stats_receiver,
             &mut ThreadInfoStatistics::default(),
+            &SplitValidator::new(),
         );
     }
 
@@ -1840,14 +1855,14 @@ mod tests {
             region_id: 1,
             peer_id: 0,
             key_ranges: vec![(b"a".to_vec(), b"b".to_vec())],
-            extra_attachment: vec![],
+            extra_attachment: Arc::new(vec![]),
         });
         let cd_key_range_tag = Arc::new(TagInfos {
             store_id: 0,
             region_id: 1,
             peer_id: 0,
             key_ranges: vec![(b"c".to_vec(), b"d".to_vec())],
-            extra_attachment: vec![],
+            extra_attachment: Arc::new(vec![]),
         });
         let multiple_key_ranges_tag = Arc::new(TagInfos {
             store_id: 0,
@@ -1857,14 +1872,14 @@ mod tests {
                 (b"a".to_vec(), b"b".to_vec()),
                 (b"c".to_vec(), b"d".to_vec()),
             ],
-            extra_attachment: vec![],
+            extra_attachment: Arc::new(vec![]),
         });
         let empty_key_range_tag = Arc::new(TagInfos {
             store_id: 0,
             region_id: 1,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: vec![],
+            extra_attachment: Arc::new(vec![]),
         });
 
         let test_cases = vec![
@@ -1891,6 +1906,10 @@ mod tests {
                     cpu_time: test_case.0,
                     read_keys: 0,
                     write_keys: 0,
+                    network_in_bytes: 0,
+                    network_out_bytes: 0,
+                    logical_read_bytes: 0,
+                    logical_write_bytes: 0,
                 },
             );
             // ["c", "d"] with (test_case.1)ms CPU time.
@@ -1900,6 +1919,10 @@ mod tests {
                     cpu_time: test_case.1,
                     read_keys: 0,
                     write_keys: 0,
+                    network_in_bytes: 0,
+                    network_out_bytes: 0,
+                    logical_read_bytes: 0,
+                    logical_write_bytes: 0,
                 },
             );
             // Multiple key ranges with (test_case.2)ms CPU time.
@@ -1909,6 +1932,10 @@ mod tests {
                     cpu_time: test_case.2,
                     read_keys: 0,
                     write_keys: 0,
+                    network_in_bytes: 0,
+                    network_out_bytes: 0,
+                    logical_read_bytes: 0,
+                    logical_write_bytes: 0,
                 },
             );
             // Empty key range with (test_case.3)ms CPU time.
@@ -1918,6 +1945,10 @@ mod tests {
                     cpu_time: test_case.3,
                     read_keys: 0,
                     write_keys: 0,
+                    network_in_bytes: 0,
+                    network_out_bytes: 0,
+                    logical_read_bytes: 0,
+                    logical_write_bytes: 0,
                 },
             );
 
@@ -2040,6 +2071,7 @@ mod tests {
                 &read_stats_receiver,
                 &cpu_stats_receiver,
                 &mut threads,
+                &SplitValidator::new(),
             );
         });
     }

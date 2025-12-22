@@ -7,10 +7,10 @@ use kvproto::{
 };
 use pd_client::PdClient;
 use raftstore::store::SplitInfo;
-use slog::{info, warn, Logger};
-use yatp::{task::future::TaskCell, Remote};
+use slog::{Logger, info, warn};
+use yatp::{Remote, task::future::TaskCell};
 
-use super::{requests::*, Runner};
+use super::{Runner, requests::*};
 use crate::{batch::StoreRouter, router::CmdResChannel};
 
 fn new_batch_split_region_request(
@@ -63,6 +63,7 @@ where
             right_derive,
             share_source_region_size,
             Some(ch),
+            pdpb::SplitReason::Size,
         );
     }
 
@@ -77,6 +78,7 @@ where
         right_derive: bool,
         share_source_region_size: bool,
         ch: Option<CmdResChannel>,
+        reason: pdpb::SplitReason,
     ) {
         if split_keys.is_empty() {
             info!(
@@ -86,7 +88,7 @@ where
             );
             return;
         }
-        let resp = pd_client.ask_batch_split(region.clone(), split_keys.len());
+        let resp = pd_client.ask_batch_split(region.clone(), split_keys.len(), reason);
         let router = router.clone();
         let logger = logger.clone();
         let f = async move {
@@ -159,6 +161,7 @@ where
                         true,
                         false,
                         None,
+                        pdpb::SplitReason::Load,
                     );
                 // Try to split the region on half within the given key
                 // range if there is no `split_key` been given.

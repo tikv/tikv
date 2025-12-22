@@ -2,6 +2,7 @@
 
 mod test_async_fetch;
 mod test_async_io;
+mod test_auto_compaction;
 mod test_backup;
 mod test_bootstrap;
 mod test_cmd_epoch_checker;
@@ -41,6 +42,7 @@ mod test_stale_read;
 mod test_stats;
 mod test_storage;
 mod test_table_properties;
+mod test_titan;
 mod test_transaction;
 mod test_transfer_leader;
 mod test_ttl;

@@ -1,12 +1,12 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{mpsc, Mutex},
+    sync::{Mutex, mpsc},
     time::Duration,
 };
 
 use collections::HashMap;
-use engine_traits::{Peekable, CF_RAFT};
+use engine_traits::{CF_RAFT, Peekable};
 use kvproto::raft_serverpb::RaftApplyState;
 use pd_client::PdClient;
 use raftstore::store::*;

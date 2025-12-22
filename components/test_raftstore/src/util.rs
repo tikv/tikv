@@ -4,24 +4,24 @@ use std::{
     fmt::Write,
     path::Path,
     str::FromStr,
-    sync::{mpsc, Arc, Mutex},
+    sync::{Arc, Mutex, mpsc},
     thread,
     time::Duration,
 };
 
 use collections::HashMap;
 use encryption_export::{
-    data_key_manager_from_config, DataKeyManager, FileConfig, MasterKeyConfig,
+    DataKeyManager, FileConfig, MasterKeyConfig, data_key_manager_from_config,
 };
-use engine_rocks::{config::BlobRunMode, RocksEngine, RocksSnapshot, RocksStatistics};
+use engine_rocks::{RocksEngine, RocksSnapshot, RocksStatistics, config::BlobRunMode};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    CfName, CfNamesExt, Engines, Iterable, KvEngine, Peekable, RaftEngineDebug, RaftEngineReadOnly,
-    CF_DEFAULT, CF_RAFT, CF_WRITE,
+    CF_DEFAULT, CF_RAFT, CF_WRITE, CfName, CfNamesExt, Engines, Iterable, KvEngine, Peekable,
+    RaftEngineDebug, RaftEngineReadOnly,
 };
 use fail::fail_point;
 use file_system::IoRateLimiter;
-use futures::{executor::block_on, future::BoxFuture, StreamExt};
+use futures::{StreamExt, executor::block_on, future::BoxFuture};
 use grpcio::{ChannelBuilder, Environment};
 use hybrid_engine::HybridEngine;
 use in_memory_engine::RegionCacheMemoryEngine;
@@ -38,14 +38,16 @@ use kvproto::{
     },
     tikvpb::TikvClient,
 };
+use lazy_static::lazy_static;
 use pd_client::PdClient;
 use protobuf::RepeatedField;
 use raft::eraftpb::ConfChangeType;
 use raftstore::{
-    store::{fsm::RaftRouter, *},
-    RaftRouterCompactedEventSender, Result,
+    RaftRouterCompactedEventSender, RegionInfoAccessor, Result,
+    coprocessor::CoprocessorHost,
+    store::{fsm::RaftRouter, util::encode_start_ts_into_flag_data, *},
 };
-use rand::{seq::SliceRandom, RngCore};
+use rand::{RngCore, seq::SliceRandom};
 use server::common::ConfiguredRaftEngine;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
@@ -54,18 +56,20 @@ use tikv::{
     config::*,
     server::KvEngineFactoryBuilder,
     storage::{
+        Engine, Snapshot,
         kv::{SnapContext, SnapshotExt},
-        point_key_range, Engine, Snapshot,
+        point_key_range,
     },
 };
 pub use tikv_util::store::{find_peer, new_learner_peer, new_peer};
 use tikv_util::{
+    HandyRwLock,
     config::*,
     escape,
+    future::block_on_timeout,
     mpsc::future,
     time::{Instant, ThreadReadId},
     worker::LazyWorker,
-    HandyRwLock,
 };
 use txn_types::Key;
 
@@ -595,6 +599,55 @@ pub fn async_read_index_on_peer<T: Simulator>(
     })
 }
 
+pub fn get_snapshot<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    peer: metapb::Peer,
+    region: metapb::Region,
+    key: &[u8],
+    start_ts: Option<u64>,
+    timeout: Duration,
+) -> RaftCmdResponse {
+    block_on_timeout(
+        async_get_snapshot(cluster, peer, region, key, start_ts),
+        timeout,
+    )
+    .unwrap()
+}
+
+pub fn async_get_snapshot<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    peer: metapb::Peer,
+    region: metapb::Region,
+    key: &[u8],
+    start_ts: Option<u64>,
+) -> BoxFuture<'static, RaftCmdResponse> {
+    let node_id = peer.get_store_id();
+    let mut cmd = new_snap_cmd();
+    cmd.mut_read_index()
+        .set_start_ts(start_ts.unwrap_or(u64::MAX));
+    cmd.mut_read_index()
+        .mut_key_ranges()
+        .push(point_key_range(Key::from_raw(key)));
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![cmd],
+        true,
+    );
+    request.mut_header().set_replica_read(true);
+    if let Some(start_ts) = start_ts {
+        encode_start_ts_into_flag_data(request.mut_header(), start_ts);
+    }
+    request.mut_header().set_peer(peer);
+    let (tx, mut rx) = future::bounded(1, future::WakePolicy::Immediately);
+    let cb = Callback::read(Box::new(move |resp| drop(tx.send(resp.response))));
+    cluster.sim.wl().async_read(node_id, None, request, cb);
+    Box::pin(async move {
+        let fut = rx.next();
+        fut.await.unwrap()
+    })
+}
+
 pub fn async_command_on_node<T: Simulator>(
     cluster: &mut Cluster<T>,
     node_id: u64,
@@ -673,6 +726,7 @@ pub fn create_test_engine(
     router: Option<RaftRouter<RocksEngine, RaftTestEngine>>,
     limiter: Option<Arc<IoRateLimiter>>,
     cfg: &Config,
+    force_partition_mgr: &ForcePartitionRangeManager,
 ) -> (
     Engines<RocksEngine, RaftTestEngine>,
     Option<Arc<DataKeyManager>>,
@@ -682,6 +736,24 @@ pub fn create_test_engine(
     Option<Arc<RocksStatistics>>,
 ) {
     let dir = test_util::temp_dir("test_cluster", cfg.prefer_mem);
+    start_test_engine(router, limiter, cfg, force_partition_mgr, dir)
+}
+
+pub fn start_test_engine(
+    // TODO: pass it in for all cases.
+    router: Option<RaftRouter<RocksEngine, RaftTestEngine>>,
+    limiter: Option<Arc<IoRateLimiter>>,
+    cfg: &Config,
+    force_partition_mgr: &ForcePartitionRangeManager,
+    dir: TempDir,
+) -> (
+    Engines<RocksEngine, RaftTestEngine>,
+    Option<Arc<DataKeyManager>>,
+    TempDir,
+    LazyWorker<String>,
+    Arc<RocksStatistics>,
+    Option<Arc<RocksStatistics>>,
+) {
     let mut cfg = cfg.clone();
     cfg.storage.data_dir = dir.path().to_str().unwrap().to_string();
     cfg.raft_store.raftdb_path = cfg.infer_raft_db_path(None).unwrap();
@@ -700,8 +772,17 @@ pub fn create_test_engine(
 
     let (raft_engine, raft_statistics) = RaftTestEngine::build(&cfg, &env, &key_manager, &cache);
 
-    let mut builder = KvEngineFactoryBuilder::new(env, &cfg, cache, key_manager.clone())
-        .sst_recovery_sender(Some(scheduler));
+    let mut host: CoprocessorHost<RocksEngine> = CoprocessorHost::default();
+    let accessor = RegionInfoAccessor::new(&mut host, Arc::new(|| true), Box::new(|| 1));
+    let mut builder = KvEngineFactoryBuilder::new(
+        env,
+        &cfg,
+        cache,
+        key_manager.clone(),
+        force_partition_mgr.clone(),
+    )
+    .sst_recovery_sender(Some(scheduler))
+    .region_info_accessor(accessor);
     if let Some(router) = router {
         builder = builder.compaction_event_sender(Arc::new(RaftRouterCompactedEventSender {
             router: Mutex::new(router),
@@ -731,7 +812,9 @@ pub fn configure_for_hibernate(config: &mut Config) {
     // Uses long check interval to make leader keep sleeping during tests.
     config.raft_store.abnormal_leader_missing_duration = ReadableDuration::secs(20);
     config.raft_store.max_leader_missing_duration = ReadableDuration::secs(40);
-    config.raft_store.peer_stale_state_check_interval = ReadableDuration::secs(10);
+    config.raft_store.peer_stale_state_check_interval = ReadableDuration::secs(5);
+    // speed up down peer detection
+    config.raft_store.max_peer_down_duration = ReadableDuration::secs(5);
 }
 
 pub fn configure_for_snapshot(config: &mut Config) {
@@ -1817,7 +1900,7 @@ pub fn put_with_timeout<T: Simulator>(
 pub fn wait_down_peers<T: Simulator>(cluster: &Cluster<T>, count: u64, peer: Option<u64>) {
     let mut peers = cluster.get_down_peers();
     for _ in 1..1000 {
-        if peers.len() == count as usize && peer.as_ref().map_or(true, |p| peers.contains_key(p)) {
+        if peers.len() == count as usize && peer.as_ref().is_none_or(|p| peers.contains_key(p)) {
             return;
         }
         std::thread::sleep(Duration::from_millis(10));
@@ -1827,4 +1910,14 @@ pub fn wait_down_peers<T: Simulator>(cluster: &Cluster<T>, count: u64, peer: Opt
         "got {:?}, want {} peers which should include {:?}",
         peers, count, peer
     );
+}
+
+pub fn get_region_read_index_safe_ts<T: Simulator>(
+    cluster: &Cluster<T>,
+    store_id: u64,
+    region_id: u64,
+) -> u64 {
+    let store_meta = cluster.store_metas.get(&store_id).unwrap().lock().unwrap();
+    let region_read_progress = store_meta.region_read_progress.get(&region_id).unwrap();
+    region_read_progress.read_index_safe_ts()
 }

@@ -3,9 +3,9 @@ use std::{
         BTreeMap,
         Bound::{Excluded, Unbounded},
     },
+    mem::ManuallyDrop,
     sync::{Arc, Mutex},
 };
-
 /// A structure used to manage range-based latch with mutual exclusion.
 ///
 /// Currently used to ensure mutual exclusion between compaction filter and
@@ -73,11 +73,7 @@ impl RangeLatch {
     ///
     /// Deadlocks cannot occur in the current scenario, as each caller thread
     /// holds at most one lock at a time.
-    pub fn acquire<'a>(
-        self: &'a Arc<Self>,
-        start_key: Vec<u8>,
-        end_key: Vec<u8>,
-    ) -> RangeLatchGuard<'a> {
+    pub fn acquire(self: &Arc<Self>, start_key: Vec<u8>, end_key: Vec<u8>) -> RangeLatchGuard<'_> {
         loop {
             let mut range_latches = self.range_latches.lock().unwrap();
 
@@ -101,14 +97,21 @@ impl RangeLatch {
 
                 // Now acquire the latch after releasing the write guard
                 let mutex_guard = mutex.lock().unwrap();
-                // Safety: `_mutex_guard` is declared before `handle` in `KeyHandleGuard`.
-                // So the mutex guard will be released earlier than the `Arc<KeyHandle>`.
-                // Then we can make sure the mutex guard doesn't point to released memory.
+                // Safety: `transmute` just change the lifetime, do not change
+                // the type.
+                // `_mutex_guard` points to the `Mutex<()>`
+                // We need to make sure it will be dropped before the
+                // `Arc<Mutex<()>>` and the `RangeLatch` while `drop`.
+                // Then we can make sure the mutex guard doesn't point to
+                // released memory.
+                // We use `ManuallyDrop` to promise it.
+
+                #[allow(clippy::missing_transmute_annotations)]
                 let mutex_guard = unsafe { std::mem::transmute(mutex_guard) };
 
                 return RangeLatchGuard {
                     start_key,
-                    _mutex_guard: mutex_guard,
+                    _mutex_guard: ManuallyDrop::new(mutex_guard),
                     handle: self,
                 };
             }
@@ -128,17 +131,26 @@ pub struct RangeLatchGuard<'a> {
     start_key: Vec<u8>,
     /// Hold the mutex guard to prevent concurrent access to the same range.
     ///
-    /// This field must be declared before `handle` so it will be dropped before
-    /// `handle`.
-    _mutex_guard: std::sync::MutexGuard<'a, ()>,
+    /// Use `ManuallyDrop` to promise:
+    /// `_mutex_guard` will be dropped before the `Arc<Mutex<()>>` and the
+    /// `RangeLatch` while `drop`.
+    _mutex_guard: ManuallyDrop<std::sync::MutexGuard<'a, ()>>,
     /// Holds a reference to RangeLatch to release the latch when the guard is
     /// dropped.
     handle: &'a RangeLatch,
 }
 
-impl<'a> Drop for RangeLatchGuard<'a> {
+impl Drop for RangeLatchGuard<'_> {
     fn drop(&mut self) {
+        // Safety: we call `ManuallyDrop::drop` to drop the mutex guard
+        // once and only once.
+        // So `_mutex_guard` will be released earlier than the
+        // `Arc<Mutex<()>>`. We drop `_mutex_guard` by hand, so dropping order
+        // depends on declaration order no longer matters.
+        unsafe { ManuallyDrop::drop(&mut self._mutex_guard) };
         let mut range_latches = self.handle.range_latches.lock().unwrap();
+        // `range_latches.remove(&self.start_key);` will cause
+        // `Arc<Mutex()>>` dropped.
         range_latches.remove(&self.start_key);
     }
 }
@@ -148,8 +160,8 @@ mod tests {
     use std::{
         collections::HashSet,
         sync::{
-            atomic::{AtomicBool, Ordering},
             Arc,
+            atomic::{AtomicBool, Ordering},
         },
         thread,
         time::Duration,
@@ -172,6 +184,7 @@ mod tests {
         drop(guard1);
         drop(guard2);
         drop(guard3);
+        drop(latch);
     }
 
     #[test]

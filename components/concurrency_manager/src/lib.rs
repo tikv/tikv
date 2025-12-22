@@ -21,8 +21,8 @@ use std::{
     fmt::Display,
     mem::MaybeUninit,
     sync::{
-        atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -31,7 +31,7 @@ use crossbeam::atomic::AtomicCell;
 use lazy_static::lazy_static;
 use mockall::automock;
 use pd_client::{PdClient, PdFuture};
-use prometheus::{register_int_gauge, IntGauge};
+use prometheus::{IntGauge, register_int_gauge};
 use thiserror::Error;
 use tikv_util::{error, future::block_on_timeout, time::Instant, warn};
 use txn_types::{Key, Lock, TimeStamp};
@@ -143,7 +143,7 @@ impl ConcurrencyManager {
         };
 
         if limit_valid_duration >= max_ts_drift_allowance {
-            error!("improper setting: limit_valid_duration >= max_ts_drift_allowance; \
+            warn!("improper setting: limit_valid_duration >= max_ts_drift_allowance; \
                 consider increasing storage.max-ts.max-drift or decreasing storage.max-ts.cache-sync-interval";
                 "limit_valid_duration" => ?limit_valid_duration,
                 "max_ts_drift_allowance" => ?max_ts_drift_allowance,
@@ -209,7 +209,6 @@ impl ConcurrencyManager {
     /// - Ok(()): If the update is successful or has no effect
     /// - Err(limit): If new_ts is greater than the max_ts_limit, returns the
     ///   current limit value
-
     pub fn update_max_ts(
         &self,
         new_ts: TimeStamp,
@@ -224,8 +223,10 @@ impl ConcurrencyManager {
         if !limit.limit.is_zero() && new_ts > limit.limit {
             let last_update = limit.update_time;
             let now = self.time_provider.now();
-            assert!(now >= last_update);
-            let duration_to_last_limit_update = now - last_update;
+            if now < last_update {
+                warn!("clock went backwards"; "now" => ?now, "last_update" => ?last_update);
+            }
+            let duration_to_last_limit_update = now.saturating_duration_since(last_update);
 
             if duration_to_last_limit_update < self.limit_valid_duration {
                 // limit is valid
@@ -573,7 +574,7 @@ pub trait IntoErrorSource: sealed::Sealed {
 }
 
 // &str impl
-impl<'a> sealed::Sealed for &'a str {}
+impl sealed::Sealed for &str {}
 impl<'a> IntoErrorSource for &'a str {
     type Output = &'a str;
     fn into_error_source(self) -> Self::Output {

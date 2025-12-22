@@ -8,12 +8,12 @@ use pd_client::RpcClient;
 
 mod resource_group;
 pub use resource_group::{
-    ResourceConsumeType, ResourceController, ResourceGroupManager, MIN_PRIORITY_UPDATE_INTERVAL,
+    MIN_PRIORITY_UPDATE_INTERVAL, ResourceConsumeType, ResourceController, ResourceGroupManager,
 };
 pub use tikv_util::resource_control::*;
 
 mod future;
-pub use future::{with_resource_limiter, ControlledFuture};
+pub use future::{ControlledFuture, with_resource_limiter};
 
 #[cfg(test)]
 extern crate test;
@@ -29,9 +29,7 @@ pub mod config;
 mod resource_limiter;
 pub use resource_limiter::ResourceLimiter;
 use tikv_util::worker::Worker;
-use worker::{
-    GroupQuotaAdjustWorker, PriorityLimiterAdjustWorker, BACKGROUND_LIMIT_ADJUST_DURATION,
-};
+use worker::{BACKGROUND_LIMIT_ADJUST_DURATION, GroupQuotaAdjustWorker};
 
 mod metrics;
 pub mod worker;
@@ -57,10 +55,12 @@ pub fn start_periodic_tasks(
     // spawn a task to auto adjust background quota limiter and priority quota
     // limiter.
     let mut worker = GroupQuotaAdjustWorker::new(mgr.clone(), io_bandwidth);
-    let mut priority_worker = PriorityLimiterAdjustWorker::new(mgr.clone());
+    // We disable the priority worker by default because the current adjust
+    // algorithm is buggy. We may reenable it only we find a better algorithm.
+    // let mut priority_worker = PriorityLimiterAdjustWorker::new(mgr.clone());
     bg_worker.spawn_interval_task(BACKGROUND_LIMIT_ADJUST_DURATION, move || {
         worker.adjust_quota();
-        priority_worker.adjust();
+        // priority_worker.adjust();
     });
     // spawn a task to periodically upload resource usage statistics to PD.
     bg_worker.spawn_async_task(async move {

@@ -7,11 +7,10 @@ use std::{
     collections::VecDeque,
     mem,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
-    u64, usize,
 };
 
 use bitflags::bitflags;
@@ -22,14 +21,10 @@ use codec::{
 };
 use collections::{HashMap, HashSet};
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
-use engine_traits::{
-    Engines, KvEngine, PerfContext, RaftEngine, Snapshot, WriteBatch, WriteOptions, CF_DEFAULT,
-    CF_LOCK, CF_WRITE,
-};
+use engine_traits::{CF_LOCK, Engines, KvEngine, RaftEngine, Snapshot};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use getset::{Getters, MutGetters};
-use keys::{enc_end_key, enc_start_key};
 use kvproto::{
     errorpb,
     kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp},
@@ -39,9 +34,7 @@ use kvproto::{
         self, AdminCmdType, AdminResponse, CmdType, CommitMergeRequest, PutRequest, RaftCmdRequest,
         RaftCmdResponse, Request, TransferLeaderRequest, TransferLeaderResponse,
     },
-    raft_serverpb::{
-        ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
-    },
+    raft_serverpb::{ExtraMessage, ExtraMessageType, MergeState, RaftApplyState, RaftMessage},
     replication_modepb::{
         DrAutoSyncState, RegionReplicationState, RegionReplicationStatus, ReplicationMode,
     },
@@ -50,78 +43,72 @@ use parking_lot::RwLockUpgradableReadGuard;
 use pd_client::{Feature, INVALID_ID};
 use protobuf::Message;
 use raft::{
-    self,
+    self, GetEntriesContext, INVALID_INDEX, LightReady, NO_LIMIT, ProgressState, RawNode, Ready,
+    SnapshotStatus, StateRole,
     eraftpb::{self, Entry, EntryType, MessageType},
-    GetEntriesContext, LightReady, ProgressState, RawNode, Ready, SnapshotStatus, StateRole,
-    INVALID_INDEX, NO_LIMIT,
 };
 use rand::seq::SliceRandom;
 use smallvec::SmallVec;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
-    box_err, box_try,
+    Either, box_err, box_try,
     codec::number::decode_u64,
     debug, error, info,
     store::{find_peer_by_id, is_learner},
     sys::disk::DiskUsage,
-    time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant, InstantExt},
+    time::{Instant as TiInstant, InstantExt, duration_to_sec, monotonic_raw_now},
     warn,
     worker::Scheduler,
-    Either,
 };
 use time::{Duration as TimeDuration, Timespec};
-use tracker::{TrackerTokenArray, GLOBAL_TRACKERS};
+use tracker::{GLOBAL_TRACKERS, TrackerTokenArray};
 use txn_types::{TimeStamp, WriteBatchFlags};
 use uuid::Uuid;
 
 use super::{
-    cmd_resp,
+    DestroyPeerJob, LocalReadContext, cmd_resp,
     local_metrics::{IoType, RaftMetrics},
     metrics::*,
-    peer_storage::{
-        write_peer_state, CheckApplyingSnapStatus, HandleReadyResult, PeerStorage,
-        RAFT_INIT_LOG_TERM,
-    },
+    peer_storage::{CheckApplyingSnapStatus, HandleReadyResult, PeerStorage, RAFT_INIT_LOG_TERM},
     read_queue::{ReadIndexQueue, ReadIndexRequest},
     transport::Transport,
     util::{
-        self, check_req_region_epoch, is_initial_msg, AdminCmdEpochState, ChangePeerI,
-        ConfChangeKind, Lease, LeaseState, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
+        self, AdminCmdEpochState, ChangePeerI, ConfChangeKind, Lease, LeaseState,
+        NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER, check_req_region_epoch, is_initial_msg,
     },
     worker::BucketStatsInfo,
-    DestroyPeerJob, LocalReadContext,
 };
 use crate::{
+    Error, Result,
     coprocessor::{
-        split_observer::NO_VALID_SPLIT_KEY, CoprocessorHost, RegionChangeEvent, RegionChangeReason,
-        RoleChange, TransferLeaderCustomContext,
+        CoprocessorHost, RegionChangeEvent, RegionChangeReason, RoleChange,
+        TransferLeaderCustomContext,
     },
     errors::RAFTSTORE_IS_BUSY,
     router::{RaftStoreRouter, ReadContext},
     store::{
+        Callback, Config, GlobalReplicationState, PdTask, PeerMsg, RAFT_INIT_LOG_INDEX,
+        ReadCallback, ReadIndexContext, ReadResponse, TxnExt, WriteCallback,
         async_io::{read::ReadTask, write::WriteMsg, write_router::WriteRouter},
         entry_storage::CacheWarmupState,
         fsm::{
+            Apply, ApplyMetrics, ApplyTask, Proposal, StoreMeta,
             apply::{self, CatchUpLogs},
             store::PollContext,
-            Apply, ApplyMetrics, ApplyTask, Proposal,
         },
         hibernate_state::GroupState,
-        memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES},
-        msg::{CampaignType, CasualMessage, ErrorCallback, RaftCommand},
-        peer_storage::HandleSnapshotResult,
+        memory::{MEMTRACE_RAFT_ENTRIES, needs_evict_entry_cache},
+        msg::{CampaignType, CasualMessage, ErrorCallback, PeerClearMetaStat, RaftCommand},
+        peer_storage::{HandleSnapshotResult, clear_meta_in_kv_and_raft},
         snapshot_backup::{AbortReason, SnapshotBrState},
         txn_ext::LocksStatus,
         unsafe_recovery::{ForceLeaderState, UnsafeRecoveryState},
-        util::{admin_cmd_epoch_lookup, RegionReadProgress},
+        util::{RegionReadProgress, admin_cmd_epoch_lookup},
         worker::{
-            CleanupTask, CompactTask, HeartbeatTask, RaftlogGcTask, ReadDelegate, ReadExecutor,
-            ReadProgress, RegionTask, SplitCheckTask,
+            HeartbeatTask, RaftlogGcTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask,
+            SplitCheckTask,
         },
-        Callback, Config, GlobalReplicationState, PdTask, PeerMsg, ReadCallback, ReadIndexContext,
-        ReadResponse, TxnExt, WriteCallback, RAFT_INIT_LOG_INDEX,
     },
-    Error, Result,
 };
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
@@ -484,7 +471,7 @@ pub struct ApplySnapshotContext {
     /// Destroy the peer after apply task finished or aborted
     /// This flag is set to true when the peer destroy is skipped because of
     /// running snapshot task.
-    /// This is to accelerate peer destroy without waiting for extra destory
+    /// This is to accelerate peer destroy without waiting for extra destroy
     /// peer message.
     pub destroy_peer_after_apply: bool,
 }
@@ -524,7 +511,7 @@ pub fn propose_read_index<T: raft::Storage>(
     let last_ready_read_count = raft_group.raft.ready_read_count();
 
     let id = Uuid::new_v4();
-    raft_group.read_index(ReadIndexContext::fields_to_bytes(id, request, None));
+    raft_group.read_index(ReadIndexContext::fields_to_bytes(id, request, None, None));
 
     let pending_read_count = raft_group.raft.pending_read_count();
     let ready_read_count = raft_group.raft.ready_read_count();
@@ -704,6 +691,25 @@ impl SplitCheckTrigger {
     }
 }
 
+/// A enum contains some useful state to represent different reason for
+/// pending remove.
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingRemoveReason {
+    NotRemoved = 0,
+    Merge,
+    /// The peer has been marked for destruction and is scheduled to be removed.
+    Destroy,
+    /// The peer is now ready to be destroyed; all necessary preparations (such
+    /// as clearing the ApplyFsm) have been completed, so it can be safely
+    /// removed.
+    ///
+    /// Note: The peer enters the final stage of destruction only when its state
+    /// transitions from `Destroy` to `ReadyToDestroy`, or if it is directly
+    /// marked as `ReadyToDestroy`.
+    ReadyToDestroy,
+}
+
 #[derive(Getters, MutGetters)]
 pub struct Peer<EK, ER>
 where
@@ -747,11 +753,11 @@ where
     /// Indicates whether the peer should be woken up.
     pub should_wake_up: bool,
     /// Whether this peer is destroyed asynchronously.
-    /// If it's true,
+    /// If it's Some(...),
     /// - when merging, its data in storeMeta will be removed early by the
     ///   target peer.
     /// - all read requests must be rejected.
-    pub pending_remove: bool,
+    pub pending_remove: Option<PendingRemoveReason>,
     /// Currently it's used to indicate whether the witness -> non-witess
     /// convertion operation is complete. The meaning of completion is that
     /// this peer must contain the applied data, then PD can consider that
@@ -926,7 +932,6 @@ where
     pub unsafe_recovery_state: Option<UnsafeRecoveryState>,
     pub snapshot_recovery_state: Option<SnapshotBrState>,
 
-    last_record_safe_point: u64,
     /// Used for checking whether the peer is busy on apply.
     /// * `None` => the peer has no pending logs for apply or already finishes
     ///   applying.
@@ -1027,7 +1032,7 @@ where
             split_check_trigger: SplitCheckTrigger::default(),
             delete_keys_hint: 0,
             leader_unreachable: false,
-            pending_remove: false,
+            pending_remove: None,
             wait_data,
             request_index: last_index,
             delay_clean_data: false,
@@ -1085,7 +1090,6 @@ where
                 REGION_READ_PROGRESS_CAP,
                 peer_id,
             )),
-            last_record_safe_point: 0,
             memtrace_raft_entries: 0,
             write_router: WriteRouter::new(tag),
             unpersisted_readies: VecDeque::default(),
@@ -1109,7 +1113,6 @@ where
 
         let persisted_index = peer.raft_group.raft.raft_log.persisted;
         peer.mut_store().update_cache_persisted(persisted_index);
-
         Ok(peer)
     }
 
@@ -1324,7 +1327,7 @@ where
     /// Tries to destroy itself. Returns a job (if needed) to do more cleaning
     /// tasks.
     pub fn maybe_destroy<T>(&mut self, ctx: &PollContext<EK, ER, T>) -> Option<DestroyPeerJob> {
-        if self.pending_remove {
+        if self.pending_remove.is_some() {
             info!(
                 "is being destroyed, skip";
                 "region_id" => self.region_id,
@@ -1381,7 +1384,9 @@ where
         //   is Some and should be set to None.
         self.apply_snap_ctx = None;
 
-        self.pending_remove = true;
+        // Marks the peer is prepared to be destroyed, waiting for finishing
+        // preparations.
+        self.pending_remove = Some(PendingRemoveReason::Destroy);
 
         Some(DestroyPeerJob {
             initialized: self.get_store().is_initialized(),
@@ -1390,115 +1395,112 @@ where
         })
     }
 
-    /// Does the real destroy task which includes:
-    /// 1. Set the region to tombstone;
-    /// 2. Clear data;
-    /// 3. Notify all pending requests.
+    /// Destroys the peer by scheduling an asychronous task to the region
+    /// worker by default.
+    ///
+    /// If the scheduling is abnormal due to `region-worker` is exited, it
+    /// will redirect to directly destroy the peer synchronously.
+    ///
+    /// The return value:
+    /// - `None` represents that the destroy task is scheduled successfully.
+    /// - `Some(...)` represents that the destroy task is executed
+    ///   synchronously.
     pub fn destroy(
         &mut self,
         engines: &Engines<EK, ER>,
-        perf_context: &mut ER::PerfContext,
         keep_data: bool,
-        pending_create_peers: &Mutex<HashMap<u64, (u64, bool)>>,
-        raft_metrics: &RaftMetrics,
-    ) -> Result<()> {
-        fail_point!("raft_store_skip_destroy_peer", |_| Ok(()));
-        let t = TiInstant::now();
+        store_meta: Arc<Mutex<StoreMeta>>,
+        pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
+    ) -> Option<PeerClearMetaStat> {
+        fail_point!("raft_store_skip_destroy_peer", |_| {
+            Some(PeerClearMetaStat::default())
+        });
 
-        let mut region = self.region().clone();
-        info!(
-            "begin to destroy";
-            "region_id" => self.region_id,
-            "peer_id" => self.peer.get_id(),
-        );
+        let peer = self.peer.clone();
+        let region = self.region().clone();
+        // Raft log gc should be flushed before being destroyed, so last_compacted_idx
+        // has to be the minimal index that may still have logs.
+        let last_compacted_idx = self.last_compacted_idx;
+        let local_first_replicate = self.local_first_replicate;
+        let merge_state = if keep_data {
+            self.pending_merge_state.clone()
+        } else {
+            None
+        };
 
-        let (pending_create_peers, clean) = if self.local_first_replicate {
-            let mut pending = pending_create_peers.lock().unwrap();
-            if self.get_store().is_initialized() {
-                assert_eq!(pending.get(&region.get_id()), None);
-                (None, true)
-            } else if let Some(status) = pending.get(&region.get_id()) {
-                if *status == (self.peer.get_id(), false) {
-                    pending.remove(&region.get_id());
-                    // Hold the lock to avoid apply worker applies split.
-                    (Some(pending), true)
-                } else if *status == (self.peer.get_id(), true) {
-                    // It's already marked to split by apply worker, skip delete.
-                    (None, false)
-                } else {
-                    // Peer id can't be different as router should exist all the time, their is no
-                    // chance for store to insert a different peer id. And apply worker should skip
-                    // split when meeting a different id.
-                    let status = *status;
-                    // Avoid panic with lock.
-                    drop(pending);
-                    panic!("{} unexpected pending states {:?}", self.tag, status);
+        // Asynchronously destroy the peer by triggering a task to background worker,
+        // and the corresponding worker will finish the preparations for destroying.
+        let async_failed = self
+            .mut_store()
+            .schedule_destroy_peer(
+                peer.clone(),
+                region.clone(),
+                keep_data,
+                local_first_replicate,
+                last_compacted_idx,
+                merge_state.clone(),
+                pending_create_peers.clone(),
+            )
+            .is_err();
+        // Failed to asynchronously destroy the peer (channel is closed),
+        // redirecting to synchronously destroy the peer.
+        let clear_stat = if async_failed {
+            match clear_meta_in_kv_and_raft(
+                engines,
+                peer,
+                region,
+                self.get_store().raft_state().clone(),
+                merge_state,
+                self.get_store().is_initialized(),
+                local_first_replicate,
+                last_compacted_idx,
+                store_meta.clone(),
+                pending_create_peers,
+            ) {
+                Err(e) => {
+                    // If not panic here, the peer will be recreated in the next restart,
+                    // then it will be gc again. But if some overlap region is created
+                    // before restarting, the gc action will delete the overlap region's
+                    // data too.
+                    panic!("{} prepare to destroy err {:?}", self.tag, e);
                 }
-            } else {
-                // The status is inserted when it's created. It will be removed in following
-                // cases:
-                // - By apply worker as it fails to split due to region state key. This is
-                //   impossible to reach this code path because the delete write batch is not
-                //   persisted yet.
-                // - By store fsm as it fails to create peer, which is also invalid obviously.
-                // - By peer fsm after persisting snapshot, then it should be initialized.
-                // - By peer fsm after split.
-                // - By peer fsm when destroy, which should go the above branch instead.
-                (None, false)
+                Ok(stat) => Some(stat),
             }
         } else {
-            (None, true)
+            // Returns `None` to represent that the destroy task is successfully
+            // scheduled.
+            None
         };
+
+        info!(
+            "trigger destroy peer task";
+            "region_id" => self.region_id,
+            "peer_id" => self.peer.get_id(),
+            "async" => !async_failed,
+        );
+        clear_stat
+    }
+
+    /// Does the final destroy task which includes:
+    /// 1. Clear data if needs (async mode).
+    /// 2. Notify all pending requests.
+    pub fn ready_to_destroy(
+        &mut self,
+        keep_data: bool,
+        clear_stat: PeerClearMetaStat,
+        raft_metrics: &RaftMetrics,
+    ) {
+        let t = TiInstant::now();
+        let region_id = self.region_id;
+        let clean = !clear_stat.is_zero();
+
         if clean {
-            // Set Tombstone state explicitly
-            let mut kv_wb = engines.kv.write_batch();
-            let mut raft_wb = engines.raft.log_batch(1024);
-            // Raft log gc should be flushed before being destroyed, so last_compacted_idx
-            // has to be the minimal index that may still have logs.
-            let last_compacted_idx = self.last_compacted_idx;
-            self.mut_store()
-                .clear_meta(last_compacted_idx, &mut kv_wb, &mut raft_wb)?;
-
-            // StoreFsmDelegate::check_msg use both epoch and region peer list to check
-            // whether a message is targeting a staled peer. But for an uninitialized peer,
-            // both epoch and peer list are empty, so a removed peer will be created again.
-            // Saving current peer into the peer list of region will fix this problem.
-            if !self.get_store().is_initialized() {
-                region.mut_peers().push(self.peer.clone());
-            }
-
-            write_peer_state(
-                &mut kv_wb,
-                &region,
-                PeerState::Tombstone,
-                // Only persist the `merge_state` if the merge is known to be succeeded
-                // which is determined by the `keep_data` flag
-                if keep_data {
-                    self.pending_merge_state.clone()
-                } else {
-                    None
-                },
-            )?;
-
-            let start = Instant::now();
-            // write kv rocksdb first in case of restart happen between two write
-            let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(true);
-            kv_wb.write_opt(&write_opts)?;
-            raft_metrics
-                .io_write_peer_destroy_kv
-                .observe(start.saturating_elapsed().as_secs_f64());
-
-            drop(pending_create_peers);
-
-            let start = Instant::now();
-            perf_context.start_observe();
-            engines.raft.consume(&mut raft_wb, true)?;
-            perf_context.report_metrics(&[]);
             raft_metrics
                 .io_write_peer_destroy_raft
-                .observe(start.saturating_elapsed().as_secs_f64());
-
+                .observe(clear_stat.raft_duration.as_secs_f64());
+            raft_metrics
+                .io_write_peer_destroy_kv
+                .observe(clear_stat.kvdb_duration.as_secs_f64());
             if self.get_store().is_initialized() && !keep_data {
                 // If we meet panic when deleting data and raft log, the dirty data
                 // will be cleared by a newer snapshot applying or restart.
@@ -1512,24 +1514,22 @@ where
             }
         }
 
-        self.pending_reads.clear_all(Some(region.get_id()));
+        self.pending_reads.clear_all(Some(region_id));
 
         for Proposal { cb, .. } in self.proposals.queue.drain(..) {
-            apply::notify_req_region_removed(region.get_id(), cb);
+            apply::notify_req_region_removed(region_id, cb);
         }
 
         info!(
             "peer destroy itself";
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
-            "takes" => ?t.saturating_elapsed(),
+            "takes" => ?(t.saturating_elapsed() + clear_stat.duration()),
             "clean" => clean,
             "keep_data" => keep_data,
         );
 
         fail_point!("raft_store_after_destroy_peer");
-
-        Ok(())
     }
 
     #[inline]
@@ -1552,10 +1552,54 @@ where
         &self.region_buckets_info
     }
 
+    fn is_peer_heartbeat_timeout(
+        &self,
+        peer_id: u64,
+        heartbeat_timeout_duration: Duration,
+    ) -> bool {
+        if let Some(instant) = self.peer_heartbeats.get(&peer_id) {
+            let elapsed = instant.saturating_elapsed();
+            return elapsed >= heartbeat_timeout_duration;
+        }
+        true // If no heartbeat record, consider it as timeout.
+    }
+
+    /// Checks if all peers that have not sent a hibernate vote are unreachable.
+    /// If one peer is unreachable, it must be in probe state and encounter
+    /// heartbeat timeout.
+    pub fn all_non_hibernate_vote_peers_unreachable(
+        &self,
+        hibernate_vote_peer_ids: &[u64],
+        heartbeat_timeout_duration: Duration,
+    ) -> bool {
+        let status = self.raft_group.status();
+        let progress = match status.progress {
+            Some(progress) => progress,
+            None => return false,
+        };
+        // Check each peer in the raft group
+        for (id, pr) in progress.iter() {
+            if *id == self.peer.get_id() {
+                continue;
+            }
+            if !hibernate_vote_peer_ids.contains(id) {
+                if pr.state != ProgressState::Probe {
+                    // Found a non-hibernate-vote peer not in probe state, return false
+                    return false;
+                }
+                if !self.is_peer_heartbeat_timeout(*id, heartbeat_timeout_duration) {
+                    // Found a non-hibernate-vote peer not in heartbeat timeout, return false
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
     /// Check whether the peer can be hibernated.
     ///
     /// This should be used with `check_after_tick` to get a correct conclusion.
-    pub fn check_before_tick(&self, cfg: &Config) -> CheckTickResult {
+    pub fn check_before_tick(&self, cfg: &Config, down_peer_ids: &[u64]) -> CheckTickResult {
         let mut res = CheckTickResult::default();
         if !self.is_leader() {
             return res;
@@ -1566,17 +1610,29 @@ where
         }
         let status = self.raft_group.status();
         let last_index = self.raft_group.raft.raft_log.last_index();
+        let mut matched_peer_ids = HashSet::default();
+        matched_peer_ids.insert(self.peer.get_id());
         for (id, pr) in status.progress.unwrap().iter() {
-            // Even a recent inactive node is also considered. If we put leader into sleep,
-            // followers or learners may not sync its logs for a long time and become
-            // unavailable. We choose availability instead of performance in this case.
+            // Leader can sleep when every alive peer is in sync and all alive peers reach
+            // majority. If we put leader into sleep when some alive peer lags,
+            // followers or learners may not sync its logs for a long time and
+            // become unavailable. We choose availability instead of performance in this
+            // case.
             if *id == self.peer.get_id() {
                 continue;
             }
-            if pr.matched != last_index {
+            if pr.matched != last_index && !down_peer_ids.contains(id) {
+                // Prevent leader from sleeping when some alive peer is still replicating logs.
                 res.reason = "replication";
                 return res;
             }
+            if pr.matched == last_index {
+                matched_peer_ids.insert(*id);
+            }
+        }
+        if !self.raft_group.raft.prs().has_quorum(&matched_peer_ids) {
+            res.reason = "not enough matched peers";
+            return res;
         }
         if self.raft_group.raft.pending_read_count() > 0 {
             res.reason = "pending read";
@@ -1675,6 +1731,12 @@ where
         region: metapb::Region,
         reason: RegionChangeReason,
     ) {
+        fail_point!(
+            "raftstore_set_region_after_change_peer",
+            self.peer.get_store_id() == 3 && reason == RegionChangeReason::ChangePeer,
+            |_| {}
+        );
+
         if self.region().get_region_epoch().get_version() < region.get_region_epoch().get_version()
         {
             // Epoch version changed, disable read on the local reader for this region.
@@ -1696,7 +1758,7 @@ where
             pessimistic_locks.version = self.region().get_region_epoch().get_version();
         }
 
-        if !self.pending_remove {
+        if self.pending_remove.is_none() {
             host.on_region_changed(
                 self.region(),
                 RegionChangeEvent::Update(reason),
@@ -1776,7 +1838,7 @@ where
     pub fn should_destroy_after_apply_snapshot(&self) -> bool {
         self.apply_snap_ctx
             .as_ref()
-            .map_or(false, |ctx| ctx.destroy_peer_after_apply)
+            .is_some_and(|ctx| ctx.destroy_peer_after_apply)
     }
 
     /// Returns `true` if the raft group has replicated a snapshot but not
@@ -1946,8 +2008,12 @@ where
         }
         let msg_type = m.get_msg_type();
         if msg_type == MessageType::MsgReadIndex {
-            ctx.coprocessor_host
-                .on_step_read_index(&mut m, self.get_role());
+            ctx.coprocessor_host.on_step_read_index(
+                &mut m,
+                self.get_role(),
+                Some(self.region().get_start_key()),
+                Some(self.region().get_end_key()),
+            );
             // Must use the commit index of `PeerStorage` instead of the commit index
             // in raft-rs which may be greater than the former one.
             // For more details, see the annotations above `on_leader_commit_idx_changed`.
@@ -2123,6 +2189,14 @@ where
             self.refill_disk_full_peers(ctx);
         }
         down_peers
+    }
+
+    /// Returns the current list of down peer ids.
+    ///
+    /// This clones the internal `down_peer_ids` vector so callers can use it
+    /// without borrowing `self` mutably.
+    pub fn get_down_peer_ids(&self) -> Vec<u64> {
+        self.down_peer_ids.clone()
     }
 
     /// Collects all pending peers and update `peers_start_pending_time`.
@@ -2624,8 +2698,8 @@ where
     ///   `Peer::on_persist_ready`
     /// - Schedule the snapshot task to region worker through
     ///   `schedule_applying_snapshot`
-    /// - Wait for applying snapshot to complete(`check_snap_status`)
-    /// Then it's valid to handle the next ready.
+    /// - Wait for applying snapshot to complete(`check_snap_status`) Then it's
+    ///   valid to handle the next ready.
     fn check_snap_status<T: Transport>(&mut self, ctx: &mut PollContext<EK, ER, T>) -> bool {
         if let Some(snap_ctx) = self.apply_snap_ctx.as_ref() {
             if !snap_ctx.scheduled {
@@ -2759,7 +2833,7 @@ where
             None => return,
         };
         let cancel_by_unreachable_store =
-            unreachable_store_id.map_or(false, |s| to_peer.get_store_id() == s);
+            unreachable_store_id.is_some_and(|s| to_peer.get_store_id() == s);
         let cancel_by_peer_not_found = find_peer_by_id(self.region(), to_peer.get_id()).is_none();
         if cancel_by_unreachable_store || cancel_by_peer_not_found {
             self.get_store().cancel_generating_snap(None);
@@ -2803,7 +2877,7 @@ where
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
     ) -> Option<ReadyResult> {
-        if self.pending_remove {
+        if self.pending_remove.is_some() {
             return None;
         }
 
@@ -3138,6 +3212,13 @@ where
         for entry in committed_entries.iter().rev() {
             // raft meta is very small, can be ignored.
             self.raft_log_size_hint += entry.get_data().len() as u64;
+            // Using per committed entry to update the term cache may slightly reduce
+            // `raft::Storage::term()` query performance for recently appended
+            // indices, but it ensures that the term cache maintains the
+            // integrity and continuity of each term's lifecycle, making it safe
+            // and efficient for access and compaction.
+            self.mut_store()
+                .update_term_cache(entry.get_index(), entry.get_term());
             if lease_to_be_updated {
                 let propose_time = self
                     .proposals
@@ -3381,7 +3462,7 @@ where
         self.write_router
             .check_new_persisted(ctx, self.persisted_number);
 
-        if !self.pending_remove {
+        if self.pending_remove.is_none() {
             // If `pending_remove` is true, no need to call `on_persist_ready` to
             // update persist index.
             let pre_persist_index = self.raft_group.raft.raft_log.persisted;
@@ -3653,10 +3734,21 @@ where
 
     fn apply_reads<T>(&mut self, ctx: &mut PollContext<EK, ER, T>, ready: &Ready) {
         let mut propose_time = None;
-        let states = ready.read_states().iter().map(|state| {
-            let read_index_ctx = ReadIndexContext::parse(state.request_ctx.as_slice()).unwrap();
-            (read_index_ctx.id, read_index_ctx.locked, state.index)
-        });
+        let states: Vec<_> = ready
+            .read_states()
+            .iter()
+            .map(|state| {
+                let read_index_ctx = ReadIndexContext::parse(state.request_ctx.as_slice()).unwrap();
+                if let Some(read_index_safe_ts) = read_index_ctx.read_index_safe_ts {
+                    // There are no pending conflict memory locks on the leader.
+                    if self.ready_to_handle_unsafe_replica_read(state.index) {
+                        self.read_progress
+                            .update_read_index_safe_ts(read_index_safe_ts);
+                    }
+                }
+                (read_index_ctx.id, read_index_ctx.locked, state.index)
+            })
+            .collect();
         // The follower may lost `ReadIndexResp`, so the pending_reads does not
         // guarantee the orders are consistent with read_states. `advance` will
         // update the `read_index` of read request that before this successful
@@ -3814,7 +3906,7 @@ where
     }
 
     fn maybe_update_read_progress(&self, reader: &mut ReadDelegate, progress: ReadProgress) {
-        if self.pending_remove {
+        if self.pending_remove.is_some() {
             return;
         }
         debug!(
@@ -3869,7 +3961,7 @@ where
         mut err_resp: RaftCmdResponse,
         mut disk_full_opt: DiskFullOpt,
     ) -> bool {
-        if self.pending_remove {
+        if self.pending_remove.is_some() {
             return false;
         }
 
@@ -3888,7 +3980,9 @@ where
                 self.read_local(ctx, req, cb);
                 return false;
             }
-            Ok(RequestPolicy::ReadIndex) => return self.read_index(ctx, req, err_resp, cb),
+            Ok(RequestPolicy::ReadIndex) | Ok(RequestPolicy::ReadIndexReplicaRead) => {
+                return self.read_index(ctx, req, err_resp, cb);
+            }
             Ok(RequestPolicy::ProposeTransferLeader) => {
                 return self.propose_transfer_leader(ctx, req, cb);
             }
@@ -4111,7 +4205,7 @@ where
     pub fn pre_read_index(&self) -> Result<()> {
         fail_point!(
             "before_propose_readindex",
-            |s| if s.map_or(true, |s| s.parse().unwrap_or(true)) {
+            |s| if s.is_none_or(|s| s.parse().unwrap_or(true)) {
                 Ok(())
             } else {
                 Err(box_err!(
@@ -4158,6 +4252,7 @@ where
             .read_index(ReadIndexContext::fields_to_bytes(
                 read.id,
                 read.addition_request.as_deref(),
+                None,
                 None,
             ));
         debug!(
@@ -4249,7 +4344,7 @@ where
                     region_id: self.region_id,
                 };
                 if let Err(e) = poll_ctx.pd_scheduler.schedule(task) {
-                    error!(
+                    warn!(
                         "failed to notify pd";
                         "region_id" => self.region_id,
                         "peer_id" => self.peer_id(),
@@ -4556,71 +4651,7 @@ where
         poll_ctx: &mut PollContext<EK, ER, T>,
         req: &mut RaftCmdRequest,
     ) -> Result<ProposalContext> {
-        poll_ctx
-            .coprocessor_host
-            .pre_propose(self.region(), req)
-            .map_err(|e| {
-                // If the error of prepropose contains str `NO_VALID_SPLIT_KEY`, it may mean the
-                // split_key of the split request is the region start key which
-                // means we may have so many potential duplicate mvcc versions
-                // that we can not manage to get a valid split key. So, we
-                // trigger a compaction to handle it.
-                if e.to_string().contains(NO_VALID_SPLIT_KEY) {
-                    let safe_ts = (|| {
-                        fail::fail_point!("safe_point_inject", |t| {
-                            t.unwrap().parse::<u64>().unwrap()
-                        });
-                        poll_ctx.safe_point.load(Ordering::Relaxed)
-                    })();
-                    if safe_ts <= self.last_record_safe_point {
-                        debug!(
-                            "skip schedule compact range due to safe_point not updated";
-                            "region_id" => self.region_id,
-                            "safe_point" => safe_ts,
-                        );
-                        return e;
-                    }
-
-                    let start_key = enc_start_key(self.region());
-                    let end_key = enc_end_key(self.region());
-
-                    let mut all_scheduled = true;
-                    for cf in [CF_WRITE, CF_DEFAULT] {
-                        let task = CompactTask::Compact {
-                            cf_name: String::from(cf),
-                            start_key: Some(start_key.clone()),
-                            end_key: Some(end_key.clone()),
-                            bottommost_level_force: true,
-                        };
-
-                        if let Err(e) = poll_ctx
-                            .cleanup_scheduler
-                            .schedule(CleanupTask::Compact(task))
-                        {
-                            error!(
-                                "schedule compact range task failed";
-                                "region_id" => self.region_id,
-                                "cf" => ?cf,
-                                "err" => ?e,
-                            );
-                            all_scheduled = false;
-                            break;
-                        }
-                    }
-
-                    if all_scheduled {
-                        info!(
-                            "schedule compact range due to no valid split keys";
-                            "region_id" => self.region_id,
-                            "safe_point" => safe_ts,
-                            "region_start_key" => log_wrappers::Value::key(&start_key),
-                            "region_end_key" => log_wrappers::Value::key(&end_key),
-                        );
-                        self.last_record_safe_point = safe_ts;
-                    }
-                }
-                e
-            })?;
+        poll_ctx.coprocessor_host.pre_propose(self.region(), req)?;
         let mut ctx = ProposalContext::empty();
 
         if get_sync_log_from_request(req) {
@@ -5528,7 +5559,7 @@ where
             }
             for peer in self.get_store().region().get_peers() {
                 let (peer_id, store_id) = (peer.get_id(), peer.get_store_id());
-                if self.disk_full_peers.peers.get(&peer_id).is_some() {
+                if self.disk_full_peers.peers.contains_key(&peer_id) {
                     disk_full_stores.push(store_id);
                 }
             }
@@ -5542,7 +5573,7 @@ where
 
     /// Check if the command will be likely to pass all the check and propose.
     pub fn will_likely_propose(&mut self, cmd: &RaftCmdRequest) -> bool {
-        !self.pending_remove
+        self.pending_remove.is_none()
             && self.is_leader()
             && self.pending_merge_state.is_none()
             && self.prepare_merge_fence == 0
@@ -5630,7 +5661,7 @@ where
 
             if self.raft_group.raft.raft_log.applied >= *target_index
                 || force
-                || self.pending_remove
+                || self.pending_remove.is_some()
             {
                 info!("snapshot recovery wait apply finished";
                     "region_id" => self.region().get_id(),
@@ -5836,7 +5867,7 @@ where
             wait_data_peers: self.wait_data_peers.clone(),
         });
         if let Err(e) = ctx.pd_scheduler.schedule(task) {
-            error!(
+            warn!(
                 "failed to notify pd";
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
@@ -5873,8 +5904,9 @@ where
         send_msg.set_extra_msg(msg);
         send_msg.set_to_peer(to.clone());
         if let Err(e) = trans.send(send_msg) {
-            error!(?e;
+            warn!(
                 "failed to send extra message";
+                "err" => ?e,
                 "type" => ?ty,
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
@@ -6093,17 +6125,17 @@ where
             None => return false,
         };
         let max_lease = ctx.cfg.raft_store_max_leader_lease();
-        let has_overlapped_reads = self.pending_reads.back().map_or(false, |read| {
+        let has_overlapped_reads = self.pending_reads.back().is_some_and(|read| {
             // If there is any read index whose lease can cover till next heartbeat
             // then we don't need to propose a new one
             read.propose_time + max_lease > renew_bound
         });
-        let has_overlapped_writes = self.proposals.back().map_or(false, |proposal| {
+        let has_overlapped_writes = self.proposals.back().is_some_and(|proposal| {
             // If there is any write whose lease can cover till next heartbeat
             // then we don't need to propose a new one
             proposal
                 .propose_time
-                .map_or(false, |propose_time| propose_time + max_lease > renew_bound)
+                .is_some_and(|propose_time| propose_time + max_lease > renew_bound)
         });
         !has_overlapped_reads && !has_overlapped_writes
     }
@@ -6155,11 +6187,15 @@ pub enum RequestPolicy {
     // Handle the read request directly without dispatch.
     ReadLocal,
     StaleRead,
-    // Handle the read request via raft's SafeReadIndex mechanism.
+    // Handle the read request via raft's SafeReadIndex mechanism. It doesn't check the read index
+    // cache
     ReadIndex,
     ProposeNormal,
     ProposeTransferLeader,
     ProposeConfChange,
+    // It shoud be ONLY used by the follower-read path and it checks the read index cache first
+    // before sending read index message to leader.
+    ReadIndexReplicaRead,
 }
 
 /// `RequestInspector` makes `RequestPolicy` for requests.
@@ -6219,6 +6255,9 @@ pub trait RequestInspector {
             return Ok(RequestPolicy::StaleRead);
         }
 
+        if req.get_header().get_replica_read() {
+            return Ok(RequestPolicy::ReadIndexReplicaRead);
+        }
         if req.get_header().get_read_quorum() {
             return Ok(RequestPolicy::ReadIndex);
         }
@@ -6273,7 +6312,7 @@ struct PollContextReader<'a, EK, ER> {
     engines: &'a Engines<EK, ER>,
 }
 
-impl<'a, EK, ER> ReadExecutor for PollContextReader<'a, EK, ER>
+impl<EK, ER> ReadExecutor for PollContextReader<'_, EK, ER>
 where
     EK: KvEngine,
     ER: RaftEngine,

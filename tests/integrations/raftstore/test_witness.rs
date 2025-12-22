@@ -17,9 +17,9 @@ use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use test_raftstore::*;
 use tikv_util::{
+    HandyRwLock,
     config::ReadableDuration,
     store::{find_peer, new_witness_peer},
-    HandyRwLock,
 };
 
 // Test the case that region split or merge with witness peer

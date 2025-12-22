@@ -13,6 +13,7 @@ pub trait Summable: Evaluable + EvaluableRet {
     /// Adds assign another value.
     fn add_assign(&mut self, ctx: &mut EvalContext, other: &Self) -> Result<()>;
 
+    #[allow(dead_code)]
     fn add(&self, other: &Self) -> Result<Self>;
     fn sub(&self, other: &Self) -> Result<Self>;
     fn mul(&self, other: &Self) -> Result<Self>;

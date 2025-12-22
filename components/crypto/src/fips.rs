@@ -2,6 +2,11 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+// Ensure that the openssl_sys crate is a dependency of this crate, so the build
+// script can detect the openssl version, `ossl1` or `ossl3`.
+const _OPENSSL_VERSION: unsafe extern "C" fn(*const openssl_sys::SSL) -> i32 =
+    openssl_sys::SSL_version;
+
 static FIPS_VERSION: AtomicUsize = AtomicUsize::new(0);
 
 /// Enable OpenSSL FIPS mode if `can_enable` returns true.

@@ -3,23 +3,24 @@
 // #[PerformanceCriticalPath]
 use api_version::KvFormat;
 use kvproto::kvrpcpb::*;
+use protobuf::Message;
 use tikv_util::{
     future::poll_future_notify,
     mpsc::future::{Sender, WakePolicy},
     time::Instant,
 };
-use tracker::{with_tls_tracker, RequestInfo, RequestType, Tracker, TrackerToken, GLOBAL_TRACKERS};
+use tracker::{GLOBAL_TRACKERS, RequestInfo, RequestType, Tracker, TrackerToken, with_tls_tracker};
 
 use crate::{
     server::{
-        metrics::{GrpcTypeKind, ResourcePriority, REQUEST_BATCH_SIZE_HISTOGRAM_VEC},
-        service::kv::{batch_commands_response, GrpcRequestDuration, MeasuredSingleResponse},
+        metrics::{GrpcTypeKind, REQUEST_BATCH_SIZE_HISTOGRAM_VEC, ResourcePriority},
+        service::kv::{GrpcRequestDuration, MeasuredSingleResponse, batch_commands_response},
     },
     storage::{
+        ResponseBatchConsumer, Result, Storage,
         errors::{extract_key_error, extract_region_error},
         kv::{Engine, Statistics},
         lock_manager::LockManager,
-        ResponseBatchConsumer, Result, Storage,
     },
 };
 
@@ -65,6 +66,9 @@ impl ReqBatcher {
             RequestType::KvBatchGetCommand,
             req.get_version(),
         )));
+        GLOBAL_TRACKERS.with_tracker(tracker, |the_tracker| {
+            the_tracker.metrics.grpc_req_size = req.compute_size() as u64;
+        });
         self.gets.push(req);
         self.get_ids.push(id);
         self.get_trackers.push(tracker);
@@ -194,7 +198,7 @@ impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics)> for GetCommandResponse
         );
         let task = MeasuredSingleResponse::new(id, res, measure, None);
         if self.tx.send_with(task, WakePolicy::Immediately).is_err() {
-            error!("KvService response batch commands fail");
+            warn!("KvService response batch commands fail");
         }
     }
 }
@@ -230,7 +234,7 @@ impl ResponseBatchConsumer<Option<Vec<u8>>> for GetCommandResponseConsumer {
         );
         let task = MeasuredSingleResponse::new(id, res, measure, None);
         if self.tx.send_with(task, WakePolicy::Immediately).is_err() {
-            error!("KvService response batch commands fail");
+            warn!("KvService response batch commands fail");
         }
     }
 }
@@ -289,7 +293,7 @@ fn future_batch_get_command<E: Engine, L: LockManager, F: KvFormat>(
                 );
                 let task = MeasuredSingleResponse::new(id, res, measure, None);
                 if tx.send_with(task, WakePolicy::Immediately).is_err() {
-                    error!("KvService response batch commands fail");
+                    warn!("KvService response batch commands fail");
                 }
             }
         }
@@ -345,7 +349,7 @@ fn future_batch_raw_get_command<E: Engine, L: LockManager, F: KvFormat>(
                 );
                 let task = MeasuredSingleResponse::new(id, res, measure, None);
                 if tx.send_with(task, WakePolicy::Immediately).is_err() {
-                    error!("KvService response batch commands fail");
+                    warn!("KvService response batch commands fail");
                 }
             }
         }

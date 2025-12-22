@@ -7,8 +7,8 @@ use std::{
     path::{Path, PathBuf},
     result,
     sync::{
-        atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering},
         Arc, RwLock as SyncRwLock,
+        atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -16,8 +16,8 @@ use std::{
 use dashmap::DashMap;
 use encryption::{BackupEncryptionManager, EncrypterReader, Iv, MultiMasterKeyBackend};
 use encryption_export::create_async_backend;
-use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use external_storage::{create_storage, BackendConfig, ExternalStorage, UnpinReader};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE, CfName};
+use external_storage::{BackendConfig, ExternalStorage, UnpinReader, create_storage};
 use file_system::Sha256Reader;
 use futures::io::Cursor;
 use kvproto::{
@@ -36,14 +36,13 @@ use slog_global::debug;
 use tidb_query_datatype::codec::table::decode_table_id;
 use tikv::config::BackupStreamConfig;
 use tikv_util::{
-    box_err,
+    Either, HandyRwLock, box_err,
     codec::stream_event::EventEncoder,
     config::ReadableSize,
     error, info,
     time::{Instant, Limiter},
     warn,
     worker::Scheduler,
-    Either, HandyRwLock,
 };
 use tokio::{
     io::AsyncWriteExt,
@@ -103,7 +102,7 @@ pub enum TaskSelectorRef<'a> {
     All,
 }
 
-impl<'a> std::fmt::Debug for TaskSelectorRef<'a> {
+impl std::fmt::Debug for TaskSelectorRef<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::ByName(name) => f.debug_tuple("ByName").field(name).finish(),
@@ -121,7 +120,7 @@ impl<'a> std::fmt::Debug for TaskSelectorRef<'a> {
     }
 }
 
-impl<'a> TaskSelectorRef<'a> {
+impl TaskSelectorRef<'_> {
     fn matches<'c, 'd>(
         self,
         task_name: &str,
@@ -160,6 +159,7 @@ pub struct FlushContext<'a> {
     pub store_id: u64,
     pub resolved_regions: &'a ResolvedRegions,
     pub resolved_ts: TimeStamp,
+    pub flush_ts: TimeStamp,
 }
 
 impl ApplyEvents {
@@ -1150,7 +1150,6 @@ impl StreamTaskHandler {
         )
         .await
         .into_iter()
-        .map(|r| r.map_err(Error::from))
         .fold(Ok(()), Result::and)?;
 
         let mut metadata = MetadataInfo::with_capacity(w.len() + wm.len());
@@ -1182,8 +1181,8 @@ impl StreamTaskHandler {
             for f in fg.data_files_info.iter_mut() {
                 if let Some((epoches, start_key, end_key)) = rmap.get(&(f.region_id as _)) {
                     f.set_region_epoch(epoches.iter().copied().cloned().collect::<Vec<_>>().into());
-                    f.set_region_start_key(start_key.to_vec());
-                    f.set_region_end_key(end_key.to_vec());
+                    f.set_region_start_key(start_key.to_vec().into());
+                    f.set_region_end_key(end_key.to_vec().into());
                 }
             }
         }
@@ -1312,12 +1311,8 @@ impl StreamTaskHandler {
         }
         let min_ts = min_ts.unwrap_or_default();
         let max_ts = max_ts.unwrap_or_default();
-        merged_file_info.set_path(TempFileKey::file_name(
-            metadata.store_id,
-            min_ts,
-            max_ts,
-            is_meta,
-        ));
+        merged_file_info
+            .set_path(TempFileKey::file_name(metadata.store_id, min_ts, max_ts, is_meta).into());
         merged_file_info.set_data_files_info(data_file_infos.into());
         merged_file_info.set_length(stat_length);
         merged_file_info.set_max_ts(max_ts);
@@ -1414,9 +1409,21 @@ impl StreamTaskHandler {
     }
 
     #[instrument(skip_all)]
-    pub async fn flush_backup_metadata(&self, metadata_info: MetadataInfo) -> Result<()> {
+    pub async fn flush_backup_metadata(
+        &self,
+        metadata_info: MetadataInfo,
+        flush_ts: TimeStamp,
+    ) -> Result<()> {
         if !metadata_info.file_groups.is_empty() {
-            let meta_path = metadata_info.path_to_meta();
+            let mut min_begin_ts = u64::MAX;
+            for file_group in metadata_info.file_groups.as_slice() {
+                assert!(!file_group.data_files_info.is_empty());
+                for d in file_group.data_files_info.as_slice() {
+                    assert_ne!(d.min_begin_ts_in_default_cf, 0);
+                    min_begin_ts = min_begin_ts.min(d.min_begin_ts_in_default_cf)
+                }
+            }
+            let meta_path = metadata_info.path_to_meta(min_begin_ts, flush_ts.into_inner());
             let meta_buff = metadata_info.marshal_to()?;
             let buflen = meta_buff.len();
 
@@ -1483,7 +1490,8 @@ impl StreamTaskHandler {
             // flush meta file to storage.
             self.fill_region_info(cx, &mut backup_metadata);
             // flush backup metadata to external storage.
-            self.flush_backup_metadata(backup_metadata).await?;
+            self.flush_backup_metadata(backup_metadata, cx.flush_ts)
+                .await?;
             crate::metrics::FLUSH_DURATION
                 .with_label_values(&["save_files"])
                 .observe(sw.lap().as_secs_f64());
@@ -1740,6 +1748,7 @@ pub struct MetadataInfo {
     // the field files is deprecated in v6.3.0
     // pub files: Vec<DataFileInfo>,
     pub file_groups: Vec<DataFileGroup>,
+    // deprecated
     pub min_resolved_ts: Option<u64>,
     pub min_ts: Option<u64>,
     pub max_ts: Option<u64>,
@@ -1787,11 +1796,13 @@ impl MetadataInfo {
             .map_err(|err| Error::Other(box_err!("failed to marshal proto: {}", err)))
     }
 
-    fn path_to_meta(&self) -> String {
+    fn path_to_meta(&self, min_begin_ts: u64, flush_ts: u64) -> String {
         format!(
-            "v1/backupmeta/{}-{}.meta",
-            self.min_resolved_ts.unwrap_or_default(),
-            uuid::Uuid::new_v4()
+            "v1/backupmeta/{:016X}-{:016X}-{:016X}-{:016X}.meta",
+            flush_ts,
+            min_begin_ts,
+            self.min_ts.unwrap_or_default(),
+            self.max_ts.unwrap_or_default(),
         )
     }
 }
@@ -1902,7 +1913,8 @@ impl DataFile {
             self.sha256
                 .finish()
                 .map(|bytes| bytes.to_vec())
-                .map_err(|err| Error::Other(box_err!("openssl hasher failed to init: {}", err)))?,
+                .map_err(|err| Error::Other(box_err!("openssl hasher failed to init: {}", err)))?
+                .into(),
         );
         meta.set_crc64xor(self.crc64xor);
         meta.set_number_of_entries(self.number_of_entries as _);
@@ -1913,13 +1925,13 @@ impl DataFile {
             self.min_begin_ts
                 .map_or(self.min_ts.into_inner(), |ts| ts.into_inner()),
         );
-        meta.set_start_key(std::mem::take(&mut self.start_key));
-        meta.set_end_key(std::mem::take(&mut self.end_key));
+        meta.set_start_key(std::mem::take(&mut self.start_key).into());
+        meta.set_end_key(std::mem::take(&mut self.end_key).into());
         meta.set_length(self.file_size as _);
 
         meta.set_is_meta(file_key.is_meta);
         meta.set_table_id(file_key.table_id);
-        meta.set_cf(file_key.cf.to_owned());
+        meta.set_cf(file_key.cf.to_owned().into());
         meta.set_region_id(file_key.region_id as i64);
         meta.set_type(file_key.get_file_type());
 
@@ -1940,9 +1952,6 @@ impl std::fmt::Debug for DataFile {
     }
 }
 
-#[derive(Clone, Ord, PartialOrd, PartialEq, Eq, Debug)]
-struct KeyRange(Vec<u8>);
-
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
 struct TaskRange {
@@ -1957,7 +1966,7 @@ mod tests {
     use async_compression::tokio::bufread::ZstdDecoder;
     use encryption::{DecrypterReader, FileConfig, MasterKeyConfig, MultiMasterKeyBackend};
     use external_storage::{BlobObject, ExternalData, NoopStorage};
-    use futures::{future::LocalBoxFuture, stream::LocalBoxStream, AsyncReadExt};
+    use futures::{AsyncReadExt, future::LocalBoxFuture, stream::LocalBoxStream};
     use kvproto::{
         brpb::{CipherInfo, Noop, StorageBackend, StreamBackupTaskInfo},
         encryptionpb::EncryptionMethod,
@@ -1971,7 +1980,7 @@ mod tests {
             stream_event::{EventIterator, Iterator},
         },
         config::ReadableDuration,
-        worker::{dummy_scheduler, ReceiverWrapper},
+        worker::{ReceiverWrapper, dummy_scheduler},
     };
     use tokio::{fs::File, io::BufReader};
     use txn_types::{Write, WriteType};
@@ -2254,7 +2263,10 @@ mod tests {
             }
         }
 
-        task_handler.flush_backup_metadata(meta).await.unwrap();
+        task_handler
+            .flush_backup_metadata(meta, TimeStamp::new(1))
+            .await
+            .unwrap();
         task_handler.clear_flushing_files().await;
 
         drop(router);
@@ -2267,10 +2279,34 @@ mod tests {
 
         let mut meta_count = 0;
         let mut log_count = 0;
+
         for entry in walkdir::WalkDir::new(storage_path) {
             let entry = entry.unwrap();
-            let filename = entry.file_name();
             if entry.path().extension() == Some(OsStr::new("meta")) {
+                let filename = entry.path().file_stem().unwrap().to_os_string();
+                let parts: Vec<&str> = filename.to_str().unwrap().split('-').collect();
+
+                assert!(
+                    parts.len() >= 4,
+                    "Invalid meta file name format: expected at least 4 parts, got {}, file: {:?}",
+                    parts.len(),
+                    entry.file_name(),
+                );
+
+                for (i, label) in ["flushTs", "minDefaultTs", "minTs", "maxTs"]
+                    .iter()
+                    .enumerate()
+                {
+                    let val = u64::from_str_radix(parts[i], 16);
+                    assert!(
+                        val.is_ok(),
+                        "Failed to parse '{}' as u64 (hex) for {} in file name: {:?}",
+                        parts[i],
+                        label,
+                        entry.file_name(),
+                    );
+                }
+
                 meta_count += 1;
             } else if entry.path().extension() == Some(OsStr::new("log")) {
                 log_count += 1;
@@ -2278,7 +2314,7 @@ mod tests {
                 assert!(
                     f.len() > 10,
                     "the log file {:?} is too small (size = {}B)",
-                    filename,
+                    entry.file_name(),
                     f.len()
                 );
             }
@@ -2334,6 +2370,7 @@ mod tests {
             store_id: 1,
             resolved_regions: &EMPTY_RESOLVE,
             resolved_ts: TimeStamp::new(1),
+            flush_ts: TimeStamp::new(1),
         };
         task_handler.do_flush(cx).await.unwrap();
         assert_eq!(task_handler.flush_failure_count(), 0);
@@ -2358,8 +2395,7 @@ mod tests {
                     let mut fst = first_time.lock().unwrap();
                     if *fst {
                         *fst = false;
-                        return Err(io::Error::new(
-                            io::ErrorKind::Other,
+                        return Err(io::Error::other(
                             "the absence of the result, is also a kind of result",
                         ));
                     }
@@ -2453,6 +2489,7 @@ mod tests {
             store_id: 42,
             resolved_regions: &EMPTY_RESOLVE,
             resolved_ts: TimeStamp::max(),
+            flush_ts: TimeStamp::max(),
         };
         let (task, _path) = task_handler("error_prone".to_owned()).await?;
         must_register_table(router.as_ref(), task, 1).await;
@@ -2509,6 +2546,7 @@ mod tests {
             store_id: 1,
             resolved_regions: &EMPTY_RESOLVE,
             resolved_ts: ts,
+            flush_ts: ts,
         };
         let rts = router.do_flush(cx).await.unwrap();
         assert_eq!(ts.into_inner(), rts);
@@ -2593,6 +2631,7 @@ mod tests {
             store_id: 42,
             resolved_regions: &EMPTY_RESOLVE,
             resolved_ts: TimeStamp::zero(),
+            flush_ts: TimeStamp::new(1),
         };
         for i in 0..=FLUSH_FAILURE_BECOME_FATAL_THRESHOLD {
             check_on_events_result(&router.on_events(build_kv_event((i * 10) as _, 10)).await);
@@ -2787,8 +2826,7 @@ mod tests {
             if data_len == content_length {
                 Ok(())
             } else {
-                Err(io::Error::new(
-                    io::ErrorKind::Other,
+                Err(io::Error::other(
                     "the length of content in reader is not equal with content_length",
                 ))
             }
@@ -2985,6 +3023,7 @@ mod tests {
             store_id: 42,
             resolved_regions: &EMPTY_RESOLVE,
             resolved_ts: TimeStamp::max(),
+            flush_ts: TimeStamp::new(1),
         };
         // set flush status to true, because we disabled the auto flush.
         t.set_flushing_status(true);
@@ -3096,6 +3135,7 @@ mod tests {
             store_id: 1,
             resolved_regions: &EMPTY_RESOLVE,
             resolved_ts: TimeStamp::new(1),
+            flush_ts: TimeStamp::new(1),
         };
         task_handler.do_flush(cx).await?;
         let duration = start.saturating_elapsed();
@@ -3167,7 +3207,22 @@ mod tests {
         for entry in walkdir::WalkDir::new(path) {
             let entry = entry.unwrap();
             if entry.path().extension() == Some(OsStr::new("meta")) {
-                meta_files.push(entry.path().to_path_buf());
+                if let Some(filename) = entry.path().file_stem().and_then(OsStr::to_str) {
+                    // v1/backupmeta/{a}-{b}-{c}-{d}.meta
+                    let parts: Vec<&str> = filename.split('-').collect();
+                    if parts.len() == 4 {
+                        for p in parts {
+                            assert!(
+                                u64::from_str_radix(p, 16).is_ok(),
+                                "Part '{}' is not a valid hex u64",
+                                p
+                            );
+                        }
+                        meta_files.push(entry.path().to_path_buf());
+                    } else {
+                        panic!("backup meta file format changed")
+                    }
+                }
             }
         }
         meta_files

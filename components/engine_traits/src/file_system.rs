@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use file_system::{get_io_rate_limiter, get_io_type, IoOp, IoRateLimiter};
+use file_system::{IoOp, IoRateLimiter, get_io_rate_limiter, get_io_type};
 
 use crate::Result;
 

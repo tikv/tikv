@@ -9,7 +9,7 @@ use kvproto::{
     kvrpcpb::Context,
 };
 use raftstore::store::{LocksStatus, PeerPessimisticLocks};
-use tikv_kv::{SnapshotExt, SEEK_BOUND};
+use tikv_kv::{SEEK_BOUND, SnapshotExt};
 use tikv_util::time::Instant;
 use txn_types::{
     Key, LastChange, Lock, OldValue, PessimisticLock, TimeStamp, TxnLockRef, Value, Write,
@@ -21,10 +21,9 @@ use crate::storage::{
         Cursor, CursorBuilder, Error as KvError, ScanMode, Snapshot as EngineSnapshot, Statistics,
     },
     mvcc::{
-        default_not_found_error,
-        metrics::{ScanLockReadTimeSource, SCAN_LOCK_READ_TIME_VEC},
+        Result, default_not_found_error,
+        metrics::{SCAN_LOCK_READ_TIME_VEC, ScanLockReadTimeSource},
         reader::{OverlappedWrite, TxnCommitRecord},
-        Result,
     },
 };
 
@@ -121,18 +120,6 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
     #[inline(always)]
     pub fn take_statistics(&mut self) -> Statistics {
         std::mem::take(&mut self.reader.statistics)
-    }
-
-    #[inline(always)]
-    pub fn setup_with_hint_items<T>(&mut self, items: &mut [T], key_of: fn(&T) -> &Key) {
-        // enable scan mode if there are multiple items, so that we don't need to seek
-        // for every key.
-        if items.len() > 1 {
-            items.sort_by(|a, b| key_of(a).cmp(key_of(b)));
-            self.reader.scan_mode = Some(ScanMode::Forward);
-            self.reader
-                .set_range(Some(key_of(items.first().unwrap()).clone()), None);
-        }
     }
 }
 
@@ -472,7 +459,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
         //
         // When it switches to another key in prefix seek mode, creates a new cursor for
         // it because the current position of the cursor is seldom around `key`.
-        if self.scan_mode.is_none() && self.current_key.as_ref().map_or(true, |k| k != key) {
+        if self.scan_mode.is_none() && self.current_key.as_ref().is_none_or(|k| k != key) {
             self.current_key = Some(key.clone());
             self.write_cursor.take();
         }
@@ -965,16 +952,16 @@ impl<S: EngineSnapshot> MvccReader<S> {
 
 #[cfg(test)]
 pub mod tests {
-    use std::{ops::Bound, u64};
+    use std::ops::Bound;
 
     use concurrency_manager::ConcurrencyManager;
     use engine_rocks::{
-        properties::MvccPropertiesCollectorFactory, RocksCfOptions, RocksDbOptions, RocksEngine,
-        RocksSnapshot,
+        RocksCfOptions, RocksDbOptions, RocksEngine, RocksSnapshot,
+        properties::MvccPropertiesCollectorFactory,
     };
     use engine_traits::{
-        CompactExt, IterOptions, ManualCompactionOptions, MiscExt, Mutable, SyncMutable,
-        WriteBatch, WriteBatchExt, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+        ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, CompactExt, IterOptions,
+        ManualCompactionOptions, MiscExt, Mutable, SyncMutable, WriteBatch, WriteBatchExt,
     };
     use kvproto::{
         kvrpcpb::{AssertionLevel, Context, PrewriteRequestPessimisticAction::*},
@@ -986,13 +973,13 @@ pub mod tests {
 
     use super::*;
     use crate::storage::{
-        kv::Modify,
-        mvcc::{tests::write, MvccReader, MvccTxn},
-        txn::{
-            acquire_pessimistic_lock, cleanup, commit, gc, prewrite,
-            sched_pool::set_tls_feature_gate, CommitKind, TransactionKind, TransactionProperties,
-        },
         Engine, TestEngineBuilder,
+        kv::Modify,
+        mvcc::{MvccReader, MvccTxn, tests::write},
+        txn::{
+            CommitKind, TransactionKind, TransactionProperties, acquire_pessimistic_lock, cleanup,
+            commit, gc, prewrite, sched_pool::set_tls_feature_gate,
+        },
     };
 
     pub struct RegionEngine {
@@ -1163,7 +1150,14 @@ pub mod tests {
             let cm = ConcurrencyManager::new_for_test(start_ts);
             let mut txn = MvccTxn::new(start_ts, cm);
             let mut reader = SnapshotReader::new(start_ts, snap, true);
-            commit(&mut txn, &mut reader, Key::from_raw(pk), commit_ts.into()).unwrap();
+            commit(
+                &mut txn,
+                &mut reader,
+                Key::from_raw(pk),
+                commit_ts.into(),
+                None,
+            )
+            .unwrap();
             self.write(txn.into_modifies());
         }
 

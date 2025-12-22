@@ -1,22 +1,24 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 pub mod compaction_filter;
+mod compaction_runner;
 mod config;
 mod gc_manager;
 mod gc_worker;
 pub mod rawkv_compaction_filter;
 
 // TODO: Use separated error type for GcWorker instead.
-#[cfg(any(test, feature = "failpoints"))]
-pub use compaction_filter::test_utils::{gc_by_compact, TestGcRunner};
 pub use compaction_filter::WriteCompactionFilterFactory;
-pub use config::{GcConfig, GcWorkerConfigManager, DEFAULT_GC_BATCH_KEYS};
+#[cfg(any(test, feature = "failpoints"))]
+pub use compaction_filter::test_utils::{TestGcRunner, gc_by_compact};
+pub use compaction_runner::{CompactionCandidate, CompactionRunner, CompactionRunnerHandle};
+pub use config::{AutoCompactionConfig, DEFAULT_GC_BATCH_KEYS, GcConfig, GcWorkerConfigManager};
 use engine_traits::MvccProperties;
 pub use gc_manager::AutoGcConfig;
 #[cfg(any(test, feature = "testexport"))]
 pub use gc_worker::test_gc_worker::{MockSafePointProvider, PrefixedEngine};
 pub use gc_worker::{
-    sync_gc, GcSafePointProvider, GcTask, GcWorker, STAT_RAW_KEYMODE, STAT_TXN_KEYMODE,
+    GcSafePointProvider, GcTask, GcWorker, STAT_RAW_KEYMODE, STAT_TXN_KEYMODE, sync_gc,
 };
 pub use rawkv_compaction_filter::RawCompactionFilterFactory;
 use txn_types::TimeStamp;
@@ -62,11 +64,11 @@ fn check_need_gc(safe_point: TimeStamp, ratio_threshold: f64, props: &MvccProper
 #[cfg(test)]
 mod tests {
     use engine_rocks::RocksEngine;
-    use engine_traits::{MvccPropertiesExt, CF_WRITE};
+    use engine_traits::{CF_WRITE, MvccPropertiesExt};
     use kvproto::metapb::Region;
 
     use super::*;
-    use crate::storage::mvcc::reader_tests::{make_region, open_db, RegionEngine};
+    use crate::storage::mvcc::reader_tests::{RegionEngine, make_region, open_db};
 
     fn get_mvcc_properties_and_check_gc(
         db: &RocksEngine,

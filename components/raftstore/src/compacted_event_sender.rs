@@ -3,9 +3,9 @@ use std::sync::Mutex;
 
 use engine_rocks::{CompactedEventSender, RocksCompactedEvent};
 use engine_traits::{KvEngine, RaftEngine};
-use tikv_util::error_unknown;
+use tikv_util::warn;
 
-use crate::store::{fsm::store::RaftRouter, StoreMsg};
+use crate::store::{StoreMsg, fsm::store::RaftRouter};
 
 // raftstore v1's implementation
 pub struct RaftRouterCompactedEventSender<EK, ER>
@@ -25,7 +25,10 @@ where
         let router = self.router.lock().unwrap();
         let event = StoreMsg::CompactedEvent(event);
         if let Err(e) = router.send_control(event) {
-            error_unknown!(?e; "send compaction finished event to raftstore failed");
+            warn!(
+                "send compaction finished event to raftstore failed";
+                "err" => ?e,
+            );
         }
     }
 }

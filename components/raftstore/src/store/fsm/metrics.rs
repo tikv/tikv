@@ -2,12 +2,12 @@
 
 // #[PerformanceCriticalPath]
 use std::sync::{
-    atomic::{AtomicBool, AtomicU64, Ordering},
     Arc,
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 use lazy_static::lazy_static;
-use prometheus::{exponential_buckets, register_histogram, Histogram};
+use prometheus::{Histogram, exponential_buckets, register_histogram};
 use tikv_util::store::QueryStats;
 
 lazy_static! {

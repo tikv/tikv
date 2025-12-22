@@ -3,7 +3,7 @@
 use std::{sync::Arc, thread, time::Duration};
 
 use crossbeam::channel;
-use engine_traits::{CfNamesExt, Iterable, Peekable, RaftEngineDebug, SyncMutable, CF_RAFT};
+use engine_traits::{CF_RAFT, CfNamesExt, Iterable, Peekable, RaftEngineDebug, SyncMutable};
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState, StoreIdent};
 use protobuf::Message;
 use raft::eraftpb::MessageType;
@@ -356,6 +356,9 @@ fn test_destroy_clean_up_logs_with_log_gc() {
     assert!(dest.is_empty(), "{:?}", dest);
 
     pd_client.must_add_peer(1, new_peer(3, 4));
+    // Clear stale leader cache after config change
+    // to avoid using outdated leader info
+    cluster.reset_leader_of_region(1);
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
     cluster.must_put(b"k3", b"v3");
     must_get_equal(&cluster.get_engine(3), b"k3", b"v3");
@@ -371,6 +374,7 @@ fn test_destroy_clean_up_logs_with_log_gc() {
     assert!(dest.is_empty(), "{:?}", dest);
 
     pd_client.must_add_peer(1, new_peer(3, 5));
+    cluster.reset_leader_of_region(1);
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
     cluster.must_put(b"k4", b"v4");
     must_get_equal(&cluster.get_engine(3), b"k4", b"v4");

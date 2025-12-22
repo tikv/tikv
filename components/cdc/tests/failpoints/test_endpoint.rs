@@ -1,23 +1,23 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{mpsc, Arc},
+    sync::{Arc, mpsc},
     thread,
     time::{Duration, Instant},
 };
 
-use api_version::{test_kv_format_impl, KvFormat};
+use api_version::{KvFormat, test_kv_format_impl};
 use causal_ts::CausalTsProvider;
-use cdc::{recv_timeout, Delegate, OldValueCache, Task, Validate};
+use cdc::{Delegate, OldValueCache, Task, Validate, recv_timeout};
 use futures::{executor::block_on, sink::SinkExt};
 use grpcio::{ChannelBuilder, Environment, WriteFlags};
 use kvproto::{cdcpb::*, kvrpcpb::*, tikvpb_grpc::TikvClient};
 use pd_client::PdClient;
 use test_raftstore::*;
-use tikv_util::{debug, worker::Scheduler, HandyRwLock};
+use tikv_util::{HandyRwLock, debug, worker::Scheduler};
 use txn_types::{Key, TimeStamp};
 
-use crate::{new_event_feed, new_event_feed_v2, ClientReceiver, TestSuite, TestSuiteBuilder};
+use crate::{ClientReceiver, TestSuite, TestSuiteBuilder, new_event_feed, new_event_feed_v2};
 
 #[test]
 fn test_cdc_double_scan_deregister() {
@@ -658,73 +658,6 @@ fn test_delegate_fail_during_incremental_scan() {
     recv.replace(Some(recver));
 }
 
-// The case shows it's possible that unordered Prewrite events on one same key
-// can be sent to TiCDC clients. Generally it only happens when a region changes
-// during a Pipelined-DML transaction.
-//
-// To ensure TiCDC can handle the situation, `generation` should be carried in
-// Prewrite events.
-#[test]
-fn test_cdc_pipeline_dml() {
-    let mut cluster = new_server_cluster(0, 1);
-    configure_for_lease_read(&mut cluster.cfg, Some(100), Some(10));
-    cluster.pd_client.disable_default_operator();
-    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
-    let region = suite.cluster.get_region(&[]);
-    let rid = region.id;
-
-    let prewrite_tso = block_on(suite.cluster.pd_client.get_tso()).unwrap();
-    let (k, v) = (b"key".to_vec(), vec![b'x'; 16]);
-    let mut mutation = Mutation::default();
-    mutation.set_op(Op::Put);
-    mutation.key = k.clone();
-    mutation.value = v;
-    suite.must_kv_flush(rid, vec![mutation], k.clone(), prewrite_tso, 1);
-
-    fail::cfg("cdc_incremental_scan_start", "pause").unwrap();
-
-    let cf_tso = block_on(suite.cluster.pd_client.get_tso()).unwrap();
-    let (mut req_tx, _, receive_event) = new_event_feed_v2(suite.get_region_cdc_client(rid));
-    let mut req = suite.new_changedata_request(rid);
-    req.request_id = 1;
-    req.checkpoint_ts = cf_tso.into_inner();
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
-    sleep_ms(100);
-
-    let (k, v) = (b"key".to_vec(), vec![b'y'; 16]);
-    let mut mutation = Mutation::default();
-    mutation.set_op(Op::Put);
-    mutation.key = k.clone();
-    mutation.value = v;
-    suite.must_kv_flush(rid, vec![mutation], k.clone(), prewrite_tso, 2);
-
-    let events = receive_event(false).take_events().into_vec();
-    for entry in events[0].get_entries().get_entries() {
-        assert_eq!(entry.r_type, EventLogType::Prewrite);
-        assert_eq!(entry.generation, 2);
-        assert_eq!(entry.value, vec![b'y'; 16]);
-    }
-
-    let commit_tso = block_on(suite.cluster.pd_client.get_tso()).unwrap();
-    suite.must_kv_commit(rid, vec![b"key".to_vec()], prewrite_tso, commit_tso);
-
-    let events = receive_event(false).take_events().into_vec();
-    for entry in events[0].get_entries().get_entries() {
-        assert_eq!(entry.r_type, EventLogType::Commit);
-        assert_eq!(entry.start_ts, prewrite_tso.into_inner());
-        assert_eq!(entry.commit_ts, commit_tso.into_inner());
-    }
-
-    fail::remove("cdc_incremental_scan_start");
-
-    let events = receive_event(false).take_events().into_vec();
-    let entries = events[0].get_entries().get_entries();
-    assert_eq!(entries[0].r_type, EventLogType::Prewrite);
-    assert_eq!(entries[0].generation, 1);
-    assert_eq!(entries[0].value, vec![b'x'; 16]);
-    assert_eq!(entries[1].r_type, EventLogType::Initialized);
-}
-
 #[test]
 fn test_cdc_unresolved_region_count_before_finish_scan_lock() {
     fn check_unresolved_region_count(scheduler: &Scheduler<Task>, target_count: usize) {
@@ -809,5 +742,96 @@ fn test_cdc_unresolved_region_count_before_finish_scan_lock() {
     for event_feed in event_feeds {
         drop(event_feed);
     }
+    suite.stop();
+}
+
+#[test]
+fn test_cdc_watchdog_idle_timeout() {
+    let cluster = new_server_cluster(0, 1);
+    cluster.pd_client.disable_default_operator();
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
+    let region = suite.cluster.get_region(b"");
+
+    // Enable failpoints to control the watchdog behavior
+    // cdc_idle_deregister_threshold will make the threshold 20 seconds instead of
+    // 20 minutes cdc_sleep_after_sink_flush will make the sink sleep for 30
+    // seconds after each flush
+    fail::cfg("cdc_idle_deregister_threshold", "return(true)").unwrap();
+    fail::cfg("cdc_sleep_after_sink_flush", "return(true)").unwrap(); // Remove the "1*" to make it trigger continuously
+
+    // Create event feed connection
+    let (mut req_tx, event_feed, _) = new_event_feed(suite.get_region_cdc_client(region.id));
+    let mut req = suite.new_changedata_request(region.id);
+    req.mut_header().set_ticdc_version("7.5.0".into());
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+
+    // Wait for the connection to be established and initialized
+    thread::sleep(Duration::from_millis(1000));
+
+    debug!("Starting watchdog test - waiting for connection to be cancelled");
+
+    // Wait for the watchdog to trigger and cancel the connection
+    // The watchdog should trigger after 5 seconds due to
+    // cdc_idle_deregister_threshold failpoint and cdc_sleep_after_sink_flush
+    // failpoint will make the sink sleep for 6 seconds
+    thread::sleep(Duration::from_secs(6));
+
+    debug!("Finished waiting, now checking if connection was cancelled");
+
+    // Try to detect if the connection was cancelled by watchdog
+    // We can do this by trying to receive from the underlying receiver
+    // If the connection is closed, recv_timeout should return an error
+    let mut connection_cancelled = false;
+    let start_time = Instant::now();
+
+    // Try to detect connection closure for up to 5 seconds (shorter timeout for
+    // testing)
+    while start_time.elapsed() < Duration::from_secs(5) {
+        // Get the underlying receiver
+        let mut rx = event_feed.replace(None).unwrap();
+
+        // Try to receive with a short timeout
+        match recv_timeout(&mut rx, Duration::from_millis(100)) {
+            Ok(Some(Ok(_))) => {
+                // Still receiving data, connection is alive
+                debug!("Connection still alive, received data");
+                // Put the receiver back
+                event_feed.replace(Some(rx));
+            }
+            Ok(Some(Err(_))) => {
+                // Received an error, connection was cancelled
+                debug!("Connection cancelled with error");
+                connection_cancelled = true;
+                break;
+            }
+            Ok(None) => {
+                // No data available, but connection might still be alive
+                debug!("No data available, connection might still be alive");
+                // Put the receiver back
+                event_feed.replace(Some(rx));
+            }
+            Err(_) => {
+                // Connection is closed
+                debug!("Connection closed");
+                connection_cancelled = true;
+                break;
+            }
+        }
+
+        // Small delay before next check
+        thread::sleep(Duration::from_millis(100));
+    }
+
+    // Verify that the connection was cancelled due to watchdog timeout
+    assert!(
+        connection_cancelled,
+        "Connection should have been cancelled by watchdog after idle timeout"
+    );
+
+    // Clean up
+    fail::remove("cdc_idle_deregister_threshold");
+    fail::remove("cdc_sleep_after_sink_flush");
+
+    drop(event_feed);
     suite.stop();
 }

@@ -11,7 +11,6 @@ mod utf8mb4_uca;
 use std::{
     cmp::Ordering,
     hash::{Hash, Hasher},
-    str,
 };
 
 pub use binary::*;
@@ -23,14 +22,37 @@ pub use utf8mb4_binary::*;
 pub use utf8mb4_general_ci::*;
 pub use utf8mb4_uca::*;
 
-use super::{charset::*, Collator};
+use super::{Collator, charset::*};
 use crate::codec::Result;
 
 pub const PADDING_SPACE: char = 0x20 as char;
 
+pub(crate) fn trim_end_padding(mut s: &[u8]) -> &[u8] {
+    while s.ends_with(&[PADDING_SPACE as u8]) {
+        s = &s[..s.len() - 1];
+    }
+    s
+}
+
+pub(crate) fn next_utf8_char(s: &[u8]) -> Option<(char, &[u8])> {
+    let len = match s.first()? {
+        0x00..=0x7F => 1,
+        0xC2..=0xDF => 2,
+        0xE0..=0xEF => 3,
+        0xF0..=0xF4 => 4,
+        _ => return None,
+    };
+    if s.len() < len {
+        return None;
+    }
+    let (head, tail) = s.split_at(len);
+    let ch = std::str::from_utf8(head).ok()?.chars().next()?;
+    Some((ch, tail))
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::{codec::collation::Collator, match_template_collator, Collation};
+    use crate::{Collation, codec::collation::Collator, match_template_collator};
 
     #[test]
     #[allow(clippy::string_lit_as_bytes)]
@@ -221,6 +243,40 @@ mod tests {
                     Ordering::Less,
                     Ordering::Less,
                     Ordering::Less,
+                ],
+            ),
+            (
+                &[0x3e, 0xfe, 0x3e, 0x3e],
+                &[0x3e, 0xff],
+                [
+                    Ordering::Less,
+                    Ordering::Less,
+                    Ordering::Equal,
+                    Ordering::Equal,
+                    Ordering::Less,
+                    Ordering::Greater,
+                    Ordering::Equal,
+                    Ordering::Equal,
+                    Ordering::Less,
+                    Ordering::Greater,
+                    Ordering::Equal,
+                ],
+            ),
+            (
+                "ʩ".as_bytes(),
+                "F".as_bytes(),
+                [
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Less, // `ʩ` is invalid character in GBK.
+                    Ordering::Less, // `ʩ` is invalid character in GBK.
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Greater,
                 ],
             ),
         ];

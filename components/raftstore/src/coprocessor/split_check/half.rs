@@ -1,12 +1,15 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{KvEngine, Range};
-use kvproto::{metapb::Region, pdpb::CheckPolicy};
+use kvproto::{
+    metapb::Region,
+    pdpb::{CheckPolicy, SplitReason},
+};
 use tikv_util::{box_try, config::ReadableSize};
 
 use super::{
     super::{
-        error::Result, Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker,
+        Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker, error::Result,
     },
     Host,
 };
@@ -86,7 +89,7 @@ where
         _: &E,
         policy: CheckPolicy,
     ) {
-        if host.auto_split() {
+        if host.split_reason() == SplitReason::Size {
             return;
         }
         host.add_checker(Box::new(Checker::new(
@@ -126,10 +129,10 @@ mod tests {
     use std::{iter, sync::mpsc};
 
     use engine_test::ctor::{CfOptions, DbOptions};
-    use engine_traits::{MiscExt, SyncMutable, ALL_CFS, CF_DEFAULT, LARGE_CFS};
+    use engine_traits::{ALL_CFS, CF_DEFAULT, LARGE_CFS, MiscExt, SyncMutable};
     use kvproto::{
         metapb::{Peer, Region},
-        pdpb::CheckPolicy,
+        pdpb::{CheckPolicy, SplitReason},
     };
     use tempfile::Builder;
     use tikv_util::{config::ReadableSize, escape, worker::Runnable};
@@ -140,9 +143,104 @@ mod tests {
         *,
     };
     use crate::{
-        coprocessor::{dispatcher::SchedTask, Config, CoprocessorHost},
+        coprocessor::{
+            BoxSplitCheckObserver, Config, CoprocessorHost, KeysCheckObserver, SizeCheckObserver,
+            dispatcher::SchedTask,
+        },
         store::{BucketRange, SplitCheckRunner, SplitCheckTask},
     };
+
+    /// SplitCheckerHost should pick Half/Size/Keys observers based on
+    /// SplitReason
+    #[test]
+    fn test_new_split_checker_host_with_different_split_reasons() {
+        let mut region = Region::default();
+        region.set_id(1);
+        region.mut_peers().push(Default::default());
+
+        let (tx, _rx) = mpsc::sync_channel(100);
+        let mut cfg = Config::default();
+        cfg.region_max_size = Some(ReadableSize(0));
+        cfg.region_max_keys = Some(0);
+        let host = CoprocessorHost::new(tx, cfg.clone());
+
+        let engine = engine_test::kv::new_engine(
+            Builder::new()
+                .prefix("test-new-split-checker-host")
+                .tempdir()
+                .unwrap()
+                .path()
+                .to_str()
+                .unwrap(),
+            ALL_CFS,
+        )
+        .unwrap();
+
+        let split_host =
+            host.new_split_checker_host(&region, &engine, SplitReason::Size, CheckPolicy::Scan);
+        assert_eq!(split_host.checkers_count(), 2);
+
+        let split_host =
+            host.new_split_checker_host(&region, &engine, SplitReason::Load, CheckPolicy::Scan);
+        assert_eq!(split_host.checkers_count(), 3);
+
+        let split_host =
+            host.new_split_checker_host(&region, &engine, SplitReason::Admin, CheckPolicy::Scan);
+        assert_eq!(split_host.checkers_count(), 3);
+    }
+
+    /// Load split should use HalfCheckObserver to find the midpoint split key
+    #[test]
+    fn test_load_split_finds_correct_split_key() {
+        let path = Builder::new().prefix("test-load-split").tempdir().unwrap();
+        let engine = engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
+
+        let mut region = Region::default();
+        region.set_id(1);
+        region.mut_peers().push(Peer::default());
+        region.mut_region_epoch().set_version(2);
+        region.mut_region_epoch().set_conf_ver(5);
+
+        let (tx, rx) = mpsc::sync_channel(100);
+        let cfg = Config {
+            region_max_size: Some(ReadableSize(100)),
+            ..Default::default()
+        };
+        let mut host = CoprocessorHost::new(tx.clone(), cfg);
+        host.registry
+            .register_split_check_observer(100, BoxSplitCheckObserver::new(HalfCheckObserver));
+        host.registry.register_split_check_observer(
+            200,
+            BoxSplitCheckObserver::new(SizeCheckObserver::new(tx.clone())),
+        );
+        host.registry.register_split_check_observer(
+            300,
+            BoxSplitCheckObserver::new(KeysCheckObserver::new(tx.clone())),
+        );
+
+        let mut runnable = SplitCheckRunner::new(engine.clone(), tx, host, None);
+
+        for i in 0..11 {
+            let k = format!("{:04}", i).into_bytes();
+            let k = keys::data_key(Key::from_raw(&k).as_encoded());
+            engine.put_cf(CF_DEFAULT, &k, &k).unwrap();
+            engine.flush_cf(CF_DEFAULT, true).unwrap();
+        }
+
+        let start_key = Key::from_raw(b"0000").into_encoded();
+        let end_key = Key::from_raw(b"0010").into_encoded();
+        runnable.run(SplitCheckTask::split_check_key_range(
+            region.clone(),
+            Some(start_key),
+            Some(end_key),
+            SplitReason::Load,
+            CheckPolicy::Scan,
+            None,
+        ));
+
+        let expected_split_key = Key::from_raw(b"0006");
+        must_split_at(&rx, &region, vec![expected_split_key.into_encoded()]);
+    }
 
     #[test]
     fn test_split_check() {
@@ -161,8 +259,12 @@ mod tests {
             region_max_size: Some(ReadableSize(BUCKET_NUMBER_LIMIT as u64)),
             ..Default::default()
         };
-        let mut runnable =
-            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
+        let mut runnable = SplitCheckRunner::new(
+            engine.clone(),
+            tx.clone(),
+            CoprocessorHost::new(tx, cfg),
+            None,
+        );
 
         // so split key will be z0005
         for i in 0..11 {
@@ -206,8 +308,12 @@ mod tests {
             region_max_size: Some(ReadableSize(BUCKET_NUMBER_LIMIT as u64)),
             ..Default::default()
         };
-        let mut runnable =
-            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
+        let mut runnable = SplitCheckRunner::new(
+            engine.clone(),
+            tx.clone(),
+            CoprocessorHost::new(tx, cfg),
+            None,
+        );
 
         for i in 0..11 {
             let k = format!("{:04}", i).into_bytes();
@@ -222,7 +328,7 @@ mod tests {
             region.clone(),
             Some(start_key),
             Some(end_key),
-            false,
+            SplitReason::Admin,
             CheckPolicy::Scan,
             None,
         ));
@@ -234,7 +340,7 @@ mod tests {
             region.clone(),
             Some(start_key),
             Some(end_key),
-            false,
+            SplitReason::Admin,
             CheckPolicy::Scan,
             None,
         ));
@@ -246,7 +352,7 @@ mod tests {
             region.clone(),
             Some(start_key),
             Some(end_key),
-            false,
+            SplitReason::Admin,
             CheckPolicy::Scan,
             None,
         ));
@@ -273,7 +379,7 @@ mod tests {
             ..Default::default()
         };
         let cop_host = CoprocessorHost::new(tx.clone(), cfg);
-        let mut runnable = SplitCheckRunner::new(engine.clone(), tx, cop_host.clone());
+        let mut runnable = SplitCheckRunner::new(engine.clone(), tx, cop_host.clone(), None);
 
         let key_gen = |k: &[u8], i: u64, mvcc: bool| {
             if !mvcc {
@@ -325,7 +431,8 @@ mod tests {
             Some(vec![bucket_range]),
         ));
 
-        let host = cop_host.new_split_checker_host(&region, &engine, true, CheckPolicy::Scan);
+        let host =
+            cop_host.new_split_checker_host(&region, &engine, SplitReason::Size, CheckPolicy::Scan);
         assert_eq!(host.policy(), CheckPolicy::Scan);
 
         must_generate_buckets(&rx, &exp_bucket_keys);
@@ -351,7 +458,8 @@ mod tests {
             CheckPolicy::Scan,
             Some(vec![bucket_range]),
         ));
-        let host = cop_host.new_split_checker_host(&region, &engine, true, CheckPolicy::Scan);
+        let host =
+            cop_host.new_split_checker_host(&region, &engine, SplitReason::Size, CheckPolicy::Scan);
         assert_eq!(host.policy(), CheckPolicy::Scan);
 
         must_generate_buckets(&rx, &exp_bucket_keys);
@@ -396,8 +504,12 @@ mod tests {
             region_bucket_size: ReadableSize(20_u64), // so that each key below will form a bucket
             ..Default::default()
         };
-        let mut runnable =
-            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
+        let mut runnable = SplitCheckRunner::new(
+            engine.clone(),
+            tx.clone(),
+            CoprocessorHost::new(tx, cfg),
+            None,
+        );
 
         // so bucket key will be all these keys
         let mut exp_bucket_keys = vec![];
@@ -488,7 +600,7 @@ mod tests {
         let engine = engine_test::kv::new_engine_opt(path, db_opts, cfs_opts).unwrap();
 
         let mut big_value = Vec::with_capacity(256);
-        big_value.extend(iter::repeat(b'v').take(256));
+        big_value.extend(iter::repeat_n(b'v', 256));
         for i in 0..100 {
             let k = format!("key_{:03}", i).into_bytes();
             let k = keys::data_key(Key::from_raw(&k).as_encoded());

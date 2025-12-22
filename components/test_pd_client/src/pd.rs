@@ -7,8 +7,8 @@ use std::{
         Bound::{Excluded, Unbounded},
     },
     sync::{
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc, RwLock,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -19,7 +19,7 @@ use futures::{
     channel::mpsc::{self, UnboundedReceiver, UnboundedSender},
     compat::Future01CompatExt,
     executor::block_on,
-    future::{err, ok, ready, BoxFuture, FutureExt},
+    future::{BoxFuture, FutureExt, err, ok, ready},
     stream,
     stream::StreamExt,
 };
@@ -40,13 +40,13 @@ use pd_client::{
 };
 use raft::eraftpb::ConfChangeType;
 use tikv_util::{
-    store::{check_key_in_region, find_peer, find_peer_by_id, is_learner, new_peer, QueryStats},
+    Either, HandyRwLock,
+    store::{QueryStats, check_key_in_region, find_peer, find_peer_by_id, is_learner, new_peer},
     time::{Instant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
-    Either, HandyRwLock,
 };
 use tokio_timer::timer::Handle;
-use txn_types::{TimeStamp, TSO_PHYSICAL_SHIFT_BITS};
+use txn_types::{TSO_PHYSICAL_SHIFT_BITS, TimeStamp};
 
 use super::*;
 
@@ -529,7 +529,7 @@ impl PdCluster {
         if self
             .stores
             .get(&store_id)
-            .map_or(true, |s| s.store.get_id() != 0)
+            .is_none_or(|s| s.store.get_id() != 0)
         {
             self.stores.insert(
                 store_id,
@@ -840,10 +840,18 @@ impl PdCluster {
         }
         self.leaders.insert(region.get_id(), leader.clone());
 
-        self.region_approximate_size
-            .insert(region.get_id(), region_stat.approximate_size);
-        self.region_approximate_keys
-            .insert(region.get_id(), region_stat.approximate_keys);
+        // only update region approximate size/keys when the stats data > 0.
+        // 0 value means the stats data is uninitialized.
+        // The equvalent logic in pd is: https://github.com/tikv/pd/blob/23550ebb90464948a2d6539d9dc9d6d067924d79/pkg/core/region.go#L275
+        if region_stat.approximate_size > 0 {
+            self.region_approximate_size
+                .insert(region.get_id(), region_stat.approximate_size);
+        }
+        if region_stat.approximate_keys > 0 {
+            self.region_approximate_keys
+                .insert(region.get_id(), region_stat.approximate_keys);
+        }
+
         self.region_last_report_ts
             .insert(region.get_id(), region_stat.last_report_ts);
         self.region_last_report_term.insert(region.get_id(), term);
@@ -1079,10 +1087,10 @@ impl TestPdClient {
             };
             let add = add_peers
                 .iter()
-                .all(|peer| find_peer(&region, peer.get_store_id()).map_or(false, |p| p == peer));
+                .all(|peer| find_peer(&region, peer.get_store_id()).is_some_and(|p| p == peer));
             let remove = remove_peers
                 .iter()
-                .all(|peer| find_peer(&region, peer.get_store_id()).map_or(true, |p| p != peer));
+                .all(|peer| find_peer(&region, peer.get_store_id()) != Some(peer));
             if add && remove {
                 return;
             }
@@ -1395,7 +1403,7 @@ impl TestPdClient {
             .rl()
             .leaders
             .get(&region_id)
-            .map_or(false, |p| *p == peer)
+            .is_some_and(|p| *p == peer)
     }
 
     // check whether region is split by split_key or not.
@@ -1805,6 +1813,7 @@ impl PdClient for TestPdClient {
         &self,
         region: metapb::Region,
         count: usize,
+        _reason: pdpb::SplitReason,
     ) -> PdFuture<pdpb::AskBatchSplitResponse> {
         if self.is_incompatible {
             return Box::pin(err(Error::Incompatible));

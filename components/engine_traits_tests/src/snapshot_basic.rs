@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{KvEngine, Peekable, SyncMutable, ALL_CFS, CF_WRITE};
+use engine_traits::{ALL_CFS, CF_WRITE, KvEngine, Peekable, SyncMutable};
 
 use super::{default_engine, engine_cfs};
 

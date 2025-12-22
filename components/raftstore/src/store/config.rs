@@ -1,9 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp::min, collections::HashMap, sync::Arc, time::Duration, u64};
+use std::{cmp::min, collections::HashMap, sync::Arc, time::Duration};
 
 use batch_system::Config as BatchSystemConfig;
-use engine_traits::{perf_level_serde, PerfLevel};
+use engine_traits::{PerfLevel, perf_level_serde};
 use lazy_static::lazy_static;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig};
 use prometheus::register_gauge_vec;
@@ -20,7 +20,7 @@ use tikv_util::{
 use time::Duration as TimeDuration;
 
 use super::worker::{RaftStoreBatchComponent, RefreshConfigTask};
-use crate::{coprocessor::config::RAFTSTORE_V2_SPLIT_SIZE, Result};
+use crate::{Result, coprocessor::config::RAFTSTORE_V2_SPLIT_SIZE};
 
 lazy_static! {
     pub static ref CONFIG_RAFTSTORE_GAUGE: prometheus::GaugeVec = register_gauge_vec!(
@@ -90,6 +90,8 @@ pub struct Config {
     /// The maximum raft log numbers that applied_index can be ahead of
     /// persisted_index.
     pub max_apply_unpersisted_log_limit: u64,
+    /// Number of Raft ticks between follower read index request retries.
+    pub raft_read_index_retry_interval_ticks: usize,
     // follower will reject this follower request to avoid falling behind leader too far,
     // when the read index is ahead of the sum between the applied index and
     // follower_read_max_log_gap,
@@ -130,18 +132,42 @@ pub struct Config {
     /// will be checked again whether it should be split.
     pub region_split_check_diff: Option<ReadableSize>,
     /// Interval (ms) to check whether start compaction for a region.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been removed. Check and compact is done in GC module."]
     pub region_compact_check_interval: ReadableDuration,
     /// Number of regions for each time checking.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been removed. Check and compact is done in GC module."]
     pub region_compact_check_step: Option<u64>,
     /// Minimum number of tombstones to trigger manual compaction.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been removed. Check and compact is done in GC module."]
     pub region_compact_min_tombstones: u64,
     /// Minimum percentage of tombstones to trigger manual compaction.
     /// Should between 1 and 100.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been removed. Check and compact is done in GC module."]
     pub region_compact_tombstones_percent: u64,
     /// Minimum number of redundant rows to trigger manual compaction.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been removed. Check and compact is done in GC module."]
     pub region_compact_min_redundant_rows: u64,
     /// Minimum percentage of redundant rows to trigger manual compaction.
     /// Should between 1 and 100.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been removed. Check and compact is done in GC module."]
     pub region_compact_redundant_rows_percent: Option<u64>,
     pub pd_heartbeat_tick_interval: ReadableDuration,
     pub pd_store_heartbeat_tick_interval: ReadableDuration,
@@ -376,6 +402,11 @@ pub struct Config {
     #[doc(hidden)]
     #[online_config(hidden)]
     pub inspect_kvdb_interval: ReadableDuration,
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(hidden)]
+    // Interval to inspect the network latency between PD and tikv for slow store detection.
+    pub inspect_network_interval: ReadableDuration,
     /// Threshold of CPU utilization to inspect for slow store detection.
     #[doc(hidden)]
     #[online_config(hidden)]
@@ -445,10 +476,39 @@ pub struct Config {
     #[online_config(hidden)]
     pub min_pending_apply_region_count: u64,
 
-    /// Whether to skip manual compaction in the clean up worker for `write` and
-    /// `default` column family
+    /// Controls whether RocksDB performs compaction at the bottommost level
+    /// during manual compaction operations.
+    ///
+    /// This option maps to `CompactRangeOptions::bottommost_level_compaction`
+    /// in RocksDB.
+    ///
+    /// Bottommost level compaction is expensive but necessary for space
+    /// reclamation and ensuring data is fully compacted. The default
+    /// behavior (`kIfHaveCompactionFilter`) only performs this operation when a
+    /// compaction filter is present, balancing performance and
+    /// functionality.
     #[doc(hidden)]
-    pub skip_manual_compaction_in_clean_up_worker: bool,
+    #[serde(skip_serializing)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been removed. Check then compact is done in GC module."]
+    pub check_then_compact_force_bottommost_level: bool,
+    /// The maximum number of ranges to compact in a single check.
+    /// Set to 0 to disable the limit, meaning all ranges that have redundant
+    /// keys more than the threshold will be compacted.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been removed. Check then compact is done in GC module."]
+    pub check_then_compact_top_n: u64,
+    // TODO: remove this field after we have a better way to propagate the
+    // compaction filter enabled flag in GC module to raftstore.
+    // If this does not match the compaction filter enabled flag in GC module,
+    // the compaction score will be incorrect.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been removed. Check then compact is done in GC module."]
+    pub compaction_filter_enabled: bool,
 }
 
 impl Default for Config {
@@ -473,6 +533,7 @@ impl Default for Config {
             raft_log_gc_count_limit: None,
             raft_log_gc_size_limit: None,
             max_apply_unpersisted_log_limit: 1024,
+            raft_read_index_retry_interval_ticks: 4,
             follower_read_max_log_gap: 100,
             raft_log_reserve_max_ticks: 6,
             raft_engine_purge_interval: ReadableDuration::secs(10),
@@ -482,7 +543,7 @@ impl Default for Config {
             split_region_check_tick_interval: ReadableDuration::secs(10),
             region_split_check_diff: None,
             region_compact_check_interval: ReadableDuration::minutes(5),
-            region_compact_check_step: None,
+            region_compact_check_step: Some(100),
             region_compact_min_tombstones: 10000,
             region_compact_tombstones_percent: 30,
             region_compact_min_redundant_rows: 50000,
@@ -507,12 +568,12 @@ impl Default for Config {
             leader_transfer_max_log_lag: 128,
             snap_apply_batch_size: ReadableSize::mb(10),
             snap_apply_copy_symlink: false,
-            region_worker_tick_interval: if cfg!(feature = "test") {
+            region_worker_tick_interval: if cfg!(test) {
                 ReadableDuration::millis(200)
             } else {
                 ReadableDuration::millis(1000)
             },
-            clean_stale_ranges_tick: if cfg!(feature = "test") { 1 } else { 10 },
+            clean_stale_ranges_tick: if cfg!(test) { 1 } else { 10 },
             lock_cf_compact_interval: ReadableDuration::minutes(10),
             lock_cf_compact_bytes_threshold: ReadableSize::mb(256),
             // Disable consistency check by default as it will hurt performance.
@@ -566,7 +627,8 @@ impl Default for Config {
             region_split_size: ReadableSize(0),
             clean_stale_peer_delay: ReadableDuration::minutes(0),
             inspect_interval: ReadableDuration::millis(100),
-            inspect_kvdb_interval: ReadableDuration::secs(2),
+            inspect_kvdb_interval: ReadableDuration::millis(100),
+            inspect_network_interval: ReadableDuration::millis(100),
             // The default value of `inspect_cpu_util_thd` is 0.4, which means
             // when the cpu utilization is greater than 40%, the store might be
             // regarded as a slow node if there exists delayed inspected messages.
@@ -591,7 +653,9 @@ impl Default for Config {
             enable_v2_compatible_learner: false,
             unsafe_disable_check_quorum: false,
             min_pending_apply_region_count: 10,
-            skip_manual_compaction_in_clean_up_worker: false,
+            check_then_compact_force_bottommost_level: true,
+            check_then_compact_top_n: 20,
+            compaction_filter_enabled: true,
         }
     }
 }
@@ -651,14 +715,6 @@ impl Config {
         self.follower_read_max_log_gap
     }
 
-    pub fn region_compact_check_step(&self) -> u64 {
-        self.region_compact_check_step.unwrap()
-    }
-
-    pub fn region_compact_redundant_rows_percent(&self) -> u64 {
-        self.region_compact_redundant_rows_percent.unwrap()
-    }
-
     #[inline]
     pub fn warmup_entry_cache_enabled(&self) -> bool {
         self.max_entry_cache_warmup_duration.0 != Duration::from_secs(0)
@@ -679,14 +735,6 @@ impl Config {
     }
 
     pub fn optimize_for(&mut self, raft_kv_v2: bool) {
-        if self.region_compact_check_step.is_none() {
-            if raft_kv_v2 {
-                self.region_compact_check_step = Some(5);
-            } else {
-                self.region_compact_check_step = Some(100);
-            }
-        }
-
         // When use raft kv v2, we can set raft log gc size limit to a smaller value to
         // avoid too many entry logs in cache.
         // The snapshot support to increment snapshot sst, so the old snapshot files
@@ -702,25 +750,18 @@ impl Config {
 
     /// Optimize the interval of different inspectors according to the
     /// configuration.
-    pub fn optimize_inspector(&mut self, separated_raft_mount_path: bool) {
+    pub fn tune_inspector_configs(
+        &mut self,
+        separated_raft_mount_path: bool,
+        inspect_network_interval: ReadableDuration,
+    ) {
         // If the kvdb uses the same mount path with raftdb, the health status
         // of kvdb will be inspected by raftstore automatically. So it's not necessary
         // to inspect kvdb.
         if !separated_raft_mount_path {
             self.inspect_kvdb_interval = ReadableDuration::ZERO;
-        } else {
-            // If the inspect_kvdb_interval is less than inspect_interval, it should
-            // use `inspect_interval` * 10 as an empirical inspect interval for KvDB Disk
-            // I/O.
-            let inspect_kvdb_interval = if self.inspect_kvdb_interval < self.inspect_interval
-                && self.inspect_kvdb_interval != ReadableDuration::ZERO
-            {
-                self.inspect_interval * 10
-            } else {
-                self.inspect_kvdb_interval
-            };
-            self.inspect_kvdb_interval = inspect_kvdb_interval;
         }
+        self.inspect_network_interval = inspect_network_interval;
     }
 
     pub fn validate(
@@ -865,24 +906,6 @@ impl Config {
             ));
         }
 
-        if self.region_compact_tombstones_percent < 1
-            || self.region_compact_tombstones_percent > 100
-        {
-            return Err(box_err!(
-                "region-compact-tombstones-percent must between 1 and 100, current value is {}",
-                self.region_compact_tombstones_percent
-            ));
-        }
-
-        let region_compact_redundant_rows_percent =
-            self.region_compact_redundant_rows_percent.unwrap();
-        if !(1..=100).contains(&region_compact_redundant_rows_percent) {
-            return Err(box_err!(
-                "region-compact-redundant-rows-percent must between 1 and 100, current value is {}",
-                region_compact_redundant_rows_percent
-            ));
-        }
-
         if self.local_read_batch_size == 0 {
             return Err(box_err!("local-read-batch-size must be greater than 0"));
         }
@@ -1020,7 +1043,6 @@ impl Config {
                 }
             }
         }
-        assert!(self.region_compact_check_step.is_some());
         if raft_kv_v2 && self.use_delete_range {
             return Err(box_err!(
                 "partitioned-raft-kv doesn't support RocksDB delete range."
@@ -1094,6 +1116,12 @@ impl Config {
             .with_label_values(&["raft_log_gc_size_limit"])
             .set(self.raft_log_gc_size_limit.unwrap_or_default().0 as f64);
         CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["max_apply_unpersisted_log_limit"])
+            .set(self.max_apply_unpersisted_log_limit as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["raft_read_index_retry_interval_ticks"])
+            .set(self.raft_read_index_retry_interval_ticks as f64);
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_log_reserve_max_ticks"])
             .set(self.raft_log_reserve_max_ticks as f64);
         CONFIG_RAFTSTORE_GAUGE
@@ -1113,27 +1141,6 @@ impl Config {
             .with_label_values(&["region_split_check_diff"])
             .set(self.region_split_check_diff.unwrap_or_default().0 as f64);
         CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["region_compact_check_interval"])
-            .set(self.region_compact_check_interval.as_secs_f64());
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["region_compact_check_step"])
-            .set(self.region_compact_check_step.unwrap_or_default() as f64);
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["region_compact_min_tombstones"])
-            .set(self.region_compact_min_tombstones as f64);
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["region_compact_tombstones_percent"])
-            .set(self.region_compact_tombstones_percent as f64);
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["region_compact_min_redundant_rows"])
-            .set(self.region_compact_min_redundant_rows as f64);
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["region_compact_redundant_rows_percent"])
-            .set(
-                self.region_compact_redundant_rows_percent
-                    .unwrap_or_default() as f64,
-            );
-        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["pd_heartbeat_tick_interval"])
             .set(self.pd_heartbeat_tick_interval.as_secs_f64());
         CONFIG_RAFTSTORE_GAUGE
@@ -1149,11 +1156,18 @@ impl Config {
             .with_label_values(&["snap_gc_timeout"])
             .set(self.snap_gc_timeout.as_secs_f64());
         CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["snap_wait_split_duration"])
+            .set(self.snap_wait_split_duration.as_secs_f64());
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["lock_cf_compact_interval"])
             .set(self.lock_cf_compact_interval.as_secs_f64());
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["lock_cf_compact_bytes_threshold"])
             .set(self.lock_cf_compact_bytes_threshold.0 as f64);
+
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["periodic_full_compact_start_max_cpu"])
+            .set(self.periodic_full_compact_start_max_cpu);
 
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["notify_capacity"])
@@ -1184,6 +1198,9 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["snap_apply_batch_size"])
             .set(self.snap_apply_batch_size.0 as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["snap_apply_copy_symlink"])
+            .set(self.snap_apply_copy_symlink.into());
 
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["consistency_check_interval_seconds"])
@@ -1195,8 +1212,17 @@ impl Config {
             .with_label_values(&["raft_store_max_leader_lease"])
             .set(self.raft_store_max_leader_lease.as_secs_f64());
         CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["check_leader_lease_interval"])
+            .set(self.check_leader_lease_interval.as_secs_f64());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["renew_leader_lease_advance_duration"])
+            .set(self.renew_leader_lease_advance_duration.as_secs_f64());
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["right_derive_when_split"])
             .set((self.right_derive_when_split as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["allow_remove_leader"])
+            .set(self.allow_remove_leader().into());
 
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["merge_max_log_gap"])
@@ -1208,15 +1234,16 @@ impl Config {
             .with_label_values(&["use_delete_range"])
             .set((self.use_delete_range as i32).into());
         CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["snap_generator_pool_size"])
+            .set(self.snap_generator_pool_size as f64);
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["cleanup_import_sst_interval"])
             .set(self.cleanup_import_sst_interval.as_secs_f64());
 
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["local_read_batch_size"])
             .set(self.local_read_batch_size as f64);
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["apply_yield_write_size"])
-            .set(self.apply_yield_write_size.0 as f64);
+
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["apply_max_batch_size"])
             .set(self.apply_batch_system.max_batch_size() as f64);
@@ -1224,11 +1251,25 @@ impl Config {
             .with_label_values(&["apply_pool_size"])
             .set(self.apply_batch_system.pool_size as f64);
         CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["apply_reschedule_duration"])
+            .set(self.apply_batch_system.reschedule_duration.as_secs_f64());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["apply_priority_pool_size"])
+            .set(self.apply_batch_system.low_priority_pool_size as f64);
+
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["store_max_batch_size"])
             .set(self.store_batch_system.max_batch_size() as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["store_pool_size"])
             .set(self.store_batch_system.pool_size as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["store_reschedule_duration"])
+            .set(self.store_batch_system.reschedule_duration.as_secs_f64());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["store_priority_pool_size"])
+            .set(self.store_batch_system.low_priority_pool_size as f64);
+
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["store_io_pool_size"])
             .set(self.store_io_pool_size as f64);
@@ -1239,11 +1280,17 @@ impl Config {
             .with_label_values(&["future_poll_size"])
             .set(self.future_poll_size as f64);
         CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["snap_generator_pool_size"])
-            .set(self.snap_generator_pool_size as f64);
-        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["hibernate_regions"])
             .set((self.hibernate_regions as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["apply_yield_duration"])
+            .set(self.apply_yield_duration.as_secs_f64());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["apply_yield_write_size"])
+            .set(self.apply_yield_write_size.0 as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["perf_level"])
+            .set(self.perf_level as u64 as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["cmd_batch"])
             .set((self.cmd_batch as i32).into());
@@ -1268,6 +1315,25 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["io_reschedule_hotpot_duration"])
             .set(self.io_reschedule_hotpot_duration.as_secs_f64());
+
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["inspect_interval"])
+            .set(self.inspect_interval.as_secs_f64());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["reactive_memory_lock_tick_interval"])
+            .set(self.reactive_memory_lock_tick_interval.as_secs_f64());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["reactive_memory_lock_timeout_tick"])
+            .set(self.reactive_memory_lock_timeout_tick as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["report_region_buckets_tick_interval"])
+            .set(self.report_region_buckets_tick_interval.as_secs_f64());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["max_entry_cache_warmup_duration"])
+            .set(self.max_entry_cache_warmup_duration.as_secs_f64());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["unreachable_backoff"])
+            .set(self.unreachable_backoff.as_secs_f64());
     }
 
     fn write_change_into_metrics(change: ConfigChange) {
@@ -1676,24 +1742,23 @@ mod tests {
             .unwrap_err();
 
         cfg = Config::new();
-        cfg.optimize_inspector(false);
+        cfg.tune_inspector_configs(false, ReadableDuration::millis(100));
         assert_eq!(cfg.inspect_kvdb_interval, ReadableDuration::ZERO);
 
         cfg = Config::new();
         cfg.inspect_kvdb_interval = ReadableDuration::secs(1);
-        cfg.optimize_inspector(false);
+        cfg.tune_inspector_configs(false, ReadableDuration::millis(100));
         assert_eq!(cfg.inspect_kvdb_interval, ReadableDuration::ZERO);
-        cfg.optimize_inspector(true);
+        cfg.tune_inspector_configs(true, ReadableDuration::millis(100));
         assert_eq!(cfg.inspect_kvdb_interval, ReadableDuration::ZERO);
 
         cfg.inspect_kvdb_interval = ReadableDuration::secs(1);
-        cfg.optimize_inspector(true);
+        cfg.tune_inspector_configs(true, ReadableDuration::millis(100));
         assert_eq!(cfg.inspect_kvdb_interval, ReadableDuration::secs(1));
 
         cfg = Config::new();
         cfg.inspect_kvdb_interval = ReadableDuration::millis(1);
-        cfg.inspect_interval = ReadableDuration::millis(100);
-        cfg.optimize_inspector(true);
-        assert_eq!(cfg.inspect_kvdb_interval, ReadableDuration::secs(1));
+        cfg.tune_inspector_configs(true, ReadableDuration::millis(100));
+        assert_eq!(cfg.inspect_kvdb_interval, ReadableDuration::millis(1));
     }
 }

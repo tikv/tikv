@@ -1,6 +1,9 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp, sync::Arc};
+use std::{
+    cmp,
+    sync::{Arc, atomic::Ordering},
+};
 
 use collections::{HashMap, HashSet};
 use engine_traits::{KvEngine, RaftEngine};
@@ -8,16 +11,16 @@ use fail::fail_point;
 use health_controller::types::LatencyInspector;
 use kvproto::pdpb;
 use pd_client::{
+    PdClient,
     metrics::{
         REGION_READ_BYTES_HISTOGRAM, REGION_READ_KEYS_HISTOGRAM, REGION_WRITTEN_BYTES_HISTOGRAM,
         REGION_WRITTEN_KEYS_HISTOGRAM,
     },
-    PdClient,
 };
 use prometheus::local::LocalHistogram;
 use raftstore::store::{
-    metrics::STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC, UnsafeRecoveryExecutePlanSyncer,
-    UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryHandle,
+    UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryHandle,
+    metrics::STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC,
 };
 use slog::{error, info, warn};
 use tikv_util::{
@@ -268,6 +271,8 @@ where
         // Update slowness statistics
         self.update_slowness_in_store_stats(&mut stats, last_query_sum);
 
+        stats.set_is_stopping(self.graceful_shutdown_state.load(Ordering::SeqCst));
+
         let resp = self.pd_client.store_heartbeat(stats, store_report, None);
         let logger = self.logger.clone();
         let router = self.router.clone();
@@ -366,7 +371,7 @@ where
                     }
                 }
                 Err(e) => {
-                    error!(logger, "store heartbeat failed"; "err" => ?e);
+                    warn!(logger, "store heartbeat failed"; "err" => ?e);
                 }
             }
         };

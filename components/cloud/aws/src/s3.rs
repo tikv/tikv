@@ -7,41 +7,41 @@ use std::{
 };
 
 use async_trait::async_trait;
-use aws_config::{sts::AssumeRoleProvider, BehaviorVersion, Region, SdkConfig};
-use aws_credential_types::{provider::ProvideCredentials, Credentials};
+use aws_config::{BehaviorVersion, Region, SdkConfig, sts::AssumeRoleProvider};
+use aws_credential_types::{Credentials, provider::ProvideCredentials};
 use aws_sdk_s3::{
-    config::HttpClient,
+    Client,
+    config::{HttpClient, StalledStreamProtectionConfig},
     operation::get_object::GetObjectError,
     types::{CompletedMultipartUpload, CompletedPart},
-    Client,
 };
 use bytes::Bytes;
 use cloud::{
     blob::{
-        none_to_empty, BlobConfig, BlobObject, BlobStorage, BucketConf, DeletableStorage,
-        IterableStorage, PutResource, StringNonEmpty,
+        BlobConfig, BlobObject, BlobStorage, BucketConf, DeletableStorage, IterableStorage,
+        PutResource, StringNonEmpty, none_to_empty,
     },
     metrics::CLOUD_REQUEST_HISTOGRAM_VEC,
 };
 use fail::fail_point;
 use futures::{executor::block_on, stream::Stream};
 use futures_util::{
+    StreamExt,
     future::{FutureExt, LocalBoxFuture},
     io::{AsyncRead, AsyncReadExt},
     stream::TryStreamExt,
-    StreamExt,
 };
 pub use kvproto::brpb::S3 as InputConfig;
 use thiserror::Error;
 use tikv_util::{
     debug,
-    stream::{error_stream, RetryError},
+    stream::{RetryError, error_stream},
     time::Instant,
 };
 use tokio::time::{sleep, timeout};
 use tokio_util::io::ReaderStream;
 
-use crate::util::{self, retry_and_count, SdkError};
+use crate::util::{self, SdkError, retry_and_count};
 
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(900);
 pub const STORAGE_VENDOR_NAME_AWS: &str = "aws";
@@ -143,12 +143,9 @@ impl BlobConfig for Config {
     }
 
     fn url(&self) -> io::Result<url::Url> {
-        self.bucket.url("s3").map_err(|s| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("error creating bucket url: {}", s),
-            )
-        })
+        self.bucket
+            .url("s3")
+            .map_err(|s| io::Error::other(format!("error creating bucket url: {}", s)))
     }
 }
 
@@ -255,8 +252,9 @@ impl S3Storage {
         let bucket_region = none_to_empty(config.bucket.region.clone());
         let bucket_endpoint = none_to_empty(config.bucket.endpoint.clone());
 
-        let mut loader =
-            aws_config::defaults(BehaviorVersion::latest()).credentials_provider(creds);
+        let mut loader = aws_config::defaults(BehaviorVersion::latest())
+            .stalled_stream_protection(StalledStreamProtectionConfig::disabled())
+            .credentials_provider(creds);
 
         loader = util::configure_region(loader, &bucket_region)?;
         loader = util::configure_endpoint(loader, &bucket_endpoint);
@@ -775,10 +773,7 @@ impl DeletableStorage for S3Storage {
                 .observe(now.saturating_elapsed().as_secs_f64());
             match res {
                 Ok(_) => Ok(()),
-                Err(e) => Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("failed to delete object {}", e),
-                )),
+                Err(e) => Err(io::Error::other(format!("failed to delete object {}", e))),
             }
         }
         .boxed_local()
@@ -819,10 +814,7 @@ impl IterableStorage for S3Storage {
                     .unwrap_or_else(|| futures::stream::empty().right_stream())
             })
             .map_err(|err| {
-                io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("sdk encounters an unexpected error: {:?}", err),
-                )
+                io::Error::other(format!("sdk encounters an unexpected error: {:?}", err))
             })
             .try_flatten()
             .boxed_local()
@@ -1145,8 +1137,62 @@ mod tests {
         client.assert_requests_match(&[]);
     }
 
+    /// Ensures that stalled stream protection does not kick in to kill a
+    /// rate-limited connection.
+    ///
+    /// This test simulates a GetObject response with 7s delay, which will cause
+    /// a StreamingError(ThroughputBelowMinimum) error if stalled stream
+    /// protection is enabled.
     #[tokio::test]
-    #[cfg(FALSE)]
+    async fn test_s3_storage_without_stalled_stream_protection() {
+        let bucket_name = StringNonEmpty::required("mybucket".to_string()).unwrap();
+        let mut bucket = BucketConf::default(bucket_name);
+        bucket.region = StringNonEmpty::opt("ap-southeast-2".to_string());
+        bucket.prefix = StringNonEmpty::opt("myprefix".to_string());
+        let config = Config::default(bucket);
+
+        let (mut delayed_response_sender, delayed_response_body) = hyper::body::Body::channel();
+        let client = StaticReplayClient::new(vec![
+            ReplayEvent::new(
+                http::Request::builder()
+                    .method("GET")
+                    .uri(Uri::from_static(
+                        "https://mybucket.s3.ap-southeast-2.amazonaws.com/myprefix/mykey?x-id=GetObject",
+                    ))
+                    .body(SdkBody::empty())
+                    .unwrap(),
+                http::Response::builder()
+                    .status(200)
+                    .body(delayed_response_body.into())
+                    .unwrap(),
+            ),
+        ]);
+
+        let creds = Credentials::from_keys("abc".to_string(), "xyz".to_string(), None);
+        let s = S3Storage::new_with_creds_client(config.clone(), client.clone(), creds).unwrap();
+
+        let mut reader = s.get("mykey");
+        let mut buf = Vec::new();
+        let send_delayed_response_task = tokio::spawn(async move {
+            // The sleep cannot be less than 6s. We need to ensure the throughput is 0 B/s
+            // for over 6s to trigger stalled stream protection.
+            tokio::time::sleep(Duration::from_secs(7)).await;
+            delayed_response_sender
+                .send_data("abcd".into())
+                .await
+                .unwrap();
+        });
+
+        let ret = reader.read_to_end(&mut buf).await.unwrap();
+        send_delayed_response_task.await.unwrap();
+        assert_eq!(ret, 4);
+        assert_eq!(buf, b"abcd");
+
+        client.assert_requests_match(&[]);
+    }
+
+    #[ignore = "s3 test env is unavailable"]
+    #[tokio::test]
     // FIXME: enable this (or move this to an integration test) if we've got a
     // reliable way to test s3 (aws test_util requires custom logic to verify the
     // body stream which itself can have bug)

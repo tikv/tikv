@@ -18,7 +18,7 @@ use hooking::{
 use kvproto::brpb::StorageBackend;
 use tikv_util::config::ReadableSize;
 use tokio::runtime::Handle;
-use tracing::{trace_span, Instrument};
+use tracing::{Instrument, trace_span};
 use tracing_active_tree::{frame, root};
 use txn_types::TimeStamp;
 
@@ -31,9 +31,11 @@ use super::{
     storage::{LoadFromExt, StreamMetaStorage},
 };
 use crate::{
-    compaction::{exec::SubcompactionExecArg, SubcompactionResult},
+    ErrorKind,
+    compaction::{SubcompactionResult, exec::SubcompactionExecArg},
     errors::{Result, TraceResultExt},
-    util, ErrorKind,
+    execute::hooking::SubcompactionSkippedCtx,
+    util,
 };
 
 const COMPACTION_V1_PREFIX: &str = "v1/compactions";
@@ -50,6 +52,10 @@ pub struct ExecutionConfig {
     pub from_ts: u64,
     /// Filter out files doesn't contain any record with TS less than this.
     pub until_ts: u64,
+    /// The max count of running prefetch tasks.
+    pub prefetch_running_count: u64,
+    /// The max count of saved prefetch tasks in the queue.
+    pub prefetch_buffer_count: u64,
     /// The compress algorithm we are going to use for output.
     pub compression: SstCompressionType,
     /// The compress level we are going to use.
@@ -129,7 +135,7 @@ pub struct Execution<DB: SstExt = RocksEngine> {
 }
 
 struct ExecuteCtx<'a, H: ExecHooks> {
-    storage: &'a Arc<dyn ExternalStorage>,
+    storage: &'a Arc<dyn ExternalStorage + 'static>,
     hooks: &'a mut H,
 }
 
@@ -152,11 +158,12 @@ impl Execution {
     async fn run_prepared(&self, cx: &mut ExecuteCtx<'_, impl ExecHooks>) -> Result<()> {
         let mut ext = LoadFromExt::default();
         let next_compaction = trace_span!("next_compaction");
-        ext.max_concurrent_fetch = 128;
         ext.loading_content_span = Some(trace_span!(
             parent: next_compaction.clone(),
             "load_meta_file_names"
         ));
+        ext.prefetch_running_count = self.cfg.prefetch_running_count as usize;
+        ext.prefetch_buffer_count = self.cfg.prefetch_buffer_count as usize;
 
         let ExecuteCtx {
             ref storage,
@@ -171,7 +178,8 @@ impl Execution {
         };
         hooks.before_execution_started(cx).await?;
 
-        let meta = StreamMetaStorage::load_from_ext(storage.as_ref(), ext).await?;
+        let storage = Arc::clone(storage);
+        let meta = StreamMetaStorage::load_from_ext(&storage, ext).await?;
         let stream = meta.flat_map(|file| match file {
             Ok(file) => stream::iter(file.into_logs()).map(Ok).left_stream(),
             Err(err) => stream::once(futures::future::err(err)).right_stream(),
@@ -197,7 +205,7 @@ impl Execution {
 
             let c = c?;
             let cid = CId(id);
-            let skip = Cell::new(false);
+            let skip = Cell::new(None);
             let cx = SubcompactionStartCtx {
                 subc: &c,
                 load_stat_diff: &lstat,
@@ -205,7 +213,9 @@ impl Execution {
                 skip: &skip,
             };
             hooks.before_a_subcompaction_start(cid, cx);
-            if skip.get() {
+            if let Some(reason) = skip.get() {
+                let skipped_cx = SubcompactionSkippedCtx { subc: &c, reason };
+                hooks.on_subcompaction_skipped(skipped_cx).await;
                 continue;
             }
 
@@ -214,7 +224,7 @@ impl Execution {
             let compact_args = SubcompactionExecArg {
                 out_prefix: Some(Path::new(&self.out_prefix).to_owned()),
                 db: self.db.clone(),
-                storage: Arc::clone(storage) as _,
+                storage: Arc::clone(&storage),
             };
             let compact_worker = SubcompactionExec::from(compact_args);
             let mut ext = SubcompactExt::default();
@@ -247,7 +257,7 @@ impl Execution {
         }
         let cx = AfterFinishCtx {
             async_rt: &Handle::current(),
-            storage: storage.as_ref(),
+            storage: &storage,
         };
         hooks.after_execution_finished(cx).await?;
 

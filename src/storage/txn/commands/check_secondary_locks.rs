@@ -1,22 +1,24 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
+use protobuf::Message;
+use resource_metering::record_network_out_bytes;
 use txn_types::{Key, Lock, WriteType};
 
 use crate::storage::{
+    ProcessResult, Snapshot,
     kv::WriteData,
     lock_manager::LockManager,
     mvcc::{MvccTxn, OverlappedWrite, ReleasedLock, SnapshotReader, TimeStamp, TxnCommitRecord},
     txn::{
+        Result,
         actions::check_txn_status::{collapse_prev_rollback, make_rollback},
         commands::{
             Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
             WriteCommand, WriteContext, WriteResult,
         },
-        Result,
     },
     types::SecondaryLocksStatus,
-    ProcessResult, Snapshot,
 };
 
 command! {
@@ -141,7 +143,7 @@ fn check_status_from_lock<S: Snapshot>(
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
-    fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
+    fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         // It is not allowed for commit to overwrite a protected rollback. So we update
         // max_ts to prevent this case from happening.
         let region_id = self.ctx.get_region_id();
@@ -152,13 +154,13 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
             })?;
 
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
-
-        let mut snapshot_reader = SnapshotReader::new_with_ctx(self.start_ts, snapshot, &self.ctx);
-        snapshot_reader.setup_with_hint_items(&mut self.keys, |k| k);
-        let mut reader = ReaderWithStats::new(snapshot_reader, context.statistics);
+        let mut reader = ReaderWithStats::new(
+            SnapshotReader::new_with_ctx(self.start_ts, snapshot, &self.ctx),
+            context.statistics,
+        );
         let mut released_locks = ReleasedLocks::new();
         let mut result = SecondaryLocksStatus::Locked(Vec::new());
-
+        let mut result_size: u64 = 0;
         for key in self.keys {
             let mut released_lock = None;
             let mut mismatch_lock = None;
@@ -195,7 +197,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
             released_locks.push(released_lock);
             match status {
                 SecondaryLockStatus::Locked(lock) => {
-                    result.push(lock.into_lock_info(key.to_raw()?));
+                    let lock_info = lock.into_lock_info(key.to_raw()?);
+                    result_size += lock_info.compute_size() as u64;
+                    result.push(lock_info);
                 }
                 SecondaryLockStatus::Committed(commit_ts) => {
                     result = SecondaryLocksStatus::Committed(commit_ts);
@@ -208,6 +212,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
             }
         }
 
+        record_network_out_bytes(result_size);
         let write_result_known_txn_status =
             if let SecondaryLocksStatus::Committed(commit_ts) = &result {
                 vec![(self.start_ts, *commit_ts)]
@@ -248,6 +253,7 @@ pub mod tests {
 
     use super::*;
     use crate::storage::{
+        Engine,
         kv::TestEngineBuilder,
         lock_manager::MockLockManager,
         mvcc::tests::*,
@@ -255,7 +261,6 @@ pub mod tests {
             commands::WriteCommand, scheduler::DEFAULT_EXECUTION_DURATION_LIMIT, tests::*,
             txn_status_cache::TxnStatusCache,
         },
-        Engine,
     };
 
     pub fn must_success<E: Engine>(

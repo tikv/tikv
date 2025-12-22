@@ -2,8 +2,9 @@
 
 use std::{
     sync::{
+        Arc,
         atomic::{AtomicUsize, Ordering},
-        mpsc, Arc,
+        mpsc,
     },
     thread,
     time::Duration,
@@ -16,7 +17,7 @@ use kvproto::{metapb, pdpb};
 use pd_client::{Error as PdError, Feature, PdClient, PdConnector, RegionStat, RpcClient};
 use raftstore::store;
 use security::{SecurityConfig, SecurityManager};
-use test_pd::{mocker::*, util::*, Server as MockServer};
+use test_pd::{Server as MockServer, mocker::*, util::*};
 use tikv_util::config::ReadableDuration;
 use tokio::runtime::Builder;
 use txn_types::TimeStamp;
@@ -132,7 +133,8 @@ fn test_rpc_client() {
         None,
     ))
     .unwrap();
-    block_on(client.ask_batch_split(metapb::Region::default(), 1)).unwrap();
+    block_on(client.ask_batch_split(metapb::Region::default(), 1, pdpb::SplitReason::Admin))
+        .unwrap();
     block_on(client.report_batch_split(vec![metapb::Region::default(), metapb::Region::default()]))
         .unwrap();
 
@@ -388,7 +390,8 @@ fn test_incompatible_version() {
 
     let client = new_client(eps, None);
 
-    let resp = block_on(client.ask_batch_split(metapb::Region::default(), 2));
+    let resp =
+        block_on(client.ask_batch_split(metapb::Region::default(), 2, pdpb::SplitReason::Admin));
     assert_eq!(
         resp.unwrap_err().to_string(),
         PdError::Incompatible.to_string()

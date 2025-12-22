@@ -83,7 +83,7 @@ macro_rules! trace(($($args:tt)+) => {
     ::slog_global::trace!($($args)+)
 };);
 
-/// Logs a infor or debug level message using the slog global logger.
+/// Logs a info or debug level message using the slog global logger.
 #[macro_export]
 macro_rules! info_or_debug{
   ($cond:expr; $($args:tt)+) => {
@@ -95,16 +95,28 @@ macro_rules! info_or_debug{
   };
 }
 
+/// Logs a info or error level message using the slog global logger.
+#[macro_export]
+macro_rules! info_or_error{
+  ($cond:expr; $($args:tt)+) => {
+        if $cond {
+            info!($($args)+)
+        } else {
+            error!($($args)+)
+        }
+  };
+}
+
 use std::fmt::{self, Display, Write};
 
-use slog::{BorrowedKV, OwnedKVList, Record, KV};
+use slog::{BorrowedKV, KV, OwnedKVList, Record};
 
 struct FormatKeyValueList<'a, W> {
     buffer: &'a mut W,
     written: bool,
 }
 
-impl<'a, W: Write> slog::Serializer for FormatKeyValueList<'a, W> {
+impl<W: Write> slog::Serializer for FormatKeyValueList<'_, W> {
     fn emit_arguments(&mut self, key: slog::Key, val: &fmt::Arguments<'_>) -> slog::Result {
         if !self.written {
             write!(&mut self.buffer, "[{}={}]", key, val).unwrap();
@@ -122,7 +134,7 @@ impl<'a, W: Write> slog::Serializer for FormatKeyValueList<'a, W> {
 /// processing.
 pub struct SlogFormat<'a>(pub &'a slog::Logger);
 
-impl<'a> Display for SlogFormat<'a> {
+impl Display for SlogFormat<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut formatter = FormatKeyValueList {
             buffer: f,

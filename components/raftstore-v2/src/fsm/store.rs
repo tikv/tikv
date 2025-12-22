@@ -9,13 +9,13 @@ use std::{
 use batch_system::Fsm;
 use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine};
-use futures::{compat::Future01CompatExt, FutureExt};
+use futures::{FutureExt, compat::Future01CompatExt};
 use keys::{data_end_key, data_key};
 use kvproto::metapb::Region;
 use raftstore::store::{
-    fsm::store::StoreRegionMeta, Config, ReadDelegate, RegionReadProgressRegistry, Transport,
+    Config, ReadDelegate, RegionReadProgressRegistry, Transport, fsm::store::StoreRegionMeta,
 };
-use slog::{info, o, Logger};
+use slog::{Logger, info, o};
 use tikv_util::{
     future::poll_future_notify,
     is_zero_duration,
@@ -81,8 +81,7 @@ impl<EK> StoreMeta<EK> {
             } else {
                 assert!(
                     self.region_ranges
-                        .get(&(data_end_key(prev.get_end_key()), version))
-                        .is_some(),
+                        .contains_key(&(data_end_key(prev.get_end_key()), version)),
                     "{} region corrupted",
                     SlogFormat(logger)
                 );
@@ -267,7 +266,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
             StoreTick::CleanupImportSst,
             self.store_ctx.cfg.cleanup_import_sst_interval.0,
         );
-        self.register_compact_check_tick();
 
         self.schedule_tick(
             StoreTick::SnapGc,
@@ -297,7 +295,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
         match tick {
             StoreTick::PdStoreHeartbeat => self.on_pd_store_heartbeat(),
             StoreTick::CleanupImportSst => self.on_cleanup_import_sst(),
-            StoreTick::CompactCheck => self.on_compact_check_tick(),
             StoreTick::SnapGc => self.on_snapshot_gc(),
             _ => slog_panic!(
                 self.store_ctx.logger,

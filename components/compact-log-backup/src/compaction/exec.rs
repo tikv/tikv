@@ -7,8 +7,8 @@ use std::{
 
 use engine_rocks::RocksEngine;
 use engine_traits::{
-    ExternalSstFileInfo, SstCompressionType, SstExt, SstWriter, SstWriterBuilder, CF_WRITE,
-    DATA_KEY_PREFIX_LEN,
+    CF_WRITE, DATA_KEY_PREFIX_LEN, ExternalSstFileInfo, SstCompressionType, SstExt, SstWriter,
+    SstWriterBuilder,
 };
 use external_storage::{ExternalStorage, UnpinReader};
 use file_system::Sha256Reader;
@@ -24,7 +24,7 @@ use crate::{
     compaction::SST_OUT_REL,
     errors::{OtherErrExt, Result, TraceResultExt},
     source::{Record, Source},
-    statistic::{prom::*, LoadStatistic, SubcompactStatistic},
+    statistic::{LoadStatistic, SubcompactStatistic, prom::*},
     storage::DEFAULT_COMPACTION_OUT_PREFIX,
     util::{self, Cooperate, ExecuteAllExt},
 };
@@ -330,7 +330,7 @@ where
         meta.set_end_key(end_key);
         meta.set_cf(cf.to_owned());
         meta.name = name.to_owned();
-        meta.end_version = u64::MAX;
+        meta.start_version = u64::MAX;
 
         let mut data_key = keys::DATA_PREFIX_KEY.to_vec();
         for item in sorted_items {
@@ -469,16 +469,16 @@ where
 
 #[cfg(test)]
 mod test {
-    use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
+    use engine_traits::{CF_DEFAULT, CF_WRITE, CfName};
     use tidb_query_datatype::codec::table::encode_row_key;
     use txn_types::{Key, Write, WriteType};
 
     use crate::{
-        compaction::{exec::SubcompactionExec, Subcompaction},
+        compaction::{Subcompaction, exec::SubcompactionExec},
         source::Record,
         storage::{Epoch, MetaFile},
         test_util::{
-            gen_step, save_many_log_files, CompactInMem, KvGen, LogFileBuilder, TmpStorage,
+            CompactInMem, KvGen, LogFileBuilder, TmpStorage, gen_step, save_many_log_files,
         },
     };
 

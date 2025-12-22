@@ -9,7 +9,7 @@ use std::{
 
 use engine_traits::CF_DEFAULT;
 use external_storage::{ExternalStorage, UnpinReader};
-use futures::{executor::block_on, io::Cursor as AsyncCursor, stream, SinkExt};
+use futures::{SinkExt, executor::block_on, io::Cursor as AsyncCursor, stream};
 use grpcio::{Result, WriteFlags};
 use kvproto::{
     brpb::{Local, StorageBackend},
@@ -124,6 +124,13 @@ pub fn must_ingest_sst_error(client: &ImportSstClient, context: Context, meta: S
     let resp = client.ingest(&ingest_request).unwrap();
 
     assert!(resp.has_error(), "{:?}", resp);
+}
+
+pub fn ingest_sst(client: &ImportSstClient, context: Context, meta: SstMeta) -> IngestResponse {
+    let mut ingest_request = IngestRequest::default();
+    ingest_request.set_context(context);
+    ingest_request.set_sst(meta);
+    client.ingest(&ingest_request).unwrap()
 }
 
 pub fn check_ingested_kvs(tikv: &TikvClient, ctx: &Context, sst_range: (u8, u8)) {

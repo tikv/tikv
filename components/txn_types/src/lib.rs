@@ -12,10 +12,11 @@ use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::kvrpcpb;
 pub use lock::{Lock, LockType, PessimisticLock, TxnLockRef};
 use thiserror::Error;
-pub use timestamp::{TimeStamp, TsSet, TSO_PHYSICAL_SHIFT_BITS};
+pub use timestamp::{TSO_PHYSICAL_SHIFT_BITS, TimeStamp, TsSet};
 pub use types::{
-    insert_old_value_if_resolved, is_short_value, Key, KvPair, LastChange, Mutation, MutationType,
-    OldValue, OldValues, TxnExtra, TxnExtraScheduler, Value, WriteBatchFlags, SHORT_VALUE_MAX_LEN,
+    CommitRole, Key, KvPair, LastChange, Mutation, MutationType, OldValue, OldValues,
+    SHORT_VALUE_MAX_LEN, TxnExtra, TxnExtraScheduler, Value, WriteBatchFlags,
+    insert_old_value_if_resolved, is_short_value,
 };
 pub use write::{Write, WriteRef, WriteType};
 
@@ -78,6 +79,8 @@ impl ErrorInner {
     }
 }
 
+pub static ENABLE_DUP_KEY_DEBUG: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct Error(#[from] pub Box<ErrorInner>);

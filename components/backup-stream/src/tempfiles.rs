@@ -22,16 +22,17 @@ use std::{
     path::{Path, PathBuf},
     pin::Pin,
     sync::{
-        atomic::{AtomicU8, AtomicUsize, Ordering},
         Arc, Mutex as BlockMutex,
+        atomic::{AtomicU8, AtomicUsize, Ordering},
     },
-    task::{ready, Context, Poll},
+    task::{Context, Poll, ready},
+    time::Instant,
 };
 
 use encryption::{BackupEncryptionManager, DecrypterReader, EncrypterWriter, Iv};
 use futures::{AsyncWriteExt, TryFutureExt};
 use kvproto::{brpb::CompressionType, encryptionpb::EncryptionMethod};
-use tikv_util::warn;
+use tikv_util::{defer, warn};
 use tokio::{
     fs::File as OsFile,
     io::{AsyncRead, AsyncWrite},
@@ -44,7 +45,8 @@ use crate::{
     annotate,
     errors::Result,
     metrics::{
-        IN_DISK_TEMP_FILE_SIZE, TEMP_FILE_COUNT, TEMP_FILE_MEMORY_USAGE, TEMP_FILE_SWAP_OUT_BYTES,
+        IN_DISK_TEMP_FILE_SIZE, TEMP_FILE_COUNT, TEMP_FILE_MEMORY_USAGE,
+        TEMP_FILE_READ_POLL_DURATION, TEMP_FILE_SWAP_OUT_BYTES,
     },
     utils::{CompressionWriter, ZstdCompressionWriter},
 };
@@ -232,8 +234,7 @@ impl TempFilePool {
             }
         });
         if f.reader_count.load(Ordering::SeqCst) > 0 {
-            return Err(Error::new(
-                ErrorKind::Other,
+            return Err(Error::other(
                 "open_for_write isn't allowed when there are concurrent reading.",
             ));
         }
@@ -286,8 +287,7 @@ impl TempFilePool {
             // like cursors to allow the reader be able to access consistent
             // File snapshot even there are writers appending contents
             // to the file. But that isn't needed for now.
-            return Err(IoErr::new(
-                ErrorKind::Other,
+            return Err(IoErr::other(
                 format!(
                     "open_for_read isn't allowed when there are concurrent writing (there are still {} reads for file {}.).",
                     refc,
@@ -337,11 +337,11 @@ impl TempFilePool {
     fn create_relative(&self, p: &Path) -> std::io::Result<SwappedOut> {
         let abs_path = self.cfg.swap_files.join(p);
         #[cfg(test)]
-        match &self.override_swapout {
-            Some(f) => return Ok(SwappedOut::Dynamic(f(&abs_path))),
-            None => {}
+        if let Some(f) = &self.override_swapout {
+            return Ok(SwappedOut::Dynamic(f(&abs_path)));
         }
-        let file = OsFile::from_std(SyncOsFile::create(&abs_path)?);
+        let mut file = OsFile::from_std(SyncOsFile::create(&abs_path)?);
+        file.set_max_buf_size(self.config().write_buffer_size);
 
         let pfile = match &self.backup_encryption_manager.opt_data_key_manager() {
             Some(enc) => SwappedOut::Encrypted(
@@ -625,7 +625,11 @@ impl AsyncRead for ForRead {
         cx: &mut Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
+        let begin = Instant::now();
         let this = self.get_mut();
+        defer! {
+            TEMP_FILE_READ_POLL_DURATION.observe(begin.elapsed().as_secs_f64())
+        }
         if this.read == 0 && this.myfile.is_some() {
             let old = buf.remaining();
             let ext_file = Pin::new(this.myfile.as_mut().unwrap());
@@ -782,15 +786,15 @@ mod test {
         path::Path,
         pin::Pin,
         sync::{
-            atomic::{AtomicUsize, Ordering},
             Arc,
+            atomic::{AtomicUsize, Ordering},
         },
     };
 
     use async_compression::tokio::bufread::ZstdDecoder;
     use encryption::{BackupEncryptionManager, DataKeyManager, MultiMasterKeyBackend};
     use kvproto::{brpb::CompressionType, encryptionpb::EncryptionMethod};
-    use tempfile::{tempdir, TempDir};
+    use tempfile::{TempDir, tempdir};
     use test_util::new_test_key_manager;
     use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
     use walkdir::WalkDir;

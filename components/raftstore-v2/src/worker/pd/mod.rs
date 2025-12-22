@@ -2,7 +2,7 @@
 
 use std::{
     fmt::{self, Display, Formatter},
-    sync::{atomic::AtomicBool, Arc},
+    sync::{Arc, atomic::AtomicBool},
 };
 
 use causal_ts::CausalTsProviderImpl;
@@ -13,19 +13,19 @@ use health_controller::types::{InspectFactor, LatencyInspector, RaftstoreDuratio
 use kvproto::{metapb, pdpb};
 use pd_client::{BucketStat, PdClient};
 use raftstore::store::{
-    metrics::STORE_INSPECT_DURATION_HISTOGRAM, util::KeysInfoFormatter, AutoSplitController,
-    Config, FlowStatsReporter, PdStatsMonitor, ReadStats, SplitInfo, StoreStatsReporter,
-    TabletSnapManager, TxnExt, WriteStats, NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
+    AutoSplitController, Config, FlowStatsReporter, NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
+    PdStatsMonitor, ReadStats, SplitInfo, SplitValidator, StoreStatsReporter, TabletSnapManager,
+    TxnExt, WriteStats, metrics::STORE_INSPECT_DURATION_HISTOGRAM, util::KeysInfoFormatter,
 };
 use resource_metering::{Collector, CollectorRegHandle, RawRecords};
 use service::service_manager::GrpcServiceManager;
-use slog::{error, warn, Logger};
+use slog::{Logger, error, warn};
 use tikv_util::{
     config::VersionTrack,
     time::{Instant as TiInstant, UnixSecs},
     worker::{Runnable, Scheduler},
 };
-use yatp::{task::future::TaskCell, Remote};
+use yatp::{Remote, task::future::TaskCell};
 
 use crate::{
     batch::StoreRouter,
@@ -98,6 +98,9 @@ pub enum Task {
     UpdateSlownessStats {
         tick_id: u64,
         duration: RaftstoreDuration,
+    },
+    GracefulShutdownState {
+        state: bool,
     },
 }
 
@@ -179,6 +182,9 @@ impl Display for Task {
                 "update slowness statistics: tick_id {}, duration {:?}",
                 tick_id, duration
             ),
+            Task::GracefulShutdownState { state } => {
+                write!(f, "graceful shutdown state: {}", state)
+            }
         }
     }
 }
@@ -227,6 +233,8 @@ where
     shutdown: Arc<AtomicBool>,
     #[allow(dead_code)]
     cfg: Arc<VersionTrack<Config>>,
+
+    graceful_shutdown_state: Arc<AtomicBool>,
 }
 
 impl<EK, ER, T> Runner<EK, ER, T>
@@ -252,15 +260,21 @@ where
         logger: Logger,
         shutdown: Arc<AtomicBool>,
         cfg: Arc<VersionTrack<Config>>,
+        graceful_shutdown_state: Arc<AtomicBool>,
     ) -> Result<Self, std::io::Error> {
         let store_heartbeat_interval = cfg.value().pd_store_heartbeat_tick_interval.0;
         let mut stats_monitor = PdStatsMonitor::new(
             store_heartbeat_interval / NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
             cfg.value().inspect_interval.0,
             std::time::Duration::default(),
+            cfg.value().inspect_network_interval.0,
             PdReporter::new(pd_scheduler, logger.clone()),
         );
-        stats_monitor.start(auto_split_controller, collector_reg_handle)?;
+        stats_monitor.start(
+            auto_split_controller,
+            collector_reg_handle,
+            SplitValidator::new(),
+        )?;
         let slowness_stats = slowness::SlownessStatistics::new(&cfg.value());
         Ok(Self {
             store_id,
@@ -285,6 +299,7 @@ where
             logger,
             shutdown,
             cfg,
+            graceful_shutdown_state,
         })
     }
 }
@@ -348,6 +363,7 @@ where
             Task::UpdateSlownessStats { tick_id, duration } => {
                 self.handle_update_slowness_stats(tick_id, duration)
             }
+            Task::GracefulShutdownState { state } => self.handle_graceful_shutdown_state(state),
         }
     }
 }
@@ -527,7 +543,7 @@ mod requests {
             None => PeerMsg::admin_command(req).0,
         };
         if let Err(e) = router.send(region_id, msg) {
-            error!(
+            warn!(
                 logger,
                 "send request failed";
                 "region_id" => region_id, "cmd_type" => ?cmd_type, "err" => ?e,

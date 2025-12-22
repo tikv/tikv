@@ -2,23 +2,23 @@
 
 use std::mem;
 
-// #[PerformanceCriticalPath]
 use kvproto::kvrpcpb::{AssertionLevel, ExtraOp, PrewriteRequestPessimisticAction};
-use txn_types::{insert_old_value_if_resolved, Mutation, OldValues, TimeStamp, TxnExtra};
+// #[PerformanceCriticalPath]
+use txn_types::{Mutation, OldValues, TimeStamp, TxnExtra, insert_old_value_if_resolved};
 
 use crate::storage::{
+    Command, ProcessResult, Result as StorageResult, Snapshot, TypedCommand,
     kv::WriteData,
     lock_manager::LockManager,
     mvcc::{MvccTxn, SnapshotReader},
     txn::{
+        CommitKind, Error, ErrorInner, Result, TransactionKind, TransactionProperties,
         actions::{common::check_committed_record_on_err, prewrite::prewrite_with_generation},
         commands::{
             CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, WriteCommand, WriteContext,
             WriteResult,
         },
-        CommitKind, Error, ErrorInner, Result, TransactionKind, TransactionProperties,
     },
-    Command, ProcessResult, Result as StorageResult, Snapshot, TypedCommand,
 };
 
 command! {
@@ -76,10 +76,10 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Flush {
         }
         let rows = self.mutations.len();
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
-
-        let mut snapshot_reader = SnapshotReader::new_with_ctx(self.start_ts, snapshot, &self.ctx);
-        snapshot_reader.setup_with_hint_items(&mut self.mutations, |m| m.key());
-        let mut reader = ReaderWithStats::new(snapshot_reader, context.statistics);
+        let mut reader = ReaderWithStats::new(
+            SnapshotReader::new_with_ctx(self.start_ts, snapshot, &self.ctx),
+            context.statistics,
+        );
         let mut old_values = Default::default();
 
         let res = self.flush(&mut txn, &mut reader, &mut old_values, context.extra_op);
@@ -224,20 +224,20 @@ mod tests {
     use txn_types::TimeStamp;
 
     use crate::storage::{
+        ProcessResult, TestEngineBuilder,
         mvcc::{
-            tests::{must_get, must_locked},
             Error as MvccError, ErrorInner as MvccErrorInner,
+            tests::{must_get, must_locked},
         },
         txn,
         txn::{
+            Error, ErrorInner,
             tests::{
                 flush_put_impl, flush_put_impl_with_assertion, must_acquire_pessimistic_lock,
                 must_acquire_pessimistic_lock_err, must_commit, must_flush_put,
                 must_pessimistic_locked, must_prewrite_put, must_prewrite_put_err,
             },
-            Error, ErrorInner,
         },
-        ProcessResult, TestEngineBuilder,
     };
 
     pub fn must_flush_put_with_assertion<E: Engine>(

@@ -12,14 +12,14 @@ use std::{
 
 use api_version::api_v2::TIDB_RANGES_COMPLEMENT;
 use encryption::{DataKeyManager, EncrypterWriter};
-use engine_traits::{iter_option, Iterator, KvEngine, RefIterable, SstMetaInfo, SstReader};
-use file_system::{sync_dir, File, OpenOptions};
+use engine_traits::{Iterator, KvEngine, RefIterable, SstMetaInfo, SstReader, iter_option};
+use file_system::{File, OpenOptions, sync_dir};
 use keys::data_key;
 use kvproto::{import_sstpb::*, kvrpcpb::ApiVersion};
 use tikv_util::time::Instant;
 use uuid::{Builder as UuidBuilder, Uuid};
 
-use crate::{metrics::*, Error, Result};
+use crate::{Error, Result, metrics::*};
 
 // `SyncableWrite` extends io::Write with sync
 trait SyncableWrite: io::Write + Send {
@@ -413,8 +413,10 @@ impl<E: KvEngine> ImportDir<E> {
 
         for (cf, cf_paths) in paths {
             let files: Vec<&str> = cf_paths.iter().map(|p| p.clone.to_str().unwrap()).collect();
-            // TODO(hwy): Use RocksDB IngestExternalFileOptions.allow_write = true.
-            engine.ingest_external_file_cf(cf, &files, None)?;
+            // TiDB guarantees that region will not receive writes during ingestion.
+            // Set `force_allow_write` to true to minimize the impact on foreground
+            // performance. Refer to https://github.com/tikv/tikv/issues/18081.
+            engine.ingest_external_file_cf(cf, &files, None, true /* force_allow_write */)?;
         }
         INPORTER_INGEST_COUNT.observe(metas.len() as _);
         IMPORTER_INGEST_BYTES.observe(ingest_bytes as _);

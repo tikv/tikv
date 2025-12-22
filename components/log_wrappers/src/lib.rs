@@ -12,11 +12,12 @@ pub mod hex;
 use std::{fmt, str::FromStr, sync::atomic::Ordering};
 
 use atomic::Atomic;
+use online_config::ConfigValue;
 use protobuf::atomic_flags::{
-    set_redact_level as proto_set_redact_level, RedactLevel, DEFAULT_REDACT_MARKER_HEAD,
-    DEFAULT_REDACT_MARKER_TAIL,
+    DEFAULT_REDACT_MARKER_HEAD, DEFAULT_REDACT_MARKER_TAIL, RedactLevel,
+    set_redact_level as proto_set_redact_level,
 };
-use serde::{de, Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Serialize, Serializer, de};
 
 pub use crate::hex::*;
 
@@ -67,13 +68,25 @@ impl<T: std::fmt::Debug> slog::Value for DebugValue<T> {
 /// data.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RedactOption {
-    Flag(bool),
+    Off,
+    On,
     Marker,
 }
 
 impl Default for RedactOption {
     fn default() -> Self {
-        Self::Flag(false)
+        Self::Off
+    }
+}
+
+impl fmt::Display for RedactOption {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::On => "on",
+            Self::Off => "off",
+            Self::Marker => "marker",
+        }
+        .fmt(f)
     }
 }
 
@@ -82,11 +95,33 @@ impl FromStr for RedactOption {
     fn from_str(s: &str) -> Result<RedactOption, String> {
         match s {
             "" => Ok(RedactOption::default()),
-            "on" | "ON" => Ok(RedactOption::Flag(true)),
-            "off" | "OFF" => Ok(RedactOption::Flag(false)),
+            "on" | "ON" | "true" | "TRUE" | "True" => Ok(RedactOption::On),
+            "off" | "OFF" | "false" | "FALSE" | "False" => Ok(RedactOption::Off),
             "marker" | "MARKER" => Ok(RedactOption::Marker),
-            s => Err(format!("expect: marker, on | off, got: {:?}", s)),
+            s => Err(format!(
+                "expect: marker | on | off | true | false, got: {s:?}"
+            )),
         }
+    }
+}
+
+impl TryFrom<ConfigValue> for RedactOption {
+    type Error = String;
+    fn try_from(value: ConfigValue) -> Result<Self, Self::Error> {
+        match value {
+            ConfigValue::Bool(true) => Ok(RedactOption::On),
+            ConfigValue::Bool(false) => Ok(RedactOption::Off),
+            ConfigValue::String(s) => RedactOption::from_str(&s),
+            _ => Err(format!(
+                "expect: marker | on | off | true | false, got: {value:?}"
+            )),
+        }
+    }
+}
+
+impl From<RedactOption> for ConfigValue {
+    fn from(option: RedactOption) -> Self {
+        ConfigValue::String(option.to_string())
     }
 }
 
@@ -96,7 +131,8 @@ impl Serialize for RedactOption {
         S: Serializer,
     {
         match self {
-            Self::Flag(flag) => flag.serialize(serializer),
+            Self::On => true.serialize(serializer),
+            Self::Off => false.serialize(serializer),
             Self::Marker => "marker".serialize(serializer),
         }
     }
@@ -109,7 +145,7 @@ impl<'de> Deserialize<'de> for RedactOption {
     {
         struct RedactOptionVisitor;
 
-        impl<'de> de::Visitor<'de> for RedactOptionVisitor {
+        impl de::Visitor<'_> for RedactOptionVisitor {
             type Value = RedactOption;
 
             fn expecting(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -127,7 +163,11 @@ impl<'de> Deserialize<'de> for RedactOption {
             where
                 E: de::Error,
             {
-                Ok(RedactOption::Flag(flag))
+                Ok(if flag {
+                    RedactOption::On
+                } else {
+                    RedactOption::Off
+                })
             }
         }
 
@@ -138,9 +178,9 @@ impl<'de> Deserialize<'de> for RedactOption {
 impl RedactOption {
     fn convert(&self) -> RedactLevel {
         match self {
-            Self::Flag(true) => RedactLevel::On,
+            Self::On => RedactLevel::On,
+            Self::Off => RedactLevel::Off,
             Self::Marker => RedactLevel::Marker,
-            _ => RedactLevel::Off,
         }
     }
 }
@@ -156,6 +196,7 @@ pub fn set_redact_info_log(config: RedactOption) {
     proto_set_redact_level(level);
 }
 
+#[derive(Clone, Copy)]
 pub struct Value<'a>(pub &'a [u8]);
 
 impl<'a> Value<'a> {
@@ -168,7 +209,7 @@ impl<'a> Value<'a> {
     }
 }
 
-impl<'a> slog::Value for Value<'a> {
+impl slog::Value for Value<'_> {
     #[inline]
     fn serialize(
         &self,
@@ -194,7 +235,7 @@ impl<'a> slog::Value for Value<'a> {
     }
 }
 
-impl<'a> fmt::Display for Value<'a> {
+impl fmt::Display for Value<'_> {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match REDACT_INFO_LOG.load(Ordering::Relaxed) {
@@ -218,7 +259,7 @@ impl<'a> fmt::Display for Value<'a> {
     }
 }
 
-impl<'a> fmt::Debug for Value<'a> {
+impl fmt::Debug for Value<'_> {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(self, f)
@@ -272,18 +313,9 @@ mod tests {
             redact_info_log: RedactOption,
         }
 
-        assert_eq!(
-            RedactOption::from_str("").unwrap(),
-            RedactOption::Flag(false)
-        );
-        assert_eq!(
-            RedactOption::from_str("on").unwrap(),
-            RedactOption::Flag(true)
-        );
-        assert_eq!(
-            RedactOption::from_str("off").unwrap(),
-            RedactOption::Flag(false)
-        );
+        assert_eq!(RedactOption::from_str("").unwrap(), RedactOption::Off);
+        assert_eq!(RedactOption::from_str("on").unwrap(), RedactOption::On);
+        assert_eq!(RedactOption::from_str("off").unwrap(), RedactOption::Off);
         assert_eq!(
             RedactOption::from_str("marker").unwrap(),
             RedactOption::Marker
@@ -300,31 +332,31 @@ mod tests {
         assert_eq!(test_config.redact_info_log.convert(), RedactLevel::Off);
 
         template = r#"
-            redact-info-log = true  
+            redact-info-log = true
         "#;
         test_config = toml::from_str(template).unwrap();
-        assert_eq!(test_config.redact_info_log, RedactOption::Flag(true));
+        assert_eq!(test_config.redact_info_log, RedactOption::On);
         assert_eq!(test_config.redact_info_log.convert(), RedactLevel::On);
 
         template = r#"
-            redact-info-log = false  
+            redact-info-log = false
         "#;
         test_config = toml::from_str(template).unwrap();
-        assert_eq!(test_config.redact_info_log, RedactOption::Flag(false));
+        assert_eq!(test_config.redact_info_log, RedactOption::Off);
         assert_eq!(test_config.redact_info_log.convert(), RedactLevel::Off);
 
         template = r#"
-            redact-info-log = "on"  
+            redact-info-log = "on"
         "#;
         test_config = toml::from_str(template).unwrap();
-        assert_eq!(test_config.redact_info_log, RedactOption::Flag(true));
+        assert_eq!(test_config.redact_info_log, RedactOption::On);
         assert_eq!(test_config.redact_info_log.convert(), RedactLevel::On);
 
         template = r#"
-            redact-info-log = "off" 
+            redact-info-log = "off"
         "#;
         test_config = toml::from_str(template).unwrap();
-        assert_eq!(test_config.redact_info_log, RedactOption::Flag(false));
+        assert_eq!(test_config.redact_info_log, RedactOption::Off);
         assert_eq!(test_config.redact_info_log.convert(), RedactLevel::Off);
 
         template = r#"
@@ -351,7 +383,7 @@ mod tests {
     fn test_redact_info_log() {
         let buffer = crate::test_util::SyncLoggerBuffer::new();
         let logger = buffer.build_logger();
-        set_redact_info_log(RedactOption::Flag(true));
+        set_redact_info_log(RedactOption::On);
         slog_info!(logger, "foo"; "bar" => Value::key(b"\xAB \xCD"));
         assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: ?\n");
 

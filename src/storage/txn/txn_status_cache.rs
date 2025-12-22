@@ -54,28 +54,28 @@
 //! Unfortunately, the solution is still imperfect. As it's already known, it
 //! may still be problematic due to the following reasons:
 //!
-//! 1. We don't have mechanism to refuse requests that have
-//! past more than [CACHE_ITEMS_REQUIRED_KEEP_TIME] since they were sent.
+//! 1. We don't have mechanism to refuse requests that have past more than
+//!    [CACHE_ITEMS_REQUIRED_KEEP_TIME] since they were sent.
 //! 2. To prevent the cache from consuming too much more memory than expected,
-//! we have a limit to the capacity (though the limit is very large), and it's
-//! configurable (so the cache can be disabled, see how the `capacity` parameter
-//! of function [TxnStatusCache::new] is used) as a way to escape from potential
-//! faults.
+//!    we have a limit to the capacity (though the limit is very large), and
+//!    it's configurable (so the cache can be disabled, see how the `capacity`
+//!    parameter of function [TxnStatusCache::new] is used) as a way to escape
+//!    from potential faults.
 //! 3. The cache can't be synced across different TiKV instances.
 //!
 //! The third case above needs detailed explanation to be clarified. This is
 //! an example of the problem:
 //!
 //! 1. Client try to send prewrite request to TiKV A, who has the leader of the
-//! region containing a index key. The request is not received by TiKV and the
-//! client retries.
-//! 2. The leader is transferred to TiKV B, and the retries prewrite request
-//! is sent to it and processed successfully.
+//!    region containing a index key. The request is not received by TiKV and
+//!    the client retries.
+//! 2. The leader is transferred to TiKV B, and the retries prewrite request is
+//!    sent to it and processed successfully.
 //! 3. The transaction is committed on TiKV B, not being known by TiKV A.
 //! 4. The leader transferred back to TiKV A.
-//! 5. The original request arrives to TiKV A and being executed. As the
-//! status of the transaction is not in the cache in TiKV A, the prewrite
-//! request will be handled in normal way, skipping constraint checks.
+//! 5. The original request arrives to TiKV A and being executed. As the status
+//!    of the transaction is not in the cache in TiKV A, the prewrite request
+//!    will be handled in normal way, skipping constraint checks.
 //!
 //! As of the time when this module is written, the above remaining cases have
 //! not yet been handled, considering the extremely low possibility to happen
@@ -90,7 +90,7 @@
 //! ### For read data locked by large transactions more efficiently
 //!
 //! * Note: the `TxnStatusCache` is designed prepared for this usage, but not
-//! used yet for now.
+//!   used yet for now.
 //!
 //! Consider the case that a very-large transaction locked a lot of keys after
 //! prewriting, while many simple reads and writes executes frequently, thus
@@ -132,7 +132,7 @@
 //! evicting information about transactions of the other type.
 use std::{
     cmp::max,
-    sync::{atomic::AtomicU64, Arc},
+    sync::{Arc, atomic::AtomicU64},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -286,6 +286,10 @@ pub struct TxnStatusCache {
     // for large txns, or any txn whose min_commit_ts needs to be cached
     // It is isolated from the normal cache to prevents large transactions from being evicted due
     // to normal transactions. This is how this module "prioritizes" large transactions.
+    //
+    // Invariant: when a process needs to acquire both locks,
+    // it must first acquire the large_txn_cache lock, then the normal_cache lock,
+    // to avoid deadlock.
     large_txn_cache: Vec<CachePadded<Mutex<TxnStatusCacheSlot>>>,
     is_enabled: bool,
 }
@@ -467,6 +471,8 @@ impl TxnStatusCache {
             }
             // normal cache path
             _ => {
+                // Always acquire large_txn_cache lock, then normal_cache lock to avoid deadlock
+                let mut large_cache = self.large_txn_cache[slot_index].lock();
                 let mut normal_cache = self.normal_cache[slot_index].lock();
                 previous_size = normal_cache.size();
                 previous_allocated = normal_cache.internal_allocated_capacity();
@@ -485,7 +491,8 @@ impl TxnStatusCache {
                 after_size = normal_cache.size();
                 after_allocated = normal_cache.internal_allocated_capacity();
 
-                let mut large_cache = self.large_txn_cache[slot_index].lock();
+                fail_point!("txn_status_cache_upsert_after_normal_before_large");
+
                 if let Some(existing_entry) = large_cache.get_mut(&start_ts) {
                     // don't update committed or rolled back txns.
                     if let TxnState::Ongoing { min_commit_ts } = existing_entry.state {
@@ -528,6 +535,8 @@ impl TxnStatusCache {
         if let Some(entry) = large_txn_cache.get(&start_ts) {
             return Some(entry.state);
         }
+
+        fail_point!("txn_status_cache_get_after_large_before_normal");
 
         let mut normal_cache = self.normal_cache[slot_index].lock();
         if let Some(entry) = normal_cache.get(&start_ts) {
@@ -596,13 +605,13 @@ impl TxnStatusCache {
 mod tests {
     use std::{
         sync::{
-            atomic::{AtomicU64, Ordering},
             Arc,
+            atomic::{AtomicU64, Ordering},
         },
         time::{Duration, Instant, SystemTime},
     };
 
-    use rand::{prelude::SliceRandom, Rng};
+    use rand::{Rng, prelude::SliceRandom};
 
     use super::*;
 
@@ -1512,5 +1521,53 @@ mod tests {
         let removed = cache.remove_large_txn(1.into());
         assert!(removed.is_some());
         assert_eq!(cache.get(1.into()), None);
+    }
+
+    #[test]
+    fn test_txn_status_cache_lock_order() {
+        use std::{sync::Arc, thread, time::Duration};
+
+        use fail::FailScenario;
+        use txn_types::TimeStamp;
+
+        let _scenario = FailScenario::setup();
+        fail::cfg("txn_status_cache_get_after_large_before_normal", "pause").unwrap();
+        fail::cfg("txn_status_cache_upsert_after_normal_before_large", "pause").unwrap();
+
+        let cache = Arc::new(TxnStatusCache::with_slots_and_time_limit(
+            1, // Use single slot for maximum contention
+            Duration::from_secs(30),
+            Duration::from_secs(60),
+            1000,
+        ));
+
+        let start_ts = TimeStamp::from(42);
+        let now = SystemTime::now();
+
+        // Start thread 1 (upsert operation)
+        let cache_clone1 = cache.clone();
+        let thread1 = thread::spawn(move || {
+            let state = TxnState::Committed {
+                commit_ts: TimeStamp::from(43),
+            };
+            cache_clone1.upsert(start_ts, state, now);
+        });
+
+        // Start thread 2 (get operation)
+        let cache_clone2 = cache.clone();
+        let thread2 = thread::spawn(move || {
+            let _ = cache_clone2.get(start_ts);
+        });
+
+        // Wait a moment to ensure both threads have reached their failpoints
+        thread::sleep(Duration::from_millis(300));
+
+        // Release the failpoints
+        fail::remove("txn_status_cache_get_after_large_before_normal");
+        fail::remove("txn_status_cache_upsert_after_normal_before_large");
+
+        // if deadlock, thread1 will not join, test will hang here
+        thread1.join().unwrap();
+        thread2.join().unwrap();
     }
 }

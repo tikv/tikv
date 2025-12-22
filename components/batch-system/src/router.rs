@@ -2,13 +2,13 @@
 
 // #[PerformanceCriticalPath]
 use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 use crossbeam::channel::{SendError, TrySendError};
 use dashmap::DashMap;
-use tikv_util::{debug, info, time::Instant, Either};
+use tikv_util::{Either, debug, info, time::Instant};
 
 use crate::{
     fsm::{Fsm, FsmScheduler},
@@ -102,7 +102,7 @@ where
     where
         F: FnMut(&BasicMailbox<N>) -> Option<R>,
     {
-        let mailbox = match self.normals.get_mut(&addr) {
+        let mailbox = match self.normals.get(&addr) {
             Some(mailbox) => mailbox,
             None => {
                 return CheckDoResult::NotExist;

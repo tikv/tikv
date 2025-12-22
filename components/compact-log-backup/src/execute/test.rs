@@ -4,8 +4,8 @@ use std::{
     collections::HashMap,
     future::Future,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
 };
 
@@ -17,6 +17,7 @@ use tokio::sync::mpsc::Sender;
 
 use super::{Execution, ExecutionConfig};
 use crate::{
+    ErrorKind,
     compaction::SubcompactionResult,
     errors::OtherErrExt,
     exec_hooks::{
@@ -25,8 +26,7 @@ use crate::{
     },
     execute::hooking::{CId, ExecHooks, SubcompactionFinishCtx},
     storage::LOCK_PREFIX,
-    test_util::{gen_step, CompactInMem, KvGen, LogFileBuilder, TmpStorage},
-    ErrorKind,
+    test_util::{CompactInMem, KvGen, LogFileBuilder, TmpStorage, gen_step},
 };
 
 #[derive(Clone)]
@@ -71,6 +71,8 @@ pub fn create_compaction(st: StorageBackend) -> Execution {
             until_ts: u64::MAX,
             compression: engine_traits::SstCompressionType::Lz4,
             compression_level: None,
+            prefetch_buffer_count: 128,
+            prefetch_running_count: 128,
         },
         max_concurrent_subcompaction: 3,
         external_storage: st,
@@ -110,6 +112,10 @@ async fn test_exec_simple() {
     let (id, mig) = migs.pop().unwrap();
     assert_eq!(id, 1);
     assert_eq!(mig.edit_meta.len(), 3);
+    for meta in mig.edit_meta.iter() {
+        assert!(meta.all_data_files_compacted);
+        assert!(meta.destruct_self);
+    }
     assert_eq!(mig.compactions.len(), 1);
     let subc = st
         .load_subcompactions(mig.compactions[0].get_artifacts())
@@ -185,6 +191,10 @@ async fn test_checkpointing() {
     let (id, mig) = migs.pop().unwrap();
     assert_eq!(id, 1);
     assert_eq!(mig.edit_meta.len(), 3);
+    for meta in mig.edit_meta.iter() {
+        assert!(meta.all_data_files_compacted);
+        assert!(meta.destruct_self);
+    }
     assert_eq!(mig.compactions.len(), 1);
     let subc = st
         .load_subcompactions(mig.compactions[0].get_artifacts())
@@ -230,10 +240,16 @@ async fn test_consistency_guard() {
     let mut exec = create_compaction(st.backend());
     exec.cfg.until_ts = 41;
     let c = StorageConsistencyGuard::default();
-    tokio::task::block_in_place(|| exec.run(c).unwrap_err());
+    tokio::task::block_in_place(|| exec.run(c).unwrap());
 
     let mut exec = create_compaction(st.backend());
     exec.cfg.until_ts = 39;
+    let c = StorageConsistencyGuard::default();
+    tokio::task::block_in_place(|| exec.run(c).unwrap());
+
+    put_checkpoint(strg, 2, 49).await;
+    let mut exec = create_compaction(st.backend());
+    exec.cfg.until_ts = 43;
     let c = StorageConsistencyGuard::default();
     tokio::task::block_in_place(|| exec.run(c).unwrap());
 }

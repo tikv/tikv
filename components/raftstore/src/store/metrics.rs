@@ -484,13 +484,6 @@ lazy_static! {
             exponential_buckets(0.00001, 2.0, 32).unwrap() // 10us ~ 42949s.
         ).unwrap();
 
-    pub static ref PEER_CREATE_RAFT_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_peer_create_raft_write_duration_seconds",
-            "Bucketed histogram of peer create raft engine write duration",
-            exponential_buckets(0.00001, 2.0, 26).unwrap() // 10us ~ 671s.
-        ).unwrap();
-
     pub static ref STORE_IO_DURATION_HISTOGRAM: HistogramVec =
         register_histogram_vec!(
             "tikv_raftstore_io_duration_seconds",
@@ -882,6 +875,14 @@ lazy_static! {
             "tikv_raftstore_inspect_duration_seconds",
             "Bucketed histogram of inspect duration.",
             &["type"],
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+
+    pub static ref STORE_INSPECT_NETWORK_DURATION_HISTOGRAM: HistogramVec =
+        register_histogram_vec!(
+            "tikv_raftstore_inspect_network_duration_seconds",
+            "Bucketed histogram of inspect network duration.",
+            &["target"],
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
 

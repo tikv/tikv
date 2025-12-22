@@ -10,7 +10,7 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use raft::eraftpb::MessageType;
 use raftstore::store::msg::*;
 use test_raftstore::*;
-use tikv_util::{future::block_on_timeout, mpsc::future, HandyRwLock};
+use tikv_util::{HandyRwLock, future::block_on_timeout, mpsc::future};
 
 struct CbReceivers {
     proposed: mpsc::Receiver<()>,

@@ -1,7 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    i32,
     net::{IpAddr, SocketAddr},
     str::FromStr,
     sync::Arc,
@@ -10,24 +9,31 @@ use std::{
 
 use api_version::KvFormat;
 use futures::{compat::Stream01CompatExt, stream::StreamExt};
-use grpcio::{ChannelBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder};
-use grpcio_health::{create_health, HealthService};
+use grpcio::{
+    ChannelBuilder,
+    CompressionLevel::{
+        GRPC_COMPRESS_LEVEL_HIGH, GRPC_COMPRESS_LEVEL_LOW, GRPC_COMPRESS_LEVEL_NONE,
+    },
+    Environment, ResourceQuota, Server as GrpcServer, ServerBuilder,
+};
+use grpcio_health::{HealthService, create_health};
 use health_controller::HealthController;
 use kvproto::tikvpb::*;
 use raftstore::store::{CheckLeaderTask, SnapManager, TabletSnapManager};
 use resource_control::ResourceGroupManager;
 use security::SecurityManager;
 use tikv_util::{
+    Either,
     config::VersionTrack,
     sys::{get_global_memory_usage, record_global_memory_usage},
     timer::GLOBAL_TIMER_HANDLE,
     worker::{LazyWorker, Scheduler, Worker},
-    Either,
 };
 use tokio::runtime::{Builder as RuntimeBuilder, Handle as RuntimeHandle, Runtime};
 use tokio_timer::timer::Handle;
 
 use super::{
+    Config, Error, Result,
     load_statistics::*,
     metrics::{MEMORY_USAGE_GAUGE, SERVER_INFO_GAUGE_VEC},
     raft_client::{ConnectionBuilder, RaftClient},
@@ -36,14 +42,13 @@ use super::{
     snap::{Runner as SnapHandler, Task as SnapTask},
     tablet_snap::SnapCacheBuilder,
     transport::ServerTransport,
-    Config, Error, Result,
 };
 use crate::{
     coprocessor::Endpoint,
     coprocessor_v2,
     read_pool::ReadPool,
-    server::{gc_worker::GcWorker, tablet_snap::TabletRunner, Proxy},
-    storage::{lock_manager::LockManager, Engine, Storage},
+    server::{Proxy, config::GrpcCompressionType, gc_worker::GcWorker, tablet_snap::TabletRunner},
+    storage::{Engine, Storage, lock_manager::LockManager},
     tikv_util::sys::thread::ThreadBuildWrapper,
 };
 
@@ -63,6 +68,7 @@ struct BuilderFactory<S: Tikv + Send + Clone + 'static> {
     cfg: Arc<VersionTrack<Config>>,
     security_mgr: Arc<SecurityManager>,
     health_service: HealthService,
+    memory_quota: ResourceQuota,
 }
 
 impl<S> BuilderFactory<S>
@@ -74,12 +80,14 @@ where
         cfg: Arc<VersionTrack<Config>>,
         security_mgr: Arc<SecurityManager>,
         health_service: HealthService,
+        memory_quota: ResourceQuota,
     ) -> BuilderFactory<S> {
         BuilderFactory {
             kv_service,
             cfg,
             security_mgr,
             health_service,
+            memory_quota,
         }
     }
 }
@@ -91,19 +99,32 @@ where
     fn create_builder(&self, env: Arc<Environment>) -> Result<ServerBuilder> {
         let addr = SocketAddr::from_str(&self.cfg.value().addr)?;
         let ip: String = format!("{}", addr.ip());
-        let mem_quota = ResourceQuota::new(Some("ServerMemQuota"))
-            .resize_memory(self.cfg.value().grpc_memory_pool_quota.0 as usize);
+
+        // Best-effort algorithm selection: If the client doesn't support the specified
+        // algorithm, the server may fall back to a different one or disable
+        // compression entirely.
+        //
+        // This is a bit hacky to map Low and High to gzip and deflate respectively.
+        // See CompressionAlgorithmForLevel in gRPC implementation for details.
+        //
+        // We cannot set default compression algorithm here, because it won't check
+        // whether the client side supports the algorithm
+        let compression_level = match self.cfg.value().grpc_compression_type {
+            GrpcCompressionType::None => GRPC_COMPRESS_LEVEL_NONE,
+            GrpcCompressionType::Deflate => GRPC_COMPRESS_LEVEL_HIGH,
+            GrpcCompressionType::Gzip => GRPC_COMPRESS_LEVEL_LOW,
+        };
         let channel_args = ChannelBuilder::new(Arc::clone(&env))
             .stream_initial_window_size(self.cfg.value().grpc_stream_initial_window_size.0 as i32)
             .max_concurrent_stream(self.cfg.value().grpc_concurrent_stream)
             .max_receive_message_len(-1)
-            .set_resource_quota(mem_quota)
+            .set_resource_quota(self.memory_quota.clone())
             .max_send_message_len(-1)
             .http2_max_ping_strikes(i32::MAX) // For pings without data from clients.
             .keepalive_time(self.cfg.value().grpc_keepalive_time.into())
             .keepalive_timeout(self.cfg.value().grpc_keepalive_timeout.into())
-            .default_compression_algorithm(self.cfg.value().grpc_compression_algorithm())
             .default_gzip_compression_level(self.cfg.value().grpc_gzip_compression_level)
+            .default_compression_level(compression_level)
             .build_args();
 
         let sb = ServerBuilder::new(Arc::clone(&env))
@@ -167,6 +188,7 @@ where
         health_controller: HealthController,
         resource_manager: Option<Arc<ResourceGroupManager>>,
         raft_message_filter: Arc<dyn RaftGrpcMessageFilter>,
+        background_worker: Worker,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
         let stats_pool = if cfg.value().stats_concurrency > 0 {
@@ -214,16 +236,18 @@ where
             health_feedback_interval,
             raft_message_filter,
         );
+
+        let mem_quota = ResourceQuota::new(Some("ServerMemQuota"))
+            .resize_memory(cfg.value().grpc_memory_pool_quota.0 as usize);
         let builder_factory = Box::new(BuilderFactory::new(
             kv_service,
             cfg.clone(),
             security_mgr.clone(),
             health_controller.get_grpc_health_service(),
+            mem_quota.clone(),
         ));
 
         let addr = SocketAddr::from_str(&cfg.value().addr)?;
-        let mem_quota = ResourceQuota::new(Some("ServerMemQuota"))
-            .resize_memory(cfg.value().grpc_memory_pool_quota.0 as usize);
         let builder = Either::Left(builder_factory.create_builder(env.clone())?);
 
         let conn_builder = ConnectionBuilder::new(
@@ -235,7 +259,15 @@ where
             lazy_worker.scheduler(),
             grpc_thread_load.clone(),
         );
-        let raft_client = RaftClient::new(store_id, conn_builder);
+        let raft_client = RaftClient::new(
+            store_id,
+            conn_builder,
+            cfg.value().inspect_network_interval.0,
+            background_worker.clone(),
+        );
+
+        raft_client.start_network_inspection();
+        health_controller.set_health_checker(Box::new(raft_client.get_health_checker()));
 
         let trans = ServerTransport::new(raft_client);
 
@@ -447,7 +479,7 @@ pub mod test_router {
 
     use engine_rocks::{RocksEngine, RocksSnapshot};
     use kvproto::raft_serverpb::RaftMessage;
-    use raftstore::{router::RaftStoreRouter, store::*, Result as RaftStoreResult};
+    use raftstore::{Result as RaftStoreResult, router::RaftStoreRouter, store::*};
     use tikv_util::time::Instant as TiInstant;
 
     use super::*;
@@ -536,7 +568,7 @@ mod tests {
     use grpcio::EnvBuilder;
     use kvproto::raft_serverpb::RaftMessage;
     use raftstore::{
-        coprocessor::{region_info_accessor::MockRegionInfoProvider, CoprocessorHost},
+        coprocessor::{CoprocessorHost, region_info_accessor::MockRegionInfoProvider},
         router::RaftStoreRouter,
         store::{transport::Transport, *},
     };
@@ -547,16 +579,16 @@ mod tests {
 
     use super::{
         super::{
-            resolve::{self, Callback as ResolveCallback, StoreAddrResolver},
             Config,
+            resolve::{self, Callback as ResolveCallback, StoreAddrResolver},
         },
         *,
     };
     use crate::{
         config::CoprReadPoolConfig,
         coprocessor::{self, readpool_impl},
-        server::{raftkv::RaftRouterWrap, tablet_snap::NoSnapshotCache, TestRaftStoreRouter},
-        storage::{lock_manager::MockLockManager, TestEngineBuilder, TestStorageBuilderApiV1},
+        server::{TestRaftStoreRouter, raftkv::RaftRouterWrap, tablet_snap::NoSnapshotCache},
+        storage::{TestEngineBuilder, TestStorageBuilderApiV1, lock_manager::MockLockManager},
     };
 
     #[derive(Clone)]
@@ -686,6 +718,7 @@ mod tests {
             HealthController::new(),
             None,
             Arc::new(DefaultGrpcMessageFilter::new(0.2)),
+            tikv_util::worker::Worker::new("test-worker"),
         )
         .unwrap();
 

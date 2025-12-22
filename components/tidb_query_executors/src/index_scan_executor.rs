@@ -2,31 +2,31 @@
 
 use std::sync::Arc;
 
+use DecodeHandleStrategy::*;
 use api_version::{ApiV1, KvFormat};
 use async_trait::async_trait;
 use codec::{number::NumberCodec, prelude::NumberDecoder};
 use itertools::izip;
 use kvproto::coprocessor::KeyRange;
 use tidb_query_common::{
-    storage::{IntervalRange, Storage},
     Result,
+    storage::{IntervalRange, Storage},
 };
 use tidb_query_datatype::{
+    EvalType, FieldTypeAccessor,
     codec::{
+        Datum,
         batch::{LazyBatchColumn, LazyBatchColumnVec},
         collation::collator::PADDING_SPACE,
         datum,
         datum::DatumDecoder,
-        row::v2::{decode_v2_u64, RowSlice, V1CompatibleEncoder},
+        row::v2::{RowSlice, V1CompatibleEncoder, decode_v2_u64},
         table,
-        table::{check_index_key, INDEX_VALUE_VERSION_FLAG, MAX_OLD_ENCODED_VALUE_LEN},
-        Datum,
+        table::{INDEX_VALUE_VERSION_FLAG, MAX_OLD_ENCODED_VALUE_LEN, check_index_key},
     },
     expr::{EvalConfig, EvalContext},
-    EvalType, FieldTypeAccessor,
 };
 use tipb::{ColumnInfo, FieldType, IndexScan};
-use DecodeHandleStrategy::*;
 
 use super::util::scan_executor::*;
 use crate::interface::*;
@@ -55,6 +55,7 @@ impl<S: Storage, F: KvFormat> BatchIndexScanExecutor<S, F> {
         is_backward: bool,
         unique: bool,
         is_scanned_range_aware: bool,
+        is_fill_extra_common_handle_key: bool,
     ) -> Result<Self> {
         // Note 1: `unique = true` doesn't completely mean that it is a unique index
         // scan. Instead it just means that we can use point-get for this index.
@@ -93,7 +94,7 @@ impl<S: Storage, F: KvFormat> BatchIndexScanExecutor<S, F> {
             });
         let is_int_handle = columns_info
             .get(columns_info.len() - 1 - pid_column_cnt - physical_table_id_column_cnt)
-            .map_or(false, |ci| ci.get_pk_handle());
+            .is_some_and(|ci| ci.get_pk_handle());
         let is_common_handle = primary_column_ids_len > 0;
         let (decode_handle_strategy, handle_column_cnt) = match (is_int_handle, is_common_handle) {
             (false, false) => (NoDecode, 0),
@@ -142,6 +143,7 @@ impl<S: Storage, F: KvFormat> BatchIndexScanExecutor<S, F> {
             pid_column_cnt,
             physical_table_id_column_cnt,
             index_version: -1,
+            fill_extra_common_handle_key: is_fill_extra_common_handle_key,
         };
         let wrapper = ScanExecutor::new(ScanExecutorOptions {
             imp,
@@ -163,6 +165,19 @@ impl<S: Storage, F: KvFormat> BatchExecutor for BatchIndexScanExecutor<S, F> {
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.0.schema()
+    }
+
+    #[inline]
+    fn intermediate_schema(&self, index: usize) -> Result<&[FieldType]> {
+        self.0.intermediate_schema(index)
+    }
+
+    #[inline]
+    fn consume_and_fill_intermediate_results(
+        &mut self,
+        results: &mut [Vec<BatchExecuteResult>],
+    ) -> Result<()> {
+        self.0.consume_and_fill_intermediate_results(results)
     }
 
     #[inline]
@@ -209,6 +224,10 @@ struct IndexScanExecutorImpl {
     columns_id_without_handle: Vec<i64>,
 
     columns_id_for_common_handle: Vec<i64>,
+
+    /// If true, also fill the `extra_common_handle_keys` in
+    /// `LazyBatchColumnVec` for each row.
+    fill_extra_common_handle_key: bool,
 
     /// The strategy to decode handles.
     /// Handle will be always placed in the last column.
@@ -485,6 +504,11 @@ impl IndexScanExecutorImpl {
                 // Otherwise, if the handle is common handle, we extract it from the key.
                 let end_index =
                     columns.columns_len() - self.pid_column_cnt - self.physical_table_id_column_cnt;
+                if self.fill_extra_common_handle_key {
+                    columns
+                        .mut_extra_common_handle_keys()
+                        .push(key_payload.to_vec());
+                }
                 Self::extract_columns_from_datum_format(
                     &mut key_payload,
                     &mut columns[self.columns_id_without_handle.len()..end_index],
@@ -557,7 +581,7 @@ impl IndexScanExecutorImpl {
                 truncate_str
                     .iter()
                     .cloned()
-                    .chain(std::iter::repeat(PADDING_SPACE as _).take(space_num as _))
+                    .chain(std::iter::repeat_n(PADDING_SPACE as _, space_num as _))
                     .collect::<Vec<_>>()
             } else {
                 let original_data = row
@@ -605,6 +629,19 @@ impl IndexScanExecutorImpl {
     ) -> Result<()> {
         let (decode_handle, decode_pid, restore_data) =
             self.build_operations(key_payload, value)?;
+        if self.fill_extra_common_handle_key {
+            match decode_handle {
+                DecodeHandleOp::CommonHandle(key) => {
+                    columns.mut_extra_common_handle_keys().push(key.to_vec());
+                }
+                op => {
+                    return Err(other_err!(
+                        "invalid op {:?} for fill_extra_common_handle_key",
+                        op
+                    ));
+                }
+            }
+        }
 
         if self.physical_table_id_column_cnt > 0 {
             match decode_pid {
@@ -850,7 +887,7 @@ impl IndexScanExecutorImpl {
     fn split_common_handle(value: &[u8]) -> Result<(&[u8], &[u8])> {
         if value
             .first()
-            .map_or(false, |c| *c == table::INDEX_VALUE_COMMON_HANDLE_FLAG)
+            .is_some_and(|c| *c == table::INDEX_VALUE_COMMON_HANDLE_FLAG)
         {
             let handle_len = (&value[1..]).read_u16().map_err(|_| {
                 other_err!(
@@ -872,7 +909,7 @@ impl IndexScanExecutorImpl {
     fn split_partition_id(value: &[u8]) -> Result<(&[u8], &[u8])> {
         if value
             .first()
-            .map_or(false, |c| *c == table::INDEX_VALUE_PARTITION_ID_FLAG)
+            .is_some_and(|c| *c == table::INDEX_VALUE_PARTITION_ID_FLAG)
         {
             if value.len() < 9 {
                 return Err(other_err!(
@@ -891,7 +928,7 @@ impl IndexScanExecutorImpl {
         Ok(
             if value
                 .first()
-                .map_or(false, |c| *c == table::INDEX_VALUE_RESTORED_DATA_FLAG)
+                .is_some_and(|c| *c == table::INDEX_VALUE_RESTORED_DATA_FLAG)
             {
                 (value, &value[value.len()..])
             } else {
@@ -910,14 +947,15 @@ mod tests {
     use kvproto::coprocessor::KeyRange;
     use tidb_query_common::{storage::test_fixture::FixtureStorage, util::convert_to_prefix_next};
     use tidb_query_datatype::{
+        Collation, FieldTypeAccessor, FieldTypeTp,
         codec::{
+            Datum,
             data_type::*,
             datum,
             row::v2::encoder_for_test::{Column, RowEncoder},
-            table, Datum,
+            table,
         },
         expr::EvalConfig,
-        Collation, FieldTypeAccessor, FieldTypeTp,
     };
     use tipb::ColumnInfo;
 
@@ -1014,6 +1052,7 @@ mod tests {
                 true,
                 false,
                 false,
+                false,
             )
             .unwrap();
 
@@ -1069,6 +1108,7 @@ mod tests {
                 key_ranges,
                 0,
                 true,
+                false,
                 false,
                 false,
             )
@@ -1131,6 +1171,7 @@ mod tests {
                 true,
                 false,
                 false,
+                false,
             )
             .unwrap();
 
@@ -1174,6 +1215,7 @@ mod tests {
                 key_ranges,
                 0,
                 true,
+                false,
                 false,
                 false,
             )
@@ -1225,6 +1267,7 @@ mod tests {
                 ],
                 key_ranges,
                 0,
+                false,
                 false,
                 false,
                 false,
@@ -1305,6 +1348,7 @@ mod tests {
                 false,
                 false,
                 false,
+                false,
             )
             .unwrap();
 
@@ -1361,6 +1405,7 @@ mod tests {
                 0,
                 false,
                 true,
+                false,
                 false,
             )
             .unwrap();
@@ -1445,7 +1490,7 @@ mod tests {
         value_prefix.write_u16(common_handle.len() as u16).unwrap();
 
         // Common handle
-        value_prefix.extend(common_handle);
+        value_prefix.extend(common_handle.clone());
 
         let index_data = datum::encode_key(&mut EvalContext::default(), &datums[0..2]).unwrap();
         let key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &index_data);
@@ -1472,6 +1517,7 @@ mod tests {
             false,
             true,
             false,
+            true,
         )
         .unwrap();
 
@@ -1503,6 +1549,8 @@ mod tests {
             result.physical_columns[2].decoded().to_real_vec(),
             &[Real::new(4.0).ok()]
         );
+        let extra_common_handle_keys = result.physical_columns.take_extra_common_handle_keys();
+        assert_eq!(extra_common_handle_keys, Some(vec![common_handle]));
 
         let value = value_prefix;
         let store = FixtureStorage::from(vec![(key, value)]);
@@ -1514,6 +1562,7 @@ mod tests {
             1,
             false,
             true,
+            false,
             false,
         )
         .unwrap();
@@ -1590,7 +1639,7 @@ mod tests {
 
         let index_data = datum::encode_key(&mut EvalContext::default(), &datums[0..1]).unwrap();
         let mut key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &index_data);
-        key.extend(common_handle);
+        key.extend(common_handle.clone());
 
         let key_ranges = vec![{
             let mut range = KeyRange::default();
@@ -1611,6 +1660,7 @@ mod tests {
             false,
             false,
             false,
+            true,
         )
         .unwrap();
 
@@ -1642,6 +1692,8 @@ mod tests {
             result.physical_columns[2].decoded().to_real_vec(),
             &[Real::new(4.0).ok()]
         );
+        let extra_common_handle_keys = result.physical_columns.take_extra_common_handle_keys();
+        assert_eq!(extra_common_handle_keys, Some(vec![common_handle]));
     }
 
     #[test]
@@ -1710,6 +1762,7 @@ mod tests {
             0,
             false,
             true,
+            false,
             false,
         )
         .unwrap();
@@ -1805,6 +1858,7 @@ mod tests {
             false,
             true,
             false,
+            false,
         )
         .unwrap();
 
@@ -1898,6 +1952,7 @@ mod tests {
             false,
             true,
             false,
+            true,
         )
         .unwrap();
 
@@ -1928,6 +1983,13 @@ mod tests {
         assert_eq!(
             result.physical_columns[2].decoded().to_real_vec(),
             &[Real::new(4.0).ok()]
+        );
+        let extra_common_handle_keys = result.physical_columns.take_extra_common_handle_keys();
+        assert_eq!(
+            extra_common_handle_keys,
+            Some(vec![
+                datum::encode_key(&mut EvalContext::default(), &datums[2..]).unwrap(),
+            ])
         );
     }
 
@@ -1990,7 +2052,7 @@ mod tests {
         value_prefix.write_u16(common_handle.len() as u16).unwrap();
 
         // Common handle
-        value_prefix.extend(common_handle);
+        value_prefix.extend(common_handle.clone());
 
         // Partition ID
         let pid = 7;
@@ -2024,6 +2086,7 @@ mod tests {
             false,
             true,
             false,
+            true,
         )
         .unwrap();
 
@@ -2060,6 +2123,8 @@ mod tests {
             result.physical_columns[3].decoded().to_int_vec(),
             &[Some(pid)]
         );
+        let extra_common_handle_keys = result.physical_columns.take_extra_common_handle_keys();
+        assert_eq!(extra_common_handle_keys, Some(vec![common_handle]));
     }
 
     #[test]
@@ -2081,6 +2146,7 @@ mod tests {
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
             index_version: -1,
+            fill_extra_common_handle_key: false,
         };
         let mut columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -2131,6 +2197,7 @@ mod tests {
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
             index_version: -1,
+            fill_extra_common_handle_key: false,
         };
         columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -2181,6 +2248,7 @@ mod tests {
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
             index_version: -1,
+            fill_extra_common_handle_key: false,
         };
         columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -2239,6 +2307,7 @@ mod tests {
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
             index_version: -1,
+            fill_extra_common_handle_key: false,
         };
         columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -2319,6 +2388,7 @@ mod tests {
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
             index_version: -1,
+            fill_extra_common_handle_key: false,
         };
         let mut columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -2369,6 +2439,7 @@ mod tests {
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
             index_version: -1,
+            fill_extra_common_handle_key: false,
         };
         columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -2424,6 +2495,7 @@ mod tests {
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
             index_version: -1,
+            fill_extra_common_handle_key: false,
         };
         columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -2484,6 +2556,7 @@ mod tests {
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
             index_version: -1,
+            fill_extra_common_handle_key: false,
         };
         columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -2607,6 +2680,7 @@ mod tests {
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
             index_version: -1,
+            fill_extra_common_handle_key: false,
         };
         let mut columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -2650,6 +2724,7 @@ mod tests {
             columns[5].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A ".as_bytes().to_vec())
         );
+
         idx_exe
             .process_kv_pair(
                 &[
@@ -2723,6 +2798,7 @@ mod tests {
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
             index_version: -1,
+            fill_extra_common_handle_key: false,
         };
         columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -2839,6 +2915,7 @@ mod tests {
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
             index_version: -1,
+            fill_extra_common_handle_key: false,
         };
         columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -2955,6 +3032,7 @@ mod tests {
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
             index_version: -1,
+            fill_extra_common_handle_key: false,
         };
         columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -3071,6 +3149,7 @@ mod tests {
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
             index_version: -1,
+            fill_extra_common_handle_key: false,
         };
         columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -3200,6 +3279,7 @@ mod tests {
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
             index_version: -1,
+            fill_extra_common_handle_key: false,
         };
         columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -3352,6 +3432,7 @@ mod tests {
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 1,
             index_version: -1,
+            fill_extra_common_handle_key: false,
         };
         let mut columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -3420,6 +3501,7 @@ mod tests {
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 1,
             index_version: -1,
+            fill_extra_common_handle_key: false,
         };
         let mut columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -3475,6 +3557,7 @@ mod tests {
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
             index_version: -1,
+            fill_extra_common_handle_key: false,
         };
         let mut columns = idx_exe.build_column_vec(1);
         idx_exe

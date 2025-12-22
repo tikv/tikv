@@ -7,17 +7,17 @@ use std::{
 };
 
 use engine_rocks::{
-    raw::IngestExternalFileOptions, RocksEngine, RocksSnapshot, RocksSstWriterBuilder,
+    RocksEngine, RocksSnapshot, RocksSstWriterBuilder, raw::IngestExternalFileOptions,
 };
 use engine_test::new_temp_engine;
 use engine_traits::{
-    CfOptionsExt, CompactExt, DeleteStrategy, Engines, KvEngine, MiscExt, Range, SstWriter,
-    SstWriterBuilder, SyncMutable, WriteOptions, CF_DEFAULT, CF_WRITE,
+    CF_DEFAULT, CF_WRITE, CfOptionsExt, CompactExt, DeleteStrategy, Engines, KvEngine, MiscExt,
+    Range, SstWriter, SstWriterBuilder, SyncMutable, WriteOptions,
 };
 use keys::data_key;
 use kvproto::metapb::{Peer, Region};
 use raftstore::store::{
-    apply_sst_cf_files_by_ingest, build_sst_cf_file_list, CfFile, RegionSnapshot,
+    CfFile, RegionSnapshot, apply_sst_cf_files_by_ingest, build_sst_cf_file_list,
 };
 use tempfile::Builder;
 use test_raftstore::*;
@@ -167,7 +167,7 @@ fn test_delete_files_in_range_for_titan() {
         .build_resources(Default::default(), cfg.storage.engine);
     let kv_db_opts = cfg.rocksdb.build_opt(&resource, cfg.storage.engine);
     let kv_cfs_opts = cfg.rocksdb.build_cf_opts(
-        &cfg.rocksdb.build_cf_resources(cache),
+        &cfg.rocksdb.build_cf_resources(cache, Default::default()),
         None,
         cfg.storage.api_version(),
         None,

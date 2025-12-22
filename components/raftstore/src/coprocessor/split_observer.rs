@@ -5,10 +5,10 @@ use kvproto::{
     metapb::Region,
     raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest},
 };
-use tikv_util::{box_err, box_try, codec::bytes, error, warn};
+use tikv_util::{box_err, box_try, codec::bytes, warn};
 
 use super::{AdminObserver, Coprocessor, ObserverContext, Result as CopResult};
-use crate::{store::util, Error};
+use crate::{Error, store::util};
 
 pub const NO_VALID_SPLIT_KEY: &str = "no valid key found for split.";
 
@@ -124,7 +124,7 @@ impl AdminObserver for SplitObserver {
                 }
                 let mut request = vec![req.take_split()];
                 if let Err(e) = self.on_split(ctx, &mut request) {
-                    error!(
+                    warn!(
                         "failed to handle split req";
                         "region_id" => ctx.region().get_id(),
                         "err" => ?e,
@@ -145,7 +145,7 @@ impl AdminObserver for SplitObserver {
                 }
                 let mut requests = req.mut_splits().take_requests().into();
                 if let Err(e) = self.on_split(ctx, &mut requests) {
-                    error!(
+                    warn!(
                         "failed to handle split req";
                         "region_id" => ctx.region().get_id(),
                         "err" => ?e,
@@ -168,7 +168,7 @@ mod tests {
         raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest},
     };
     use tidb_query_datatype::{
-        codec::{datum, table, Datum},
+        codec::{Datum, datum, table},
         expr::EvalContext,
     };
     use tikv_util::codec::bytes::encode_bytes;

@@ -2,11 +2,11 @@
 
 use std::{
     fmt::{self, Display, Formatter},
-    io::{Error as IoError, ErrorKind, Read, Write},
+    io::{Error as IoError, Read, Write},
     pin::Pin,
     sync::{
-        atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     time::{Duration, Instant as StdInstant},
 };
@@ -14,7 +14,7 @@ use std::{
 use file_system::{IoType, WithIoType};
 use futures::{
     compat::Future01CompatExt,
-    future::{select, Either, Future, TryFutureExt},
+    future::{Either, Future, TryFutureExt, select},
     pin_mut,
     sink::SinkExt,
     stream::{Stream, StreamExt, TryStreamExt},
@@ -38,16 +38,15 @@ use raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
 use security::SecurityManager;
 use tikv_kv::RaftExtension;
 use tikv_util::{
-    box_err,
-    config::{Tracker, VersionTrack, MIB},
+    DeferContext, box_err,
+    config::{MIB, Tracker, VersionTrack},
     time::{Instant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
     worker::Runnable,
-    DeferContext,
 };
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 
-use super::{metrics::*, Config, Error, Result};
+use super::{Config, Error, Result, metrics::*};
 use crate::{server::tablet_snap::NoSnapshotCache, tikv_util::sys::thread::ThreadBuildWrapper};
 
 pub type Callback = Box<dyn FnOnce(Result<()>) + Send>;
@@ -170,7 +169,7 @@ pub fn send_snap(
         let snap = msg.get_message().get_snapshot();
         let mut snap_data = RaftSnapshotData::default();
         if let Err(e) = snap_data.merge_from_bytes(snap.get_data()) {
-            return Err(Error::Io(IoError::new(ErrorKind::Other, e)));
+            return Err(Error::Io(IoError::other(e)));
         }
         let key = SnapKey::from_region_snap(msg.get_region_id(), snap);
         let snap_start = snap_data.get_meta().get_start();
@@ -559,7 +558,7 @@ impl<R: RaftExtension + 'static> Runnable for Runner<R> {
                     let result =
                         recv_snap(stream, sink, snap_mgr, raft_router, recving_count).await;
                     if let Err(e) = result {
-                        error!("failed to recv snapshot"; "err" => %e);
+                        warn!("failed to recv snapshot"; "err" => %e);
                     }
                 };
                 self.pool.spawn(task);
@@ -602,7 +601,7 @@ impl<R: RaftExtension + 'static> Runnable for Runner<R> {
                     .await;
                     recving_count.fetch_sub(1, Ordering::SeqCst);
                     if let Err(e) = result {
-                        error!("failed to recv snapshot"; "err" => %e);
+                        warn!("failed to recv snapshot"; "err" => %e);
                     }
                 };
                 self.pool.spawn(task);
@@ -645,7 +644,7 @@ impl<R: RaftExtension + 'static> Runnable for Runner<R> {
                             cb(Ok(()));
                         }
                         Err(e) => {
-                            error!("failed to send snap"; "to_addr" => addr, "region_id" => region_id, "err" => ?e);
+                            warn!("failed to send snap"; "to_addr" => addr, "region_id" => region_id, "err" => ?e);
                             cb(Err(e));
                         }
                     };

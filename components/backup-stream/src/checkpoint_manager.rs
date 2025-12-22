@@ -3,9 +3,9 @@
 use std::{cell::RefCell, collections::HashMap, sync::Arc, time::Duration};
 
 use futures::{
+    FutureExt, SinkExt, StreamExt,
     channel::mpsc::{self as async_mpsc, Receiver, Sender},
     future::BoxFuture,
-    FutureExt, SinkExt, StreamExt,
 };
 use grpcio::{RpcStatus, RpcStatusCode, WriteFlags};
 use kvproto::{
@@ -20,13 +20,13 @@ use txn_types::TimeStamp;
 use uuid::Uuid;
 
 use crate::{
-    annotate,
+    RegionCheckpointOperation, Task, annotate,
     errors::{Error, Result},
     future,
-    metadata::{store::MetaStore, Checkpoint, CheckpointProvider, MetadataClient},
+    metadata::{Checkpoint, CheckpointProvider, MetadataClient, store::MetaStore},
     metrics,
     subscription_track::ResolveResult,
-    try_send, RegionCheckpointOperation, Task,
+    try_send,
 };
 
 /// A manager for maintaining the last flush ts.
@@ -66,6 +66,7 @@ impl SubscriptionManager {
         info!("subscription manager started!");
         defer! { info!("subscription manager exit.") }
         while let Some(msg) = self.input.next().await {
+            metrics::ACTIVE_SUBSCRIPTION_NUMBER.set(self.subscribers.len() as _);
             match msg {
                 SubscriptionOp::Add(sub) => {
                     let uid = Uuid::new_v4();
@@ -609,7 +610,7 @@ pub mod tests {
         time::Duration,
     };
 
-    use futures::{future::ok, Sink};
+    use futures::{Sink, future::ok};
     use grpcio::{RpcStatus, RpcStatusCode};
     use kvproto::{logbackuppb::SubscribeFlushEventResponse, metapb::*};
     use pd_client::{PdClient, PdFuture};
@@ -617,8 +618,8 @@ pub mod tests {
 
     use super::{BasicFlushObserver, FlushObserver, RegionIdWithVersion};
     use crate::{
-        subscription_track::{CheckpointType, ResolveResult},
         GetCheckpointResult,
+        subscription_track::{CheckpointType, ResolveResult},
     };
 
     fn region(id: u64, version: u64, conf_version: u64) -> Region {

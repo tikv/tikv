@@ -4,15 +4,15 @@ use std::{
     borrow::Cow,
     cell::RefCell,
     fmt,
-    sync::{atomic::*, mpsc, Arc, Mutex, RwLock},
+    sync::{Arc, Mutex, RwLock, atomic::*, mpsc},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use async_channel::SendError;
 use causal_ts::{CausalTsProvider, CausalTsProviderImpl};
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{name_to_cf, raw_ttl::ttl_current_ts, CfName, KvEngine, SstCompressionType};
-use external_storage::{create_storage, BackendConfig, ExternalStorage, HdfsConfig};
+use engine_traits::{CfName, KvEngine, SstCompressionType, name_to_cf, raw_ttl::ttl_current_ts};
+use external_storage::{BackendConfig, ExternalStorage, HdfsConfig, create_storage};
 use futures::{channel::mpsc::*, executor::block_on};
 use kvproto::{
     brpb::*,
@@ -23,15 +23,15 @@ use kvproto::{
 use online_config::OnlineConfig;
 use raft::StateRole;
 use raftstore::coprocessor::RegionInfoProvider;
-use resource_control::{with_resource_limiter, ResourceGroupManager, ResourceLimiter};
+use resource_control::{ResourceGroupManager, ResourceLimiter, with_resource_limiter};
 use tikv::{
     config::BackupConfig,
     storage::{
+        Snapshot, Statistics,
         kv::{CursorBuilder, Engine, LocalTablets, ScanMode, SnapContext},
         mvcc::Error as MvccError,
         raw::raw_mvcc::RawMvccSnapshot,
         txn::{EntryBatch, Error as TxnError, SnapshotStore, TxnEntryScanner, TxnEntryStore},
-        Snapshot, Statistics,
     },
 };
 use tikv_util::{
@@ -48,11 +48,12 @@ use tokio::runtime::{Handle, Runtime};
 use txn_types::{Key, Lock, TimeStamp, TsSet};
 
 use crate::{
+    Error,
     metrics::*,
     softlimit::{CpuStatistics, SoftLimit, SoftLimitByCpu},
     utils::KeyValueCodec,
     writer::{BackupWriterBuilder, CfNameWrap},
-    Error, *,
+    *,
 };
 
 const BACKUP_BATCH_LIMIT: usize = 1024;
@@ -381,7 +382,7 @@ impl BackupRange {
         let snapshot = match engine.snapshot(snap_ctx) {
             Ok(s) => s,
             Err(e) => {
-                error!(?e; "backup snapshot failed");
+                warn!("backup snapshot failed"; "err" => ?e, "ctx" => ?ctx);
                 return Err(e.into());
             }
         };
@@ -417,7 +418,7 @@ impl BackupRange {
             RescheduleChecker::new(tokio::task::yield_now, TASK_YIELD_DURATION);
         loop {
             if let Err(e) = scanner.scan_entries(&mut batch) {
-                error!(?e; "backup scan entries failed");
+                warn!("backup scan entries failed"; "err" => ?e, "ctx" => ?ctx);
                 return Err(e.into());
             };
             if batch.is_empty() {
@@ -458,7 +459,7 @@ impl BackupRange {
 
             // Build sst files.
             if let Err(e) = writer.write(entries, true) {
-                error_unknown!(?e; "backup build sst failed");
+                warn!("backup build sst failed"; "err" => ?e, "ctx" => ?ctx);
                 return Err(e);
             }
             if resource_limiter.is_some() {
@@ -583,7 +584,7 @@ impl BackupRange {
         ) {
             Ok(w) => w,
             Err(e) => {
-                error_unknown!(?e; "backup writer failed");
+                warn!("backup writer failed"; "err" => ?e, "region" => ?self.region);
                 return Err(e);
             }
         };
@@ -600,7 +601,7 @@ impl BackupRange {
         let engine_snapshot = match engine.snapshot(snap_ctx) {
             Ok(s) => s,
             Err(e) => {
-                error!(?e; "backup raw kv snapshot failed");
+                warn!("backup raw kv snapshot failed"; "err" => ?e, "ctx" => ?ctx);
                 return Err(e.into());
             }
         };
@@ -862,7 +863,6 @@ impl<R: RegionInfoProvider> Progress<R> {
             }),
         );
         if let Err(e) = res {
-            // TODO: handle error.
             error!(?e; "backup seek region failed");
         }
 
@@ -970,7 +970,8 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             loop {
                 // when get the guard, release it until we finish scanning a batch,
                 // because if we were suspended during scanning,
-                // the region info have higher possibility to change (then we must compensate that by the fine-grained backup).
+                // the region info have higher possibility to change (then we must compensate
+                // that by the fine-grained backup).
                 let guard = soft_limit_keeper.guard().await;
                 if let Err(e) = guard {
                     warn!("failed to retrieve limit guard, omitting."; "err" => %e);
@@ -980,14 +981,16 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                     // It is critical to speed up backup, otherwise workers are
                     // blocked by each other.
                     //
-                    // If we use [tokio::sync::Mutex] here, until we give back the control flow to the scheduler
-                    // or tasks waiting for the lock won't be waked up due to the characteristic of the runtime...
+                    // If we use [tokio::sync::Mutex] here, until we give back the control flow to
+                    // the scheduler or tasks waiting for the lock won't be
+                    // waked up due to the characteristic of the runtime...
                     //
                     // The worst case is when using `noop` backend:
-                    // the task seems never yielding and in fact the backup would executing sequentially.
+                    // the task seems never yielding and in fact the backup would executing
+                    // sequentially.
                     //
-                    // Anyway, even tokio itself doesn't recommend to use it unless the lock guard needs to be `Send`.
-                    // (See https://tokio.rs/tokio/tutorial/shared-state)
+                    // Anyway, even tokio itself doesn't recommend to use it unless the lock guard
+                    // needs to be `Send`. (See https://tokio.rs/tokio/tutorial/shared-state)
                     // Use &mut and mark the type for making rust-analyzer happy.
                     let progress: &mut Progress<_> = &mut prs.lock().unwrap();
                     match progress.forward(batch_size, request.replica_read) {
@@ -997,8 +1000,9 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                 };
 
                 for brange in batch {
-                    // wake up the scheduler for each loop for awaking tasks waiting for some lock or channels.
-                    // because the softlimit permit is held by current task, there isn't risk of being suspended for long time.
+                    // wake up the scheduler for each loop for awaking tasks waiting for some lock
+                    // or channels. because the softlimit permit is held by
+                    // current task, there isn't risk of being suspended for long time.
                     tokio::task::yield_now().await;
                     let engine = engine.clone();
                     if request.cancel.load(Ordering::SeqCst) {
@@ -1007,7 +1011,8 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                     }
                     // TODO: make file_name unique and short
                     let key = brange.start_key.clone().and_then(|k| {
-                        // use start_key sha256 instead of start_key to avoid file name too long os error
+                        // use start_key sha256 instead of start_key to avoid file name too long os
+                        // error
                         let input = brange.codec.decode_backup_key(Some(k)).unwrap_or_default();
                         file_system::sha256(&input).ok().map(hex::encode)
                     });
@@ -1046,7 +1051,8 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                             sst_max_size,
                             request.cipher.clone(),
                         );
-                        with_resource_limiter(brange.backup(
+                        with_resource_limiter(
+                            brange.backup(
                                 writer_builder,
                                 engine,
                                 concurrency_manager.clone(),
@@ -1057,15 +1063,17 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                                 saver_tx.clone(),
                                 _backend.name(),
                                 resource_limiter.clone(),
-                            ), resource_limiter.clone())
-                            .await
+                            ),
+                            resource_limiter.clone(),
+                        )
+                        .await
                     };
                     match stat {
                         Err(err) => {
-                            error_unknown!(%err; "error during backup"; "region" => ?brange.region,);
+                            warn!("error during backup"; "region" => ?brange.region, "err" => %err);
                             let mut resp = BackupResponse::new();
                             resp.set_error(err.into());
-                            if let Err(err) =  resp_tx.unbounded_send(resp) {
+                            if let Err(err) = resp_tx.unbounded_send(resp) {
                                 warn!("failed to send response"; "err" => ?err)
                             }
                         }
@@ -1339,7 +1347,7 @@ pub mod tests {
         time::Duration,
     };
 
-    use api_version::{api_v2::RAW_KEY_PREFIX, dispatch_api_version, KvFormat, RawValue};
+    use api_version::{KvFormat, RawValue, api_v2::RAW_KEY_PREFIX, dispatch_api_version};
     use collections::HashSet;
     use engine_rocks::RocksSstReader;
     use engine_traits::{IterOptions, Iterator, MiscExt, RefIterable, SstReader};
@@ -1354,9 +1362,9 @@ pub mod tests {
     use tikv::{
         coprocessor::checksum_crc64_xor,
         storage::{
+            RocksEngine, TestEngineBuilder,
             kv::LocalTablets,
             txn::tests::{must_commit, must_prewrite_put},
-            RocksEngine, TestEngineBuilder,
         },
     };
     use tikv_util::{config::ReadableSize, info, store::new_peer};

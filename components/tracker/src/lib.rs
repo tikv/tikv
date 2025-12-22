@@ -1,5 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod future;
 mod metrics;
 mod slab;
 mod tls;
@@ -9,7 +10,8 @@ use std::time::Instant;
 use kvproto::kvrpcpb as pb;
 
 pub use self::{
-    slab::{TrackerToken, TrackerTokenArray, GLOBAL_TRACKERS, INVALID_TRACKER_TOKEN},
+    future::{FutureTrack, track},
+    slab::{GLOBAL_TRACKERS, INVALID_TRACKER_TOKEN, TrackerToken, TrackerTokenArray},
     tls::*,
 };
 
@@ -17,8 +19,6 @@ pub use self::{
 pub struct Tracker {
     pub req_info: RequestInfo,
     pub metrics: RequestMetrics,
-    // TODO: Add request stage info
-    // pub current_stage: RequestStage,
 }
 
 impl Tracker {
@@ -29,8 +29,21 @@ impl Tracker {
         }
     }
 
-    pub fn write_time_detail(&self, detail_v2: &mut pb::TimeDetailV2) {
-        detail_v2.set_kv_grpc_process_time_ns(self.metrics.grpc_process_nanos);
+    /// This function is used to merge the time detail of the request into the
+    /// `TimeDetailV2` of the request.
+    // Note: This function uses merge because the
+    // [`tikv::coprocessor::tracker::Tracker`] sets the `TimeDetailV2`, and we
+    // don't want to overwrite the its result.
+    pub fn merge_time_detail(&self, detail_v2: &mut pb::TimeDetailV2) {
+        detail_v2.set_kv_grpc_process_time_ns(
+            detail_v2.kv_grpc_process_time_ns + self.metrics.grpc_process_nanos,
+        );
+        detail_v2.set_process_wall_time_ns(
+            detail_v2.process_wall_time_ns + self.metrics.future_process_nanos,
+        );
+        detail_v2.set_process_suspend_wall_time_ns(
+            detail_v2.process_suspend_wall_time_ns + self.metrics.future_suspend_nanos,
+        );
     }
 
     pub fn write_scan_detail(&self, detail_v2: &mut pb::ScanDetailV2) {
@@ -85,12 +98,13 @@ impl Tracker {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct RequestInfo {
     pub region_id: u64,
     pub start_ts: u64,
     pub task_id: u64,
     pub resource_group_tag: Vec<u8>,
+    pub begin: Instant,
 
     // Information recorded after the task is scheduled.
     pub request_type: RequestType,
@@ -105,6 +119,7 @@ impl RequestInfo {
             start_ts,
             task_id: ctx.get_task_id(),
             resource_group_tag: ctx.get_resource_group_tag().to_vec(),
+            begin: Instant::now(),
             request_type,
             cid: 0,
             is_external_req: ctx.get_request_source().contains("external"),
@@ -157,6 +172,10 @@ pub struct RequestMetrics {
     pub latch_wait_nanos: u64,
     pub scheduler_process_nanos: u64,
     pub scheduler_throttle_nanos: u64,
+
+    pub future_process_nanos: u64,
+    pub future_suspend_nanos: u64,
+
     // temp instant used in raftstore metrics, first be the instant when creating the write
     // callback, then reset when it is ready to apply
     pub write_instant: Option<Instant>,
@@ -180,4 +199,7 @@ pub struct RequestMetrics {
     pub apply_thread_wait_nanos: u64,
     pub apply_write_wal_nanos: u64,
     pub apply_write_memtable_nanos: u64,
+
+    // recorded outside the read_pool thread, accessed inside the read_pool thread for topsql usage
+    pub grpc_req_size: u64,
 }

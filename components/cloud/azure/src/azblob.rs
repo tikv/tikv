@@ -7,38 +7,30 @@ use std::{
 };
 
 use async_trait::async_trait;
-use azure_core::{
-    auth::{TokenCredential, TokenResponse},
-    new_http_client,
-};
-use azure_identity::{
-    AutoRefreshingTokenCredential, ClientSecretCredential, DefaultAzureCredential,
-    TokenCredentialOptions,
-};
-use azure_storage::{prelude::*, ConnectionString, ConnectionStringBuilder};
+use azure_core::auth::{AccessToken, TokenCredential};
+use azure_identity::{ClientSecretCredential, DefaultAzureCredential};
+use azure_storage::{ConnectionString, ConnectionStringBuilder, prelude::*};
 use azure_storage_blobs::{blob::operations::PutBlockBlobBuilder, prelude::*};
-use cloud::blob::{
-    none_to_empty, unimplemented, BlobConfig, BlobObject, BlobStorage, BucketConf,
-    DeletableStorage, IterableStorage, PutResource, StringNonEmpty,
+use cloud::{
+    blob::{
+        BlobConfig, BlobObject, BlobStorage, BucketConf, DeletableStorage, IterableStorage,
+        PutResource, StringNonEmpty, none_to_empty, read_to_end, unimplemented,
+    },
+    metrics::AZBLOB_UPLOAD_DURATION,
 };
 use futures::TryFutureExt;
-use futures_util::{
-    future::FutureExt,
-    io::{AsyncRead, AsyncReadExt},
-    stream,
-    stream::StreamExt,
-    TryStreamExt,
-};
+use futures_util::{TryStreamExt, future::FutureExt, io::AsyncRead, stream, stream::StreamExt};
 pub use kvproto::brpb::{AzureBlobStorage as InputConfig, AzureCustomerKey};
 use oauth2::{ClientId, ClientSecret};
 use tikv_util::{
-    debug,
-    stream::{retry, RetryError},
+    debug, defer,
+    stream::{RetryError, retry},
+    time::Instant,
 };
 use time::OffsetDateTime;
 use tokio::{
     sync::Mutex,
-    time::{timeout, Duration},
+    time::{Duration, timeout},
 };
 
 const ENV_CLIENT_ID: &str = "AZURE_CLIENT_ID";
@@ -241,12 +233,9 @@ impl BlobConfig for Config {
     }
 
     fn url(&self) -> io::Result<url::Url> {
-        self.bucket.url("azure").map_err(|s| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("error creating bucket url: {}", s),
-            )
-        })
+        self.bucket
+            .url("azure")
+            .map_err(|s| io::Error::other(format!("error creating bucket url: {}", s)))
     }
 }
 
@@ -311,8 +300,12 @@ impl AzureUploader {
         est_len: u64,
     ) -> io::Result<()> {
         // upload the entire data.
+        let begin = Instant::now_coarse();
+        defer! {
+            AZBLOB_UPLOAD_DURATION.observe(begin.saturating_elapsed().as_secs_f64())
+        }
         let mut data = Vec::with_capacity(est_len as usize);
-        reader.read_to_end(&mut data).await?;
+        read_to_end(reader, &mut data).await?;
         retry(|| self.upload(&data)).await?;
         Ok(())
     }
@@ -389,14 +382,14 @@ trait ContainerBuilder: 'static + Send + Sync {
 /// Also see [`DefaultAzureCredential`].
 struct DefaultContainerBuilder {
     config: Config,
-    cred: AutoRefreshingTokenCredential,
+    cred: Arc<DefaultAzureCredential>,
 }
 
 impl DefaultContainerBuilder {
     fn new(config: Config) -> Self {
         Self {
             config,
-            cred: AutoRefreshingTokenCredential::new(Arc::<DefaultAzureCredential>::default()),
+            cred: Arc::<DefaultAzureCredential>::default(),
         }
     }
 }
@@ -408,9 +401,10 @@ impl ContainerBuilder for DefaultContainerBuilder {
         let bucket = (*self.config.bucket.bucket).to_owned();
 
         let token_resource = format!("https://{}.blob.core.windows.net", &account_name);
+        let scopes = vec![&token_resource as &str];
         let token = self
             .cred
-            .get_token(&token_resource)
+            .get_token(&scopes)
             .await
             .map_err(|e| {
                 io::Error::new(
@@ -422,7 +416,7 @@ impl ContainerBuilder for DefaultContainerBuilder {
 
         let client = BlobServiceClient::new(
             account_name,
-            StorageCredentials::bearer_token(token.secret()),
+            StorageCredentials::bearer_token(token.secret().to_string()),
         )
         .container_client(bucket);
         Ok(Arc::new(client))
@@ -440,7 +434,7 @@ impl ContainerBuilder for SharedKeyContainerBuilder {
     }
 }
 
-type TokenCacheType = Arc<RwLock<Option<(TokenResponse, Arc<ContainerClient>)>>>;
+type TokenCacheType = Arc<RwLock<Option<(AccessToken, Arc<ContainerClient>)>>>;
 struct TokenCredContainerBuilder {
     account_name: String,
     container_name: String,
@@ -526,14 +520,14 @@ impl ContainerBuilder for TokenCredContainerBuilder {
             }
             // release read lock, the thread still have modify lock,
             // so no other threads can write the token_cache, so read lock is not blocked.
-            let token = self
-                .token_cred
-                .get_token(&self.token_resource)
-                .await
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{:?}", &e)))?;
+            let scopes = vec![&self.token_resource as &str];
+            let token =
+                self.token_cred.get_token(&scopes).await.map_err(|e| {
+                    io::Error::new(io::ErrorKind::InvalidInput, format!("{:?}", &e))
+                })?;
             let blob_service = BlobServiceClient::new(
                 self.account_name.clone(),
-                StorageCredentials::BearerToken(token.token.secret().into()),
+                StorageCredentials::bearer_token(token.token.secret().to_string()),
             );
             let storage_client =
                 Arc::new(blob_service.container_client(self.container_name.clone()));
@@ -638,11 +632,11 @@ impl AzureStorage {
         } else if let Some(credential_info) = config.credential_info.as_ref() {
             let token_resource = format!("https://{}.blob.core.windows.net", &account_name);
             let cred = ClientSecretCredential::new(
-                new_http_client(),
-                credential_info.tenant_id.clone(),
+                azure_core::new_http_client(),
                 credential_info.client_id.to_string(),
                 credential_info.client_secret.secret().clone(),
-                TokenCredentialOptions::default(),
+                credential_info.tenant_id.clone(),
+                Default::default(),
             );
 
             let client_builder = Arc::new(TokenCredContainerBuilder::new(
@@ -816,6 +810,8 @@ impl DeletableStorage for AzureStorage {
 
 #[cfg(test)]
 mod tests {
+    use futures::AsyncReadExt;
+
     use super::*;
 
     #[test]
@@ -893,8 +889,8 @@ mod tests {
         env::remove_var(ENV_CLIENT_SECRET);
     }
 
+    #[ignore = "no available azure cloud service for the test env."]
     #[tokio::test]
-    #[cfg(feature = "azurite")]
     // test in Azurite emulator
     async fn test_azblob_storage() {
         use futures_util::stream;

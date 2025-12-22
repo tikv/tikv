@@ -12,16 +12,17 @@ use std::{
 use api_version::KvFormat;
 use collections::HashSet;
 use engine_rocks::{
+    RocksEngine, RocksEngineIterator, RocksMvccProperties, RocksStatistics, RocksWriteBatchVec,
     raw::{CompactOptions, DBBottommostLevelCompaction},
     util::get_cf_handle,
-    RocksEngine, RocksEngineIterator, RocksMvccProperties, RocksStatistics, RocksWriteBatchVec,
 };
 use engine_traits::{
-    Engines, Error as EngineTraitError, IterOptions, Iterable, Iterator as EngineIterator, MiscExt,
-    Mutable, MvccProperties, Peekable, RaftEngine, RaftLogBatch, Range, RangePropertiesExt,
-    SyncMutable, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, Engines, Error as EngineTraitError, IterOptions,
+    Iterable, Iterator as EngineIterator, MiscExt, Mutable, MvccProperties, Peekable, RaftEngine,
+    RaftLogBatch, Range, RangePropertiesExt, SyncMutable, WriteBatch, WriteBatchExt, WriteOptions,
 };
 use futures::future::Future;
+use hyper::{Body, Method, Request, Response, StatusCode};
 use kvproto::{
     debugpb::{self, Db as DbType},
     kvrpcpb::{self, Context, MvccInfo},
@@ -29,12 +30,12 @@ use kvproto::{
     raft_serverpb::*,
 };
 use protobuf::Message;
-use raft::{self, eraftpb::Entry, RawNode};
+use raft::{self, RawNode, eraftpb::Entry};
 use raftstore::{
     coprocessor::get_region_approximate_middle,
     store::{
-        local_metrics::RaftMetrics, write_initial_apply_state, write_initial_raft_state,
-        write_peer_state, PeerStorage,
+        PeerStorage, local_metrics::RaftMetrics, write_initial_apply_state,
+        write_initial_raft_state, write_peer_state,
     },
 };
 use thiserror::Error;
@@ -51,9 +52,9 @@ use crate::{
     config::ConfigController,
     server::reset_to_version::ResetToVersionManager,
     storage::{
+        Storage,
         lock_manager::LockManager,
         mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType},
-        Storage,
     },
 };
 
@@ -431,11 +432,10 @@ where
         let res = handles
             .into_iter()
             .map(|h: JoinHandle<Result<()>>| h.join())
-            .map(|r| {
+            .inspect(|r| {
                 if let Err(e) = &r {
                     error!("{:?}", e);
                 }
-                r
             })
             .all(|r| r.is_ok());
         if res {
@@ -533,7 +533,7 @@ where
         promote_learner: bool,
     ) -> Result<()> {
         let store_id = self.get_store_ident()?.get_store_id();
-        if store_ids.iter().any(|&s| s == store_id) {
+        if store_ids.contains(&store_id) {
             let msg = format!("Store {} in the failed list", store_id);
             return Err(Error::Other(msg.into()));
         }
@@ -1611,7 +1611,7 @@ fn set_region_tombstone(
         .get_peers()
         .iter()
         .find(|p| p.get_store_id() == store_id)
-        .map_or(true, |p| p.get_id() != peer_id);
+        .is_none_or(|p| p.get_id() != peer_id);
     if !scheduled {
         return Err(box_err!("The peer is still in target peers"));
     }
@@ -1630,11 +1630,76 @@ fn divide_db(db: &RocksEngine, parts: usize) -> raftstore::Result<Vec<Vec<u8>>> 
     ))
 }
 
+/// Main handler for debug dup key.
+pub fn handle_dup_key_debug(req: Request<Body>) -> hyper::Result<Response<Body>> {
+    let path = req.uri().path();
+    let method = req.method();
+
+    match (method, path) {
+        (&Method::GET, "/debug/dup-key/check") => handle_check(),
+        (&Method::POST, "/debug/dup-key/enable") => handle_enable_debug(true),
+        (&Method::POST, "/debug/dup-key/disable") => handle_enable_debug(false),
+        _ => Ok(Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(Body::from("Not Found"))
+            .unwrap()),
+    }
+}
+
+/// Handle /debug/debug-dup/check endpoint (GET method to get current
+/// config)
+fn handle_check() -> hyper::Result<Response<Body>> {
+    let result = txn_types::ENABLE_DUP_KEY_DEBUG
+        .load(std::sync::atomic::Ordering::Relaxed)
+        .to_string();
+    let json = match serde_json::to_string_pretty(&result) {
+        Ok(json) => json,
+        Err(e) => {
+            return Ok(Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from(format!("JSON serialization error: {}", e)))
+                .unwrap());
+        }
+    };
+
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "application/json")
+        .body(Body::from(json))
+        .unwrap())
+}
+
+/// Handle /debug/dup-key/enable or disable endpoint (POST method to clear
+/// registry)
+fn handle_enable_debug(operation: bool) -> hyper::Result<Response<Body>> {
+    txn_types::ENABLE_DUP_KEY_DEBUG.store(operation, std::sync::atomic::Ordering::Relaxed);
+    let response = serde_json::json!({
+        "status": "success",
+        "message": format!("set to operation={:?} successfully", operation),
+    });
+
+    let json = match serde_json::to_string_pretty(&response) {
+        Ok(json) => json,
+        Err(e) => {
+            return Ok(Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from(format!("JSON serialization error: {}", e)))
+                .unwrap());
+        }
+    };
+
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "application/json")
+        .body(Body::from(json))
+        .unwrap())
+}
+
 #[cfg(test)]
 mod tests {
     use api_version::ApiV1;
-    use engine_rocks::{util::new_engine_opt, RocksCfOptions, RocksDbOptions, RocksEngine};
-    use engine_traits::{Mutable, SyncMutable, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use engine_rocks::{RocksCfOptions, RocksDbOptions, RocksEngine, util::new_engine_opt};
+    use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, Mutable, SyncMutable};
     use kvproto::{
         kvrpcpb::ApiVersion,
         metapb::{Peer, PeerRole, Region},

@@ -5,21 +5,20 @@ use std::sync::Mutex;
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftRequestHeader};
 use raft::{
-    eraftpb::{self, MessageType},
     Storage,
+    eraftpb::{self, MessageType},
 };
 use raftstore::{
+    Error, Result,
     store::{
-        can_amend_read, cmd_resp,
+        ReadDelegate, ReadIndexRequest, ReadProgress, Transport, can_amend_read, cmd_resp,
         fsm::{apply::notify_stale_req, new_read_index_request},
         metrics::RAFT_READ_INDEX_PENDING_COUNT,
         msg::{ErrorCallback, ReadCallback},
         propose_read_index, should_renew_lease,
         simple_write::SimpleWriteEncoder,
-        util::{check_req_region_epoch, LeaseState},
-        ReadDelegate, ReadIndexRequest, ReadProgress, Transport,
+        util::{LeaseState, check_req_region_epoch},
     },
-    Error, Result,
 };
 use slog::debug;
 use tikv_util::time::monotonic_raw_now;
@@ -41,8 +40,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     ) -> bool {
         assert_eq!(m.get_msg_type(), MessageType::MsgReadIndex);
 
-        ctx.coprocessor_host
-            .on_step_read_index(m, self.state_role());
+        ctx.coprocessor_host.on_step_read_index(
+            m,
+            self.state_role(),
+            Some(self.region().get_start_key()),
+            Some(self.region().get_end_key()),
+        );
         // Must use the commit index of `PeerStorage` instead of the commit index
         // in raft-rs which may be greater than the former one.
         // For more details, see the annotations above `on_leader_commit_idx_changed`.
@@ -72,7 +75,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     pub fn pre_read_index(&self) -> Result<()> {
         fail::fail_point!("before_propose_readindex", |s| if s
-            .map_or(true, |s| s.parse().unwrap_or(true))
+            .is_none_or(|s| s.parse().unwrap_or(true))
         {
             Ok(())
         } else {
@@ -340,23 +343,23 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             None => return false,
         };
         let max_lease = ctx.cfg.raft_store_max_leader_lease();
-        let has_overlapped_reads = self.pending_reads().back().map_or(false, |read| {
+        let has_overlapped_reads = self.pending_reads().back().is_some_and(|read| {
             // If there is any read index whose lease can cover till next heartbeat
             // then we don't need to propose a new one
             read.propose_time + max_lease > renew_bound
         });
-        let has_overlapped_writes = self.proposals().back().map_or(false, |proposal| {
+        let has_overlapped_writes = self.proposals().back().is_some_and(|proposal| {
             // If there is any write whose lease can cover till next heartbeat
             // then we don't need to propose a new one
             proposal
                 .propose_time
-                .map_or(false, |propose_time| propose_time + max_lease > renew_bound)
+                .is_some_and(|propose_time| propose_time + max_lease > renew_bound)
         });
         !has_overlapped_reads && !has_overlapped_writes
     }
 }
 
-impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
+impl<EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'_, EK, ER, T> {
     fn register_check_leader_lease_tick(&mut self) {
         self.schedule_tick(PeerTick::CheckLeaderLease)
     }

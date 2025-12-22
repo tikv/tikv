@@ -1,14 +1,14 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use api_version::{keyspace::KvPair, KvFormat};
+use api_version::{KvFormat, keyspace::KvPair};
 use async_trait::async_trait;
 use kvproto::coprocessor::KeyRange;
 use tidb_query_common::{
-    storage::{
-        scanner::{RangesScanner, RangesScannerOptions},
-        IntervalRange, Range, Storage,
-    },
     Result,
+    storage::{
+        IntervalRange, Range, Storage,
+        scanner::{RangesScanner, RangesScannerOptions},
+    },
 };
 use tidb_query_datatype::{codec::batch::LazyBatchColumnVec, expr::EvalContext};
 use tipb::{ColumnInfo, FieldType};
@@ -168,6 +168,23 @@ impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> BatchExecutor for ScanExecuto
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.imp.schema()
+    }
+
+    #[inline]
+    fn intermediate_schema(&self, index: usize) -> Result<&[FieldType]> {
+        Err(other_err!(
+            "The intermediate schema is not found until root executor, index: {}",
+            index
+        ))
+    }
+
+    #[inline]
+    fn consume_and_fill_intermediate_results(
+        &mut self,
+        _results: &mut [Vec<BatchExecuteResult>],
+    ) -> Result<()> {
+        // Do nothing.
+        Ok(())
     }
 
     #[inline]

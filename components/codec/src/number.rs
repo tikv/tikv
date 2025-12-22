@@ -1,12 +1,15 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::intrinsics::{likely, unlikely};
+use std::{
+    intrinsics::{likely, unlikely},
+    ptr,
+};
 
 use byteorder::{BigEndian, ByteOrder, LittleEndian};
 
 use crate::{
-    buffer::{BufferReader, BufferWriter},
     ErrorInner, Result,
+    buffer::{BufferReader, BufferWriter},
 };
 
 pub const MAX_VARINT64_LENGTH: usize = 10;
@@ -466,12 +469,12 @@ impl NumberCodec {
                 let ptr_end = buf.as_ptr().add(len);
                 // Slow path
                 let mut shift = 0;
-                while ptr != ptr_end && *ptr >= 0x80 {
+                while !ptr::eq(ptr, ptr_end) && *ptr >= 0x80 {
                     val |= ((*ptr & 0x7f) as u64) << shift;
                     shift += 7;
                     ptr = ptr.add(1);
                 }
-                if unlikely(ptr == ptr_end) {
+                if unlikely(ptr::eq(ptr, ptr_end)) {
                     return Err(ErrorInner::eof().into());
                 }
                 val |= (*ptr as u64) << shift;
@@ -541,7 +544,7 @@ impl NumberCodec {
             } else {
                 let ptr_end = buf.as_ptr().add(len);
                 // Slow path
-                while ptr != ptr_end && *ptr >= 0x80 {
+                while !ptr::eq(ptr, ptr_end) && *ptr >= 0x80 {
                     ptr = ptr.add(1);
                 }
                 // When we got here, we are either `ptr == ptr_end`, or `*ptr < 0x80`.
@@ -549,7 +552,7 @@ impl NumberCodec {
                 //      but meet EOF, so only `len` is returned.
                 // For `*ptr < 0x80` case, it means currently it is pointing to the last byte
                 //      of the VarInt, so we return `delta + 1` as length.
-                if unlikely(ptr == ptr_end) {
+                if unlikely(ptr::eq(ptr, ptr_end)) {
                     return len;
                 }
                 ptr.offset_from(buf.as_ptr()) as usize + 1

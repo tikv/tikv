@@ -8,7 +8,7 @@ use std::{
 
 use collections::HashMap;
 use kvproto::{kvrpcpb::Context, resource_usage_agent::ResourceUsageRecord};
-use resource_metering::{error::Result, init_recorder, init_reporter, Config, DataSink};
+use resource_metering::{Config, DataSink, error::Result, init_recorder, init_reporter};
 use tikv_util::config::ReadableDuration;
 
 const PRECISION_MS: u64 = 1000;
@@ -48,7 +48,7 @@ fn test_summary() {
     };
 
     let (_, collector_reg_handle, resource_tag_factory, mut recorder_worker) =
-        init_recorder(cfg.precision.as_millis());
+        init_recorder(cfg.precision.as_millis(), cfg.enable_network_io_collection);
     let (_, data_sink_reg_handle, mut reporter_worker) = init_reporter(cfg, collector_reg_handle);
 
     let data_sink = MockDataSink::default();

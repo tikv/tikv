@@ -5,14 +5,14 @@ use std::{
     cmp::{max, min},
     collections::HashSet,
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
 
 use collections::HashMap;
-use dashmap::{mapref::one::Ref, DashMap};
+use dashmap::{DashMap, mapref::one::Ref};
 use fail::fail_point;
 use kvproto::{
     kvrpcpb::{CommandPri, ResourceControlContext},
@@ -22,7 +22,7 @@ use parking_lot::{MappedRwLockReadGuard, RwLock, RwLockReadGuard};
 use tikv_util::{
     config::VersionTrack,
     info,
-    resource_control::{TaskMetadata, TaskPriority, DEFAULT_RESOURCE_GROUP_NAME},
+    resource_control::{DEFAULT_RESOURCE_GROUP_NAME, TaskMetadata, TaskPriority},
     time::Instant,
 };
 use yatp::queue::priority::TaskPriorityProvider;
@@ -277,7 +277,9 @@ impl ResourceGroupManager {
     // resource group.
     #[inline]
     fn enable_priority_limiter(&self) -> bool {
-        self.get_group_count() > 1
+        // TODO: reenable it once when we fix https://github.com/tikv/tikv/issues/18939
+        // self.get_group_count() > 1
+        false
     }
 
     // Always return the background resource limiter if any;
@@ -1086,7 +1088,7 @@ pub(crate) mod tests {
     #[cfg(feature = "failpoints")]
     #[test]
     fn test_reset_resource_group_vt_overflow() {
-        use rand::{thread_rng, RngCore};
+        use rand::{RngCore, thread_rng};
         let resource_manager = ResourceGroupManager::default();
         let resource_ctl = resource_manager.derive_controller("test_write".into(), false);
         let mut rng = thread_rng();
@@ -1262,25 +1264,6 @@ pub(crate) mod tests {
         assert!(Arc::ptr_eq(
             &mgr.get_resource_limiter("test1", "stats", 0).unwrap(),
             &default_limiter
-        ));
-        assert!(Arc::ptr_eq(
-            &mgr.get_resource_limiter("test1", "query", 0).unwrap(),
-            &mgr.priority_limiters[0]
-        ));
-        assert!(Arc::ptr_eq(
-            &mgr.get_resource_limiter("test1", "query", LOW_PRIORITY as u64)
-                .unwrap(),
-            &mgr.priority_limiters[2]
-        ));
-
-        assert!(Arc::ptr_eq(
-            &mgr.get_resource_limiter("default", "query", LOW_PRIORITY as u64)
-                .unwrap(),
-            &mgr.priority_limiters[2]
-        ));
-        assert!(Arc::ptr_eq(
-            &mgr.get_resource_limiter("unknown", "query", 0).unwrap(),
-            &mgr.priority_limiters[1]
         ));
     }
 }

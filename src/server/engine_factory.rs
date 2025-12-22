@@ -4,22 +4,22 @@ use std::{path::Path, sync::Arc};
 
 use encryption_export::DataKeyManager;
 use engine_rocks::{
-    raw::{Cache, Env},
-    util::RangeCompactionFilterFactory,
     CompactedEventSender, CompactionListener, FlowListener, RocksCfOptions, RocksCompactionJobInfo,
     RocksDbOptions, RocksEngine, RocksEventListener, RocksPersistenceListener, RocksStatistics,
     TabletLogger,
+    raw::{Cache, Env},
+    util::RangeCompactionFilterFactory,
 };
 use engine_traits::{
-    CompactionJobInfo, MiscExt, PersistenceListener, Result, StateStorage, TabletContext,
-    TabletFactory, CF_DEFAULT, CF_WRITE,
+    CF_DEFAULT, CF_WRITE, CompactionJobInfo, MiscExt, PersistenceListener, Result, StateStorage,
+    TabletContext, TabletFactory,
 };
 use kvproto::kvrpcpb::ApiVersion;
-use raftstore::RegionInfoAccessor;
+use raftstore::{RegionInfoAccessor, store::ForcePartitionRangeManager};
 use tikv_util::worker::Scheduler;
 
 use crate::{
-    config::{CfResources, DbConfig, DbResources, TikvConfig, DEFAULT_ROCKSDB_SUB_DIR},
+    config::{CfResources, DEFAULT_ROCKSDB_SUB_DIR, DbConfig, DbResources, TikvConfig},
     storage::config::EngineType,
 };
 
@@ -47,6 +47,7 @@ impl KvEngineFactoryBuilder {
         config: &TikvConfig,
         cache: Cache,
         key_manager: Option<Arc<DataKeyManager>>,
+        force_partition_range_mgr: ForcePartitionRangeManager,
     ) -> Self {
         Self {
             inner: FactoryInner {
@@ -57,7 +58,9 @@ impl KvEngineFactoryBuilder {
                 sst_recovery_sender: None,
                 encryption_key_manager: key_manager,
                 db_resources: config.rocksdb.build_resources(env, config.storage.engine),
-                cf_resources: config.rocksdb.build_cf_resources(cache),
+                cf_resources: config
+                    .rocksdb
+                    .build_cf_resources(cache, force_partition_range_mgr),
                 state_storage: None,
                 lite: false,
             },
@@ -284,7 +287,8 @@ mod tests {
         let dir = test_util::temp_dir(name, false);
         let env = cfg.build_shared_rocks_env(None, None).unwrap();
 
-        let factory = KvEngineFactoryBuilder::new(env, &cfg, cache, None).build();
+        let factory =
+            KvEngineFactoryBuilder::new(env, &cfg, cache, None, Default::default()).build();
         let reg = TabletRegistry::new(Box::new(factory), dir.path()).unwrap();
         (dir, reg)
     }

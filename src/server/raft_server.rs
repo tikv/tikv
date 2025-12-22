@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{atomic::AtomicU64, Arc, Mutex},
+    sync::{Arc, Mutex, atomic::AtomicU64},
     thread,
     time::Duration,
 };
@@ -9,19 +9,19 @@ use std::{
 use api_version::api_v2::TIDB_RANGES_COMPLEMENT;
 use causal_ts::CausalTsProviderImpl;
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{Engines, Iterable, KvEngine, RaftEngine, DATA_CFS, DATA_KEY_PREFIX_LEN};
+use engine_traits::{DATA_CFS, DATA_KEY_PREFIX_LEN, Engines, Iterable, KvEngine, RaftEngine};
 use health_controller::HealthController;
 use kvproto::{
     kvrpcpb::ApiVersion, metapb, raft_serverpb::StoreIdent, replication_modepb::ReplicationStatus,
 };
-use pd_client::{Error as PdError, PdClient, INVALID_ID};
+use pd_client::{Error as PdError, INVALID_ID, PdClient};
 use raftstore::{
     coprocessor::dispatcher::CoprocessorHost,
     store::{
-        self,
-        fsm::{store::StoreMeta, ApplyRouter, RaftBatchSystem, RaftRouter},
-        initial_region, AutoSplitController, Config as StoreConfig, DiskCheckRunner,
-        GlobalReplicationState, PdTask, RefreshConfigTask, SnapManager, SplitCheckTask, Transport,
+        self, AutoSplitController, Config as StoreConfig, DiskCheckRunner, GlobalReplicationState,
+        PdTask, RefreshConfigTask, SnapManager, SplitCheckTask, Transport,
+        fsm::{ApplyRouter, RaftBatchSystem, RaftRouter, store::StoreMeta},
+        initial_region,
     },
 };
 use resource_metering::CollectorRegHandle;
@@ -167,14 +167,14 @@ where
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<EK>,
         importer: Arc<SstImporter<EK>>,
-        split_check_scheduler: Scheduler<SplitCheckTask>,
+        split_check_scheduler: Scheduler<SplitCheckTask<EK>>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         disk_check_runner: DiskCheckRunner,
         grpc_service_mgr: GrpcServiceManager,
-        safe_point: Arc<AtomicU64>,
+        gc_safe_point: Arc<AtomicU64>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -214,7 +214,7 @@ where
             causal_ts_provider,
             disk_check_runner,
             grpc_service_mgr,
-            safe_point,
+            gc_safe_point,
         )?;
 
         Ok(())
@@ -234,6 +234,10 @@ where
     /// start.
     pub fn refresh_config_scheduler(&mut self) -> Scheduler<RefreshConfigTask> {
         self.system.refresh_config_scheduler()
+    }
+
+    pub fn pd_scheduler(&self) -> Scheduler<PdTask<EK>> {
+        self.system.pd_scheduler()
     }
 
     /// Gets a transmission end of a channel which is used to send `Msg` to the
@@ -425,7 +429,7 @@ where
                     }
                 },
                 // TODO: should we clean region for other errors too?
-                Err(e) => error!(?e; "bootstrap cluster"; "cluster_id" => self.cluster_id,),
+                Err(e) => warn!("bootstrap cluster"; "cluster_id" => self.cluster_id, "err" => ?e),
             }
             retry += 1;
             thread::sleep(CHECK_CLUSTER_BOOTSTRAPPED_RETRY_INTERVAL);
@@ -457,14 +461,14 @@ where
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<EK>,
         importer: Arc<SstImporter<EK>>,
-        split_check_scheduler: Scheduler<SplitCheckTask>,
+        split_check_scheduler: Scheduler<SplitCheckTask<EK>>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         disk_check_runner: DiskCheckRunner,
         grpc_service_mgr: GrpcServiceManager,
-        safe_point: Arc<AtomicU64>,
+        gc_safe_point: Arc<AtomicU64>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -500,7 +504,7 @@ where
             causal_ts_provider,
             disk_check_runner,
             grpc_service_mgr,
-            safe_point,
+            gc_safe_point,
         )?;
         Ok(())
     }

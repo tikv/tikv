@@ -5,21 +5,21 @@ use collections::HashMap;
 use txn_types::{Key, Lock, TimeStamp};
 
 use crate::storage::{
+    ProcessResult, Snapshot,
     kv::WriteData,
     lock_manager::LockManager,
     mvcc::{
-        Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader,
-        MAX_TXN_WRITE_SIZE,
+        Error as MvccError, ErrorInner as MvccErrorInner, MAX_TXN_WRITE_SIZE, MvccTxn,
+        SnapshotReader,
     },
     txn::{
-        cleanup,
+        Error, ErrorInner, Result, cleanup,
         commands::{
             Command, CommandExt, ReaderWithStats, ReleasedLocks, ResolveLockReadPhase,
             ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
         },
-        commit, Error, ErrorInner, Result,
+        commit,
     },
-    ProcessResult, Snapshot,
 };
 
 command! {
@@ -80,13 +80,13 @@ impl CommandExt for ResolveLock {
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
     fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
-        let (ctx, txn_status, mut key_locks) = (self.ctx, self.txn_status, self.key_locks);
+        let (ctx, txn_status, key_locks) = (self.ctx, self.txn_status, self.key_locks);
 
         let mut txn = MvccTxn::new(TimeStamp::zero(), context.concurrency_manager);
-
-        let mut snapshot_reader = SnapshotReader::new_with_ctx(TimeStamp::zero(), snapshot, &ctx);
-        snapshot_reader.setup_with_hint_items(&mut key_locks, |k| &k.0);
-        let mut reader = ReaderWithStats::new(snapshot_reader, context.statistics);
+        let mut reader = ReaderWithStats::new(
+            SnapshotReader::new_with_ctx(TimeStamp::zero(), snapshot, &ctx),
+            context.statistics,
+        );
 
         let mut scan_key = self.scan_key.take();
         let rows = key_locks.len();
@@ -111,7 +111,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
                 // Continue to resolve locks if the not found committed locks are pessimistic
                 // type. They could be left if the transaction is finally committed and
                 // pessimistic conflict retry happens during execution.
-                match commit(&mut txn, &mut reader, current_key.clone(), commit_ts) {
+                match commit(&mut txn, &mut reader, current_key.clone(), commit_ts, None) {
                     Ok(res) => {
                         known_txn_status.push((current_lock.ts, commit_ts));
                         res

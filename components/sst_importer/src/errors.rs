@@ -1,7 +1,11 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    error::Error as StdError, io::Error as IoError, num::ParseIntError, path::PathBuf, result,
+    error::{Error as StdError, Report},
+    io::Error as IoError,
+    num::ParseIntError,
+    path::PathBuf,
+    result,
     time::Duration,
 };
 
@@ -77,7 +81,7 @@ pub enum Error {
     #[error("{0}")]
     Engine(Box<dyn StdError + Send + Sync + 'static>),
 
-    #[error("Cannot read {url}/{name} into {}: {err}", local_path.display())]
+    #[error("Cannot read {url}/{name} into {}: {}", local_path.display(), Report::new(err))]
     CannotReadExternalStorage {
         url: String,
         name: String,
@@ -139,6 +143,12 @@ pub enum Error {
 
     #[error("TiKV disk space is not enough.")]
     DiskSpaceNotEnough,
+
+    #[error("mismatch request type")]
+    MisMatchRequest,
+
+    #[error("a general error wrapper")]
+    ErrorWrapper(String),
 }
 
 impl Error {
@@ -226,6 +236,8 @@ impl ErrorCodeExt for Error {
             Error::RequestTooNew(_) => error_code::sst_importer::REQUEST_TOO_NEW,
             Error::RequestTooOld(_) => error_code::sst_importer::REQUEST_TOO_OLD,
             Error::DiskSpaceNotEnough => error_code::sst_importer::DISK_SPACE_NOT_ENOUGH,
+            Error::MisMatchRequest => error_code::sst_importer::MISMATCH_REQUEST,
+            Error::ErrorWrapper(_) => error_code::sst_importer::ERROR_WRAPPER,
         }
     }
 }

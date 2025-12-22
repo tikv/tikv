@@ -4,12 +4,12 @@ use collections::HashMap;
 use tikv_util::sys::thread::{self, Pid};
 
 use crate::{
+    RawRecords,
     metrics::STAT_TASK_COUNT,
     recorder::{
-        localstorage::{LocalStorage, SharedTagInfos},
         SubRecorder,
+        localstorage::{LocalStorage, SharedTagInfos},
     },
-    RawRecords,
 };
 
 /// An implementation of [SubRecorder] for collecting cpu statistics.
@@ -130,7 +130,7 @@ mod tests {
             region_id: 0,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: b"abc".to_vec(),
+            extra_attachment: Arc::new(b"abc".to_vec()),
         });
         let store = LocalStorage {
             attached_tag: SharedTagInfos::new(info),

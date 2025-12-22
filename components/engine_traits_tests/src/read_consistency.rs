@@ -2,7 +2,7 @@
 
 //! Testing iterator and snapshot behavior in the presence of intermixed writes
 
-use engine_traits::{Iterable, Iterator, KvEngine, Peekable, SyncMutable, CF_DEFAULT};
+use engine_traits::{CF_DEFAULT, Iterable, Iterator, KvEngine, Peekable, SyncMutable};
 
 use super::default_engine;
 

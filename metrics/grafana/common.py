@@ -20,6 +20,7 @@ from grafanalib.core import (
     SeriesOverride,
     Stat,
     StatValueMappings,
+    Table,
     Target,
     Template,
     TimeSeries,
@@ -1180,3 +1181,84 @@ def heatmap_panel_graph_panel_histogram_quantile_pairs(
             hide_avg=hide_avg,
         ),
     ]
+
+
+DEFAULT_TABLE_OVERRIDES = [
+    {
+        "matcher": {"id": "byName", "options": "Field"},
+        "properties": [
+            {"id": "displayName", "value": "Option"},
+            {"id": "custom.align", "value": None},
+        ],
+    },
+    {
+        "matcher": {"id": "byName", "options": "Last (not null)"},
+        "properties": [{"id": "displayName", "value": "Value"}],
+    },
+]
+DEFAULT_TABLE_TRANSFORMATIONS = [
+    {
+        "id": "organize",
+        "options": {
+            "excludeByName": {
+                "Time": True,
+                "__name__": True,
+                "job": True,
+            },
+            "indexByName": {},
+            "renameByName": {
+                "Time": "",
+                "Value #A": "Value",
+                "name": "Option",
+                "job": "",
+            },
+        },
+    }
+]
+
+
+def table_panel(
+    title: str,
+    targets: list[Target],
+    description=None,
+    dataSource=DATASOURCE,
+    overrides=DEFAULT_TABLE_OVERRIDES,
+    columns=None,
+    filterable=False,
+    show_header=True,
+    transformations=DEFAULT_TABLE_TRANSFORMATIONS,
+) -> Panel:
+    """
+    Create a table panel for displaying configuration data in tabular format.
+
+    Args:
+        title: Panel title
+        targets: List of targets to query data
+        description: Panel description
+        data_source: Data source to use
+        overrides: Field overrides for customizing display
+        columns: Column configuration
+        filterable: Whether to allow column filtering
+        show_header: Whether to show table header
+        transformations: Grafana transformations for the panel
+
+    Returns:
+        Table panel instance
+    """
+    for target in targets:
+        target.format = "table"
+        target.instant = True
+
+    table_args = {
+        "title": title,
+        "targets": targets,
+        "description": description,
+        "dataSource": dataSource,
+        "overrides": overrides,
+        "columns": columns,
+        "filterable": filterable,
+        "showHeader": show_header,
+        "transformations": transformations,
+    }
+
+    return Table(**table_args)

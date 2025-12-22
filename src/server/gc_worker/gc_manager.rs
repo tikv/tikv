@@ -3,8 +3,9 @@
 use std::{
     cmp::Ordering,
     sync::{
+        Arc, Condvar, Mutex,
         atomic::{AtomicU64, Ordering as AtomicOrdering},
-        mpsc, Arc, Condvar, Mutex,
+        mpsc,
     },
     thread::{self, Builder as ThreadBuilder, JoinHandle},
     time::Duration,
@@ -18,10 +19,10 @@ use tikv_util::{store::find_peer, time::Instant, worker::Scheduler};
 use txn_types::{Key, TimeStamp};
 
 use super::{
+    Error, ErrorInner, Result,
     compaction_filter::is_compaction_filter_allowed,
     config::GcWorkerConfigManager,
-    gc_worker::{schedule_gc, GcSafePointProvider, GcTask},
-    Error, ErrorInner, Result,
+    gc_worker::{GcSafePointProvider, GcTask, schedule_gc},
 };
 use crate::{server::metrics::*, storage::Callback, tikv_util::sys::thread::StdThreadBuildWrapper};
 
@@ -637,7 +638,10 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
         );
 
         if let Err(e) = res {
-            error!(?e; "gc_worker: failed to get next region information");
+            warn!(
+                "gc_worker: failed to get next region information";
+                "err" => ?e
+            );
             return (None, None);
         };
 
@@ -672,7 +676,7 @@ mod tests {
     use std::{
         collections::BTreeMap,
         mem,
-        sync::mpsc::{channel, Receiver, Sender},
+        sync::mpsc::{Receiver, Sender, channel},
     };
 
     use engine_rocks::RocksEngine;

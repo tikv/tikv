@@ -2,13 +2,13 @@
 
 use std::{
     path::{Path, PathBuf},
-    sync::{atomic::AtomicU64, Arc, Mutex, RwLock},
+    sync::{Arc, Mutex, RwLock, atomic::AtomicU64},
 };
 
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::{RocksEngine, RocksSnapshot, util};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{Engines, MiscExt, Peekable};
 use health_controller::HealthController;
@@ -19,17 +19,18 @@ use kvproto::{
     raft_serverpb::{self, RaftMessage},
 };
 use protobuf::Message;
-use raft::{eraftpb::MessageType, SnapshotStatus};
+use raft::{SnapshotStatus, eraftpb::MessageType};
 use raftstore::{
-    coprocessor::{config::SplitCheckConfigManager, CoprocessorHost},
+    Result,
+    coprocessor::{CoprocessorHost, config::SplitCheckConfigManager},
     errors::Error as RaftError,
     router::{LocalReadRouter, RaftStoreRouter, ReadContext, ServerRaftStoreRouter},
     store::{
+        SnapManagerBuilder,
         config::RaftstoreConfigManager,
-        fsm::{store::StoreMeta, ApplyRouter, RaftBatchSystem, RaftRouter},
-        SnapManagerBuilder, *,
+        fsm::{ApplyRouter, RaftBatchSystem, RaftRouter, store::StoreMeta},
+        *,
     },
-    Result,
 };
 use resource_control::ResourceGroupManager;
 use resource_metering::CollectorRegHandle;
@@ -39,7 +40,7 @@ use test_pd_client::TestPdClient;
 use tikv::{
     config::{ConfigController, Module},
     import::SstImporter,
-    server::{raftkv::ReplicaReadLockChecker, MultiRaftServer, Result as ServerResult},
+    server::{MultiRaftServer, Result as ServerResult, raftkv::ReplicaReadLockChecker},
 };
 use tikv_util::{
     config::VersionTrack,
@@ -240,6 +241,7 @@ impl Simulator for NodeCluster {
         router: RaftRouter<RocksEngine, RaftTestEngine>,
         system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
         _resource_manager: &Option<Arc<ResourceGroupManager>>,
+        _force_partition_mgr: &ForcePartitionRangeManager,
     ) -> ServerResult<u64> {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
         let pd_worker = LazyWorker::new("test-pd-worker");
@@ -299,7 +301,29 @@ impl Simulator for NodeCluster {
         self.snap_mgrs.insert(node_id, snap_mgr.clone());
 
         // Create coprocessor.
+        let enable_region_stats_mgr_cb: Arc<dyn Fn() -> bool + Send + Sync> =
+            if cfg.in_memory_engine.enable {
+                Arc::new(|| true)
+            } else {
+                Arc::new(|| false)
+            };
         let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
+
+        // In-memory engine
+        let mut in_memory_engine_config = cfg.in_memory_engine.clone();
+        in_memory_engine_config.expected_region_size = cfg.coprocessor.region_split_size();
+        let in_memory_engine_config = Arc::new(VersionTrack::new(in_memory_engine_config));
+        let in_memory_engine_config_clone = in_memory_engine_config.clone();
+
+        let region_info_accessor = raftstore::RegionInfoAccessor::new(
+            &mut coprocessor_host,
+            enable_region_stats_mgr_cb,
+            Box::new(move || {
+                in_memory_engine_config_clone
+                    .value()
+                    .mvcc_amplification_threshold
+            }),
+        );
 
         if let Some(f) = self.post_create_coprocessor_host.as_ref() {
             f(node_id, &mut coprocessor_host);
@@ -325,8 +349,12 @@ impl Simulator for NodeCluster {
         );
         let cfg_controller = ConfigController::new(cfg.tikv.clone());
 
-        let split_check_runner =
-            SplitCheckRunner::new(engines.kv.clone(), router.clone(), coprocessor_host.clone());
+        let split_check_runner = SplitCheckRunner::new(
+            engines.kv.clone(),
+            router.clone(),
+            coprocessor_host.clone(),
+            Some(Arc::new(region_info_accessor)),
+        );
         let split_scheduler = bg_worker.start("test-split-check", split_check_runner);
         cfg_controller.register(
             Module::Coprocessor,
@@ -334,21 +362,21 @@ impl Simulator for NodeCluster {
         );
         // Spawn a task to update the disk status periodically.
         {
-            let engines = engines.clone();
             let data_dir = PathBuf::from(engines.kv.path());
+            let rocks_engine = Arc::downgrade(engines.kv.as_inner());
             let snap_mgr = snap_mgr.clone();
             bg_worker.spawn_interval_task(std::time::Duration::from_millis(1000), move || {
-                let snap_size = snap_mgr.get_total_snap_size().unwrap();
-                let kv_size = engines
-                    .kv
-                    .get_engine_used_size()
-                    .expect("get kv engine size");
-                let used_size = snap_size + kv_size;
-                let (capacity, available) = disk::get_disk_space_stats(&data_dir).unwrap();
+                if let Some(rocks_engine) = rocks_engine.upgrade() {
+                    let snap_size = snap_mgr.get_total_snap_size().unwrap();
+                    let kv_size = util::get_engine_cfs_used_size(rocks_engine.as_ref())
+                        .expect("get kv engine size");
+                    let used_size = snap_size + kv_size;
+                    let (capacity, available) = disk::get_disk_space_stats(&data_dir).unwrap();
 
-                disk::set_disk_capacity(capacity);
-                disk::set_disk_used_size(used_size);
-                disk::set_disk_available_size(std::cmp::min(available, capacity - used_size));
+                    disk::set_disk_capacity(capacity);
+                    disk::set_disk_used_size(used_size);
+                    disk::set_disk_available_size(std::cmp::min(available, capacity - used_size));
+                }
             });
         }
 

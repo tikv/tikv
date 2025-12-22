@@ -7,9 +7,9 @@ use futures::stream::TryStreamExt;
 use tikv_util::{info, time::Instant, warn};
 
 use crate::{
-    compaction::META_OUT_REL,
-    execute::hooking::{BeforeStartCtx, CId, ExecHooks, SubcompactionStartCtx},
     ErrorKind, OtherErrExt, Result, TraceResultExt,
+    compaction::META_OUT_REL,
+    execute::hooking::{BeforeStartCtx, CId, ExecHooks, SkipReason, SubcompactionStartCtx},
 };
 
 #[derive(Default)]
@@ -75,7 +75,7 @@ impl ExecHooks for Checkpoint {
         if self.loaded.contains(&hash) {
             info!("Checkpoint: skipping a subcompaction because we have found it."; 
                 "subc" => %cx.subc, "hash" => %format_args!("{:16X}", hash));
-            cx.skip();
+            cx.skip(SkipReason::AlreadyDone);
         }
     }
 }

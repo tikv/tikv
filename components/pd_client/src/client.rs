@@ -3,21 +3,20 @@
 use std::{
     fmt,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
     time::Duration,
-    u64,
 };
 
 use futures::{
+    TryStreamExt,
     channel::mpsc,
     compat::{Compat, Future01CompatExt},
     executor::block_on,
     future::{self, BoxFuture, FutureExt, TryFlattenStream, TryFutureExt},
     sink::SinkExt,
     stream::{ErrInto, StreamExt},
-    TryStreamExt,
 };
 use grpcio::{EnvBuilder, Environment, WriteFlags};
 use kvproto::{
@@ -31,18 +30,18 @@ use kvproto::{
 };
 use security::SecurityManager;
 use tikv_util::{
-    box_err, debug, error, info, thd_name, time::Instant, timer::GLOBAL_TIMER_HANDLE, warn, Either,
-    HandyRwLock,
+    Either, HandyRwLock, box_err, debug, error, info, thd_name, time::Instant,
+    timer::GLOBAL_TIMER_HANDLE, warn,
 };
 use txn_types::TimeStamp;
-use yatp::{task::future::TaskCell, ThreadPool};
+use yatp::{ThreadPool, task::future::TaskCell};
 
 use super::{
+    BucketStat, Config, Error, FeatureGate, PdClient, PdFuture, REQUEST_TIMEOUT, RegionInfo,
+    RegionStat, Result, UnixSecs,
     meta_storage::{Delete, Get, MetaStorageClient, Put, Watch},
     metrics::*,
-    util::{call_option_inner, check_resp_header, sync_request, Client, PdConnector},
-    BucketStat, Config, Error, FeatureGate, PdClient, PdFuture, RegionInfo, RegionStat, Result,
-    UnixSecs, REQUEST_TIMEOUT,
+    util::{Client, PdConnector, call_option_inner, check_resp_header, sync_request},
 };
 
 pub const CQ_COUNT: usize = 1;
@@ -81,7 +80,7 @@ impl RpcClient {
 
         // -1 means the max.
         let retries = match cfg.retry_max_count {
-            -1 => std::isize::MAX,
+            -1 => isize::MAX,
             v => v.saturating_add(1),
         };
         let monitor = Arc::new(
@@ -652,7 +651,7 @@ impl PdClient for RpcClient {
                             info!("cancel region heartbeat sender");
                         }
                         Err(e) => {
-                            error!(?e; "failed to send heartbeat");
+                            warn!("failed to send heartbeat"; "err" => ?e);
                         }
                     };
                 });
@@ -719,6 +718,7 @@ impl PdClient for RpcClient {
         &self,
         region: metapb::Region,
         count: usize,
+        reason: pdpb::SplitReason,
     ) -> PdFuture<pdpb::AskBatchSplitResponse> {
         let timer = Instant::now();
 
@@ -726,6 +726,7 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         req.set_region(region);
         req.set_split_count(count as u32);
+        req.set_reason(reason);
 
         let executor = move |client: &Client, req: pdpb::AskBatchSplitRequest| {
             let handler = {

@@ -207,7 +207,7 @@ pub async fn with_resource_limiter<F: Future>(
 
 #[cfg(all(test, feature = "failpoints"))]
 mod tests {
-    use std::sync::mpsc::{channel, Sender};
+    use std::sync::mpsc::{Sender, channel};
 
     use tikv_util::yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder};
 

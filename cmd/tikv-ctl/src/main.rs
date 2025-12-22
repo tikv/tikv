@@ -1,6 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![feature(lazy_cell)]
 #![feature(let_chains)]
 
 #[macro_use]
@@ -16,19 +15,19 @@ use std::{
     sync::{Arc, Mutex, RwLock},
     thread,
     time::Duration,
-    u64,
 };
 
 use collections::HashMap;
 use compact_log_backup::{
+    TraceResultExt,
     exec_hooks::{self as compact_log_hooks, skip_small_compaction::SkipSmallCompaction},
-    execute as compact_log, TraceResultExt,
+    execute as compact_log,
 };
 use crypto::fips;
 use encryption_export::{
-    create_backend, data_key_manager_from_config, DataKeyManager, DecrypterReader, Iv,
+    DataKeyManager, DecrypterReader, Iv, create_backend, data_key_manager_from_config,
 };
-use engine_rocks::{get_env, util::new_engine_opt, RocksEngine};
+use engine_rocks::{RocksEngine, get_env, util::new_engine_opt};
 use engine_traits::Peekable;
 use file_system::calc_crc32;
 use futures::{executor::block_on, future::try_join_all};
@@ -49,16 +48,16 @@ use raft_log_engine::ManagedFileSystem;
 use raftstore::store::util::build_key_range;
 use regex::Regex;
 use security::{SecurityConfig, SecurityManager};
-use structopt::{clap::ErrorKind, StructOpt};
+use structopt::{StructOpt, clap::ErrorKind};
 use tempfile::TempDir;
 use tikv::{
     config::TikvConfig,
-    server::{debug::BottommostLevelCompaction, KvEngineFactoryBuilder},
+    server::{KvEngineFactoryBuilder, debug::BottommostLevelCompaction},
     storage::config::EngineType,
 };
 use tikv_util::{
     escape,
-    logger::{get_log_level, Level},
+    logger::{Level, get_log_level},
     run_and_wait_child_process,
     sys::thread::StdThreadBuildWrapper,
     unescape, warn,
@@ -407,6 +406,8 @@ fn main() {
             name,
             force_regenerate,
             minimal_compaction_size,
+            prefetch_running_count,
+            prefetch_buffer_count,
         } => {
             let tmp_engine =
                 TemporaryRocks::new(&cfg).expect("failed to create temp engine for writing SSTs.");
@@ -433,6 +434,8 @@ fn main() {
             let ccfg = compact_log::ExecutionConfig {
                 from_ts,
                 until_ts,
+                prefetch_running_count,
+                prefetch_buffer_count,
                 compression,
                 compression_level,
             };
@@ -1208,8 +1211,10 @@ impl TemporaryRocks {
         let tmp = TempDir::new().map_err(|v| format!("failed to create tmp dir: {}", v))?;
         let opt = build_rocks_opts(cfg);
         let cf_opts = cfg.rocksdb.build_cf_opts(
-            &cfg.rocksdb
-                .build_cf_resources(cfg.storage.block_cache.build_shared_cache()),
+            &cfg.rocksdb.build_cf_resources(
+                cfg.storage.block_cache.build_shared_cache(),
+                Default::default(),
+            ),
             None,
             cfg.storage.api_version(),
             None,
@@ -1292,6 +1297,9 @@ fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, 
     stderr_buf.read_to_end(&mut buffer).unwrap();
     let corruptions = unsafe { String::from_utf8_unchecked(buffer) };
 
+    let r = Regex::new(r"/\w*\.sst").unwrap();
+    let column_r = Regex::new(r"--------------- (.*) --------------\n(.*)").unwrap();
+    let sst_stat_r = Regex::new(r".*\n\d+:\d+\[\d+ .. \d+\]\['(\w*)' seq:\d+, type:\d+ .. '(\w*)' seq:\d+, type:\d+\] at level \d+").unwrap();
     for line in corruptions.lines() {
         println!("--------------------------------------------------------");
         // The corruption format may like this:
@@ -1300,7 +1308,6 @@ fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, 
         // ```
         println!("corruption info:\n{}", line);
 
-        let r = Regex::new(r"/\w*\.sst").unwrap();
         let sst_file_number = match r.captures(line) {
             None => {
                 println!("skip bad line format");
@@ -1361,15 +1368,13 @@ fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, 
         // --------------- Column family "write"  (ID 2) --------------
         // 63:132906243[3555338 .. 3555338]['7A311B40EFCC2CB4C5911ECF3937D728DED26AE53FA5E61BE04F23F2BE54EACC73' seq:3555338, type:1 .. '7A313030302E25CD5F57252E' seq:3555338, type:1] at level 0
         // ```
-        let column_r = Regex::new(r"--------------- (.*) --------------\n(.*)").unwrap();
         if let Some(m) = column_r.captures(&output) {
             println!(
                 "{} for {}",
                 m.get(2).unwrap().as_str(),
                 m.get(1).unwrap().as_str()
             );
-            let r = Regex::new(r".*\n\d+:\d+\[\d+ .. \d+\]\['(\w*)' seq:\d+, type:\d+ .. '(\w*)' seq:\d+, type:\d+\] at level \d+").unwrap();
-            let matches = match r.captures(&output) {
+            let matches = match sst_stat_r.captures(&output) {
                 None => {
                     println!("sst start key format is not correct: {}", output);
                     continue;
@@ -1487,10 +1492,11 @@ fn read_cluster_id(config: &TikvConfig) -> Result<u64, String> {
             .map(Arc::new);
     let env = get_env(key_manager.clone(), None /* io_rate_limiter */).unwrap();
     let cache = config.storage.block_cache.build_shared_cache();
-    let kv_engine = KvEngineFactoryBuilder::new(env, config, cache, key_manager)
-        .build()
-        .create_shared_db(&config.storage.data_dir)
-        .map_err(|e| format!("create_shared_db fail: {}", e))?;
+    let kv_engine =
+        KvEngineFactoryBuilder::new(env, config, cache, key_manager, Default::default())
+            .build()
+            .create_shared_db(&config.storage.data_dir)
+            .map_err(|e| format!("create_shared_db fail: {}", e))?;
     let ident = kv_engine
         .get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
         .unwrap()

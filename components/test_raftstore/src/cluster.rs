@@ -4,7 +4,7 @@ use std::{
     collections::hash_map::Entry as MapEntry,
     error::Error as StdError,
     result,
-    sync::{mpsc, Arc, Mutex, RwLock},
+    sync::{Arc, Mutex, RwLock, mpsc},
     thread,
     time::Duration,
 };
@@ -15,11 +15,11 @@ use encryption_export::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    CompactExt, Engines, Iterable, ManualCompactionOptions, MiscExt, Mutable, Peekable,
-    RaftEngineReadOnly, SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_RAFT,
+    CF_DEFAULT, CF_RAFT, CompactExt, Engines, Iterable, ManualCompactionOptions, MiscExt, Mutable,
+    Peekable, RaftEngineReadOnly, SyncMutable, WriteBatch, WriteBatchExt,
 };
 use file_system::IoRateLimiter;
-use futures::{self, channel::oneshot, executor::block_on, future::BoxFuture, StreamExt};
+use futures::{self, StreamExt, channel::oneshot, executor::block_on, future::BoxFuture};
 use kvproto::{
     errorpb::Error as PbError,
     kvrpcpb::{ApiVersion, Context, DiskFullOpt},
@@ -34,27 +34,26 @@ use kvproto::{
 use pd_client::{BucketStat, PdClient};
 use raft::eraftpb::ConfChangeType;
 use raftstore::{
+    Error, Result,
     router::RaftStoreRouter,
     store::{
         fsm::{
-            create_raft_batch_system,
-            store::{StoreMeta, PENDING_MSG_CAP},
-            ApplyRouter, RaftBatchSystem, RaftRouter,
+            ApplyRouter, RaftBatchSystem, RaftRouter, create_raft_batch_system,
+            store::{PENDING_MSG_CAP, StoreMeta},
         },
         transport::CasualRouter,
         *,
     },
-    Error, Result,
 };
 use resource_control::ResourceGroupManager;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use tikv::{config::TikvConfig, server::Result as ServerResult};
 use tikv_util::{
+    HandyRwLock,
     thread_group::GroupProperties,
     time::{Instant, ThreadReadId},
     worker::LazyWorker,
-    HandyRwLock,
 };
 use txn_types::WriteBatchFlags;
 
@@ -81,6 +80,7 @@ pub trait Simulator {
         router: RaftRouter<RocksEngine, RaftTestEngine>,
         system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
         resource_manager: &Option<Arc<ResourceGroupManager>>,
+        force_partition_mgr: &ForcePartitionRangeManager,
     ) -> ServerResult<u64>;
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
@@ -177,6 +177,7 @@ pub struct Cluster<T: Simulator> {
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
     resource_manager: Option<Arc<ResourceGroupManager>>,
+    pub force_partition_mgr: ForcePartitionRangeManager,
 }
 
 impl<T: Simulator> Cluster<T> {
@@ -210,6 +211,7 @@ impl<T: Simulator> Cluster<T> {
             resource_manager: Some(Arc::new(ResourceGroupManager::default())),
             kv_statistics: vec![],
             raft_statistics: vec![],
+            force_partition_mgr: Default::default(),
         }
     }
 
@@ -251,13 +253,47 @@ impl<T: Simulator> Cluster<T> {
 
     fn create_engine(&mut self, router: Option<RaftRouter<RocksEngine, RaftTestEngine>>) {
         let (engines, key_manager, dir, sst_worker, kv_statistics, raft_statistics) =
-            create_test_engine(router, self.io_rate_limiter.clone(), &self.cfg);
+            create_test_engine(
+                router,
+                self.io_rate_limiter.clone(),
+                &self.cfg,
+                &self.force_partition_mgr,
+            );
         self.dbs.push(engines);
         self.key_managers.push(key_manager);
         self.paths.push(dir);
         self.sst_workers.push(sst_worker);
         self.kv_statistics.push(kv_statistics);
         self.raft_statistics.push(raft_statistics);
+    }
+
+    pub fn restart_engine(&mut self, node_id: u64) {
+        let idx = node_id as usize - 1;
+        let path = self.paths.remove(idx);
+        {
+            self.dbs.remove(idx);
+            self.key_managers.remove(idx);
+            self.sst_workers.remove(idx);
+            self.kv_statistics.remove(idx);
+            self.raft_statistics.remove(idx);
+            self.engines.remove(&node_id);
+        }
+        let (engines, key_manager, dir, sst_worker, kv_statistics, raft_statistics) =
+            start_test_engine(
+                None,
+                self.io_rate_limiter.clone(),
+                &self.cfg,
+                &self.force_partition_mgr,
+                path,
+            );
+        self.dbs.insert(idx, engines);
+        self.key_managers.insert(idx, key_manager);
+        self.paths.insert(idx, dir);
+        self.sst_workers.insert(idx, sst_worker);
+        self.kv_statistics.insert(idx, kv_statistics);
+        self.raft_statistics.insert(idx, raft_statistics);
+        self.engines
+            .insert(node_id, self.dbs.last().unwrap().clone());
     }
 
     pub fn create_engines(&mut self) {
@@ -302,6 +338,7 @@ impl<T: Simulator> Cluster<T> {
                 router,
                 system,
                 &self.resource_manager,
+                &self.force_partition_mgr,
             )?;
             self.group_props.insert(node_id, props);
             self.engines.insert(node_id, engines);
@@ -388,6 +425,7 @@ impl<T: Simulator> Cluster<T> {
             router,
             system,
             &self.resource_manager,
+            &self.force_partition_mgr,
         )?;
         debug!("node {} started", node_id);
         Ok(())

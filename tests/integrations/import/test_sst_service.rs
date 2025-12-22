@@ -1,6 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::time::Duration;
+use std::{path::Path, time::Duration};
 
 use futures::{executor::block_on, stream::StreamExt};
 use kvproto::{import_sstpb::*, kvrpcpb::Context, tikvpb::*};
@@ -10,7 +10,7 @@ use test_sst_importer::*;
 use tikv::config::TikvConfig;
 use tikv_util::{
     config::ReadableSize,
-    sys::disk::{set_disk_status, DiskUsage},
+    sys::disk::{DiskUsage, set_disk_status},
 };
 
 use super::util::*;
@@ -197,6 +197,14 @@ fn test_switch_mode_v2() {
     let mut cfg = TikvConfig::default();
     cfg.server.grpc_concurrency = 1;
     cfg.rocksdb.writecf.disable_auto_compactions = true;
+    // `ingest_maybe_slowdown_writes` uses `stop_writes_trigger` to check if ingest
+    // may cause a write stall. We also set `slowdown_writes_trigger` because
+    // RocksDB ignores `stop_writes_trigger` when it is smaller than
+    // `slowdown_writes_trigger`
+    cfg.rocksdb.defaultcf.level0_slowdown_writes_trigger = 4;
+    cfg.rocksdb.writecf.level0_slowdown_writes_trigger = 4;
+    cfg.rocksdb.defaultcf.level0_stop_writes_trigger = Some(4);
+    cfg.rocksdb.writecf.level0_stop_writes_trigger = Some(4);
     cfg.raft_store.right_derive_when_split = true;
     // cfg.rocksdb.writecf.level0_slowdown_writes_trigger = Some(2);
     let (mut cluster, mut ctx, _tikv, import) = open_cluster_and_tikv_import_client_v2(Some(cfg));
@@ -679,4 +687,115 @@ fn test_suspend_import() {
     let sst_range = (20, 30);
     let ssts = write(sst_range).unwrap();
     multi_ingest(ssts.get_metas()).unwrap();
+}
+
+#[test]
+fn test_concurrent_ingest_admission_control() {
+    let mut cfg = TikvConfig::default();
+    cfg.server.grpc_concurrency = 1;
+    // `ingest_maybe_slowdown_writes` uses `stop_writes_trigger` to check if ingest
+    // may cause a write stall. We also set `slowdown_writes_trigger` because
+    // RocksDB ignores `stop_writes_trigger` when it is smaller than
+    // `slowdown_writes_trigger`
+    cfg.rocksdb.defaultcf.level0_slowdown_writes_trigger = 4;
+    cfg.rocksdb.writecf.level0_slowdown_writes_trigger = 4;
+    cfg.rocksdb.defaultcf.level0_stop_writes_trigger = Some(4);
+    cfg.rocksdb.writecf.level0_stop_writes_trigger = Some(4);
+    let (_cluster, ctx, _tikv, import) = open_cluster_and_tikv_import_client(Some(cfg));
+    let temp_dir = Builder::new().prefix("test_ingest_sst").tempdir().unwrap();
+    let sst_path = temp_dir.path().join("test.sst");
+    let mut metas = Vec::new();
+
+    // Upload multiple SST files targeting the write CF
+    for i in 0..10 {
+        let sst_range = (i * 10, (i + 1) * 10);
+        let (mut meta, data) = gen_sst_file(sst_path.clone(), sst_range);
+        meta.set_region_id(ctx.get_region_id());
+        meta.set_region_epoch(ctx.get_region_epoch().clone());
+        meta.set_cf_name("write".to_string());
+        send_upload_sst(&import, &meta, &data).unwrap();
+        metas.push(meta);
+    }
+
+    // Ingest in parallel. The admission control should limit the number of
+    // ingests that are allowed to proceed.
+    let handles: Vec<_> = metas
+        .into_iter()
+        .map(|meta| {
+            let import = import.clone();
+            let ctx = ctx.clone();
+            std::thread::spawn(move || ingest_sst(&import, ctx, meta))
+        })
+        .collect();
+
+    let mut success = 0;
+    let mut errors = Vec::new();
+    for handle in handles {
+        match handle.join().unwrap() {
+            ref resp if !resp.has_error() => success += 1,
+            resp => errors.push(resp.get_error().get_message().to_string()),
+        }
+    }
+    // With the test config (slowdown_trigger: 4, compaction_trigger: 4), we
+    // expect 4 ingests to succeed.
+    assert_eq!(success, 4);
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("too many sst files are ingesting"))
+    );
+}
+
+#[track_caller]
+fn check_sst_num(dir: &Path, expected_count: usize) {
+    let mut real_count = 0;
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_name().to_str().unwrap().ends_with(".sst") {
+            real_count += 1;
+        }
+    }
+    assert_eq!(
+        real_count, expected_count,
+        "expected: {}, got: {}",
+        expected_count, real_count
+    );
+}
+
+#[test]
+fn test_force_partition_range() {
+    let (cluster, ctx, _tikv, import) = new_cluster_and_tikv_import_client();
+    let temp_dir = Builder::new()
+        .prefix("test_force_partition_range")
+        .tempdir()
+        .unwrap();
+    let sst_path = temp_dir.path().join("test.sst");
+
+    // ingest a sst with a big range
+    let (mut meta, data) =
+        gen_sst_file_with_tidb_kvs(sst_path.clone(), &[(b"a", b"a"), (b"z", b"z")], None);
+    meta.set_region_id(ctx.get_region_id());
+    meta.set_region_epoch(ctx.get_region_epoch().clone());
+    meta.set_cf_name("write".to_string());
+    send_upload_sst(&import, &meta, &data).unwrap();
+    ingest_sst(&import, ctx, meta);
+
+    let db_path = cluster.paths[0].path().join("db");
+    println!("{:?}", &db_path);
+    check_sst_num(&db_path, 1);
+
+    let mut partition_range_req = AddPartitionRangeRequest::default();
+    let mut range = Range::default();
+    // set a smaller force partition range to trigger compact.
+    range.set_start(b"b".to_vec());
+    range.set_end(b"c".to_vec());
+    partition_range_req.set_range(range);
+    partition_range_req.set_ttl_seconds(3600);
+    import
+        .add_force_partition_range(&partition_range_req)
+        .unwrap();
+
+    // force partition should trigger a manual compact and split the original sst to
+    // 2 sst.
+    check_sst_num(&db_path, 2);
 }

@@ -1,9 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{borrow::ToOwned, str, string::ToString, sync::LazyLock, u64};
+use std::{borrow::ToOwned, str, string::ToString, sync::LazyLock};
 
-use clap::{crate_authors, AppSettings};
-use engine_traits::{SstCompressionType, CF_DEFAULT};
+use clap::{AppSettings, crate_authors};
+use engine_traits::{CF_DEFAULT, SstCompressionType};
 use raft_engine::ReadableSize;
 use structopt::StructOpt;
 
@@ -705,6 +705,20 @@ pub enum Cmd {
             )
         )]
         minimal_compaction_size: ReadableSize,
+
+        #[structopt(
+            long,
+            default_value = "128",
+            help("specify the maximum count of running tasks to download a metadata")
+        )]
+        prefetch_running_count: u64,
+
+        #[structopt(
+            long,
+            default_value = "1024",
+            help("specify the maximum count of spawning tasks to download a metadata")
+        )]
+        prefetch_buffer_count: u64,
     },
     /// Get the state of a region's RegionReadProgress.
     GetRegionReadProgress {

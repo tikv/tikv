@@ -3,7 +3,7 @@
 // #[PerformanceCriticalPath]
 #[cfg(any(test, feature = "testexport"))]
 use std::sync::Arc;
-use std::{borrow::Cow, fmt};
+use std::{borrow::Cow, fmt, time::Duration};
 
 use collections::HashSet;
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
@@ -23,16 +23,17 @@ use kvproto::{
 use pd_client::BucketMeta;
 use raft::SnapshotStatus;
 use resource_control::ResourceMetered;
-use smallvec::{smallvec, SmallVec};
+use smallvec::{SmallVec, smallvec};
 use strum::{EnumCount, EnumVariantNames};
 use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
-use tracker::{get_tls_tracker_token, TrackerToken};
+use tracker::{TrackerToken, get_tls_tracker_token};
 
 use super::{
-    local_metrics::TimeTracker, region_meta::RegionMeta,
-    snapshot_backup::SnapshotBrWaitApplyRequest, FetchedLogs, RegionSnapshot,
+    FetchedLogs, RegionSnapshot, local_metrics::TimeTracker, region_meta::RegionMeta,
+    snapshot_backup::SnapshotBrWaitApplyRequest,
 };
 use crate::store::{
+    SnapKey,
     fsm::apply::{CatchUpLogs, ChangeObserver, TaskRes as ApplyTaskRes},
     metrics::RaftEventDurationType,
     unsafe_recovery::{
@@ -41,7 +42,6 @@ use crate::store::{
     },
     util::KeysInfoFormatter,
     worker::{Bucket, BucketRange},
-    SnapKey,
 };
 
 #[derive(Debug)]
@@ -62,6 +62,32 @@ pub struct WriteResponse {
 pub struct PeerInternalStat {
     pub buckets: Arc<BucketMeta>,
     pub bucket_ranges: Option<Vec<BucketRange>>,
+}
+
+/// Statistics about clearing peer metadata.
+#[derive(Debug, Default, Clone)]
+pub struct PeerClearMetaStat {
+    // Duration of clearing metadata in raft
+    pub raft_duration: Duration,
+    // Duration of clearning metadata in kvdb
+    pub kvdb_duration: Duration,
+}
+
+impl PeerClearMetaStat {
+    pub fn new(raft_duration: Duration, kvdb_duration: Duration) -> Self {
+        Self {
+            raft_duration,
+            kvdb_duration,
+        }
+    }
+
+    pub fn is_zero(&self) -> bool {
+        self.raft_duration.is_zero() && self.kvdb_duration.is_zero()
+    }
+
+    pub fn duration(&self) -> Duration {
+        self.raft_duration + self.kvdb_duration
+    }
 }
 
 // This is only necessary because of seeming limitations in derive(Clone) w/r/t
@@ -552,6 +578,15 @@ where
     UnsafeRecoveryFillOutReport(UnsafeRecoveryFillOutReportSyncer),
     SnapshotBrWaitApply(SnapshotBrWaitApplyRequest),
     CheckPendingAdmin(UnboundedSender<CheckAdminResponse>),
+    /// A message to destroy the corresponding peer.
+    ///
+    /// `clear_stat` records the statistics of duration when clear raft state
+    /// and data in kvdb.
+    ReadyToDestroyPeer {
+        to_peer_id: u64,
+        merged_by_target: bool,
+        clear_stat: PeerClearMetaStat,
+    },
 }
 
 /// Campaign type for triggering a Raft campaign.
@@ -939,18 +974,20 @@ where
 {
     RaftMessage(Box<InspectedRaftMessage>),
 
-    // Clear region size and keys for all regions in the range, so we can force them to
-    // re-calculate their size later.
-    ClearRegionSizeInRange {
-        start_key: Vec<u8>,
-        end_key: Vec<u8>,
-    },
     StoreUnreachable {
         store_id: u64,
     },
 
     // Compaction finished event
     CompactedEvent(EK::CompactedEvent),
+
+    // Clear region size and keys for all regions in the range, so we can force them to
+    // re-calculate their size later.
+    ClearRegionSizeInRange {
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
+    },
+
     Tick(StoreTick),
     Start {
         store: metapb::Store,
@@ -976,6 +1013,7 @@ where
 
     AwakenRegions {
         abnormal_stores: Vec<u64>,
+        region_ids: Vec<u64>,
     },
 
     /// Message only used for test.
@@ -1052,5 +1090,36 @@ mod tests {
 
         // make sure the msg is small enough
         assert_eq!(mem::size_of::<PeerMsg<RocksEngine>>(), 32);
+    }
+
+    #[test]
+    fn test_validate_slowlog_of_store_msg() {
+        use engine_rocks::RocksEngine;
+        use strum::VariantNames;
+
+        use super::*;
+
+        #[allow(const_evaluatable_unchecked)]
+        let mut distribution = [0; StoreMsg::<RocksEngine>::COUNT];
+
+        let unreachable_msg: StoreMsg<RocksEngine> = StoreMsg::StoreUnreachable { store_id: 4 };
+        distribution[unreachable_msg.discriminant()] += 1;
+        let result = StoreMsg::<RocksEngine>::VARIANTS
+            .iter()
+            .zip(distribution)
+            .find(|(_, c)| *c > 0)
+            .unwrap();
+        assert_eq!(result.1, unreachable_msg.discriminant());
+        assert_eq!(*result.0, "StoreUnreachable");
+
+        let gcsnap_msg: StoreMsg<RocksEngine> = StoreMsg::GcSnapshotFinish;
+        distribution[gcsnap_msg.discriminant()] += 1;
+        let mut filter = StoreMsg::<RocksEngine>::VARIANTS
+            .iter()
+            .zip(distribution)
+            .filter(|(_, c)| *c > 0);
+        assert_eq!(*filter.next().unwrap().0, "StoreUnreachable");
+        assert_eq!(*filter.next().unwrap().0, "GcSnapshotFinish");
+        assert!(filter.next().is_none());
     }
 }

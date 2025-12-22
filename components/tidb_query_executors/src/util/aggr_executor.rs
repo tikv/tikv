@@ -31,14 +31,14 @@ use std::{convert::TryFrom, sync::Arc};
 
 use async_trait::async_trait;
 use tidb_query_aggr::*;
-use tidb_query_common::{storage::IntervalRange, Result};
+use tidb_query_common::{Result, storage::IntervalRange};
 use tidb_query_datatype::{
+    EvalType, FieldTypeAccessor,
     codec::{
         batch::{LazyBatchColumn, LazyBatchColumnVec},
         data_type::*,
     },
     expr::{EvalConfig, EvalContext},
-    EvalType, FieldTypeAccessor,
 };
 use tidb_query_expr::RpnExpression;
 use tipb::{Expr, FieldType};
@@ -312,6 +312,21 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> BatchExecutor
     }
 
     #[inline]
+    fn intermediate_schema(&self, index: usize) -> Result<&[FieldType]> {
+        self.entities.src.intermediate_schema(index)
+    }
+
+    #[inline]
+    fn consume_and_fill_intermediate_results(
+        &mut self,
+        results: &mut [Vec<BatchExecuteResult>],
+    ) -> Result<()> {
+        self.entities
+            .src
+            .consume_and_fill_intermediate_results(results)
+    }
+
+    #[inline]
     async fn next_batch(&mut self, _scan_rows: usize) -> BatchExecuteResult {
         assert!(!self.is_ended);
 
@@ -370,10 +385,10 @@ pub mod tests {
     use tidb_query_codegen::AggrFunction;
     use tidb_query_common::Result;
     use tidb_query_datatype::{
+        Collation, FieldTypeTp,
         builder::FieldTypeBuilder,
         codec::{batch::LazyBatchColumnVec, data_type::*},
         expr::{EvalContext, EvalWarnings},
-        Collation, FieldTypeTp,
     };
 
     use crate::{interface::*, util::mock_executor::MockExecutor};

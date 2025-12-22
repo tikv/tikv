@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tidb_query_common::{storage::IntervalRange, Result};
+use tidb_query_common::{Result, storage::IntervalRange};
 use tidb_query_datatype::{
     codec::{batch::LazyBatchColumnVec, data_type::BATCH_MAX_SIZE},
     expr::{EvalConfig, EvalContext, EvalWarnings},
@@ -306,6 +306,19 @@ impl<Src: BatchExecutor> BatchExecutor for BatchPartitionTopNExecutor<Src> {
         self.src.schema()
     }
 
+    #[inline]
+    fn intermediate_schema(&self, index: usize) -> Result<&[FieldType]> {
+        self.src.intermediate_schema(index)
+    }
+
+    #[inline]
+    fn consume_and_fill_intermediate_results(
+        &mut self,
+        results: &mut [Vec<BatchExecuteResult>],
+    ) -> Result<()> {
+        self.src.consume_and_fill_intermediate_results(results)
+    }
+
     /// Implementation of BatchExecutor::next_batch
     /// Memory Control Analysis:
     /// 1. if n > paging_size(1024), this operator won't do anything and just
@@ -383,14 +396,14 @@ impl<Src: BatchExecutor> BatchExecutor for BatchPartitionTopNExecutor<Src> {
 mod tests {
     use futures::executor::block_on;
     use tidb_query_datatype::{
+        Collation, FieldTypeFlag, FieldTypeTp,
         builder::FieldTypeBuilder,
         codec::{batch::LazyBatchColumnVec, data_type::*},
         expr::EvalWarnings,
-        Collation, FieldTypeFlag, FieldTypeTp,
     };
     use tidb_query_expr::{
-        impl_arithmetic::{IntDivideInt, IntIntPlus},
         RpnExpressionBuilder,
+        impl_arithmetic::{IntDivideInt, IntIntPlus},
     };
 
     use super::*;
@@ -1496,7 +1509,7 @@ mod tests {
     #[test]
     fn test_no_partition_integration_3() {
         use tidb_query_expr::{
-            impl_arithmetic::{arithmetic_fn_meta, IntIntPlus},
+            impl_arithmetic::{IntIntPlus, arithmetic_fn_meta},
             impl_op::is_null_fn_meta,
         };
 

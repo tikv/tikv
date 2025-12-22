@@ -2,23 +2,23 @@
 
 use std::{
     iter::FromIterator,
-    sync::{atomic::AtomicU64, mpsc, Arc, Mutex},
+    sync::{Arc, Mutex, atomic::AtomicU64, mpsc},
     time::Duration,
 };
 
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
-use engine_traits::{Engines, ALL_CFS, CF_DEFAULT};
+use engine_traits::{ALL_CFS, CF_DEFAULT, Engines};
 use health_controller::HealthController;
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::{
+    Result,
     coprocessor::CoprocessorHost,
     store::{
+        AutoSplitController, DiskCheckRunner, SnapManager, StoreMsg, Transport,
         config::{Config, RaftstoreConfigManager},
         fsm::{StoreMeta, *},
-        AutoSplitController, DiskCheckRunner, SnapManager, StoreMsg, Transport,
     },
-    Result,
 };
 use resource_metering::CollectorRegHandle;
 use service::service_manager::GrpcServiceManager;
@@ -30,7 +30,7 @@ use tikv::{
 };
 use tikv_util::{
     config::{ReadableDuration, ReadableSize, VersionTrack},
-    worker::{dummy_scheduler, LazyWorker, Worker},
+    worker::{LazyWorker, Worker, dummy_scheduler},
 };
 
 #[derive(Clone)]

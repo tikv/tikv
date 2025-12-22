@@ -5,9 +5,9 @@ use std::{
     iter::Peekable,
     mem,
     sync::{
+        Arc, Mutex,
         atomic::{AtomicU64, AtomicUsize, Ordering},
         mpsc::Sender,
-        Arc, Mutex,
     },
     vec::IntoIter,
 };
@@ -17,8 +17,8 @@ use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{FlowInfo, RocksEngine};
 use engine_traits::{
-    raw_ttl::ttl_current_ts, DeleteStrategy, Error as EngineError, ImportExt, KvEngine, MiscExt,
-    Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    CF_DEFAULT, CF_LOCK, CF_WRITE, DeleteStrategy, Error as EngineError, ImportExt, KvEngine,
+    MiscExt, Range, WriteBatch, WriteOptions, raw_ttl::ttl_current_ts,
 };
 use file_system::{IoType, WithIoType};
 use futures::executor::block_on;
@@ -27,32 +27,32 @@ use pd_client::{FeatureGate, PdClient};
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoProvider};
 use tikv_kv::{CfStatistics, CursorBuilder, Modify, SnapContext};
 use tikv_util::{
+    Either,
     config::{Tracker, VersionTrack},
     set_panic_context,
     store::find_peer,
-    time::{duration_to_sec, Instant, Limiter, SlowTimer},
+    time::{Instant, Limiter, SlowTimer, duration_to_sec},
     worker::{Builder as WorkerBuilder, LazyWorker, Runnable, ScheduleError, Scheduler},
-    Either,
 };
 use txn_types::{Key, TimeStamp};
-use yatp::{task::future::TaskCell, Remote};
+use yatp::{Remote, task::future::TaskCell};
 
 use super::{
-    check_need_gc,
+    Callback, Error, ErrorInner, Result, check_need_gc,
     compaction_filter::{
         CompactionFilterInitializer, DeleteBatch, GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED,
         GC_COMPACTION_FILTER_MVCC_DELETION_WASTED, GC_COMPACTION_FILTER_ORPHAN_VERSIONS,
     },
+    compaction_runner::{CompactionRunner, CompactionRunnerHandle},
     config::{GcConfig, GcWorkerConfigManager},
     gc_manager::{AutoGcConfig, GcManager, GcManagerHandle},
-    Callback, Error, ErrorInner, Result,
 };
 use crate::{
     server::metrics::*,
     storage::{
-        kv::{metrics::GcKeyMode, Engine, ScanMode, Statistics},
+        kv::{Engine, ScanMode, Statistics, metrics::GcKeyMode},
         mvcc::{GcInfo, MvccReader, MvccTxn},
-        txn::{gc, Error as TxnError},
+        txn::{Error as TxnError, gc},
     },
 };
 
@@ -1211,6 +1211,7 @@ where
     worker_scheduler: Scheduler<GcTask<<E::Local as MiscExt>::DiskEngine>>,
 
     gc_manager_handle: Arc<Mutex<Option<GcManagerHandle>>>,
+    compaction_runner_handle: Arc<Mutex<Option<CompactionRunnerHandle>>>,
     feature_gate: FeatureGate,
 }
 
@@ -1227,6 +1228,7 @@ impl<E: Engine> Clone for GcWorker<E> {
             worker: self.worker.clone(),
             worker_scheduler: self.worker_scheduler.clone(),
             gc_manager_handle: self.gc_manager_handle.clone(),
+            compaction_runner_handle: self.compaction_runner_handle.clone(),
             feature_gate: self.feature_gate.clone(),
             region_info_provider: self.region_info_provider.clone(),
         }
@@ -1290,6 +1292,41 @@ where
         Ok(())
     }
 
+    pub fn start_auto_compaction<
+        S: GcSafePointProvider,
+        R: RegionInfoProvider + Clone + 'static,
+    >(
+        &self,
+        safe_point_provider: S,
+        region_info_provider: R,
+    ) -> Result<()> {
+        let mut handle = self.compaction_runner_handle.lock().unwrap();
+        assert!(handle.is_none(), "compaction runner already started");
+
+        let kv_engine = match self.engine.kv_engine() {
+            Some(engine) => engine,
+            None => {
+                warn!("kv_engine not available, auto compaction cannot start");
+                return Ok(());
+            }
+        };
+
+        let compaction_runner = CompactionRunner::new(
+            safe_point_provider,
+            region_info_provider,
+            kv_engine,
+            self.config_manager.clone(),
+        );
+
+        let new_handle = compaction_runner
+            .start()
+            .map_err(|e| -> Error { box_err!("failed to start compaction runner: {:?}", e) })?;
+
+        *handle = Some(new_handle);
+        info!("compaction runner started");
+        Ok(())
+    }
+
     pub fn scheduler(&self) -> Scheduler<GcTask<<E::Local as MiscExt>::DiskEngine>> {
         self.worker_scheduler.clone()
     }
@@ -1319,6 +1356,7 @@ impl<E: Engine> GcWorker<E> {
             worker: Arc::new(Mutex::new(worker)),
             worker_scheduler,
             gc_manager_handle: Arc::new(Mutex::new(None)),
+            compaction_runner_handle: Arc::new(Mutex::new(None)),
             feature_gate,
             region_info_provider,
         }
@@ -1350,6 +1388,10 @@ impl<E: Engine> GcWorker<E> {
     pub fn stop(&self) -> Result<()> {
         // Stop GcManager.
         if let Some(h) = self.gc_manager_handle.lock().unwrap().take() {
+            h.stop()?;
+        }
+        // Stop CompactionRunner.
+        if let Some(h) = self.compaction_runner_handle.lock().unwrap().take() {
             h.stop()?;
         }
         // Stop self.
@@ -1420,14 +1462,14 @@ pub mod test_gc_worker {
         metapb::{Peer, Region},
     };
     use raftstore::store::RegionSnapshot;
-    use tikv_kv::{write_modifies, OnAppliedCb};
+    use tikv_kv::{OnAppliedCb, write_modifies};
     use txn_types::{Key, TimeStamp};
 
     use crate::{
         server::gc_worker::{GcSafePointProvider, Result as GcWorkerResult},
         storage::{
-            kv::{self, Modify, Result as EngineResult, SnapContext, WriteData},
             Engine,
+            kv::{self, Modify, Result as EngineResult, SnapContext, WriteData},
         },
     };
 
@@ -1520,7 +1562,9 @@ pub mod test_gc_worker {
         }
 
         type IMSnap = Self::Snap;
-        type IMSnapshotRes = Self::SnapshotRes;
+        // TODO: revert this once https://github.com/rust-lang/rust/issues/140222 is fixed.
+        // type IMSnapshotRes = Self::SnapshotRes;
+        type IMSnapshotRes = impl Future<Output = EngineResult<Self::Snap>> + Send;
         fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
             self.async_snapshot(ctx)
         }
@@ -1537,6 +1581,7 @@ pub mod test_gc_worker {
     #[derive(Clone, Default)]
     pub struct MultiRocksEngine {
         pub engines: Arc<Mutex<HashMap<u64, PrefixedEngine>>>,
+        #[allow(dead_code)]
         pub region_info: HashMap<u64, Region>,
     }
 
@@ -1585,7 +1630,9 @@ pub mod test_gc_worker {
         }
 
         type IMSnap = Self::Snap;
-        type IMSnapshotRes = Self::SnapshotRes;
+        // TODO: revert this once https://github.com/rust-lang/rust/issues/140222 is fixed.
+        // type IMSnapshotRes = Self::SnapshotRes;
+        type IMSnapshotRes = impl Future<Output = EngineResult<Self::Snap>> + Send;
         fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
             self.async_snapshot(ctx)
         }
@@ -1603,15 +1650,15 @@ mod tests {
     };
 
     use api_version::{ApiV2, KvFormat, RawValue};
-    use engine_rocks::{raw::FlushOptions, util::get_cf_handle, RocksEngine};
+    use engine_rocks::{RocksEngine, raw::FlushOptions, util::get_cf_handle};
     use engine_traits::Peekable as _;
     use futures::executor::block_on;
     use kvproto::{kvrpcpb::ApiVersion, metapb::Peer};
     use online_config::{ConfigChange, ConfigManager, ConfigValue};
     use raft::StateRole;
     use raftstore::coprocessor::{
-        region_info_accessor::{MockRegionInfoProvider, RegionInfoAccessor},
         CoprocessorHost, RegionChangeEvent,
+        region_info_accessor::{MockRegionInfoProvider, RegionInfoAccessor},
     };
     use tempfile::Builder;
     use tikv_kv::Snapshot;
@@ -1623,11 +1670,12 @@ mod tests {
         config::DbConfig,
         server::gc_worker::{MockSafePointProvider, PrefixedEngine},
         storage::{
-            kv::{metrics::GcKeyMode, Modify, TestEngineBuilder, WriteData},
+            Engine, Storage, TestStorageBuilderApiV1,
+            kv::{Modify, TestEngineBuilder, WriteData, metrics::GcKeyMode},
             lock_manager::MockLockManager,
             mvcc::{
-                tests::{must_get_none, must_get_none_on_region, must_get_on_region},
                 MAX_TXN_WRITE_SIZE,
+                tests::{must_get_none, must_get_none_on_region, must_get_on_region},
             },
             txn::{
                 commands,
@@ -1637,7 +1685,6 @@ mod tests {
                     must_rollback,
                 },
             },
-            Engine, Storage, TestStorageBuilderApiV1,
         },
     };
 
@@ -1801,7 +1848,7 @@ mod tests {
         // Commit.
         let keys: Vec<_> = init_keys.iter().map(|k| Key::from_raw(k)).collect();
         wait_op!(|cb| storage.sched_txn_command(
-            commands::Commit::new(keys, start_ts, commit_ts.into(), Context::default()),
+            commands::Commit::new(keys, start_ts, commit_ts.into(), None, Context::default()),
             cb
         ))
         .unwrap()

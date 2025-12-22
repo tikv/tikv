@@ -2,7 +2,7 @@
 
 use std::{
     marker::PhantomData,
-    sync::{atomic::AtomicU64, Arc},
+    sync::{Arc, atomic::AtomicU64},
 };
 
 use api_version::{ApiV1, KvFormat};
@@ -14,14 +14,14 @@ use kvproto::{
     metapb,
 };
 use raftstore::coprocessor::{
-    region_info_accessor::MockRegionInfoProvider, CoprocessorHost, RegionInfoProvider,
+    CoprocessorHost, RegionInfoProvider, region_info_accessor::MockRegionInfoProvider,
 };
 use tikv::{
     server::gc_worker::{AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker},
     storage::{
-        config::Config, kv::RocksEngine, lock_manager::MockLockManager, test_util::GetConsumer,
-        txn::commands, Engine, KvGetStatistics, PrewriteResult, Result, Storage, TestEngineBuilder,
-        TestStorageBuilder, TxnStatus,
+        Engine, KvGetStatistics, PrewriteResult, Result, Storage, TestEngineBuilder,
+        TestStorageBuilder, TxnStatus, config::Config, kv::RocksEngine,
+        lock_manager::MockLockManager, test_util::GetConsumer, txn::commands,
     },
 };
 use tikv_util::time::Instant;
@@ -260,7 +260,7 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
         commit_ts: impl Into<TimeStamp>,
     ) -> Result<TxnStatus> {
         wait_op!(|cb| self.store.sched_txn_command(
-            commands::Commit::new(keys, start_ts.into(), commit_ts.into(), ctx),
+            commands::Commit::new(keys, start_ts.into(), commit_ts.into(), None, ctx),
             cb,
         ))
         .unwrap()

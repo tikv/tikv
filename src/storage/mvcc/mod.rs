@@ -15,8 +15,8 @@ use kvproto::kvrpcpb::{self, Assertion, IsolationLevel};
 use thiserror::Error;
 use tikv_util::{metrics::CRITICAL_ERROR, panic_when_unexpected_key_or_data, set_panic_mark};
 pub use txn_types::{
-    Key, Lock, LockType, Mutation, TimeStamp, Value, Write, WriteRef, WriteType,
-    SHORT_VALUE_MAX_LEN,
+    Key, Lock, LockType, Mutation, SHORT_VALUE_MAX_LEN, TimeStamp, Value, Write, WriteRef,
+    WriteType,
 };
 
 pub use self::{
@@ -25,8 +25,9 @@ pub use self::{
     },
     metrics::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM},
     reader::*,
-    txn::{GcInfo, MvccTxn, ReleasedLock, MAX_TXN_WRITE_SIZE},
+    txn::{GcInfo, MAX_TXN_WRITE_SIZE, MvccTxn, ReleasedLock},
 };
+pub use crate::storage::types::MvccInfo;
 
 #[derive(Debug, Error)]
 pub enum ErrorInner {
@@ -69,6 +70,7 @@ pub enum ErrorInner {
         start_ts: TimeStamp,
         commit_ts: TimeStamp,
         key: Vec<u8>,
+        mvcc_info: Option<MvccInfo>,
     },
 
     #[error("txn not found {} key: {}", .start_ts, log_wrappers::Value::key(.key))]
@@ -133,6 +135,7 @@ pub enum ErrorInner {
         commit_ts: TimeStamp,
         key: Vec<u8>,
         min_commit_ts: TimeStamp,
+        mvcc_info: Option<MvccInfo>,
     },
 
     #[error("bad format key(version)")]
@@ -200,10 +203,12 @@ impl ErrorInner {
                 start_ts,
                 commit_ts,
                 key,
+                mvcc_info,
             } => Some(ErrorInner::TxnLockNotFound {
                 start_ts: *start_ts,
                 commit_ts: *commit_ts,
                 key: key.to_owned(),
+                mvcc_info: mvcc_info.clone(),
             }),
             ErrorInner::TxnNotFound { start_ts, key } => Some(ErrorInner::TxnNotFound {
                 start_ts: *start_ts,
@@ -261,11 +266,13 @@ impl ErrorInner {
                 commit_ts,
                 key,
                 min_commit_ts,
+                mvcc_info,
             } => Some(ErrorInner::CommitTsExpired {
                 start_ts: *start_ts,
                 commit_ts: *commit_ts,
                 key: key.clone(),
                 min_commit_ts: *min_commit_ts,
+                mvcc_info: mvcc_info.clone(),
             }),
             ErrorInner::KeyVersion => Some(ErrorInner::KeyVersion),
             ErrorInner::Committed {
