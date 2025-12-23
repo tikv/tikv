@@ -2343,12 +2343,11 @@ fn future_copr<E: Engine>(
     async move {
         let resp = ret.await;
         // Log response size for debugging memory issues
-        let resp_size = resp.compute_size() as usize;
-        if resp_size > 512 * 1024 {
+        let data_len = resp.data.len();
+        if data_len > 512 * 1024 {
             // Log if response > 512KB
             info!("[DEBUG-GRPC-MEM] large coprocessor response";
-                "resp_size" => resp_size,
-                "data_len" => resp.data.len(),
+                "data_len" => data_len,
             );
         }
         Ok(resp)
