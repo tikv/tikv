@@ -2340,7 +2340,19 @@ fn future_copr<E: Engine>(
     req: Request,
 ) -> impl Future<Output = ServerResult<MemoryTraceGuard<Response>>> {
     let ret = copr.parse_and_handle_unary_request(req, peer);
-    async move { Ok(ret.await) }
+    async move {
+        let resp = ret.await;
+        // Log response size for debugging memory issues
+        let resp_size = resp.compute_size() as usize;
+        if resp_size > 512 * 1024 {
+            // Log if response > 512KB
+            info!("[DEBUG-GRPC-MEM] large coprocessor response";
+                "resp_size" => resp_size,
+                "data_len" => resp.data.len(),
+            );
+        }
+        Ok(resp)
+    }
 }
 
 fn future_raw_coprocessor<E: Engine, L: LockManager, F: KvFormat>(
