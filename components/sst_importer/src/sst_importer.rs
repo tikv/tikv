@@ -484,9 +484,11 @@ impl<E: KvEngine> SstImporter<E> {
             clean_paths.push(path.temp);
         }
 
+        let mut iter_option = IterOptions::default();
+        iter_option.set_fill_cache(false);
         let mut sst_iters = Vec::with_capacity(sst_readers.len());
         for sst_reader in &sst_readers {
-            let sst_iter = sst_reader.iter(IterOptions::default())?;
+            let sst_iter = sst_reader.iter(iter_option.clone())?;
             sst_iters.push(sst_iter);
         }
         let mut sst_iter = BinaryIterator::new(sst_iters);
