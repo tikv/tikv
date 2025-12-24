@@ -75,7 +75,7 @@ const ADAPTIVE_QPS_BASELINE_HISTORY_MIN_LEN: usize = 10;
 const ADAPTIVE_DEFAULT_QPS_BASELINE: u64 = 1000;
 const ADAPTIVE_QPS_PRESSURE_LOWER_BOUND: u64 = 10000;
 // Dynamic threshold for high concurrency - initial and minimum value
-const ADAPTIVE_MIN_HIGH_CONCURRENCY_QPS: u64 = 50000;
+const ADAPTIVE_MIN_HIGH_CONCURRENCY_QPS: u64 = 40000;
 // EWMA smoothing factor for high_concurrency_qps_threshold update
 const ADAPTIVE_HIGH_CONCURRENCY_EWMA_ALPHA: f64 = 0.2; // 0.8*old + 0.2*new
 // High concurrency multiplier (0.9 of high_concurrency_qps_threshold)
