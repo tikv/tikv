@@ -68,6 +68,7 @@ const RAFT_WB_DEFAULT_RECORDER_SIZE: usize = 30;
 
 const RAFT_WB_WAIT_DURATION_UPPER_BOUND_NS: u64 = 1000_000; // 1ms
 const RAFT_WB_WAIT_DURATION_LOWER_BOUND_NS: u64 = 10_000; // 10us
+const RAFT_WB_WAIT_DURATION_DEFAULT_NS: u64 = 20_000; // default config value for wait_duration is 20us
 const HIGH_CONCURRENCY_FUTILE_THRESHOLD_NS: u64 = 100_000; // 100us
 
 // Adaptive batching QPS-related constants for calculate_adaptive_wait_duration()
@@ -500,8 +501,16 @@ impl WriteTaskBatchRecorder {
         batch_size < self.batch_size_hint && self.wait_count < self.wait_max_count
     }
 
-    fn wait_for_a_while(&mut self) {
+    fn wait_for_a_while(&mut self, adaptive_batch_enabled: bool) {
         self.wait_count += 1;
+
+        // Fallback to old strategy: if wait_duration drops too low (<=40us), reset to 20us
+        // This is only applied when adaptive_batch_enabled is true
+        // This prevents the new adaptive algorithm from preforming too aggressively to increase IOPS unexpectedly.
+        if adaptive_batch_enabled && self.wait_duration.as_nanos() <= (2 * RAFT_WB_WAIT_DURATION_DEFAULT_NS).into() {
+            self.wait_duration = Duration::from_nanos(RAFT_WB_WAIT_DURATION_DEFAULT_NS);
+        }
+
         // Use a simple linear function to calculate the wait duration.
         spin_at_least(Duration::from_nanos(
             (self.wait_duration.as_nanos() as f64 * (1.0 / self.trend)) as u64,
@@ -724,8 +733,8 @@ where
         self.recorder.should_wait(self.get_raft_size())
     }
 
-    fn wait_for_a_while(&mut self) {
-        self.recorder.wait_for_a_while();
+    fn wait_for_a_while(&mut self, adaptive_batch_enabled: bool) {
+        self.recorder.wait_for_a_while(adaptive_batch_enabled);
     }
 }
 
@@ -875,7 +884,7 @@ where
                         // If the batch size is not large enough, wait for a while to make the batch larger.
                         // This can reduce IOPS amplification when there are many trivial writes.
                         if self.batch.should_wait() {
-                            self.batch.wait_for_a_while();
+                            self.batch.wait_for_a_while(self.adaptive_batch_enabled);
                             self.wait_count += 1;
                             last_round_is_wait = true;
                             continue;
