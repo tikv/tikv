@@ -78,10 +78,13 @@ const ADAPTIVE_QPS_PRESSURE_LOWER_BOUND: u64 = 10000;
 const ADAPTIVE_MIN_HIGH_CONCURRENCY_QPS: u64 = 50000;
 // EWMA smoothing factor for high_concurrency_qps_threshold update
 const ADAPTIVE_HIGH_CONCURRENCY_EWMA_ALPHA: f64 = 0.2; // 0.8*old + 0.2*new
-// High concurrency multiplier (0.95 of high_concurrency_qps_threshold)
-const ADAPTIVE_HIGH_CONCURRENCY_MULTIPLIER: f64 = 0.95;
+// High concurrency multiplier (0.9 of high_concurrency_qps_threshold)
+const ADAPTIVE_HIGH_CONCURRENCY_MULTIPLIER: f64 = 0.9;
 // Very high concurrency multiplier (1x of high_concurrency_qps_threshold)
 const ADAPTIVE_VERY_HIGH_CONCURRENCY_MULTIPLIER: f64 = 1.0;
+// Threshold for fast ramp-up: when wait_duration < hint * this ratio, use aggressive growth
+// Set to 0.5 (50%) to enable fast ramp-up when wait_duration is below half of hint
+const FAST_RAMP_UP_THRESHOLD_RATIO: f64 = 0.5;
 const BATCH_ACHIEVEMENT_RATIO_LOW_THRESHOLD: f64 = 0.3;
 // Consecutive low batch_ratio count threshold for futile waiting detection (< 0.3)
 const CONSECUTIVE_LOW_BATCH_RATIO_THRESHOLD: u32 = 2; // Require 2 consecutive times < 0.3
@@ -1124,9 +1127,16 @@ where
             // Strategy: Respect wait_duration_hint in high concurrency scenarios to pursue higher throughput
             // Only reduce wait_duration when we've reached or exceeded the hint
             if current_wait_duration_nanos < wait_duration_hint_nanos && is_high_concurrency {
-                // Haven't reached hint yet, maintain or increase slightly to pursue higher throughput
-                // This allows larger batches and better overall system throughput
-                (current_wait_duration_nanos as f64 * 1.05) as u64
+                // Haven't reached hint yet, maintain or increase to pursue higher throughput
+                // Use aggressive growth when far below hint for fast early-stage ramp-up
+                let is_far_from_hint = current_wait_duration_nanos < (wait_duration_hint_nanos as f64 * FAST_RAMP_UP_THRESHOLD_RATIO) as u64;
+                if is_far_from_hint {
+                    // Far below hint: use more aggressive growth despite good batching
+                    (current_wait_duration_nanos as f64 * 1.2) as u64
+                } else {
+                    // Closer to hint: conservative growth
+                    (current_wait_duration_nanos as f64 * 1.05) as u64
+                }
             } else {
                 // Already at or above hint, can reduce to improve latency
                 let reduction = if qps_pressure_factor > 0.7 {
@@ -1140,8 +1150,16 @@ where
             // Good batching (60-80% of target)
             // Strategy: In high concurrency, still pursue hint if not reached yet
             if current_wait_duration_nanos < wait_duration_hint_nanos && is_high_concurrency {
-                // Haven't reached hint yet, increase slightly to pursue higher throughput
-                (current_wait_duration_nanos as f64 * 1.08) as u64
+                // Haven't reached hint yet, increase to pursue higher throughput
+                // Use aggressive growth when far below hint for fast early-stage ramp-up
+                let is_far_from_hint = current_wait_duration_nanos < (wait_duration_hint_nanos as f64 * FAST_RAMP_UP_THRESHOLD_RATIO) as u64;
+                if is_far_from_hint {
+                    // Far below hint: use aggressive growth
+                    (current_wait_duration_nanos as f64 * 1.3) as u64
+                } else {
+                    // Closer to hint: moderate growth
+                    (current_wait_duration_nanos as f64 * 1.08) as u64
+                }
             } else {
                 // Already at or above hint, maintain or reduce slightly
                 let adjustment = if qps_pressure_factor > 0.7 {
@@ -1156,7 +1174,15 @@ where
             // Only increase if wait_duration is still relatively low
             if current_wait_duration_nanos < wait_duration_hint_nanos {
                 // Still have room to increase
-                (current_wait_duration_nanos as f64 * 1.1) as u64
+                // Use aggressive growth when far below hint for fast early-stage ramp-up
+                let is_far_from_hint = current_wait_duration_nanos < (wait_duration_hint_nanos as f64 * FAST_RAMP_UP_THRESHOLD_RATIO) as u64;
+                if is_far_from_hint && is_high_concurrency {
+                    // Far below hint in high concurrency: use aggressive growth
+                    (current_wait_duration_nanos as f64 * 1.4) as u64
+                } else {
+                    // Normal growth
+                    (current_wait_duration_nanos as f64 * 1.1) as u64
+                }
             } else {
                 // Already waiting long enough, keep current
                 current_wait_duration_nanos as u64
@@ -1174,7 +1200,13 @@ where
                 // High concurrency with poor batching
                 // Continue increasing wait_duration to force aggregation
                 // Use adaptive adjustment based on how long poor batching has persisted
-                let adjustment_factor = if self.consecutive_low_batch_ratio_count >= 10 {
+                // AND how far we are from hint (early-stage ramp-up optimization)
+                let is_far_from_hint = current_wait_duration_nanos < (wait_duration_hint_nanos as f64 * FAST_RAMP_UP_THRESHOLD_RATIO) as u64;
+                let adjustment_factor = if is_far_from_hint {
+                    // Far below hint: use very aggressive growth to quickly reach target
+                    // This prevents getting stuck in low wait_duration for long periods
+                    1.5  // +50% per period for fast early-stage ramp-up
+                } else if self.consecutive_low_batch_ratio_count >= 10 {
                     // Severe persistent poor batching (10+ periods): aggressive increase
                     // Example: consecutive=15, need to grow from 13us to 100us quickly
                     1.3  // +30% per period
@@ -1197,11 +1229,23 @@ where
 
         // Use exponential weighted moving average for smoother transitions
         // Smoothing factor (α) - higher values make quicker adjustments
-        // Use adaptive smoothing strategies:
-        // 1. When poor batching persists under high concurrency: increase α for faster response
-        // 2. When in downgrade mode: also use faster response to quickly reduce wait_duration
-        // 3. When batching has been poor for 10+ periods: use even faster response
-        let smoothing_factor = if should_exit_high_concurrency && self.consecutive_low_batch_ratio_count >= 10 {
+        // Use adaptive smoothing strategies with early-stage ramp-up optimization:
+        // 1. When wait_duration << hint (< 50%): use aggressive smoothing for fast convergence
+        // 2. When poor batching persists under high concurrency: increase α for faster response
+        // 3. When in downgrade mode: also use faster response to quickly reduce wait_duration
+        // 4. When batching has been poor for 10+ periods: use even faster response
+
+        // Fast ramp-up: when wait_duration is far below hint, use aggressive smoothing
+        let is_far_below_hint = current_wait_duration_nanos < (wait_duration_hint_nanos as f64 * FAST_RAMP_UP_THRESHOLD_RATIO) as u64;
+
+        let smoothing_factor = if is_far_below_hint && is_very_high_concurrency {
+            // Very high concurrency and far below hint: use very aggressive smoothing for fast ramp-up
+            // This helps converge quickly in early-stage high-pressure scenarios
+            0.5  // 50% weight on target, 50% on current
+        } else if is_far_below_hint && is_high_concurrency {
+            // High concurrency and far below hint: use aggressive smoothing
+            0.4  // 40% weight on target, 60% on current
+        } else if should_exit_high_concurrency && self.consecutive_low_batch_ratio_count >= 10 {
             // Downgrade with severe persistence: use aggressive smoothing for fast recovery
             0.35  // 35% weight on target, 65% on current (even faster response)
         } else if should_exit_high_concurrency && self.consecutive_low_batch_ratio_count >= 5 {
