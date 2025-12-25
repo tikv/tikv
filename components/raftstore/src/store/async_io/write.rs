@@ -86,7 +86,7 @@ const ADAPTIVE_VERY_HIGH_CONCURRENCY_MULTIPLIER: f64 = 1.0;
 // Threshold for fast ramp-up: when wait_duration < hint * this ratio, use aggressive growth
 // Set to 0.5 (50%) to enable fast ramp-up when wait_duration is below half of hint
 const FAST_RAMP_UP_THRESHOLD_RATIO: f64 = 0.5;
-const BATCH_ACHIEVEMENT_RATIO_LOW_THRESHOLD: f64 = 0.3;
+const BATCH_ACHIEVEMENT_RATIO_LOW_THRESHOLD: f64 = 0.1;
 // Consecutive low batch_ratio count threshold for futile waiting detection (< 0.3)
 const CONSECUTIVE_LOW_BATCH_RATIO_THRESHOLD: u32 = 2; // Require 2 consecutive times < 0.3
 
