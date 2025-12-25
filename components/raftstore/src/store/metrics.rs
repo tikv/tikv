@@ -543,7 +543,7 @@ lazy_static! {
         register_histogram!(
             "tikv_raftstore_apply_msg_len",
             "Length of apply msg.",
-            exponential_buckets(1.0, 2.0, 20).unwrap() // max 1024 * 1024
+            exponential_buckets(1.0, 2.0, 21).unwrap() // max 1024 * 1024
         ).unwrap();
 
     pub static ref STORE_RAFT_READY_COUNTER_VEC: IntCounterVec =
@@ -675,7 +675,7 @@ lazy_static! {
             "tikv_snapshot_cf_kv_count",
             "Total number of kv in each cf file of snapshot.",
             &["type"],
-            exponential_buckets(100.0, 2.0, 20).unwrap()
+            exponential_buckets(100.0, 2.0, 21).unwrap()
         ).unwrap();
     pub static ref SNAPSHOT_CF_KV_COUNT: SnapCf =
         auto_flush_from!(SNAPSHOT_CF_KV_COUNT_VEC, SnapCf);
@@ -693,7 +693,7 @@ lazy_static! {
         register_histogram!(
             "tikv_snapshot_build_time_duration_secs",
             "Bucketed histogram of snapshot build time duration.",
-            exponential_buckets(0.05, 2.0, 20).unwrap()
+            exponential_buckets(0.05, 2.0, 21).unwrap()
         ).unwrap();
 
     pub static ref SNAPSHOT_KV_COUNT_HISTOGRAM: Histogram =
