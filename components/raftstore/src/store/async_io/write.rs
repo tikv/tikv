@@ -420,6 +420,7 @@ struct WriteTaskBatchRecorder {
     trend: f64,
     /// Wait duration in nanoseconds.
     wait_duration: Duration,
+    wait_duration_adaptive: Duration,
     wait_duration_hint: Duration,
     /// The count of wait.
     wait_count: u64,
@@ -439,6 +440,7 @@ impl WriteTaskBatchRecorder {
             avg: 0,
             trend: 1.0,
             wait_duration: wait_duration,
+            wait_duration_adaptive: wait_duration,
             wait_duration_hint: wait_duration,
             wait_count: 0,
             wait_max_count: 1,
@@ -460,16 +462,17 @@ impl WriteTaskBatchRecorder {
         self.batch_size_hint = batch_size_config;
         self.wait_duration_hint = wait_duration_config;
         if need_update_wait_duration {
+            self.wait_duration_adaptive = wait_duration_config;
             self.wait_duration = wait_duration_config;
         }
     }
 
     #[inline]
-    fn update_wait_duration(&mut self, wait_duration: Duration) {
-        self.wait_duration = wait_duration;
+    fn update_wait_duration_adaptive(&mut self, wait_duration: Duration) {
+        self.wait_duration_adaptive = wait_duration;
     }
 
-    fn record(&mut self, size: usize, adaptive_batch_enabled: bool) {
+    fn record(&mut self, size: usize, _adaptive_batch_enabled: bool) {
         self.history.push_back(size);
         self.sum += size;
 
@@ -482,7 +485,7 @@ impl WriteTaskBatchRecorder {
         }
         self.avg = self.sum / len;
 
-        if len >= self.capacity && self.batch_size_hint > 0 && !adaptive_batch_enabled {
+        if len >= self.capacity && self.batch_size_hint > 0 {
             // The trend ranges from 0.5 to 2.0 (when adaptive batch is disabled).
             let trend = self.avg as f64 / self.batch_size_hint as f64;
             self.trend = trend.clamp(0.5, 2.0);
@@ -507,8 +510,13 @@ impl WriteTaskBatchRecorder {
         // Fallback to old strategy: if wait_duration drops too low (<=40us), reset to 20us
         // This is only applied when adaptive_batch_enabled is true
         // This prevents the new adaptive algorithm from preforming too aggressively to increase IOPS unexpectedly.
-        if adaptive_batch_enabled && self.wait_duration.as_nanos() <= (2 * RAFT_WB_WAIT_DURATION_DEFAULT_NS).into() {
-            self.wait_duration = Duration::from_nanos(RAFT_WB_WAIT_DURATION_DEFAULT_NS);
+        if adaptive_batch_enabled {
+            if self.wait_duration_adaptive.as_nanos() <= (2 * RAFT_WB_WAIT_DURATION_DEFAULT_NS).into() {
+                self.wait_duration = Duration::from_nanos(RAFT_WB_WAIT_DURATION_DEFAULT_NS);
+            } else {
+                self.wait_duration = self.wait_duration_adaptive;
+                self.trend = 1.0; // reset trend to 1.0
+            }
         }
 
         // Use a simple linear function to calculate the wait duration.
@@ -724,8 +732,8 @@ where
     }
 
     #[inline]
-    fn update_wait_duration(&mut self, wait_duration: Duration) {
-        self.recorder.update_wait_duration(wait_duration);
+    fn update_wait_duration_adaptive(&mut self, wait_duration: Duration) {
+        self.recorder.update_wait_duration_adaptive(wait_duration);
     }
 
     #[inline]
@@ -979,7 +987,7 @@ where
         let new_wait_duration = self.calculate_adaptive_wait_duration(avg_qps);
         
         // Update configuration (only wait_duration)
-        self.batch.update_wait_duration(new_wait_duration);
+        self.batch.update_wait_duration_adaptive(new_wait_duration);
         self.wait_count = 0;
         self.wasted_wait_count = 0;
         self.valid_wait_count = 0;
@@ -991,7 +999,7 @@ where
     /// - Consecutive low batch ratio counter (anti-oscillation mechanism)
     /// Uses EWMA for smooth transitions and updates high_concurrency_qps_threshold dynamically
     fn calculate_adaptive_wait_duration(&mut self, avg_qps: u64) -> Duration {
-        let current_wait_duration_nanos = self.batch.recorder.wait_duration.as_nanos() as u64;
+        let current_wait_duration_nanos = self.batch.recorder.wait_duration_adaptive.as_nanos() as u64;
         let wait_duration_hint_nanos = self.batch.recorder.wait_duration_hint.as_nanos() as u64;
         // Dynamically calculate QPS baseline using P50 (median)
         // Also update high_concurrency_qps_threshold using P90 and EWMA
@@ -1520,7 +1528,7 @@ where
             self.batch.update_config(
                 incoming.raft_write_batch_size_hint.0 as usize,
                 incoming.raft_write_wait_duration.0,
-                self.adaptive_batch_enabled
+                !self.adaptive_batch_enabled
             );
         }
     }
