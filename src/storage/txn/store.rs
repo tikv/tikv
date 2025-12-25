@@ -23,9 +23,9 @@ pub trait Store: Send {
     ///
     /// If `load_commit_ts` is true, the commit timestamp will be present in
     /// the return `ValueEntry`, otherwise `ValueEntry.CommitTS` will be `None`.
-    /// The access_locks will be skipped if `load_commit_ts` to ensure a valid
-    /// commit timestamp can be fetched, so, set it to false if you don't
-    /// need commit_ts to reduce unnecessary performance overhead.
+    /// The access_locks will be skipped if `load_commit_ts` is true to ensure a
+    /// valid commit timestamp can be fetched, so, set it to false if you
+    /// don't need commit_ts to reduce unnecessary performance overhead.
     fn get_entry(
         &self,
         key: &Key,
@@ -46,9 +46,9 @@ pub trait Store: Send {
     ///
     /// If `load_commit_ts` is true, the commit timestamp will be present in
     /// the return `ValueEntry`, otherwise `ValueEntry.CommitTS` will be `None`.
-    /// The access_locks will be skipped if `load_commit_ts` to ensure a valid
-    /// commit timestamp can be fetched, so, set it to false if you don't
-    /// need commit_ts to reduce unnecessary performance overhead.
+    /// The access_locks will be skipped if `load_commit_ts` is true to ensure a
+    /// valid commit timestamp can be fetched, so, set it to false if you
+    /// don't need commit_ts to reduce unnecessary performance overhead.
     fn incremental_get_entry(
         &mut self,
         key: &Key,
@@ -1065,7 +1065,7 @@ mod tests {
             assert_eq!(
                 item.unwrap().commit_ts,
                 Some(COMMIT_TS),
-                "commit ts should not be loaded"
+                "commit ts should be loaded"
             );
         }
     }

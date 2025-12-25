@@ -52,7 +52,7 @@ pub const EXTRA_PARTITION_ID_COL_ID: i64 = -2;
 /// If it's a global index, it will return partition id, see <https://github.com/tikv/tikv/issues/17138>
 pub const EXTRA_PHYSICAL_TABLE_ID_COL_ID: i64 = -3;
 
-// EXTRA_COMMIT_TS_ID is the column ID of column which holds the commit
+// EXTRA_COMMIT_TS_COL_ID is the column ID of column which holds the commit
 // timestamp.
 pub const EXTRA_COMMIT_TS_COL_ID: i64 = -5;
 

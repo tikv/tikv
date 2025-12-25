@@ -49,8 +49,8 @@ impl ValueEntry {
     /// Creates a `ValueEntry` from only a `Value`,
     /// with other attributes not present.
     ///
-    /// Please use `ValueEntry::new` instead if you commit_ts or other
-    /// attributes is required to make the value complete.
+    /// Please use `ValueEntry::new` instead if commit_ts or other attributes
+    /// are required to make the value complete.
     #[inline]
     pub fn from_value(value: Value) -> Self {
         ValueEntry {

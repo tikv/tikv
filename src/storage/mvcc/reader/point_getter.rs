@@ -181,9 +181,9 @@ impl<S: Snapshot> PointGetter<S> {
     ///
     /// If `load_commit_ts` is true, the commit timestamp will be present in
     /// the return `ValueEntry`, otherwise `ValueEntry.CommitTS` will be `None`.
-    /// The access_locks will be skipped if `load_commit_ts` to ensure a valid
-    /// commit timestamp can be fetched, so, set it to false if you don't
-    /// need commit_ts to reduce unnecessary performance overhead.
+    /// The access_locks will be skipped if `load_commit_ts` is true to ensure a
+    /// valid commit timestamp can be fetched, so, set it to false if you
+    /// don't need commit_ts to reduce unnecessary performance overhead.
     #[inline]
     pub fn get_entry(
         &mut self,
@@ -263,9 +263,9 @@ impl<S: Snapshot> PointGetter<S> {
     ///
     /// If `load_commit_ts` is true, the commit timestamp will be present in
     /// the return `ValueEntry`, otherwise it will be `None`.
-    /// The access_locks will be skipped if `load_commit_ts` to ensure a valid
-    /// commit timestamp can be fetched, so, set it to false if you don't
-    /// need commit_ts to reduce unnecessary performance overhead.
+    /// The access_locks will be skipped if `load_commit_ts` is true to ensure a
+    /// valid commit timestamp can be fetched, so, set it to false if you
+    /// don't need commit_ts to reduce unnecessary performance overhead.
     fn load_data(&mut self, user_key: &Key, load_commit_ts: bool) -> Result<Option<ValueEntry>> {
         let mut use_near_seek = false;
         let mut seek_key = user_key.clone();

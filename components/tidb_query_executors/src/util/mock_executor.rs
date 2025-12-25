@@ -244,8 +244,8 @@ impl Storage for MockStorage {
 
     fn get_entry(
         &mut self,
-        _load_commit_ts: bool,
         _is_key_only: bool,
+        _load_commit_ts: bool,
         _range: PointRange,
     ) -> StorageResult<Option<OwnedKvPairEntry>> {
         unimplemented!()
