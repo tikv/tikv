@@ -177,7 +177,6 @@ impl<S: Snapshot> PointGetter<S> {
                 return self.load_data_from_lock(user_key, lock);
             }
         }
-
         self.load_data(user_key)
     }
 
@@ -225,7 +224,6 @@ impl<S: Snapshot> PointGetter<S> {
     fn load_data(&mut self, user_key: &Key) -> Result<Option<Value>> {
         let mut use_near_seek = false;
         let mut seek_key = user_key.clone();
-
         if self.met_newer_ts_data == NewerTsCheckState::NotMetYet
             || self.isolation_level == IsolationLevel::RcCheckTs
         {
@@ -238,8 +236,7 @@ impl<S: Snapshot> PointGetter<S> {
             }
             seek_key = seek_key.truncate_ts()?;
             use_near_seek = true;
-
-            let cursor_key = self.write_cursor.key(&mut self.statistics.write);
+            let cursor_key = self.write_cursor.key();
             // No need to compare user key because it uses prefix seek.
             let key_commit_ts = Key::decode_ts_from(cursor_key)?;
             if key_commit_ts > self.ts {
@@ -264,8 +261,7 @@ impl<S: Snapshot> PointGetter<S> {
 
         seek_key = seek_key.append_ts(self.ts);
         let data_found = if use_near_seek {
-            if self.write_cursor.key(&mut self.statistics.write) >= seek_key.as_encoded().as_slice()
-            {
+            if self.write_cursor.key() >= seek_key.as_encoded().as_slice() {
                 // we call near_seek with ScanMode::Mixed set, if the key() > seek_key,
                 // it will call prev() several times, whereas we just want to seek forward here
                 // so cmp them in advance
@@ -282,7 +278,7 @@ impl<S: Snapshot> PointGetter<S> {
             return Ok(None);
         }
 
-        let mut write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))?;
+        let mut write = WriteRef::parse(self.write_cursor.value())?;
         let mut owned_value: Vec<u8>; // To work around lifetime problem
         loop {
             if !write.check_gc_fence_as_latest_version(self.ts) {
@@ -350,7 +346,7 @@ impl<S: Snapshot> PointGetter<S> {
                 return Ok(None);
             }
             // No need to compare user key because it uses prefix seek.
-            write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))?;
+            write = WriteRef::parse(self.write_cursor.value())?;
         }
     }
 
@@ -372,13 +368,14 @@ impl<S: Snapshot> PointGetter<S> {
             )
         ));
         self.statistics.data.get += 1;
+        let key = user_key.clone().append_ts(write_start_ts);
         // TODO: We can avoid this clone.
-        let value = self
-            .snapshot
-            .get_cf(CF_DEFAULT, &user_key.clone().append_ts(write_start_ts))?;
+        let value = self.snapshot.get_cf(CF_DEFAULT, &key)?;
 
         if let Some(value) = value {
             self.statistics.data.processed_keys += 1;
+            self.statistics.data.flow_stats.read_keys += 1;
+            self.statistics.data.flow_stats.read_bytes += key.len() + value.len();
             Ok(value)
         } else {
             Err(default_not_found_error(
@@ -715,6 +712,143 @@ mod tests {
         let mut getter = new_point_getter(&mut engine, 30.into());
         must_get_none(&mut getter, b"foo");
         must_get_none(&mut getter, b"foo0");
+    }
+
+    #[test]
+    fn test_flow_statistics() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        // insert 100 versions for key "foo"
+        // foo@10 -> 'a'*10
+        // foo@20 -> 'a'*20
+        // ...
+        // foo@1000 -> 'a'*1000
+        let key = b"foo";
+        for i in 0..100 {
+            let start_ts = (i * 10) as u64;
+            let commit_ts = start_ts + 10;
+            let value = vec![b'a'; commit_ts as usize];
+            must_prewrite_put(&mut engine, key, &value, key, start_ts);
+            must_commit(&mut engine, key, start_ts, commit_ts);
+        }
+
+        fn get_key<S: Snapshot>(
+            getter: &mut PointGetter<S>,
+            expected_read_keys: usize,
+            expected_read_bytes: usize,
+        ) {
+            let key = b"foo";
+            must_get_key(getter, key);
+            let stats = getter.take_statistics();
+            let mut all = stats.write;
+            all.add(&stats.data);
+            assert_eq!(
+                all.flow_stats.read_keys, expected_read_keys,
+                "cf statistics:{:?}",
+                all
+            );
+            assert_eq!(
+                all.flow_stats.read_bytes, expected_read_bytes,
+                "cf statistics:{:?}",
+                all
+            );
+        }
+
+        fn get_none<S: Snapshot>(
+            getter: &mut PointGetter<S>,
+            expected_read_keys: usize,
+            expected_read_bytes: usize,
+        ) {
+            let key = b"foo";
+            must_get_none(getter, key);
+            let stats = getter.take_statistics();
+            let mut all = stats.write;
+            all.add(&stats.data);
+            assert_eq!(
+                all.flow_stats.read_keys, expected_read_keys,
+                "cf statistics:{:?}",
+                all
+            );
+            assert_eq!(
+                all.flow_stats.read_bytes, expected_read_bytes,
+                "cf statistics:{:?}",
+                all
+            );
+        }
+
+        // read the latest version foo@1000
+        // first seek the write cf and get key@1000, read 9(user_key)+8(ts)+ 3(value)
+        // value bytes. then seek the default cf and get value@100, read 1000
+        // value bytes + 9 key bytes.
+        let mut getter = new_point_getter(&mut engine, 1200.into());
+        get_key(&mut getter, 2, (9 + 8) * 2 + 3 + 1000);
+
+        // test short value
+        // read the version foo@25
+        // seek the write cf and get key@25, and short value in write cf.
+        // write cf value 4+20 bytes.
+        let mut getter = new_point_getter(&mut engine, 25.into());
+        get_key(&mut getter, 1, 9 + 8 + 4 + 20);
+
+        // add 10 delete versions after 2000 ts
+        // foo@2010 - delete
+        // foo@2020 - delete
+        // ...
+        // foo@2100 - delete
+        for i in 0..10 {
+            let start_ts = 2000 + (i * 10) as u64;
+            let commit_ts = start_ts + 10;
+            must_prewrite_delete(&mut engine, key, key, start_ts);
+            must_commit(&mut engine, key, start_ts, commit_ts);
+        }
+
+        let mut getter = new_point_getter(&mut engine, 1200.into());
+        get_key(&mut getter, 2, (9 + 8) * 2 + 3 + 1000);
+        let mut getter = new_point_getter(&mut engine, 900.into());
+        get_key(&mut getter, 2, (9 + 8) * 2 + 3 + 900);
+        // delete value only needs 3 bytes
+        let mut getter = new_point_getter(&mut engine, 2050.into());
+        get_none(&mut getter, 1, 9 + 8 + 3);
+
+        // read the latest version foo@2100 - delete
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut getter = PointGetterBuilder::new(snapshot, 1200.into())
+            .check_has_newer_ts_data(true)
+            .build()
+            .unwrap();
+        // near seek to foo@2100, see it's delete, then seek to foo@2020 for 8 times and
+        // then seek to foo@1000 first write cf seek, key length:(9+8), value
+        // length:3 8 times next, key length:(9+8), value length:3
+        // second write cf seek, key length:(9+8), value length:3
+        // 1 default get, key length:9+8, value length:1000
+        get_key(&mut getter, 2 + 8 + 1, (9 + 8 + 3) * 10 + 9 + 8 + 1000);
+
+        // read the latest version foo@300
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut getter: PointGetter<std::sync::Arc<tikv_kv::RocksSnapshot>> =
+            PointGetterBuilder::new(snapshot, 300.into())
+                .check_has_newer_ts_data(true)
+                .build()
+                .unwrap();
+        // just value is different from above
+        get_key(&mut getter, 2 + 1 + 8, (9 + 8 + 3) * 10 + 9 + 8 + 300);
+
+        // read the delete version foo@2050
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut getter: PointGetter<std::sync::Arc<tikv_kv::RocksSnapshot>> =
+            PointGetterBuilder::new(snapshot, 2050.into())
+                .check_has_newer_ts_data(true)
+                .build()
+                .unwrap();
+        // near seek to foo@2100, see it's delete, then seek to foo@2020 for 5 times
+        // first write cf seek: key length:(9+8), value length:3
+        // 5 next: key length:(9+8), value length:3
+        get_none(&mut getter, 5 + 1, (9 + 8 + 3) * 6);
+
+        // add one uncommit put from 3000
+        // foo@3000 - delete (uncommitted)
+        must_prewrite_put(&mut engine, key, b"aa", key, 3000);
+        let mut getter = new_point_getter(&mut engine, 1200.into());
+        get_key(&mut getter, 2, (9 + 8) * 2 + 3 + 1000);
     }
 
     #[test]

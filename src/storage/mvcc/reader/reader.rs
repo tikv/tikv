@@ -331,14 +331,14 @@ impl<S: EngineSnapshot> MvccReader<S> {
             }
 
             while cursor.valid()? {
-                let key = Key::from_encoded_slice(cursor.key(&mut self.statistics.lock));
+                let key = Key::from_encoded_slice(cursor.key());
                 if let Some(end) = end_key {
                     if key >= *end {
                         storage_iteration_finished = true;
                         return Ok(None);
                     }
                 }
-                let lock = Lock::parse(cursor.value(&mut self.statistics.lock))?;
+                let lock = Lock::parse(cursor.value())?;
                 if filter(&key, TxnLockRef::Persisted(&lock)) {
                     self.statistics.lock.processed_keys += 1;
                     return Ok(Some((key, lock)));
@@ -471,7 +471,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
         if !found {
             return Ok(None);
         }
-        let write_key = cursor.key(&mut self.statistics.write);
+        let write_key = cursor.key();
         let commit_ts = Key::decode_ts_from(write_key)?;
         // check whether the found written_key's "real key" part equals the `key` we
         // want to find
@@ -479,7 +479,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             return Ok(None);
         }
         // parse out the write record
-        let write = WriteRef::parse(cursor.value(&mut self.statistics.write))?.to_owned();
+        let write = WriteRef::parse(cursor.value())?.to_owned();
         Ok(Some((commit_ts, write)))
     }
 
@@ -682,10 +682,9 @@ impl<S: EngineSnapshot> MvccReader<S> {
         let mut ok = cursor.seek_to_first(&mut self.statistics.write);
 
         while ok {
-            if WriteRef::parse(cursor.value(&mut self.statistics.write))?.start_ts == ts {
+            if WriteRef::parse(cursor.value())?.start_ts == ts {
                 return Ok(Some(
-                    Key::from_encoded(cursor.key(&mut self.statistics.write).to_vec())
-                        .truncate_ts()?,
+                    Key::from_encoded(cursor.key().to_vec()).truncate_ts()?,
                 ));
             }
             ok = cursor.next(&mut self.statistics.write);
@@ -721,7 +720,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
         let mut locks = Vec::with_capacity(limit);
         let mut has_remain = false;
         while cursor.valid()? {
-            let key = Key::from_encoded_slice(cursor.key(&mut self.statistics.lock));
+            let key = Key::from_encoded_slice(cursor.key());
             if let Some(end) = end {
                 if key >= *end {
                     has_remain = false;
@@ -729,7 +728,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
                 }
             }
 
-            let lock = Lock::parse(cursor.value(&mut self.statistics.lock))?;
+            let lock = Lock::parse(cursor.value())?;
             if filter(&key, &lock) {
                 locks.push((key, lock));
                 if limit > 0 && locks.len() == limit {
@@ -779,7 +778,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
         let mut keys = Vec::with_capacity(limit);
         let mut has_remain = false;
         while cursor.valid()? {
-            let key = Key::from_encoded_slice(cursor.key(&mut self.statistics.write));
+            let key = Key::from_encoded_slice(cursor.key());
             if let Some(end) = end {
                 if key >= *end {
                     has_remain = false;
@@ -790,7 +789,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             let user_key = key.truncate_ts()?;
             // Skip the key if its latest write type is not `WriteType::Put` or
             // `WriteType::Delete`.
-            match WriteRef::parse(cursor.value(&mut self.statistics.write))?.write_type {
+            match WriteRef::parse(cursor.value())?.write_type {
                 WriteType::Put | WriteType::Delete => {}
                 WriteType::Lock | WriteType::Rollback => {
                     cursor.next(&mut self.statistics.write);
@@ -846,8 +845,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
                 resource_metering::record_read_keys(keys.len() as u32);
                 return Ok((keys, start));
             }
-            let key =
-                Key::from_encoded(cursor.key(&mut self.statistics.write).to_vec()).truncate_ts()?;
+            let key = Key::from_encoded(cursor.key().to_vec()).truncate_ts()?;
             start = Some(key.clone().append_ts(TimeStamp::zero()));
             keys.push(key);
         }
@@ -863,10 +861,10 @@ impl<S: EngineSnapshot> MvccReader<S> {
         }
         let mut v = vec![];
         while ok {
-            let cur_key = cursor.key(&mut self.statistics.data);
+            let cur_key = cursor.key();
             let ts = Key::decode_ts_from(cur_key)?;
             if Key::is_user_key_eq(cur_key, key.as_encoded()) {
-                v.push((ts, cursor.value(&mut self.statistics.data).to_vec()));
+                v.push((ts, cursor.value().to_vec()));
             } else {
                 break;
             }

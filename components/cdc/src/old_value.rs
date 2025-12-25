@@ -192,11 +192,11 @@ pub fn near_seek_old_value<S: EngineSnapshot>(
 
     let (user_key, seek_ts) = Key::split_on_ts_for(key.as_encoded()).unwrap();
     if write_cursor.near_seek(key, &mut statistics.write)?
-        && Key::is_user_key_eq(write_cursor.key(&mut statistics.write), user_key)
+        && Key::is_user_key_eq(write_cursor.key(), user_key)
     {
         let mut old_value = None;
-        while Key::is_user_key_eq(write_cursor.key(&mut statistics.write), user_key) {
-            let write = WriteRef::parse(write_cursor.value(&mut statistics.write)).unwrap();
+        while Key::is_user_key_eq(write_cursor.key(), user_key) {
+            let write = WriteRef::parse(write_cursor.value()).unwrap();
             old_value = match write.write_type {
                 WriteType::Put if write.check_gc_fence_as_latest_version(seek_ts) => {
                     match write.short_value {

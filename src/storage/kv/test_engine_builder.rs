@@ -379,7 +379,7 @@ mod tests {
         );
         assert_eq!(iter.valid().unwrap(), true);
         assert_eq!(
-            iter.key(&mut statistics),
+            iter.key(),
             Key::from_raw(b"foo4")
                 .append_ts(TimeStamp::zero())
                 .as_encoded()
