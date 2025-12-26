@@ -131,6 +131,7 @@ pub struct HeartbeatTask {
     pub approximate_keys: Option<u64>,
     pub replication_status: Option<RegionReplicationStatus>,
     pub wait_data_peers: Vec<u64>,
+    pub bucket_meta: Option<metapb::BucketMeta>,
 }
 
 /// Uses an asynchronous thread to tell PD something.
@@ -1212,6 +1213,7 @@ where
         peer: metapb::Peer,
         region_stat: RegionStat,
         replication_status: Option<RegionReplicationStatus>,
+        bucket_meta: Option<metapb::BucketMeta>,
     ) {
         self.store_stat
             .region_bytes_written
@@ -1234,6 +1236,7 @@ where
             peer,
             region_stat,
             replication_status,
+            bucket_meta,
         );
         let f = async move {
             if let Err(e) = resp.await {
@@ -2394,6 +2397,7 @@ where
                         cpu_usage,
                     },
                     hb_task.replication_status,
+                    hb_task.bucket_meta,
                 )
             }
             Task::StoreHeartbeat {

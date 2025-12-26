@@ -120,6 +120,7 @@ fn test_rpc_client() {
         peer.clone(),
         RegionStat::default(),
         None,
+        None,
     ));
     rx.recv_timeout(Duration::from_secs(3)).unwrap();
 
@@ -518,6 +519,7 @@ fn test_pd_client_heartbeat_send_failed() {
             metapb::Peer::default(),
             RegionStat::default(),
             None,
+            None,
         ));
         let rsp = rx.recv_timeout(Duration::from_millis(300));
         if ok {
@@ -570,6 +572,7 @@ fn test_region_heartbeat_on_leader_change() {
         peer.clone(),
         stat.clone(),
         None,
+        None,
     ));
     rx.recv_timeout(LeaderChange::get_leader_interval())
         .unwrap();
@@ -593,6 +596,7 @@ fn test_region_heartbeat_on_leader_change() {
             region.clone(),
             peer.clone(),
             stat.clone(),
+            None,
             None,
         ));
         rx.recv_timeout(LeaderChange::get_leader_interval())

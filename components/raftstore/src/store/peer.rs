@@ -5789,6 +5789,10 @@ where
     }
 
     pub fn heartbeat_pd<T>(&mut self, ctx: &PollContext<EK, ER, T>) {
+        let bucket_meta = self
+            .region_buckets_info()
+            .bucket_stat()
+            .map(|stat| -> metapb::BucketMeta { stat.meta.as_ref().into() });
         let task = PdTask::Heartbeat(HeartbeatTask {
             term: self.term(),
             region: self.region().clone(),
@@ -5801,6 +5805,7 @@ where
             approximate_keys: self.approximate_keys(),
             replication_status: self.region_replication_status(ctx),
             wait_data_peers: self.wait_data_peers.clone(),
+            bucket_meta,
         });
         if let Err(e) = ctx.pd_scheduler.schedule(task) {
             warn!(

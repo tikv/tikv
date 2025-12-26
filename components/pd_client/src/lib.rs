@@ -102,6 +102,15 @@ impl PartialEq for BucketMeta {
     }
 }
 
+impl From<&BucketMeta> for metapb::BucketMeta {
+    fn from(bucket_meta: &BucketMeta) -> Self {
+        let mut bm = metapb::BucketMeta::default();
+        bm.set_version(bucket_meta.version);
+        bm.set_keys(bucket_meta.keys.clone().into());
+        bm
+    }
+}
+
 impl PartialOrd for BucketMeta {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
@@ -411,6 +420,7 @@ pub trait PdClient: Send + Sync {
         _leader: metapb::Peer,
         _region_stat: RegionStat,
         _replication_status: Option<RegionReplicationStatus>,
+        _bucket_meta: Option<metapb::BucketMeta>,
     ) -> PdFuture<()> {
         unimplemented!();
     }

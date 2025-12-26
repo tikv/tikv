@@ -36,7 +36,8 @@ use kvproto::{
     },
 };
 use pd_client::{
-    BucketStat, Error, FeatureGate, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result,
+    BucketMeta, BucketStat, Error, FeatureGate, Key, PdClient, PdFuture, RegionInfo, RegionStat,
+    Result,
 };
 use raft::eraftpb::ConfChangeType;
 use tikv_util::{
@@ -827,6 +828,7 @@ impl PdCluster {
         leader: metapb::Peer,
         region_stat: RegionStat,
         replication_status: Option<RegionReplicationStatus>,
+        bucket_meta: Option<metapb::BucketMeta>,
     ) -> Result<pdpb::RegionHeartbeatResponse> {
         for peer in region.get_peers() {
             self.down_peers.remove(&peer.get_id());
@@ -850,6 +852,15 @@ impl PdCluster {
 
         if let Some(status) = replication_status {
             self.region_replication_status.insert(region.id, status);
+        }
+        if let Some(meta) = bucket_meta {
+            let mut bs = BucketStat::default();
+            let mut m = BucketMeta::default();
+            m.region_id = region.get_id();
+            m.version = meta.get_version();
+            m.keys = meta.get_keys().to_vec();
+            bs.set_meta(Arc::new(m));
+            self.buckets.insert(region.get_id(), bs);
         }
         fail_point!("test_raftstore::pd::region_heartbeat");
 
@@ -1710,6 +1721,7 @@ impl PdClient for TestPdClient {
         leader: metapb::Peer,
         region_stat: RegionStat,
         replication_status: Option<RegionReplicationStatus>,
+        bucket_meta: Option<metapb::BucketMeta>,
     ) -> PdFuture<()> {
         if let Err(e) = self.check_bootstrap() {
             return Box::pin(err(e));
@@ -1720,6 +1732,7 @@ impl PdClient for TestPdClient {
             leader.clone(),
             region_stat,
             replication_status,
+            bucket_meta,
         );
         fail_point!("test_pd_client::finish_region_heartbeat");
         match resp {
