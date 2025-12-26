@@ -1553,6 +1553,7 @@ dependencies = [
  "keys",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "pin-project",
  "pprof",
  "prometheus",
