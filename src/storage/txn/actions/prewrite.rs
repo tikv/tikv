@@ -9,6 +9,7 @@ use kvproto::kvrpcpb::{
     PrewriteRequestPessimisticAction::{self, *},
     WriteConflictReason,
 };
+use tikv_util::Either;
 use txn_types::{
     Key, LastChange, Mutation, MutationType, OldValue, TimeStamp, Value, Write, WriteType,
     is_short_value,
@@ -93,7 +94,13 @@ pub fn prewrite_with_generation<S: Snapshot>(
     let mut lock_amended = false;
 
     let lock_status = match reader.load_lock(&mutation.key)? {
-        Some(lock) => {
+        Some(lock_or_shared_locks) => {
+            let lock = match lock_or_shared_locks {
+                Either::Left(lock) => lock,
+                Either::Right(_shared_locks) => {
+                    unimplemented!("SharedLocks returned from load_lock is not supported here")
+                }
+            };
             mutation.check_lock(lock, pessimistic_action, expected_for_update_ts, generation)?
         }
         None if matches!(pessimistic_action, DoPessimisticCheck) => {
@@ -2809,8 +2816,8 @@ pub mod tests {
         for &key in &[k1, k2] {
             let k = Key::from_raw(key);
             let res = cm.read_key_check(&k, |l| {
-                Lock::check_ts_conflict(
-                    Cow::Borrowed(l),
+                txn_types::check_ts_conflict(
+                    Cow::Owned(tikv_util::Either::Left(l.clone())),
                     &k,
                     TimeStamp::max(),
                     &TsSet::Empty,

@@ -42,7 +42,6 @@ use tikv_util::{
 };
 use tipb::{AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, DagRequest, ExecType};
 use tokio::sync::Semaphore;
-use txn_types::Lock;
 
 use super::config_manager::CopConfigManager;
 use crate::{
@@ -943,8 +942,8 @@ fn check_memory_locks_for_ranges(
             let end_key = txn_types::Key::from_raw_maybe_unbounded(range.get_end());
             concurrency_manager
                 .read_range_check(start_key.as_ref(), end_key.as_ref(), |key, lock| {
-                    Lock::check_ts_conflict(
-                        Cow::Borrowed(lock),
+                    txn_types::check_ts_conflict(
+                        Cow::Owned(tikv_util::Either::Left(lock.clone())),
                         key,
                         start_ts,
                         &req_ctx.bypass_locks,

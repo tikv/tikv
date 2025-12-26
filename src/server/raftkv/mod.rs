@@ -914,8 +914,8 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                     start_key.as_ref(),
                     end_key.as_ref(),
                     |key, lock| {
-                        txn_types::Lock::check_ts_conflict_for_replica_read(
-                            Cow::Borrowed(lock),
+                        txn_types::check_ts_conflict_for_replica_read(
+                            Cow::Owned(tikv_util::Either::Left(lock.clone())),
                             key,
                             start_ts,
                             &Default::default(),

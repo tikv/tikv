@@ -41,7 +41,7 @@ use raftstore::{
 use thiserror::Error;
 use tikv_kv::Engine;
 use tikv_util::{
-    config::ReadableSize, keybuilder::KeyBuilder, store::find_peer,
+    Either, config::ReadableSize, keybuilder::KeyBuilder, store::find_peer,
     sys::thread::StdThreadBuildWrapper, worker::Worker,
 };
 use txn_types::Key;
@@ -1497,7 +1497,14 @@ impl MvccChecker {
 
     fn next_lock(&mut self, key: &[u8]) -> Result<Option<Lock>> {
         if self.lock_iter.valid().unwrap() && keys::origin_key(self.lock_iter.key()) == key {
-            let lock = box_try!(Lock::parse(self.lock_iter.value()));
+            let lock = match box_try!(txn_types::parse_lock(self.lock_iter.value())) {
+                Either::Left(lock) => lock,
+                Either::Right(_shared_locks) => {
+                    unimplemented!(
+                        "SharedLocks returned from txn_types::parse_lock is not supported here"
+                    )
+                }
+            };
             self.lock_iter.next().unwrap();
             return Ok(Some(lock));
         }
