@@ -160,7 +160,18 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
         keys: &[Key],
         start_ts: impl Into<TimeStamp>,
     ) -> Result<(Vec<Result<KvPair>>, KvGetStatistics)> {
-        block_on(self.store.batch_get(ctx, keys.to_owned(), start_ts.into()))
+        block_on(
+            self.store
+                .batch_get(ctx, keys.to_owned(), start_ts.into(), false),
+        )
+        .map(|(list, stats)| {
+            (
+                list.into_iter()
+                    .map(|r| r.map(|(key, entry)| (key, entry.value)))
+                    .collect(),
+                stats,
+            )
+        })
     }
 
     #[allow(clippy::type_complexity)]
