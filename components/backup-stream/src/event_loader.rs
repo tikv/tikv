@@ -167,6 +167,8 @@ impl<S: Snapshot> EventLoader<S> {
                                     region_id: self.region.id,
                                 })?;
                         }
+                    } else {
+                        debug!("meet shared locks during initial scanning."; "key" => %utils::redact(&lock_at));
                     }
                 }
                 TxnEntry::Commit { default, write, .. } => {

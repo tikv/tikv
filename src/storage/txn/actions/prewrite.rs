@@ -94,8 +94,8 @@ pub fn prewrite_with_generation<S: Snapshot>(
     let mut lock_amended = false;
 
     let lock_status = match reader.load_lock(&mutation.key)? {
-        Some(lock) => {
-            let lock = match lock {
+        Some(lock_or_shared_locks) => {
+            let lock = match lock_or_shared_locks {
                 Either::Left(lock) => lock,
                 Either::Right(_shared_locks) => {
                     unimplemented!("SharedLocks returned from load_lock is not supported here")

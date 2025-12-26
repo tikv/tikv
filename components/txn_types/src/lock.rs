@@ -227,12 +227,6 @@ impl Lock {
         self
     }
 
-    #[inline]
-    #[must_use]
-    pub fn is_shared(&self) -> bool {
-        self.lock_type == LockType::Shared
-    }
-
     pub fn to_bytes(&self) -> Vec<u8> {
         assert!(
             self.lock_type != LockType::Shared,
@@ -351,18 +345,15 @@ pub fn detect_lock_type(b: &[u8]) -> Result<LockType> {
 }
 
 pub fn detect_lock_ts(b: &[u8]) -> Result<TimeStamp> {
-    if b.is_empty() {
-        return Err(Error::from(ErrorInner::BadFormatLock));
+    match detect_lock_type(b)? {
+        LockType::Shared => Err(Error::from(ErrorInner::BadFormatLock)),
+        _ => {
+            let mut b = &b[1..];
+            let _ = bytes::decode_compact_bytes(&mut b)?;
+            let ts = number::decode_var_u64(&mut b)?.into();
+            Ok(ts)
+        }
     }
-    if LockType::from_u8(b[0]).ok_or(ErrorInner::BadFormatLock)? == LockType::Shared {
-        let shared_locks = SharedLocks::parse(b)?;
-        let (ts, _) = shared_locks.compute_outer_ts_and_for_update_ts()?;
-        return Ok(ts);
-    }
-    let mut b = &b[1..];
-    let _ = bytes::decode_compact_bytes(&mut b)?;
-    let ts = number::decode_var_u64(&mut b)?.into();
-    Ok(ts)
 }
 
 /// Checks whether the lock conflicts with the given `ts`. If `ts ==
@@ -664,13 +655,17 @@ impl Lock {
     }
 }
 
-#[derive(PartialEq, Clone, Debug)]
+#[derive(PartialEq, Clone, Debug, Default)]
 pub struct SharedLocks {
     pub txn_info_segments: HashMap<TimeStamp, Either<Vec<u8>, Lock>>,
 }
 
 impl SharedLocks {
-    pub fn new(txn_info_segments: HashMap<TimeStamp, Either<Vec<u8>, Lock>>) -> Self {
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    pub fn new_with_txn_infos(txn_info_segments: HashMap<TimeStamp, Either<Vec<u8>, Lock>>) -> Self {
         Self { txn_info_segments }
     }
 
@@ -693,122 +688,9 @@ impl SharedLocks {
             let lock_ts = detect_lock_ts(&lock_bytes)?;
             segments.insert(lock_ts, Either::Left(lock_bytes));
         }
-        Ok(Self::new(segments))
+        Ok(Self::new_with_txn_infos(segments))
     }
-
-    pub fn new_in_shared_mode() -> Self {
-        Self::new(HashMap::default())
-    }
-
-    #[inline]
-    #[must_use]
-    pub fn lock_type(&self) -> LockType {
-        LockType::Shared
-    }
-
-    fn compute_outer_ts_and_for_update_ts(&self) -> Result<(TimeStamp, TimeStamp)> {
-        let mut ts = TimeStamp::max();
-        let mut for_update_ts = TimeStamp::max();
-        let mut seen_pessimistic = false;
-
-        for seg in self.txn_info_segments.values() {
-            match seg {
-                Either::Left(encoded) => match detect_lock_type(encoded)? {
-                    LockType::Lock => {
-                        ts = std::cmp::min(ts, detect_lock_ts(encoded)?);
-                    }
-                    LockType::Pessimistic => {
-                        seen_pessimistic = true;
-                        for_update_ts =
-                            std::cmp::min(for_update_ts, Self::detect_for_update_ts(encoded)?);
-                    }
-                    other => unreachable!(
-                        "unexpected lock type in shared lock txn info segment: {:?}",
-                        other
-                    ),
-                },
-                Either::Right(lock) => match lock.lock_type {
-                    LockType::Lock => {
-                        ts = std::cmp::min(ts, lock.ts);
-                    }
-                    LockType::Pessimistic => {
-                        seen_pessimistic = true;
-                        for_update_ts = std::cmp::min(for_update_ts, lock.for_update_ts);
-                    }
-                    other => unreachable!(
-                        "unexpected lock type in shared lock txn info segment: {:?}",
-                        other
-                    ),
-                },
-            }
-        }
-
-        if !seen_pessimistic {
-            for_update_ts = TimeStamp::max();
-        }
-
-        Ok((ts, for_update_ts))
-    }
-
-    fn detect_for_update_ts(mut b: &[u8]) -> Result<TimeStamp> {
-        if b.is_empty() {
-            return Err(Error::from(ErrorInner::BadFormatLock));
-        }
-        let _lock_type = LockType::from_u8(b.read_u8()?).ok_or(ErrorInner::BadFormatLock)?;
-        let _ = bytes::decode_compact_bytes(&mut b)?;
-        let _ = number::decode_var_u64(&mut b)?;
-        if b.is_empty() {
-            return Ok(TimeStamp::zero());
-        }
-        let _ttl = number::decode_var_u64(&mut b)?;
-
-        while !b.is_empty() {
-            match b.read_u8()? {
-                SHORT_VALUE_PREFIX => {
-                    let len = b.read_u8()? as usize;
-                    if b.len() < len {
-                        return Err(Error::from(ErrorInner::BadFormatLock));
-                    }
-                    b = &b[len..];
-                }
-                FOR_UPDATE_TS_PREFIX => return Ok(number::decode_u64(&mut b)?.into()),
-                TXN_SIZE_PREFIX => {
-                    let _ = number::decode_u64(&mut b)?;
-                }
-                MIN_COMMIT_TS_PREFIX => {
-                    let _ = number::decode_u64(&mut b)?;
-                }
-                ASYNC_COMMIT_PREFIX => {
-                    let len = number::decode_var_u64(&mut b)? as _;
-                    for _ in 0..len {
-                        let _ = bytes::decode_compact_bytes(&mut b)?;
-                    }
-                }
-                ROLLBACK_TS_PREFIX => {
-                    let len = number::decode_var_u64(&mut b)? as usize;
-                    for _ in 0..len {
-                        let _ = number::decode_u64(&mut b)?;
-                    }
-                }
-                LAST_CHANGE_PREFIX => {
-                    let _ = number::decode_u64(&mut b)?;
-                    let _ = number::decode_var_u64(&mut b)?;
-                }
-                TXN_SOURCE_PREFIX => {
-                    let _ = number::decode_var_u64(&mut b)?;
-                }
-                PESSIMISTIC_LOCK_WITH_CONFLICT_PREFIX => {}
-                GENERATION_PREFIX => {
-                    let _ = number::decode_u64(&mut b)?;
-                }
-                // Forward compatibility, stop parsing if meets an unknown byte.
-                _ => break,
-            }
-        }
-
-        Ok(TimeStamp::zero())
-    }
-
+    
     pub fn len(&self) -> usize {
         self.txn_info_segments.len()
     }
@@ -1307,7 +1189,7 @@ mod tests {
                 .set_txn_source(1)
                 .with_generation(10),
             ),
-            Either::Right(SharedLocks::new({
+            Either::Right(SharedLocks::new_with_txn_infos({
                 let mut segments = HashMap::default();
                 let seg1_ts: TimeStamp = 11.into();
                 let seg1 = Lock::new(
@@ -1840,7 +1722,7 @@ mod tests {
             .to_bytes()
         }
 
-        let shared_bytes = SharedLocks::new_in_shared_mode().to_bytes();
+        let shared_bytes = SharedLocks::new().to_bytes();
 
         assert!(matches!(
             detect_lock_type(&lock_bytes(LockType::Put)),
@@ -1890,19 +1772,18 @@ mod tests {
 
     #[test]
     fn test_new_in_shared_mode_initial_state() {
-        let lock = SharedLocks::new_in_shared_mode();
+        let shared_locks = SharedLocks::new();
 
-        assert_eq!(lock.lock_type(), LockType::Shared);
-        assert_eq!(lock.len(), 0);
-        let bytes = lock.to_bytes();
+        assert_eq!(shared_locks.len(), 0);
+        let bytes = shared_locks.to_bytes();
         assert!(matches!(detect_lock_type(&bytes), Ok(LockType::Shared)));
-        assert_eq!(detect_lock_ts(&bytes).unwrap(), TimeStamp::max());
+        detect_lock_ts(&bytes).unwrap_err();
         assert!(matches!(parse_lock(&bytes).unwrap(), Either::Right(_)));
     }
 
     #[test]
     fn test_push_and_find_shared_lock_txn() {
-        let mut shared_lock = SharedLocks::new_in_shared_mode();
+        let mut shared_locks = SharedLocks::new();
 
         let txn1_ts: TimeStamp = 5.into();
         let txn1_lock = Lock::new(
@@ -1941,28 +1822,28 @@ mod tests {
             false,
         );
 
-        shared_lock.put_shared_lock(txn1_lock);
-        shared_lock.put_shared_lock(txn2_pessimistic_lock);
-        shared_lock.put_shared_lock(txn2_prewrite_lock);
+        shared_locks.put_shared_lock(txn1_lock);
+        shared_locks.put_shared_lock(txn2_pessimistic_lock);
+        shared_locks.put_shared_lock(txn2_prewrite_lock);
 
-        assert_eq!(shared_lock.len(), 2);
-        assert_eq!(shared_lock.get_lock(&txn1_ts).unwrap().ts, txn1_ts);
+        assert_eq!(shared_locks.len(), 2);
+        assert_eq!(shared_locks.get_lock(&txn1_ts).unwrap().ts, txn1_ts);
         assert_eq!(
-            shared_lock.get_lock(&txn1_ts).unwrap().lock_type,
+            shared_locks.get_lock(&txn1_ts).unwrap().lock_type,
             LockType::Pessimistic
         );
-        assert_eq!(shared_lock.get_lock(&txn2_ts).unwrap().ts, txn2_ts);
+        assert_eq!(shared_locks.get_lock(&txn2_ts).unwrap().ts, txn2_ts);
         assert_eq!(
-            shared_lock.get_lock(&txn2_ts).unwrap().lock_type,
+            shared_locks.get_lock(&txn2_ts).unwrap().lock_type,
             LockType::Lock
         );
 
-        let found = shared_lock.find_shared_lock_txn(txn1_ts).unwrap();
+        let found = shared_locks.find_shared_lock_txn(txn1_ts).unwrap();
         assert_eq!(found.primary, b"txn1".to_vec());
         assert_eq!(found.ts, txn1_ts);
         assert_eq!(found.lock_type, LockType::Pessimistic);
 
         let missing_ts: TimeStamp = 42.into();
-        assert!(shared_lock.find_shared_lock_txn(missing_ts).is_none());
+        assert!(shared_locks.find_shared_lock_txn(missing_ts).is_none());
     }
 }

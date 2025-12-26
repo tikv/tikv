@@ -779,7 +779,7 @@ impl Delegate {
                         debug!("cdc skip lock record"; "lock" => ?lock_type, "key" => %Key::from_encoded(lock.0));
                         continue;
                     }
-                    let l = txn_types::parse_lock(&lock.1).unwrap().left().unwrap();
+                    let l = txn_types::parse_lock(&lock.1).unwrap().left().expect("only put/delete lock should be here");
                     if decode_lock(lock.0, l, &mut row, &mut _has_value) {
                         continue;
                     }
@@ -1054,14 +1054,14 @@ impl Delegate {
                 let lock = txn_types::parse_lock(put.get_value())
                     .unwrap()
                     .left()
-                    .unwrap();
+                    .expect("only put/delete lock should be here");
                 let for_update_ts = lock.for_update_ts;
                 let txn_source = lock.txn_source;
 
                 let key = Key::from_encoded_slice(&put.key);
                 let row = rows.txns_by_key.entry(key.clone()).or_default();
                 if decode_lock(put.take_key(), lock, &mut row.v, &mut row.has_value) {
-                    unreachable!();
+                    unreachable!("non put/delete lock has been filtered");
                 }
 
                 let mini_lock = MiniLock::new(row.v.start_ts, txn_source);
