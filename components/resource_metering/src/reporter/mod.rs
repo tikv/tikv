@@ -14,6 +14,7 @@ use std::{
 use collections::HashMap;
 use kvproto::resource_usage_agent::ResourceUsageRecord;
 use tikv_util::{
+    thread_name_prefix::RESOURCE_METERING_RECORDER_THREAD,
     time::Duration,
     warn,
     worker::{Builder as WorkerBuilder, LazyWorker, Runnable, RunnableWithTimer, Scheduler},
@@ -238,10 +239,10 @@ pub fn init_reporter(
     DataSinkRegHandle,
     Box<LazyWorker<Task>>,
 ) {
-    let mut reporter_worker = WorkerBuilder::new("resource-metering-reporter")
+    let mut reporter_worker = WorkerBuilder::new(RESOURCE_METERING_RECORDER_THREAD)
         .pending_capacity(30)
         .create()
-        .lazy_build("resource-metering-reporter");
+        .lazy_build(RESOURCE_METERING_RECORDER_THREAD);
     let reporter_scheduler = reporter_worker.scheduler();
     let data_sink_reg_handle = DataSinkRegHandle::new(reporter_scheduler.clone());
     let reporter = Reporter::new(config, collector_reg_handle, reporter_scheduler.clone());

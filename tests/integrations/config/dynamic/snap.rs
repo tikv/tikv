@@ -22,6 +22,7 @@ use tikv::{
 };
 use tikv_util::{
     config::{ReadableSize, VersionTrack},
+    thread_name_prefix::SNAP_HANDLER_THREAD,
     worker::{LazyWorker, Scheduler, Worker},
 };
 
@@ -56,7 +57,7 @@ fn start_server(
     );
     let (raft_router, _) =
         create_raft_batch_system::<RocksEngine, RaftLogEngine>(&cfg.raft_store, &None);
-    let mut snap_worker = Worker::new("snap-handler").lazy_build("snap-handler");
+    let mut snap_worker = Worker::new(SNAP_HANDLER_THREAD).lazy_build(SNAP_HANDLER_THREAD);
     let snap_worker_scheduler = snap_worker.scheduler();
     let server_config = Arc::new(VersionTrack::new(cfg.server.clone()));
     let cfg_controller = ConfigController::new(cfg);

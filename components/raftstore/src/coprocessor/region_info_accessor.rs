@@ -18,7 +18,9 @@ use kvproto::metapb::Region;
 use pd_client::RegionStat;
 use raft::StateRole;
 use tikv_util::{
-    box_err, debug, info, warn,
+    box_err, debug, info,
+    thread_name_prefix::REGION_COLLECTOR_WORKER_THREAD,
+    warn,
     worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer, Scheduler, Worker},
 };
 
@@ -876,9 +878,9 @@ impl RegionInfoAccessor {
         mvcc_amplification_threshold: Box<dyn Fn() -> usize + Send>,
     ) -> Self {
         let region_leaders = Arc::new(RwLock::new(HashSet::default()));
-        let worker = WorkerBuilder::new("region-collector-worker").create();
+        let worker = WorkerBuilder::new(REGION_COLLECTOR_WORKER_THREAD).create();
         let scheduler = worker.start_with_timer(
-            "region-collector-worker",
+            REGION_COLLECTOR_WORKER_THREAD,
             RegionCollector::new(region_leaders.clone(), mvcc_amplification_threshold),
         );
         register_region_event_listener(host, scheduler.clone(), region_stats_manager_enabled_cb);

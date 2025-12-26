@@ -43,6 +43,7 @@ use tikv_util::{
     memory::{MemoryQuota, OwnedAllocated},
     resizable_threadpool::DeamonRuntimeHandle,
     sys::{SysQuota, thread::ThreadBuildWrapper},
+    thread_name_prefix::SST_IMPORT_MISC_THREAD,
     time::{Instant, Limiter},
 };
 use tokio::{runtime::Runtime, sync::OnceCell};
@@ -191,7 +192,7 @@ impl<E: KvEngine> SstImporter<E> {
         // enough.
         let download_rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
-            .thread_name("sst_import_misc")
+            .thread_name(SST_IMPORT_MISC_THREAD)
             .with_sys_and_custom_hooks(
                 || {
                     file_system::set_io_type(IoType::Import);
