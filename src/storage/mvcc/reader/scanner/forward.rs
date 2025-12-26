@@ -718,62 +718,74 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
             .unwrap()
             .value(&mut statistics.lock)
             .to_owned();
-        let lock = match txn_types::parse_lock(&lock_value)? {
-            Either::Left(lock) => lock,
-            Either::Right(_shared_locks) => {
-                unimplemented!(
-                    "SharedLocks returned from txn_types::parse_lock is not supported here"
-                )
+        match txn_types::parse_lock(&lock_value)? {
+            Either::Left(lock) => {
+                let result = if lock.ts > cfg.ts {
+                    Ok(HandleRes::Skip(current_user_key))
+                } else {
+                    let load_default_res =
+                        if lock.lock_type == LockType::Put && lock.short_value.is_none() {
+                            let default_cursor = cursors.default.as_mut().unwrap();
+                            super::near_load_data_by_write(
+                                default_cursor,
+                                &current_user_key,
+                                lock.ts,
+                                statistics,
+                            )
+                            .map(|v| {
+                                let key = default_cursor.key(&mut statistics.data).to_vec();
+                                (key, v)
+                            })
+                        } else {
+                            Ok((vec![], vec![]))
+                        };
+
+                    let mut old_value = OldValue::None;
+                    if self.extra_op == ExtraOp::ReadOldValue
+                        && matches!(lock.lock_type, LockType::Put | LockType::Delete)
+                    {
+                        // When meet a lock, the write cursor must indicate the same user key.
+                        // Seek for the last valid committed here.
+                        old_value = super::seek_for_valid_value(
+                            &mut cursors.write,
+                            cursors.default.as_mut().unwrap(),
+                            &current_user_key,
+                            std::cmp::max(lock.ts, lock.for_update_ts),
+                            self.from_ts,
+                            cfg.hint_min_ts,
+                            statistics,
+                        )?;
+                    }
+                    load_default_res.map(|default| {
+                        HandleRes::Return(TxnEntry::Prewrite {
+                            default,
+                            lock: (current_user_key.into_encoded(), lock_value),
+                            old_value,
+                        })
+                    })
+                };
+
+                cursors.lock.as_mut().unwrap().next(&mut statistics.lock);
+
+                result
             }
-        };
-        let result = if lock.ts > cfg.ts {
-            Ok(HandleRes::Skip(current_user_key))
-        } else {
-            let load_default_res = if lock.lock_type == LockType::Put && lock.short_value.is_none()
-            {
-                let default_cursor = cursors.default.as_mut().unwrap();
-                super::near_load_data_by_write(
-                    default_cursor,
-                    &current_user_key,
-                    lock.ts,
-                    statistics,
-                )
-                .map(|v| {
-                    let key = default_cursor.key(&mut statistics.data).to_vec();
-                    (key, v)
+            Either::Right(shared_locks) => {
+                let should_output = shared_locks
+                    .txn_info_segments
+                    .keys()
+                    .any(|start_ts| *start_ts <= cfg.ts);
+                cursors.lock.as_mut().unwrap().next(&mut statistics.lock);
+                Ok(if should_output {
+                    HandleRes::Return(TxnEntry::Prewrite {
+                        default: (vec![], vec![]),
+                        lock: (current_user_key.into_encoded(), lock_value),
+                        old_value: OldValue::None,
+                    })
+                } else {
+                    HandleRes::Skip(current_user_key)
                 })
-            } else {
-                Ok((vec![], vec![]))
-            };
-
-            let mut old_value = OldValue::None;
-            if self.extra_op == ExtraOp::ReadOldValue
-                && matches!(lock.lock_type, LockType::Put | LockType::Delete)
-            {
-                // When meet a lock, the write cursor must indicate the same user key.
-                // Seek for the last valid committed here.
-                old_value = super::seek_for_valid_value(
-                    &mut cursors.write,
-                    cursors.default.as_mut().unwrap(),
-                    &current_user_key,
-                    std::cmp::max(lock.ts, lock.for_update_ts),
-                    self.from_ts,
-                    cfg.hint_min_ts,
-                    statistics,
-                )?;
             }
-            load_default_res.map(|default| {
-                HandleRes::Return(TxnEntry::Prewrite {
-                    default,
-                    lock: (current_user_key.into_encoded(), lock_value),
-                    old_value,
-                })
-            })
-        };
-
-        cursors.lock.as_mut().unwrap().next(&mut statistics.lock);
-
-        result
+        }
     }
 
     fn handle_write(

@@ -1136,15 +1136,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                 let pair: Option<std::result::Result<KvPair, _>> =
                                     match reader.load_lock(&k) {
                                         Ok(None) => None,
-                                        Ok(Some(lock)) => {
-                                            let lock = match lock {
-                                                Either::Left(lock) => lock,
-                                                Either::Right(_shared_locks) => {
-                                                    unimplemented!(
-                                                        "SharedLocks returned from load_lock is not supported here"
-                                                    )
-                                                }
-                                            };
+                                        Ok(Some(Either::Right(_))) => None,
+                                        Ok(Some(Either::Left(lock))) => {
                                             if matches!(lock.lock_type, LockType::Pessimistic) {
                                                 assert_ne!(lock.ts, start_ts);
                                             }

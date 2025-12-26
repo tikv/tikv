@@ -779,7 +779,10 @@ impl Delegate {
                         debug!("cdc skip lock record"; "lock" => ?lock_type, "key" => %Key::from_encoded(lock.0));
                         continue;
                     }
-                    let l = txn_types::parse_lock(&lock.1).unwrap().left().expect("only put/delete lock should be here");
+                    let l = txn_types::parse_lock(&lock.1)
+                        .unwrap()
+                        .left()
+                        .expect("only put/delete lock should be here");
                     if decode_lock(lock.0, l, &mut row, &mut _has_value) {
                         continue;
                     }

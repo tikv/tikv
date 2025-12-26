@@ -238,7 +238,12 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> ScannerPool<T, E> {
         Ok((
             locks
                 .into_iter()
-                .map(|(key, lock)| (key, lock.left().expect("only put/delete lock should be here")))
+                .map(|(key, lock)| {
+                    (
+                        key,
+                        lock.left().expect("only put/delete lock should be here"),
+                    )
+                })
                 .collect(),
             has_remaining,
         ))

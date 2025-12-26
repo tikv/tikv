@@ -665,7 +665,9 @@ impl SharedLocks {
         Default::default()
     }
 
-    pub fn new_with_txn_infos(txn_info_segments: HashMap<TimeStamp, Either<Vec<u8>, Lock>>) -> Self {
+    pub fn new_with_txn_infos(
+        txn_info_segments: HashMap<TimeStamp, Either<Vec<u8>, Lock>>,
+    ) -> Self {
         Self { txn_info_segments }
     }
 
@@ -701,7 +703,7 @@ impl SharedLocks {
 
         Ok(Self::new_with_txn_infos(segments))
     }
-    
+
     pub fn len(&self) -> usize {
         self.txn_info_segments.len()
     }
