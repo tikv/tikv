@@ -367,11 +367,11 @@ fn check_ts_conflict_si(
 ) -> Result<()> {
     let lock = match lock_or_shared_locks.as_ref() {
         Either::Left(lock) => lock,
-        Either::Right(_) => return Ok(()),
+        Either::Right(_) => return Ok(()), // Ignore SharedLocks
     };
 
     if lock.ts > ts || lock.lock_type == LockType::Lock || lock.is_pessimistic_lock() {
-        // Ignore lock when lock.ts > ts or lock's type is Lock, Shared or Pessimistic
+        // Ignore lock when lock.ts > ts or lock's type is Lock or Pessimistic
         return Ok(());
     }
 
@@ -428,10 +428,9 @@ fn check_ts_conflict_rc_check_ts(
 ) -> Result<()> {
     let lock = match lock_or_shared_locks.as_ref() {
         Either::Left(lock) => lock,
-        Either::Right(_) => return Ok(()),
+        Either::Right(_) => return Ok(()), // Ignore SharedLocks
     };
 
-    // let lock = lock_or_shared_locks
     if lock.lock_type == LockType::Lock || lock.is_pessimistic_lock() {
         // Ignore lock when the lock's type is Lock, Shared or Pessimistic.
         return Ok(());
@@ -818,8 +817,6 @@ impl HeapSize for SharedLocks {
         self.txn_info_segments.approximate_heap_size()
     }
 }
-
-// type TxnInfoEntry = RefCell<Either<Vec<u8>, Lock>>;
 
 /// A specialized lock only for pessimistic lock. This saves memory for cases
 /// that only pessimistic locks exist.
