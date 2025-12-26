@@ -3770,7 +3770,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#291054671541d529d18b3cbe1dc736a0cfff5ab0"
+source = "git+https://github.com/bufferflies/kvproto?branch=region_heartbeat_with_bucket#a3753d45c0a7be9687bfd97f83078a5eff6d8044"
 dependencies = [
  "bytes",
  "futures 0.3.15",
