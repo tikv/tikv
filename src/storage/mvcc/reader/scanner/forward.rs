@@ -5,7 +5,9 @@ use std::{borrow::Cow, cmp::Ordering};
 
 use engine_traits::CF_DEFAULT;
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel, WriteConflictReason};
-use txn_types::{Key, LastChange, Lock, LockType, OldValue, TimeStamp, Value, WriteRef, WriteType};
+use txn_types::{
+    Key, LastChange, Lock, LockType, OldValue, TimeStamp, ValueEntry, WriteRef, WriteType,
+};
 
 use super::ScannerConfig;
 use crate::storage::{
@@ -380,7 +382,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
 pub struct LatestKvPolicy;
 
 impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
-    type Output = (Key, Value);
+    type Output = (Key, ValueEntry);
 
     fn handle_lock(
         &mut self,
@@ -409,7 +411,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
             statistics.lock.processed_keys += 1;
             // Skip current_user_key because this key is either blocked or handled.
             cursors.move_write_cursor_to_next_user_key(&current_user_key, statistics)?;
-            if cfg.access_locks.contains(lock.ts) {
+            if !cfg.load_commit_ts && cfg.access_locks.contains(lock.ts) {
                 cursors.ensure_default_cursor(cfg)?;
                 return super::load_data_by_lock(
                     &current_user_key,
@@ -419,7 +421,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
                     statistics,
                 )
                 .map(|val| match val {
-                    Some(v) => HandleRes::Return((current_user_key, v)),
+                    Some(v) => HandleRes::Return((current_user_key, ValueEntry::new(v, None))),
                     None => HandleRes::MoveToNext,
                 });
             }
@@ -435,7 +437,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
         cursors: &mut Cursors<S>,
         statistics: &mut Statistics,
     ) -> Result<HandleRes<Self::Output>> {
-        let value: Option<Value> = loop {
+        let value: Option<ValueEntry> = loop {
             let write = WriteRef::parse(cursors.write.value(&mut statistics.write))?;
 
             if !write.check_gc_fence_as_latest_version(cfg.ts) {
@@ -444,13 +446,20 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
 
             match write.write_type {
                 WriteType::Put => {
+                    let commit_ts = if cfg.load_commit_ts {
+                        Some(Key::decode_ts_from(
+                            cursors.write.key(&mut statistics.write),
+                        )?)
+                    } else {
+                        None
+                    };
                     if cfg.omit_value {
-                        break Some(vec![]);
+                        break Some(ValueEntry::new(vec![], commit_ts));
                     }
                     match write.short_value {
                         Some(value) => {
                             // Value is carried in `write`.
-                            break Some(value.to_vec());
+                            break Some(ValueEntry::new(value.to_vec(), commit_ts));
                         }
                         None => {
                             // Value is in the default CF.
@@ -462,7 +471,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
                                 start_ts,
                                 statistics,
                             )?;
-                            break Some(value);
+                            break Some(ValueEntry::new(value, commit_ts));
                         }
                     }
                 }
@@ -506,7 +515,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
     }
 
     fn output_size(&mut self, output: &Self::Output) -> usize {
-        output.0.len() + output.1.len()
+        output.0.len() + output.1.value.len()
     }
 }
 
