@@ -675,19 +675,30 @@ impl SharedLocks {
         }
         let lock_type = LockType::from_u8(b.read_u8()?).ok_or(ErrorInner::BadFormatLock)?;
         assert!(lock_type == LockType::Shared);
-
-        if b.read_u8()? != SHARED_LOCK_TXNS_INFO_PREFIX {
-            return Err(Error::from(ErrorInner::BadFormatLock));
+        if b.is_empty() {
+            return Ok(Self::new());
         }
 
-        let len = number::decode_var_u64(&mut b)? as usize;
         let mut segments = HashMap::default();
-        segments.reserve(len + 1); // some schedulers may append a new lock, reserve for it.
-        for _ in 0..len {
-            let lock_bytes = bytes::decode_compact_bytes(&mut b)?;
-            let lock_ts = detect_lock_ts(&lock_bytes)?;
-            segments.insert(lock_ts, Either::Left(lock_bytes));
+        while !b.is_empty() {
+            match b.read_u8()? {
+                SHARED_LOCK_TXNS_INFO_PREFIX => {
+                    let len = number::decode_var_u64(&mut b)? as usize;
+                    segments.reserve(len + 1); // some schedulers may append a new lock, reserve for it.
+                    for _ in 0..len {
+                        let lock_bytes = bytes::decode_compact_bytes(&mut b)?;
+                        let lock_ts = detect_lock_ts(&lock_bytes)?;
+                        segments.insert(lock_ts, Either::Left(lock_bytes));
+                    }
+                }
+                _ => {
+                    // To support forward compatibility, all fields should be serialized in order
+                    // and stop parsing if meets an unknown byte.
+                    break;
+                }
+            }
         }
+
         Ok(Self::new_with_txn_infos(segments))
     }
     
