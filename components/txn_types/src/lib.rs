@@ -14,8 +14,8 @@ pub use lock::{Lock, LockType, PessimisticLock, TxnLockRef};
 use thiserror::Error;
 pub use timestamp::{TSO_PHYSICAL_SHIFT_BITS, TimeStamp, TsSet};
 pub use types::{
-    CommitRole, Key, KvPair, LastChange, Mutation, MutationType, OldValue, OldValues,
-    SHORT_VALUE_MAX_LEN, TxnExtra, TxnExtraScheduler, Value, WriteBatchFlags,
+    CommitRole, Key, KvPair, KvPairEntry, LastChange, Mutation, MutationType, OldValue, OldValues,
+    SHORT_VALUE_MAX_LEN, TxnExtra, TxnExtraScheduler, Value, ValueEntry, WriteBatchFlags,
     insert_old_value_if_resolved, is_short_value,
 };
 pub use write::{Write, WriteRef, WriteType};
