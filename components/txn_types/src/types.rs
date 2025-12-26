@@ -31,11 +31,43 @@ pub fn is_short_value(value: &[u8]) -> bool {
 /// Value type which is essentially raw bytes.
 pub type Value = Vec<u8>;
 
+/// Value with more information such as commit timestamp.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ValueEntry {
+    pub value: Value,
+    /// The commit timestamp of the value.
+    /// `None` means the commit timestamp unknown.
+    pub commit_ts: Option<TimeStamp>,
+}
+
+impl ValueEntry {
+    #[inline]
+    pub fn new(value: Value, commit_ts: Option<TimeStamp>) -> Self {
+        ValueEntry { value, commit_ts }
+    }
+
+    /// Creates a `ValueEntry` from only a `Value`,
+    /// with other attributes not present.
+    ///
+    /// Please use `ValueEntry::new` instead if commit_ts or other attributes
+    /// are required to make the value complete.
+    #[inline]
+    pub fn from_value(value: Value) -> Self {
+        ValueEntry {
+            value,
+            commit_ts: None,
+        }
+    }
+}
+
 /// Key-value pair type.
 ///
 /// The value is simply raw bytes; the key is a little bit tricky, which is
 /// encoded bytes.
 pub type KvPair = (Vec<u8>, Value);
+
+/// Key-value pair entry type.
+pub type KvPairEntry = (Vec<u8>, ValueEntry);
 
 /// Key type.
 ///
