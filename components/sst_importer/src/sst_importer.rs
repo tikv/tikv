@@ -7,7 +7,7 @@ use std::{
     io::{self, BufReader, ErrorKind, Read},
     ops::Bound,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{Duration, SystemTime},
 };
 
@@ -459,7 +459,12 @@ impl<E: KvEngine> SstImporter<E> {
             "speed_limit" => speed_limiter.speed_limit(),
         );
         let mut sst_readers = Vec::new();
-        let mut clean_paths = Vec::new();
+        let clean_paths = Mutex::new(Vec::new());
+        defer! {
+            for path in clean_paths.lock().unwrap().iter_mut() {
+                self.remove_file_no_throw(&path)
+            }
+        };
         for (name, meta) in metas {
             let path = self.dir.join_for_write(meta)?;
             let dst_file_name = self
@@ -480,8 +485,13 @@ impl<E: KvEngine> SstImporter<E> {
             sst_reader.verify_checksum()?;
 
             sst_readers.push(sst_reader);
-            clean_paths.push(path.temp);
+            clean_paths.lock().unwrap().push(path.temp);
         }
+
+        fail::fail_point!("download_files_ext_after_download", |msg| {
+            let msg = msg.unwrap_or_else(|| "download files ext injected error".to_string());
+            return Err(Error::ErrorWrapper(msg));
+        });
 
         let mut sst_iters = Vec::with_capacity(sst_readers.len());
         for sst_reader in &sst_readers {
@@ -503,11 +513,7 @@ impl<E: KvEngine> SstImporter<E> {
                 engine,
                 ext.req_type,
                 Instant::now(),
-                || {
-                    for path in clean_paths {
-                        let _ = file_system::remove_file(path);
-                    }
-                },
+                || {},
             )
             .await;
 
@@ -4834,6 +4840,54 @@ mod tests {
 
         // Should fail due to invalid SST file
         result.unwrap_err();
+    }
+
+    #[test]
+    #[cfg(feature = "failpoints")]
+    fn test_download_files_ext_cleanup_temp_files_on_error() {
+        let (_ext_sst_dir, backend, file_metas) = create_multiple_external_sst_files(2).unwrap();
+
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer =
+            SstImporter::<TestEngine>::new(&cfg, &importer_dir, None, ApiVersion::V1, false)
+                .unwrap();
+        let db = create_sst_test_engine().unwrap();
+
+        let metas: HashMap<String, SstMeta> = file_metas
+            .iter()
+            .map(|(name, meta)| (name.clone(), meta.clone()))
+            .collect();
+        let temp_paths: Vec<_> = metas
+            .values()
+            .map(|meta| importer.dir.join_for_write(meta).unwrap().temp)
+            .collect();
+
+        let _fp = fail::FailScenario::setup();
+        fail::cfg("download_files_ext_after_download", "return(injected)").unwrap();
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let result = runtime.block_on(importer.download_files_ext(
+            &file_metas[0].1,
+            &metas,
+            &backend,
+            &RewriteRule::default(),
+            None,
+            Limiter::new(f64::INFINITY),
+            db,
+            DownloadExt::default(),
+        ));
+
+        fail::remove("download_files_ext_after_download");
+        assert!(result.is_err());
+
+        for path in temp_paths {
+            assert!(
+                !path.exists(),
+                "temporary download file {:?} should be cleaned up",
+                path
+            );
+        }
     }
 
     #[test]
