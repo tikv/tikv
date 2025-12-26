@@ -653,14 +653,7 @@ fn scan_latest_handle_lock<S: Snapshot, T>(
     let lock_cursor = cursors.lock.as_mut().unwrap();
     let lock_or_shared_locks = {
         let lock_value = lock_cursor.value(&mut statistics.lock);
-        match txn_types::parse_lock(lock_value)? {
-            Either::Left(lock) => Either::Left(lock),
-            Either::Right(_shared_locks) => {
-                unimplemented!(
-                    "SharedLocks returned from txn_types::parse_lock is not supported here"
-                )
-            }
-        }
+        txn_types::parse_lock(lock_value)?
     };
     lock_cursor.next(&mut statistics.lock);
 

@@ -173,17 +173,20 @@ pub(crate) fn decode_lock(key: &[u8], value: &[u8]) -> Option<Lock> {
         _ => {
             #[cfg(debug_assertions)]
             {
-                let lock = match txn_types::parse_lock(value).ok()? {
-                    Either::Left(lock) => lock,
-                    Either::Right(_shared_locks) => unimplemented!(
-                        "SharedLocks returned from txn_types::parse_lock is not supported here"
-                    ),
+                match txn_types::parse_lock(value).ok()? {
+                    Either::Left(lock) => {
+                        debug!("skip lock record";
+                            "type" => ?lock.lock_type,
+                            "start_ts" => ?lock.ts,
+                            "key" => log_wrappers::Value(key),
+                            "for_update_ts" => ?lock.for_update_ts);
+                    }
+                    Either::Right(shared_locks) => {
+                        debug!("skip shared locks record";
+                            "key" => log_wrappers::Value(key),
+                            "len" => shared_locks.len());
+                    }
                 };
-                debug!("skip lock record";
-                    "type" => ?lock.lock_type,
-                    "start_ts" => ?lock.ts,
-                    "key" => log_wrappers::Value(key),
-                    "for_update_ts" => ?lock.for_update_ts);
             }
             None
         }

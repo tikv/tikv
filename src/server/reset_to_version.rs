@@ -270,7 +270,6 @@ impl ResetToVersionManager {
 mod tests {
     use engine_traits::{ALL_CFS, CF_LOCK, WriteBatch, WriteBatchExt};
     use tempfile::Builder;
-    use tikv_util::Either;
     use txn_types::{Lock, LockType, WriteType};
 
     use super::*;
@@ -375,15 +374,11 @@ mod tests {
         lock_iter.seek_to_first().unwrap();
         let mut remaining_locks = vec![];
         while lock_iter.valid().unwrap() {
-            let lock = match txn_types::parse_lock(lock_iter.value()).unwrap() {
-                Either::Left(lock) => lock,
-                Either::Right(_shared_locks) => {
-                    unimplemented!(
-                        "SharedLocks returned from txn_types::parse_lock is not supported here"
-                    )
-                }
-            }
-            .to_owned();
+            let lock = txn_types::parse_lock(lock_iter.value())
+                .unwrap()
+                .left()
+                .unwrap()
+                .to_owned();
             let key = lock_iter.key().to_vec();
             lock_iter.next().unwrap();
             remaining_locks.push((key, lock));
