@@ -9,7 +9,10 @@ use std::{
 use rand::Rng;
 use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
-use tidb_query_datatype::codec::data_type::*;
+use tidb_query_datatype::codec::{
+    data_type::*,
+    mysql::RoundMode,
+};
 use uuid::Uuid;
 
 const IPV4_LENGTH: usize = 4;
@@ -208,6 +211,43 @@ pub fn uuid() -> Result<Option<Bytes>> {
     let mut buf = vec![0; uuid::fmt::Hyphenated::LENGTH];
     result.hyphenated().encode_lower(&mut buf);
     Ok(Some(buf))
+}
+
+#[rpn_fn(nullable)]
+#[inline]
+pub fn uuid_version(input: Option<BytesRef>) -> Result<Option<Int>> {
+    let input = match input {
+        Some(input) => String::from_utf8_lossy(input),
+        None => return Ok(None),
+    };
+    let uuid = Uuid::parse_str(&input);
+    match uuid {
+        Ok(u) => Ok(Some(u.get_version_num() as i64)),
+        Err(_e) => return Ok(None),
+    }
+}
+
+#[rpn_fn(nullable)]
+#[inline]
+pub fn uuid_timestamp(input: Option<BytesRef>) -> Result<Option<Decimal>> {
+    let input = match input {
+        Some(input) => String::from_utf8_lossy(input),
+        None => return Ok(None),
+    };
+    let uuid = Uuid::parse_str(&input);
+    match uuid {
+        Err(_e) => return Ok(None),
+        Ok(_) => (),
+    }
+    let ts = uuid.unwrap().get_timestamp();
+    let (s, ms) = match ts {
+        None => return Ok(None),
+        Some(t) => t.to_unix(),
+    };
+    let r = Decimal::from(s*1000000+((ms as u64)/1000))
+        .shift(-6)
+        .round(6, RoundMode::Truncate);
+    Ok(Some(*r))
 }
 
 #[cfg(test)]
@@ -644,5 +684,45 @@ mod tests {
         assert_eq!(v[4].len(), 12);
         let u = Uuid::parse_str(&r).expect("Parsing UUID failed");
         assert_eq!(u.get_version_num(), 1);
+    }
+
+    #[test]
+    fn test_uuid_version() {
+        let test_cases = vec![
+            ("5f13f854-d74a-11f0-9b7a-0ae0156bd76b", Some(1)),
+            ("c6437ef1-5b86-3a4e-a071-c2d4ad414e65", Some(3)),
+            ("a3e3b4a1-ea6d-471e-9860-8303a8b261f6", Some(4)),
+            ("271a8175-dadd-5df9-b0bd-20a4a0b441e6", Some(5)),
+            ("1f0e48c1-7860-69cc-9b3f-35f89c103d4d", Some(6)),
+            ("019b1440-87b7-7380-ab00-ce413e795004", Some(7)),
+        ];
+
+        for (input, expected_ver) in test_cases {
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .evaluate::<Int>(ScalarFuncSig::UuidVersion)
+                .unwrap();
+            assert_eq!(got, expected_ver);
+        }
+    }
+
+    #[test]
+    fn test_uuid_timestamp() {
+        let test_cases = vec![
+            ("5f13f854-d74a-11f0-9b7a-0ae0156bd76b", Some(Decimal::from_str("1765537487.118139").unwrap())),
+            ("c6437ef1-5b86-3a4e-a071-c2d4ad414e65", None),
+            ("a3e3b4a1-ea6d-471e-9860-8303a8b261f6", None),
+            ("271a8175-dadd-5df9-b0bd-20a4a0b441e6", None),
+            ("1f0e48c1-7860-69cc-9b3f-35f89c103d4d", Some(Decimal::from_str("1766995078.970004").unwrap())),
+            ("019b1440-87b7-7380-ab00-ce413e795004", Some(Decimal::from_str("1765571332.023000").unwrap())),
+        ];
+
+        for (input, expected_ts) in test_cases {
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .evaluate::<Decimal>(ScalarFuncSig::UuidTimestamp)
+                .unwrap();
+            assert_eq!(got, expected_ts);
+        }
     }
 }
