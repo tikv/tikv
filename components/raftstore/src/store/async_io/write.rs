@@ -440,7 +440,7 @@ impl WriteTaskBatchRecorder {
             avg: 0,
             trend: 1.0,
             wait_duration: wait_duration,
-            wait_duration_adaptive: wait_duration,
+            wait_duration_adaptive: Duration::from_nanos(RAFT_WB_WAIT_DURATION_DEFAULT_NS),
             wait_duration_hint: wait_duration,
             wait_count: 0,
             wait_max_count: 1,
@@ -458,13 +458,10 @@ impl WriteTaskBatchRecorder {
     }
 
     #[inline]
-    fn update_config(&mut self, batch_size_config: usize, wait_duration_config: Duration, need_update_wait_duration: bool) {
+    fn update_config(&mut self, batch_size_config: usize, wait_duration_config: Duration) {
         self.batch_size_hint = batch_size_config;
+        self.wait_duration = wait_duration_config;
         self.wait_duration_hint = wait_duration_config;
-        if need_update_wait_duration {
-            self.wait_duration_adaptive = wait_duration_config;
-            self.wait_duration = wait_duration_config;
-        }
     }
 
     #[inline]
@@ -727,8 +724,8 @@ where
     }
 
     #[inline]
-    fn update_config(&mut self, batch_size_config: usize, wait_duration_config: Duration, need_update_wait_duration: bool) {
-        self.recorder.update_config(batch_size_config, wait_duration_config, need_update_wait_duration);
+    fn update_config(&mut self, batch_size_config: usize, wait_duration_config: Duration) {
+        self.recorder.update_config(batch_size_config, wait_duration_config);
     }
 
     #[inline]
@@ -1527,9 +1524,7 @@ where
             self.metrics.waterfall_metrics = incoming.waterfall_metrics;
             self.batch.update_config(
                 incoming.raft_write_batch_size_hint.0 as usize,
-                incoming.raft_write_wait_duration.0,
-                !self.adaptive_batch_enabled
-            );
+                incoming.raft_write_wait_duration.0);
         }
     }
 
