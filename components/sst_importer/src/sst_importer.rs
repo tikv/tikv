@@ -461,8 +461,8 @@ impl<E: KvEngine> SstImporter<E> {
         let mut sst_readers = Vec::new();
         let clean_paths = Mutex::new(Vec::new());
         defer! {
-            for path in clean_paths.lock().unwrap().iter_mut() {
-                self.remove_file_no_throw(&path)
+            for path in clean_paths.lock().unwrap().iter() {
+                self.remove_file_no_throw(path)
             }
         };
         for (name, meta) in metas {
@@ -490,7 +490,7 @@ impl<E: KvEngine> SstImporter<E> {
 
         fail::fail_point!("download_files_ext_after_download", |msg| {
             let msg = msg.unwrap_or_else(|| "download files ext injected error".to_string());
-            return Err(Error::ErrorWrapper(msg));
+            Err(Error::ErrorWrapper(msg))
         });
 
         let mut sst_iters = Vec::with_capacity(sst_readers.len());
@@ -4879,7 +4879,7 @@ mod tests {
         ));
 
         fail::remove("download_files_ext_after_download");
-        assert!(result.is_err());
+        result.unwrap_err();
 
         for path in temp_paths {
             assert!(
