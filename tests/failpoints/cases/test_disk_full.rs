@@ -333,7 +333,6 @@ fn test_majority_disk_full() {
     opts.disk_full_opt = DiskFullOpt::AllowedOnAlmostFull;
     let ch = cluster.async_request_with_opts(put, opts).unwrap();
     let resp = block_on_timeout(ch, Duration::from_secs(10)).unwrap();
-    println!("{:?}", resp);
     assert_eq!(disk_full_stores(&resp), vec![2, 3]);
 
     // Peer 2 disk usage changes from already full to almost full.
