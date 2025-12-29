@@ -25,8 +25,8 @@ pub struct BatchLimitExecutor<Src: BatchExecutor> {
     prefix_keys_exps: Vec<RpnExpression>,
     prefix_keys_field_type: Vec<FieldType>,
     prefix_key_num: usize,
-    
-    /// Stores previous prefix keys
+
+    /// Stores previous prefix keys to compare with current prefix keys
     prev_prefix_keys: Vec<ScalarValue>,
 
     /// Stores current prefix keys
@@ -34,17 +34,51 @@ pub struct BatchLimitExecutor<Src: BatchExecutor> {
     /// 'static. The elements are only valid in the same batch where they
     /// are added.
     current_prefix_keys_unsafe: Vec<RpnStackNode<'static>>,
+    executed_in_limit_for_test: bool,
+    executed_in_rank_limit_for_test: bool,
 }
 
 impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
-    pub fn new(src: Src, limit: usize, is_src_scan_executor: bool, config: Arc<EvalConfig>,) -> Result<Self> {
+    pub fn new(src: Src, limit: usize, is_src_scan_executor: bool) -> Result<Self> {
         Ok(Self {
             src,
             remaining_rows: limit,
             is_src_scan_executor,
-            context: EvalContext::new(config),
-            // TODO initialize some fields
+            context: EvalContext::new(Arc::new(EvalConfig::default())),
+            prefix_keys_exps: Vec::with_capacity(0),
+            prefix_keys_field_type: Vec::with_capacity(0),
+            prefix_key_num: 0,
+            prev_prefix_keys: Vec::with_capacity(0),
+            current_prefix_keys_unsafe: Vec::with_capacity(0),
+            executed_in_limit_for_test: false,
+            executed_in_rank_limit_for_test: false,
         })
+    }
+
+    pub fn new_rank_limit(
+        src: Src,
+        limit: usize,
+        is_src_scan_executor: bool,
+        config: Arc<EvalConfig>,
+        prefix_key_exp_defs: Vec<RpnExpression>) -> Result<Self> {
+            let prefix_key_num = prefix_key_exp_defs.len();
+            let prefix_keys_field_type: Vec<FieldType> = prefix_key_exp_defs
+                .iter()
+                .map(|exp| exp.ret_field_type(src.schema()).clone())
+                .collect();
+            Ok(Self {
+                src,
+                remaining_rows: limit,
+                is_src_scan_executor,
+                context: EvalContext::new(config),
+                prefix_keys_exps: prefix_key_exp_defs,
+                prefix_keys_field_type: prefix_keys_field_type,
+                prefix_key_num: prefix_key_num,
+                prev_prefix_keys: Vec::with_capacity(prefix_key_num),
+                current_prefix_keys_unsafe: Vec::with_capacity(prefix_key_num),
+                executed_in_limit_for_test: false,
+                executed_in_rank_limit_for_test: false,
+            })
     }
 
     #[cfg(test)]
@@ -77,7 +111,9 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
 
     #[inline]
     async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
-        if self.prefix_keys_exps.len() > 0 {            
+        if self.prefix_keys_exps.len() > 0 {  
+            #[cfg(debug_assertions)] { self.executed_in_rank_limit_for_test = true; }
+
             if self.remaining_rows == 0 {
                 return BatchExecuteResult {
                         physical_columns: LazyBatchColumnVec::empty(),
@@ -86,9 +122,9 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
                         is_drained: Ok(BatchExecIsDrain::Drain)
                     };
             }
-            
+
             let mut result = self.src.next_batch(scan_rows).await;
-            
+
             let src_schema = self.src.schema();
             // Decode columns with mutable input first, so subsequent access to input can be
             // immutable (and the borrow checker will be happy)
@@ -177,6 +213,8 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
             }
             return result;
         } else {
+            #[cfg(debug_assertions)] { self.executed_in_limit_for_test = true; }
+
             let real_scan_rows = if self.is_src_scan_executor {
                 std::cmp::min(scan_rows, self.remaining_rows)
             } else {
@@ -226,6 +264,8 @@ mod tests {
         expr::EvalWarnings,
     };
 
+    use tidb_query_expr::RpnExpressionBuilder;
+
     use super::*;
     use crate::util::mock_executor::{MockExecutor, MockScanExecutor};
 
@@ -249,6 +289,8 @@ mod tests {
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 3);
         assert!(r.is_drained.unwrap().stop());
+        assert!(exec.executed_in_limit_for_test);
+        assert!(!exec.executed_in_rank_limit_for_test);
     }
 
     #[test]
@@ -271,6 +313,8 @@ mod tests {
         assert_eq!(&r.logical_rows, &[1, 2]);
         assert_eq!(r.physical_columns.rows_len(), 3);
         r.is_drained.unwrap_err();
+        assert!(exec.executed_in_limit_for_test);
+        assert!(!exec.executed_in_rank_limit_for_test);
     }
 
     #[test]
@@ -308,6 +352,8 @@ mod tests {
         assert_eq!(&r.logical_rows, &[1, 2]);
         assert_eq!(r.physical_columns.rows_len(), 3);
         assert!(r.is_drained.unwrap().stop());
+        assert!(exec.executed_in_limit_for_test);
+        assert!(!exec.executed_in_rank_limit_for_test);
     }
 
     #[test]
@@ -345,6 +391,8 @@ mod tests {
         assert_eq!(&r.logical_rows, &[0, 2]);
         assert_eq!(r.physical_columns.rows_len(), 3);
         assert!(r.is_drained.unwrap().stop()); // No errors
+        assert!(exec.executed_in_limit_for_test);
+        assert!(!exec.executed_in_rank_limit_for_test);
     }
 
     #[test]
@@ -393,6 +441,8 @@ mod tests {
         assert_eq!(&r.logical_rows, &[0, 4]);
         assert_eq!(r.physical_columns.rows_len(), 5);
         assert!(r.is_drained.unwrap().stop());
+        assert!(exec.executed_in_limit_for_test);
+        assert!(!exec.executed_in_rank_limit_for_test);
     }
 
     #[test]
@@ -417,6 +467,8 @@ mod tests {
         }
         let r = block_on(exec.next_batch(1));
         assert!(r.is_drained.unwrap().stop());
+        assert!(exec.executed_in_limit_for_test);
+        assert!(!exec.executed_in_rank_limit_for_test);
     }
 
     #[test]
@@ -462,6 +514,36 @@ mod tests {
                 b"h04".to_vec(),
             ]),
         );
+        assert!(r.is_drained.unwrap().stop());
+        assert!(exec.executed_in_limit_for_test);
+        assert!(!exec.executed_in_rank_limit_for_test);
+    }
+
+    #[test]
+    fn test_rank_limit_0() {
+        let src_exec = MockExecutor::new(
+            vec![FieldTypeTp::LongLong.into()],
+            vec![BatchExecuteResult {
+                physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Int(
+                    vec![None, Some(50), None].into(),
+                )]),
+                logical_rows: vec![1, 2],
+                warnings: EvalWarnings::default(),
+                is_drained: Ok(BatchExecIsDrain::Drain),
+            }],
+        );
+
+        let config = Arc::new(EvalConfig::default());
+        let group_by_exp = || {
+            RpnExpressionBuilder::new_for_test()
+                .push_column_ref_for_test(1)
+                .build_for_test()
+        };
+        let mut exec = BatchLimitExecutor::new_rank_limit(src_exec, 0, false, config, vec![group_by_exp()]).unwrap();
+
+        let r = block_on(exec.next_batch(1));
+        assert!(r.logical_rows.is_empty());
+        assert_eq!(r.physical_columns.rows_len(), 3);
         assert!(r.is_drained.unwrap().stop());
     }
 }
