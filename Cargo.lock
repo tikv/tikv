@@ -1558,6 +1558,7 @@ dependencies = [
  "pprof",
  "prometheus",
  "protobuf 2.8.0",
+ "rand 0.8.5",
  "serde",
  "serde_json",
  "slog",

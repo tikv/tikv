@@ -173,7 +173,7 @@ impl<DB> SubcompactionExec<DB> {
 
                 // Rollback -> Protected Rollback.
                 // Keep the protected one.
-                // This was observered in some versions and shouldn't happen in normally.
+                // This was observed in some versions and shouldn't happen normally.
                 (Rollback, Rollback) if wa.is_protected() => Some(Ordering::Greater),
                 (Rollback, Rollback) if wb.is_protected() => Some(Ordering::Less),
 
@@ -187,7 +187,11 @@ impl<DB> SubcompactionExec<DB> {
         info!("resolve conflict result."; "conflict_id" => cid, "order" => ?maybe_ord);
         match maybe_ord {
             Some(Ordering::Greater) => std::mem::swap(a, b),
-            None => panic!("cannot resolve the conflict {}", cid),
+            None => panic!(
+                "cannot resolve the conflict {} for key {}",
+                cid,
+                redact(&a.key)
+            ),
 
             Some(_) => {}
         }
@@ -784,7 +788,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_non_write_cf() {
+    async fn test_non_write_cf_success() {
         use WriteType::*;
         let items = vec![
             vec![
