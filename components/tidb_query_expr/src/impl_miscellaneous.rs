@@ -642,5 +642,7 @@ mod tests {
         assert_eq!(v[2].len(), 4);
         assert_eq!(v[3].len(), 4);
         assert_eq!(v[4].len(), 12);
+        let u = Uuid::parse_str(&r).expect("Parsing UUID failed");
+        assert_eq!(u.get_version_num(), 1);
     }
 }
