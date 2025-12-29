@@ -3,7 +3,7 @@
 use std::{cmp::Ordering, sync::Arc};
 
 use async_trait::async_trait;
-use tidb_query_common::{Result, storage::IntervalRange};
+use tidb_query_common::{Error, Result, storage::IntervalRange};
 use tipb::FieldType;
 use tidb_query_datatype::{
     codec::{batch::LazyBatchColumnVec, data_type::*},
@@ -85,6 +85,137 @@ impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
     pub fn into_child(self) -> Src {
         self.src
     }
+
+    // Record the prefix key values for the last row
+    #[inline]
+    fn record_prefix_key_values(&mut self, result: &mut BatchExecuteResult, idx: usize) -> Result<()> {
+        let src_schema = self.src.schema();
+        let mut res = ensure_columns_decoded(
+            &mut self.context,
+            &self.prefix_keys_exps,
+            src_schema,
+            &mut result.physical_columns,
+            &result.logical_rows,
+        );
+        match res {
+            Ok(_) => {},
+            Err(err) => {return Err(err);}
+        }
+
+        assert!(self.current_prefix_keys_unsafe.is_empty());
+        unsafe {
+            res = eval_exprs_decoded_no_lifetime(
+                &mut self.context,
+                &self.prefix_keys_exps,
+                src_schema,
+                &mut result.physical_columns,
+                &result.logical_rows,
+                &mut self.current_prefix_keys_unsafe,
+            );
+
+            match res {
+                Ok(_) => {},
+                Err(err) => {return Err(err);}
+            }
+        }
+
+        let mut cur_prefix_keys_ref = Vec::with_capacity(self.prefix_keys_exps.len());
+        for cur_prefix_key_result in &self.current_prefix_keys_unsafe {
+            cur_prefix_keys_ref.push(cur_prefix_key_result.get_logical_scalar_ref(idx));
+        }
+
+        self.prev_prefix_keys.clear();
+        self.prev_prefix_keys.extend(cur_prefix_keys_ref.drain(..).map(ScalarValueRef::to_owned));
+        cur_prefix_keys_ref.clear();
+        Ok(())
+    }
+
+    #[inline]
+    fn find_different_prefix_key_row(&mut self, result: &mut BatchExecuteResult, start_idx: usize) -> Result<usize> {
+        let src_schema = self.src.schema();
+        // Decode columns with mutable input first, so subsequent access to input can be
+        // immutable (and the borrow checker will be happy)
+        let mut res = ensure_columns_decoded(
+            &mut self.context,
+            &self.prefix_keys_exps,
+            src_schema,
+            &mut result.physical_columns,
+            &result.logical_rows,
+        );
+        match res {
+            Ok(_) => {},
+            Err(err) => {return Err(err);}
+        }
+
+        assert!(self.current_prefix_keys_unsafe.is_empty());
+        unsafe {
+            res = eval_exprs_decoded_no_lifetime(
+                &mut self.context,
+                &self.prefix_keys_exps,
+                src_schema,
+                &mut result.physical_columns,
+                &result.logical_rows,
+                &mut self.current_prefix_keys_unsafe,
+            );
+
+            match res {
+                Ok(_) => {},
+                Err(err) => {return Err(err);}
+            }
+        }
+
+        let total_row_num = result.logical_rows.len();
+        let mut i = start_idx;
+        let mut cur_prefix_keys_ref = Vec::with_capacity(self.prefix_keys_exps.len());
+        while i < total_row_num {
+            for cur_prefix_key_result in &self.current_prefix_keys_unsafe {
+                cur_prefix_keys_ref.push(cur_prefix_key_result.get_logical_scalar_ref(i));
+            }
+
+            if self.prev_prefix_keys.len() == 0 {
+                self.prev_prefix_keys.extend(cur_prefix_keys_ref.drain(..).map(ScalarValueRef::to_owned));
+                cur_prefix_keys_ref.clear();
+                i += 1;
+                continue;
+            }
+
+            let prefix_key_match = || -> Result<bool> {
+                match self.prev_prefix_keys.chunks_exact(self.prefix_key_num).next() {
+                    Some(current_key) => {
+                        for preifx_key_col_index in 0..self.prefix_key_num {
+                            if current_key[preifx_key_col_index]
+                                .as_scalar_value_ref()
+                                .cmp_sort_key(
+                                    &cur_prefix_keys_ref[preifx_key_col_index],
+                                    &self.prefix_keys_field_type[preifx_key_col_index],
+                                )?
+                                != Ordering::Equal
+                            {
+                                return Ok(false);
+                            }
+                        }
+                        Ok(true)
+                    }
+                    _ => Ok(false),
+                }
+            };
+
+            let res = prefix_key_match();
+            match res {
+                Ok(v) => {
+                    if v {
+                        cur_prefix_keys_ref.clear();
+                    } else {
+                        return Ok(i);
+                    }
+                },
+                Err(err) => {return Err(err);}
+            }
+
+            i += 1;
+        }
+        return Ok(i);
+    }
 }
 
 #[async_trait]
@@ -114,103 +245,59 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
         if self.prefix_keys_exps.len() > 0 {  
             #[cfg(debug_assertions)] { self.executed_in_rank_limit_for_test = true; }
 
-            if self.remaining_rows == 0 {
+            if self.remaining_rows == 0 && self.prev_prefix_keys.len() == 0 {
                 return BatchExecuteResult {
-                        physical_columns: LazyBatchColumnVec::empty(),
-                        logical_rows: Vec::new(),
-                        warnings: EvalWarnings::default(),
-                        is_drained: Ok(BatchExecIsDrain::Drain)
-                    };
+                    physical_columns: LazyBatchColumnVec::empty(),
+                    logical_rows: Vec::new(),
+                    warnings: EvalWarnings::default(),
+                    is_drained: Ok(BatchExecIsDrain::Drain)
+                };
             }
 
-            let mut result = self.src.next_batch(scan_rows).await;
+            let real_scan_rows = if self.is_src_scan_executor {
+                std::cmp::min(scan_rows, self.remaining_rows)
+            } else {
+                scan_rows
+            };
+            let mut result = self.src.next_batch(real_scan_rows).await;
+            let total_row_num = result.logical_rows.len();
+            let output_row_num;
+            if total_row_num < self.remaining_rows {
+                output_row_num = total_row_num;
+                self.remaining_rows -= output_row_num;
 
-            let src_schema = self.src.schema();
-            // Decode columns with mutable input first, so subsequent access to input can be
-            // immutable (and the borrow checker will be happy)
-            let mut res = ensure_columns_decoded(
-                &mut self.context,
-                &self.prefix_keys_exps,
-                src_schema,
-                &mut result.physical_columns,
-                &result.logical_rows,
-            );
-            match res {
-                Ok(_) => {},
-                Err(err) => {return BatchExecuteResult{is_drained:Err(err), physical_columns: result.physical_columns, logical_rows: result.logical_rows, warnings: EvalWarnings::default()};}
-            }
-
-            assert!(self.current_prefix_keys_unsafe.is_empty());
-            unsafe {
-                res = eval_exprs_decoded_no_lifetime(
-                    &mut self.context,
-                    &self.prefix_keys_exps,
-                    src_schema,
-                    &mut result.physical_columns,
-                    &result.logical_rows,
-                    &mut self.current_prefix_keys_unsafe,
-                );
-
+                // Record prefix key values for further search
+                let res = self.record_prefix_key_values(&mut result, output_row_num-1);
                 match res {
                     Ok(_) => {},
-                    Err(err) => {return BatchExecuteResult{is_drained:Err(err), physical_columns: result.physical_columns, logical_rows: result.logical_rows, warnings: EvalWarnings::default()};}
+                    Err(err) => {return BatchExecuteResult{is_drained:Err(err), physical_columns: result.physical_columns, logical_rows: result.logical_rows, warnings: EvalWarnings::default()}}
                 }
-            }
-
-            let mut cur_prefix_keys_ref = Vec::with_capacity(self.prefix_keys_exps.len());
-            let logical_rows_len = result.logical_rows.len();
-            for logical_row_idx in 0..logical_rows_len {
-                for cur_prefix_key_result in &self.current_prefix_keys_unsafe {
-                    cur_prefix_keys_ref.push(cur_prefix_key_result.get_logical_scalar_ref(logical_row_idx));
-                }
-
-                if self.prev_prefix_keys.len() == 0 {
-                    self.prev_prefix_keys.extend(cur_prefix_keys_ref.drain(..).map(ScalarValueRef::to_owned));
-                    cur_prefix_keys_ref.clear();
-                    continue;
-                }
-
-                let prefix_key_match = || -> Result<bool> {
-                    match self.prev_prefix_keys.chunks_exact(self.prefix_key_num).next() {
-                        Some(current_key) => {
-                            for preifx_key_col_index in 0..self.prefix_key_num {
-                                if current_key[preifx_key_col_index]
-                                    .as_scalar_value_ref()
-                                    .cmp_sort_key(
-                                        &cur_prefix_keys_ref[preifx_key_col_index],
-                                        &self.prefix_keys_field_type[preifx_key_col_index],
-                                    )?
-                                    != Ordering::Equal
-                                {
-                                    return Ok(false);
-                                }
-                            }
-                            Ok(true)
-                        }
-                        _ => Ok(false),
+            } else {
+                // When self.remaining_rows == 0, it means that previous prefix key values have been recorded before.
+                if self.remaining_rows != 0 {
+                    // Record prefix key values for further search
+                    let res = self.record_prefix_key_values(&mut result, self.remaining_rows-1);
+                    match res {
+                        Ok(_) => {},
+                        Err(err) => {return BatchExecuteResult{is_drained:Err(err), physical_columns: result.physical_columns, logical_rows: result.logical_rows, warnings: EvalWarnings::default()}}
                     }
-                };
-
-                let res = prefix_key_match();
-                match res {
-                    Ok(v) => {
-                        if v {
-                            cur_prefix_keys_ref.clear();
-                        } else {
-                            self.remaining_rows -= 1;
-                            if self.remaining_rows == 0 {
-                                result.logical_rows.truncate(logical_row_idx);
-                                result.is_drained = Ok(BatchExecIsDrain::Drain);
-                                return result;
-                            } else {
-                                self.prev_prefix_keys.clear();
-                                self.prev_prefix_keys.extend(cur_prefix_keys_ref.drain(..).map(ScalarValueRef::to_owned));
-                            }
-                        }
-                    },
-                    Err(err) => {return BatchExecuteResult{is_drained:Err(err), physical_columns: result.physical_columns, logical_rows: result.logical_rows, warnings: EvalWarnings::default()};}
                 }
+
+                // Traverse remaining rows, so that we can find the row whose prefix key values are different the prev.
+                let end_idx = self.find_different_prefix_key_row(&mut result, self.remaining_rows);
+                match end_idx {
+                    Ok(v) => {output_row_num = v + 1;}
+                    Err(err) => {return BatchExecuteResult{is_drained:Err(err), physical_columns: result.physical_columns, logical_rows: result.logical_rows, warnings: EvalWarnings::default()}}
+                }
+                self.remaining_rows = 0;
             }
+
+            if output_row_num < result.logical_rows.len() {
+                result.is_drained = Ok(BatchExecIsDrain::Drain);
+            }
+
+            // We don't need to touch the physical data.
+            result.logical_rows.truncate(output_row_num);            
             return result;
         } else {
             #[cfg(debug_assertions)] { self.executed_in_limit_for_test = true; }
