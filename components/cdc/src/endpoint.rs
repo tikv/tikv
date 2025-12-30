@@ -718,6 +718,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     conn.iter_downstreams(|_, region_id, downstream_id, _| {
                         self.deregister_downstream(region_id, downstream_id, None);
                     });
+                    CDC_CONNECTION_COUNT.dec();
+                    info!("cdc connection deregistered"; "conn_id" => ?conn_id);
                 } else {
                     info!("cdc connection already deregistered"; "conn_id" => ?conn_id);
                 }
@@ -1186,7 +1188,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     Ok(_) | Err(ScheduleError::Stopped(_)) => (),
                     // Must schedule `MinTS` event otherwise resolved ts can not
                     // advance normally.
-                    Err(err) => panic!("failed to schedule min ts event, error: {:?}", err),
+                    Err(err) => panic!("cdc failed to schedule min ts event, error: {:?}", err),
                 }
             }
         };
@@ -1195,6 +1197,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
 
     fn on_open_conn(&mut self, conn: Conn) {
         self.connections.insert(conn.get_id(), conn);
+        CDC_CONNECTION_COUNT.inc();
     }
 
     fn on_set_conn_version(

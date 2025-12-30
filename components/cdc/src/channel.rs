@@ -376,7 +376,7 @@ impl<'a> Drain {
         });
 
         stream::select(scaned, observed).map(|(start, mut event, size)| {
-            CDC_EVENTS_PENDING_DURATION.observe(start.saturating_elapsed_secs() * 1000.0);
+            CDC_EVENTS_PENDING_DURATION.observe(start.saturating_elapsed_secs());
             if let CdcEvent::Barrier(ref mut barrier) = event {
                 if let Some(barrier) = barrier.take() {
                     // Unset barrier when it is received.
@@ -455,21 +455,21 @@ impl Drop for Drain {
         self.unbounded_receiver.close();
         let start = Instant::now();
         let mut total_bytes = 0;
+        let conn_id = self.conn_id;
         let mut drain = Box::pin(async move {
-            let conn_id = self.conn_id;
             let memory_quota = self.memory_quota.clone();
             let mut drain = self.drain();
             while let Some((_, bytes)) = drain.next().await {
                 total_bytes += bytes;
             }
             memory_quota.free(total_bytes);
-            info!("drop Drain finished, free memory"; "conn_id" => ?conn_id,
-                "freed_bytes" => total_bytes, "inuse_bytes" => memory_quota.in_use());
+            info!("cdc drop Drain finished, free memory"; "freed_bytes" => total_bytes,
+                "inuse_bytes" => memory_quota.in_use(), "conn_id" => ?conn_id);
         });
         block_on(&mut drain);
         let takes = start.saturating_elapsed();
         if takes >= Duration::from_millis(200) {
-            warn!("drop Drain too slow"; "takes" => ?takes);
+            warn!("cdc drop Drain too slow"; "takes" => ?takes, "conn_id" => ?conn_id);
         }
     }
 }
