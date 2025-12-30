@@ -26,7 +26,7 @@ use tikv_util::{
     Either,
     config::VersionTrack,
     sys::{get_global_memory_usage, record_global_memory_usage},
-    thread_name_prefix::{GRPC_SERVER_THREAD, SNAP_HANDLER_THREAD, STATS_THREAD},
+    thread_name_prefix::{GRPC_SERVER_THREAD, SNAP_HANDLER_THREAD, TRANSPORT_STATS_THREAD},
     timer::GLOBAL_TIMER_HANDLE,
     worker::{LazyWorker, Scheduler, Worker},
 };
@@ -192,7 +192,7 @@ where
         let stats_pool = if cfg.value().stats_concurrency > 0 {
             Some(
                 RuntimeBuilder::new_multi_thread()
-                    .thread_name(STATS_THREAD)
+                    .thread_name(TRANSPORT_STATS_THREAD)
                     .worker_threads(cfg.value().stats_concurrency)
                     .with_sys_hooks()
                     .build()

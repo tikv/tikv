@@ -1,3 +1,5 @@
+// Copyright 2025 TiKV Project Authors. Licensed under Apache-2.0.
+
 //! Centralized definitions of TiKV thread name prefixes.
 //!
 //! TiKV spawns many worker threads across subsystems (raftstore, scheduler,
@@ -17,6 +19,12 @@
 //!
 //! Constants are ordered by when TiKV creates these threads during server
 //! startup.
+//!
+//! Note on length: On Linux, the thread name (`comm`) is limited to 16 bytes.
+//! We intentionally keep these prefixes short and stable so that the final
+//! thread names (usually `"<prefix>-<N>"`, e.g. `"raftstore-1"`) remain
+//! identifiable after truncation.
+//!
 
 pub const ARCHIVE_WORKER_THREAD: &str = "archive-worker";
 
@@ -38,7 +46,7 @@ pub const BACKGROUND_WORKER_THREAD: &str = "background";
 
 pub const CHECK_LEADER_THREAD: &str = "check-leader";
 
-pub const REGION_COLLECTOR_WORKER_THREAD: &str = "region-collector-worker";
+pub const REGION_COLLECTOR_WORKER_THREAD: &str = "region-collect";
 
 pub const SST_RECOVERY_THREAD: &str = "sst-recovery";
 
@@ -50,24 +58,23 @@ pub const CDC_THREAD: &str = "cdc";
 
 pub const PD_WORKER_THREAD: &str = "pd-worker";
 
-pub const UNIFIED_READ_POOL_THREAD: &str = "unified-read-pool";
+pub const UNIFIED_READ_POOL_THREAD: &str = "uni-read";
 
 pub const DEBUGGER_THREAD: &str = "debugger";
 
-pub const RESOURCE_METERING_RECORDER_THREAD: &str = "resource-metering-recorder";
+pub const RESOURCE_METERING_RECORDER_THREAD: &str = "res-meter-rec";
 
-pub const RESOURCE_METERING_SINGLE_TARGET_THREAD: &str =
-    "resource-metering-single-target-data-sink";
+pub const RESOURCE_METERING_SINGLE_TARGET_THREAD: &str = "res-meter-sink";
 
-pub const SCHEDULE_WORKER_POOL_THREAD: &str = "sched-worker-pool";
+pub const SCHEDULE_WORKER_POOL_THREAD: &str = "sched-pool";
 
-pub const SCHEDULE_WORKER_HIGH_PRI_THREAD: &str = "sched-worker-high";
+pub const SCHEDULE_WORKER_HIGH_PRI_THREAD: &str = "sched-high";
 
-pub const SCHEDULE_WORKER_PRIORITY_THREAD: &str = "sched-worker-priority";
+pub const SCHEDULE_WORKER_PRIORITY_THREAD: &str = "sched-pri";
 
-pub const RESOLVED_TS_WORKER_THREAD: &str = "resolved-ts-worker";
+pub const RESOLVED_TS_WORKER_THREAD: &str = "resolved-ts";
 
-pub const STATS_THREAD: &str = "transport-stats";
+pub const TRANSPORT_STATS_THREAD: &str = "trans-stats";
 
 pub const SNAP_HANDLER_THREAD: &str = "snap-handler";
 
@@ -81,9 +88,9 @@ pub const SST_IMPORT_MISC_THREAD: &str = "sst-import-misc";
 
 pub const PURGE_WORKER_THREAD: &str = "purge-worker";
 
-pub const CHECKPOINT_WORKER_THREAD: &str = "checkpoint-worker";
+pub const CHECKPOINT_WORKER_THREAD: &str = "checkpoint";
 
-pub const ASYNC_READ_WORKER_THREAD: &str = "async-read-worker";
+pub const ASYNC_READ_WORKER_THREAD: &str = "async-read";
 
 pub const STORE_BACKGROUND_WORKER_THREAD: &str = "store-bg";
 
@@ -99,9 +106,9 @@ pub const CLEANUP_WORKER_THREAD: &str = "cleanup-worker";
 
 pub const REGION_WORKER_THREAD: &str = "region-worker";
 
-pub const RAFTLOG_FETCH_WORKER_THREAD: &str = "raftlog-fetch-worker";
+pub const RAFTLOG_FETCH_WORKER_THREAD: &str = "raftlog-fetch";
 
-pub const REFRESH_CONFIG_WORKER_THREAD: &str = "refresh-config-worker";
+pub const REFRESH_CONFIG_WORKER_THREAD: &str = "refresh-cfg";
 
 pub const STORE_WRITER_THREAD: &str = "store-writer";
 
@@ -117,7 +124,7 @@ pub const STATS_MONITOR_THREAD: &str = "stats-monitor";
 
 pub const GC_MANAGER_THREAD: &str = "gc-manager";
 
-pub const COMPACTION_RUNNER_THREAD: &str = "compaction-runner";
+pub const COMPACTION_RUNNER_THREAD: &str = "compaction";
 
 pub const CDC_WORKER_THREAD: &str = "cdc-worker";
 
@@ -125,19 +132,19 @@ pub const TSO_THREAD: &str = "tso";
 
 pub const ADVANCED_TS_THREAD: &str = "advanced-ts";
 
-pub const RESOLVED_TS_SCANNER_THREAD: &str = "resolved-ts-scanner";
+pub const RESOLVED_TS_SCANNER_THREAD: &str = "rts-scan";
 
-pub const SNAP_BROADCAST_THREAD: &str = "snap-br-backup-prepare";
+pub const SNAP_BROADCAST_THREAD: &str = "snap-broadcast";
 
 pub const RUNTIME_KEEPER_THREAD: &str = "runtime-keeper";
 
-pub const IMPORT_SST_WORKER_THREAD: &str = "import-sst-worker";
+pub const IMPORT_SST_WORKER_THREAD: &str = "import-sst";
 
 pub const WAITER_MANAGER_THREAD: &str = "waiter-manager";
 
-pub const DEADLOCK_DETECTOR_THREAD: &str = "deadlock-detector";
+pub const DEADLOCK_DETECTOR_THREAD: &str = "deadlock-det";
 
-pub const DEADLOCK_CLIENT_THREAD: &str = "deadlock-client";
+pub const DEADLOCK_CLIENT_THREAD: &str = "deadlock-cli";
 
 pub const BACKUP_WORKER_THREAD: &str = "backup-worker";
 
@@ -145,6 +152,6 @@ pub const BACKUP_IO_THREAD: &str = "backup-io";
 
 pub const SNAP_SENDER_THREAD: &str = "snap-sender";
 
-pub const TABLET_SNAP_SENDER_THREAD: &str = "tablet-snap-sender";
+pub const TABLET_SNAP_SENDER_THREAD: &str = "tablet-snap";
 
 pub const STATUS_SERVER_THREAD: &str = "status-server";
