@@ -53,8 +53,7 @@ impl LimiterItems {
         let read_bandwidth_limiter =
             Limiter::new(QuotaLimiter::speed_limit(read_bandwidth.0 as f64));
 
-        let iops_limiter =
-            Limiter::new(QuotaLimiter::speed_limit(iops_limit as f64));
+        let iops_limiter = Limiter::new(QuotaLimiter::speed_limit(iops_limit as f64));
 
         Self {
             cputime_limiter,
@@ -368,14 +367,15 @@ impl QuotaLimiter {
         };
 
         let iops_dur = if sample.iops > 0 {
-            limiters
-                .iops_limiter
-                .consume_duration(sample.iops)
+            limiters.iops_limiter.consume_duration(sample.iops)
         } else {
             Duration::ZERO
         };
 
-        let mut exec_delay = std::cmp::max(cpu_dur, std::cmp::max(w_bw_dur, std::cmp::max(r_bw_dur, iops_dur)));
+        let mut exec_delay = std::cmp::max(
+            cpu_dur,
+            std::cmp::max(w_bw_dur, std::cmp::max(r_bw_dur, iops_dur)),
+        );
         let delay_duration = self.max_delay_duration();
         if !delay_duration.is_zero() {
             exec_delay = std::cmp::min(delay_duration, exec_delay);
@@ -439,8 +439,7 @@ impl ConfigManager for QuotaLimitConfigManager {
         }
 
         if let Some(iops) = change.get("background_iops") {
-            self.quota_limiter
-                .set_iops_limit(iops.into(), false);
+            self.quota_limiter.set_iops_limit(iops.into(), false);
         }
 
         if let Some(duration) = change.get("max_delay_duration") {
