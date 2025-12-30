@@ -7388,6 +7388,7 @@ dependencies = [
  "panic_hook",
  "profiler",
  "protobuf 2.8.0",
+ "rand 0.8.5",
  "regex",
  "serde",
  "serde_json",
@@ -7399,7 +7400,7 @@ dependencies = [
  "time 0.1.43",
  "tipb",
  "tipb_helper",
- "uuid 0.8.2",
+ "uuid 1.7.0",
 ]
 
 [[package]]
@@ -8193,6 +8194,7 @@ version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f00cc9702ca12d3c81455259621e676d0f7251cec66a21e98fe2e9a37db93b2a"
 dependencies = [
+ "atomic",
  "getrandom 0.2.11",
  "serde",
 ]
