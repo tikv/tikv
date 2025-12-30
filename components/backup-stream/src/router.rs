@@ -704,34 +704,29 @@ impl RouterInner {
     /// of this flush. returns `None` if failed.
     #[instrument(skip(self, cx))]
     pub async fn do_flush(&self, cx: FlushContext<'_>) -> Option<u64> {
-        let task = self.tasks.get(cx.task_name);
-        match task {
-            Some(task_handler) => {
-                let result = task_handler.do_flush(cx).await;
-                // set false to flushing whether success or fail
-                task_handler.set_flushing_status(false);
+        let task_handler = match self.get_task_handler(cx.task_name) {
+            Ok(h) => h,
+            Err(_) => return None,
+        };
+        let result = task_handler.do_flush(cx).await;
+        // set false to flushing whether success or fail
+        task_handler.set_flushing_status(false);
 
-                if let Err(e) = result {
-                    e.report("failed to flush task.");
-                    warn!("backup steam do flush fail"; "err" => ?e);
-                    if task_handler.flush_failure_count() > FLUSH_FAILURE_BECOME_FATAL_THRESHOLD {
-                        // NOTE: Maybe we'd better record all errors and send them to the client?
-                        try_send!(
-                            self.scheduler,
-                            Task::FatalError(
-                                TaskSelector::ByName(cx.task_name.to_owned()),
-                                Box::new(e)
-                            )
-                        );
-                    }
-                    return None;
-                }
-                // if succeed in flushing, update flush_time. Or retry do_flush immediately.
-                task_handler.update_flush_time();
-                result.ok().flatten()
+        if let Err(e) = result {
+            e.report("failed to flush task.");
+            warn!("backup steam do flush fail"; "err" => ?e);
+            if task_handler.flush_failure_count() > FLUSH_FAILURE_BECOME_FATAL_THRESHOLD {
+                // NOTE: Maybe we'd better record all errors and send them to the client?
+                try_send!(
+                    self.scheduler,
+                    Task::FatalError(TaskSelector::ByName(cx.task_name.to_owned()), Box::new(e))
+                );
             }
-            _ => None,
+            return None;
         }
+        // if succeed in flushing, update flush_time. Or retry do_flush immediately.
+        task_handler.update_flush_time();
+        result.ok().flatten()
     }
 
     #[instrument(skip(self))]
