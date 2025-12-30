@@ -593,7 +593,7 @@ fn test_down_node_when_disk_full() {
 }
 
 #[test]
-fn test_reject_follower_read_index_when_disk_ful() {
+fn test_reject_follower_read_index_when_disk_full() {
     let mut cluster = new_node_cluster(0, 2);
     // To ensure the thread has full store disk usage infomation.
     cluster.cfg.raft_store.store_batch_system.pool_size = 1;
