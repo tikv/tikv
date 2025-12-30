@@ -24,7 +24,6 @@
 //! We intentionally keep these prefixes short and stable so that the final
 //! thread names (usually `"<prefix>-<N>"`, e.g. `"raftstore-1"`) remain
 //! identifiable after truncation.
-//!
 
 pub const ARCHIVE_WORKER_THREAD: &str = "archive-worker";
 
@@ -58,7 +57,7 @@ pub const CDC_THREAD: &str = "cdc";
 
 pub const PD_WORKER_THREAD: &str = "pd-worker";
 
-pub const UNIFIED_READ_POOL_THREAD: &str = "uni-read";
+pub const UNIFIED_READ_POOL_THREAD: &str = "unified-read";
 
 pub const DEBUGGER_THREAD: &str = "debugger";
 
@@ -106,7 +105,7 @@ pub const CLEANUP_WORKER_THREAD: &str = "cleanup-worker";
 
 pub const REGION_WORKER_THREAD: &str = "region-worker";
 
-pub const RAFTLOG_FETCH_WORKER_THREAD: &str = "raftlog-fetch";
+pub const RAFTLOG_FETCH_WORKER_THREAD: &str = "raftlog-fetch-worker";
 
 pub const REFRESH_CONFIG_WORKER_THREAD: &str = "refresh-cfg";
 
@@ -126,7 +125,7 @@ pub const GC_MANAGER_THREAD: &str = "gc-manager";
 
 pub const COMPACTION_RUNNER_THREAD: &str = "compaction";
 
-pub const CDC_WORKER_THREAD: &str = "cdc-worker";
+pub const CDC_WORKER_THREAD: &str = "cdcwkr";
 
 pub const TSO_THREAD: &str = "tso";
 
@@ -138,7 +137,7 @@ pub const SNAP_BROADCAST_THREAD: &str = "snap-broadcast";
 
 pub const RUNTIME_KEEPER_THREAD: &str = "runtime-keeper";
 
-pub const IMPORT_SST_WORKER_THREAD: &str = "import-sst";
+pub const IMPORT_SST_WORKER_THREAD: &str = "impwkr";
 
 pub const WAITER_MANAGER_THREAD: &str = "waiter-manager";
 
