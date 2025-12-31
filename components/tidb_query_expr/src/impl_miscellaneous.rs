@@ -6,6 +6,7 @@ use std::{
     str::FromStr,
 };
 
+use rand::Rng;
 use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
@@ -200,9 +201,12 @@ pub fn is_ipv6(addr: Option<BytesRef>) -> Result<Option<Int>> {
 #[rpn_fn(nullable)]
 #[inline]
 pub fn uuid() -> Result<Option<Bytes>> {
-    let result = Uuid::new_v4();
-    let mut buf = vec![0; uuid::adapter::Hyphenated::LENGTH];
-    result.to_hyphenated().encode_lower(&mut buf);
+    let mut node_id = rand::thread_rng().gen::<[u8; 6]>();
+    node_id[0] |= 0x01; // RFC 4122 multicast bit
+
+    let result = Uuid::now_v1(&node_id);
+    let mut buf = vec![0; uuid::fmt::Hyphenated::LENGTH];
+    result.hyphenated().encode_lower(&mut buf);
     Ok(Some(buf))
 }
 
@@ -638,5 +642,7 @@ mod tests {
         assert_eq!(v[2].len(), 4);
         assert_eq!(v[3].len(), 4);
         assert_eq!(v[4].len(), 12);
+        let u = Uuid::parse_str(&r).expect("Parsing UUID failed");
+        assert_eq!(u.get_version_num(), 1);
     }
 }

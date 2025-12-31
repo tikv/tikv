@@ -543,7 +543,7 @@ lazy_static! {
         register_histogram!(
             "tikv_raftstore_apply_msg_len",
             "Length of apply msg.",
-            exponential_buckets(1.0, 2.0, 20).unwrap() // max 1024 * 1024
+            exponential_buckets(1.0, 2.0, 21).unwrap() // max 1024 * 1024
         ).unwrap();
 
     pub static ref STORE_RAFT_READY_COUNTER_VEC: IntCounterVec =
@@ -675,7 +675,7 @@ lazy_static! {
             "tikv_snapshot_cf_kv_count",
             "Total number of kv in each cf file of snapshot.",
             &["type"],
-            exponential_buckets(100.0, 2.0, 20).unwrap()
+            exponential_buckets(100.0, 2.0, 21).unwrap()
         ).unwrap();
     pub static ref SNAPSHOT_CF_KV_COUNT: SnapCf =
         auto_flush_from!(SNAPSHOT_CF_KV_COUNT_VEC, SnapCf);
@@ -693,21 +693,21 @@ lazy_static! {
         register_histogram!(
             "tikv_snapshot_build_time_duration_secs",
             "Bucketed histogram of snapshot build time duration.",
-            exponential_buckets(0.05, 2.0, 20).unwrap()
+            exponential_buckets(0.05, 2.0, 21).unwrap()
         ).unwrap();
 
     pub static ref SNAPSHOT_KV_COUNT_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_snapshot_kv_count",
             "Total number of kv in snapshot.",
-            exponential_buckets(100.0, 2.0, 20).unwrap() //100,100*2^1,...100M
+            exponential_buckets(100.0, 2.0, 21).unwrap() //100,100*2^1,...100M
         ).unwrap();
 
     pub static ref SNAPSHOT_SIZE_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_snapshot_size",
             "Size of snapshot.",
-            exponential_buckets(1024.0, 2.0, 22).unwrap() // 1024,1024*2^1,..,4G
+            exponential_buckets(1024.0, 2.0, 23).unwrap() // 1024,1024*2^1,..,4G
         ).unwrap();
 
     pub static ref RAFT_ENTRY_FETCHES_VEC: IntCounterVec =
@@ -759,21 +759,21 @@ lazy_static! {
             "tikv_raftstore_event_duration",
             "Duration of raft store events.",
             &["type"],
-            exponential_buckets(0.001, 1.59, 20).unwrap() // max 10s
+            exponential_buckets(0.001, 1.59, 21).unwrap() // max 10s
         ).unwrap();
 
     pub static ref PEER_MSG_LEN: Histogram =
         register_histogram!(
             "tikv_raftstore_peer_msg_len",
             "Length of peer msg.",
-            exponential_buckets(1.0, 2.0, 20).unwrap() // max 1024 * 1024
+            exponential_buckets(1.0, 2.0, 21).unwrap() // max 1024 * 1024
         ).unwrap();
 
     pub static ref RAFT_READ_INDEX_PENDING_DURATION: Histogram =
         register_histogram!(
             "tikv_raftstore_read_index_pending_duration",
             "Duration of pending read index.",
-            exponential_buckets(0.001, 2.0, 20).unwrap() // max 1000s
+            exponential_buckets(0.001, 2.0, 21).unwrap() // max 1000s
         ).unwrap();
 
     pub static ref RAFT_READ_INDEX_PENDING_COUNT: IntGauge =
@@ -850,7 +850,7 @@ lazy_static! {
     register_histogram!(
         "tikv_raftstore_peer_pending_duration_seconds",
         "Bucketed histogram of region peer pending duration.",
-        exponential_buckets(0.1, 1.5, 30).unwrap()  // 0.1s ~ 5.3 hours
+        exponential_buckets(0.1, 1.5, 31).unwrap()  // 0.1s ~ 5.3 hours
     ).unwrap();
 
     pub static ref HIBERNATED_PEER_STATE_GAUGE: HibernatedPeerStateGauge = register_static_int_gauge_vec!(
