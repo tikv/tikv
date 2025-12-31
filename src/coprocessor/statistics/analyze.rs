@@ -27,7 +27,7 @@ use tipb::{self, AnalyzeColumnsReq};
 
 use super::{cmsketch::CmSketch, fmsketch::FmSketch, histogram::Histogram};
 use crate::{
-    coprocessor::{dag::TikvStorage, MEMTRACE_ANALYZE, *},
+    coprocessor::{dag::TikvStorage, metrics, MEMTRACE_ANALYZE, *},
     storage::{Snapshot, SnapshotStore},
 };
 
@@ -119,6 +119,9 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                 let block_read_count_after = PerfContext::get().block_read_count();
                 let block_read_count_delta = block_read_count_after.saturating_sub(block_read_count_before);
                 sample.add_iops(block_read_count_delta as usize);
+                // Record metrics
+                metrics::ANALYZE_BLOCK_READ_COUNT_DELTA_TOTAL.inc_by(block_read_count_delta);
+                metrics::ANALYZE_NEXT_BATCH_COUNT_TOTAL.inc();
                 let _guard = sample.observe_cpu();
                 is_drained = result.is_drained?.stop();
 
@@ -620,6 +623,8 @@ impl<S: Snapshot, F: KvFormat> SampleBuilder<S, F> {
         let mut ctx = EvalContext::default();
         while !is_drained {
             let result = self.data.next_batch(BATCH_MAX_SIZE).await;
+            // Record next_batch call count
+            metrics::ANALYZE_NEXT_BATCH_COUNT_TOTAL.inc();
             is_drained = result.is_drained?.stop();
 
             let mut columns_slice = result.physical_columns.as_slice();

@@ -188,6 +188,16 @@ lazy_static! {
         .unwrap();
     pub static ref MEM_LOCK_CHECK_HISTOGRAM_VEC_STATIC: MemLockCheckHistogramVec =
         auto_flush_from!(MEM_LOCK_CHECK_HISTOGRAM_VEC, MemLockCheckHistogramVec);
+    pub static ref ANALYZE_BLOCK_READ_COUNT_DELTA_TOTAL: IntCounter = register_int_counter!(
+        "tikv_analyze_block_read_count_total",
+        "Total accumulated block_read_count during analyze execution"
+    )
+    .unwrap();
+    pub static ref ANALYZE_NEXT_BATCH_COUNT_TOTAL: IntCounter = register_int_counter!(
+        "tikv_analyze_next_batch_count_total",
+        "Total number of next_batch calls during analyze execution"
+    )
+    .unwrap();
 }
 
 make_static_metric! {
