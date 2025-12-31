@@ -9,10 +9,7 @@ use std::{
 use rand::Rng;
 use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
-use tidb_query_datatype::codec::{
-    data_type::*,
-    mysql::RoundMode,
-};
+use tidb_query_datatype::codec::{data_type::*, mysql::RoundMode};
 use uuid::Uuid;
 
 const IPV4_LENGTH: usize = 4;
@@ -244,7 +241,7 @@ pub fn uuid_timestamp(input: Option<BytesRef>) -> Result<Option<Decimal>> {
         None => return Ok(None),
         Some(t) => t.to_unix(),
     };
-    let r = Decimal::from(s*1000000+((ms as u64)/1000))
+    let r = Decimal::from(s * 1000000 + ((ms as u64) / 1000))
         .shift(-6)
         .round(6, RoundMode::Truncate);
     Ok(Some(*r))
@@ -709,12 +706,21 @@ mod tests {
     #[test]
     fn test_uuid_timestamp() {
         let test_cases = vec![
-            ("5f13f854-d74a-11f0-9b7a-0ae0156bd76b", Some(Decimal::from_str("1765537487.118139").unwrap())),
+            (
+                "5f13f854-d74a-11f0-9b7a-0ae0156bd76b",
+                Some(Decimal::from_str("1765537487.118139").unwrap()),
+            ),
             ("c6437ef1-5b86-3a4e-a071-c2d4ad414e65", None),
             ("a3e3b4a1-ea6d-471e-9860-8303a8b261f6", None),
             ("271a8175-dadd-5df9-b0bd-20a4a0b441e6", None),
-            ("1f0e48c1-7860-69cc-9b3f-35f89c103d4d", Some(Decimal::from_str("1766995078.970004").unwrap())),
-            ("019b1440-87b7-7380-ab00-ce413e795004", Some(Decimal::from_str("1765571332.023000").unwrap())),
+            (
+                "1f0e48c1-7860-69cc-9b3f-35f89c103d4d",
+                Some(Decimal::from_str("1766995078.970004").unwrap()),
+            ),
+            (
+                "019b1440-87b7-7380-ab00-ce413e795004",
+                Some(Decimal::from_str("1765571332.023000").unwrap()),
+            ),
         ];
 
         for (input, expected_ts) in test_cases {
