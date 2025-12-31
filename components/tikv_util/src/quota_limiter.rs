@@ -32,6 +32,7 @@ pub struct LimiterItems {
     cputime_limiter: Limiter,
     write_bandwidth_limiter: Limiter,
     read_bandwidth_limiter: Limiter,
+    iops_limiter: Limiter,
 }
 
 impl LimiterItems {
@@ -39,6 +40,7 @@ impl LimiterItems {
         cpu_quota: usize,
         write_bandwidth: ReadableSize,
         read_bandwidth: ReadableSize,
+        iops_limit: usize,
     ) -> Self {
         let cputime_limiter =
             Limiter::builder(QuotaLimiter::speed_limit(cpu_quota as f64 * 1000_f64))
@@ -51,10 +53,14 @@ impl LimiterItems {
         let read_bandwidth_limiter =
             Limiter::new(QuotaLimiter::speed_limit(read_bandwidth.0 as f64));
 
+        let iops_limiter =
+            Limiter::new(QuotaLimiter::speed_limit(iops_limit as f64));
+
         Self {
             cputime_limiter,
             write_bandwidth_limiter,
             read_bandwidth_limiter,
+            iops_limiter,
         }
     }
 }
@@ -65,6 +71,7 @@ impl Default for LimiterItems {
             cputime_limiter: Limiter::new(f64::INFINITY),
             write_bandwidth_limiter: Limiter::new(f64::INFINITY),
             read_bandwidth_limiter: Limiter::new(f64::INFINITY),
+            iops_limiter: Limiter::new(f64::INFINITY),
         }
     }
 }
@@ -86,6 +93,7 @@ pub struct Sample {
     read_bytes: usize,
     write_bytes: usize,
     cpu_time: Duration,
+    iops: usize,
     enable_cpu_limit: bool,
 }
 
@@ -96,6 +104,10 @@ impl<'a> Sample {
 
     pub fn add_write_bytes(&mut self, bytes: usize) {
         self.write_bytes += bytes;
+    }
+
+    pub fn add_iops(&mut self, ops: usize) {
+        self.iops += ops;
     }
 
     // Record the cpu time in the lifetime. Use this function inside code block.
@@ -205,6 +217,7 @@ impl QuotaLimiter {
         background_cpu_quota: usize,
         background_write_bandwidth: ReadableSize,
         background_read_bandwidth: ReadableSize,
+        background_iops: usize,
         max_delay_duration: ReadableDuration,
         enable_auto_tune: bool,
     ) -> Self {
@@ -212,11 +225,13 @@ impl QuotaLimiter {
             foreground_cpu_quota,
             foreground_write_bandwidth,
             foreground_read_bandwidth,
+            0, // foreground doesn't use IOPS limiter
         );
         let background_limiters = LimiterItems::new(
             background_cpu_quota,
             background_write_bandwidth,
             background_read_bandwidth,
+            background_iops,
         );
         let max_delay_duration = AtomicU64::new(max_delay_duration.0.as_nanos() as u64);
         let enable_auto_tune = AtomicBool::new(enable_auto_tune);
@@ -264,6 +279,12 @@ impl QuotaLimiter {
             .set_speed_limit(Self::speed_limit(read_bandwidth.0 as f64));
     }
 
+    pub fn set_iops_limit(&self, iops: usize, is_foreground: bool) {
+        self.get_limiters(is_foreground)
+            .iops_limiter
+            .set_speed_limit(Self::speed_limit(iops as f64));
+    }
+
     pub fn set_max_delay_duration(&self, duration: ReadableDuration) {
         self.max_delay_duration
             .store(duration.0.as_nanos() as u64, Ordering::Relaxed);
@@ -300,6 +321,7 @@ impl QuotaLimiter {
             read_bytes: 0,
             write_bytes: 0,
             cpu_time: Duration::ZERO,
+            iops: 0,
             enable_cpu_limit: if is_foreground {
                 !self
                     .foreground_limiters
@@ -345,7 +367,15 @@ impl QuotaLimiter {
             Duration::ZERO
         };
 
-        let mut exec_delay = std::cmp::max(cpu_dur, std::cmp::max(w_bw_dur, r_bw_dur));
+        let iops_dur = if sample.iops > 0 {
+            limiters
+                .iops_limiter
+                .consume_duration(sample.iops)
+        } else {
+            Duration::ZERO
+        };
+
+        let mut exec_delay = std::cmp::max(cpu_dur, std::cmp::max(w_bw_dur, std::cmp::max(r_bw_dur, iops_dur)));
         let delay_duration = self.max_delay_duration();
         if !delay_duration.is_zero() {
             exec_delay = std::cmp::min(delay_duration, exec_delay);
@@ -408,6 +438,11 @@ impl ConfigManager for QuotaLimitConfigManager {
                 .set_read_bandwidth_limit(read_bandwidth.clone().into(), false);
         }
 
+        if let Some(iops) = change.get("background_iops") {
+            self.quota_limiter
+                .set_iops_limit(iops.into(), false);
+        }
+
         if let Some(duration) = change.get("max_delay_duration") {
             let delay_dur: ReadableDuration = duration.clone().into();
             self.quota_limiter
@@ -440,6 +475,7 @@ mod tests {
             1000,
             ReadableSize::kb(1),
             ReadableSize::kb(1),
+            0,
             ReadableDuration::millis(0),
             false,
         );
@@ -609,6 +645,31 @@ mod tests {
         let mut sample = quota_limiter.new_sample(false);
         sample.add_write_bytes(128);
         let should_delay = block_on(quota_limiter.consume_sample(sample, false));
+        check_duration(should_delay, Duration::from_millis(125));
+
+        // Test IOPS limiter
+        // Set IOPS limit to 1000 ops/sec (1 ops/ms)
+        quota_limiter.set_iops_limit(1000, false);
+        let mut sample = quota_limiter.new_sample(false);
+        sample.add_iops(1);
+        let should_delay = block_on(quota_limiter.consume_sample(sample, false));
+        check_duration(should_delay, Duration::from_millis(1));
+
+        // Test that IOPS = 0 means unlimited
+        quota_limiter.set_iops_limit(0, false);
+        let mut sample = quota_limiter.new_sample(false);
+        sample.add_iops(100);
+        let should_delay = block_on(quota_limiter.consume_sample(sample, false));
+        check_duration(should_delay, Duration::ZERO);
+
+        // Test IOPS limiting with other limiters
+        quota_limiter.set_iops_limit(100, false); // 100 ops/sec = 10ms per op
+        quota_limiter.set_read_bandwidth_limit(ReadableSize::kb(1), false);
+        let mut sample = quota_limiter.new_sample(false);
+        sample.add_iops(1);
+        sample.add_read_bytes(128);
+        let should_delay = block_on(quota_limiter.consume_sample(sample, false));
+        // Should be max of IOPS delay (10ms) and read bandwidth delay (125ms)
         check_duration(should_delay, Duration::from_millis(125));
     }
 }
