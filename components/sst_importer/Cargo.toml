@@ -7,7 +7,7 @@ license = "Apache-2.0"
 
 [features]
 default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
-failpoints = ["fail/failpoints"]
+failpoints = ["fail/failpoints", "tikv/failpoints"]
 
 test-engines-rocksdb = [
   "engine_test/test-engines-rocksdb",
