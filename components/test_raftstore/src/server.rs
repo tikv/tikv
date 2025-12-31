@@ -85,6 +85,7 @@ use tikv_util::{
     config::VersionTrack,
     quota_limiter::QuotaLimiter,
     sys::thread::ThreadBuildWrapper,
+    thread_name_prefix::RESOLVED_TS_WORKER_THREAD,
     time::ThreadReadId,
     worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
 };
@@ -422,7 +423,7 @@ impl ServerCluster {
         let txn_status_cache = Arc::new(TxnStatusCache::new_for_test());
         let rts_worker = if cfg.resolved_ts.enable {
             // Resolved ts worker
-            let mut rts_worker = LazyWorker::new("resolved-ts");
+            let mut rts_worker = LazyWorker::new(RESOLVED_TS_WORKER_THREAD);
             let rts_ob = resolved_ts::Observer::new(rts_worker.scheduler());
             rts_ob.register_to(&mut coprocessor_host);
             // resolved ts endpoint needs store id.

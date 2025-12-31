@@ -1557,10 +1557,10 @@ impl DbConfig {
         let rate_limiter = if self.rate_bytes_per_sec.0 > 0 {
             // for raft-v2, we use a longer window to make the compaction io smoother
             let (tune_per_secs, window_size, recent_size) = match engine {
-                // 1s tune duraion, long term window is 5m, short term window is 30s.
+                // 1s tune duration, long term window is 5m, short term window is 30s.
                 // this is the default settings.
                 EngineType::RaftKv => (1, 300, 30),
-                // 5s tune duraion, long term window is 1h, short term window is 5m
+                // 5s tune duration, long term window is 1h, short term window is 5m
                 EngineType::RaftKv2 => (5, 720, 60),
             };
             Some(Arc::new(RateLimiter::new_writeampbased_with_auto_tuned(
