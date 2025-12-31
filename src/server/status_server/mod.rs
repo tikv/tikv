@@ -56,6 +56,7 @@ use serde_json::Value;
 use service::service_manager::GrpcServiceManager;
 use tikv_kv::RaftExtension;
 use tikv_util::{
+    config::ReadableSize,
     GLOBAL_SERVER_READINESS,
     logger::set_log_level,
     metrics::{dump, dump_to},
@@ -202,11 +203,16 @@ where
         }
         let encode_res = if full {
             // Get all config
-            serde_json::to_string(&cfg_controller.get_current())
+            serde_json::to_value(cfg_controller.get_current())
         } else {
             // Filter hidden config
-            serde_json::to_string(&cfg_controller.get_current().get_encoder())
-        };
+            serde_json::to_value(cfg_controller.get_current().get_encoder())
+        }
+        .map(|mut config_value| {
+            Self::apply_raw_size_config(&mut config_value, &cfg_controller.get_raw_size_config());
+            serde_json::to_string(&config_value)
+        })
+        .and_then(|res| res);
         Ok(match encode_res {
             Ok(json) => Response::builder()
                 .header(header::CONTENT_TYPE, "application/json")
@@ -214,6 +220,52 @@ where
                 .unwrap(),
             Err(_) => make_response(StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error"),
         })
+    }
+
+    fn apply_raw_size_config(
+        config: &mut Value,
+        raw: &std::collections::HashMap<String, String>,
+    ) {
+        for (path, raw_value) in raw {
+            let segments: Vec<&str> = path.split('.').collect();
+            if segments.is_empty() {
+                continue;
+            }
+            let mut cursor = &mut *config;
+            for (idx, segment) in segments.iter().enumerate() {
+                let is_last = idx + 1 == segments.len();
+                if let Value::Object(map) = cursor {
+                    if is_last {
+                        if let Some(current_value) = map.get(*segment) {
+                            if Self::raw_size_matches(current_value, raw_value) {
+                                map.insert((*segment).to_owned(), Value::String(raw_value.clone()));
+                            }
+                        }
+                        break;
+                    }
+                    if let Some(next) = map.get_mut(*segment) {
+                        cursor = next;
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+
+    fn raw_size_matches(current_value: &Value, raw_value: &str) -> bool {
+        let raw_size = raw_value.parse::<ReadableSize>().ok();
+        let current_size = match current_value {
+            Value::String(value) => value.parse::<ReadableSize>().ok(),
+            Value::Number(value) => value.as_u64().map(ReadableSize),
+            _ => None,
+        };
+        match (raw_size, current_size) {
+            (Some(raw), Some(current)) => raw.0 == current.0,
+            _ => false,
+        }
     }
 
     fn get_cmdline(_req: Request<Body>) -> hyper::Result<Response<Body>> {
@@ -1366,6 +1418,7 @@ mod tests {
     use openssl::ssl::{SslConnector, SslFiletype, SslMethod};
     use raftstore::store::region_meta::RegionMeta;
     use security::SecurityConfig;
+    use serde_json::json;
     use service::service_manager::GrpcServiceManager;
     use test_util::new_security_cfg;
     use tikv_kv::RaftExtension;
@@ -1543,13 +1596,37 @@ mod tests {
                     .await
                     .unwrap();
                 let resp_json = String::from_utf8_lossy(&v).to_string();
-                assert!(resp_json.contains("\"region-split-size\":\"1GiB\""));
+                assert!(resp_json.contains("\"region-split-size\":\"1GB\""));
             });
             block_on(handle2).unwrap();
             status_server.stop();
         };
         test_config(true);
         test_config(false);
+    }
+
+    #[test]
+    fn test_apply_raw_size_config_only_when_equal() {
+        let mut config_value = json!({
+            "raftstore": {
+                "raft-entry-max-size": "1GiB",
+            },
+            "coprocessor": {
+                "region-split-size": "512MiB",
+            },
+        });
+        let mut raw = std::collections::HashMap::new();
+        raw.insert("raftstore.raft-entry-max-size".to_owned(), "1GB".to_owned());
+        raw.insert("coprocessor.region-split-size".to_owned(), "1GB".to_owned());
+        StatusServer::<MockRouter>::apply_raw_size_config(&mut config_value, &raw);
+        assert_eq!(
+            config_value["raftstore"]["raft-entry-max-size"].as_str(),
+            Some("1GB")
+        );
+        assert_eq!(
+            config_value["coprocessor"]["region-split-size"].as_str(),
+            Some("512MiB")
+        );
     }
 
     #[cfg(feature = "failpoints")]
