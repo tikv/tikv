@@ -718,8 +718,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     conn.iter_downstreams(|_, region_id, downstream_id, _| {
                         self.deregister_downstream(region_id, downstream_id, None);
                     });
-                } else {
-                    info!("cdc connection already deregistered"; "conn_id" => ?conn_id);
+                    CDC_CONNECTION_COUNT.dec();
+                    info!("cdc connection deregistered"; "conn_id" => ?conn_id);
                 }
             }
             Deregister::Request {
@@ -731,9 +731,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                         let err = Some(Error::Other("region not found".into()));
                         self.deregister_downstream(region_id, downstream, err);
                     }
-                } else {
-                    info!("cdc connection already deregistered for request deregister";
-                    "request_id" => ?request_id, "conn_id" => ?conn_id);
                 }
             }
             Deregister::Region {
@@ -746,9 +743,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                         let err = Some(Error::Other("region not found".into()));
                         self.deregister_downstream(region_id, downstream, err);
                     }
-                } else {
-                    info!("cdc connection already deregistered for region deregister";
-                      "request_id" => ?request_id, "region_id" => region_id, "conn_id" => ?conn_id);
                 }
             }
             Deregister::Downstream {
@@ -1186,7 +1180,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     Ok(_) | Err(ScheduleError::Stopped(_)) => (),
                     // Must schedule `MinTS` event otherwise resolved ts can not
                     // advance normally.
-                    Err(err) => panic!("failed to schedule min ts event, error: {:?}", err),
+                    Err(err) => panic!("cdc failed to schedule min ts event, error: {:?}", err),
                 }
             }
         };
@@ -1195,6 +1189,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
 
     fn on_open_conn(&mut self, conn: Conn) {
         self.connections.insert(conn.get_id(), conn);
+        CDC_CONNECTION_COUNT.inc();
     }
 
     fn on_set_conn_version(
