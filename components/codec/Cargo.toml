@@ -1,0 +1,20 @@
+[package]
+name = "codec"
+version = "0.0.1"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+
+[dependencies]
+byteorder = "1.2"
+error_code = { workspace = true }
+libc = "0.2"
+static_assertions = { version = "1.0", features = ["nightly"] }
+thiserror = "1.0"
+tikv_alloc = { workspace = true }
+
+[dev-dependencies]
+bytes = "1.0"
+panic_hook = { workspace = true }
+protobuf = "2"
+rand = "0.8"

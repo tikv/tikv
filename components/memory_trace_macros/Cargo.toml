@@ -1,0 +1,12 @@
+[package]
+name = "memory_trace_macros"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+quote = "1"
+syn = { version = "1", features = ["full", "extra-traits"] }

@@ -1,0 +1,76 @@
+[package]
+name = "tikv-ctl"
+version = "0.0.1"
+license = "Apache-2.0"
+edition = "2021"
+publish = false
+
+[features]
+default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
+tcmalloc = ["tikv/tcmalloc"]
+jemalloc = ["tikv/jemalloc"]
+mimalloc = ["tikv/mimalloc"]
+snmalloc = ["tikv/snmalloc"]
+portable = ["tikv/portable"]
+sse = ["tikv/sse"]
+mem-profiling = ["tikv/mem-profiling"]
+failpoints = ["tikv/failpoints"]
+openssl-vendored = ["tikv/openssl-vendored"]
+test-engine-kv-rocksdb = [
+  "tikv/test-engine-kv-rocksdb"
+]
+test-engine-raft-raft-engine = [
+  "tikv/test-engine-raft-raft-engine"
+]
+test-engines-rocksdb = [
+  "tikv/test-engines-rocksdb",
+]
+test-engines-panic = [
+  "tikv/test-engines-panic",
+]
+
+nortcheck = ["engine_rocks/nortcheck"]
+
+[dependencies]
+api_version = { workspace = true }
+base64 = "0.13.0"
+clap = { workspace = true }
+collections = { workspace = true }
+compact-log-backup = { workspace = true }
+crypto = { workspace = true }
+encryption_export = { workspace = true }
+engine_rocks = { workspace = true }
+engine_traits = { workspace = true }
+file_system = { workspace = true }
+futures = "0.3"
+gag = "1.0"
+grpcio = { workspace = true }
+hex = "0.4"
+keys = { workspace = true }
+kvproto = { workspace = true }
+log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
+log_wrappers = { workspace = true }
+pd_client = { workspace = true }
+protobuf = { version = "2.8", features = ["bytes"] }
+raft = { workspace = true }
+raft-engine = { workspace = true }
+raft-engine-ctl = { workspace = true }
+raft_log_engine = { workspace = true }
+raftstore = { workspace = true }
+regex = "1"
+security = { workspace = true }
+serde_json = "1.0"
+server = { workspace = true }
+slog = { workspace = true }
+slog-global = { workspace = true }
+structopt = "0.3"
+tempfile = "3.0"
+tikv = { workspace = true }
+tikv_util = { workspace = true }
+tokio = { version = "1.5", features = ["rt-multi-thread", "time"] }
+toml = "0.5"
+txn_types = { workspace = true }
+
+[build-dependencies]
+cc = "1.0"
+time = { workspace = true }

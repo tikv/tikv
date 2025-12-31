@@ -1,0 +1,28 @@
+# This Docker image contains a minimal build environment for TiKV
+#
+# It contains all the tools necessary to prepare the unit test env of TiKV
+
+########### stage: builder
+FROM quay.io/rockylinux/rockylinux:8.10.20240528-ubi
+
+# install packages.
+RUN --mount=type=cache,target=/var/cache/dnf \
+    dnf upgrade-minimal -y && \
+    dnf --enablerepo=powertools install -y \
+      dwz make git findutils gcc gcc-c++ cmake curl openssl-devel perl python3 \
+      libstdc++-static
+
+# install protoc.
+# renovate: datasource=github-release depName=protocolbuffers/protobuf
+ARG PROTOBUF_VER=v3.15.8
+RUN FILE=$([ "$(arch)" = "aarch64" ] && echo "protoc-${PROTOBUF_VER#?}-linux-aarch_64.zip" || echo "protoc-${PROTOBUF_VER#?}-linux-$(arch).zip"); \
+    curl -LO "https://github.com/protocolbuffers/protobuf/releases/download/${PROTOBUF_VER}/${FILE}" && unzip "$FILE" -d /usr/local/ && rm -f "$FILE"
+
+# install rust toolchain
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s - -y --default-toolchain none
+ENV PATH /root/.cargo/bin:$PATH
+
+WORKDIR /tikv
+COPY rust-toolchain.toml ./
+
+RUN cargo install cargo-nextest@0.9.85 --locked

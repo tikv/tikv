@@ -1,0 +1,203 @@
+services:
+  # PD (Placement Driver) cluster - 3 nodes
+  # Note: All PD nodes start simultaneously to allow proper Raft leader election
+  pd1:
+    image: pingcap/pd:nightly
+    container_name: tikv-pd1
+    ports:
+      - "23791:2379"  # Client API
+      - "23801:2380"  # Peer communication
+    volumes:
+      - pd1-data:/data
+      - pd1-logs:/logs
+    command:
+      - --name=pd1
+      - --client-urls=http://0.0.0.0:2379
+      - --peer-urls=http://0.0.0.0:2380
+      - --advertise-client-urls=http://pd1:2379
+      - --advertise-peer-urls=http://pd1:2380
+      - --initial-cluster=pd1=http://pd1:2380,pd2=http://pd2:2380,pd3=http://pd3:2380
+      - --data-dir=/data/pd1
+      - --log-file=/logs/pd.log
+    networks:
+      - tikv-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:2379/pd/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+  pd2:
+    image: pingcap/pd:nightly
+    container_name: tikv-pd2
+    ports:
+      - "23792:2379"
+      - "23802:2380"
+    volumes:
+      - pd2-data:/data
+      - pd2-logs:/logs
+    command:
+      - --name=pd2
+      - --client-urls=http://0.0.0.0:2379
+      - --peer-urls=http://0.0.0.0:2380
+      - --advertise-client-urls=http://pd2:2379
+      - --advertise-peer-urls=http://pd2:2380
+      - --initial-cluster=pd1=http://pd1:2380,pd2=http://pd2:2380,pd3=http://pd3:2380
+      - --data-dir=/data/pd2
+      - --log-file=/logs/pd.log
+    networks:
+      - tikv-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:2379/pd/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+  pd3:
+    image: pingcap/pd:nightly
+    container_name: tikv-pd3
+    ports:
+      - "23793:2379"
+      - "23803:2380"
+    volumes:
+      - pd3-data:/data
+      - pd3-logs:/logs
+    command:
+      - --name=pd3
+      - --client-urls=http://0.0.0.0:2379
+      - --peer-urls=http://0.0.0.0:2380
+      - --advertise-client-urls=http://pd3:2379
+      - --advertise-peer-urls=http://pd3:2380
+      - --initial-cluster=pd1=http://pd1:2380,pd2=http://pd2:2380,pd3=http://pd3:2380
+      - --data-dir=/data/pd3
+      - --log-file=/logs/pd.log
+    networks:
+      - tikv-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:2379/pd/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+  # TiKV cluster - 3 nodes
+  # Using pre-built TiKV nightly image from Docker Hub
+  # Note: All TiKV nodes wait for all 3 PD nodes to be healthy before starting
+  tikv1:
+    image: pingcap/tikv:nightly
+    container_name: tikv-tikv1
+    depends_on:
+      pd1:
+        condition: service_healthy
+      pd2:
+        condition: service_healthy
+      pd3:
+        condition: service_healthy
+    ports:
+      - "20161:20160"  # TiKV server port
+      - "20181:20180"  # TiKV status port
+    volumes:
+      - tikv1-data:/data
+      - tikv1-logs:/logs
+    command:
+      - --pd-endpoints=pd1:2379,pd2:2379,pd3:2379
+      - --addr=0.0.0.0:20160
+      - --advertise-addr=tikv1:20160
+      - --status-addr=0.0.0.0:20180
+      - --data-dir=/data/tikv1
+      - --log-file=/logs/tikv.log
+    networks:
+      - tikv-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:20180/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+  tikv2:
+    image: pingcap/tikv:nightly
+    container_name: tikv-tikv2
+    # Wait for all 3 PD nodes to be healthy before starting
+    depends_on:
+      pd1:
+        condition: service_healthy
+      pd2:
+        condition: service_healthy
+      pd3:
+        condition: service_healthy
+    ports:
+      - "20162:20160"
+      - "20182:20180"
+    volumes:
+      - tikv2-data:/data
+      - tikv2-logs:/logs
+    command:
+      - --pd-endpoints=pd1:2379,pd2:2379,pd3:2379
+      - --addr=0.0.0.0:20160
+      - --advertise-addr=tikv2:20160
+      - --status-addr=0.0.0.0:20180
+      - --data-dir=/data/tikv2
+      - --log-file=/logs/tikv.log
+    networks:
+      - tikv-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:20180/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+  tikv3:
+    image: pingcap/tikv:nightly
+    container_name: tikv-tikv3
+    # Wait for all 3 PD nodes to be healthy before starting
+    depends_on:
+      pd1:
+        condition: service_healthy
+      pd2:
+        condition: service_healthy
+      pd3:
+        condition: service_healthy
+    ports:
+      - "20163:20160"
+      - "20183:20180"
+    volumes:
+      - tikv3-data:/data
+      - tikv3-logs:/logs
+    command:
+      - --pd-endpoints=pd1:2379,pd2:2379,pd3:2379
+      - --addr=0.0.0.0:20160
+      - --advertise-addr=tikv3:20160
+      - --status-addr=0.0.0.0:20180
+      - --data-dir=/data/tikv3
+      - --log-file=/logs/tikv.log
+    networks:
+      - tikv-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:20180/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+volumes:
+  pd1-data:
+  pd2-data:
+  pd3-data:
+  pd1-logs:
+  pd2-logs:
+  pd3-logs:
+  tikv1-data:
+  tikv2-data:
+  tikv3-data:
+  tikv1-logs:
+  tikv2-logs:
+  tikv3-logs:
+
+networks:
+  tikv-network:
+    driver: bridge
+

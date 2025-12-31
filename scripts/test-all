@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# This script runs all the tests under a variety of conditions.
+# This should pass before submitting pull requests.
+# Arguments given will be passed through to "cargo test"
+# This runs in the Makefile environment via "make run"
+
+set -euo pipefail
+
+# Run from the Makefile environment
+MAKEFILE_RUN=${MAKEFILE_RUN:-""}
+if [[ -z $MAKEFILE_RUN ]] ; then
+    COMMAND="$0 $*" exec make run
+fi
+
+./scripts/test "$@"  && echo
+# Re-run tests that requires specific environment variables.
+if [[ "$(uname)" == "Linux" ]]; then
+    export MALLOC_CONF=prof:true
+    ./scripts/test ifdef_malloc_conf "$@" && echo
+fi
+
+if [[ "$(uname)" = "Linux" ]]; then
+    CUSTOM_TEST_COMMAND="" EXTRA_CARGO_ARGS="" ./scripts/test --message-format=json-render-diagnostics -q --no-run |
+        python3 scripts/check-bins.py --features "${TIKV_ENABLE_FEATURES}" --check-tests
+fi

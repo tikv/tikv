@@ -1,0 +1,690 @@
+slow-log-file = "slow_foo"
+slow-log-threshold = "1s"
+panic-when-unexpected-key-or-data = true
+abort-on-panic = true
+memory-usage-limit = "10GB"
+memory-usage-high-water = 0.65
+
+[log]
+level = "fatal"
+format = "json"
+
+[log.file]
+filename = "foo"
+max-size = 1
+max-backups = 2
+max-days = 3
+
+[memory]
+enable-heap-profiling = false
+profiling-sample-per-bytes = "1MB"
+enable-thread-exclusive-arena = false
+
+[readpool.unified]
+min-thread-count = 5
+max-thread-count = 10
+stack-size = "20MB"
+max-tasks-per-worker = 2200
+
+[readpool.storage]
+use-unified-pool = true
+high-concurrency = 1
+normal-concurrency = 3
+low-concurrency = 7
+max-tasks-per-worker-high = 1000
+max-tasks-per-worker-normal = 1500
+max-tasks-per-worker-low = 2500
+stack-size = "20MB"
+
+[readpool.coprocessor]
+use-unified-pool = false
+high-concurrency = 2
+normal-concurrency = 4
+low-concurrency = 6
+max-tasks-per-worker-high = 2000
+max-tasks-per-worker-normal = 1000
+max-tasks-per-worker-low = 3000
+stack-size = "12MB"
+
+[server]
+addr = "example.com:443"
+advertise-addr = "example.com:443"
+status-addr = "example.com:443"
+advertise-status-addr = "example.com:443"
+status-thread-pool-size = 1
+max-grpc-send-msg-len = 6291456
+raft-client-grpc-send-msg-buffer = 1263616
+raft-client-queue-size = 1234
+raft-client-max-backoff = "5s"
+raft-msg-max-batch-size = 123
+grpc-compression-type = "gzip"
+grpc-concurrency = 123
+grpc-concurrent-stream = 1234
+grpc-memory-pool-quota = 123456
+grpc-raft-conn-num = 123
+grpc-stream-initial-window-size = 12345
+grpc-keepalive-time = "3s"
+grpc-keepalive-timeout = "1m"
+concurrent-send-snap-limit = 4
+concurrent-recv-snap-limit = 4
+end-point-recursion-limit = 100
+end-point-stream-channel-size = 16
+end-point-batch-row-limit = 64
+end-point-stream-batch-row-limit = 4096
+end-point-enable-batch-if-possible = true
+end-point-request-max-handle-duration = "12s"
+end-point-max-concurrency = 10
+end-point-perf-level = 5
+snap-io-max-bytes-per-sec = "10MB"
+snap-max-total-size = "10GB"
+stats-concurrency = 10
+heavy-load-threshold = 25
+heavy-load-wait-duration = "2ms"
+enable-request-batch = false
+background-thread-count = 999
+end-point-slow-log-threshold = "1s"
+forward-max-connections-per-address = 5
+reject-messages-on-memory-ratio = 0.8
+health-feedback-interval = "2s"
+inspect-network-interval = "222ms"
+
+[server.labels]
+a = "b"
+
+[storage]
+data-dir = "/var"
+engine = "partitioned-raft-kv"
+gc-ratio-threshold = 1.2
+max-key-size = 4096
+scheduler-concurrency = 123
+scheduler-worker-pool-size = 1
+scheduler-pending-write-threshold = "123KB"
+enable-async-apply-prewrite = true
+reserve-space = "10GB"
+reserve-raft-space = "2GB"
+enable-ttl = true
+ttl-check-poll-interval = "0s"
+txn-status-cache-capacity = 1000
+memory-quota = "123KB"
+
+[storage.max-ts]
+max-drift = "333s"
+cache-sync-interval = "44s"
+action-on-invalid-update = "error"
+
+[storage.block-cache]
+capacity = "40GB"
+num-shard-bits = 10
+strict-capacity-limit = true
+high-pri-pool-ratio = 0.8
+memory-allocator = "nodump"
+
+[storage.flow-control]
+enable = false
+soft-pending-compaction-bytes-limit = 1
+hard-pending-compaction-bytes-limit = 1
+memtables-threshold = 10
+l0-files-threshold = 10
+
+[storage.io-rate-limit]
+max-bytes-per-sec = "1000MB"
+mode = "all-io"
+strict = true
+foreground-read-priority = "low"
+foreground-write-priority = "low"
+flush-priority = "low"
+level-zero-compaction-priority = "low"
+compaction-priority = "high"
+replication-priority = "low"
+load-balance-priority = "low"
+gc-priority = "high"
+import-priority = "high"
+export-priority = "high"
+other-priority = "low"
+
+[pd]
+endpoints = ["example.com:443"]
+
+[metric]
+job = "tikv_1"
+
+[raftstore]
+prevote = false
+raftdb-path = "/var"
+capacity = 123
+raft-base-tick-interval = "12s"
+raft-heartbeat-ticks = 1
+raft-election-timeout-ticks = 12
+raft-min-election-timeout-ticks = 14
+raft-max-election-timeout-ticks = 20
+raft-max-size-per-msg = "12MB"
+raft-max-inflight-msgs = 123
+raft-entry-max-size = "12MB"
+raft-log-compact-sync-interval = "12s"
+raft-log-gc-tick-interval = "12s"
+raft-log-gc-threshold = 12
+raft-log-gc-count-limit = 12
+raft-log-gc-size-limit = "1KB"
+raft-read-index-retry-interval-ticks = 123
+raft-log-reserve-max-ticks = 100
+raft-engine-purge-interval = "20m"
+max-manual-flush-rate = 5.0
+raft-entry-cache-life-time = "12s"
+split-region-check-tick-interval = "12s"
+region-split-check-diff = "20MB"
+clean-stale-peer-delay = "0s"
+pd-heartbeat-tick-interval = "12m"
+pd-store-heartbeat-tick-interval = "12s"
+pd-report-min-resolved-ts-interval = "233ms"
+snap-mgr-gc-tick-interval = "12m"
+snap-gc-timeout = "12h"
+snap-wait-split-duration = "12h"
+lock-cf-compact-interval = "12m"
+lock-cf-compact-bytes-threshold = "123MB"
+notify-capacity = 12345
+messages-per-tick = 12345
+max-peer-down-duration = "12m"
+max-leader-missing-duration = "12h"
+abnormal-leader-missing-duration = "6h"
+peer-stale-state-check-interval = "2h"
+gc-peer-check-interval = "1d"
+leader-transfer-max-log-lag = 123
+snap-apply-batch-size = "12MB"
+snap-apply-copy-symlink = true
+consistency-check-interval = "12s"
+report-region-flow-interval = "12m"
+raft-store-max-leader-lease = "12s"
+right-derive-when-split = false
+allow-remove-leader = true
+merge-max-log-gap = 3
+merge-check-tick-interval = "11s"
+use-delete-range = true
+cleanup-import-sst-interval = "12m"
+local-read-batch-size = 33
+apply-yield-write-size = "12345B"
+apply-max-batch-size = 22
+apply-pool-size = 4
+apply-reschedule-duration = "3s"
+apply-before-pause-wait-us = 123
+apply-yield-duration = "333ms"
+store-max-batch-size = 21
+store-pool-size = 3
+store-reschedule-duration = "2s"
+store-before-pause-wait-us = 123
+store-io-pool-size = 5
+store-io-notify-capacity = 123456
+future-poll-size = 2
+hibernate-regions = false
+dev-assert = true
+perf-level = 1
+evict-cache-on-memory-ratio = 0.8
+cmd-batch = false
+cmd-batch-concurrent-ready-max-count = 123
+raft-write-size-limit = "34MB"
+raft-write-batch-size-hint = "1MB"
+raft-write-wait-duration = "444us"
+waterfall-metrics = true
+io-reschedule-concurrent-max-count = 1234
+io-reschedule-hotpot-duration = "4321s"
+inspect-interval = "444ms"
+inspect-kvdb-interval = "333ms"
+inspect-cpu-util-thd = 0.666
+check-leader-lease-interval = "123ms"
+renew-leader-lease-advance-duration = "456ms"
+reactive-memory-lock-tick-interval = "566ms"
+reactive-memory-lock-timeout-tick = 8
+check-long-uncommitted-interval = "1s"
+long-uncommitted-base-threshold = "1s"
+report-region-buckets-tick-interval = "1234s"
+max-snapshot-file-raw-size = "10GB"
+unreachable-backoff = "111s"
+max-entry-cache-warmup-duration = "2s"
+enable-partitioned-raft-kv-compatible-learner = false
+
+[coprocessor]
+split-region-on-table = false
+batch-split-limit = 1
+region-max-size = "12MB"
+region-split-size = "12MB"
+region-max-keys = 100000
+region-split-keys = 100000
+consistency-check-method = "raw"
+enable-region-bucket = true
+region-bucket-size = "1MB"
+region-size-threshold-for-approximate = "3MB"
+region-bucket-merge-size-ratio = 0.4
+prefer-approximate-bucket = false
+
+[rocksdb]
+wal-recovery-mode = "absolute-consistency"
+wal-dir = "/var"
+wal-ttl-seconds = 1
+wal-size-limit = "1KB"
+max-total-wal-size = "1GB"
+max-background-jobs = 12
+max-background-flushes = 4
+max-manifest-file-size = "12MB"
+create-if-missing = false
+max-open-files = 12345
+stats-dump-period = "12m"
+compaction-readahead-size = "1KB"
+info-log-dir = "/var"
+rate-bytes-per-sec = "1KB"
+rate-limiter-refill-period = "10ms"
+rate-limiter-mode = "all-io"
+rate-limiter-auto-tuned = false
+bytes-per-sync = "1MB"
+wal-bytes-per-sync = "32KB"
+max-sub-compactions = 12
+writable-file-max-buffer-size = "12MB"
+use-direct-io-for-flush-and-compaction = true
+enable-pipelined-write = false
+enable-multi-batch-write = true
+enable-unordered-write = true
+allow-concurrent-memtable-write = false
+write-buffer-limit = "1GB"
+
+[rocksdb.titan]
+enabled = true
+dirname = "bar"
+disable-gc = false
+max-background-gc = 9
+purge-obsolete-files-period = "1s"
+
+[rocksdb.defaultcf]
+block-size = "12KB"
+block-cache-size = "12GB"
+disable-block-cache = false
+cache-index-and-filter-blocks = false
+pin-l0-filter-and-index-blocks = false
+use-bloom-filter = false
+optimize-filters-for-hits = false
+optimize-filters-for-memory = true
+whole-key-filtering = true
+bloom-filter-bits-per-key = 123
+block-based-bloom-filter = true
+ribbon-filter-above-level = 1
+read-amp-bytes-per-bit = 0
+compression-per-level = ["no", "no", "zstd", "zstd", "no", "zstd", "lz4"]
+bottommost-level-compression = "disable"
+bottommost-zstd-compression-dict-size = 1024
+bottommost-zstd-compression-sample-size = 1024
+write-buffer-size = "1MB"
+max-write-buffer-number = 12
+min-write-buffer-number-to-merge = 12
+max-bytes-for-level-base = "12KB"
+target-file-size-base = "123KB"
+level0-file-num-compaction-trigger = 123
+level0-slowdown-writes-trigger = 123
+level0-stop-writes-trigger = 123
+max-compaction-bytes = "1GB"
+compaction-pri = "min-overlapping-ratio"
+dynamic-level-bytes = true
+num-levels = 4
+max-bytes-for-level-multiplier = 8
+compaction-style = 1
+disable-auto-compactions = true
+disable-write-stall = true
+soft-pending-compaction-bytes-limit = "12GB"
+hard-pending-compaction-bytes-limit = "12GB"
+force-consistency-checks = true
+prop-size-index-distance = 4000000
+prop-keys-index-distance = 40000
+enable-doubly-skiplist = false
+enable-compaction-guard = false
+compaction-guard-min-output-file-size = "12MB"
+compaction-guard-max-output-file-size = "34MB"
+prepopulate-block-cache = "flush-only"
+format-version = 0
+checksum = "xxh3"
+max-compactions = 3
+ttl = "10d"
+periodic-compaction-seconds = "10d"
+
+[rocksdb.defaultcf.titan]
+min-blob-size = "2018B"
+blob-file-compression = "lz4"
+zstd-dict-size = "16KB"
+shared-blob-cache = false
+blob-cache-size = "12GB"
+min-gc-batch-size = "12KB"
+max-gc-batch-size = "12MB"
+discardable-ratio = 0.00156
+merge-small-file-threshold = "21KB"
+blob-run-mode = "fallback"
+level-merge = true
+range-merge = true
+max-sorted-runs = 100
+
+[rocksdb.writecf]
+block-size = "12KB"
+block-cache-size = "12GB"
+disable-block-cache = false
+cache-index-and-filter-blocks = false
+pin-l0-filter-and-index-blocks = false
+use-bloom-filter = false
+optimize-filters-for-hits = true
+optimize-filters-for-memory = true
+whole-key-filtering = true
+bloom-filter-bits-per-key = 123
+block-based-bloom-filter = true
+ribbon-filter-above-level = 1
+read-amp-bytes-per-bit = 0
+compression-per-level = ["no", "no", "zstd", "zstd", "no", "zstd", "lz4"]
+write-buffer-size = "1MB"
+max-write-buffer-number = 12
+min-write-buffer-number-to-merge = 12
+max-bytes-for-level-base = "12KB"
+target-file-size-base = "123KB"
+level0-file-num-compaction-trigger = 123
+level0-slowdown-writes-trigger = 123
+level0-stop-writes-trigger = 123
+max-compaction-bytes = "1GB"
+compaction-pri = "min-overlapping-ratio"
+dynamic-level-bytes = true
+num-levels = 4
+max-bytes-for-level-multiplier = 8
+compaction-style = "universal"
+disable-auto-compactions = true
+disable-write-stall = true
+soft-pending-compaction-bytes-limit = "12GB"
+hard-pending-compaction-bytes-limit = "12GB"
+force-consistency-checks = true
+prop-size-index-distance = 4000000
+prop-keys-index-distance = 40000
+enable-compaction-guard = false
+compaction-guard-min-output-file-size = "12MB"
+compaction-guard-max-output-file-size = "34MB"
+prepopulate-block-cache = "flush-only"
+format-version = 0
+checksum = "xxh3"
+max-compactions = 3
+ttl = "10d"
+periodic-compaction-seconds = "10d"
+
+[rocksdb.lockcf]
+block-size = "12KB"
+block-cache-size = "12GB"
+disable-block-cache = false
+cache-index-and-filter-blocks = false
+pin-l0-filter-and-index-blocks = false
+use-bloom-filter = false
+optimize-filters-for-hits = true
+optimize-filters-for-memory = true
+whole-key-filtering = true
+bloom-filter-bits-per-key = 123
+block-based-bloom-filter = true
+ribbon-filter-above-level = 1
+read-amp-bytes-per-bit = 0
+compression-per-level = ["no", "no", "zstd", "zstd", "no", "zstd", "lz4"]
+write-buffer-size = "1MB"
+write-buffer-limit = "16MB"
+max-write-buffer-number = 12
+min-write-buffer-number-to-merge = 12
+max-bytes-for-level-base = "12KB"
+target-file-size-base = "123KB"
+level0-file-num-compaction-trigger = 123
+level0-slowdown-writes-trigger = 123
+level0-stop-writes-trigger = 123
+max-compaction-bytes = "1GB"
+compaction-pri = "min-overlapping-ratio"
+dynamic-level-bytes = true
+num-levels = 4
+max-bytes-for-level-multiplier = 8
+compaction-style = "universal"
+disable-auto-compactions = true
+disable-write-stall = true
+soft-pending-compaction-bytes-limit = "12GB"
+hard-pending-compaction-bytes-limit = "12GB"
+force-consistency-checks = true
+prop-size-index-distance = 4000000
+prop-keys-index-distance = 40000
+enable-compaction-guard = true
+compaction-guard-min-output-file-size = "12MB"
+compaction-guard-max-output-file-size = "34MB"
+prepopulate-block-cache = "flush-only"
+format-version = 0
+checksum = "xxh3"
+max-compactions = 3
+ttl = "10d"
+periodic-compaction-seconds = "10d"
+
+[rocksdb.raftcf]
+block-size = "12KB"
+block-cache-size = "12GB"
+disable-block-cache = false
+cache-index-and-filter-blocks = false
+pin-l0-filter-and-index-blocks = false
+use-bloom-filter = false
+optimize-filters-for-hits = false
+optimize-filters-for-memory = true
+whole-key-filtering = true
+bloom-filter-bits-per-key = 123
+block-based-bloom-filter = true
+ribbon-filter-above-level = 1
+read-amp-bytes-per-bit = 0
+compression-per-level = ["no", "no", "zstd", "zstd", "no", "zstd", "lz4"]
+write-buffer-size = "1MB"
+max-write-buffer-number = 12
+min-write-buffer-number-to-merge = 12
+max-bytes-for-level-base = "12KB"
+target-file-size-base = "123KB"
+level0-file-num-compaction-trigger = 123
+level0-slowdown-writes-trigger = 123
+level0-stop-writes-trigger = 123
+max-compaction-bytes = "1GB"
+compaction-pri = "min-overlapping-ratio"
+dynamic-level-bytes = true
+num-levels = 4
+max-bytes-for-level-multiplier = 8
+compaction-style = "universal"
+disable-auto-compactions = true
+disable-write-stall = true
+soft-pending-compaction-bytes-limit = "12GB"
+hard-pending-compaction-bytes-limit = "12GB"
+force-consistency-checks = true
+prop-size-index-distance = 4000000
+prop-keys-index-distance = 40000
+enable-compaction-guard = true
+compaction-guard-min-output-file-size = "12MB"
+compaction-guard-max-output-file-size = "34MB"
+prepopulate-block-cache = "flush-only"
+format-version = 0
+checksum = "xxh3"
+max-compactions = 3
+ttl = "10d"
+periodic-compaction-seconds = "10d"
+
+[raftdb]
+wal-recovery-mode = "skip-any-corrupted-records"
+wal-dir = "/var"
+wal-ttl-seconds = 1
+wal-size-limit = "12KB"
+max-total-wal-size = "1GB"
+max-background-jobs = 12
+max-background-flushes = 4
+max-manifest-file-size = "12MB"
+create-if-missing = false
+max-open-files = 12345
+stats-dump-period = "12m"
+compaction-readahead-size = "1KB"
+info-log-dir = "/var"
+max-sub-compactions = 12
+writable-file-max-buffer-size = "12MB"
+use-direct-io-for-flush-and-compaction = true
+enable-pipelined-write = false
+allow-concurrent-memtable-write = false
+bytes-per-sync = "1MB"
+wal-bytes-per-sync = "32KB"
+
+[raftdb.titan]
+enabled = true
+dirname = "bar"
+disable-gc = false
+max-background-gc = 9
+purge-obsolete-files-period = "1s"
+
+[raftdb.defaultcf]
+block-size = "12KB"
+block-cache-size = "12GB"
+disable-block-cache = false
+cache-index-and-filter-blocks = false
+pin-l0-filter-and-index-blocks = false
+use-bloom-filter = false
+optimize-filters-for-hits = false
+optimize-filters-for-memory = true
+whole-key-filtering = true
+bloom-filter-bits-per-key = 123
+block-based-bloom-filter = true
+ribbon-filter-above-level = 1
+read-amp-bytes-per-bit = 0
+compression-per-level = ["no", "no", "zstd", "zstd", "no", "zstd", "lz4"]
+write-buffer-size = "1MB"
+max-write-buffer-number = 12
+min-write-buffer-number-to-merge = 12
+max-bytes-for-level-base = "12KB"
+target-file-size-base = "123KB"
+level0-file-num-compaction-trigger = 123
+level0-slowdown-writes-trigger = 123
+level0-stop-writes-trigger = 123
+max-compaction-bytes = "1GB"
+compaction-pri = "min-overlapping-ratio"
+dynamic-level-bytes = true
+num-levels = 4
+max-bytes-for-level-multiplier = 8
+compaction-style = "universal"
+disable-auto-compactions = true
+disable-write-stall = true
+soft-pending-compaction-bytes-limit = "12GB"
+hard-pending-compaction-bytes-limit = "12GB"
+force-consistency-checks = true
+prop-size-index-distance = 4000000
+prop-keys-index-distance = 40000
+enable-compaction-guard = true
+compaction-guard-min-output-file-size = "12MB"
+compaction-guard-max-output-file-size = "34MB"
+prepopulate-block-cache = "flush-only"
+format-version = 0
+checksum = "xxh3"
+max-compactions = 3
+
+[raftdb.defaultcf.titan]
+min-blob-size = "2018B"
+blob-file-compression = "lz4"
+zstd-dict-size = "16KB"
+shared-blob-cache = false
+blob-cache-size = "12GB"
+min-gc-batch-size = "12KB"
+max-gc-batch-size = "12MB"
+discardable-ratio = 0.00156
+merge-small-file-threshold = "21KB"
+blob-run-mode = "fallback"
+level-merge = true
+range-merge = true
+max-sorted-runs = 100
+
+[raft-engine]
+enable = false
+dir = "test-dir"
+batch-compression-threshold = "1KB"
+target-file-size = "1MB"
+purge-threshold = "1GB"
+recovery-mode = "tolerate-tail-corruption"
+recovery-read-block-size = "1KB"
+recovery-threads = 2
+memory-limit = "1GB"
+enable-log-recycle = false
+
+[security]
+ca-path = "invalid path"
+cert-path = "invalid path"
+key-path = "invalid path"
+redact-info-log = true
+cert-allowed-cn = ["example.tikv.com"]
+
+[security.encryption]
+data-encryption-method = "aes128-ctr"
+data-key-rotation-period = "14d"
+enable-file-dictionary-log = false
+file-dictionary-rewrite-threshold = 123456
+
+[security.encryption.master-key]
+type = "file"
+path = "/master/key/path"
+
+[security.encryption.previous-master-key]
+type = "plaintext"
+
+[backup]
+num-threads = 456
+batch-size = 7
+s3-multi-part-size = "15MB"
+sst-max-size = "789MB"
+
+[log-backup]
+min-ts-interval = "2s"
+max-flush-interval = "11s"
+num-threads = 7
+enable = true
+temp-path = "./stream"
+file-size-limit = "5GiB"
+initial-scan-pending-memory-quota = "2KiB"
+initial-scan-rate-limit = "3MiB"
+
+[backup.hadoop]
+home = "/root/hadoop"
+linux-user = "hadoop"
+
+[import]
+num-threads = 123
+stream-channel-window = 123
+import-mode-timeout = "1453s"
+
+[gc]
+ratio-threshold = 1.2
+batch-keys = 256
+max-write-bytes-per-sec = "10MB"
+enable-compaction-filter = false
+compaction-filter-skip-version-check = true
+num-threads = 2
+
+[pessimistic-txn]
+enabled = false                # test backward compatibility
+wait-for-lock-timeout = "10ms"
+wake-up-delay-duration = 100   # test backward compatibility
+pipelined = false
+in-memory = false
+
+[cdc]
+min-ts-interval = "4s"
+old-value-cache-size = 0
+hibernate-regions-compatible = false
+incremental-scan-threads = 3
+incremental-scan-concurrency = 4
+incremental-scan-concurrency-limit = 5
+incremental-scan-speed-limit = 7
+incremental-fetch-speed-limit = 8
+incremental-scan-ts-filter-ratio = 0.7
+tso-worker-threads = 2
+old-value-cache-memory-quota = "14MB"
+sink-memory-quota = "7MB"
+
+[resolved-ts]
+enable = true
+advance-ts-interval = "5s"
+scan-lock-pool-size = 1
+memory-quota = "1MB"
+incremental-scan-concurrency = 7
+
+[split]
+detect-times = 10
+qps-threshold = 3000
+sample-num = 20
+sample-threshold = 100
+byte-threshold = 31457280
+split.split-balance-score = 0.25
+split.split-contained-score = 0.5
+
+[resource-control]
+enabled = false
+priority-ctl-strategy = "aggressive"

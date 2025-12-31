@@ -1,0 +1,47 @@
+[package]
+name = "batch-system"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[features]
+default = ["test-runner"]
+test-runner = ["derive_more"]
+
+[dependencies]
+crossbeam = { workspace = true }
+dashmap = "5.2"
+derive_more = { version = "0.99", optional = true }
+fail = "0.5"
+file_system = { workspace = true }
+kvproto = { workspace = true }
+lazy_static = "1.3"
+online_config = { workspace = true }
+prometheus = { version = "0.13", default-features = false, features = ["nightly"] }
+prometheus-static-metric = "0.5"
+resource_control = { workspace = true }
+serde = { version = "1.0", features = ["derive"] }
+slog = { workspace = true }
+slog-global = { workspace = true }
+tikv_alloc = { workspace = true }
+tikv_util = { workspace = true }
+
+[dev-dependencies]
+criterion = "0.3"
+
+[[test]]
+name = "tests"
+path = "tests/cases/mod.rs"
+required-features = ["test-runner"]
+
+[[bench]]
+name = "router"
+path = "benches/router.rs"
+harness = false
+required-features = ["test-runner"]
+
+[[bench]]
+name = "batch-system"
+path = "benches/batch-system.rs"
+harness = false
+required-features = ["test-runner"]

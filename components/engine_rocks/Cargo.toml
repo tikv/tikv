@@ -1,0 +1,66 @@
+[package]
+name = "engine_rocks"
+version = "0.0.1"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+
+[features]
+trace-lifetime = []
+jemalloc = ["rocksdb/jemalloc"]
+portable = ["rocksdb/portable"]
+sse = ["rocksdb/sse"]
+failpoints = ["fail/failpoints"]
+testexport = []
+
+# Disables runtime checks of invariants required by RocksDB that are redundant
+# with assertions inside RocksDB itself. This makes it possible to test those
+# invariants in Rust tests, resulting an a panic instead of an abort, at the
+# expense of an extra branch. This feature exists to mark those extra branches.
+# The checks _can_ be disabled by enabling this feature, though it may not
+# result in any real performance improvement to do so, and it will break
+# the test suite.
+#
+# Probably these checks should be in the rust-rocksdb crate itself, in order
+# to ensure the bindings are safe, but until that is done, they are here.
+nortcheck = []
+
+[dependencies]
+api_version = { workspace = true }
+collections = { workspace = true }
+derive_more = "0.99.3"
+encryption = { workspace = true }
+engine_traits = { workspace = true }
+fail = "0.5"
+file_system = { workspace = true }
+keys = { workspace = true }
+kvproto = { workspace = true }
+lazy_static = "1.4.0"
+log_wrappers = { workspace = true }
+num_cpus = "1"
+online_config = { workspace = true }
+prometheus = { version = "0.13", features = ["nightly"] }
+prometheus-static-metric = "0.5"
+protobuf = "2"
+raft = { workspace = true }
+regex = "1"
+serde = "1.0"
+slog = { workspace = true }
+slog-global = { workspace = true }
+slog_derive = "0.2"
+tempfile = "3.0"
+tikv_alloc = { workspace = true }
+tikv_util = { workspace = true }
+time = { workspace = true }
+tracker = { workspace = true }
+txn_types = { workspace = true }
+
+[dependencies.rocksdb]
+git = "https://github.com/tikv/rust-rocksdb.git"
+package = "rocksdb"
+features = ["encryption"]
+
+[dev-dependencies]
+proptest = "1.0.0"
+rand = "0.8"
+toml = "0.5"

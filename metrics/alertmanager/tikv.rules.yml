@@ -1,0 +1,362 @@
+groups:
+- name: alert.rules
+  rules:
+  - alert: TiKV_critical_error
+    expr: sum(rate(tikv_critical_error_total[1m])) BY (type, instance) > 0
+    # without the for clause will become active on the first evaluation.
+    labels:
+      env: ENV_LABELS_ENV
+      level: critical
+      expr: sum(rate(tikv_critical_error_total[1m])) BY (type, instance) > 0
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values:{{ $value }}'
+      value: '{{ $value }}'
+      summary: TiKV encounters critical error
+
+  - alert: TiKV_memory_used_too_fast
+    expr: process_resident_memory_bytes{job=~"tikv",instance=~".*"} - (process_resident_memory_bytes{job=~"tikv",instance=~".*"} offset 5m) > 5*1024*1024*1024
+    for: 5m
+    labels:
+      env: ENV_LABELS_ENV
+      level: emergency
+      expr: process_resident_memory_bytes{job=~"tikv",instance=~".*"} - (process_resident_memory_bytes{job=~"tikv",instance=~".*"} offset 5m) > 5*1024*1024*1024
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values: {{ $value }}'
+      value: '{{ $value }}'
+      summary: TiKV memory used too fast
+
+  - alert: TiKV_GC_can_not_work
+    expr: sum(increase(tikv_gcworker_gc_tasks_vec{task="gc"}[1d])) < 1 and (sum(increase(tikv_gc_compaction_filter_perform[1d])) < 1 and sum(increase(tikv_engine_event_total{db="kv", cf="write", type="compaction"}[1d])) >= 1)
+    for: 5m
+    labels:
+      env: ENV_LABELS_ENV
+      level: emergency
+      expr: sum(increase(tikv_gcworker_gc_tasks_vec{task="gc"}[1d])) < 1
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values:{{ $value }}'
+      value: '{{ $value }}'
+      summary: TiKV GC can not work
+
+  - alert: TiKV_server_report_failure_msg_total
+    expr:  sum(rate(tikv_server_report_failure_msg_total{type="unreachable"}[10m])) BY (store_id) > 10
+    for: 1m
+    labels:
+      env: ENV_LABELS_ENV
+      level: critical
+      expr:  sum(rate(tikv_server_report_failure_msg_total{type="unreachable"}[10m])) BY (store_id) > 10
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values:{{ $value }}'
+      value: '{{ $value }}'
+      summary: TiKV server_report_failure_msg_total error
+
+  - alert: TiKV_channel_full_total
+    expr: sum(rate(tikv_channel_full_total[10m])) BY (type, instance) > 0
+    for: 1m
+    labels:
+      env: ENV_LABELS_ENV
+      level: critical
+      expr:  sum(rate(tikv_channel_full_total[10m])) BY (type, instance) > 0
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values:{{ $value }}'
+      value: '{{ $value }}'
+      summary: TiKV channel full
+
+  - alert: TiKV_write_stall
+    expr: delta( tikv_engine_write_stall[10m])  > 0
+    for: 1m
+    labels:
+      env: ENV_LABELS_ENV
+      level: critical
+      expr:  delta( tikv_engine_write_stall[10m])  > 0
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, type: {{ $labels.type }}, instance: {{ $labels.instance }}, values: {{ $value }}'
+      value: '{{ $value }}'
+      summary: TiKV write stall
+
+  - alert: TiKV_maybe_write_stall
+    expr: max(tikv_scheduler_l0_avg) by (instance) > 80
+    for: 1m
+    labels:
+      env: ENV_LABELS_ENV
+      level: critical
+      expr:  max(tikv_scheduler_l0_avg) by (instance) > 80
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, type: {{ $labels.type }}, instance: {{ $labels.instance }}, values: {{ $value }}'
+      value: '{{ $value }}'
+      summary: TiKV the average number of L0 files exceeds 80
+
+  - alert: TiKV_raft_log_lag
+    expr: histogram_quantile(0.99, sum(rate(tikv_raftstore_log_lag_bucket[1m])) by (le, instance))  > 5000
+    for: 1m
+    labels:
+      env: ENV_LABELS_ENV
+      level: critical
+      expr:  histogram_quantile(0.99, sum(rate(tikv_raftstore_log_lag_bucket[1m])) by (le, instance))  > 5000
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, instance {{ $labels.instance }}, values: {{ $value }}'
+      value: '{{ $value }}'
+      summary: TiKV raftstore log lag more than 5000
+
+  - alert: TiKV_async_request_snapshot_duration_seconds
+    expr: histogram_quantile(0.99, sum(rate(tikv_storage_engine_async_request_duration_seconds_bucket{type="snapshot"}[1m])) by (le, instance, type)) > 1
+    for: 1m
+    labels:
+      env: ENV_LABELS_ENV
+      level: critical
+      expr:  histogram_quantile(0.99, sum(rate(tikv_storage_engine_async_request_duration_seconds_bucket{type="snapshot"}[1m])) by (le, instance, type)) > 1
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values:{{ $value }}'
+      value: '{{ $value }}'
+      summary: TiKV async request snapshot duration seconds more than 1s
+
+  - alert: TiKV_async_request_write_duration_seconds
+    expr: histogram_quantile(0.99, sum(rate(tikv_storage_engine_async_request_duration_seconds_bucket{type="write"}[1m])) by (le, instance, type)) > 1
+    for: 1m
+    labels:
+      env: ENV_LABELS_ENV
+      level: critical
+      expr:  histogram_quantile(0.99, sum(rate(tikv_storage_engine_async_request_duration_seconds_bucket{type="write"}[1m])) by (le, instance, type)) > 1
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values:{{ $value }}'
+      value: '{{ $value }}'
+      summary: TiKV async request write duration seconds more than 1s
+
+  - alert: TiKV_coprocessor_request_wait_seconds
+    expr: histogram_quantile(0.9999, sum(rate(tikv_coprocessor_request_wait_seconds_bucket{type="all"}[1m])) by (le, instance, req)) > 10
+    for: 1m
+    labels:
+      env: ENV_LABELS_ENV
+      level: critical
+      expr:  histogram_quantile(0.9999, sum(rate(tikv_coprocessor_request_wait_seconds_bucket{type="all"}[1m])) by (le, instance, req)) > 10
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values:{{ $value }}'
+      value: '{{ $value }}'
+      summary: TiKV coprocessor request wait seconds more than 10s
+
+  - alert: TiKV_raftstore_thread_cpu_seconds_total
+    expr: sum(rate(tikv_thread_cpu_seconds_total{name=~"(raftstore|rs)_.*"}[1m])) by (instance)  > 1.6
+    for: 1m
+    labels:
+      env: ENV_LABELS_ENV
+      level: critical
+      expr: sum(rate(tikv_thread_cpu_seconds_total{name=~"(raftstore|rs)_.*"}[1m])) by (instance)  > 1.6
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values:{{ $value }}'
+      value: '{{ $value }}'
+      summary: TiKV raftstore thread CPU seconds is high
+
+  - alert: TiKV_raft_append_log_duration_secs
+    expr: histogram_quantile(0.99, sum(rate(tikv_raftstore_append_log_duration_seconds_bucket[1m])) by (le, instance)) > 1
+    for: 1m
+    labels:
+      env: ENV_LABELS_ENV
+      level: critical
+      expr: histogram_quantile(0.99, sum(rate(tikv_raftstore_append_log_duration_seconds_bucket[1m])) by (le, instance)) > 1
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values:{{ $value }}'
+      value: '{{ $value }}'
+      summary: TiKV_raft_append_log_duration_secs
+
+  - alert: TiKV_raft_apply_log_duration_secs
+    expr: histogram_quantile(0.99, sum(rate(tikv_raftstore_apply_log_duration_seconds_bucket[1m])) by (le, instance)) > 1
+    for: 1m
+    labels:
+      env: ENV_LABELS_ENV
+      level: critical
+      expr: histogram_quantile(0.99, sum(rate(tikv_raftstore_apply_log_duration_seconds_bucket[1m])) by (le, instance)) > 1
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values:{{ $value }}'
+      value: '{{ $value }}'
+      summary: TiKV_raft_apply_log_duration_secs
+
+  - alert: TiKV_scheduler_latch_wait_duration_seconds
+    expr: histogram_quantile(0.99, sum(rate(tikv_scheduler_latch_wait_duration_seconds_bucket[1m])) by (le, instance, type))  > 1
+    for: 1m
+    labels:
+      env: ENV_LABELS_ENV
+      level: critical
+      expr:  histogram_quantile(0.99, sum(rate(tikv_scheduler_latch_wait_duration_seconds_bucket[1m])) by (le, instance, type))  > 1
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values:{{ $value }}'
+      value: '{{ $value }}'
+      summary: TiKV scheduler latch wait duration seconds more than 1s
+
+  - alert: TiKV_thread_apply_worker_cpu_seconds
+    expr: max(rate(tikv_thread_cpu_seconds_total{name="apply_.*"}[1m])) by (instance) > 0.9
+    for: 1m
+    labels:
+      env: ENV_LABELS_ENV
+      level: critical
+      expr:  max(rate(tikv_thread_cpu_seconds_total{name="apply_.*"}[1m])) by (instance) > 0.9
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, type: {{ $labels.type }}, instance: {{ $labels.instance }}, values: {{ $value }}'
+      value: '{{ $value }}'
+      summary: TiKV thread apply worker cpu seconds is high
+
+  - alert: TiDB_tikvclient_gc_action_fail
+    expr: sum(increase(tidb_tikvclient_gc_action_result{type="fail"}[1m])) > 10
+    for: 1m
+    labels:
+      env: ENV_LABELS_ENV
+      level: critical
+      expr: sum(increase(tidb_tikvclient_gc_action_result{type="fail"}[1m])) > 10
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, type: {{ $labels.type }}, instance: {{ $labels.instance }}, values: {{ $value }}'
+      value: '{{ $value }}'
+      summary: TiDB_tikvclient_gc_action_fail
+
+  - alert: TiKV_leader_drops
+    expr: delta(tikv_pd_heartbeat_tick_total{type="leader"}[30s]) < -10
+    for: 1m
+    labels:
+      env: ENV_LABELS_ENV
+      level: warning
+      expr: delta(tikv_pd_heartbeat_tick_total{type="leader"}[30s]) < -10
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values:{{ $value }}'
+      value: '{{ $value }}'
+      summary: TiKV leader drops
+
+  - alert: TiKV_raft_process_ready_duration_secs
+    expr: histogram_quantile(0.999, sum(rate(tikv_raftstore_raft_process_duration_secs_bucket{type='ready'}[1m])) by (le, instance, type)) > 2
+    for: 1m
+    labels:
+      env: ENV_LABELS_ENV
+      level: warning
+      expr: histogram_quantile(0.999, sum(rate(tikv_raftstore_raft_process_duration_secs_bucket{type='ready'}[1m])) by (le, instance, type)) > 2
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values: {{ $value }}'
+      value: '{{ $value }}'
+      summary: TiKV_raft_process_ready_duration_secs
+
+  - alert: TiKV_raft_process_tick_duration_secs
+    expr: histogram_quantile(0.999, sum(rate(tikv_raftstore_raft_process_duration_secs_bucket{type='tick'}[1m])) by (le, instance, type)) > 2
+    for: 1m
+    labels:
+      env: ENV_LABELS_ENV
+      level: warning
+      expr: histogram_quantile(0.999, sum(rate(tikv_raftstore_raft_process_duration_secs_bucket{type='tick'}[1m])) by (le, instance, type)) > 2
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values: {{ $value }}'
+      value: '{{ $value }}'
+      summary: TiKV_raft_process_tick_duration_secs
+
+  - alert: TiKV_scheduler_context_total
+    expr: abs(delta( tikv_scheduler_contex_total[5m])) > 1000
+    for: 1m
+    labels:
+      env: ENV_LABELS_ENV
+      level: warning
+      expr:  abs(delta( tikv_scheduler_contex_total[5m])) > 1000
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values:{{ $value }}'
+      value: '{{ $value }}'
+      summary: TiKV scheduler context total
+
+  - alert: TiKV_scheduler_command_duration_seconds
+    expr: histogram_quantile(0.99, sum(rate(tikv_scheduler_command_duration_seconds_bucket[1m])) by (le, instance, type)  / 1000)  > 1
+    for: 1m
+    labels:
+      env: ENV_LABELS_ENV
+      level: warning
+      expr:  histogram_quantile(0.99, sum(rate(tikv_scheduler_command_duration_seconds_bucket[1m])) by (le, instance, type)  / 1000)  > 1
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values:{{ $value }}'
+      value: '{{ $value }}'
+      summary: TiKV scheduler command duration seconds more than 1s
+
+  - alert: TiKV_coprocessor_pending_request
+    expr: delta( tikv_coprocessor_pending_request[10m]) > 5000
+    for: 1m
+    labels:
+      env: ENV_LABELS_ENV
+      level: warning
+      expr:  delta( tikv_coprocessor_pending_request[10m]) > 5000
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, type: {{ $labels.type }}, instance: {{ $labels.instance }}, values: {{ $value }}'
+      value: '{{ $value }}'
+      summary: TiKV pending {{ $labels.type }} request is high
+
+  - alert: TiKV_coprocessor_cpu_util
+    expr: sum(rate(tikv_thread_cpu_seconds_total{name=~"cop_.*"}[1m])) by (instance) / (count(tikv_thread_cpu_seconds_total{name=~"cop_.*"}) by (instance) * 0.9) >= 1
+    for: 1m
+    labels:
+      env: ENV_LABELS_ENV
+      level: warning
+      expr:  sum(rate(tikv_thread_cpu_seconds_total{name=~"cop_.*"}[1m])) by (instance) / (count(tikv_thread_cpu_seconds_total{name=~"cop_.*"}) by (instance) * 0.9) >= 1
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, type: {{ $labels.type }}, instance: {{ $labels.instance }}, values: {{ $value }}'
+      value: '{{ $value }}'
+      summary: TiKV coprocessor CPU utilization exceeds 90%
+
+  - alert: TiKV_pending_task
+    expr: sum(tikv_worker_pending_task_total) BY (instance,name)  > 1000
+    for: 1m
+    labels:
+      env: ENV_LABELS_ENV
+      level: warning
+      expr:  sum(tikv_worker_pending_task_total) BY (instance,name)  > 1000
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, type: {{ $labels.type }}, instance: {{ $labels.instance }}, values: {{ $value }}'
+      value: '{{ $value }}'
+      summary: TiKV pending task too much
+
+  - alert: TiKV_low_space
+    expr: sum(tikv_store_size_bytes{type="available"}) by (instance) / sum(tikv_store_size_bytes{type="capacity"}) by (instance) < 0.2
+    for: 1m
+    labels:
+      env: ENV_LABELS_ENV
+      level: warning
+      expr:  sum(tikv_store_size_bytes{type="available"}) by (instance) / sum(tikv_store_size_bytes{type="capacity"}) by (instance) < 0.2
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, type: {{ $labels.type }}, instance: {{ $labels.instance }}, values: {{ $value }}'
+      value: '{{ $value }}'
+      summary: TiKV available disk space too low
+
+  - alert: TiKV_approximate_region_size
+    expr: histogram_quantile(0.99, sum(rate(tikv_raftstore_region_size_bucket[1m])) by (le)) > 1073741824
+    for: 1m
+    labels:
+      env: ENV_LABELS_ENV
+      level: warning
+      expr: histogram_quantile(0.99, sum(rate(tikv_raftstore_region_size_bucket[1m])) by (le)) > 1073741824
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, type: {{ $labels.type }}, instance: {{ $labels.instance }}, values: {{ $value }}'
+      value: '{{ $value }}'
+      summary: TiKV approximate region size is more than 1GB
+
+  - alert: TiKV_node_restart
+    expr: changes(process_start_time_seconds{job="tikv"}[5m]) > 0
+    for: 1m
+    labels:
+      env: ENV_LABELS_ENV
+      level: warning
+      expr:  changes(process_start_time_seconds{job="tikv"}[5m]) > 0
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values:{{ $value }}'
+      value: '{{ $value }}'
+      summary: TiKV server has been restarted
+
+  - alert: TiKV_cpu_quota
+    expr:  irate(process_cpu_seconds_total{job="tikv"}[30s]) / tikv_server_cpu_cores_quota > 0.8
+    for: 45s
+    labels:
+      env: ENV_LABELS_ENV
+      level: warning
+      expr: irate(process_cpu_seconds_total{job="tikv"}[30s]) / tikv_server_cpu_cores_quota > 0.8
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values:{{ $value }}'
+      value: '{{ $value }}'
+      summary: TiKV CPU usage is over 80% of CPU quota
+
+  - alert: TiKV_memory_quota
+    expr:  process_resident_memory_bytes{job="tikv"} / tikv_server_memory_quota_bytes > 0.8
+    for: 15s
+    labels:
+      env: ENV_LABELS_ENV
+      level: warning
+      expr: process_resident_memory_bytes{job="tikv"} / tikv_server_memory_quota_bytes > 0.8
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values:{{ $value }}'
+      value: '{{ $value }}'
+      summary: TiKV memory usage is over 80% of memory quota

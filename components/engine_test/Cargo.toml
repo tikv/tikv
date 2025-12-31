@@ -1,0 +1,34 @@
+[package]
+name = "engine_test"
+version = "0.0.1"
+description = "A single engine that masquerades as all other engines, for testing"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+
+[features]
+default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
+
+test-engine-kv-panic = []
+test-engine-kv-rocksdb = []
+test-engine-raft-panic = []
+test-engine-raft-rocksdb = []
+test-engine-raft-raft-engine = []
+
+test-engines-rocksdb = [
+  "test-engine-kv-rocksdb",
+  "test-engine-raft-rocksdb",
+]
+test-engines-panic = [
+  "test-engine-kv-panic",
+  "test-engine-raft-panic",
+]
+
+[dependencies]
+encryption = { workspace = true }
+engine_panic = { workspace = true }
+engine_rocks = { workspace = true }
+engine_traits = { workspace = true }
+file_system = { workspace = true }
+raft_log_engine = { workspace = true }
+tempfile = "3.0"

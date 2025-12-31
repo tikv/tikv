@@ -1,0 +1,35 @@
+[package]
+name = "tidb_query_executors"
+version = "0.0.1"
+edition = "2021"
+publish = false
+description = "A vector query engine to run TiDB pushed down executors"
+license = "Apache-2.0"
+
+[dependencies]
+api_version = { workspace = true }
+async-trait = "0.1"
+codec = { workspace = true }
+collections = { workspace = true }
+fail = "0.5"
+futures = { version = "0.3", features = ["compat"] }
+itertools = "0.10"
+kvproto = { workspace = true }
+log_wrappers = { workspace = true }
+match-template = "0.0.1"
+protobuf = { version = "2.8", features = ["bytes"] }
+slog = { workspace = true }
+slog-global = { workspace = true }
+smallvec = "1.4"
+tidb_query_aggr = { workspace = true }
+tidb_query_common = { workspace = true }
+tidb_query_datatype = { workspace = true }
+tidb_query_expr = { workspace = true }
+tikv_util = { workspace = true }
+tipb = { workspace = true }
+txn_types = { workspace = true }
+
+[dev-dependencies]
+anyhow = "1.0"
+tidb_query_codegen = { workspace = true }
+tipb_helper = { workspace = true }

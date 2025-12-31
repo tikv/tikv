@@ -1,0 +1,814 @@
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
+
+// #[PerformanceCriticalPath]
+use std::{
+    fmt,
+    num::NonZeroU64,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+};
+
+use engine_traits::{
+    CF_RAFT, Error as EngineError, IterOptions, Iterable, Iterator, KvEngine, MetricsExt, Peekable,
+    RaftEngine, ReadOptions, Result as EngineResult, Snapshot, util::check_key_in_range,
+};
+use fail::fail_point;
+use keys::DATA_PREFIX_KEY;
+use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb::Region, raft_serverpb::RaftApplyState};
+use pd_client::BucketMeta;
+use tikv_util::{
+    box_err, error, keybuilder::KeyBuilder, metrics::CRITICAL_ERROR,
+    panic_when_unexpected_key_or_data, set_panic_mark,
+};
+
+use crate::{
+    Error, Result,
+    coprocessor::ObservedSnapshot,
+    store::{PeerStorage, TxnExt, util},
+};
+
+/// Snapshot of a region.
+///
+/// Only data within a region can be accessed.
+pub struct RegionSnapshot<S: Snapshot> {
+    snap: Arc<S>,
+    region: Arc<Region>,
+    apply_index: Arc<AtomicU64>,
+    from_v2: bool,
+    pub term: Option<NonZeroU64>,
+    pub txn_extra_op: TxnExtraOp,
+    // `None` means the snapshot does not provide peer related transaction extensions.
+    pub txn_ext: Option<Arc<TxnExt>>,
+    pub bucket_meta: Option<Arc<BucketMeta>>,
+
+    observed_snap: Option<Arc<Mutex<Option<Box<dyn ObservedSnapshot>>>>>,
+}
+
+impl<S: Snapshot> fmt::Debug for RegionSnapshot<S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RegionSnapshot")
+            .field("region", &self.region)
+            .field("apply_index", &self.apply_index)
+            .field("from_v2", &self.from_v2)
+            .field("term", &self.term)
+            .field("txn_extra_op", &self.txn_extra_op)
+            .field("txn_ext", &self.txn_ext)
+            .field("bucket_meta", &self.bucket_meta)
+            .finish()
+    }
+}
+
+impl<S> RegionSnapshot<S>
+where
+    S: Snapshot,
+{
+    #[allow(clippy::new_ret_no_self)] // temporary until this returns RegionSnapshot<E>
+    pub fn new<EK>(ps: &PeerStorage<EK, impl RaftEngine>) -> RegionSnapshot<EK::Snapshot>
+    where
+        EK: KvEngine,
+    {
+        RegionSnapshot::from_snapshot(Arc::new(ps.raw_snapshot()), Arc::new(ps.region().clone()))
+    }
+
+    pub fn from_raw<EK>(db: EK, region: Region) -> RegionSnapshot<EK::Snapshot>
+    where
+        EK: KvEngine,
+    {
+        RegionSnapshot::from_snapshot(Arc::new(db.snapshot()), Arc::new(region))
+    }
+
+    pub fn from_snapshot(snap: Arc<S>, region: Arc<Region>) -> RegionSnapshot<S> {
+        RegionSnapshot {
+            snap,
+            region,
+            // Use 0 to indicate that the apply index is missing and we need to KvGet it,
+            // since apply index must be >= RAFT_INIT_LOG_INDEX.
+            apply_index: Arc::new(AtomicU64::new(0)),
+            from_v2: false,
+            term: None,
+            txn_extra_op: TxnExtraOp::Noop,
+            txn_ext: None,
+            bucket_meta: None,
+            observed_snap: None,
+        }
+    }
+
+    pub fn set_observed_snapshot(&mut self, observed_snap: Box<dyn ObservedSnapshot>) {
+        self.observed_snap = Some(Arc::new(Mutex::new(Some(observed_snap))));
+    }
+
+    /// Replace underlying snapshot with its observed snapshot.
+    ///
+    /// One use case is to allow callers to build a `RegionSnapshot` with an
+    /// optimized snapshot. See RaftKv::async_in_memory_snapshot for an example.
+    ///
+    /// # Panics
+    ///
+    /// It panics, if it has been cloned before this calling `replace_snapshot`
+    /// or if `snap_fn` panics, the panic is propagated to the caller.
+    pub fn replace_snapshot<Sp, F>(mut self, snap_fn: F) -> RegionSnapshot<Sp>
+    where
+        Sp: Snapshot,
+        F: FnOnce(S, Option<Box<dyn ObservedSnapshot>>) -> Sp,
+    {
+        let mut observed = None;
+        if let Some(observed_snap) = self.observed_snap.take() {
+            observed = observed_snap.lock().unwrap().take();
+        }
+        let inner = Arc::into_inner(self.snap).unwrap();
+        RegionSnapshot {
+            snap: Arc::new(snap_fn(inner, observed)),
+            region: self.region,
+            apply_index: self.apply_index,
+            from_v2: self.from_v2,
+            term: self.term,
+            txn_extra_op: self.txn_extra_op,
+            txn_ext: self.txn_ext,
+            bucket_meta: self.bucket_meta,
+            observed_snap: None,
+        }
+    }
+
+    #[inline]
+    pub fn get_region(&self) -> &Region {
+        &self.region
+    }
+
+    #[inline]
+    pub fn get_snapshot(&self) -> &S {
+        self.snap.as_ref()
+    }
+
+    pub fn set_from_v2(&mut self) {
+        self.from_v2 = true;
+    }
+
+    pub fn get_data_version(&self) -> Result<u64> {
+        if self.from_v2 {
+            if self.snap.sequence_number() != 0 {
+                Ok(self.snap.sequence_number())
+            } else {
+                Err(box_err!("Snapshot sequence number 0"))
+            }
+        } else {
+            self.get_apply_index()
+        }
+    }
+
+    #[inline]
+    pub fn set_apply_index(&self, apply_index: u64) {
+        self.apply_index.store(apply_index, Ordering::SeqCst);
+    }
+
+    #[inline]
+    pub fn get_apply_index(&self) -> Result<u64> {
+        let apply_index = self.apply_index.load(Ordering::SeqCst);
+        if apply_index == 0 {
+            self.get_apply_index_from_storage()
+        } else {
+            Ok(apply_index)
+        }
+    }
+
+    fn get_apply_index_from_storage(&self) -> Result<u64> {
+        let apply_state: Option<RaftApplyState> = self
+            .snap
+            .get_msg_cf(CF_RAFT, &keys::apply_state_key(self.region.get_id()))?;
+        match apply_state {
+            Some(s) => {
+                let apply_index = s.get_applied_index();
+                self.apply_index.store(apply_index, Ordering::SeqCst);
+                Ok(apply_index)
+            }
+            None => Err(box_err!("Unable to get applied index")),
+        }
+    }
+
+    pub fn iter(&self, cf: &str, iter_opt: IterOptions) -> Result<RegionIterator<S>> {
+        Ok(RegionIterator::new(
+            &self.snap,
+            Arc::clone(&self.region),
+            iter_opt,
+            cf,
+        ))
+    }
+
+    // scan scans database using an iterator in range [start_key, end_key), calls
+    // function f for each iteration, if f returns false, terminates this scan.
+    pub fn scan<F>(
+        &self,
+        cf: &str,
+        start_key: &[u8],
+        end_key: &[u8],
+        fill_cache: bool,
+        mut f: F,
+    ) -> Result<()>
+    where
+        F: FnMut(&[u8], &[u8]) -> Result<bool>,
+    {
+        let start = KeyBuilder::from_slice(start_key, DATA_PREFIX_KEY.len(), 0);
+        let end = KeyBuilder::from_slice(end_key, DATA_PREFIX_KEY.len(), 0);
+        let iter_opt = IterOptions::new(Some(start), Some(end), fill_cache);
+
+        let mut it = self.iter(cf, iter_opt)?;
+        let mut it_valid = it.seek(start_key)?;
+        while it_valid {
+            it_valid = f(it.key(), it.value())? && it.next()?;
+        }
+        Ok(())
+    }
+
+    #[inline]
+    pub fn get_start_key(&self) -> &[u8] {
+        self.region.get_start_key()
+    }
+
+    #[inline]
+    pub fn get_end_key(&self) -> &[u8] {
+        self.region.get_end_key()
+    }
+}
+
+impl<S> Clone for RegionSnapshot<S>
+where
+    S: Snapshot,
+{
+    fn clone(&self) -> Self {
+        RegionSnapshot {
+            snap: self.snap.clone(),
+            region: Arc::clone(&self.region),
+            apply_index: Arc::clone(&self.apply_index),
+            from_v2: self.from_v2,
+            term: self.term,
+            txn_extra_op: self.txn_extra_op,
+            txn_ext: self.txn_ext.clone(),
+            bucket_meta: self.bucket_meta.clone(),
+            observed_snap: self.observed_snap.clone(),
+        }
+    }
+}
+
+impl<S> Peekable for RegionSnapshot<S>
+where
+    S: Snapshot,
+{
+    type DbVector = <S as Peekable>::DbVector;
+
+    fn get_value_opt(
+        &self,
+        opts: &ReadOptions,
+        key: &[u8],
+    ) -> EngineResult<Option<Self::DbVector>> {
+        check_key_in_range(
+            key,
+            self.region.get_id(),
+            self.region.get_start_key(),
+            self.region.get_end_key(),
+        )
+        .map_err(|e| EngineError::Other(box_err!(e)))?;
+        let data_key = keys::data_key(key);
+        self.snap
+            .get_value_opt(opts, &data_key)
+            .map_err(|e| self.handle_get_value_error(e, "", key))
+    }
+
+    fn get_value_cf_opt(
+        &self,
+        opts: &ReadOptions,
+        cf: &str,
+        key: &[u8],
+    ) -> EngineResult<Option<Self::DbVector>> {
+        check_key_in_range(
+            key,
+            self.region.get_id(),
+            self.region.get_start_key(),
+            self.region.get_end_key(),
+        )
+        .map_err(|e| EngineError::Other(box_err!(e)))?;
+        let data_key = keys::data_key(key);
+        self.snap
+            .get_value_cf_opt(opts, cf, &data_key)
+            .map_err(|e| self.handle_get_value_error(e, cf, key))
+    }
+}
+
+impl<S> RegionSnapshot<S>
+where
+    S: Snapshot,
+{
+    #[inline(never)]
+    fn handle_get_value_error(&self, e: EngineError, cf: &str, key: &[u8]) -> EngineError {
+        CRITICAL_ERROR.with_label_values(&["rocksdb get"]).inc();
+        if panic_when_unexpected_key_or_data() {
+            set_panic_mark();
+            panic!(
+                "failed to get value of key {} in region {}: {:?}",
+                log_wrappers::Value::key(key),
+                self.region.get_id(),
+                e,
+            );
+        } else {
+            error!(
+                "failed to get value of key in cf";
+                "key" => log_wrappers::Value::key(key),
+                "region" => self.region.get_id(),
+                "cf" => cf,
+                "error" => ?e,
+            );
+            e
+        }
+    }
+}
+
+/// `RegionIterator` wrap a rocksdb iterator and only allow it to
+/// iterate in the region. It behaves as if underlying
+/// db only contains one region.
+pub struct RegionIterator<S: Snapshot> {
+    iter: <S as Iterable>::Iterator,
+    region: Arc<Region>,
+}
+
+impl<S: Snapshot> MetricsExt for RegionIterator<S> {
+    type Collector = <<S as Iterable>::Iterator as MetricsExt>::Collector;
+    fn metrics_collector(&self) -> Self::Collector {
+        self.iter.metrics_collector()
+    }
+}
+
+fn update_lower_bound(iter_opt: &mut IterOptions, region: &Region) {
+    let region_start_key = keys::enc_start_key(region);
+    if iter_opt.lower_bound().is_some() && !iter_opt.lower_bound().as_ref().unwrap().is_empty() {
+        iter_opt.set_lower_bound_prefix(keys::DATA_PREFIX_KEY);
+        if region_start_key.as_slice() > *iter_opt.lower_bound().as_ref().unwrap() {
+            iter_opt.set_vec_lower_bound(region_start_key);
+        }
+    } else {
+        iter_opt.set_vec_lower_bound(region_start_key);
+    }
+}
+
+fn update_upper_bound(iter_opt: &mut IterOptions, region: &Region) {
+    let region_end_key = keys::enc_end_key(region);
+    if iter_opt.upper_bound().is_some() && !iter_opt.upper_bound().as_ref().unwrap().is_empty() {
+        iter_opt.set_upper_bound_prefix(keys::DATA_PREFIX_KEY);
+        if region_end_key.as_slice() < *iter_opt.upper_bound().as_ref().unwrap() {
+            iter_opt.set_vec_upper_bound(region_end_key, 0);
+        }
+    } else {
+        iter_opt.set_vec_upper_bound(region_end_key, 0);
+    }
+}
+
+// we use engine::rocks's style iterator, doesn't need to impl std iterator.
+impl<S> RegionIterator<S>
+where
+    S: Snapshot,
+{
+    pub fn new(
+        snap: &S,
+        region: Arc<Region>,
+        mut iter_opt: IterOptions,
+        cf: &str,
+    ) -> RegionIterator<S> {
+        update_lower_bound(&mut iter_opt, &region);
+        update_upper_bound(&mut iter_opt, &region);
+        let iter = snap
+            .iterator_opt(cf, iter_opt)
+            .expect("creating snapshot iterator"); // FIXME error handling
+        RegionIterator { iter, region }
+    }
+
+    pub fn seek_to_first(&mut self) -> Result<bool> {
+        self.iter.seek_to_first().map_err(Error::from)
+    }
+
+    pub fn seek_to_last(&mut self) -> Result<bool> {
+        self.iter.seek_to_last().map_err(Error::from)
+    }
+
+    pub fn seek(&mut self, key: &[u8]) -> Result<bool> {
+        fail_point!("region_snapshot_seek", |_| {
+            Err(box_err!("region seek error"))
+        });
+        self.should_seekable(key)?;
+        let key = keys::data_key(key);
+        self.iter.seek(&key).map_err(Error::from)
+    }
+
+    pub fn seek_for_prev(&mut self, key: &[u8]) -> Result<bool> {
+        self.should_seekable(key)?;
+        let key = keys::data_key(key);
+        self.iter.seek_for_prev(&key).map_err(Error::from)
+    }
+
+    pub fn prev(&mut self) -> Result<bool> {
+        self.iter.prev().map_err(Error::from)
+    }
+
+    pub fn next(&mut self) -> Result<bool> {
+        self.iter.next().map_err(Error::from)
+    }
+
+    #[inline]
+    pub fn key(&self) -> &[u8] {
+        keys::origin_key(self.iter.key())
+    }
+
+    #[inline]
+    pub fn value(&self) -> &[u8] {
+        self.iter.value()
+    }
+
+    #[inline]
+    pub fn valid(&self) -> Result<bool> {
+        self.iter.valid().map_err(Error::from)
+    }
+
+    #[inline]
+    pub fn should_seekable(&self, key: &[u8]) -> Result<()> {
+        if let Err(e) = util::check_key_in_region_inclusive(key, &self.region) {
+            return handle_check_key_in_region_error(e);
+        }
+        Ok(())
+    }
+}
+
+#[inline(never)]
+fn handle_check_key_in_region_error(e: crate::Error) -> Result<()> {
+    // Split out the error case to reduce hot-path code size.
+    CRITICAL_ERROR
+        .with_label_values(&["key not in region"])
+        .inc();
+    if panic_when_unexpected_key_or_data() {
+        set_panic_mark();
+        panic!("key exceed bound: {:?}", e);
+    } else {
+        Err(e)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use engine_test::{kv::KvTestSnapshot, new_temp_engine};
+    use engine_traits::{CF_DEFAULT, Engines, KvEngine, Peekable, RaftEngine, SyncMutable};
+    use keys::data_key;
+    use kvproto::metapb::{Peer, Region};
+    use tempfile::Builder;
+    use tikv_util::worker;
+
+    use super::*;
+    use crate::{
+        Result,
+        store::{PeerStorage, local_metrics::RaftMetrics},
+    };
+
+    type DataSet = Vec<(Vec<u8>, Vec<u8>)>;
+
+    fn new_peer_storage<EK, ER>(engines: Engines<EK, ER>, r: &Region) -> PeerStorage<EK, ER>
+    where
+        EK: KvEngine,
+        ER: RaftEngine,
+    {
+        let (region_sched, _) = worker::dummy_scheduler();
+        let (raftlog_fetch_sched, _) = worker::dummy_scheduler();
+        PeerStorage::new(
+            engines,
+            r,
+            region_sched,
+            raftlog_fetch_sched,
+            0,
+            "".to_owned(),
+            &RaftMetrics::new(false),
+        )
+        .unwrap()
+    }
+
+    fn load_default_dataset<EK, ER>(engines: Engines<EK, ER>) -> (PeerStorage<EK, ER>, DataSet)
+    where
+        EK: KvEngine,
+        ER: RaftEngine,
+    {
+        let mut r = Region::default();
+        r.mut_peers().push(Peer::default());
+        r.set_id(10);
+        r.set_start_key(b"a2".to_vec());
+        r.set_end_key(b"a7".to_vec());
+
+        let base_data = vec![
+            (b"a1".to_vec(), b"v1".to_vec()),
+            (b"a3".to_vec(), b"v3".to_vec()),
+            (b"a5".to_vec(), b"v5".to_vec()),
+            (b"a7".to_vec(), b"v7".to_vec()),
+            (b"a9".to_vec(), b"v9".to_vec()),
+        ];
+
+        for (k, v) in &base_data {
+            engines.kv.put(&data_key(k), v).unwrap();
+        }
+        let store = new_peer_storage(engines, &r);
+        (store, base_data)
+    }
+
+    fn load_multiple_levels_dataset<EK, ER>(
+        engines: Engines<EK, ER>,
+    ) -> (PeerStorage<EK, ER>, DataSet)
+    where
+        EK: KvEngine,
+        ER: RaftEngine,
+    {
+        let mut r = Region::default();
+        r.mut_peers().push(Peer::default());
+        r.set_id(10);
+        r.set_start_key(b"a04".to_vec());
+        r.set_end_key(b"a15".to_vec());
+
+        let levels = vec![
+            (b"a01".to_vec(), 1),
+            (b"a02".to_vec(), 5),
+            (b"a03".to_vec(), 3),
+            (b"a04".to_vec(), 4),
+            (b"a05".to_vec(), 1),
+            (b"a06".to_vec(), 2),
+            (b"a07".to_vec(), 2),
+            (b"a08".to_vec(), 5),
+            (b"a09".to_vec(), 6),
+            (b"a10".to_vec(), 0),
+            (b"a11".to_vec(), 1),
+            (b"a12".to_vec(), 4),
+            (b"a13".to_vec(), 2),
+            (b"a14".to_vec(), 5),
+            (b"a15".to_vec(), 3),
+            (b"a16".to_vec(), 2),
+            (b"a17".to_vec(), 1),
+            (b"a18".to_vec(), 0),
+        ];
+
+        let mut data = vec![];
+        {
+            let db = &engines.kv;
+            for &(ref k, level) in &levels {
+                db.put(&data_key(k), k).unwrap();
+                db.flush_cfs(&[], true).unwrap();
+                data.push((k.to_vec(), k.to_vec()));
+                db.compact_files_in_range(Some(&data_key(k)), Some(&data_key(k)), Some(level))
+                    .unwrap();
+            }
+        }
+
+        let store = new_peer_storage(engines, &r);
+        (store, data)
+    }
+
+    #[test]
+    fn test_peekable() {
+        let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
+        let engines = new_temp_engine(&path);
+        let mut r = Region::default();
+        r.set_id(10);
+        r.set_start_key(b"key0".to_vec());
+        r.set_end_key(b"key4".to_vec());
+        let store = new_peer_storage(engines.clone(), &r);
+
+        let key3 = b"key3";
+        engines.kv.put_msg(&data_key(key3), &r).expect("");
+
+        let snap = RegionSnapshot::<KvTestSnapshot>::new(&store);
+        let v3 = snap.get_msg(key3).expect("");
+        assert_eq!(v3, Some(r));
+
+        let v0 = snap.get_value(b"key0").expect("");
+        assert!(v0.is_none());
+
+        let v4 = snap.get_value(b"key5");
+        v4.unwrap_err();
+    }
+
+    #[allow(clippy::type_complexity)]
+    #[test]
+    fn test_seek_and_seek_prev() {
+        let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
+        let engines = new_temp_engine(&path);
+        let (store, _) = load_default_dataset(engines);
+        let snap = RegionSnapshot::<KvTestSnapshot>::new(&store);
+
+        let check_seek_result = |snap: &RegionSnapshot<KvTestSnapshot>,
+                                 lower_bound: Option<&[u8]>,
+                                 upper_bound: Option<&[u8]>,
+                                 seek_table: &Vec<(
+            &[u8],
+            bool,
+            Option<(&[u8], &[u8])>,
+            Option<(&[u8], &[u8])>,
+        )>| {
+            let iter_opt = IterOptions::new(
+                lower_bound.map(|v| KeyBuilder::from_slice(v, keys::DATA_PREFIX_KEY.len(), 0)),
+                upper_bound.map(|v| KeyBuilder::from_slice(v, keys::DATA_PREFIX_KEY.len(), 0)),
+                true,
+            );
+            let mut iter = snap.iter(CF_DEFAULT, iter_opt).unwrap();
+            for (seek_key, in_range, seek_exp, prev_exp) in seek_table.clone() {
+                let check_res = |iter: &RegionIterator<KvTestSnapshot>,
+                                 res: Result<bool>,
+                                 exp: Option<(&[u8], &[u8])>| {
+                    if !in_range {
+                        assert!(
+                            res.is_err(),
+                            "exp failed at {}",
+                            log_wrappers::Value::key(seek_key)
+                        );
+                        return;
+                    }
+                    if exp.is_none() {
+                        assert!(
+                            !res.unwrap(),
+                            "exp none at {}",
+                            log_wrappers::Value::key(seek_key)
+                        );
+                        return;
+                    }
+
+                    assert!(
+                        res.unwrap(),
+                        "should succeed at {}",
+                        log_wrappers::Value::key(seek_key)
+                    );
+                    let (exp_key, exp_val) = exp.unwrap();
+                    assert_eq!(iter.key(), exp_key);
+                    assert_eq!(iter.value(), exp_val);
+                };
+                let seek_res = iter.seek(seek_key);
+                check_res(&iter, seek_res, seek_exp);
+                let prev_res = iter.seek_for_prev(seek_key);
+                check_res(&iter, prev_res, prev_exp);
+            }
+        };
+
+        let mut seek_table: Vec<(&[u8], bool, Option<(&[u8], &[u8])>, Option<(&[u8], &[u8])>)> = vec![
+            (b"a1", false, None, None),
+            (b"a2", true, Some((b"a3", b"v3")), None),
+            (b"a3", true, Some((b"a3", b"v3")), Some((b"a3", b"v3"))),
+            (b"a4", true, Some((b"a5", b"v5")), Some((b"a3", b"v3"))),
+            (b"a6", true, None, Some((b"a5", b"v5"))),
+            (b"a7", true, None, Some((b"a5", b"v5"))),
+            (b"a9", false, None, None),
+        ];
+        check_seek_result(&snap, None, None, &seek_table);
+        check_seek_result(&snap, None, Some(b"a9"), &seek_table);
+        check_seek_result(&snap, Some(b"a1"), None, &seek_table);
+        check_seek_result(&snap, Some(b""), Some(b""), &seek_table);
+        check_seek_result(&snap, Some(b"a1"), Some(b"a9"), &seek_table);
+        check_seek_result(&snap, Some(b"a2"), Some(b"a9"), &seek_table);
+        check_seek_result(&snap, Some(b"a2"), Some(b"a7"), &seek_table);
+        check_seek_result(&snap, Some(b"a1"), Some(b"a7"), &seek_table);
+
+        seek_table = vec![
+            (b"a1", false, None, None),
+            (b"a2", true, None, None),
+            (b"a3", true, None, None),
+            (b"a4", true, None, None),
+            (b"a6", true, None, None),
+            (b"a7", true, None, None),
+            (b"a9", false, None, None),
+        ];
+        check_seek_result(&snap, None, Some(b"a1"), &seek_table);
+        check_seek_result(&snap, Some(b"a8"), None, &seek_table);
+        check_seek_result(&snap, Some(b"a7"), Some(b"a2"), &seek_table);
+
+        let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
+        let engines = new_temp_engine(&path);
+        let (store, _) = load_multiple_levels_dataset(engines);
+        let snap = RegionSnapshot::<KvTestSnapshot>::new(&store);
+
+        seek_table = vec![
+            (b"a01", false, None, None),
+            (b"a03", false, None, None),
+            (b"a05", true, Some((b"a05", b"a05")), Some((b"a05", b"a05"))),
+            (b"a10", true, Some((b"a10", b"a10")), Some((b"a10", b"a10"))),
+            (b"a14", true, Some((b"a14", b"a14")), Some((b"a14", b"a14"))),
+            (b"a15", true, None, Some((b"a14", b"a14"))),
+            (b"a18", false, None, None),
+            (b"a19", false, None, None),
+        ];
+        check_seek_result(&snap, None, None, &seek_table);
+        check_seek_result(&snap, None, Some(b"a20"), &seek_table);
+        check_seek_result(&snap, Some(b"a00"), None, &seek_table);
+        check_seek_result(&snap, Some(b""), Some(b""), &seek_table);
+        check_seek_result(&snap, Some(b"a00"), Some(b"a20"), &seek_table);
+        check_seek_result(&snap, Some(b"a01"), Some(b"a20"), &seek_table);
+        check_seek_result(&snap, Some(b"a01"), Some(b"a15"), &seek_table);
+        check_seek_result(&snap, Some(b"a00"), Some(b"a15"), &seek_table);
+    }
+
+    #[test]
+    fn test_iterate() {
+        let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
+        let engines = new_temp_engine(&path);
+        let (store, base_data) = load_default_dataset(engines.clone());
+
+        let snap = RegionSnapshot::<KvTestSnapshot>::new(&store);
+        let mut data = vec![];
+        snap.scan(CF_DEFAULT, b"a2", &[0xFF, 0xFF], false, |key, value| {
+            data.push((key.to_vec(), value.to_vec()));
+            Ok(true)
+        })
+        .unwrap();
+
+        assert_eq!(data.len(), 2);
+        assert_eq!(data, &base_data[1..3]);
+
+        data.clear();
+        snap.scan(CF_DEFAULT, b"a2", &[0xFF, 0xFF], false, |key, value| {
+            data.push((key.to_vec(), value.to_vec()));
+            Ok(false)
+        })
+        .unwrap();
+
+        assert_eq!(data.len(), 1);
+
+        let mut iter = snap.iter(CF_DEFAULT, IterOptions::default()).unwrap();
+        assert!(iter.seek_to_first().unwrap());
+        let mut res = vec![];
+        loop {
+            res.push((iter.key().to_vec(), iter.value().to_vec()));
+            if !iter.next().unwrap() {
+                break;
+            }
+        }
+        assert_eq!(res, base_data[1..3].to_vec());
+
+        // test last region
+        let mut region = Region::default();
+        region.mut_peers().push(Peer::default());
+        let store = new_peer_storage(engines.clone(), &region);
+        let snap = RegionSnapshot::<KvTestSnapshot>::new(&store);
+        data.clear();
+        snap.scan(CF_DEFAULT, b"", &[0xFF, 0xFF], false, |key, value| {
+            data.push((key.to_vec(), value.to_vec()));
+            Ok(true)
+        })
+        .unwrap();
+
+        assert_eq!(data.len(), 5);
+        assert_eq!(data, base_data);
+
+        let mut iter = snap.iter(CF_DEFAULT, IterOptions::default()).unwrap();
+        assert!(iter.seek(b"a1").unwrap());
+
+        assert!(iter.seek_to_first().unwrap());
+        let mut res = vec![];
+        loop {
+            res.push((iter.key().to_vec(), iter.value().to_vec()));
+            if !iter.next().unwrap() {
+                break;
+            }
+        }
+        assert_eq!(res, base_data);
+
+        // test iterator with upper bound
+        let store = new_peer_storage(engines, &region);
+        let snap = RegionSnapshot::<KvTestSnapshot>::new(&store);
+        let mut iter = snap
+            .iter(
+                CF_DEFAULT,
+                IterOptions::new(
+                    None,
+                    Some(KeyBuilder::from_slice(b"a5", DATA_PREFIX_KEY.len(), 0)),
+                    true,
+                ),
+            )
+            .unwrap();
+        assert!(iter.seek_to_first().unwrap());
+        let mut res = vec![];
+        loop {
+            res.push((iter.key().to_vec(), iter.value().to_vec()));
+            if !iter.next().unwrap() {
+                break;
+            }
+        }
+        assert_eq!(res, base_data[0..2].to_vec());
+    }
+
+    #[test]
+    fn test_reverse_iterate_with_lower_bound() {
+        let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
+        let engines = new_temp_engine(&path);
+        let (store, test_data) = load_default_dataset(engines);
+
+        let snap = RegionSnapshot::<KvTestSnapshot>::new(&store);
+        let mut iter_opt = IterOptions::default();
+        iter_opt.set_lower_bound(b"a3", 1);
+        let mut iter = snap.iter(CF_DEFAULT, iter_opt).unwrap();
+        assert!(iter.seek_to_last().unwrap());
+        let mut res = vec![];
+        loop {
+            res.push((iter.key().to_vec(), iter.value().to_vec()));
+            if !iter.prev().unwrap() {
+                break;
+            }
+        }
+        res.sort();
+        assert_eq!(res, test_data[1..3].to_vec());
+    }
+}

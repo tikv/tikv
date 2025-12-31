@@ -1,0 +1,25 @@
+[package]
+name = "engine_rocks_helper"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+
+[features]
+failpoints = ["fail/failpoints"]
+
+[dependencies]
+engine_rocks = { workspace = true }
+engine_traits = { workspace = true }
+fail = "0.5"
+keys = { workspace = true }
+lazy_static = "1.4.0"
+prometheus = { version = "0.13", features = ["nightly"] }
+raftstore = { workspace = true }
+slog = { workspace = true }
+slog-global = { workspace = true }
+tikv_util = { workspace = true }
+
+[dev-dependencies]
+kvproto = { workspace = true }
+tempfile = "3.0"

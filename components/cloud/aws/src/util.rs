@@ -1,0 +1,320 @@
+// Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
+use std::{error::Error as StdError, io};
+
+use ::aws_smithy_runtime_api::client::orchestrator::HttpResponse;
+use aws_config::{
+    ConfigLoader, Region,
+    default_provider::credentials::DefaultCredentialsChain,
+    environment::EnvironmentVariableRegionProvider,
+    meta::region::{self, ProvideRegion, RegionProviderChain},
+    profile::ProfileFileRegionProvider,
+    provider_config::ProviderConfig,
+};
+use aws_credential_types::provider::{ProvideCredentials, error::CredentialsError};
+use aws_sdk_kms::config::SharedHttpClient;
+use aws_sdk_s3::config::HttpClient;
+use aws_smithy_runtime::client::http::hyper_014::HyperClientBuilder;
+use cloud::metrics;
+use futures::{Future, TryFutureExt};
+use hyper::Client;
+use hyper_tls::HttpsConnector;
+use tikv_util::{
+    stream::{RetryError, RetryExt, block_on_external_io, retry_ext},
+    warn,
+};
+
+const DEFAULT_REGION: &str = "us-east-1";
+
+pub(crate) type SdkError<E, R = HttpResponse> =
+    ::aws_smithy_runtime_api::client::result::SdkError<E, R>;
+
+struct CredentialsErrorWrapper(CredentialsError);
+
+impl From<CredentialsErrorWrapper> for CredentialsError {
+    fn from(c: CredentialsErrorWrapper) -> CredentialsError {
+        c.0
+    }
+}
+
+impl std::fmt::Display for CredentialsErrorWrapper {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.0)?;
+        Ok(())
+    }
+}
+
+impl RetryError for CredentialsErrorWrapper {
+    fn is_retryable(&self) -> bool {
+        true
+    }
+}
+
+pub fn new_http_client() -> SharedHttpClient {
+    let hyper_builder = Client::builder();
+
+    HyperClientBuilder::new()
+        .hyper_builder(hyper_builder)
+        .build(HttpsConnector::new())
+}
+
+pub fn new_credentials_provider(http: impl HttpClient + 'static) -> DefaultCredentialsProvider {
+    let fut = DefaultCredentialsProvider::new(http);
+    if let Ok(hnd) = tokio::runtime::Handle::try_current() {
+        tokio::task::block_in_place(move || hnd.block_on(fut))
+    } else {
+        block_on_external_io(fut)
+    }
+}
+
+pub fn is_retryable<T>(error: &SdkError<T>) -> bool {
+    match error {
+        SdkError::TimeoutError(_) => true,
+        SdkError::DispatchFailure(_) => true,
+        SdkError::ResponseError(resp_err) => {
+            let code = resp_err.raw().status();
+            code.is_server_error() || code.as_u16() == http::StatusCode::REQUEST_TIMEOUT.as_u16()
+        }
+        SdkError::ServiceError(service_err) => {
+            let code = service_err.raw().status();
+            code.is_server_error() || code.as_u16() == http::StatusCode::REQUEST_TIMEOUT.as_u16()
+        }
+        _ => false,
+    }
+}
+
+pub fn configure_endpoint(loader: ConfigLoader, endpoint: &str) -> ConfigLoader {
+    if !endpoint.is_empty() {
+        loader.endpoint_url(endpoint)
+    } else {
+        loader
+    }
+}
+
+pub fn configure_region(loader: ConfigLoader, region: &str) -> io::Result<ConfigLoader> {
+    if !region.is_empty() {
+        Ok(loader.region(Region::new(region.to_owned())))
+    } else {
+        Ok(loader.region(DefaultRegionProvider::new()))
+    }
+}
+
+pub async fn retry_and_count<G, T, F, E>(action: G, name: &'static str) -> Result<T, E>
+where
+    G: FnMut() -> F,
+    F: Future<Output = Result<T, E>>,
+    E: RetryError + std::fmt::Display,
+{
+    let id = uuid::Uuid::new_v4();
+    retry_ext(
+        action,
+        RetryExt::default().with_fail_hook(move |err: &E| {
+            warn!("aws request fails"; "err" => %err, "retry?" => %err.is_retryable(), "context" => %name, "uuid" => %id);
+            metrics::CLOUD_ERROR_VEC.with_label_values(&["aws", name]).inc();
+        }),
+    ).await
+}
+
+#[derive(Debug)]
+struct DefaultRegionProvider(RegionProviderChain);
+
+impl DefaultRegionProvider {
+    fn new() -> Self {
+        let env_provider = EnvironmentVariableRegionProvider::new();
+        let profile_provider = ProfileFileRegionProvider::builder().build();
+
+        // same as default region resolving in rusoto
+        let chain = RegionProviderChain::first_try(env_provider)
+            .or_else(profile_provider)
+            .or_else(Region::new(DEFAULT_REGION));
+
+        Self(chain)
+    }
+}
+
+impl ProvideRegion for DefaultRegionProvider {
+    fn region(&self) -> region::future::ProvideRegion<'_> {
+        ProvideRegion::region(&self.0)
+    }
+}
+
+#[derive(Debug)]
+pub struct DefaultCredentialsProvider {
+    default_provider: DefaultCredentialsChain,
+}
+
+impl DefaultCredentialsProvider {
+    async fn new(cli: impl HttpClient + 'static) -> Self {
+        let cfg = ProviderConfig::default().with_http_client(cli);
+        let default_provider = DefaultCredentialsChain::builder()
+            .configure(cfg)
+            .build()
+            .await;
+        Self { default_provider }
+    }
+}
+
+impl ProvideCredentials for DefaultCredentialsProvider {
+    fn provide_credentials<'a>(
+        &'a self,
+    ) -> aws_credential_types::provider::future::ProvideCredentials<'a>
+    where
+        Self: 'a,
+    {
+        aws_credential_types::provider::future::ProvideCredentials::new(async move {
+            // Add exponential backoff for every error, because we cannot
+            // distinguish the error type.
+            let cred = retry_and_count(
+                || {
+                    #[cfg(test)]
+                    fail::fail_point!("cred_err", |_| {
+                        let cause: Box<dyn StdError + Send + Sync + 'static> =
+                            String::from("injected error").into();
+                        Box::pin(futures::future::err(CredentialsErrorWrapper(
+                            CredentialsError::provider_error(cause),
+                        )))
+                            as std::pin::Pin<Box<dyn futures::Future<Output = _> + Send>>
+                    });
+
+                    Box::pin(
+                        self.default_provider
+                            .provide_credentials()
+                            .map_err(|e| CredentialsErrorWrapper(e)),
+                    )
+                },
+                "get_cred_on_premise",
+            )
+            .await
+            .map_err(|e| e.0);
+
+            cred.map_err(|e| {
+                let msg = e
+                    .source()
+                    .map(|src_err| src_err.to_string())
+                    .unwrap_or_else(|| e.to_string());
+                let cause: Box<dyn StdError + Send + Sync + 'static> =
+                    format_args!("Couldn't find AWS credentials in sources ({}).", msg)
+                        .to_string()
+                        .into();
+                CredentialsError::provider_error(cause)
+            })
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use aws_smithy_runtime_api::http::StatusCode;
+    use aws_smithy_types::body::SdkBody;
+
+    #[allow(unused_imports)]
+    use super::*;
+
+    #[test]
+    fn test_is_retryable_response_error_5xx() {
+        // Test that ResponseError with 5xx status codes are retryable
+        let response = HttpResponse::new(StatusCode::try_from(503).unwrap(), SdkBody::empty());
+        let err = SdkError::<(), _>::response_error("service unavailable", response);
+        assert!(is_retryable(&err));
+
+        let response = HttpResponse::new(StatusCode::try_from(500).unwrap(), SdkBody::empty());
+        let err = SdkError::<(), _>::response_error("internal server error", response);
+        assert!(is_retryable(&err));
+    }
+
+    #[test]
+    fn test_is_retryable_response_error_4xx() {
+        // Test that ResponseError with 4xx status codes are not retryable
+        let response = HttpResponse::new(StatusCode::try_from(404).unwrap(), SdkBody::empty());
+        let err = SdkError::<(), _>::response_error("not found", response);
+        assert!(!is_retryable(&err));
+
+        let response = HttpResponse::new(StatusCode::try_from(400).unwrap(), SdkBody::empty());
+        let err = SdkError::<(), _>::response_error("bad request", response);
+        assert!(!is_retryable(&err));
+    }
+
+    #[test]
+    fn test_is_retryable_response_error_408() {
+        // Test that ResponseError with 408 Request Timeout is retryable
+        let response = HttpResponse::new(StatusCode::try_from(408).unwrap(), SdkBody::empty());
+        let err = SdkError::<(), _>::response_error("request timeout", response);
+        assert!(is_retryable(&err));
+    }
+
+    #[test]
+    fn test_is_retryable_service_error_5xx() {
+        // Test that ServiceError with 5xx status codes are retryable (e.g., S3
+        // SlowDown)
+        let response = HttpResponse::new(StatusCode::try_from(503).unwrap(), SdkBody::empty());
+        let err = SdkError::<(), _>::service_error((), response);
+        assert!(is_retryable(&err));
+
+        let response = HttpResponse::new(StatusCode::try_from(500).unwrap(), SdkBody::empty());
+        let err = SdkError::<(), _>::service_error((), response);
+        assert!(is_retryable(&err));
+    }
+
+    #[test]
+    fn test_is_retryable_service_error_4xx() {
+        // Test that ServiceError with 4xx status codes are not retryable
+        let response = HttpResponse::new(StatusCode::try_from(404).unwrap(), SdkBody::empty());
+        let err = SdkError::<(), _>::service_error((), response);
+        assert!(!is_retryable(&err));
+
+        let response = HttpResponse::new(StatusCode::try_from(403).unwrap(), SdkBody::empty());
+        let err = SdkError::<(), _>::service_error((), response);
+        assert!(!is_retryable(&err));
+    }
+
+    #[test]
+    fn test_is_retryable_service_error_408() {
+        // Test that ServiceError with 408 Request Timeout is retryable
+        let response = HttpResponse::new(StatusCode::try_from(408).unwrap(), SdkBody::empty());
+        let err = SdkError::<(), _>::service_error((), response);
+        assert!(is_retryable(&err));
+    }
+
+    #[test]
+    fn test_is_retryable_timeout_error() {
+        // Test that TimeoutError is retryable
+        let err = SdkError::<(), HttpResponse>::timeout_error("operation timed out");
+        assert!(is_retryable(&err));
+    }
+
+    #[test]
+    fn test_is_retryable_construction_failure() {
+        // Test that ConstructionFailure is not retryable
+        let err = SdkError::<(), HttpResponse>::construction_failure("failed to build request");
+        assert!(!is_retryable(&err));
+    }
+
+    #[cfg(feature = "failpoints")]
+    #[tokio::test]
+    async fn test_default_provider() {
+        const AWS_WEB_IDENTITY_TOKEN_FILE: &str = "AWS_WEB_IDENTITY_TOKEN_FILE";
+
+        let default_provider = DefaultCredentialsProvider::new(new_http_client()).await;
+        std::env::set_var(AWS_WEB_IDENTITY_TOKEN_FILE, "tmp");
+        // mock k8s env with web_identitiy_provider
+        fail::cfg("cred_err", "return").unwrap();
+        fail::cfg("retry_count", "return(1)").unwrap();
+        let res = default_provider.provide_credentials().await;
+        assert_eq!(res.is_err(), true);
+
+        let err = res.unwrap_err();
+
+        match err {
+            CredentialsError::ProviderError(_) => {
+                assert_eq!(
+                    err.source().unwrap().to_string(),
+                    "Couldn't find AWS credentials in sources (injected error)."
+                )
+            }
+            err => panic!("unexpected error type: {}", err),
+        }
+
+        fail::remove("cred_err");
+        fail::remove("retry_count");
+        std::env::remove_var(AWS_WEB_IDENTITY_TOKEN_FILE);
+    }
+}

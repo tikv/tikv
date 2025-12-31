@@ -1,0 +1,10 @@
+[package]
+name = "fuzzer-libfuzzer"
+version = "0.0.1"
+publish = false
+license = "Apache-2.0"
+edition = "2024"
+
+[dependencies]
+fuzz-targets = { path = "../targets" }
+libfuzzer-sys = "0.3.1"

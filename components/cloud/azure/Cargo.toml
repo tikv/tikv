@@ -1,0 +1,30 @@
+[package]
+name = "azure"
+version = "0.0.1"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+
+[dependencies]
+async-trait = "0.1"
+azure_core = { version = "0.18", default-features = false, features = ["hmac_openssl"]}
+azure_identity = "0.18"
+azure_security_keyvault = { version = "0.18", default-features = false }
+azure_storage = { version = "0.18", default-features = false }
+azure_storage_blobs = { version = "0.18", default-features = false }
+base64 = "0.13"
+cloud = { workspace = true }
+futures = "0.3"
+futures-util = { version = "0.3", default-features = false, features = ["io"] }
+kvproto = { workspace = true }
+oauth2 = { version = "4.4", default-features = false }
+openssl = { workspace = true }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+slog = { workspace = true }
+slog-global = { workspace = true }
+tikv_util = { workspace = true }
+time = { version = "0.3", features = ["local-offset"] }
+tokio = { version = "1.5", features = ["time"] }
+url = "2.0"
+uuid = { version = "1.0", features = ["v4"] }

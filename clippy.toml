@@ -1,0 +1,108 @@
+[[disallowed-methods]]
+path = "std::thread::Builder::spawn"
+reason = """
+Wrapper function `<std::thread::Builder as tikv_util::sys::thread::StdThreadBuildWrapper>::spawn_wrapper`
+should be used instead, refer to https://github.com/tikv/tikv/pull/12442 for more details.
+"""
+[[disallowed-methods]]
+path = "tokio::runtime::builder::Builder::on_thread_start"
+reason = """
+Adding hooks directly will omit system hooks, please use
+<tokio::runtime::builder::Builder as tikv_util::sys::thread::ThreadBuildWrapper>::with_sys_and_custom_hooks
+refer to https://github.com/tikv/tikv/pull/12442 and https://github.com/tikv/tikv/pull/15017 for more details.
+"""
+[[disallowed-methods]]
+path = "tokio::runtime::builder::Builder::on_thread_stop"
+reason = """
+Adding hooks directly will omit system hooks, please use
+<tokio::runtime::builder::Builder as tikv_util::sys::thread::ThreadBuildWrapper>::with_sys_and_custom_hooks
+refer to https://github.com/tikv/tikv/pull/12442 and https://github.com/tikv/tikv/pull/15017 for more details.
+"""
+[[disallowed-methods]]
+path = "futures_executor::thread_pool::ThreadPoolBuilder::after_start"
+reason = """
+Adding hooks directly will omit system hooks, please use
+<futures_executor::thread_pool::ThreadPoolBuilder as tikv_util::sys::thread::ThreadBuildWrapper>::with_sys_and_custom_hooks
+refer to https://github.com/tikv/tikv/pull/12442 and https://github.com/tikv/tikv/pull/15017 for more details.
+"""
+[[disallowed-methods]]
+path = "futures_executor::thread_pool::ThreadPoolBuilder::before_stop"
+reason = """
+Adding hooks directly will omit system hooks, please use
+<futures_executor::thread_pool::ThreadPoolBuilder as tikv_util::sys::thread::ThreadBuildWrapper>::with_sys_and_custom_hooks
+refer to https://github.com/tikv/tikv/pull/12442 and https://github.com/tikv/tikv/pull/15017 for more details.
+"""
+
+# See more about RUSTSEC-2020-0071 in deny.toml.
+[[disallowed-methods]]
+path = "time::now"
+reason = "time::now is unsound, see RUSTSEC-2020-0071"
+[[disallowed-methods]]
+path = "time::at"
+reason = "time::at is unsound, see RUSTSEC-2020-0071"
+[[disallowed-methods]]
+path = "time::at_utc"
+reason = "time::at_utc is unsound, see RUSTSEC-2020-0071"
+
+# See more about RUSTSEC-2023-0072 in deny.toml.
+[[disallowed-methods]]
+path = "openssl::x509::store::X509StoreRef::objects"
+reason = """
+X509StoreRef::objects is unsound, see RUSTSEC-2020-0071
+"""
+
+# See more about RUSTSEC-2025-0004 in deny.toml.
+[[disallowed-methods]]
+path = "openssl::ssl::select_next_proto"
+reason = """
+openssl::ssl::select_next_proto may return a buffer use after free, \
+see RUSTSEC-2025-0004
+"""
+
+# See more about RUSTSEC-2024-0357 in deny.toml.
+[[disallowed-types]]
+path = "openssl::bio::MemBio"
+reason = """
+openssl::bio::MemBio::get_buf is unsound, see RUSTSEC-2024-0357
+"""
+[[disallowed-types]]
+path = "openssl::pkcs7::Pkcs7"
+reason = """
+openssl::pkcs7::Pkcs7 may call openssl::bio::MemBio::get_buf, \
+see RUSTSEC-2024-0357
+"""
+[[disallowed-types]]
+path = "openssl::pkey::PKeyRef"
+reason = """
+openssl::pkey::PKeyRef may call openssl::bio::MemBio::get_buf, \
+see RUSTSEC-2024-0357
+"""
+[[disallowed-types]]
+path = "openssl::cms::CmsContentInfoRef"
+reason = """
+openssl::cms::CmsContentInfoRef may call openssl::bio::MemBio::get_buf, \
+see RUSTSEC-2024-0357
+"""
+[[disallowed-types]]
+path = "openssl::asn1::Asn1GeneralizedTimeRef"
+reason = """
+openssl::asn1::Asn1GeneralizedTimeRef may call openssl::bio::MemBio::get_buf, \
+see RUSTSEC-2024-0357
+"""
+
+# See more about RUSTSEC-2025-0022 in deny.toml.
+[[disallowed-types]]
+path = "openssl::cipher::Cipher::fetch"
+reason = """
+When a Some(...) value was passed to the properties argument of openssl::cipher::Cipher::fetch, \
+a use-after-free would result. See RUSTSEC-2025-0022
+"""
+[[disallowed-types]]
+path = "openssl::md::Md::fetch"
+reason = """
+When a Some(...) value was passed to the properties argument of openssl::md::Md::fetch, \
+a use-after-free would result. See RUSTSEC-2025-0022
+"""
+
+avoid-breaking-exported-api = false
+upper-case-acronyms-aggressive = true

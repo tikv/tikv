@@ -1,0 +1,39 @@
+[package]
+name = "causal_ts"
+version = "0.0.1"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+
+[features]
+testexport = []
+
+[dependencies]
+async-trait = { version = "0.1" }
+enum_dispatch = "0.3.8"
+error_code = { workspace = true }
+futures = { version = "0.3" }
+lazy_static = "1.3"
+parking_lot = "0.12"
+pd_client = { workspace = true }
+prometheus = { version = "0.13", features = ["nightly"] }
+prometheus-static-metric = "0.5"
+serde = "1.0"
+serde_derive = "1.0"
+slog = { workspace = true }
+slog-global = { workspace = true }
+# Both included in `lib.rs` and `benches`, so we need to add it here.
+# TODO: move it to `dev-dependencies` after we have a better way to handle it.
+test_pd_client = { workspace = true }
+thiserror = "1.0"
+tikv_util = { workspace = true }
+tokio = { version = "1", features = ["sync"] }
+txn_types = { workspace = true }
+
+[dev-dependencies]
+criterion = "0.3"
+
+[[bench]]
+name = "tso"
+path = "benches/tso.rs"
+harness = false

@@ -1,0 +1,24 @@
+[package]
+name = "test_util"
+version = "0.0.1"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+
+[dependencies]
+backtrace = "0.3"
+chrono = { workspace = true }
+collections = { workspace = true }
+encryption_export = { workspace = true }
+fail = "0.5"
+grpcio = { workspace = true }
+kvproto = { workspace = true }
+log_wrappers = { workspace = true }
+rand = "0.8"
+rand_isaac = "0.3"
+security = { workspace = true }
+slog = { workspace = true }
+slog-global = { workspace = true }
+tempfile = "3.0"
+tikv_util = { workspace = true }
+time = { workspace = true }

@@ -1,0 +1,96 @@
+[package]
+name = "backup-stream"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[features]
+default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
+test-engine-kv-rocksdb = ["tikv/test-engine-kv-rocksdb", "engine_test/test-engine-kv-rocksdb"]
+test-engine-raft-raft-engine = ["tikv/test-engine-raft-raft-engine", "engine_test/test-engine-raft-raft-engine"]
+test-engines-rocksdb = ["tikv/test-engines-rocksdb"]
+failpoints = ["tikv/failpoints", "fail/failpoints"]
+backup-stream-debug = []
+
+[[test]]
+name = "integration"
+path = "tests/integration/mod.rs"
+test = true
+harness = true
+
+[[test]]
+name = "failpoints"
+path = "tests/failpoints/mod.rs"
+required-features = ["failpoints"]
+test = true
+harness = true
+
+[dependencies]
+async-compression = { version = "0.4.27", features = ["tokio", "zstd"] }
+async-trait = { version = "0.1" }
+base64 = "0.13.0"
+chrono = { workspace = true }
+concurrency_manager = { workspace = true }
+crc64fast = "0.1"
+dashmap = "5"
+derive_more = "0.99.3"
+encryption = { workspace = true }
+encryption_export = { workspace = true }
+engine_rocks = { workspace = true }
+engine_traits = { workspace = true }
+error_code = { workspace = true }
+external_storage = { workspace = true }
+fail = "0.5"
+file_system = { workspace = true }
+futures = "0.3"
+grpcio = { workspace = true }
+hex = "0.4"
+kvproto = { workspace = true }
+lazy_static = "1.4"
+log_wrappers = { workspace = true }
+online_config = { workspace = true }
+openssl = { workspace = true }
+pd_client = { workspace = true }
+pin-project = "1.0"
+prometheus = { version = "0.13", default-features = false, features = ["nightly"] }
+prometheus-static-metric = "0.5"
+protobuf = { version = "2.8", features = ["bytes"] }
+raft = { workspace = true }
+raftstore = { workspace = true }
+rand = "0.8.0"
+resolved_ts = { workspace = true }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["preserve_order"] }
+slog = { workspace = true }
+slog-global = { workspace = true }
+thiserror = "1"
+tidb_query_datatype = { workspace = true }
+tikv = { workspace = true }
+tikv_kv = { workspace = true }
+tikv_util = { workspace = true }
+tokio = { version = "1.5", features = ["rt-multi-thread", "macros", "time", "sync"] }
+tokio-stream = "0.1"
+tokio-util = { version = "0.7", features = ["compat"] }
+tracing = { workspace = true }
+tracing-active-tree = { workspace = true }
+txn_types = { workspace = true }
+uuid = "0.8"
+
+[dev-dependencies]
+async-trait = "0.1"
+encryption = { workspace = true, features = ["sm4"] }
+engine_panic = { workspace = true }
+engine_test = { workspace = true }
+grpcio = { workspace = true }
+hex = "0.4"
+protobuf = { version = "2.8", features = ["bytes"] }
+rand = "0.8.0"
+tempdir = "0.3"
+tempfile = "3.0"
+test_pd = { workspace = true }
+test_pd_client = { workspace = true }
+test_raftstore = { workspace = true }
+test_util = { workspace = true }
+tokio = { version = "1.5", features = ["test-util"] }
+url = "2"
+walkdir = "2"

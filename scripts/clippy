@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# This script runs clippy with the most common configurations.
+# Arguments given will be passed through to "cargo clippy"
+# This runs in the Makefile environment via "make run"
+
+set -euo pipefail
+
+# Run from the Makefile environment
+MAKEFILE_RUN=${MAKEFILE_RUN:-""}
+if [[ -z $MAKEFILE_RUN ]] ; then
+    COMMAND="$0 $*" exec make run
+fi
+SHELL_DEBUG=${SHELL_DEBUG:-""}
+if [[ -n "$SHELL_DEBUG" ]] ; then
+    set -x
+fi
+
+# Notes:
+# - Enables `significant_drop_in_scrutinee` after
+#   https://github.com/rust-lang/rust-clippy/issues/8963 is fixed.
+# - `derive_partial_eq_without_eq` has compilation overhead.
+# - Blocking issue for enabling `result_large_err` is the protobuf messages.
+# - Blocking issue for clippy::large_enum_variant is the raftstore peer message.
+# - Allow `unexpected_cfgs` as have defines many compiling cfg for unsupported test cases.
+CLIPPY_LINTS=(
+    -A clippy::module_inception  \
+    -A clippy::result_large_err \
+    -A clippy::large_enum_variant \
+    -A clippy::should_implement_trait \
+    -A clippy::too_many_arguments \
+    -A clippy::disallowed_names \
+    -A clippy::redundant_closure \
+    -A clippy::field_reassign_with_default \
+    -A clippy::wrong_self_convention \
+    -A clippy::needless_range_loop \
+    -A clippy::inconsistent_struct_constructor \
+    -A clippy::new_ret_no_self \
+    -A clippy::unnecessary_sort_by \
+    -A clippy::unnecessary_wraps \
+    -A clippy::bool_assert_comparison \
+    -A clippy::self_named_constructors \
+    -A clippy::enum_variant_names \
+    -A clippy::type_complexity \
+    -A clippy::significant_drop_in_scrutinee \
+    -A clippy::derive_partial_eq_without_eq \
+    -W clippy::dbg_macro \
+    -W clippy::todo \
+    -D clippy::upper_case_acronyms \
+    -D clippy::disallowed_methods \
+    -D rust-2018-idioms \
+    -D clippy::assertions_on_result_states \
+    -A clippy::non_canonical_partial_ord_impl \
+    -A clippy::arc_with_non_send_sync \
+    -A unexpected_cfgs \
+)
+
+# TODO: Enables `clippy::needless_return_with_question_mark` after
+# https://github.com/rust-lang/rust-clippy/issues/11982 is fixed.
+CLIPPY_LINTS+=(
+    -A clippy::needless_return_with_question_mark \
+)
+
+# We should be pedantic about writing async code, as it's easy to write
+# suboptimal or even bloat code. See:
+# - https://github.com/rust-lang/rust/issues/69826
+# - https://github.com/rust-lang/rust/issues/69663
+# - https://github.com/rust-lang/rust/issues/71407
+CLIPPY_LINTS+=(
+    -D clippy::redundant_async_block \
+    -D clippy::unused_async \
+    -D clippy::manual_async_fn \
+    -D clippy::large_futures \
+)
+
+# Allow let_underscore_future temporary due to lots of counterexamples in
+# tests.
+# TODO: deny it.
+CLIPPY_LINTS+=(
+    -A clippy::let_underscore_future \
+)
+
+cargo clippy --workspace \
+    --exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
+    --no-default-features --features "${TIKV_ENABLE_FEATURES}" "$@" -- "${CLIPPY_LINTS[@]}"

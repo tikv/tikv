@@ -1,0 +1,34 @@
+[package]
+name = "engine_traits_tests"
+version = "0.0.1"
+description = "Engine-agnostic tests for the engine_traits interface"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+
+[lib]
+doctest = false
+
+[features]
+default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
+
+test-engine-kv-rocksdb = [
+  "engine_test/test-engine-kv-rocksdb"
+]
+test-engine-raft-raft-engine = [
+  "engine_test/test-engine-raft-raft-engine"
+]
+test-engines-rocksdb = [
+  "engine_test/test-engines-rocksdb",
+]
+test-engines-panic = [
+  "engine_test/test-engines-panic",
+]
+
+[dependencies]
+encryption_export = { workspace = true }
+engine_test = { workspace = true }
+engine_traits = { workspace = true }
+panic_hook = { workspace = true }
+tempfile = "3.0"
+test_util = { workspace = true }

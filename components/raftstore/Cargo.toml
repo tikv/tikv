@@ -1,0 +1,95 @@
+[package]
+name = "raftstore"
+version = "0.0.1"
+authors = ["The TiKV Authors"]
+license = "Apache-2.0"
+edition = "2021"
+publish = false
+
+[features]
+default = [
+  "test-engine-kv-rocksdb",
+  "test-engine-raft-raft-engine",
+  "engine_rocks",
+]
+failpoints = ["fail/failpoints"]
+testexport = []
+test-engine-kv-rocksdb = ["engine_test/test-engine-kv-rocksdb"]
+test-engine-raft-raft-engine = ["engine_test/test-engine-raft-raft-engine"]
+test-engines-rocksdb = ["engine_test/test-engines-rocksdb"]
+test-engines-panic = ["engine_test/test-engines-panic"]
+
+[dependencies]
+batch-system = { workspace = true }
+bitflags = "1.0.1"
+byteorder = "1.2"
+bytes = "1.0"
+causal_ts = { workspace = true }
+chrono = { workspace = true }
+codec = { workspace = true }
+collections = { workspace = true }
+concurrency_manager = { workspace = true }
+crc32fast = "1.2"
+crossbeam = { workspace = true }
+crossbeam-skiplist = { workspace = true }
+derive_more = { version = "2.0", features = ["debug"] }
+encryption = { workspace = true }
+engine_rocks = { workspace = true, optional = true }
+engine_traits = { workspace = true }
+error_code = { workspace = true }
+fail = "0.5"
+file_system = { workspace = true }
+futures = "0.3"
+futures-util = { version = "0.3.1", default-features = false, features = [
+  "io",
+] }
+getset = "0.1"
+health_controller = { workspace = true }
+into_other = { workspace = true }
+itertools = "0.10"
+keys = { workspace = true }
+kvproto = { workspace = true }
+lazy_static = "1.3"
+log_wrappers = { workspace = true }
+memory_trace_macros = { workspace = true }
+online_config = { workspace = true }
+openssl = { workspace = true }
+parking_lot = "0.12"
+pd_client = { workspace = true }
+prometheus = { version = "0.13", features = ["nightly"] }
+prometheus-static-metric = "0.5"
+protobuf = { version = "2.8", features = ["bytes"] }
+raft = { workspace = true }
+raft-proto = { version = "0.7.0", default-features = false }
+rand = "0.8.3"
+resource_control = { workspace = true }
+resource_metering = { workspace = true }
+serde = "1.0"
+serde_derive = "1.0"
+serde_with = "1.4"
+service = { workspace = true }
+slog = { workspace = true }
+slog-global = { workspace = true }
+smallvec = "1.4"
+sst_importer = { workspace = true }
+strum = { version = "0.20", features = ["derive"] }
+tempfile = "3.0"
+thiserror = "1.0"
+tidb_query_datatype = { workspace = true }
+tikv_alloc = { workspace = true }
+tikv_util = { workspace = true }
+time = { workspace = true }
+tokio = { version = "1.5", features = ["sync", "rt-multi-thread"] }
+tracker = { workspace = true }
+txn_types = { workspace = true }
+uuid = { version = "0.8.1", features = ["serde", "v4"] }
+yatp = { workspace = true }
+
+[dev-dependencies]
+encryption_export = { workspace = true }
+engine_panic = { workspace = true }
+engine_rocks = { workspace = true }
+engine_test = { workspace = true }
+file_system = { workspace = true, features = ["testexport"] }
+panic_hook = { workspace = true }
+test_sst_importer = { workspace = true }

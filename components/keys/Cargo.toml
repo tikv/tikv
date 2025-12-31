@@ -1,0 +1,17 @@
+[package]
+name = "keys"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+
+[dependencies]
+byteorder = "1.2"
+kvproto = { workspace = true }
+log_wrappers = { workspace = true }
+thiserror = "1.0"
+tikv_alloc = { workspace = true }
+tikv_util = { workspace = true }
+
+[dev-dependencies]
+panic_hook = { workspace = true }
