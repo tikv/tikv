@@ -513,7 +513,6 @@ impl<E: KvEngine> SstImporter<E> {
                 engine,
                 ext.req_type,
                 Instant::now(),
-                || {},
             )
             .await;
 
@@ -1992,7 +1991,7 @@ impl<E: KvEngine> SstImporter<E> {
         Ok((range_start, range_end))
     }
 
-    async fn do_rewrite_keys<'a, Iter: Iterator, F>(
+    async fn do_rewrite_keys<'a, Iter: Iterator>(
         &'a self,
         dst_file_name: PathBuf,
         rewrite_rule: &'a RewriteRule,
@@ -2003,16 +2002,12 @@ impl<E: KvEngine> SstImporter<E> {
         engine: E,
         req_type: DownloadRequestType,
         start_rewrite: Instant,
-        clean_files: F,
     ) -> Result<
         Option<(
             Range,
             <<E as SstExt>::SstWriter as SstWriter>::ExternalSstFileInfo,
         )>,
-    >
-    where
-        F: FnOnce(),
-    {
+    > {
         let old_prefix = rewrite_rule.get_old_key_prefix();
         let new_prefix = rewrite_rule.get_new_key_prefix();
         // perform iteration and key rewrite.
@@ -2136,8 +2131,6 @@ impl<E: KvEngine> SstImporter<E> {
                 first_key = Some(keys::origin_key(&data_key).to_vec());
             }
         }
-
-        clean_files();
 
         IMPORTER_DOWNLOAD_DURATION
             .with_label_values(&["rewrite"])
