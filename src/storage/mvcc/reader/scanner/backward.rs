@@ -5,7 +5,7 @@ use std::{borrow::Cow, cmp::Ordering};
 
 use engine_traits::CF_DEFAULT;
 use kvproto::kvrpcpb::{IsolationLevel, WriteConflictReason};
-use txn_types::{Key, Lock, TimeStamp, Value, ValueEntry, Write, WriteRef, WriteType};
+use txn_types::{Key, TimeStamp, Value, ValueEntry, Write, WriteRef, WriteType};
 
 use super::ScannerConfig;
 use crate::storage::{
@@ -156,19 +156,19 @@ impl<S: Snapshot> BackwardKvScanner<S> {
 
             if has_lock {
                 if need_check_locks(self.cfg.isolation_level) {
-                    let lock = {
+                    let lock_or_shared_locks = {
                         let lock_value = self
                             .lock_cursor
                             .as_mut()
                             .unwrap()
                             .value(&mut self.statistics.lock);
-                        Lock::parse(lock_value)?
+                        txn_types::parse_lock(lock_value)?
                     };
                     if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
                         self.met_newer_ts_data = NewerTsCheckState::Met;
                     }
-                    result = Lock::check_ts_conflict(
-                        Cow::Borrowed(&lock),
+                    result = txn_types::check_ts_conflict(
+                        Cow::Borrowed(&lock_or_shared_locks),
                         &current_user_key,
                         ts,
                         &self.cfg.bypass_locks,
@@ -177,6 +177,9 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                     .map(|_| None)
                     .map_err(Into::into);
                     if result.is_err() {
+                        let lock = lock_or_shared_locks
+                            .left()
+                            .expect("Err result only for single lock");
                         self.statistics.lock.processed_keys += 1;
                         if !self.cfg.load_commit_ts && self.cfg.access_locks.contains(lock.ts) {
                             self.ensure_default_cursor()?;

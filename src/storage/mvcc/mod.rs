@@ -13,7 +13,9 @@ use std::{error, io};
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::kvrpcpb::{self, Assertion, IsolationLevel};
 use thiserror::Error;
-use tikv_util::{metrics::CRITICAL_ERROR, panic_when_unexpected_key_or_data, set_panic_mark};
+use tikv_util::{
+    Either, metrics::CRITICAL_ERROR, panic_when_unexpected_key_or_data, set_panic_mark,
+};
 pub use txn_types::{
     Key, Lock, LockType, Mutation, SHORT_VALUE_MAX_LEN, TimeStamp, Value, Write, WriteRef,
     WriteType,
@@ -560,9 +562,9 @@ pub mod tests {
         key: &Key,
         ts: TimeStamp,
     ) -> Result<()> {
-        if let Some(lock) = reader.load_lock(key)? {
-            if let Err(e) = Lock::check_ts_conflict(
-                Cow::Owned(lock),
+        if let Some(lock_or_shared_locks) = reader.load_lock(key)? {
+            if let Err(e) = txn_types::check_ts_conflict(
+                Cow::Owned(lock_or_shared_locks),
                 key,
                 ts,
                 &Default::default(),
@@ -628,7 +630,12 @@ pub mod tests {
     ) -> Lock {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true);
-        let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
+        let lock = match reader.load_lock(&Key::from_raw(key)).unwrap().unwrap() {
+            Either::Left(lock) => lock,
+            Either::Right(_shared_locks) => {
+                unimplemented!("SharedLocks returned from load_lock is not supported here")
+            }
+        };
         assert_eq!(lock.ts, start_ts.into());
         assert!(!lock.is_pessimistic_lock());
         lock
@@ -642,7 +649,12 @@ pub mod tests {
     ) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true);
-        let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
+        let lock = match reader.load_lock(&Key::from_raw(key)).unwrap().unwrap() {
+            Either::Left(lock) => lock,
+            Either::Right(_shared_locks) => {
+                unimplemented!("SharedLocks returned from load_lock is not supported here")
+            }
+        };
         assert_eq!(lock.ts, start_ts.into());
         assert!(!lock.is_pessimistic_lock());
         assert_eq!(lock.ttl, ttl);
@@ -658,7 +670,12 @@ pub mod tests {
     ) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true);
-        let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
+        let lock = match reader.load_lock(&Key::from_raw(key)).unwrap().unwrap() {
+            Either::Left(lock) => lock,
+            Either::Right(_shared_locks) => {
+                unimplemented!("SharedLocks returned from load_lock is not supported here")
+            }
+        };
         assert_eq!(lock.ts, start_ts.into());
         assert_eq!(lock.ttl, ttl);
         assert_eq!(lock.min_commit_ts, min_commit_ts.into());

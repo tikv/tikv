@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use tikv_kv::{ScanMode, Snapshot};
+use tikv_util::Either;
 use txn_types::{Key, TimeStamp, Value, Write};
 
 use crate::storage::mvcc::{Lock as MvccLock, MvccReader};
@@ -18,7 +19,12 @@ pub fn find_mvcc_infos_by_key<S: Snapshot>(
 ) -> crate::storage::txn::Result<LockWritesVals> {
     let mut writes = vec![];
     let mut values = vec![];
-    let lock = reader.load_lock(key)?;
+    let lock = reader.load_lock(key)?.map(|lock| match lock {
+        Either::Left(lock) => lock,
+        Either::Right(_shared_locks) => {
+            unimplemented!("SharedLocks returned from load_lock is not supported here")
+        }
+    });
     let mut ts = TimeStamp::max();
     loop {
         let opt = reader.seek_write(key, ts)?;
@@ -61,6 +67,8 @@ pub mod tests {
     use tikv_kv::Engine;
     #[cfg(test)]
     use tikv_kv::Snapshot;
+    #[cfg(test)]
+    use tikv_util::Either;
     use txn_types::Key;
     #[cfg(test)]
     use txn_types::{Lock, SHORT_VALUE_MAX_LEN, TimeStamp, Value, Write};
@@ -95,7 +103,12 @@ pub mod tests {
             start_ts: impl Into<TimeStamp>,
             reader: &mut SnapshotReader<S>,
         ) {
-            let expected_lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
+            let expected_lock = match reader.load_lock(&Key::from_raw(key)).unwrap().unwrap() {
+                Either::Left(lock) => lock,
+                Either::Right(_shared_locks) => {
+                    unimplemented!("SharedLocks returned from load_lock is not supported here")
+                }
+            };
             assert_eq!(lock.ts, start_ts.into());
             assert_eq!(lock, expected_lock);
         }
