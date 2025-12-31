@@ -220,7 +220,7 @@ pub fn uuid_version(input: Option<BytesRef>) -> Result<Option<Int>> {
     let uuid = Uuid::parse_str(&input);
     match uuid {
         Ok(u) => Ok(Some(u.get_version_num() as i64)),
-        Err(_e) => return Ok(None),
+        Err(_e) => Ok(None),
     }
 }
 
@@ -232,10 +232,9 @@ pub fn uuid_timestamp(input: Option<BytesRef>) -> Result<Option<Decimal>> {
         None => return Ok(None),
     };
     let uuid = Uuid::parse_str(&input);
-    match uuid {
-        Err(_e) => return Ok(None),
-        Ok(_) => (),
-    }
+    if uuid.is_err() {
+        return Ok(None);
+    };
     let ts = uuid.unwrap().get_timestamp();
     let (s, ms) = match ts {
         None => return Ok(None),
