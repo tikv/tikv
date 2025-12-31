@@ -167,6 +167,10 @@ pub fn compression_type_to_u8(c: SstCompressionType) -> u8 {
     }
 }
 
+pub fn redact(k: &[u8]) -> log_wrappers::Value<'_> {
+    log_wrappers::Value::key(k)
+}
+
 #[derive(Eq, PartialEq)]
 pub struct EndKey<'a>(pub &'a [u8]);
 
