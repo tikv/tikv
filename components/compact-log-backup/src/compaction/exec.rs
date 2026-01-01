@@ -7,13 +7,8 @@ use std::{
 
 use engine_rocks::RocksEngine;
 use engine_traits::{
-<<<<<<< HEAD
-    ExternalSstFileInfo, SstCompressionType, SstExt, SstWriter, SstWriterBuilder,
+    ExternalSstFileInfo, SstCompressionType, SstExt, SstWriter, SstWriterBuilder, CF_WRITE,
     DATA_KEY_PREFIX_LEN,
-=======
-    CF_WRITE, DATA_KEY_PREFIX_LEN, ExternalSstFileInfo, SstCompressionType, SstExt, SstWriter,
-    SstWriterBuilder,
->>>>>>> 8cc0f4e44d (compact-log-backup: try to resolve conflict encountering during compacting (#18313))
 };
 use external_storage::{ExternalStorage, UnpinReader};
 use file_system::Sha256Reader;
@@ -478,12 +473,12 @@ where
 
 #[cfg(test)]
 mod test {
-    use engine_traits::{CF_DEFAULT, CF_WRITE, CfName};
+    use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
     use tidb_query_datatype::codec::table::encode_row_key;
     use txn_types::{Key, Write, WriteType};
 
     use crate::{
-        compaction::{Subcompaction, exec::SubcompactionExec},
+        compaction::{exec::SubcompactionExec, Subcompaction},
         source::Record,
         storage::{Epoch, MetaFile},
         test_util::{
