@@ -3550,4 +3550,68 @@ mod tests {
             0
         );
     }
+
+    #[test]
+    fn test_decode_int_handle_from_key() {
+        let idx_exe = IndexScanExecutorImpl {
+            context: Default::default(),
+            schema: vec![],
+            columns_id_without_handle: vec![],
+            columns_id_for_common_handle: vec![],
+            decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
+            pid_column_cnt: 0,
+            physical_table_id_column_cnt: 0,
+            index_version: -1,
+        };
+
+        // Test regular INT_FLAG (positive)
+        let mut key = vec![datum::INT_FLAG];
+        key.write_i64(123).unwrap();
+        assert_eq!(idx_exe.decode_int_handle_from_key(&key).unwrap(), 123);
+
+        // Test regular INT_FLAG (negative)
+        let mut key = vec![datum::INT_FLAG];
+        key.write_i64(-456).unwrap();
+        assert_eq!(idx_exe.decode_int_handle_from_key(&key).unwrap(), -456);
+
+        // Test regular UINT_FLAG
+        let mut key = vec![datum::UINT_FLAG];
+        key.write_u64(789).unwrap();
+        assert_eq!(idx_exe.decode_int_handle_from_key(&key).unwrap(), 789);
+
+        // Test partition handle with INT_FLAG inner handle
+        let mut key = vec![table::INDEX_VALUE_PARTITION_ID_FLAG];
+        let partition_id = 100i64;
+        key.write_i64(partition_id).unwrap(); // partition id
+        key.push(datum::INT_FLAG);
+        key.write_i64(999).unwrap(); // inner handle
+        assert_eq!(idx_exe.decode_int_handle_from_key(&key).unwrap(), 999);
+
+        // Test partition handle with UINT_FLAG inner handle
+        let mut key = vec![table::INDEX_VALUE_PARTITION_ID_FLAG];
+        key.write_i64(200).unwrap(); // partition id
+        key.push(datum::UINT_FLAG);
+        key.write_u64(888).unwrap(); // inner handle
+        assert_eq!(idx_exe.decode_int_handle_from_key(&key).unwrap(), 888);
+
+        // Test error: invalid handle flag
+        let key = vec![0x99, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08];
+        assert!(idx_exe.decode_int_handle_from_key(&key).is_err());
+
+        // Test error: partition flag with insufficient data for partition id
+        let key = vec![table::INDEX_VALUE_PARTITION_ID_FLAG, 0x01, 0x02];
+        assert!(idx_exe.decode_int_handle_from_key(&key).is_err());
+
+        // Test error: partition flag with partition id but no handle data
+        let mut key = vec![table::INDEX_VALUE_PARTITION_ID_FLAG];
+        key.write_i64(300).unwrap(); // partition id only, no handle
+        assert!(idx_exe.decode_int_handle_from_key(&key).is_err());
+
+        // Test error: partition flag with partition id and invalid handle flag
+        let mut key = vec![table::INDEX_VALUE_PARTITION_ID_FLAG];
+        key.write_i64(400).unwrap(); // partition id
+        key.push(0xFF); // invalid handle flag
+        key.write_i64(111).unwrap();
+        assert!(idx_exe.decode_int_handle_from_key(&key).is_err());
+    }
 }
