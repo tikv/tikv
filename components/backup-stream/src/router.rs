@@ -1421,7 +1421,7 @@ impl StreamTaskHandler {
                 )
                 .await
                 .context(format_args!("flush meta {:?}", meta_path))?;
-            meta_files.push(meta_path)
+            meta_files.push(meta_path);
         }
         Ok(meta_files)
     }
@@ -1791,12 +1791,13 @@ impl MetadataInfo {
             .map_err(|err| Error::Other(box_err!("failed to marshal proto: {}", err)))
     }
 
-    fn path_to_meta(&self, min_begin_ts: u64, mut flush_ts: u64) -> String {
-        // It is possible flush_ts be set to zero when PD is unavailable.
-        // In this scenario, a "tso" from local clock will be synthesised.
-        // A special suffix need to be appended to avoid file name collision.
+    fn path_to_meta(&self, min_begin_ts: u64, flush_ts: u64) -> String {
+        // It is possible for flush_ts to be set to zero when PD is unavailable.
+        // In this scenario, a "tso" from the local clock will be synthesized.
+        // A special suffix needs to be appended to avoid file name collision.
+        let mut actual_flush_ts = flush_ts;
         let suffix = if flush_ts == 0 {
-            flush_ts = TimeStamp::compose(TimeStamp::physical_now(), 0).into_inner();
+            actual_flush_ts = TimeStamp::compose(TimeStamp::physical_now(), 0).into_inner();
             let uuid = Uuid::new_v4().as_u128();
             format!("-SYNTHETIC{:X}", uuid)
         } else {
@@ -1804,7 +1805,7 @@ impl MetadataInfo {
         };
         format!(
             "v1/backupmeta/{:016X}-{:016X}-{:016X}-{:016X}{}.meta",
-            flush_ts,
+            actual_flush_ts,
             min_begin_ts,
             self.min_ts.unwrap_or_default(),
             self.max_ts.unwrap_or_default(),
@@ -3365,7 +3366,7 @@ mod tests {
         // Case 2: flush_ts is 0
         let path_synthetic = meta.path_to_meta(50, 0);
         let another_path_synthetic = meta.path_to_meta(50, 0);
-        // synthetic path shouldn't be the same.
+        // synthetic paths should be unique due to different UUIDs
         assert_ne!(another_path_synthetic, path_synthetic);
 
         assert!(path_synthetic.contains("-SYNTHETIC"));
