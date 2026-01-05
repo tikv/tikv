@@ -746,9 +746,12 @@ impl SharedLocks {
     }
 
     fn put_lock(&mut self, ts: TimeStamp, lock: Lock) -> Option<Lock> {
-        match self.txn_info_segments.insert(ts, Either::Right(lock)) {
+        let previous = self.txn_info_segments.insert(ts, Either::Right(lock));
+
+        match previous {
             Some(either) => match either {
                 Either::Left(encoded) => {
+                    // Previously stored as encoded lock info; decode it back to a Lock.
                     Some(Lock::parse(&encoded).expect("failed to parse shared lock txn info"))
                 }
                 Either::Right(lock) => Some(lock),
