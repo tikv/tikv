@@ -773,7 +773,7 @@ impl Delegate {
                     if !observed_range.contains_encoded_key(&lock.0) {
                         continue;
                     }
-                    let lock_type = txn_types::detect_lock_type(&lock.1).unwrap();
+                    let lock_type = txn_types::decode_lock_type(&lock.1).unwrap();
                     if !matches!(lock_type, LockType::Put | LockType::Delete) {
                         // We only send locks with data changes to downstream.
                         debug!("cdc skip lock record"; "lock" => ?lock_type, "key" => %Key::from_encoded(lock.0));
@@ -1048,7 +1048,7 @@ impl Delegate {
                 }
             }
             "lock" => {
-                let lock_type = txn_types::detect_lock_type(put.get_value()).unwrap();
+                let lock_type = txn_types::decode_lock_type(put.get_value()).unwrap();
                 if !matches!(lock_type, LockType::Put | LockType::Delete) {
                     // We only send locks with data changes to downstream.
                     debug!("cdc skip lock record"; "lock" => ?lock_type, "key" => %Key::from_encoded(put.take_key()));

@@ -336,7 +336,7 @@ impl Lock {
     }
 }
 
-pub fn detect_lock_type(b: &[u8]) -> Result<LockType> {
+pub fn decode_lock_type(b: &[u8]) -> Result<LockType> {
     if b.is_empty() {
         return Err(Error::from(ErrorInner::BadFormatLock));
     }
@@ -344,8 +344,8 @@ pub fn detect_lock_type(b: &[u8]) -> Result<LockType> {
     Ok(lock_type)
 }
 
-pub fn detect_lock_ts(b: &[u8]) -> Result<TimeStamp> {
-    match detect_lock_type(b)? {
+pub fn decode_lock_start_ts(b: &[u8]) -> Result<TimeStamp> {
+    match decode_lock_type(b)? {
         LockType::Shared => Err(Error::from(ErrorInner::BadFormatLock)),
         _ => {
             let mut b = &b[1..];
@@ -493,7 +493,7 @@ pub fn check_ts_conflict_for_replica_read(
 }
 
 pub fn parse_lock(b: &[u8]) -> Result<LockOrSharedLocks> {
-    match detect_lock_type(b)? {
+    match decode_lock_type(b)? {
         LockType::Shared => Ok(Either::Right(SharedLocks::parse(b)?)),
         _ => Ok(Either::Left(Lock::parse(b)?)),
     }
@@ -688,7 +688,7 @@ impl SharedLocks {
                     segments.reserve(len + 1); // some schedulers may append a new lock, reserve for it.
                     for _ in 0..len {
                         let lock_bytes = bytes::decode_compact_bytes(&mut b)?;
-                        let lock_ts = detect_lock_ts(&lock_bytes)?;
+                        let lock_ts = decode_lock_start_ts(&lock_bytes)?;
                         segments.insert(lock_ts, Either::Left(lock_bytes));
                     }
                 }
@@ -737,12 +737,6 @@ impl SharedLocks {
                 *either = Either::Right(lock);
             }
         }
-    }
-
-    #[inline]
-    #[must_use]
-    pub fn find_shared_lock_txn(&mut self, start_ts: TimeStamp) -> Option<&Lock> {
-        self.get_lock(&start_ts)
     }
 
     #[inline]
@@ -1716,7 +1710,7 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_lock_type() {
+    fn test_decode_lock_type() {
         fn lock_bytes(lock_type: LockType) -> Vec<u8> {
             Lock::new(
                 lock_type,
@@ -1735,30 +1729,30 @@ mod tests {
         let shared_bytes = SharedLocks::new().to_bytes();
 
         assert!(matches!(
-            detect_lock_type(&lock_bytes(LockType::Put)),
+            decode_lock_type(&lock_bytes(LockType::Put)),
             Ok(LockType::Put)
         ));
         assert!(matches!(
-            detect_lock_type(&lock_bytes(LockType::Delete)),
+            decode_lock_type(&lock_bytes(LockType::Delete)),
             Ok(LockType::Delete)
         ));
         assert!(matches!(
-            detect_lock_type(&lock_bytes(LockType::Lock)),
+            decode_lock_type(&lock_bytes(LockType::Lock)),
             Ok(LockType::Lock)
         ));
         assert!(matches!(
-            detect_lock_type(&lock_bytes(LockType::Pessimistic)),
+            decode_lock_type(&lock_bytes(LockType::Pessimistic)),
             Ok(LockType::Pessimistic)
         ));
         assert!(matches!(
-            detect_lock_type(&shared_bytes),
+            decode_lock_type(&shared_bytes),
             Ok(LockType::Shared)
         ));
-        detect_lock_type(&[]).unwrap_err();
+        decode_lock_type(&[]).unwrap_err();
     }
 
     #[test]
-    fn test_detect_lock_ts() {
+    fn test_decode_lock_start_ts() {
         let ts: TimeStamp = 123.into();
         let lock = Lock::new(
             LockType::Put,
@@ -1773,11 +1767,11 @@ mod tests {
         );
         let bytes = lock.to_bytes();
 
-        assert_eq!(detect_lock_ts(&bytes).unwrap(), ts);
+        assert_eq!(decode_lock_start_ts(&bytes).unwrap(), ts);
 
         let incomplete = vec![LockType::Put.to_u8()];
-        detect_lock_ts(&incomplete).unwrap_err();
-        detect_lock_ts(&[]).unwrap_err();
+        decode_lock_start_ts(&incomplete).unwrap_err();
+        decode_lock_start_ts(&[]).unwrap_err();
     }
 
     #[test]
@@ -1786,13 +1780,13 @@ mod tests {
 
         assert_eq!(shared_locks.len(), 0);
         let bytes = shared_locks.to_bytes();
-        assert!(matches!(detect_lock_type(&bytes), Ok(LockType::Shared)));
-        detect_lock_ts(&bytes).unwrap_err();
+        assert!(matches!(decode_lock_type(&bytes), Ok(LockType::Shared)));
+        decode_lock_start_ts(&bytes).unwrap_err();
         assert!(matches!(parse_lock(&bytes).unwrap(), Either::Right(_)));
     }
 
     #[test]
-    fn test_push_and_find_shared_lock_txn() {
+    fn test_put_and_get_shared_lock_txn() {
         let mut shared_locks = SharedLocks::new();
 
         let txn1_ts: TimeStamp = 5.into();
@@ -1848,12 +1842,12 @@ mod tests {
             LockType::Lock
         );
 
-        let found = shared_locks.find_shared_lock_txn(txn1_ts).unwrap();
+        let found = shared_locks.get_lock(&txn1_ts).unwrap();
         assert_eq!(found.primary, b"txn1".to_vec());
         assert_eq!(found.ts, txn1_ts);
         assert_eq!(found.lock_type, LockType::Pessimistic);
 
         let missing_ts: TimeStamp = 42.into();
-        assert!(shared_locks.find_shared_lock_txn(missing_ts).is_none());
+        assert!(shared_locks.get_lock(&missing_ts).is_none());
     }
 }
