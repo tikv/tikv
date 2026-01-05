@@ -918,7 +918,7 @@ def Server() -> RowPanel:
             ),
             graph_panel(
                 title="Disk IO bytes per second",
-                yaxes=yaxes(left_format=UNITS.NANO_SECONDS),
+                yaxes=yaxes(left_format=UNITS.BYTES_SEC_IEC),
                 lines=False,
                 stack=True,
                 targets=[
@@ -938,6 +938,57 @@ def Server() -> RowPanel:
                         ),
                         legend_format="copr-{{req}}",
                         additional_groupby=True,
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Disk IO count per second",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                lines=False,
+                stack=True,
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_storage_rocksdb_perf",
+                            label_selectors=['metric="block_read_count"'],
+                            by_labels=["req"],
+                        ),
+                        additional_groupby=True,
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_coprocessor_rocksdb_perf",
+                            label_selectors=['metric="block_read_count"'],
+                            by_labels=["req"],
+                        ),
+                        legend_format="copr-{{req}}",
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Analyze block read count per second",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_analyze_block_read_count_total",
+                            by_labels=["instance"],
+                        ),
+                        legend_format="{{instance}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Analyze next batch count per second",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_analyze_next_batch_count_total",
+                            by_labels=["instance"],
+                        ),
+                        legend_format="{{instance}}",
                     ),
                 ],
             ),
