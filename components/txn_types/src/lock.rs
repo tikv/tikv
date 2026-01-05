@@ -713,6 +713,13 @@ impl SharedLocks {
         self.txn_info_segments.contains_key(&start_ts)
     }
 
+    /// Returns the shared lock for `ts`, if any.
+    ///
+    /// When decoding a shared lock, each txn-info segment is kept as raw bytes (`Either::Left`)
+    /// to avoid eagerly parsing all segments. This method performs lazy parsing: the first time
+    /// a `ts` is accessed, it parses the bytes into a `Lock` and caches it in-place by replacing
+    /// the entry with `Either::Right(Lock)`. Subsequent calls return the cached `Lock` without
+    /// reparsing.
     pub fn get_lock(&mut self, ts: &TimeStamp) -> Option<&Lock> {
         if let Some(either) = self.txn_info_segments.get_mut(ts) {
             match either {
