@@ -3,7 +3,7 @@
 use std::{cmp::Ordering, sync::Arc};
 
 use async_trait::async_trait;
-use tidb_query_common::{Error, Result, storage::IntervalRange};
+use tidb_query_common::{Result, storage::IntervalRange};
 use tipb::FieldType;
 use tidb_query_datatype::{
     codec::{batch::LazyBatchColumnVec, data_type::*},
@@ -102,7 +102,7 @@ impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
             Err(err) => {return Err(err);}
         }
 
-        assert!(self.current_prefix_keys_unsafe.is_empty());
+        self.current_prefix_keys_unsafe.clear();
         unsafe {
             res = eval_exprs_decoded_no_lifetime(
                 &mut self.context,
@@ -147,7 +147,7 @@ impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
             Err(err) => {return Err(err);}
         }
 
-        assert!(self.current_prefix_keys_unsafe.is_empty());
+        self.current_prefix_keys_unsafe.clear();
         unsafe {
             res = eval_exprs_decoded_no_lifetime(
                 &mut self.context,
@@ -286,7 +286,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
                 // Traverse remaining rows, so that we can find the row whose prefix key values are different the prev.
                 let end_idx = self.find_different_prefix_key_row(&mut result, self.remaining_rows);
                 match end_idx {
-                    Ok(v) => {output_row_num = v + 1;}
+                    Ok(v) => {output_row_num = v;}
                     Err(err) => {return BatchExecuteResult{is_drained:Err(err), physical_columns: result.physical_columns, logical_rows: result.logical_rows, warnings: EvalWarnings::default()}}
                 }
                 self.remaining_rows = 0;
@@ -346,9 +346,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
 mod tests {
     use futures::executor::block_on;
     use tidb_query_datatype::{
-        FieldTypeTp,
-        codec::{batch::LazyBatchColumnVec, data_type::VectorValue},
-        expr::EvalWarnings,
+        builder::FieldTypeBuilder, codec::{batch::LazyBatchColumnVec, data_type::VectorValue}, expr::EvalWarnings, Collation, FieldTypeTp
     };
 
     use tidb_query_expr::RpnExpressionBuilder;
@@ -632,5 +630,462 @@ mod tests {
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 3);
         assert!(r.is_drained.unwrap().stop());
+    }
+    // TODO(x) consider is_src_scan_executor in test?
+
+    #[test]
+    fn test_rank_limit_one_chunk() {
+        let limits = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 100];
+        let results = vec![
+            vec![],
+            vec![0, 1, 2],
+            vec![0, 1, 2],
+            vec![0, 1, 2],
+            vec![0, 1, 2, 3],
+            vec![0, 1, 2, 3, 4, 5, 6, 7],
+            vec![0, 1, 2, 3, 4, 5, 6, 7],
+            vec![0, 1, 2, 3, 4, 5, 6, 7],
+            vec![0, 1, 2, 3, 4, 5, 6, 7],
+            vec![0, 1, 2, 3, 4, 5, 6, 7, 8],
+            vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+            vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+        ];
+
+        for i in 0..limits.len() {
+            let src_exec = MockExecutor::new(
+                vec![
+                    FieldTypeBuilder::new().tp(FieldTypeTp::VarString).collation(Collation::Utf8Mb4Bin).build(),
+                    FieldTypeBuilder::new().tp(FieldTypeTp::VarString).collation(Collation::Utf8Mb4Bin).build(),
+                ],
+                vec![BatchExecuteResult {
+                    physical_columns: LazyBatchColumnVec::from(vec![
+                        VectorValue::Bytes(vec![
+                            Some(b"val1".to_vec()),
+                            Some(b"val2".to_vec()),
+                            Some(b"val3".to_vec()),
+                            Some(b"val4".to_vec()),
+                            Some(b"val5".to_vec()),
+                            Some(b"val6".to_vec()),
+                            Some(b"val7".to_vec()),
+                            Some(b"val8".to_vec()),
+                            Some(b"val9".to_vec()),
+                            Some(b"val10".to_vec()),
+                        ].into()),
+                        VectorValue::Bytes(vec![
+                            Some(b"group1".to_vec()),
+                            Some(b"group1".to_vec()),
+                            Some(b"group1".to_vec()),
+                            Some(b"group2".to_vec()),
+                            Some(b"group3".to_vec()),
+                            Some(b"group3".to_vec()),
+                            Some(b"group3".to_vec()),
+                            Some(b"group3".to_vec()),
+                            Some(b"group4".to_vec()),
+                            Some(b"group5".to_vec()),
+                        ].into()),
+                    ]),
+                    logical_rows: vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+                    warnings: EvalWarnings::default(),
+                    is_drained: Ok(BatchExecIsDrain::Drain),
+                }],
+            );
+
+            let config = Arc::new(EvalConfig::default());
+            let prefix_key_exp = 
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(1)
+                    .build_for_test();
+
+            let mut exec = BatchLimitExecutor::new_rank_limit(src_exec, limits[i], false, config, vec![prefix_key_exp]).unwrap();
+
+            let r = block_on(exec.next_batch(10));
+            assert_eq!(r.logical_rows, results[i]);
+            if limits[i] == 0 {
+                assert_eq!(r.physical_columns.rows_len(), 0);
+            } else {
+                assert_eq!(r.physical_columns.rows_len(), 10);
+            }
+            assert!(r.is_drained.unwrap().stop());
+            if limits[i] <= 10 {
+                assert_eq!(exec.remaining_rows, 0);
+            }
+            assert!(exec.executed_in_rank_limit_for_test);
+        }
+    }
+
+    #[test]
+    fn test_rank_limit_several_chunks() {
+        let limits = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 100];
+        let results = vec![
+            vec![],
+            vec![0],
+            vec![0, 1],
+            vec![0, 1, 0],
+            vec![0, 1, 0, 1, 2, 3],
+            vec![0, 1, 0, 1, 2, 3], // 5
+            vec![0, 1, 0, 1, 2, 3],
+            vec![0, 1, 0, 1, 2, 3, 4, 0, 1, 2, 0, 0],
+            vec![0, 1, 0, 1, 2, 3, 4, 0, 1, 2, 0, 0],
+            vec![0, 1, 0, 1, 2, 3, 4, 0, 1, 2, 0, 0],
+            vec![0, 1, 0, 1, 2, 3, 4, 0, 1, 2, 0, 0], // 10
+            vec![0, 1, 0, 1, 2, 3, 4, 0, 1, 2, 0, 0],
+            vec![0, 1, 0, 1, 2, 3, 4, 0, 1, 2, 0, 0],
+            vec![0, 1, 0, 1, 2, 3, 4, 0, 1, 2, 0, 0, 1, 2],
+            vec![0, 1, 0, 1, 2, 3, 4, 0, 1, 2, 0, 0, 1, 2],
+            vec![0, 1, 0, 1, 2, 3, 4, 0, 1, 2, 0, 0, 1, 2, 0], // 15
+            vec![0, 1, 0, 1, 2, 3, 4, 0, 1, 2, 0, 0, 1, 2, 0, 0, 1],
+            vec![0, 1, 0, 1, 2, 3, 4, 0, 1, 2, 0, 0, 1, 2, 0, 0, 1],
+            vec![0, 1, 0, 1, 2, 3, 4, 0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2],
+            vec![0, 1, 0, 1, 2, 3, 4, 0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2, 0, 1],
+            vec![0, 1, 0, 1, 2, 3, 4, 0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2, 0, 1], // 20
+            vec![0, 1, 0, 1, 2, 3, 4, 0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2, 0, 1],
+        ];
+
+        for i in 0..limits.len() {
+            let src_exec = MockExecutor::new(
+                vec![
+                    FieldTypeBuilder::new().tp(FieldTypeTp::VarString).collation(Collation::Binary).build(),
+                    FieldTypeBuilder::new().tp(FieldTypeTp::VarString).collation(Collation::Binary).build(),
+                ],
+                vec![
+                    BatchExecuteResult {
+                        physical_columns: LazyBatchColumnVec::from(vec![
+                            VectorValue::Bytes(vec![
+                                Some(b"val1".to_vec()),
+                                Some(b"val2".to_vec()),
+                            ].into()),
+                            VectorValue::Bytes(vec![
+                                Some(b"group1".to_vec()),
+                                Some(b"group2".to_vec()),
+                            ].into()),
+                        ]),
+                        logical_rows: vec![0, 1],
+                        warnings: EvalWarnings::default(),
+                        is_drained: Ok(BatchExecIsDrain::Remain),
+                    },
+                    BatchExecuteResult {
+                        physical_columns: LazyBatchColumnVec::from(vec![
+                            VectorValue::Bytes(vec![
+                                Some(b"val3".to_vec()),
+                                Some(b"val4".to_vec()),
+                                Some(b"val5".to_vec()),
+                                Some(b"val6".to_vec()),
+                                Some(b"val7".to_vec()),
+                            ].into()),
+                            VectorValue::Bytes(vec![
+                                Some(b"group3".to_vec()),
+                                Some(b"group4".to_vec()),
+                                Some(b"group4".to_vec()),
+                                Some(b"group4".to_vec()),
+                                Some(b"group5".to_vec()),
+                            ].into()),
+                        ]),
+                        logical_rows: vec![0, 1, 2, 3, 4],
+                        warnings: EvalWarnings::default(),
+                        is_drained: Ok(BatchExecIsDrain::Remain),
+                    },
+                    BatchExecuteResult {
+                        physical_columns: LazyBatchColumnVec::from(vec![
+                            VectorValue::Bytes(vec![
+                                Some(b"val8".to_vec()),
+                                Some(b"val9".to_vec()),
+                                Some(b"val10".to_vec()),
+                            ].into()),
+                            VectorValue::Bytes(vec![
+                                Some(b"group5".to_vec()),
+                                Some(b"group5".to_vec()),
+                                Some(b"group5".to_vec()),
+                            ].into()),
+                        ]),
+                        logical_rows: vec![0, 1, 2],
+                        warnings: EvalWarnings::default(),
+                        is_drained: Ok(BatchExecIsDrain::Remain),
+                    },
+                    BatchExecuteResult {
+                        physical_columns: LazyBatchColumnVec::from(vec![
+                            VectorValue::Bytes(vec![
+                                Some(b"val11".to_vec()),
+                            ].into()),
+                            VectorValue::Bytes(vec![
+                                Some(b"group5".to_vec()),
+                            ].into()),
+                        ]),
+                        logical_rows: vec![0],
+                        warnings: EvalWarnings::default(),
+                        is_drained: Ok(BatchExecIsDrain::Remain),
+                    },
+                    BatchExecuteResult {
+                        physical_columns: LazyBatchColumnVec::from(vec![
+                            VectorValue::Bytes(vec![
+                                Some(b"val12".to_vec()),
+                                Some(b"val13".to_vec()),
+                                Some(b"val14".to_vec()),
+                            ].into()),
+                            VectorValue::Bytes(vec![
+                                Some(b"group5".to_vec()),
+                                Some(b"group6".to_vec()),
+                                Some(b"group6".to_vec()),
+                            ].into()),
+                        ]),
+                        logical_rows: vec![0, 1, 2],
+                        warnings: EvalWarnings::default(),
+                        is_drained: Ok(BatchExecIsDrain::Remain),
+                    },
+                    BatchExecuteResult {
+                        physical_columns: LazyBatchColumnVec::from(vec![
+                            VectorValue::Bytes(vec![
+                                Some(b"val15".to_vec()),
+                            ].into()),
+                            VectorValue::Bytes(vec![
+                                Some(b"group7".to_vec()),
+                            ].into()),
+                        ]),
+                        logical_rows: vec![0],
+                        warnings: EvalWarnings::default(),
+                        is_drained: Ok(BatchExecIsDrain::Remain),
+                    },
+                    BatchExecuteResult {
+                        physical_columns: LazyBatchColumnVec::from(vec![
+                            VectorValue::Bytes(vec![
+                                Some(b"val16".to_vec()),
+                                Some(b"val17".to_vec()),
+                                Some(b"val18".to_vec()),
+                            ].into()),
+                            VectorValue::Bytes(vec![
+                                Some(b"group8".to_vec()),
+                                Some(b"group8".to_vec()),
+                                Some(b"group9".to_vec()),
+                            ].into()),
+                        ]),
+                        logical_rows: vec![0, 1, 2],
+                        warnings: EvalWarnings::default(),
+                        is_drained: Ok(BatchExecIsDrain::Remain),
+                    },
+                    BatchExecuteResult {
+                        physical_columns: LazyBatchColumnVec::from(vec![
+                            VectorValue::Bytes(vec![
+                                Some(b"val19".to_vec()),
+                                Some(b"val20".to_vec()),
+                            ].into()),
+                            VectorValue::Bytes(vec![
+                                Some(b"group10".to_vec()),
+                                Some(b"group10".to_vec()),
+                            ].into()),
+                        ]),
+                        logical_rows: vec![0, 1],
+                        warnings: EvalWarnings::default(),
+                        is_drained: Ok(BatchExecIsDrain::Drain),
+                    },
+                ],
+            );
+
+            let config = Arc::new(EvalConfig::default());
+            let prefix_key_exp = 
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(1)
+                    .build_for_test();
+            let mut exec = BatchLimitExecutor::new_rank_limit(src_exec, limits[i], false, config, vec![prefix_key_exp]).unwrap();
+
+            let mut actual_logical_rows: Vec<usize> = vec![];
+
+            loop {
+                let r = block_on(exec.next_batch(10));
+                actual_logical_rows.extend(r.logical_rows);
+                if r.is_drained.unwrap().stop() {
+                    break;
+                }
+            }
+
+            assert_eq!(results[i], actual_logical_rows);
+            assert!(exec.executed_in_rank_limit_for_test);
+        }
+    }
+
+    #[test]
+    fn test_rank_limit_with_ci_collation() {
+        let limits = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 100];
+        let results = vec![
+            vec![],
+            vec![0],
+            vec![0, 1],
+            vec![0, 1, 0],
+            vec![0, 1, 0, 1, 2, 3],
+            vec![0, 1, 0, 1, 2, 3], // 5
+            vec![0, 1, 0, 1, 2, 3],
+            vec![0, 1, 0, 1, 2, 3, 4, 0, 1, 2, 0, 0],
+            vec![0, 1, 0, 1, 2, 3, 4, 0, 1, 2, 0, 0],
+            vec![0, 1, 0, 1, 2, 3, 4, 0, 1, 2, 0, 0],
+            vec![0, 1, 0, 1, 2, 3, 4, 0, 1, 2, 0, 0], // 10
+            vec![0, 1, 0, 1, 2, 3, 4, 0, 1, 2, 0, 0],
+            vec![0, 1, 0, 1, 2, 3, 4, 0, 1, 2, 0, 0],
+            vec![0, 1, 0, 1, 2, 3, 4, 0, 1, 2, 0, 0, 1, 2],
+            vec![0, 1, 0, 1, 2, 3, 4, 0, 1, 2, 0, 0, 1, 2],
+            vec![0, 1, 0, 1, 2, 3, 4, 0, 1, 2, 0, 0, 1, 2, 0], // 15
+            vec![0, 1, 0, 1, 2, 3, 4, 0, 1, 2, 0, 0, 1, 2, 0, 0, 1],
+            vec![0, 1, 0, 1, 2, 3, 4, 0, 1, 2, 0, 0, 1, 2, 0, 0, 1],
+            vec![0, 1, 0, 1, 2, 3, 4, 0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2],
+            vec![0, 1, 0, 1, 2, 3, 4, 0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2, 0, 1],
+            vec![0, 1, 0, 1, 2, 3, 4, 0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2, 0, 1], // 20
+            vec![0, 1, 0, 1, 2, 3, 4, 0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2, 0, 1],
+        ];
+
+        for i in 0..limits.len() {
+            let src_exec = MockExecutor::new(
+                vec![
+                    FieldTypeBuilder::new().tp(FieldTypeTp::VarString).collation(Collation::Utf8Mb4GeneralCi).build(),
+                    FieldTypeBuilder::new().tp(FieldTypeTp::VarString).collation(Collation::Utf8Mb4GeneralCi).build(),
+                ],
+                    vec![
+                        BatchExecuteResult {
+                            physical_columns: LazyBatchColumnVec::from(vec![
+                                VectorValue::Bytes(vec![
+                                    Some(b"val1".to_vec()),
+                                    Some(b"val2".to_vec()),
+                                ].into()),
+                                VectorValue::Bytes(vec![
+                                    Some(b"group1".to_vec()),
+                                    Some(b"group2".to_vec()),
+                                ].into()),
+                            ]),
+                            logical_rows: vec![0, 1],
+                            warnings: EvalWarnings::default(),
+                            is_drained: Ok(BatchExecIsDrain::Remain),
+                        },
+                        BatchExecuteResult {
+                            physical_columns: LazyBatchColumnVec::from(vec![
+                                VectorValue::Bytes(vec![
+                                    Some(b"val3".to_vec()),
+                                    Some(b"val4".to_vec()),
+                                    Some(b"val5".to_vec()),
+                                    Some(b"val6".to_vec()),
+                                    Some(b"val7".to_vec()),
+                                ].into()),
+                                VectorValue::Bytes(vec![
+                                    Some(b"group3".to_vec()),
+                                    Some(b"group4".to_vec()),
+                                    Some(b"groUp4".to_vec()),
+                                    Some(b"gRoup4".to_vec()),
+                                    Some(b"group5".to_vec()),
+                                ].into()),
+                            ]),
+                            logical_rows: vec![0, 1, 2, 3, 4],
+                            warnings: EvalWarnings::default(),
+                            is_drained: Ok(BatchExecIsDrain::Remain),
+                        },
+                        BatchExecuteResult {
+                            physical_columns: LazyBatchColumnVec::from(vec![
+                                VectorValue::Bytes(vec![
+                                    Some(b"val8".to_vec()),
+                                    Some(b"val9".to_vec()),
+                                    Some(b"val10".to_vec()),
+                                ].into()),
+                                VectorValue::Bytes(vec![
+                                    Some(b"group5".to_vec()),
+                                    Some(b"groUP5".to_vec()),
+                                    Some(b"group5".to_vec()),
+                                ].into()),
+                            ]),
+                            logical_rows: vec![0, 1, 2],
+                            warnings: EvalWarnings::default(),
+                            is_drained: Ok(BatchExecIsDrain::Remain),
+                        },
+                        BatchExecuteResult {
+                            physical_columns: LazyBatchColumnVec::from(vec![
+                                VectorValue::Bytes(vec![
+                                    Some(b"val11".to_vec()),
+                                ].into()),
+                                VectorValue::Bytes(vec![
+                                    Some(b"gRoup5".to_vec()),
+                                ].into()),
+                            ]),
+                            logical_rows: vec![0],
+                            warnings: EvalWarnings::default(),
+                            is_drained: Ok(BatchExecIsDrain::Remain),
+                        },
+                        BatchExecuteResult {
+                            physical_columns: LazyBatchColumnVec::from(vec![
+                                VectorValue::Bytes(vec![
+                                    Some(b"val12".to_vec()),
+                                    Some(b"val13".to_vec()),
+                                    Some(b"val14".to_vec()),
+                                ].into()),
+                                VectorValue::Bytes(vec![
+                                    Some(b"group5".to_vec()),
+                                    Some(b"group6".to_vec()),
+                                    Some(b"GROUP6".to_vec()),
+                                ].into()),
+                            ]),
+                            logical_rows: vec![0, 1, 2],
+                            warnings: EvalWarnings::default(),
+                            is_drained: Ok(BatchExecIsDrain::Remain),
+                        },
+                        BatchExecuteResult {
+                            physical_columns: LazyBatchColumnVec::from(vec![
+                                VectorValue::Bytes(vec![
+                                    Some(b"val15".to_vec()),
+                                ].into()),
+                                VectorValue::Bytes(vec![
+                                    Some(b"grOup7".to_vec()),
+                                ].into()),
+                            ]),
+                            logical_rows: vec![0],
+                            warnings: EvalWarnings::default(),
+                            is_drained: Ok(BatchExecIsDrain::Remain),
+                        },
+                        BatchExecuteResult {
+                            physical_columns: LazyBatchColumnVec::from(vec![
+                                VectorValue::Bytes(vec![
+                                    Some(b"val16".to_vec()),
+                                    Some(b"val17".to_vec()),
+                                    Some(b"val18".to_vec()),
+                                ].into()),
+                                VectorValue::Bytes(vec![
+                                    Some(b"GROUP8".to_vec()),
+                                    Some(b"group8".to_vec()),
+                                    Some(b"group9".to_vec()),
+                                ].into()),
+                            ]),
+                            logical_rows: vec![0, 1, 2],
+                            warnings: EvalWarnings::default(),
+                            is_drained: Ok(BatchExecIsDrain::Remain),
+                        },
+                        BatchExecuteResult {
+                            physical_columns: LazyBatchColumnVec::from(vec![
+                                VectorValue::Bytes(vec![
+                                    Some(b"val19".to_vec()),
+                                    Some(b"val20".to_vec()),
+                                ].into()),
+                                VectorValue::Bytes(vec![
+                                    Some(b"gRoup10".to_vec()),
+                                    Some(b"grouP10".to_vec()),
+                                ].into()),
+                            ]),
+                            logical_rows: vec![0, 1],
+                            warnings: EvalWarnings::default(),
+                            is_drained: Ok(BatchExecIsDrain::Drain),
+                        },
+                    ],
+            );
+            
+            let config = Arc::new(EvalConfig::default());
+            let prefix_key_exp = 
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(1)
+                    .build_for_test();
+            let mut exec = BatchLimitExecutor::new_rank_limit(src_exec, limits[i], false, config, vec![prefix_key_exp]).unwrap();
+
+            let mut actual_logical_rows: Vec<usize> = vec![];
+
+            loop {
+                let r = block_on(exec.next_batch(10));
+                actual_logical_rows.extend(r.logical_rows);
+                if r.is_drained.unwrap().stop() {
+                    break;
+                }
+            }
+
+            assert_eq!(results[i], actual_logical_rows);
+            assert!(exec.executed_in_rank_limit_for_test);
+        }
     }
 }
