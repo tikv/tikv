@@ -31,7 +31,7 @@ use tikv::{
 use tikv_util::{
     config::ReadableDuration,
     memory::MemoryQuota,
-    worker::{LazyWorker, Runnable},
+    worker::{Builder, LazyWorker, Runnable},
     HandyRwLock,
 };
 use txn_types::TimeStamp;
@@ -185,11 +185,16 @@ impl TestSuiteBuilder {
             let memory_quota = Arc::new(MemoryQuota::new(memory_quota));
             let memory_quota_ = memory_quota.clone();
             let scheduler = worker.scheduler();
+            let pool = Arc::new(Builder::new("cdc-watchdog-test").thread_count(1).create());
             sim.pending_services
                 .entry(id)
                 .or_default()
                 .push(Box::new(move || {
-                    create_change_data(cdc::Service::new(scheduler.clone(), memory_quota_.clone()))
+                    create_change_data(cdc::Service::new(
+                        scheduler.clone(),
+                        memory_quota_.clone(),
+                        pool.clone(),
+                    ))
                 }));
             sim.txn_extra_schedulers.insert(
                 id,
@@ -654,10 +659,11 @@ impl TestSuite {
 
     pub fn must_wait_delegate_condition(
         &self,
+        node_id: u64,
         region_id: u64,
         cond: Arc<dyn Fn(Option<&Delegate>) -> bool + Sync + Send>,
     ) {
-        let scheduler = self.endpoints[&region_id].scheduler();
+        let scheduler = self.endpoints[&node_id].scheduler();
         let start = Instant::now();
         loop {
             sleep_ms(100);

@@ -29,7 +29,10 @@ use tikv_util::{
 use crate::store::{
     metrics::*,
     util::build_key_range,
-    worker::{split_config::get_sample_num, FlowStatistics, SplitConfig, SplitConfigManager},
+    worker::{
+        split_config::get_sample_num, FlowStatistics, SplitConfig, SplitConfigManager,
+        SplitValidator,
+    },
 };
 
 const DEFAULT_MAX_SAMPLE_LOOP_COUNT: usize = 10000;
@@ -760,6 +763,7 @@ impl AutoSplitController {
         read_stats_receiver: &Receiver<ReadStats>,
         cpu_stats_receiver: &Receiver<Arc<RawRecords>>,
         thread_stats: &mut ThreadInfoStatistics,
+        split_validator: &SplitValidator,
     ) -> (Vec<usize>, Vec<SplitInfo>) {
         let mut top_cpu_usage = vec![];
         let mut top_qps = BinaryHeap::with_capacity(TOP_N);
@@ -791,6 +795,9 @@ impl AutoSplitController {
         // Start to record the read stats info.
         let mut split_infos = vec![];
         for (region_id, region_infos) in region_infos_map {
+            if split_validator.is_disabled(region_id) {
+                continue;
+            }
             let qps_prefix_sum = prefix_sum(region_infos.iter(), RegionInfo::get_read_qps);
             // region_infos is not empty, so it's safe to unwrap here.
             let qps = *qps_prefix_sum.last().unwrap();
@@ -1330,6 +1337,7 @@ mod tests {
                 &read_stats_receiver,
                 &cpu_stats_receiver,
                 &mut ThreadInfoStatistics::default(),
+                &SplitValidator::new(),
             );
             if (i + 1) % hub.cfg.detect_times != 0 {
                 continue;
@@ -1369,6 +1377,7 @@ mod tests {
                 &read_stats_receiver,
                 &cpu_stats_receiver,
                 &mut ThreadInfoStatistics::default(),
+                &SplitValidator::new(),
             );
             if (i + 1) % hub.cfg.detect_times != 0 {
                 continue;
@@ -1461,6 +1470,7 @@ mod tests {
                 &read_stats_receiver,
                 &cpu_stats_receiver,
                 &mut ThreadInfoStatistics::default(),
+                &SplitValidator::new(),
             );
         }
 
@@ -1482,6 +1492,7 @@ mod tests {
             &read_stats_receiver,
             &cpu_stats_receiver,
             &mut ThreadInfoStatistics::default(),
+            &SplitValidator::new(),
         );
     }
 
@@ -2040,6 +2051,7 @@ mod tests {
                 &read_stats_receiver,
                 &cpu_stats_receiver,
                 &mut threads,
+                &SplitValidator::new(),
             );
         });
     }

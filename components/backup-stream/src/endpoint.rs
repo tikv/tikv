@@ -230,7 +230,7 @@ where
         let safepoint_name = self.pause_guard_id_for_task(task);
         let safepoint_ttl = self.pause_guard_duration();
         let code = err.error_code().code.to_owned();
-        let msg = err.to_string();
+        let msg = format!("[store = {}] {}", store_id, err);
         let t = task.to_owned();
         let f = async move {
             let err_fut = async {
@@ -254,12 +254,12 @@ where
                     }
                     _ => Err(err),
                 })?;
-                meta_cli.pause(&t).await?;
                 let mut last_error = StreamBackupError::new();
                 last_error.set_error_code(code);
                 last_error.set_error_message(msg.clone());
                 last_error.set_store_id(store_id);
                 last_error.set_happen_at(TimeStamp::physical_now());
+                meta_cli.pause_with_err(&t, last_error.clone()).await?;
                 meta_cli.report_last_error(&t, last_error).await?;
 
                 Result::Ok(())

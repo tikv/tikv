@@ -9,7 +9,7 @@ use std::{
 
 use futures::executor::block_on;
 use grpcio::EnvBuilder;
-use kvproto::metapb::*;
+use kvproto::{metapb::*, pdpb};
 use pd_client::{PdClientV2, RegionInfo, RpcClientV2};
 use security::{SecurityConfig, SecurityManager};
 use test_pd::{mocker::*, util::*, Server as MockServer};
@@ -64,7 +64,7 @@ fn test_pd_client_deadlock() {
         request!(client => get_region_info(b"")),
         request!(client => block_on(get_region_by_id(0))),
         request!(client => block_on(ask_split(Region::default()))),
-        request!(client => block_on(ask_batch_split(Region::default(), 1))),
+        request!(client => block_on(ask_batch_split(Region::default(), 1, pdpb::SplitReason::Admin))),
         request!(client => block_on(store_heartbeat(Default::default(), None, None))),
         request!(client => block_on(report_batch_split(vec![]))),
         request!(client => scatter_region(RegionInfo::new(Region::default(), None))),
@@ -222,7 +222,7 @@ fn test_retry() {
     test_retry_success(&mut client, |c| c.get_region_info(b""));
     test_retry_success(&mut client, |c| block_on(c.get_region_by_id(0)));
     test_retry_success(&mut client, |c| {
-        block_on(c.ask_batch_split(Region::default(), 1))
+        block_on(c.ask_batch_split(Region::default(), 1, pdpb::SplitReason::Admin))
     });
     test_retry_success(&mut client, |c| {
         block_on(c.store_heartbeat(Default::default(), None, None))

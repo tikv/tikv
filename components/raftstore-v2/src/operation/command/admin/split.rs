@@ -37,7 +37,7 @@ use futures::channel::oneshot;
 use kvproto::{
     kvrpcpb::DiskFullOpt,
     metapb::{self, Region, RegionEpoch},
-    pdpb::CheckPolicy,
+    pdpb::{CheckPolicy, SplitReason},
     raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, SplitRequest},
     raft_serverpb::{RaftMessage, RaftSnapshotData},
 };
@@ -409,7 +409,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             region.clone(),
             rhs.start_key,
             rhs.end_key,
-            false,
+            SplitReason::Admin,
             rhs.policy,
             split_check_bucket_ranges,
         );
