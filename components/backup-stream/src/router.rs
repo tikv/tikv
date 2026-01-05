@@ -1797,6 +1797,27 @@ impl MetadataInfo {
     }
 
     fn path_to_meta(&self, min_begin_ts: u64, flush_ts: u64) -> String {
+        if flush_ts == 0 {
+            // PD unreachable fallback:
+            // - use local physical timestamp
+            // - append store_id to avoid cross-store conflicts
+            // - extra suffix is safe because BR regex only matches 4 groups
+            let local_ts = TimeStamp::compose(TimeStamp::physical_now(), 0).into_inner();
+            warn!(
+                "log backup flush_ts is 0, fallback to local timestamp and append store_id";
+                "local_ts" => local_ts,
+                "store_id" => self.store_id,
+            );
+            return format!(
+                "v1/backupmeta/{:016X}-{:016X}-{:016X}-{:016X}-{:016X}.meta",
+                local_ts,
+                min_begin_ts,
+                self.min_ts.unwrap_or_default(),
+                self.max_ts.unwrap_or_default(),
+                self.store_id,
+            );
+        }
+
         format!(
             "v1/backupmeta/{:016X}-{:016X}-{:016X}-{:016X}.meta",
             flush_ts,
@@ -2334,6 +2355,95 @@ mod tests {
             "world".repeat(1024).as_bytes(),
         );
         events_builder.finish()
+    }
+
+    #[tokio::test]
+    async fn test_do_flush_fallback_when_pd_ts_is_zero() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let backend = external_storage::make_local_backend(tmp_dir.path());
+        let mut task_info = StreamBackupTaskInfo::default();
+        task_info.set_storage(backend);
+        let stream_task = StreamTask {
+            info: task_info,
+            is_paused: false,
+        };
+        let merged_file_size_limit = 0x10000;
+        let task_handler = StreamTaskHandler::new(
+            stream_task,
+            vec![(vec![], vec![])],
+            merged_file_size_limit,
+            make_tempfiles_cfg(tmp_dir.path()),
+            BackupEncryptionManager::default(),
+        )
+        .await
+        .unwrap();
+
+        // on_event
+        let region_count = merged_file_size_limit / (4 * 1024); // 2 merged log files
+        for i in 1..=region_count {
+            let kv_events = mock_build_large_kv_events(i as _, i as _, i as _);
+            task_handler.on_events(kv_events).await.unwrap();
+        }
+        // do_flush
+        task_handler.set_flushing_status(true);
+        let cx = FlushContext {
+            task_name: &task_handler.task.info.name,
+            store_id: 65536,
+            resolved_regions: &EMPTY_RESOLVE,
+            resolved_ts: TimeStamp::new(1),
+            // 0 still can be flushed
+            flush_ts: 0.into(),
+        };
+        task_handler.do_flush(cx).await.unwrap();
+        assert_eq!(task_handler.flush_failure_count(), 0);
+        assert_eq!(task_handler.files.read().await.is_empty(), true);
+        assert_eq!(task_handler.flushing_files.read().await.is_empty(), true);
+
+        // assert backup log files
+        verify_on_disk_file(tmp_dir.path(), 2, 1);
+
+        // ---- verify meta file format (fallback: 5 segments) ----
+        let meta_files: Vec<_> = walkdir::WalkDir::new(tmp_dir.path())
+            .into_iter()
+            .map(|e| e.expect("walkdir failed"))
+            .filter(|e| e.path().extension() == Some(OsStr::new("meta")))
+            .collect();
+
+        for entry in meta_files {
+            let filename = entry
+                .path()
+                .file_stem()
+                .and_then(OsStr::to_str)
+                .expect("meta file name should be valid utf-8");
+
+            // v1/backupmeta/{a}-{b}-{c}-{d}-{e}.meta
+            let parts: Vec<&str> = filename.split('-').collect();
+
+            assert_eq!(
+                parts.len(),
+                5,
+                "fallback meta file should have 5 hex segments, got {}: {:?}",
+                parts.len(),
+                parts,
+            );
+
+            for p in &parts {
+                assert!(
+                    u64::from_str_radix(p, 16).is_ok(),
+                    "meta segment '{}' is not a valid hex u64",
+                    p
+                );
+            }
+            let last = parts.last().expect("meta file should have store_id suffix");
+
+            let parsed_store_id =
+                u64::from_str_radix(last, 16).expect("store_id suffix should be valid hex u64");
+
+            assert_eq!(
+                parsed_store_id, cx.store_id,
+                "last meta segment should be store_id"
+            );
+        }
     }
 
     #[tokio::test]
