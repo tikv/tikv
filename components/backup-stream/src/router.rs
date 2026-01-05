@@ -52,6 +52,7 @@ use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 use tracing::instrument;
 use tracing_active_tree::frame;
 use txn_types::{Key, Lock, TimeStamp, WriteRef};
+use uuid::Uuid;
 
 use super::errors::Result;
 use crate::{
@@ -1413,7 +1414,8 @@ impl StreamTaskHandler {
         &self,
         metadata_info: MetadataInfo,
         flush_ts: TimeStamp,
-    ) -> Result<()> {
+    ) -> Result<Vec<String>> {
+        let mut meta_files = vec![];
         if !metadata_info.file_groups.is_empty() {
             let mut min_begin_ts = u64::MAX;
             for file_group in metadata_info.file_groups.as_slice() {
@@ -1435,8 +1437,9 @@ impl StreamTaskHandler {
                 )
                 .await
                 .context(format_args!("flush meta {:?}", meta_path))?;
+            meta_files.push(meta_path)
         }
-        Ok(())
+        Ok(meta_files)
     }
 
     /// get the total count of adjacent error.
@@ -1490,7 +1493,8 @@ impl StreamTaskHandler {
             // flush meta file to storage.
             self.fill_region_info(cx, &mut backup_metadata);
             // flush backup metadata to external storage.
-            self.flush_backup_metadata(backup_metadata, cx.flush_ts)
+            let meta_files = self
+                .flush_backup_metadata(backup_metadata, cx.flush_ts)
                 .await?;
             crate::metrics::FLUSH_DURATION
                 .with_label_values(&["save_files"])
@@ -1505,6 +1509,7 @@ impl StreamTaskHandler {
                 .iter()
                 .for_each(|(size, _)| crate::metrics::FLUSH_FILE_SIZE.observe(*size as _));
             info!("log backup flush done";
+                "meta_files" => ?meta_files,
                 "merged_files" => %file_size_vec.len(),    // the number of the merged files
                 "files" => %file_size_vec.iter().map(|(_, v)| v).sum::<usize>(),
                 "total_size" => %file_size_vec.iter().map(|(v, _)| v).sum::<u64>(), // the size of the merged files after compressed
@@ -1796,13 +1801,24 @@ impl MetadataInfo {
             .map_err(|err| Error::Other(box_err!("failed to marshal proto: {}", err)))
     }
 
-    fn path_to_meta(&self, min_begin_ts: u64, flush_ts: u64) -> String {
+    fn path_to_meta(&self, min_begin_ts: u64, mut flush_ts: u64) -> String {
+        // It is possible flush_ts be set to zero when PD is unavailable.
+        // In this scenario, a "tso" from local clock will be synthesised.
+        // A special suffix need to be appended to avoid file name collision.
+        let suffix = if flush_ts == 0 {
+            flush_ts = TimeStamp::compose(TimeStamp::physical_now(), 0).into_inner();
+            let uuid = Uuid::new_v4().as_u128();
+            format!("-SYNTHETIC{:X}", uuid)
+        } else {
+            String::new()
+        };
         format!(
-            "v1/backupmeta/{:016X}-{:016X}-{:016X}-{:016X}.meta",
+            "v1/backupmeta/{:016X}-{:016X}-{:016X}-{:016X}{}.meta",
             flush_ts,
             min_begin_ts,
             self.min_ts.unwrap_or_default(),
             self.max_ts.unwrap_or_default(),
+            suffix
         )
     }
 }
@@ -3336,5 +3352,36 @@ mod tests {
             kv_pairs.push((apply_event.key.clone(), apply_event.value.clone()));
         }
         kv_pairs
+    }
+
+    #[test]
+    fn test_path_to_meta() {
+        let mut meta = MetadataInfo::with_capacity(0);
+        meta.min_ts = Some(100);
+        meta.max_ts = Some(200);
+
+        // Case 1: Normal flush_ts
+        let path = meta.path_to_meta(50, 300);
+        assert_eq!(
+            path,
+            "v1/backupmeta/000000000000012C-0000000000000032-0000000000000064-00000000000000C8.meta"
+        );
+
+        // Case 2: flush_ts is 0
+        let path_synthetic = meta.path_to_meta(50, 0);
+        let another_path_synthetic = meta.path_to_meta(50, 0);
+        // synthetic path shouldn't be the same.
+        assert_ne!(another_path_synthetic, path_synthetic);
+
+        assert!(path_synthetic.contains("-SYNTHETIC"));
+        assert!(path_synthetic.starts_with("v1/backupmeta/"));
+        assert!(path_synthetic.ends_with(".meta"));
+
+        // Check that the timestamp part is not 0 anymore (it uses physical_now)
+        let parts: Vec<&str> = path_synthetic.split('/').collect();
+        let filename = parts.last().unwrap();
+        let ts_part = filename.split('-').next().unwrap();
+        let ts = u64::from_str_radix(ts_part, 16).unwrap();
+        assert_ne!(ts, 0);
     }
 }
