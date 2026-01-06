@@ -3376,19 +3376,14 @@ mod tests {
 
         // Verify the synthetic path format with regex
         let synthetic_pattern = regex::Regex::new(
-            r"^v1/backupmeta/[0-9A-F]{16}-[0-9A-F]{16}-[0-9A-F]{16}-[0-9A-F]{16}-SYNTHETIC[0-9A-F]+\.meta$"
+            r"^v1/backupmeta/([0-9A-F]{16})-[0-9A-F]{16}-[0-9A-F]{16}-[0-9A-F]{16}-SYNTHETIC[0-9A-F]+\.meta$"
         ).unwrap();
-        assert!(
-            synthetic_pattern.is_match(&path_synthetic),
-            "{}",
-            path_synthetic
-        );
+        let capture = synthetic_pattern
+            .captures(&path_synthetic)
+            .unwrap_or_else(|| panic!("non match: {}", path_synthetic));
 
         // Check that the timestamp part is not 0 anymore (it uses physical_now)
-        let parts: Vec<&str> = path_synthetic.split('/').collect();
-        let filename = parts.last().unwrap();
-        let ts_part = filename.split('-').next().unwrap();
-        let ts = u64::from_str_radix(ts_part, 16).unwrap();
+        let ts = u64::from_str_radix(capture.get(1).unwrap().as_str(), 16).unwrap();
         assert_ne!(ts, 0);
     }
 }
