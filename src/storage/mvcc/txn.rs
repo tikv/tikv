@@ -1339,7 +1339,12 @@ pub(crate) mod tests {
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true);
-        let lock = reader.load_lock(&Key::from_raw(b"key")).unwrap().unwrap();
+        let lock = reader
+            .load_lock(&Key::from_raw(b"key"))
+            .unwrap()
+            .unwrap()
+            .left()
+            .unwrap();
         assert_eq!(lock.ts, TimeStamp::new(2));
         assert_eq!(lock.use_async_commit, true);
         assert_eq!(
@@ -1398,7 +1403,12 @@ pub(crate) mod tests {
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true);
-        let lock = reader.load_lock(&Key::from_raw(b"key")).unwrap().unwrap();
+        let lock = reader
+            .load_lock(&Key::from_raw(b"key"))
+            .unwrap()
+            .unwrap()
+            .left()
+            .unwrap();
         assert_eq!(lock.ts, TimeStamp::new(2));
         assert_eq!(lock.use_async_commit, true);
         assert_eq!(

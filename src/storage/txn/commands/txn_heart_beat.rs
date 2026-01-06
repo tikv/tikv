@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
+use tikv_util::Either;
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
@@ -72,7 +73,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
         ));
 
         let lock = match reader.load_lock(&self.primary_key)? {
-            Some(mut lock) if lock.ts == self.start_ts => {
+            Some(Either::Left(mut lock)) if lock.ts == self.start_ts => {
                 let mut updated = false;
 
                 if lock.ttl < self.advise_ttl {
@@ -96,6 +97,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
                 }
 
                 lock
+            }
+            Some(Either::Right(_shared_locks)) => {
+                unimplemented!("SharedLocks returned from load_lock is not supported here")
             }
             _ => {
                 return Err(MvccError::from(MvccErrorInner::TxnNotFound {

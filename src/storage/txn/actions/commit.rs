@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
+use tikv_util::Either;
 use txn_types::{Key, TimeStamp, Write, WriteType};
 
 use crate::storage::{
@@ -22,7 +23,7 @@ pub fn commit<S: Snapshot>(
     ));
 
     let (mut lock, commit) = match reader.load_lock(&key)? {
-        Some(lock) if lock.ts == reader.start_ts => {
+        Some(Either::Left(lock)) if lock.ts == reader.start_ts => {
             // A lock with larger min_commit_ts than current commit_ts can't be committed
             if commit_ts < lock.min_commit_ts {
                 info!(
@@ -58,6 +59,9 @@ pub fn commit<S: Snapshot>(
             } else {
                 (lock, true)
             }
+        }
+        Some(Either::Right(_shared_locks)) => {
+            unimplemented!("SharedLocks returned from load_lock is not supported here")
         }
         _ => {
             return match reader.get_txn_commit_record(&key)?.info() {

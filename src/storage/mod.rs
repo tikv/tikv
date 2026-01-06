@@ -80,7 +80,7 @@ use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use engine_traits::{
     raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS, DATA_CFS_LEN,
 };
-use futures::{future::Either, prelude::*};
+use futures::{future::Either as FuturesEither, prelude::*};
 use kvproto::{
     kvrpcpb,
     kvrpcpb::{
@@ -100,6 +100,7 @@ use resource_metering::{
 };
 use tikv_kv::{OnAppliedCb, SnapshotExt};
 use tikv_util::{
+    Either,
     deadline::Deadline,
     future::try_poll,
     quota_limiter::QuotaLimiter,
@@ -1126,7 +1127,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                 let pair: Option<std::result::Result<KvPair, _>> =
                                     match reader.load_lock(&k) {
                                         Ok(None) => None,
-                                        Ok(Some(lock)) => {
+                                        Ok(Some(Either::Right(_))) => None,
+                                        Ok(Some(Either::Left(lock))) => {
                                             if matches!(lock.lock_type, LockType::Pessimistic) {
                                                 assert_ne!(lock.ts, start_ts);
                                             }
@@ -1140,6 +1142,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                                     LockType::Delete => Some(Ok((k.into_raw().unwrap(), vec![]))),
                                                     LockType::Lock => unreachable!("Unexpected LockType::Lock. pipelined-dml only supports optimistic transactions"),
                                                     LockType::Pessimistic => unreachable!("Unexpected LockType::Pessimistic. pipelined-dml only supports optimistic transactions"),
+                                                    LockType::Shared => unreachable!("Unexpected LockType::Shared. pipelined-dml only supports optimistic transactions"),
                                                     LockType::Put => {
                                                         match lock.short_value {
                                                             Some(v) => Some(Ok((k.into_raw().unwrap(), v))),
@@ -1521,8 +1524,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     let begin_instant = Instant::now();
                     concurrency_manager
                         .read_range_check(start_key.as_ref(), end_key.as_ref(), |key, lock| {
-                            Lock::check_ts_conflict(
-                                Cow::Borrowed(lock),
+                            txn_types::check_ts_conflict(
+                                Cow::Owned(tikv_util::Either::Left(lock.clone())),
                                 key,
                                 start_ts,
                                 &bypass_locks,
@@ -1704,7 +1707,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     start_key.as_ref(),
                     end_key.as_ref(),
                     |key, lock| {
-                        // `Lock::check_ts_conflict` can't be used here, because LockType::Lock
+                        // `txn_types::check_ts_conflict` can't be used here, because LockType::Lock
                         // can't be ignored in this case.
                         if lock.ts <= max_ts {
                             CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC
@@ -1753,6 +1756,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     let (read_locks, _) = read_res?;
                     let mut locks = Vec::with_capacity(read_locks.len());
                     for (key, lock) in read_locks.into_iter() {
+                        let lock = match lock {
+                            Either::Left(lock) => lock,
+                            Either::Right(_shared_locks) => unimplemented!(
+                                "SharedLocks returned from scan_locks is not supported here"
+                            ),
+                        };
                         let lock_info =
                             lock.into_lock_info(key.into_raw().map_err(txn::Error::from)?);
                         locks.push(lock_info);
@@ -3322,9 +3331,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         if let Err(busy_err) = self.read_pool.check_busy_threshold(busy_threshold) {
             let mut err = kvproto::errorpb::Error::default();
             err.set_server_is_busy(busy_err);
-            return Either::Left(future::err(Error::from(ErrorInner::Kv(err.into()))));
+            return FuturesEither::Left(future::err(Error::from(ErrorInner::Kv(err.into()))));
         }
-        Either::Right(
+        FuturesEither::Right(
             self.read_pool
                 .spawn_handle(future, priority, task_id, metadata, resource_limiter)
                 .map_err(|_| Error::from(ErrorInner::SchedTooBusy))
@@ -3445,8 +3454,8 @@ fn prepare_snap_ctx<'a>(
                 .read_key_check(key, |lock| {
                     // No need to check access_locks because they are committed which means they
                     // can't be in memory lock table.
-                    Lock::check_ts_conflict(
-                        Cow::Borrowed(lock),
+                    txn_types::check_ts_conflict(
+                        Cow::Owned(tikv_util::Either::Left(lock.clone())),
                         key,
                         start_ts,
                         bypass_locks,
