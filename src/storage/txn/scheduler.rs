@@ -1084,13 +1084,6 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 return;
             }
 
-            let ReleasedLock {
-                start_ts,
-                commit_ts,
-                key,
-                pessimistic,
-            } = released_lock;
-
             if let Some(f) = delay_future {
                 delay_wake_up_futures.push(f);
             }
@@ -1108,7 +1101,12 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 } else {
                     legacy_wake_up_list.push((
                         lock_wait_entry,
-                        ReleasedLock::new(start_ts, commit_ts, key.clone(), pessimistic),
+                        ReleasedLock::new(
+                            released_lock.start_ts,
+                            released_lock.commit_ts,
+                            released_lock.key.clone(),
+                            released_lock.pessimistic,
+                        ),
                     ));
                 }
             }
