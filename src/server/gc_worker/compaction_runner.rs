@@ -288,6 +288,11 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
                     break;
                 }
             };
+            // Reset MVCC read tracker if time window has elapsed
+            use crate::storage::mvcc::mvcc_read_tracker::MVCC_READ_TRACKER;
+            if let Some(tracker) = MVCC_READ_TRACKER.get() {
+                tracker.reset_if_needed();
+            }
 
             // Sleep for remaining time in check interval, or start next round immediately
             if elapsed < check_interval {
@@ -366,12 +371,6 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
             }
         }
 
-        // Reset MVCC read tracker if time window has elapsed
-        use crate::storage::mvcc::mvcc_read_tracker::MVCC_READ_TRACKER;
-        if let Some(tracker) = MVCC_READ_TRACKER.get() {
-            tracker.reset_if_needed();
-        }
-
         // Convert heap to sorted vector (highest score first)
         let candidates: Vec<CompactionCandidate> = candidates_heap
             .into_sorted_vec()
@@ -389,6 +388,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
                 "tikv_estimated_discardable" => candidate.num_discardable,
                 "rocksdb_tombstones" => candidate.num_tombstones,
                 "tikv_rows" => candidate.num_rows,
+                "mvcc_versions_scanned" => candidate.mvcc_versions_scanned
             );
         }
 
@@ -707,9 +707,10 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
             if num_tombstones < config.auto_compaction.tombstones_num_threshold
                 && ratio < config.auto_compaction.tombstones_percent_threshold as f64 / 100.0
             {
-                return 0.0;
+                0.0
+            } else {
+                num_tombstones as f64 * ratio
             }
-            num_tombstones as f64 * ratio
         } else {
             // When compaction filter is enabled, ignore tombstone threshold,
             // just add deletes to redundant keys for scoring.
@@ -717,9 +718,10 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
             if num_discardable < config.auto_compaction.redundant_rows_threshold
                 && ratio < config.auto_compaction.redundant_rows_percent_threshold as f64 / 100.0
             {
-                return 0.0;
+                0.0
+            } else {
+                num_discardable as f64 * ratio
             }
-            num_discardable as f64 * ratio
         };
 
         // If MVCC-read-aware compaction is disabled, return base score

@@ -12,9 +12,6 @@ use dashmap::DashMap;
 
 use crate::server::gc_worker::GcWorkerConfigManager;
 
-/// Default time window for MVCC read tracking (in seconds)
-const DEFAULT_MVCC_READ_WINDOW_SECS: u64 = 300; // same as compaction check interval
-
 /// Global MVCC read tracker instance
 pub static MVCC_READ_TRACKER: OnceLock<MvccReadTracker> = OnceLock::new();
 
@@ -30,8 +27,6 @@ pub struct RegionMvccReadStats {
     redundant_versions_scanned: AtomicU64,
     /// Total number of read requests (atomic for lock-free updates)
     total_requests: AtomicU64,
-    /// Timestamp (in seconds since epoch) of the last read
-    last_read_time_secs: AtomicU64,
 }
 
 impl RegionMvccReadStats {
@@ -39,7 +34,6 @@ impl RegionMvccReadStats {
         Self {
             redundant_versions_scanned: AtomicU64::new(0),
             total_requests: AtomicU64::new(0),
-            last_read_time_secs: AtomicU64::new(0),
         }
     }
 
@@ -60,11 +54,6 @@ impl RegionMvccReadStats {
     pub fn get_total_requests(&self) -> u64 {
         self.total_requests.load(Ordering::Relaxed)
     }
-
-    /// Get timestamp of last read (in seconds since epoch)
-    pub fn get_last_read_time_secs(&self) -> u64 {
-        self.last_read_time_secs.load(Ordering::Relaxed)
-    }
 }
 
 impl Default for RegionMvccReadStats {
@@ -79,8 +68,6 @@ impl Default for RegionMvccReadStats {
 pub struct MvccReadTracker {
     /// Lock-free concurrent map from region_id to read statistics
     stats: Arc<DashMap<u64, RegionMvccReadStats>>,
-    /// Time window in seconds
-    window_secs: u64,
     /// Timestamp (in seconds since epoch) when stats were last reset
     reset_time_secs: Arc<AtomicU64>,
     /// Config tracker for accessing mvcc_scan_threshold
@@ -89,10 +76,6 @@ pub struct MvccReadTracker {
 
 impl MvccReadTracker {
     pub fn new(cfg_tracker: GcWorkerConfigManager) -> Self {
-        Self::with_window_secs(DEFAULT_MVCC_READ_WINDOW_SECS, cfg_tracker)
-    }
-
-    pub fn with_window_secs(window_secs: u64, cfg_tracker: GcWorkerConfigManager) -> Self {
         let now_secs = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -100,13 +83,12 @@ impl MvccReadTracker {
 
         Self {
             stats: Arc::new(DashMap::new()),
-            window_secs,
             reset_time_secs: Arc::new(AtomicU64::new(now_secs)),
             cfg_tracker,
         }
     }
 
-    /// Reset stats if the time window has elapsed
+    /// Reset stats unconditionally
     /// Should be called periodically by the compaction runner
     pub fn reset_if_needed(&self) {
         let now_secs = SystemTime::now()
@@ -114,17 +96,11 @@ impl MvccReadTracker {
             .unwrap()
             .as_secs();
 
-        let last_reset_secs = self.reset_time_secs.load(Ordering::Relaxed);
-        let elapsed_secs = now_secs.saturating_sub(last_reset_secs);
+        // Clear all stats (reset the window)
+        self.stats.clear();
 
-        // If window has elapsed, reset the stats
-        if elapsed_secs >= self.window_secs {
-            // Clear all stats (reset the window)
-            self.stats.clear();
-
-            // Update reset time
-            self.reset_time_secs.store(now_secs, Ordering::Relaxed);
-        }
+        // Update reset time
+        self.reset_time_secs.store(now_secs, Ordering::Relaxed);
     }
 
     /// Record a read operation for a region
@@ -151,10 +127,8 @@ impl MvccReadTracker {
         self.stats
             .get(&region_id)
             .map(|stats| {
-                // Read and reset counters atomically
-                let total_versions = stats.redundant_versions_scanned.swap(0, Ordering::Relaxed);
-                let _total_requests = stats.total_requests.swap(0, Ordering::Relaxed);
-                let last_read_time_secs = stats.last_read_time_secs.swap(0, Ordering::Relaxed);
+                // Read counters without resetting
+                let total_versions = stats.redundant_versions_scanned.load(Ordering::Relaxed);
 
                 if total_versions == 0 {
                     return 0;
@@ -166,22 +140,13 @@ impl MvccReadTracker {
                     .unwrap()
                     .as_secs();
 
-                // Calculate elapsed time
-                let start_time_secs = if last_read_time_secs == 0 {
-                    // No previous read, use reset time
-                    self.reset_time_secs.load(Ordering::Relaxed)
-                } else {
-                    last_read_time_secs
-                };
-
+                // Calculate elapsed time since last reset
+                let start_time_secs = self.reset_time_secs.load(Ordering::Relaxed);
                 let elapsed_secs = now_secs.saturating_sub(start_time_secs);
 
                 if elapsed_secs == 0 {
                     return 0;
                 }
-
-                // Store current time as last read time for next calculation
-                stats.last_read_time_secs.store(now_secs, Ordering::Relaxed);
 
                 // Calculate throughput: total_mvcc_versions / elapsed_time
                 // This naturally combines:
@@ -239,7 +204,7 @@ mod tests {
     fn test_mvcc_read_tracker() {
         // Use threshold of 0 so all reads are recorded
         let cfg_manager = create_test_config_manager_with_threshold(0);
-        let tracker = MvccReadTracker::with_window_secs(600, cfg_manager);
+        let tracker = MvccReadTracker::new(cfg_manager);
         tracker.clear();
 
         // Record reads for multiple regions
@@ -264,9 +229,13 @@ mod tests {
         assert!((900..=1100).contains(&rate1), "rate1 = {}", rate1);
         assert!((400..=600).contains(&rate2), "rate2 = {}", rate2);
 
-        // After get_mvcc_versions_scanned, counters are reset
-        // So next call should return 0 (no new data)
-        assert_eq!(tracker.get_mvcc_versions_scanned(region1), 0);
+        // Counters are not reset anymore, so same values should be returned
+        let rate1_again = tracker.get_mvcc_versions_scanned(region1);
+        assert!(
+            (900..=1100).contains(&rate1_again),
+            "rate1_again = {}",
+            rate1_again
+        );
 
         // Non-existent region
         assert_eq!(tracker.get_mvcc_versions_scanned(9999), 0);
@@ -276,7 +245,7 @@ mod tests {
     fn test_accumulation() {
         // Use threshold of 0 so all reads are recorded
         let cfg_manager = create_test_config_manager_with_threshold(0);
-        let tracker = MvccReadTracker::with_window_secs(10, cfg_manager);
+        let tracker = MvccReadTracker::new(cfg_manager);
         tracker.clear();
 
         let region = 2001;
@@ -302,27 +271,27 @@ mod tests {
         let rate = tracker.get_mvcc_versions_scanned(region);
         assert!((225..=275).contains(&rate), "rate = {}", rate);
 
-        // After reading, counters should be reset
+        // Counters are not reset anymore, so values should remain
         {
             let stats = tracker.stats.get(&region).unwrap();
-            assert_eq!(stats.get_total_mvcc_versions(), 0);
-            assert_eq!(stats.get_total_requests(), 0);
+            assert_eq!(stats.get_total_mvcc_versions(), 500);
+            assert_eq!(stats.get_total_requests(), 4);
         }
 
-        // Test rate calculation uses last_read_time_secs for subsequent reads
+        // Add more reads
         tracker.record_read(region, 100); // 100 total versions
         thread::sleep(Duration::from_secs(1));
 
-        // Throughput = 100 versions / 1 sec = 100 versions/sec
+        // Now we have 600 versions total over ~3 secs = ~200 versions/sec
         let rate2 = tracker.get_mvcc_versions_scanned(region);
-        assert!((80..=120).contains(&rate2), "rate2 = {}", rate2);
+        assert!((150..=250).contains(&rate2), "rate2 = {}", rate2);
     }
 
     #[test]
     fn test_clear_stats() {
         // Use threshold of 0 so all reads are recorded
         let cfg_manager = create_test_config_manager_with_threshold(0);
-        let tracker = MvccReadTracker::with_window_secs(600, cfg_manager);
+        let tracker = MvccReadTracker::new(cfg_manager);
         tracker.clear();
 
         tracker.record_read(1, 100);
@@ -338,7 +307,7 @@ mod tests {
     fn test_threshold_filtering() {
         // Use threshold of 500 - only reads above this should be recorded
         let cfg_manager = create_test_config_manager_with_threshold(500);
-        let tracker = MvccReadTracker::with_window_secs(600, cfg_manager);
+        let tracker = MvccReadTracker::new(cfg_manager);
         tracker.clear();
 
         let region = 3001;
