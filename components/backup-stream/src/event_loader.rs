@@ -16,7 +16,7 @@ use tikv::storage::{
     txn::{TxnEntry, TxnEntryScanner},
 };
 use tikv_util::{
-    box_err,
+    Either, box_err,
     memory::{MemoryQuota, OwnedAllocated},
     time::{Instant, Limiter},
     worker::Scheduler,
@@ -24,7 +24,7 @@ use tikv_util::{
 use tokio::sync::Semaphore;
 use tracing::instrument;
 use tracing_active_tree::frame;
-use txn_types::{Key, Lock, TimeStamp};
+use txn_types::{Key, TimeStamp};
 
 use crate::{
     Task, annotate, debug,
@@ -150,20 +150,25 @@ impl<S: Snapshot> EventLoader<S> {
                             cmd_type: CmdType::Put,
                         });
                     }
-                    let lock = Lock::parse(&lock_value).map_err(|err| {
-                        annotate!(
-                            err,
-                            "BUG?: failed to parse ts from lock; key = {}",
-                            utils::redact(&lock_at)
-                        )
-                    })?;
-                    debug!("meet lock during initial scanning."; "key" => %utils::redact(&lock_at), "ts" => %lock.ts);
-                    if utils::should_track_lock(&lock) {
-                        resolver
-                            .track_phase_one_lock(lock.ts, lock_at, lock.generation)
-                            .map_err(|_| Error::OutOfQuota {
-                                region_id: self.region.id,
-                            })?;
+                    let lock_or_shared_locks =
+                        txn_types::parse_lock(&lock_value).map_err(|err| {
+                            annotate!(
+                                err,
+                                "BUG?: failed to parse ts from lock; key = {}",
+                                utils::redact(&lock_at)
+                            )
+                        })?;
+                    if let Either::Left(lock) = lock_or_shared_locks {
+                        debug!("meet lock during initial scanning."; "key" => %utils::redact(&lock_at), "ts" => %lock.ts);
+                        if utils::should_track_lock(&lock) {
+                            resolver
+                                .track_phase_one_lock(lock.ts, lock_at, lock.generation)
+                                .map_err(|_| Error::OutOfQuota {
+                                    region_id: self.region.id,
+                                })?;
+                        }
+                    } else {
+                        debug!("meet shared locks during initial scanning."; "key" => %utils::redact(&lock_at));
                     }
                 }
                 TxnEntry::Commit { default, write, .. } => {

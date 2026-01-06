@@ -51,7 +51,7 @@ use tokio::{
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 use tracing::instrument;
 use tracing_active_tree::frame;
-use txn_types::{Key, Lock, TimeStamp, WriteRef};
+use txn_types::{Key, TimeStamp, WriteRef};
 
 use super::errors::Result;
 use crate::{
@@ -203,18 +203,20 @@ impl ApplyEvents {
             if cf == CF_LOCK {
                 match cmd_type {
                     CmdType::Put => {
-                        match Lock::parse(&value).map_err(|err| {
+                        match txn_types::parse_lock(&value).map_err(|err| {
                             annotate!(
                                 err,
                                 "failed to parse lock (value = {})",
                                 utils::redact(&value)
                             )
                         }) {
-                            Ok(lock) => {
-                                if utils::should_track_lock(&lock) {
-                                    resolver
-                                        .track_lock(lock.ts, key, lock.generation)
-                                        .map_err(|_| Error::OutOfQuota { region_id })?;
+                            Ok(lock_or_shared_locks) => {
+                                if let Either::Left(lock) = lock_or_shared_locks {
+                                    if utils::should_track_lock(&lock) {
+                                        resolver
+                                            .track_lock(lock.ts, key, lock.generation)
+                                            .map_err(|_| Error::OutOfQuota { region_id })?;
+                                    }
                                 }
                             }
                             Err(err) => err.report(format!("region id = {}", region_id)),
