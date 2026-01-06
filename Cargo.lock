@@ -929,6 +929,7 @@ dependencies = [
  "raft",
  "raftstore",
  "rand 0.8.5",
+ "regex",
  "resolved_ts",
  "serde",
  "serde_json",
