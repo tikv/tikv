@@ -35,7 +35,7 @@ command! {
         }
         content => {
             /// The set of keys to lock.
-            /// /// (Key, bool, bool) means (key, should_not_exist, is_shared_lock)
+            /// (Key, bool, bool) means (key, should_not_exist, is_shared_lock)
             keys: Vec<(Key, bool, bool)>,
             /// The primary lock. Secondary locks (from `keys`) will refer to the primary lock.
             primary: Vec<u8>,
