@@ -656,7 +656,7 @@ impl Lock {
 
 #[derive(PartialEq, Clone, Debug, Default)]
 pub struct SharedLocks {
-    pub txn_info_segments: HashMap<TimeStamp, Either<Vec<u8>, Lock>>,
+    txn_info_segments: HashMap<TimeStamp, Either<Vec<u8>, Lock>>,
 }
 
 impl SharedLocks {
@@ -707,10 +707,32 @@ impl SharedLocks {
         self.txn_info_segments.len()
     }
 
+    // Decode all shared-lock segments so tests can rely on parsed locks.
+    #[cfg(test)]
+    pub fn parse_all(&mut self) {
+        for (_ts, either) in self.txn_info_segments.iter_mut() {
+            if let Either::Left(encoded) = either {
+                let lock = Lock::parse(encoded).expect("failed to parse shared lock txn info");
+                *either = Either::Right(lock);
+            }
+        }
+    }
+
+    #[inline]
+    #[must_use]
+    pub fn shared_lock_num(&self) -> usize {
+        self.len()
+    }
+
     #[inline]
     #[must_use]
     pub fn contains_start_ts(&self, start_ts: TimeStamp) -> bool {
         self.txn_info_segments.contains_key(&start_ts)
+    }
+
+    #[inline]
+    pub fn iter_ts(&self) -> impl Iterator<Item = &TimeStamp> {
+        self.txn_info_segments.keys()
     }
 
     /// Returns the shared lock for `ts`, if any.
@@ -734,23 +756,6 @@ impl SharedLocks {
         } else {
             None
         }
-    }
-
-    // Decode all shared-lock segments so tests can rely on parsed locks.
-    #[cfg(test)]
-    pub fn parse_all(&mut self) {
-        for (_ts, either) in self.txn_info_segments.iter_mut() {
-            if let Either::Left(encoded) = either {
-                let lock = Lock::parse(encoded).expect("failed to parse shared lock txn info");
-                *either = Either::Right(lock);
-            }
-        }
-    }
-
-    #[inline]
-    #[must_use]
-    pub fn shared_lock_num(&self) -> usize {
-        self.len()
     }
 
     fn put_lock(&mut self, ts: TimeStamp, lock: Lock) -> Option<Lock> {

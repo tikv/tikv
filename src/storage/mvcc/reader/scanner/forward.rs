@@ -763,10 +763,7 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
                 result
             }
             Either::Right(shared_locks) => {
-                let should_output = shared_locks
-                    .txn_info_segments
-                    .keys()
-                    .any(|start_ts| *start_ts <= cfg.ts);
+                let should_output = shared_locks.iter_ts().any(|start_ts| *start_ts <= cfg.ts);
                 cursors.lock.as_mut().unwrap().next(&mut statistics.lock);
                 Ok(if should_output {
                     HandleRes::Return(TxnEntry::Prewrite {
