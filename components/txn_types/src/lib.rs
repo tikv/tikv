@@ -10,7 +10,10 @@ use std::io;
 
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::kvrpcpb;
-pub use lock::{Lock, LockType, PessimisticLock, TxnLockRef};
+pub use lock::{
+    Lock, LockOrSharedLocks, LockType, PessimisticLock, TxnLockRef, check_ts_conflict,
+    check_ts_conflict_for_replica_read, decode_lock_start_ts, decode_lock_type, parse_lock,
+};
 use thiserror::Error;
 pub use timestamp::{TSO_PHYSICAL_SHIFT_BITS, TimeStamp, TsSet};
 pub use types::{

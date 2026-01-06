@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
+use tikv_util::Either;
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
@@ -113,7 +114,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
         ));
 
         let (txn_status, released) = match reader.load_lock(&self.primary_key)? {
-            Some(lock) if lock.ts == self.lock_ts => check_txn_status_lock_exists(
+            Some(Either::Left(lock)) if lock.ts == self.lock_ts => check_txn_status_lock_exists(
                 &mut txn,
                 &mut reader,
                 self.primary_key,
@@ -125,12 +126,20 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
                 self.verify_is_primary,
                 self.rollback_if_not_exist,
             )?,
+            Some(Either::Right(_shared_locks)) => {
+                unimplemented!("SharedLocks returned from load_lock is not supported here")
+            }
             l => (
                 check_txn_status_missing_lock(
                     &mut txn,
                     &mut reader,
                     self.primary_key,
-                    l,
+                    l.map(|lock| match lock {
+                        Either::Left(lock) => lock,
+                        Either::Right(_shared_locks) => unimplemented!(
+                            "SharedLocks returned from load_lock is not supported here"
+                        ),
+                    }),
                     MissingLockAction::rollback(self.rollback_if_not_exist),
                     self.resolving_pessimistic_lock,
                 )?,
