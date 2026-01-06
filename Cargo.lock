@@ -907,6 +907,7 @@ dependencies = [
  "raft",
  "raftstore",
  "rand 0.8.5",
+ "regex",
  "resolved_ts",
  "slog",
  "slog-global",
