@@ -3369,9 +3369,15 @@ mod tests {
         // synthetic paths should be unique due to different UUIDs
         assert_ne!(another_path_synthetic, path_synthetic);
 
-        assert!(path_synthetic.contains("-SYNTHETIC"));
-        assert!(path_synthetic.starts_with("v1/backupmeta/"));
-        assert!(path_synthetic.ends_with(".meta"));
+        // Verify the synthetic path format with regex
+        let synthetic_pattern = regex::Regex::new(
+            r"^v1/backupmeta/[0-9A-F]{16}-[0-9A-F]{16}-[0-9A-F]{16}-[0-9A-F]{16}-SYNTHETIC[0-9A-F]+\.meta$"
+        ).unwrap();
+        assert!(
+            synthetic_pattern.is_match(&path_synthetic),
+            "{}",
+            path_synthetic
+        );
 
         // Check that the timestamp part is not 0 anymore (it uses physical_now)
         let parts: Vec<&str> = path_synthetic.split('/').collect();
