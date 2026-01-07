@@ -274,7 +274,9 @@ impl CheckpointManager {
         e.and_modify(|old_cp| {
             let old_ver = old_cp.region.get_region_epoch().get_version();
             let checkpoint_is_newer = old_cp.checkpoint < checkpoint;
-            if !checkpoint_is_newer {
+            // Shouldn't log when checkpoint is the same or it can be really verbose when
+            // checkpoint stuck due to pending txn...
+            if !checkpoint_is_newer && old_cp.checkpoint != checkpoint {
                 warn!("received older checkpoint, maybe region merge.";
                     "region_id" => old_cp.region.get_id(),
                     "old_ver" => old_ver,
