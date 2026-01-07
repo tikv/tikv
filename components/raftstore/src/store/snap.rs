@@ -569,7 +569,7 @@ impl Snapshot {
         s.mgr.limiter = Limiter::new(f64::INFINITY);
 
         if !s.exists() {
-            // Skip the initialization below if it doesn't exists.
+            // Skip the initialization below if it doesn't exist.
             return Ok(s);
         }
         for cf_file in &mut s.cf_files {
@@ -1981,7 +1981,7 @@ impl SnapManagerCore {
         Ok(total_size)
     }
 
-    // Return true if it successfully delete the specified snapshot.
+    // Return true if it successfully deletes the specified snapshot.
     fn delete_snapshot(&self, key: &SnapKey, snap: &Snapshot, check_entry: bool) -> bool {
         let registry = self.registry.rl();
         if check_entry {

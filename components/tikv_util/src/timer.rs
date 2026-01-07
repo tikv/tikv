@@ -19,6 +19,7 @@ use tokio_timer::{
 
 use crate::{
     sys::thread::StdThreadBuildWrapper,
+    thread_name_prefix::{STEADY_TIMER_THREAD, TIMER_THREAD},
     time::{Instant, monotonic_raw_now},
 };
 
@@ -100,7 +101,7 @@ impl Now for SystemClock {
 }
 
 lazy_static! {
-    pub static ref GLOBAL_TIMER_HANDLE: Handle = start_timer_thread("timer", SystemClock);
+    pub static ref GLOBAL_TIMER_HANDLE: Handle = start_timer_thread(TIMER_THREAD, SystemClock);
 }
 
 /// A struct that marks the *zero* time.
@@ -185,7 +186,7 @@ impl Default for SteadyTimer {
 
 fn start_global_steady_timer() -> SteadyTimer {
     let clock = SteadyClock::default();
-    let handle = start_timer_thread("steady-timer", clock.clone());
+    let handle = start_timer_thread(STEADY_TIMER_THREAD, clock.clone());
     SteadyTimer { clock, handle }
 }
 
@@ -269,6 +270,7 @@ mod tests {
     use futures::{compat::Future01CompatExt, executor::block_on};
 
     use super::*;
+    use crate::thread_name_prefix::TIMER_THREAD;
 
     #[derive(Debug, PartialEq, Copy, Clone)]
     enum Task {
@@ -345,7 +347,7 @@ mod tests {
         let clock = BadClock {
             backward: AtomicBool::new(false),
         };
-        let handle = start_timer_thread("timer", clock);
+        let handle = start_timer_thread(TIMER_THREAD, clock);
 
         for i in 0..100 {
             let deadline = if i % 2 == 0 {

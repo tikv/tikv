@@ -1,9 +1,8 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use kvproto::kvrpcpb::IsolationLevel;
-use txn_types::{
-    Key, KvPair, LastChange, Lock, OldValue, TimeStamp, TsSet, Value, ValueEntry, WriteRef,
-};
+use tikv_util::Either;
+use txn_types::{Key, KvPair, LastChange, OldValue, TimeStamp, TsSet, Value, ValueEntry, WriteRef};
 
 use super::{Error, ErrorInner, Result};
 use crate::storage::{
@@ -208,7 +207,12 @@ impl TxnEntry {
             TxnEntry::Prewrite {
                 lock: (_, value), ..
             } => {
-                let l = Lock::parse(value).unwrap();
+                let l = match txn_types::parse_lock(value).unwrap() {
+                    Either::Left(lock) => lock,
+                    Either::Right(_shared_locks) => unimplemented!(
+                        "SharedLocks returned from txn_types::parse_lock is not supported here"
+                    ),
+                };
                 *value = l.set_last_change(LastChange::Unknown).to_bytes();
             }
             TxnEntry::Commit {
