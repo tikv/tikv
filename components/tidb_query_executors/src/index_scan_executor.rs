@@ -433,6 +433,9 @@ impl IndexScanExecutorImpl {
     #[inline]
     fn decode_int_handle_from_key(&self, key: &[u8]) -> Result<i64> {
         let mut val = key;
+        if val.is_empty() {
+            return Err(other_err!("Key is empty, cannot decode handle"));
+        }
         let first_flag = val[0];
         val = &val[1..];
 
@@ -3754,6 +3757,32 @@ mod tests {
         key.push(0xFF); // invalid handle flag
         key.write_i64(111).unwrap();
         assert!(idx_exe.decode_int_handle_from_key(&key).is_err());
+
+        // Test error: empty key
+        let key = vec![];
+        assert!(idx_exe.decode_int_handle_from_key(&key).is_err());
+
+        // Test error: INT_FLAG with insufficient data (only 1 byte instead of 8)
+        let key = vec![datum::INT_FLAG, 0x01];
+        assert!(idx_exe.decode_int_handle_from_key(&key).is_err());
+
+        // Test error: UINT_FLAG with insufficient data (only 1 byte instead of 8)
+        let key = vec![datum::UINT_FLAG, 0x01];
+        assert!(idx_exe.decode_int_handle_from_key(&key).is_err());
+
+        // Test error: partition flag with INT_FLAG but insufficient handle data
+        let mut key = vec![table::INDEX_VALUE_PARTITION_ID_FLAG];
+        key.write_i64(500).unwrap(); // partition id
+        key.push(datum::INT_FLAG);
+        key.push(0x01); // only 1 byte instead of 8
+        assert!(idx_exe.decode_int_handle_from_key(&key).is_err());
+
+        // Test error: partition flag with UINT_FLAG but insufficient handle data
+        let mut key = vec![table::INDEX_VALUE_PARTITION_ID_FLAG];
+        key.write_i64(600).unwrap(); // partition id
+        key.push(datum::UINT_FLAG);
+        key.push(0x01); // only 1 byte instead of 8
+        assert!(idx_exe.decode_int_handle_from_key(&key).is_err());
     }
 
     #[test]
@@ -3763,10 +3792,10 @@ mod tests {
         // 1. Partition ID in key doesn't break handle decoding
         // 2. Partition ID from value is still extracted correctly
         // 3. All columns are output correctly
+        // 4. Edge cases: zero and negative partition IDs work correctly
 
         const TABLE_ID: i64 = 100;
         const INDEX_ID: i64 = 5;
-        const PARTITION_ID: i64 = 42;
 
         // Column definitions: indexed column, handle, partition ID
         let columns_info = vec![
@@ -3797,126 +3826,33 @@ mod tests {
             FieldTypeTp::LongLong.into(), // partition id
         ];
 
-        // Build index key with V1 format:
-        // [table_prefix][index_id][indexed_col][PARTITION_ID_FLAG][partition_id][handle]
-        let indexed_value = 999i64;
-        let handle_value = 123i64;
+        // Test with multiple partition IDs including edge cases
+        for (partition_id, indexed_value, handle_value, test_name) in [
+            (42i64, 999i64, 123i64, "normal partition ID"),
+            (0i64, 100i64, 1i64, "zero partition ID"),
+            (-1i64, 200i64, 2i64, "negative partition ID"),
+        ] {
+            // Build index key with V1 format:
+            // [table_prefix][index_id][indexed_col][PARTITION_ID_FLAG][partition_id][handle]
 
-        // Encode indexed column
-        let mut index_key_data = datum::encode_key(&mut EvalContext::default(), &[Datum::I64(indexed_value)]).unwrap();
-        // Add partition ID prefix (V1 format - new location)
-        index_key_data.push(table::INDEX_VALUE_PARTITION_ID_FLAG);
-        index_key_data.write_i64(PARTITION_ID).unwrap();
-        // Add handle
-        let handle_data = datum::encode_key(&mut EvalContext::default(), &[Datum::I64(handle_value)]).unwrap();
-        index_key_data.extend(handle_data);
-
-        let key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &index_key_data);
-
-        // Build index value with partition ID (V1 still has it in value too - old location)
-        let mut value = vec![0u8]; // tail_len = 0 (no tail data)
-
-        // Add partition ID to value
-        value.push(table::INDEX_VALUE_PARTITION_ID_FLAG);
-        let mut pid_bytes = vec![0u8; 8];
-        NumberCodec::encode_i64(&mut pid_bytes, PARTITION_ID);
-        value.extend(&pid_bytes);
-
-        let key_ranges = vec![{
-            let mut range = KeyRange::default();
-            range.set_start(key.clone());
-            range.set_end(key.clone());
-            convert_to_prefix_next(range.mut_end());
-            range
-        }];
-
-        let store = FixtureStorage::from(vec![(key, value)]);
-        let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
-            store,
-            Arc::new(EvalConfig::default()),
-            columns_info,
-            key_ranges,
-            0, // primary_column_ids_len = 0 (non-clustered table, int handle)
-            false,
-            false,
-            false,
-            false,
-        )
-        .unwrap();
-
-        let mut result = block_on(executor.next_batch(10));
-        assert!(result.is_drained.as_ref().unwrap().stop());
-        assert_eq!(result.physical_columns.columns_len(), 3);
-        assert_eq!(result.physical_columns.rows_len(), 1);
-
-        // Verify indexed column
-        result.physical_columns[0]
-            .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[0])
-            .unwrap();
-        assert_eq!(
-            result.physical_columns[0].decoded().to_int_vec(),
-            &[Some(indexed_value)],
-            "Indexed column value mismatch"
-        );
-
-        // Verify handle (decoded from key, skipping partition ID)
-        assert_eq!(
-            result.physical_columns[1].decoded().to_int_vec(),
-            &[Some(handle_value)],
-            "Handle value mismatch - partition ID in key should be skipped"
-        );
-
-        // Verify partition ID (extracted from VALUE in V1)
-        assert_eq!(
-            result.physical_columns[2].decoded().to_int_vec(),
-            &[Some(PARTITION_ID)],
-            "Partition ID mismatch - should be extracted from value"
-        );
-    }
-
-    #[test]
-    fn test_v1_edge_cases() {
-        // Test edge cases for V1 format
-
-        const TABLE_ID: i64 = 100;
-        const INDEX_ID: i64 = 5;
-
-        // Test case 1: Zero partition ID
-        {
-            let columns_info = vec![
-                {
-                    let mut ci = ColumnInfo::default();
-                    ci.set_column_id(1);
-                    ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                    ci
-                },
-                {
-                    let mut ci = ColumnInfo::default();
-                    ci.set_column_id(-1);
-                    ci.set_pk_handle(true);
-                    ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                    ci
-                },
-                {
-                    let mut ci = ColumnInfo::default();
-                    ci.set_column_id(table::EXTRA_PARTITION_ID_COL_ID);
-                    ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                    ci
-                },
-            ];
-
-            let mut index_key_data = datum::encode_key(&mut EvalContext::default(), &[Datum::I64(100)]).unwrap();
+            // Encode indexed column
+            let mut index_key_data = datum::encode_key(&mut EvalContext::default(), &[Datum::I64(indexed_value)]).unwrap();
+            // Add partition ID prefix (V1 format - new location)
             index_key_data.push(table::INDEX_VALUE_PARTITION_ID_FLAG);
-            index_key_data.write_i64(0i64).unwrap(); // Zero partition ID
-            let handle_data = datum::encode_key(&mut EvalContext::default(), &[Datum::I64(1)]).unwrap();
+            index_key_data.write_i64(partition_id).unwrap();
+            // Add handle
+            let handle_data = datum::encode_key(&mut EvalContext::default(), &[Datum::I64(handle_value)]).unwrap();
             index_key_data.extend(handle_data);
 
             let key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &index_key_data);
 
-            let mut value = vec![0u8];
+            // Build index value with partition ID (V1 still has it in value too - old location)
+            let mut value = vec![0u8]; // tail_len = 0 (no tail data)
+
+            // Add partition ID to value
             value.push(table::INDEX_VALUE_PARTITION_ID_FLAG);
             let mut pid_bytes = vec![0u8; 8];
-            NumberCodec::encode_i64(&mut pid_bytes, 0i64);
+            NumberCodec::encode_i64(&mut pid_bytes, partition_id);
             value.extend(&pid_bytes);
 
             let key_ranges = vec![{
@@ -3931,9 +3867,9 @@ mod tests {
             let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
                 store,
                 Arc::new(EvalConfig::default()),
-                columns_info,
+                columns_info.clone(),
                 key_ranges,
-                0, // primary_column_ids_len = 0 (non-clustered table)
+                0, // primary_column_ids_len = 0 (non-clustered table, int handle)
                 false,
                 false,
                 false,
@@ -3941,169 +3877,37 @@ mod tests {
             )
             .unwrap();
 
-            let result = block_on(executor.next_batch(10));
+            let mut result = block_on(executor.next_batch(10));
+            assert!(result.is_drained.as_ref().unwrap().stop());
+            assert_eq!(result.physical_columns.columns_len(), 3);
             assert_eq!(result.physical_columns.rows_len(), 1);
+
+            // Verify indexed column
+            result.physical_columns[0]
+                .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[0])
+                .unwrap();
+            assert_eq!(
+                result.physical_columns[0].decoded().to_int_vec(),
+                &[Some(indexed_value)],
+                "Indexed column value mismatch for {}",
+                test_name
+            );
+
+            // Verify handle (decoded from key, skipping partition ID)
+            assert_eq!(
+                result.physical_columns[1].decoded().to_int_vec(),
+                &[Some(handle_value)],
+                "Handle value mismatch for {} - partition ID in key should be skipped",
+                test_name
+            );
+
+            // Verify partition ID (extracted from VALUE in V1)
             assert_eq!(
                 result.physical_columns[2].decoded().to_int_vec(),
-                &[Some(0)],
-                "Zero partition ID should work"
+                &[Some(partition_id)],
+                "Partition ID mismatch for {} - should be extracted from value",
+                test_name
             );
         }
-
-        // Test case 2: Negative partition ID
-        {
-            let columns_info = vec![
-                {
-                    let mut ci = ColumnInfo::default();
-                    ci.set_column_id(1);
-                    ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                    ci
-                },
-                {
-                    let mut ci = ColumnInfo::default();
-                    ci.set_column_id(-1);
-                    ci.set_pk_handle(true);
-                    ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                    ci
-                },
-                {
-                    let mut ci = ColumnInfo::default();
-                    ci.set_column_id(table::EXTRA_PARTITION_ID_COL_ID);
-                    ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                    ci
-                },
-            ];
-
-            let mut index_key_data = datum::encode_key(&mut EvalContext::default(), &[Datum::I64(200)]).unwrap();
-            index_key_data.push(table::INDEX_VALUE_PARTITION_ID_FLAG);
-            index_key_data.write_i64(-1i64).unwrap(); // Negative partition ID
-            let handle_data = datum::encode_key(&mut EvalContext::default(), &[Datum::I64(2)]).unwrap();
-            index_key_data.extend(handle_data);
-
-            let key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &index_key_data);
-
-            let mut value = vec![0u8];
-            value.push(table::INDEX_VALUE_PARTITION_ID_FLAG);
-            let mut pid_bytes = vec![0u8; 8];
-            NumberCodec::encode_i64(&mut pid_bytes, -1i64);
-            value.extend(&pid_bytes);
-
-            let key_ranges = vec![{
-                let mut range = KeyRange::default();
-                range.set_start(key.clone());
-                range.set_end(key.clone());
-                convert_to_prefix_next(range.mut_end());
-                range
-            }];
-
-            let store = FixtureStorage::from(vec![(key, value)]);
-            let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
-                store,
-                Arc::new(EvalConfig::default()),
-                columns_info,
-                key_ranges,
-                0, // primary_column_ids_len = 0 (non-clustered table)
-                false,
-                false,
-                false,
-                false,
-            )
-            .unwrap();
-
-            let result = block_on(executor.next_batch(10));
-            assert_eq!(result.physical_columns.rows_len(), 1);
-            assert_eq!(
-                result.physical_columns[2].decoded().to_int_vec(),
-                &[Some(-1)],
-                "Negative partition ID should work"
-            );
-        }
-    }
-
-    #[test]
-    fn test_v1_backward_compatibility() {
-        // Test that old format (no partition ID in key) still works
-        // This ensures V1 TiKV can read both old and new format keys
-
-        const TABLE_ID: i64 = 100;
-        const INDEX_ID: i64 = 5;
-
-        let columns_info = vec![
-            {
-                let mut ci = ColumnInfo::default();
-                ci.set_column_id(1);
-                ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ci
-            },
-            {
-                let mut ci = ColumnInfo::default();
-                ci.set_column_id(-1);
-                ci.set_pk_handle(true);
-                ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ci
-            },
-        ];
-
-        let schema: Vec<FieldType> = vec![
-            FieldTypeTp::LongLong.into(),
-            FieldTypeTp::LongLong.into(),
-        ];
-
-        // Old format: no partition ID in key, just [indexed_col][handle]
-        let indexed_value = 888i64;
-        let handle_value = 999i64;
-
-        let mut index_key_data = datum::encode_key(&mut EvalContext::default(), &[Datum::I64(indexed_value)]).unwrap();
-        let handle_data = datum::encode_key(&mut EvalContext::default(), &[Datum::I64(handle_value)]).unwrap();
-        index_key_data.extend(handle_data);
-
-        let key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &index_key_data);
-
-        // Old format value: no partition ID
-        let value = vec![0u8]; // tail_len = 0
-
-        let key_ranges = vec![{
-            let mut range = KeyRange::default();
-            range.set_start(key.clone());
-            range.set_end(key.clone());
-            convert_to_prefix_next(range.mut_end());
-            range
-        }];
-
-        let store = FixtureStorage::from(vec![(key, value)]);
-        let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
-            store,
-            Arc::new(EvalConfig::default()),
-            columns_info,
-            key_ranges,
-            0, // pid_column_cnt = 0 (not requesting partition ID)
-            false,
-            false,
-            false,
-            false,
-        )
-        .unwrap();
-
-        let mut result = block_on(executor.next_batch(10));
-        assert!(result.is_drained.as_ref().unwrap().stop());
-        assert_eq!(result.physical_columns.columns_len(), 2);
-        assert_eq!(result.physical_columns.rows_len(), 1);
-
-        // Verify indexed column
-        result.physical_columns[0]
-            .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[0])
-            .unwrap();
-        assert_eq!(
-            result.physical_columns[0].decoded().to_int_vec(),
-            &[Some(indexed_value)],
-            "Old format: indexed column should work"
-        );
-
-        // Verify handle
-        assert_eq!(
-            result.physical_columns[1].decoded().to_int_vec(),
-            &[Some(handle_value)],
-            "Old format: handle should be decoded correctly"
-        );
     }
 }

@@ -39,6 +39,8 @@ pub const MAX_OLD_ENCODED_VALUE_LEN: usize = 9;
 pub const INDEX_VALUE_COMMON_HANDLE_FLAG: u8 = 127;
 /// Flag that indicate if the index value has partition id.
 pub const INDEX_VALUE_PARTITION_ID_FLAG: u8 = 126;
+/// Alias for INDEX_VALUE_PARTITION_ID_FLAG when used in index keys.
+pub const INDEX_KEY_PARTITION_ID_FLAG: u8 = INDEX_VALUE_PARTITION_ID_FLAG;
 /// Flag that indicate if the index values has the version information.
 pub const INDEX_VALUE_VERSION_FLAG: u8 = 125;
 /// Flag that indicate if the index value has restored data.
