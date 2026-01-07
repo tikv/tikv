@@ -3836,17 +3836,22 @@ mod tests {
             // [table_prefix][index_id][indexed_col][PARTITION_ID_FLAG][partition_id][handle]
 
             // Encode indexed column
-            let mut index_key_data = datum::encode_key(&mut EvalContext::default(), &[Datum::I64(indexed_value)]).unwrap();
+            let mut index_key_data =
+                datum::encode_key(&mut EvalContext::default(), &[Datum::I64(indexed_value)])
+                    .unwrap();
             // Add partition ID prefix (V1 format - new location)
             index_key_data.push(table::INDEX_VALUE_PARTITION_ID_FLAG);
             index_key_data.write_i64(partition_id).unwrap();
             // Add handle
-            let handle_data = datum::encode_key(&mut EvalContext::default(), &[Datum::I64(handle_value)]).unwrap();
+            let handle_data =
+                datum::encode_key(&mut EvalContext::default(), &[Datum::I64(handle_value)])
+                    .unwrap();
             index_key_data.extend(handle_data);
 
             let key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &index_key_data);
 
-            // Build index value with partition ID (V1 still has it in value too - old location)
+            // Build index value with partition ID (V1 still has it in value too - old
+            // location)
             let mut value = vec![0u8]; // tail_len = 0 (no tail data)
 
             // Add partition ID to value
