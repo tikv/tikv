@@ -442,7 +442,9 @@ impl IndexScanExecutorImpl {
             // Ensure there are at least 8 bytes for partition id + 1 byte for handle flag
             if val.len() < table::ID_LEN + 1 {
                 return Err(other_err!(
-                    "Remaining len {} is too short to decode partition ID and handle",
+                    "Insufficient data to decode partition ID and handle flag: \
+expected at least {} bytes after first flag, got {}",
+                    table::ID_LEN + 1,
                     val.len()
                 ));
             }
