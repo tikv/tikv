@@ -32,7 +32,9 @@ use raftstore::store::{
         AbortReason, PrepareDiskSnapObserver, SnapshotBrHandle, SnapshotBrWaitApplyRequest,
     },
 };
-use tikv_util::{Either, sys::thread::ThreadBuildWrapper, warn};
+use tikv_util::{
+    Either, sys::thread::ThreadBuildWrapper, thread_name_prefix::SNAP_BROADCAST_THREAD, warn,
+};
 use tokio::{
     runtime::{Handle, Runtime},
     sync::oneshot,
@@ -197,7 +199,7 @@ impl<SR: SnapshotBrHandle> Env<SR> {
             .worker_threads(DEFAULT_RT_THREADS)
             .enable_all()
             .with_sys_hooks()
-            .thread_name("snap_br_backup_prepare")
+            .thread_name(SNAP_BROADCAST_THREAD)
             .build()
             .unwrap();
         Arc::new(rt)

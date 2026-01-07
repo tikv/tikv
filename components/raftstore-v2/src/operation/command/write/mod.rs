@@ -330,6 +330,7 @@ mod test {
     use tempfile::TempDir;
     use tikv_util::{
         store::new_peer,
+        thread_name_prefix::TABLET_WORKER_THREAD,
         worker::{Worker, dummy_scheduler},
         yatp_pool::{DefaultTicker, YatpPoolBuilder},
     };
@@ -378,9 +379,9 @@ mod test {
         let host = CoprocessorHost::<KvTestEngine>::default();
 
         let snap_mgr = TabletSnapManager::new(tmp_dir.path(), None).unwrap();
-        let tablet_worker = Worker::new("tablet-worker");
+        let tablet_worker = Worker::new(TABLET_WORKER_THREAD);
         let tablet_scheduler = tablet_worker.start(
-            "tablet-worker",
+            TABLET_WORKER_THREAD.to_string(),
             tablet::Runner::new(reg.clone(), importer.clone(), snap_mgr, logger.clone()),
         );
         tikv_util::defer!(tablet_worker.stop());
