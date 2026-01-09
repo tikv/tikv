@@ -910,13 +910,6 @@ impl Config {
             return Err(box_err!("local-read-batch-size must be greater than 0"));
         }
 
-        if self.raft_write_wait_duration.as_micros() > 1000 {
-            return Err(box_err!(
-                "raft-write-wait-duration should be less than 1ms, current value is {}ms",
-                self.raft_write_wait_duration.as_millis()
-            ));
-        }
-
         // Since the following configuration supports online update, in order to
         // prevent mistakenly inputting too large values, the max limit is made
         // according to the cpu quota * 10. Notice 10 is only an estimate, not an
