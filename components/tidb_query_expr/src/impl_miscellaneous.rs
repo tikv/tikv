@@ -236,11 +236,15 @@ pub fn uuid_timestamp(input: Option<BytesRef>) -> Result<Option<Decimal>> {
         return Ok(None);
     };
     let ts = uuid.unwrap().get_timestamp();
-    let (s, ms) = match ts {
+    let (s, ns) = match ts {
         None => return Ok(None),
         Some(t) => t.to_unix(),
     };
-    let r = Decimal::from(s * 1000000 + ((ms as u64) / 1000))
+    // s * 1_000_000 to convert from seconds to microseconds
+    // ns / 1_000 to convert from nanoseconds to microseconds
+    // shift by -6 to get from microseconds to seconds
+    // in the end we return a decimal of seconds since the UNIX epoch.
+    let r = Decimal::from(s * 1_000_000 + ((ns as u64) / 1_000))
         .shift(-6)
         .round(6, RoundMode::Truncate);
     Ok(Some(*r))
