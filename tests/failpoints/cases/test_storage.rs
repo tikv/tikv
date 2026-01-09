@@ -952,7 +952,7 @@ fn test_async_apply_prewrite_impl<E: Engine, F: KvFormat>(
         storage
             .sched_txn_command(
                 commands::AcquirePessimisticLock::new(
-                    vec![(Key::from_raw(key), false)],
+                    vec![(Key::from_raw(key), false, false)],
                     key.to_vec(),
                     start_ts,
                     0,
@@ -1306,7 +1306,7 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine, F: KvFormat>(
         storage
             .sched_txn_command(
                 commands::AcquirePessimisticLock::new(
-                    vec![(Key::from_raw(key), false)],
+                    vec![(Key::from_raw(key), false, false)],
                     key.to_vec(),
                     start_ts,
                     0,
