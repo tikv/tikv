@@ -363,50 +363,48 @@ impl<L: LockManager> LockWaitQueues<L> {
             v.last_conflict_start_ts = conflicting_start_ts;
             v.last_conflict_commit_ts = conflicting_commit_ts;
 
-            if popped_entries.is_empty() {
-                if let Some((_, lock_wait_entry)) = v.queue.pop() {
-                    removed_waiters += 1;
+            if let Some((_, lock_wait_entry)) = v.queue.pop() {
+                removed_waiters += 1;
 
-                    let mut group_entries = Vec::with_capacity(4);
-                    let mut schedule_delayed_wake_up = false;
+                let mut group_entries = Vec::with_capacity(4);
+                let mut schedule_delayed_wake_up = false;
 
-                    if !lock_wait_entry.parameters.allow_lock_with_conflict {
-                        v.legacy_wake_up_index += 1;
-                        schedule_delayed_wake_up = true;
-                    }
-
-                    let shared_group = lock_wait_entry.is_shared_lock;
-                    group_entries.push(lock_wait_entry);
-
-                    if shared_group {
-                        while let Some((_, front)) = v.queue.peek() {
-                            if !front.is_shared_lock {
-                                break;
-                            }
-                            let (_, shared_entry) = v.queue.pop().unwrap();
-                            removed_waiters += 1;
-                            if !shared_entry.parameters.allow_lock_with_conflict {
-                                v.legacy_wake_up_index += 1;
-                                schedule_delayed_wake_up = true;
-                            }
-                            group_entries.push(shared_entry);
-                        }
-                    }
-
-                    let notify_all_future = if schedule_delayed_wake_up {
-                        match wake_up_delay_duration_ms {
-                            Some(delay) if !v.queue.is_empty() => {
-                                self.handle_delayed_wake_up(v, key, delay)
-                            }
-                            _ => None,
-                        }
-                    } else {
-                        None
-                    };
-
-                    popped_future = notify_all_future;
-                    popped_entries = group_entries;
+                if !lock_wait_entry.parameters.allow_lock_with_conflict {
+                    v.legacy_wake_up_index += 1;
+                    schedule_delayed_wake_up = true;
                 }
+
+                let shared_group = lock_wait_entry.is_shared_lock;
+                group_entries.push(lock_wait_entry);
+
+                if shared_group {
+                    while let Some((_, front)) = v.queue.peek() {
+                        if !front.is_shared_lock {
+                            break;
+                        }
+                        let (_, shared_entry) = v.queue.pop().unwrap();
+                        removed_waiters += 1;
+                        if !shared_entry.parameters.allow_lock_with_conflict {
+                            v.legacy_wake_up_index += 1;
+                            schedule_delayed_wake_up = true;
+                        }
+                        group_entries.push(shared_entry);
+                    }
+                }
+
+                let notify_all_future = if schedule_delayed_wake_up {
+                    match wake_up_delay_duration_ms {
+                        Some(delay) if !v.queue.is_empty() => {
+                            self.handle_delayed_wake_up(v, key, delay)
+                        }
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+
+                popped_future = notify_all_future;
+                popped_entries = group_entries;
             }
 
             self.inner
