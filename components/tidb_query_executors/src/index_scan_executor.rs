@@ -536,11 +536,13 @@ impl IndexScanExecutorImpl {
 
         // V2: Extract partition ID from key if present (before handle decoding)
         let mut partition_id_from_key: Option<i64> = None;
-        if self.pid_column_cnt > 0 && !key_payload.is_empty() && key_payload[0] == table::INDEX_VALUE_PARTITION_ID_FLAG {
-            if key_payload.len() >= 1 + table::ID_LEN {
-                partition_id_from_key = Some(NumberCodec::decode_i64(&key_payload[1..1 + table::ID_LEN]));
-                key_payload = &key_payload[1 + table::ID_LEN..]; // Skip partition ID
-            }
+        if self.pid_column_cnt > 0
+            && !key_payload.is_empty()
+            && key_payload[0] == table::INDEX_VALUE_PARTITION_ID_FLAG
+            && key_payload.len() > table::ID_LEN
+        {
+            partition_id_from_key = Some(NumberCodec::decode_i64(&key_payload[1..1 + table::ID_LEN]));
+            key_payload = &key_payload[1 + table::ID_LEN..]; // Skip partition ID
         }
 
         match self.decode_handle_strategy {
@@ -3796,23 +3798,23 @@ mod tests {
 
         // Test error: invalid handle flag
         let key = vec![0x99, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08];
-        assert!(idx_exe.decode_int_handle_from_key(&key).is_err());
+        idx_exe.decode_int_handle_from_key(&key).unwrap_err();
 
         // Test error: partition flag with insufficient data for partition id
         let key = vec![table::INDEX_VALUE_PARTITION_ID_FLAG, 0x01, 0x02];
-        assert!(idx_exe.decode_int_handle_from_key(&key).is_err());
+        idx_exe.decode_int_handle_from_key(&key).unwrap_err();
 
         // Test error: partition flag with partition id but no handle data
         let mut key = vec![table::INDEX_VALUE_PARTITION_ID_FLAG];
         key.write_i64(300).unwrap(); // partition id only, no handle
-        assert!(idx_exe.decode_int_handle_from_key(&key).is_err());
+        idx_exe.decode_int_handle_from_key(&key).unwrap_err();
 
         // Test error: partition flag with partition id and invalid handle flag
         let mut key = vec![table::INDEX_VALUE_PARTITION_ID_FLAG];
         key.write_i64(400).unwrap(); // partition id
         key.push(0xFF); // invalid handle flag
         key.write_i64(111).unwrap();
-        assert!(idx_exe.decode_int_handle_from_key(&key).is_err());
+        idx_exe.decode_int_handle_from_key(&key).unwrap_err();
     }
 
     #[test]
