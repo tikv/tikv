@@ -3,6 +3,7 @@
 use std::{cmp::Reverse, collections::BinaryHeap, hash::Hasher, mem, sync::Arc};
 
 use api_version::KvFormat;
+use engine_rocks::PerfContext;
 use kvproto::coprocessor::KeyRange;
 use mur3::Hasher128;
 use rand::{Rng, rngs::StdRng};
@@ -26,7 +27,7 @@ use tipb::{self, AnalyzeColumnsReq};
 
 use super::{cmsketch::CmSketch, fmsketch::FmSketch, histogram::Histogram};
 use crate::{
-    coprocessor::{MEMTRACE_ANALYZE, dag::TikvStorage, *},
+    coprocessor::{MEMTRACE_ANALYZE, dag::TikvStorage, metrics, *},
     storage::{Snapshot, SnapshotStore},
 };
 
@@ -102,6 +103,10 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
             let mut sample = self.quota_limiter.new_sample(!self.is_auto_analyze);
             let mut read_size: usize = 0;
             {
+                // Track block_read_count as IOPS using perf context
+                // Capture initial state before the async operation
+                let block_read_count_before = PerfContext::get().block_read_count();
+
                 let result = {
                     let (duration, res) = sample
                         .observe_cpu_async(self.data.next_batch(BATCH_MAX_SIZE))
@@ -109,6 +114,15 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                     sample.add_cpu_time(duration);
                     res
                 };
+
+                // Capture final state and calculate delta
+                let block_read_count_after = PerfContext::get().block_read_count();
+                let block_read_count_delta =
+                    block_read_count_after.saturating_sub(block_read_count_before);
+                sample.add_iops(block_read_count_delta as usize);
+                // Record metrics
+                metrics::ANALYZE_BLOCK_READ_COUNT_TOTAL.inc_by(block_read_count_delta);
+                metrics::ANALYZE_NEXT_BATCH_COUNT_TOTAL.inc();
                 let _guard = sample.observe_cpu();
                 is_drained = result.is_drained?.stop();
 
@@ -612,6 +626,8 @@ impl<S: Snapshot, F: KvFormat> SampleBuilder<S, F> {
         let mut ctx = EvalContext::default();
         while !is_drained {
             let result = self.data.next_batch(BATCH_MAX_SIZE).await;
+            // Record next_batch call count
+            metrics::ANALYZE_NEXT_BATCH_COUNT_TOTAL.inc();
             is_drained = result.is_drained?.stop();
 
             let mut columns_slice = result.physical_columns.as_slice();

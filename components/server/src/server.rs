@@ -441,6 +441,7 @@ where
             config.quota.background_cpu_time,
             config.quota.background_write_bandwidth,
             config.quota.background_read_bandwidth,
+            config.quota.background_iops,
             config.quota.max_delay_duration,
             config.quota.enable_auto_tune,
         ));
