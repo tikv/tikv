@@ -217,9 +217,10 @@ impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLock
             .take_mutations()
             .into_iter()
             .map(|x| match x.get_op() {
-                Op::PessimisticLock => (
+                Op::PessimisticLock | Op::SharedPessimisticLock => (
                     Key::from_raw(x.get_key()),
                     x.get_assertion() == Assertion::NotExist,
+                    x.get_op() == Op::SharedPessimisticLock,
                 ),
                 _ => panic!("mismatch Op in pessimistic lock mutations"),
             })
@@ -1124,7 +1125,7 @@ pub mod test_util {
         let concurrency_manager = ConcurrencyManager::new_for_test(start_ts.into());
         let cmd = AcquirePessimisticLock::new(
             keys.into_iter()
-                .map(|key| (Key::from_raw(key.0), key.1))
+                .map(|key| (Key::from_raw(key.0), key.1, false))
                 .collect(),
             primary,
             TimeStamp::from(start_ts),

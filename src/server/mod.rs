@@ -26,6 +26,7 @@ pub mod transport;
 pub mod ttl;
 
 pub use engine_factory::{KvEngineFactory, KvEngineFactoryBuilder};
+pub use tikv_util::thread_name_prefix::GRPC_SERVER_THREAD;
 
 #[cfg(any(test, feature = "testexport"))]
 pub use self::server::test_router::TestRaftStoreRouter;
@@ -42,6 +43,6 @@ pub use self::{
     raftkv::RaftKv,
     raftkv2::{Extension, NodeV2, RaftKv2},
     resolve::{PdStoreAddrResolver, StoreAddrResolver},
-    server::{GRPC_THREAD_PREFIX, Server},
+    server::Server,
     transport::ServerTransport,
 };

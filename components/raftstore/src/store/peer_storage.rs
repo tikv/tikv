@@ -1423,6 +1423,7 @@ pub mod tests {
     use tempfile::{Builder, TempDir};
     use tikv_util::{
         store::{new_peer, new_witness_peer},
+        thread_name_prefix::{RAFTLOG_FETCH_WORKER_THREAD, SNAP_GENERATOR_THREAD},
         worker::{LazyWorker, Scheduler, Worker, dummy_scheduler},
     };
 
@@ -1747,7 +1748,7 @@ pub mod tests {
             let region_worker = Worker::new("snap-manager").lazy_build("snap-manager");
             let region_scheduler = region_worker.scheduler();
             let mut raftlog_fetch_worker =
-                Worker::new("raftlog-fetch-worker").lazy_build("raftlog-fetch-worker");
+                Worker::new(RAFTLOG_FETCH_WORKER_THREAD).lazy_build(RAFTLOG_FETCH_WORKER_THREAD);
             let raftlog_fetch_scheduler = raftlog_fetch_worker.scheduler();
             let mut store =
                 new_storage_from_ents(region_scheduler, raftlog_fetch_scheduler, &td, &ents);
@@ -1852,7 +1853,7 @@ pub mod tests {
         let mut s = new_storage_from_ents(sched.clone(), dummy_scheduler, &td, &ents);
         let (router, _) = mpsc::sync_channel(100);
 
-        let mut snap_gen_worker = LazyWorker::new("snap-generator");
+        let mut snap_gen_worker = LazyWorker::new(SNAP_GENERATOR_THREAD);
         let snap_gen_sched = snap_gen_worker.scheduler();
         let snap_gen_runner = SnapGenRunner::new(
             s.engines.kv.clone(),
@@ -2017,7 +2018,7 @@ pub mod tests {
         pd_client.add_store(store);
         let pd_mock = Arc::new(pd_client);
 
-        let mut snap_gen_worker = LazyWorker::new("snap-generator");
+        let mut snap_gen_worker = LazyWorker::new(SNAP_GENERATOR_THREAD);
         let snap_gen_sched = snap_gen_worker.scheduler();
         let snap_gen_runner = SnapGenRunner::new(
             s.engines.kv.clone(),
@@ -2080,7 +2081,7 @@ pub mod tests {
         let mut s = new_storage_from_ents(sched, dummy_scheduler, &td, &ents);
         let (router, _) = mpsc::sync_channel(100);
 
-        let mut snap_gen_worker = LazyWorker::new("snap-generator");
+        let mut snap_gen_worker = LazyWorker::new(SNAP_GENERATOR_THREAD);
         let snap_gen_sched = snap_gen_worker.scheduler();
         let snap_gen_runner = SnapGenRunner::new(
             s.engines.kv.clone(),
@@ -2160,7 +2161,7 @@ pub mod tests {
         let s1 = new_storage_from_ents(sched.clone(), dummy_scheduler.clone(), &td1, &ents);
         let (router, _) = mpsc::sync_channel(100);
 
-        let mut snap_gen_worker = LazyWorker::new("snap-generator");
+        let mut snap_gen_worker = LazyWorker::new(SNAP_GENERATOR_THREAD);
         let snap_gen_sched = snap_gen_worker.scheduler();
         let snap_gen_runner = SnapGenRunner::new(
             s1.engines.kv.clone(),
@@ -2320,7 +2321,7 @@ pub mod tests {
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let region_worker = LazyWorker::new("snap-manager");
         let region_sched = region_worker.scheduler();
-        let raftlog_fetch_worker = LazyWorker::new("raftlog-fetch-worker");
+        let raftlog_fetch_worker = LazyWorker::new(RAFTLOG_FETCH_WORKER_THREAD);
         let raftlog_fetch_sched = raftlog_fetch_worker.scheduler();
         let kv_db = engine_test::kv::new_engine(td.path().to_str().unwrap(), ALL_CFS).unwrap();
         let raft_path = td.path().join(Path::new("raft"));

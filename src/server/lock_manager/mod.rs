@@ -19,7 +19,10 @@ use kvproto::metapb::RegionEpoch;
 use pd_client::PdClient;
 use raftstore::coprocessor::CoprocessorHost;
 use security::SecurityManager;
-use tikv_util::worker::FutureWorker;
+use tikv_util::{
+    thread_name_prefix::{DEADLOCK_DETECTOR_THREAD, WAITER_MANAGER_THREAD},
+    worker::FutureWorker,
+};
 use txn_types::TimeStamp;
 
 pub use self::{
@@ -89,8 +92,8 @@ impl Clone for LockManager {
 
 impl LockManager {
     pub fn new(cfg: &Config) -> Self {
-        let waiter_mgr_worker = FutureWorker::new("waiter-manager");
-        let detector_worker = FutureWorker::new("deadlock-detector");
+        let waiter_mgr_worker = FutureWorker::new(WAITER_MANAGER_THREAD);
+        let detector_worker = FutureWorker::new(DEADLOCK_DETECTOR_THREAD);
 
         Self {
             waiter_mgr_scheduler: WaiterMgrScheduler::new(waiter_mgr_worker.scheduler()),
@@ -290,7 +293,10 @@ impl LockManagerTrait for LockManager {
 
         // If it is the first lock the transaction tries to lock, it won't cause
         // deadlock.
-        if !is_first_lock {
+        // The lock waiting for shared lock is not tracked yet, because the shared lock
+        // may grow after this detection. After we implement the shrinking of
+        // shared lock, we can track it then.
+        if !is_first_lock && wait_info.lock_info.lock_type != kvproto::kvrpcpb::Op::SharedLock {
             self.detector_scheduler
                 .detect(start_ts, wait_info, diag_ctx);
         }

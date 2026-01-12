@@ -54,15 +54,15 @@ impl<F: Future> Future for ControlledFuture<F> {
     }
 }
 
-// `LimitedFuture` wraps a Future with ResourceLimiter, it will automically
-// statistics the cpu time and io bytes consumed by the future, and do async
-// waiting according the configuration of the ResourceLimiter.
+// `LimitedFuture` wraps a Future with ResourceLimiter, it will automatically
+// get statistics of the cpu time and io bytes consumed by the future, and do
+// async waiting according the configuration of the ResourceLimiter.
 #[pin_project]
 pub struct LimitedFuture<F: Future> {
     #[pin]
     f: F,
     // `pre_delay` and `post_delay` is used to delay this task, at any time, at most one of the two
-    // is valid. A future can only be polled once in one round, so we uses two field here to
+    // is valid. A future can only be polled once in one round, so we use two fields here to
     // workaround this restriction of the rust compiler.
     #[pin]
     pre_delay: OptionalFuture<Compat01As03<Delay>>,
