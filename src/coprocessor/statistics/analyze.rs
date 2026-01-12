@@ -118,32 +118,33 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                 for logical_row in &result.logical_rows {
                     for i in 0..self.columns_info.len() {
                         column_vals[i].clear();
-                        collation_key_vals[i].clear();
+                        // collation_key_vals[i].clear();
                         columns_slice[i].encode(
                             *logical_row,
                             &self.columns_info[i],
                             &mut ctx,
                             &mut column_vals[i],
                         )?;
-                        if self.columns_info[i].as_accessor().is_string_like() {
-                            match_template_collator! {
-                                TT, match self.columns_info[i].as_accessor().collation()? {
-                                    Collation::TT => {
-                                        let mut mut_val = &column_vals[i][..];
-                                        let decoded_val = table::decode_col_value(&mut mut_val, &mut ctx, &self.columns_info[i])?;
-                                        if decoded_val == Datum::Null {
-                                            collation_key_vals[i].clone_from(&column_vals[i]);
-                                        } else {
+                        // if self.columns_info[i].as_accessor().is_string_like() {
+                            // match_template_collator! {
+                                // TT, match self.columns_info[i].as_accessor().collation()? {
+                                    // Collation::TT => {
+                                        // let mut mut_val = &column_vals[i][..];
+                                        // let decoded_val = table::decode_col_value(&mut mut_val, &mut ctx, &self.columns_info[i])?;
+                                        // if decoded_val == Datum::Null {
+                                            // collation_key_vals[i].clone_from(&column_vals[i]);
+                                        // } else {
                                             // Only if the `decoded_val` is Datum::Null, `decoded_val` is a Ok(None).
                                             // So it is safe the unwrap the Ok value.
-                                            TT::write_sort_key(&mut collation_key_vals[i], &decoded_val.as_string()?.unwrap())?;
-                                        }
-                                    }
-                                }
-                            };
-                        }
+                                            // TT::write_sort_key(&mut collation_key_vals[i], &decoded_val.as_string()?.unwrap())?;
+                                        // }
+                                    // }
+                                // }
+                            // };
+                        // }
                         read_size += column_vals[i].len();
                     }
+                    collector.mut_base().count += 1;
                     collector.collect_column_group(
                         &column_vals,
                         &collation_key_vals,
@@ -267,10 +268,6 @@ impl BaseRowSampleCollector {
     ) {
         let col_len = columns_val.len();
         for i in 0..column_groups.len() {
-<<<<<<< HEAD
-            // self.row_buf.clear();
-=======
->>>>>>> origin/master
             let offsets = column_groups[i].get_column_offsets();
             if offsets.len() == 1 {
                 // For the single-column group, its fm_sketch is the same as that of the
@@ -286,33 +283,15 @@ impl BaseRowSampleCollector {
                 }
                 self.total_sizes[col_len + i] += columns_val[*j as usize].len() as i64 - 1
             }
-<<<<<<< HEAD
-            // We only maintain the null count for single column case.
-            if has_null && offsets.len() == 1 {
-                self.null_count[col_len + i] += 1;
-                continue;
-            }
-            // Use a in place murmur3 to replace this memory copy.
+            // let mut hasher = Hasher128::with_seed(0);
             // for j in offsets {
-            //     if columns_info[*j as usize].as_accessor().is_string_like() {
-            //         self.row_buf
-            //             .extend_from_slice(&collation_keys_val[*j as usize]);
-            //     } else {
-            //         self.row_buf.extend_from_slice(&columns_val[*j as usize]);
-            //     }
-            // }
-            // self.fm_sketches[col_len + i].insert(&self.row_buf);
-=======
-            let mut hasher = Hasher128::with_seed(0);
-            for j in offsets {
-                if columns_info[*j as usize].as_accessor().is_string_like() {
-                    hasher.write(&collation_keys_val[*j as usize]);
-                } else {
-                    hasher.write(&columns_val[*j as usize]);
-                }
+                // if columns_info[*j as usize].as_accessor().is_string_like() {
+                    // hasher.write(&collation_keys_val[*j as usize]);
+                // } else {
+                    // hasher.write(&columns_val[*j as usize]);
+                // }
             }
-            self.fm_sketches[col_len + i].insert_hash_value(hasher.finish());
->>>>>>> origin/master
+            // self.fm_sketches[col_len + i].insert_hash_value(hasher.finish());
         }
     }
 
@@ -420,14 +399,6 @@ impl RowSampleCollector for BernoulliRowSampleCollector {
             .collect_column(columns_val, collation_keys_val, columns_info);
         self.sampling(columns_val);
     }
-<<<<<<< HEAD
-    fn sampling(&mut self, data: Vec<Vec<u8>>) {
-        // let cur_rng = self.base.rng.gen_range(0.0, 1.0);
-        // if cur_rng >= self.sample_rate {
-        //     return;
-        // }
-        self.base.memory_usage += data.iter().map(|x| x.capacity()).sum::<usize>();
-=======
     fn sampling(&mut self, data: &[Vec<u8>]) {
         let cur_rng = self.base.rng.gen_range(0.0, 1.0);
         if cur_rng >= self.sample_rate {
@@ -435,7 +406,6 @@ impl RowSampleCollector for BernoulliRowSampleCollector {
         }
         let sample = data.to_vec();
         self.base.memory_usage += sample.iter().map(|x| x.capacity()).sum::<usize>();
->>>>>>> origin/master
         self.base.report_memory_usage(false);
         self.samples.push(sample);
     }
