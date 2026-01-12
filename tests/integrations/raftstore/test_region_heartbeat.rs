@@ -1,100 +1,94 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{mpsc, Arc},
+    sync::{Arc, mpsc},
     thread::sleep,
     time::Duration,
 };
 
 use test_raftstore::*;
+use test_raftstore_macro::test_case;
 use tikv_util::{
+    HandyRwLock,
     config::*,
     time::{Instant, UnixSecs as PdInstant},
-    HandyRwLock,
 };
 
-fn wait_down_peers<T: Simulator>(cluster: &Cluster<T>, count: u64, peer: Option<u64>) {
-    let mut peers = cluster.get_down_peers();
-    for _ in 1..1000 {
-        if peers.len() == count as usize && peer.as_ref().map_or(true, |p| peers.contains_key(p)) {
-            return;
+macro_rules! test_down_peers {
+    ($cluster:expr) => {
+        // depress false-positive warning.
+        #[allow(clippy::unnecessary_mut_passed)]
+        {
+            $cluster.cfg.raft_store.max_peer_down_duration = ReadableDuration::secs(1);
+            $cluster.run();
+
+            // Kill 1, 2
+            for len in 1..3 {
+                let id = len;
+                $cluster.stop_node(id);
+                wait_down_peers($cluster, len, Some(id));
+            }
+
+            // Restart 1, 2
+            $cluster.run_node(1).unwrap();
+            $cluster.run_node(2).unwrap();
+            wait_down_peers($cluster, 0, None);
+
+            $cluster.stop_node(1);
+
+            $cluster.must_put(b"k1", b"v1");
+            // max peer down duration is 500 millis, but we only report down time in
+            // seconds, so sleep 1 second to make the old down second is always larger
+            // than new down second by at lease 1 second.
+            sleep_ms(1000);
+
+            wait_down_peers($cluster, 1, Some(1));
+            let down_secs = $cluster.get_down_peers()[&1].get_down_seconds();
+            let timer = Instant::now();
+            let leader = $cluster.leader_of_region(1).unwrap();
+            let new_leader = if leader.get_id() == 2 {
+                new_peer(3, 3)
+            } else {
+                new_peer(2, 2)
+            };
+
+            $cluster.must_transfer_leader(1, new_leader);
+            // new leader should reset all down peer list.
+            wait_down_peers($cluster, 0, None);
+            wait_down_peers($cluster, 1, Some(1));
+            assert!(
+                $cluster.get_down_peers()[&1].get_down_seconds()
+                    < down_secs + timer.saturating_elapsed().as_secs()
+            );
+
+            // Ensure that node will not reuse the previous peer heartbeats.
+            $cluster.must_transfer_leader(1, leader);
+            wait_down_peers($cluster, 0, None);
+            wait_down_peers($cluster, 1, Some(1));
+            assert!(
+                $cluster.get_down_peers()[&1].get_down_seconds()
+                    < timer.saturating_elapsed().as_secs() + 1
+            );
         }
-        sleep(Duration::from_millis(10));
-        peers = cluster.get_down_peers();
-    }
-    panic!(
-        "got {:?}, want {} peers which should include {:?}",
-        peers, count, peer
-    );
-}
-
-fn test_down_peers<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.cfg.raft_store.max_peer_down_duration = ReadableDuration::secs(1);
-    cluster.run();
-
-    // Kill 1, 2
-    for len in 1..3 {
-        let id = len;
-        cluster.stop_node(id);
-        wait_down_peers(cluster, len, Some(id));
-    }
-
-    // Restart 1, 2
-    cluster.run_node(1).unwrap();
-    cluster.run_node(2).unwrap();
-    wait_down_peers(cluster, 0, None);
-
-    cluster.stop_node(1);
-
-    cluster.must_put(b"k1", b"v1");
-    // max peer down duration is 500 millis, but we only report down time in
-    // seconds, so sleep 1 second to make the old down second is always larger
-    // than new down second by at lease 1 second.
-    sleep_ms(1000);
-
-    wait_down_peers(cluster, 1, Some(1));
-    let down_secs = cluster.get_down_peers()[&1].get_down_seconds();
-    let timer = Instant::now();
-    let leader = cluster.leader_of_region(1).unwrap();
-    let new_leader = if leader.get_id() == 2 {
-        new_peer(3, 3)
-    } else {
-        new_peer(2, 2)
     };
-
-    cluster.must_transfer_leader(1, new_leader);
-    // new leader should reset all down peer list.
-    wait_down_peers(cluster, 0, None);
-    wait_down_peers(cluster, 1, Some(1));
-    assert!(
-        cluster.get_down_peers()[&1].get_down_seconds()
-            < down_secs + timer.saturating_elapsed().as_secs()
-    );
-
-    // Ensure that node will not reuse the previous peer heartbeats.
-    cluster.must_transfer_leader(1, leader);
-    wait_down_peers(cluster, 0, None);
-    wait_down_peers(cluster, 1, Some(1));
-    assert!(
-        cluster.get_down_peers()[&1].get_down_seconds() < timer.saturating_elapsed().as_secs() + 1
-    );
 }
 
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
 fn test_server_down_peers_with_hibernate_regions() {
     let mut cluster = new_server_cluster(0, 5);
     // When hibernate_regions is enabled, down peers are not detected in time
     // by design. So here use a short check interval to trigger region heartbeat
     // more frequently.
     cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::millis(500);
-    test_down_peers(&mut cluster);
+    test_down_peers!(&mut cluster);
 }
 
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_server_down_peers_without_hibernate_regions() {
-    let mut cluster = new_server_cluster(0, 5);
+    let mut cluster = new_cluster(0, 5);
     cluster.cfg.raft_store.hibernate_regions = false;
-    test_down_peers(&mut cluster);
+    test_down_peers!(&mut cluster);
 }
 
 fn test_pending_peers<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -206,4 +200,73 @@ fn test_region_heartbeat_term() {
         }
     }
     panic!("reported term should be updated");
+}
+
+/// `test_region_heartbeat_leader_change` test when region leadership changes,
+/// region approximate size/keys should be reset so pd won't receive outdated
+/// stats data. See: https://github.com/tikv/tikv/issues/19180 for more details.
+#[test]
+fn test_region_heartbeat_leader_change() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.raft_store.right_derive_when_split = true;
+    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
+    // Set a very big interval to avoid regular heartbeat.
+    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::secs(1000);
+    cluster.cfg.raft_store.region_split_check_diff = Some(ReadableSize(10));
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+    let region_id = cluster.run_conf_change();
+
+    let mut range = 1..;
+    put_till_size(&mut cluster, 1000, &mut range);
+    sleep_ms(100);
+
+    // add a peer to trigger region heartbeat.
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    test_util::eventually(
+        Duration::from_millis(100),
+        Duration::from_millis(3000),
+        || {
+            let size = cluster
+                .pd_client
+                .get_region_approximate_size(region_id)
+                .unwrap_or_default();
+            size >= 1000
+        },
+    );
+
+    cluster.must_transfer_leader(region_id, new_peer(2, 2));
+
+    put_till_size(&mut cluster, 1000, &mut range);
+    sleep_ms(100);
+
+    // add a new peer to trigger heartbeat pd.
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+    test_util::eventually(
+        Duration::from_millis(100),
+        Duration::from_millis(3000),
+        || {
+            let size = cluster
+                .pd_client
+                .get_region_approximate_size(region_id)
+                .unwrap_or_default();
+            size >= 2000
+        },
+    );
+    let approximate_size = cluster
+        .pd_client
+        .get_region_approximate_size(region_id)
+        .unwrap_or_default();
+
+    // transfer leader back to the old leader and the region approximate size
+    // should not change.
+    cluster.must_transfer_leader(region_id, new_peer(1, 1));
+    sleep_ms(100);
+    // after `must_transfer_leader` the new leader must have already sent a new
+    // region heartbeat.
+    let size = cluster
+        .pd_client
+        .get_region_approximate_size(region_id)
+        .unwrap_or_default();
+    assert_eq!(size, approximate_size);
 }

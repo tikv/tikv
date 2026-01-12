@@ -1,13 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
     Arc,
+    atomic::{AtomicUsize, Ordering},
 };
 
-use crossbeam::channel::{unbounded, Receiver};
+use crossbeam::channel::{Receiver, unbounded};
 use engine_rocks::{self, RocksEngine};
-use engine_traits::{Iterable, Iterator, RaftEngine, RaftEngineReadOnly, RaftLogBatch, CF_DEFAULT};
+use engine_traits::{CF_DEFAULT, Iterable, Iterator, RaftEngine, RaftEngineReadOnly, RaftLogBatch};
 use kvproto::raft_serverpb::RaftLocalState;
 use protobuf::Message;
 use raft::eraftpb::Entry;
@@ -237,6 +237,7 @@ mod tests {
         cfg.raft_store.raftdb_path = raftdb_path.to_str().unwrap().to_owned();
         cfg.raftdb.wal_dir = raftdb_wal_path.to_str().unwrap().to_owned();
         cfg.raft_engine.mut_config().dir = raft_engine_path.to_str().unwrap().to_owned();
+        cfg.validate().unwrap();
         let cache = cfg.storage.block_cache.build_shared_cache();
 
         // Dump logs from RocksEngine to RaftLogEngine.

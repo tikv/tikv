@@ -1,10 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{io, marker::Unpin, pin::Pin, task::Poll};
+use std::{fmt::Display, io, marker::Unpin, panic::Location, pin::Pin, task::Poll};
 
 use async_trait::async_trait;
+use futures::{future::LocalBoxFuture, io as async_io, io::Cursor, stream::Stream};
 use futures_io::AsyncRead;
-pub use kvproto::brpb::CloudDynamic;
 
 pub trait BlobConfig: 'static + Send + Sync {
     fn name(&self) -> &'static str;
@@ -17,11 +17,11 @@ pub trait BlobConfig: 'static + Send + Sync {
 ///
 /// See the documentation of [external_storage::UnpinReader] for why those
 /// wrappers exists.
-pub struct PutResource(pub Box<dyn AsyncRead + Send + Unpin>);
+pub struct PutResource<'a>(pub Box<dyn AsyncRead + Send + Unpin + 'a>);
 
 pub type BlobStream<'a> = Box<dyn AsyncRead + Unpin + Send + 'a>;
 
-impl AsyncRead for PutResource {
+impl AsyncRead for PutResource<'_> {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -31,8 +31,8 @@ impl AsyncRead for PutResource {
     }
 }
 
-impl From<Box<dyn AsyncRead + Send + Unpin>> for PutResource {
-    fn from(s: Box<dyn AsyncRead + Send + Unpin>) -> Self {
+impl<'a> From<Box<dyn AsyncRead + Send + Unpin + 'a>> for PutResource<'a> {
+    fn from(s: Box<dyn AsyncRead + Send + Unpin + 'a>) -> Self {
         Self(s)
     }
 }
@@ -44,13 +44,50 @@ pub trait BlobStorage: 'static + Send + Sync {
     fn config(&self) -> Box<dyn BlobConfig>;
 
     /// Write all contents of the read to the given path.
-    async fn put(&self, name: &str, reader: PutResource, content_length: u64) -> io::Result<()>;
+    async fn put(&self, name: &str, reader: PutResource<'_>, content_length: u64)
+    -> io::Result<()>;
 
     /// Read all contents of the given path.
     fn get(&self, name: &str) -> BlobStream<'_>;
 
     /// Read part of contents of the given path.
     fn get_part(&self, name: &str, off: u64, len: u64) -> BlobStream<'_>;
+}
+
+pub trait DeletableStorage {
+    fn delete(&self, name: &str) -> LocalBoxFuture<'_, io::Result<()>>;
+}
+
+#[track_caller]
+pub fn unimplemented() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::Unsupported,
+        format!(
+            "this method isn't supported, check more details at {:?}",
+            Location::caller()
+        ),
+    )
+}
+
+#[derive(Debug)]
+pub struct BlobObject {
+    pub key: String,
+}
+
+impl Display for BlobObject {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.key)
+    }
+}
+
+/// An storage that its content can be enumerated by prefix.
+pub trait IterableStorage {
+    /// Walk the prefix of the blob storage.
+    /// It returns the stream of items.
+    fn iter_prefix(
+        &self,
+        prefix: &str,
+    ) -> Pin<Box<dyn Stream<Item = std::result::Result<BlobObject, io::Error>> + '_>>;
 }
 
 impl BlobConfig for dyn BlobStorage {
@@ -69,7 +106,12 @@ impl BlobStorage for Box<dyn BlobStorage> {
         (**self).config()
     }
 
-    async fn put(&self, name: &str, reader: PutResource, content_length: u64) -> io::Result<()> {
+    async fn put(
+        &self,
+        name: &str,
+        reader: PutResource<'_>,
+        content_length: u64,
+    ) -> io::Result<()> {
         let fut = (**self).put(name, reader, content_length);
         fut.await
     }
@@ -177,20 +219,6 @@ impl BucketConf {
             Ok(u)
         }
     }
-
-    pub fn from_cloud_dynamic(cloud_dynamic: &CloudDynamic) -> io::Result<Self> {
-        let bucket = cloud_dynamic.bucket.clone().into_option().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::Other, "Required field bucket is missing")
-        })?;
-
-        Ok(Self {
-            endpoint: StringNonEmpty::opt(bucket.endpoint),
-            bucket: StringNonEmpty::required_field(bucket.bucket, "bucket")?,
-            prefix: StringNonEmpty::opt(bucket.prefix),
-            storage_class: StringNonEmpty::opt(bucket.storage_class),
-            region: StringNonEmpty::opt(bucket.region),
-        })
-    }
 }
 
 pub fn none_to_empty(opt: Option<StringNonEmpty>) -> String {
@@ -201,8 +229,19 @@ pub fn none_to_empty(opt: Option<StringNonEmpty>) -> String {
     }
 }
 
+/// Like AsyncReadExt::read_to_end, but only try to initialize the buffer once.
+/// Check https://github.com/rust-lang/futures-rs/issues/2658 for the reason we cannot
+/// directly use it.
+pub async fn read_to_end<R: AsyncRead>(r: R, v: &mut Vec<u8>) -> std::io::Result<u64> {
+    let mut c = Cursor::new(v);
+    async_io::copy(r, &mut c).await
+}
+
 #[cfg(test)]
 mod tests {
+    extern crate test;
+    use futures::AsyncReadExt;
+
     use super::*;
 
     #[test]
@@ -219,5 +258,83 @@ mod tests {
             bucket.url("s3").unwrap().to_string(),
             "http://endpoint.com/bucket/backup%2001/prefix/"
         );
+    }
+
+    enum ThrottleReadState {
+        Spawning,
+        Emitting,
+    }
+    /// ThrottleRead throttles a `Read` -- make it emits 2 chars for each
+    /// `read` call. This is copy & paste from the implmentation from s3.rs.
+    #[pin_project::pin_project]
+    struct ThrottleRead<R> {
+        #[pin]
+        inner: R,
+        state: ThrottleReadState,
+    }
+    impl<R: AsyncRead> AsyncRead for ThrottleRead<R> {
+        fn poll_read(
+            self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+            buf: &mut [u8],
+        ) -> Poll<io::Result<usize>> {
+            let this = self.project();
+            match this.state {
+                ThrottleReadState::Spawning => {
+                    *this.state = ThrottleReadState::Emitting;
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                }
+                ThrottleReadState::Emitting => {
+                    *this.state = ThrottleReadState::Spawning;
+                    this.inner.poll_read(cx, &mut buf[..2])
+                }
+            }
+        }
+    }
+    impl<R> ThrottleRead<R> {
+        fn new(r: R) -> Self {
+            Self {
+                inner: r,
+                state: ThrottleReadState::Spawning,
+            }
+        }
+    }
+
+    const BENCH_READ_SIZE: usize = 128 * 1024;
+
+    // 255,120,895 ns/iter (+/- 73,332,249) (futures-util 0.3.15)
+    #[bench]
+    fn bench_read_to_end(b: &mut test::Bencher) {
+        let mut v = [0; BENCH_READ_SIZE];
+        let mut dst = Vec::with_capacity(BENCH_READ_SIZE);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+
+        b.iter(|| {
+            let mut r = ThrottleRead::new(Cursor::new(&mut v));
+            dst.clear();
+
+            rt.block_on(r.read_to_end(&mut dst)).unwrap();
+            assert_eq!(dst.len(), BENCH_READ_SIZE)
+        })
+    }
+
+    // 5,850,042 ns/iter (+/- 3,787,438)
+    #[bench]
+    fn bench_manual_read_to_end(b: &mut test::Bencher) {
+        let mut v = [0; BENCH_READ_SIZE];
+        let mut dst = Vec::with_capacity(BENCH_READ_SIZE);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        b.iter(|| {
+            let r = ThrottleRead::new(Cursor::new(&mut v));
+            dst.clear();
+
+            rt.block_on(read_to_end(r, &mut dst)).unwrap();
+            assert_eq!(dst.len(), BENCH_READ_SIZE)
+        })
     }
 }

@@ -1,17 +1,21 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(min_specialization)]
+#![feature(associated_type_defaults)]
 
 mod api_v1;
 mod api_v1ttl;
 pub mod api_v2;
+pub mod keyspace;
 
 use engine_traits::Result;
 use kvproto::kvrpcpb::ApiVersion;
 pub use match_template::match_template;
 use txn_types::{Key, TimeStamp};
 
-pub trait KvFormat: Clone + Copy + 'static + Send + Sync {
+use crate::keyspace::Keyspace;
+
+pub trait KvFormat: Keyspace + Clone + Copy + 'static + Send + Sync {
     const TAG: ApiVersion;
     /// Corresponding TAG of client requests. For test only.
     #[cfg(any(test, feature = "testexport"))]
@@ -255,7 +259,7 @@ impl<T: AsRef<[u8]>> RawValue<T> {
     #[inline]
     pub fn is_ttl_expired(&self, current_ts: u64) -> bool {
         self.expire_ts
-            .map_or(false, |expire_ts| expire_ts <= current_ts)
+            .is_some_and(|expire_ts| expire_ts <= current_ts)
     }
 }
 

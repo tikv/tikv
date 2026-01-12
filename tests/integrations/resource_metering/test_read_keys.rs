@@ -3,7 +3,7 @@
 use std::{sync::Arc, time::Duration};
 
 use concurrency_manager::ConcurrencyManager;
-use crossbeam::channel::{unbounded, Receiver, RecvTimeoutError, Sender};
+use crossbeam::channel::{Receiver, RecvTimeoutError, Sender, unbounded};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{coprocessor, kvrpcpb::*, resource_usage_agent::ResourceUsageRecord, tikvpb::*};
 use protobuf::Message;
@@ -14,13 +14,13 @@ use test_util::alloc_port;
 use tidb_query_datatype::codec::Datum;
 use tikv::{
     config::CoprReadPoolConfig,
-    coprocessor::{readpool_impl, Endpoint},
+    coprocessor::{Endpoint, readpool_impl},
     read_pool::ReadPool,
     storage::{Engine, RocksEngine},
 };
 use tikv_util::{
-    config::ReadableDuration, quota_limiter::QuotaLimiter, thread_group::GroupProperties,
-    HandyRwLock,
+    HandyRwLock, config::ReadableDuration, quota_limiter::QuotaLimiter,
+    thread_group::GroupProperties,
 };
 use tipb::SelectResponse;
 
@@ -157,7 +157,10 @@ fn test_read_keys_coprocessor() {
     cfg.report_receiver_interval = ReadableDuration::millis(400);
 
     let (_, collector_reg_handle, resource_tag_factory, recorder_worker) =
-        resource_metering::init_recorder(cfg.precision.as_millis());
+        resource_metering::init_recorder(
+            cfg.precision.as_millis(),
+            cfg.enable_network_io_collection,
+        );
     let (_, data_sink_reg_handle, reporter_worker) =
         resource_metering::init_reporter(cfg, collector_reg_handle);
 
@@ -222,13 +225,14 @@ fn init_coprocessor_with_data(
         &CoprReadPoolConfig::default_for_test(),
         store.get_engine(),
     ));
-    let cm = ConcurrencyManager::new(1.into());
+    let cm = ConcurrencyManager::new_for_test(1.into());
     Endpoint::new(
         &tikv::server::Config::default(),
         pool.handle(),
         cm,
         tag_factory,
         Arc::new(QuotaLimiter::default()),
+        None,
     )
 }
 

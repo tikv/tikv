@@ -20,22 +20,22 @@ impl Collator for CollatorUtf8Mb4Bin {
 
     #[inline]
     fn write_sort_key<W: BufferWriter>(writer: &mut W, bstr: &[u8]) -> Result<usize> {
-        let s = str::from_utf8(bstr)?.trim_end_matches(PADDING_SPACE);
-        writer.write_bytes(s.as_bytes())?;
-        Ok(s.len())
+        let bstr = trim_end_padding(bstr);
+        writer.write_bytes(bstr)?;
+        Ok(bstr.len())
     }
 
     #[inline]
-    fn sort_compare(a: &[u8], b: &[u8]) -> Result<Ordering> {
-        let sa = str::from_utf8(a)?.trim_end_matches(PADDING_SPACE);
-        let sb = str::from_utf8(b)?.trim_end_matches(PADDING_SPACE);
-        Ok(sa.as_bytes().cmp(sb.as_bytes()))
+    fn sort_compare(a: &[u8], b: &[u8], force_no_pad: bool) -> Result<Ordering> {
+        let a = if force_no_pad { a } else { trim_end_padding(a) };
+        let b = if force_no_pad { b } else { trim_end_padding(b) };
+        Ok(a.cmp(b))
     }
 
     #[inline]
     fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8]) -> Result<()> {
-        let s = str::from_utf8(bstr)?.trim_end_matches(PADDING_SPACE);
-        s.hash(state);
+        let bstr = trim_end_padding(bstr);
+        bstr.hash(state);
         Ok(())
     }
 }
@@ -57,21 +57,17 @@ impl Collator for CollatorUtf8Mb4BinNoPadding {
 
     #[inline]
     fn write_sort_key<W: BufferWriter>(writer: &mut W, bstr: &[u8]) -> Result<usize> {
-        str::from_utf8(bstr)?;
         writer.write_bytes(bstr)?;
         Ok(bstr.len())
     }
 
     #[inline]
-    fn sort_compare(a: &[u8], b: &[u8]) -> Result<Ordering> {
-        str::from_utf8(a)?;
-        str::from_utf8(b)?;
+    fn sort_compare(a: &[u8], b: &[u8], _force_no_pad: bool) -> Result<Ordering> {
         Ok(a.cmp(b))
     }
 
     #[inline]
     fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8]) -> Result<()> {
-        str::from_utf8(bstr)?;
         bstr.hash(state);
         Ok(())
     }

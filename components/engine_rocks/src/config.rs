@@ -65,9 +65,9 @@ pub mod compression_type_level_serde {
 
     use rocksdb::DBCompressionType;
     use serde::{
+        Deserializer, Serializer,
         de::{Error, SeqAccess, Unexpected, Visitor},
         ser::SerializeSeq,
-        Deserializer, Serializer,
     };
 
     pub fn serialize<S>(ts: &[DBCompressionType; 7], serializer: S) -> Result<S::Ok, S::Error>
@@ -152,8 +152,8 @@ pub mod compression_type_serde {
 
     use rocksdb::DBCompressionType;
     use serde::{
-        de::{Error, Unexpected, Visitor},
         Deserializer, Serializer,
+        de::{Error, Unexpected, Visitor},
     };
 
     pub fn serialize<S>(t: &DBCompressionType, serializer: S) -> Result<S::Ok, S::Error>
@@ -179,7 +179,7 @@ pub mod compression_type_serde {
         D: Deserializer<'de>,
     {
         struct StrVistor;
-        impl<'de> Visitor<'de> for StrVistor {
+        impl Visitor<'_> for StrVistor {
             type Value = DBCompressionType;
 
             fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -215,13 +215,50 @@ pub mod compression_type_serde {
     }
 }
 
+impl From<CompressionType> for ConfigValue {
+    fn from(comp: CompressionType) -> ConfigValue {
+        let str_value = match comp {
+            CompressionType::No => "no",
+            CompressionType::Snappy => "snappy",
+            CompressionType::Zlib => "zlib",
+            CompressionType::Bz2 => "bzip2",
+            CompressionType::Lz4 => "lz4",
+            CompressionType::Lz4hc => "lz4hc",
+            CompressionType::Zstd => "zstd",
+            CompressionType::ZstdNotFinal => "zstd-not-final",
+        };
+        ConfigValue::String(str_value.into())
+    }
+}
+
+impl TryFrom<ConfigValue> for CompressionType {
+    type Error = String;
+    fn try_from(c: ConfigValue) -> Result<CompressionType, Self::Error> {
+        if let ConfigValue::String(s) = c {
+            match s {
+                s if s.eq_ignore_ascii_case("no") => Ok(CompressionType::No),
+                s if s.eq_ignore_ascii_case("snappy") => Ok(CompressionType::Snappy),
+                s if s.eq_ignore_ascii_case("zlib") => Ok(CompressionType::Zlib),
+                s if s.eq_ignore_ascii_case("bzip2") => Ok(CompressionType::Bz2),
+                s if s.eq_ignore_ascii_case("lz4") => Ok(CompressionType::Lz4),
+                s if s.eq_ignore_ascii_case("lz4hc") => Ok(CompressionType::Lz4hc),
+                s if s.eq_ignore_ascii_case("zstd") => Ok(CompressionType::Zstd),
+                s if s.eq_ignore_ascii_case("zstd-not-final") => Ok(CompressionType::ZstdNotFinal),
+                _ => Err(format!("invalid compression type: {:?}", s)),
+            }
+        } else {
+            panic!("expect: ConfigValue::String, got: {:?}", c);
+        }
+    }
+}
+
 pub mod checksum_serde {
     use std::fmt;
 
     use rocksdb::ChecksumType;
     use serde::{
-        de::{Error, Unexpected, Visitor},
         Deserializer, Serializer,
+        de::{Error, Unexpected, Visitor},
     };
 
     pub fn serialize<S>(t: &ChecksumType, serializer: S) -> Result<S::Ok, S::Error>
@@ -243,7 +280,7 @@ pub mod checksum_serde {
         D: Deserializer<'de>,
     {
         struct StrVistor;
-        impl<'de> Visitor<'de> for StrVistor {
+        impl Visitor<'_> for StrVistor {
             type Value = ChecksumType;
 
             fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -280,8 +317,8 @@ pub mod prepopulate_block_cache_serde {
 
     use rocksdb::PrepopulateBlockCache;
     use serde::{
-        de::{Error, Unexpected, Visitor},
         Deserializer, Serializer,
+        de::{Error, Unexpected, Visitor},
     };
 
     pub fn serialize<S>(t: &PrepopulateBlockCache, serializer: S) -> Result<S::Ok, S::Error>
@@ -300,7 +337,7 @@ pub mod prepopulate_block_cache_serde {
         D: Deserializer<'de>,
     {
         struct StrVistor;
-        impl<'de> Visitor<'de> for StrVistor {
+        impl Visitor<'_> for StrVistor {
             type Value = PrepopulateBlockCache;
 
             fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -340,9 +377,9 @@ pub enum BlobRunMode {
 impl From<BlobRunMode> for ConfigValue {
     fn from(mode: BlobRunMode) -> ConfigValue {
         let str_value = match mode {
-            BlobRunMode::Normal => "normal",
-            BlobRunMode::ReadOnly => "read-only",
-            BlobRunMode::Fallback => "fallback",
+            BlobRunMode::Normal => "kNormal",
+            BlobRunMode::ReadOnly => "kReadOnly",
+            BlobRunMode::Fallback => "kFallback",
         };
         ConfigValue::String(str_value.into())
     }
@@ -366,8 +403,11 @@ impl FromStr for BlobRunMode {
             "normal" => Ok(BlobRunMode::Normal),
             "read-only" => Ok(BlobRunMode::ReadOnly),
             "fallback" => Ok(BlobRunMode::Fallback),
+            "kNormal" => Ok(BlobRunMode::Normal),
+            "kReadOnly" => Ok(BlobRunMode::ReadOnly),
+            "kFallback" => Ok(BlobRunMode::Fallback),
             m => Err(format!(
-                "expect: normal, read-only or fallback, got: {:?}",
+                "expect: normal, kNormal, read-only, kReadOnly, kFallback or fallback, got: {:?}",
                 m
             )),
         }

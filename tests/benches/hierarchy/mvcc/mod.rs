@@ -1,17 +1,17 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use concurrency_manager::ConcurrencyManager;
-use criterion::{black_box, BatchSize, Bencher, Criterion};
+use criterion::{BatchSize, Bencher, Criterion, black_box};
 use kvproto::kvrpcpb::{AssertionLevel, Context, PrewriteRequestPessimisticAction::*};
 use test_util::KvGenerator;
 use tikv::storage::{
     kv::{Engine, WriteData},
     mvcc::{self, MvccReader, MvccTxn, SnapshotReader},
-    txn::{cleanup, commit, prewrite, CommitKind, TransactionKind, TransactionProperties},
+    txn::{CommitKind, TransactionKind, TransactionProperties, cleanup, commit, prewrite},
 };
 use txn_types::{Key, Mutation, TimeStamp};
 
-use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS, DEFAULT_KV_GENERATOR_SEED};
+use super::{BenchConfig, DEFAULT_ITERATIONS, DEFAULT_KV_GENERATOR_SEED, EngineFactory};
 
 fn setup_prewrite<E, F>(
     engine: &mut E,
@@ -25,7 +25,7 @@ where
     let ctx = Context::default();
     let snapshot = engine.snapshot(Default::default()).unwrap();
     let start_ts = start_ts.into();
-    let cm = ConcurrencyManager::new(start_ts);
+    let cm = ConcurrencyManager::new_for_test(start_ts);
     let mut txn = MvccTxn::new(start_ts, cm);
     let mut reader = SnapshotReader::new(start_ts, snapshot, true);
 
@@ -56,6 +56,7 @@ where
             Mutation::make_put(Key::from_raw(k), v.clone()),
             &None,
             SkipPessimisticCheck,
+            None,
         )
         .unwrap();
     }
@@ -68,7 +69,7 @@ where
 
 fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config: &BenchConfig<F>) {
     let mut engine = config.engine_factory.build();
-    let cm = ConcurrencyManager::new(1.into());
+    let cm = ConcurrencyManager::new_for_test(1.into());
     b.iter_batched(
         || {
             let mutations: Vec<(Mutation, Vec<u8>)> = KvGenerator::with_seed(
@@ -107,6 +108,7 @@ fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config: &B
                     mutation,
                     &None,
                     SkipPessimisticCheck,
+                    None,
                 )
                 .unwrap();
             }
@@ -117,14 +119,14 @@ fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config: &B
 
 fn mvcc_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config: &BenchConfig<F>) {
     let mut engine = config.engine_factory.build();
-    let cm = ConcurrencyManager::new(1.into());
+    let cm = ConcurrencyManager::new_for_test(1.into());
     b.iter_batched(
         || setup_prewrite(&mut engine, config, 1),
         |(snapshot, keys)| {
             for key in keys {
                 let mut txn = mvcc::MvccTxn::new(1.into(), cm.clone());
                 let mut reader = SnapshotReader::new(1.into(), snapshot.clone(), true);
-                black_box(commit(&mut txn, &mut reader, key, 1.into())).unwrap();
+                black_box(commit(&mut txn, &mut reader, key, 1.into(), None)).unwrap();
             }
         },
         BatchSize::SmallInput,
@@ -136,7 +138,7 @@ fn mvcc_rollback_prewrote<E: Engine, F: EngineFactory<E>>(
     config: &BenchConfig<F>,
 ) {
     let mut engine = config.engine_factory.build();
-    let cm = ConcurrencyManager::new(1.into());
+    let cm = ConcurrencyManager::new_for_test(1.into());
     b.iter_batched(
         || setup_prewrite(&mut engine, config, 1),
         |(snapshot, keys)| {
@@ -162,7 +164,7 @@ fn mvcc_rollback_conflict<E: Engine, F: EngineFactory<E>>(
     config: &BenchConfig<F>,
 ) {
     let mut engine = config.engine_factory.build();
-    let cm = ConcurrencyManager::new(1.into());
+    let cm = ConcurrencyManager::new_for_test(1.into());
     b.iter_batched(
         || setup_prewrite(&mut engine, config, 2),
         |(snapshot, keys)| {
@@ -188,7 +190,7 @@ fn mvcc_rollback_non_prewrote<E: Engine, F: EngineFactory<E>>(
     config: &BenchConfig<F>,
 ) {
     let mut engine = config.engine_factory.build();
-    let cm = ConcurrencyManager::new(1.into());
+    let cm = ConcurrencyManager::new_for_test(1.into());
     b.iter_batched(
         || {
             let kvs = KvGenerator::with_seed(

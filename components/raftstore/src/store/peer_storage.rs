@@ -2,49 +2,63 @@
 
 // #[PerformanceCriticalPath]
 use std::{
-    cell::RefCell,
+    cell::{Ref, RefCell},
     error,
     ops::{Deref, DerefMut},
     sync::{
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         mpsc::{self, Receiver, TryRecvError},
-        Arc,
     },
-    u64,
+    time::Duration,
 };
 
-use engine_traits::{Engines, KvEngine, Mutable, Peekable, RaftEngine, RaftLogBatch, CF_RAFT};
+use collections::HashMap;
+use engine_traits::{
+    CF_RAFT, Engines, KvEngine, Mutable, Peekable, RaftEngine, RaftLogBatch, WriteBatch,
+    WriteOptions,
+};
 use fail::fail_point;
 use into_other::into_other;
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::{
-    metapb::{self, Region},
+    metapb::{self, Peer, Region},
     raft_serverpb::{
         MergeState, PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData, RegionLocalState,
     },
 };
 use protobuf::Message;
 use raft::{
-    self,
+    self, Error as RaftError, GetEntriesContext, RaftState, Ready, Storage, StorageError,
     eraftpb::{self, ConfState, Entry, HardState, Snapshot},
-    Error as RaftError, GetEntriesContext, RaftState, Ready, Storage, StorageError,
 };
+use rand::Rng;
 use tikv_util::{
-    box_err, box_try, debug, defer, error, info, store::find_peer_by_id, time::Instant, warn,
+    box_err, box_try, debug, defer, error, info,
+    store::find_peer_by_id,
+    time::{Instant, UnixSecs},
+    warn,
     worker::Scheduler,
 };
 
-use super::{metrics::*, worker::RegionTask, SnapEntry, SnapKey, SnapManager};
+use super::{
+    SnapEntry, SnapKey, SnapManager, local_metrics::RaftMetrics, metrics::*, worker::RegionTask,
+};
 use crate::{
+    Error, Result,
     store::{
         async_io::{read::ReadTask, write::WriteTask},
-        entry_storage::EntryStorage,
-        fsm::GenSnapTask,
+        entry_storage::{CacheWarmupState, EntryStorage},
+        fsm::{GenSnapTask, StoreMeta},
+        msg::PeerClearMetaStat,
         peer::PersistSnapshotResult,
         util,
     },
-    Error, Result,
 };
+
+// The maximum tick interval between precheck requests. The tick interval helps
+// prevent sending the precheck requests too aggressively.
+const SNAP_GEN_PRECHECK_MAX_TICK_INTERVAL: usize = 5;
 
 // When we create a region peer, we should initialize its log term/index > 0,
 // so that we can force the follower peer to sync the snapshot first.
@@ -93,7 +107,7 @@ impl PartialEq for SnapState {
             (&SnapState::Relax, &SnapState::Relax)
             | (&SnapState::ApplyAborted, &SnapState::ApplyAborted)
             | (&SnapState::Generating { .. }, &SnapState::Generating { .. }) => true,
-            (&SnapState::Applying(ref b1), &SnapState::Applying(ref b2)) => {
+            (SnapState::Applying(b1), SnapState::Applying(b2)) => {
                 b1.load(Ordering::Relaxed) == b2.load(Ordering::Relaxed)
             }
             _ => false,
@@ -183,9 +197,6 @@ fn init_raft_state<EK: KvEngine, ER: RaftEngine>(
         raft_state.last_index = RAFT_INIT_LOG_INDEX;
         raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
         raft_state.mut_hard_state().set_commit(RAFT_INIT_LOG_INDEX);
-        let mut lb = engines.raft.log_batch(0);
-        lb.put_raft_state(region.get_id(), &raft_state)?;
-        engines.raft.consume(&mut lb, true)?;
     }
     Ok(raft_state)
 }
@@ -226,7 +237,7 @@ where
 
     snap_state: RefCell<SnapState>,
     gen_snap_task: RefCell<Option<GenSnapTask>>,
-    region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+    region_scheduler: Scheduler<RegionTask>,
     snap_tried_cnt: RefCell<usize>,
 
     entry_storage: EntryStorage<EK, ER>,
@@ -296,10 +307,11 @@ where
     pub fn new(
         engines: Engines<EK, ER>,
         region: &metapb::Region,
-        region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+        region_scheduler: Scheduler<RegionTask>,
         raftlog_fetch_scheduler: Scheduler<ReadTask<EK>>,
         peer_id: u64,
         tag: String,
+        raft_metrics: &RaftMetrics,
     ) -> Result<PeerStorage<EK, ER>> {
         debug!(
             "creating storage on specified path";
@@ -307,9 +319,19 @@ where
             "peer_id" => peer_id,
             "path" => ?engines.kv.path(),
         );
+        let start = Instant::now();
         let raft_state = init_raft_state(&engines, region)?;
-        let apply_state = init_apply_state(&engines, region)?;
+        raft_metrics
+            .io_write_init_raft_state
+            .observe(start.saturating_elapsed().as_secs_f64());
 
+        let start = Instant::now();
+        let apply_state = init_apply_state(&engines, region)?;
+        raft_metrics
+            .io_write_init_apply_state
+            .observe(start.saturating_elapsed().as_secs_f64());
+
+        let start = Instant::now();
         let entry_storage = EntryStorage::new(
             peer_id,
             engines.raft.clone(),
@@ -317,7 +339,11 @@ where
             apply_state,
             region,
             raftlog_fetch_scheduler,
+            raft_metrics,
         )?;
+        raft_metrics
+            .io_read_entry_storage_create
+            .observe(start.saturating_elapsed().as_secs_f64());
 
         Ok(PeerStorage {
             engines,
@@ -449,6 +475,11 @@ where
     /// Gets a snapshot. Returns `SnapshotTemporarilyUnavailable` if there is no
     /// available snapshot.
     pub fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {
+        fail_point!("ignore generate snapshot", self.peer_id == 1, |_| {
+            Err(raft::Error::Store(
+                raft::StorageError::SnapshotTemporarilyUnavailable,
+            ))
+        });
         if self.peer.as_ref().unwrap().is_witness {
             // witness could be the leader for a while, do not generate snapshot now
             return Err(raft::Error::Store(
@@ -456,7 +487,19 @@ where
             ));
         }
 
-        if find_peer_by_id(&self.region, to).map_or(false, |p| p.is_witness) {
+        if find_peer_by_id(&self.region, to).is_some_and(|p| p.is_witness) {
+            // Although we always sending snapshot task behind apply task to get latest
+            // snapshot, we can't use `last_applying_idx` here, as below the judgment
+            // condition will generate an witness snapshot directly, the new non-witness
+            // will ingore this mismatch snapshot and can't request snapshot successfully
+            // again.
+            if self.applied_index() < request_index {
+                // It may be a request from non-witness. In order to avoid generating mismatch
+                // snapshots, wait for apply non-witness to complete
+                return Err(raft::Error::Store(
+                    raft::StorageError::SnapshotTemporarilyUnavailable,
+                ));
+            }
             // generate an empty snapshot for witness directly
             return Ok(util::new_empty_snapshot(
                 self.region.clone(),
@@ -487,6 +530,8 @@ where
                     *snap_state = SnapState::Relax;
                     *tried_cnt = 0;
                     if self.validate_snap(&s, request_index) {
+                        info!("start sending snapshot"; "region_id" => self.region.get_id(),
+                            "peer_id" => self.peer_id, "request_peer" => to,);
                         return Ok(s);
                     }
                 }
@@ -507,67 +552,108 @@ where
             panic!("{} unexpected state: {:?}", self.tag, *snap_state);
         }
 
-        if *tried_cnt >= MAX_SNAP_TRY_CNT {
-            let cnt = *tried_cnt;
-            *tried_cnt = 0;
-            return Err(raft::Error::Store(box_err!(
-                "failed to get snapshot after {} times",
-                cnt
-            )));
+        match find_peer_by_id(&self.region, to) {
+            Some(to_peer) => {
+                let max_snap_try_cnt = (|| {
+                    fail_point!("ignore_snap_try_cnt", |_| usize::MAX);
+                    MAX_SNAP_TRY_CNT
+                })();
+
+                if *tried_cnt >= max_snap_try_cnt {
+                    let cnt = *tried_cnt;
+                    *tried_cnt = 0;
+                    return Err(raft::Error::Store(box_err!(
+                        "failed to get snapshot after {} times",
+                        cnt
+                    )));
+                }
+                if !tried || !last_canceled {
+                    *tried_cnt += 1;
+                }
+
+                info!(
+                    "requesting snapshot";
+                    "region_id" => self.region.get_id(),
+                    "peer_id" => self.peer_id,
+                    "request_index" => request_index,
+                    "request_peer" => to,
+                );
+
+                let (sender, receiver) = mpsc::sync_channel(1);
+                let canceled = Arc::new(AtomicBool::new(false));
+                let index = Arc::new(AtomicU64::new(0));
+                *snap_state = SnapState::Generating {
+                    canceled: canceled.clone(),
+                    index: index.clone(),
+                    receiver,
+                };
+
+                let task = GenSnapTask::new(
+                    self.region.get_id(),
+                    index,
+                    canceled,
+                    sender,
+                    to_peer.clone(),
+                );
+                self.set_gen_snap_task(task);
+            }
+            None => {
+                warn!(
+                    "failed to find peer";
+                    "region_id" => self.region.get_id(),
+                    "peer_id" => self.peer_id,
+                    "times" => *tried_cnt,
+                    "request_peer" => to,
+                );
+            }
         }
-        if !tried || !last_canceled {
-            *tried_cnt += 1;
-        }
-
-        info!(
-            "requesting snapshot";
-            "region_id" => self.region.get_id(),
-            "peer_id" => self.peer_id,
-            "request_index" => request_index,
-            "request_peer" => to,
-        );
-
-        let (sender, receiver) = mpsc::sync_channel(1);
-        let canceled = Arc::new(AtomicBool::new(false));
-        let index = Arc::new(AtomicU64::new(0));
-        *snap_state = SnapState::Generating {
-            canceled: canceled.clone(),
-            index: index.clone(),
-            receiver,
-        };
-
-        let store_id = self
-            .region()
-            .get_peers()
-            .iter()
-            .find(|p| p.id == to)
-            .map(|p| p.store_id)
-            .unwrap_or(0);
-        let task = GenSnapTask::new(self.region.get_id(), index, canceled, sender, store_id);
-
-        let mut gen_snap_task = self.gen_snap_task.borrow_mut();
-        assert!(gen_snap_task.is_none());
-        *gen_snap_task = Some(task);
         Err(raft::Error::Store(
             raft::StorageError::SnapshotTemporarilyUnavailable,
         ))
+    }
+
+    pub fn need_gen_snap_precheck(&self) -> Option<metapb::Peer> {
+        let mut gen_task = self.gen_snap_task.borrow_mut();
+        let task = gen_task.as_mut()?;
+        if task.precheck_remaining_ticks == 0 {
+            // Use random tick counts to space out the requests.
+            task.precheck_remaining_ticks =
+                rand::thread_rng().gen_range(1..=SNAP_GEN_PRECHECK_MAX_TICK_INTERVAL);
+            Some(task.to_peer.clone())
+        } else {
+            task.precheck_remaining_ticks -= 1;
+            None
+        }
+    }
+
+    pub fn set_gen_snap_task_for_balance(&self) {
+        if let Some(gen_task) = self.gen_snap_task.borrow_mut().as_mut() {
+            gen_task.set_for_balance();
+        }
+    }
+
+    pub fn get_gen_snap_task(&self) -> Ref<'_, Option<GenSnapTask>> {
+        self.gen_snap_task.borrow()
     }
 
     pub fn has_gen_snap_task(&self) -> bool {
         self.gen_snap_task.borrow().is_some()
     }
 
-    pub fn mut_gen_snap_task(&mut self) -> &mut Option<GenSnapTask> {
-        self.gen_snap_task.get_mut()
+    pub fn take_gen_snap_task(&self) -> Option<GenSnapTask> {
+        let mut task = self.gen_snap_task.borrow_mut();
+        (*task).take()
     }
 
-    pub fn take_gen_snap_task(&mut self) -> Option<GenSnapTask> {
-        self.gen_snap_task.get_mut().take()
+    pub fn set_gen_snap_task(&self, task: GenSnapTask) {
+        let mut gen_snap_task = self.gen_snap_task.borrow_mut();
+        assert!(gen_snap_task.is_none(), "{:?}", gen_snap_task);
+        *gen_snap_task = Some(task);
     }
 
-    pub fn on_compact_raftlog(&mut self, idx: u64) {
-        self.entry_storage.compact_entry_cache(idx);
-        self.cancel_generating_snap(Some(idx));
+    pub fn on_compact_raftlog_cache(&mut self, idx: u64, state: Option<&mut CacheWarmupState>) {
+        self.entry_storage.compact_entry_cache(idx, state);
+        self.entry_storage.compact_term_cache(idx);
     }
 
     // Apply the peer with given snapshot.
@@ -666,9 +752,40 @@ where
             "peer_id" => self.peer_id,
             "region" => ?region,
             "state" => ?self.apply_state(),
+            "for_witness" => for_witness,
         );
 
         Ok((region, for_witness))
+    }
+
+    pub fn schedule_destroy_peer(
+        &mut self,
+        peer: metapb::Peer,
+        region: metapb::Region,
+        keep_data: bool,
+        local_first_replicate: bool,
+        first_index: u64,
+        merge_state: Option<MergeState>,
+        pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
+    ) -> Result<()> {
+        self.entry_storage.clear();
+        // For `ClearPeerMeta` task, it must be sent to the worker even
+        // if the capacity is full.
+        box_try!(
+            self.region_scheduler
+                .schedule_force(RegionTask::ClearPeerMeta {
+                    peer,
+                    region,
+                    raft_state: self.raft_state().clone(),
+                    initialized: self.is_initialized(),
+                    keep_data,
+                    merge_state,
+                    local_first_replicate,
+                    first_index,
+                    pending_create_peers,
+                })
+        );
+        Ok(())
     }
 
     /// Delete all meta belong to the region. Results are stored in `wb`.
@@ -767,8 +884,9 @@ where
                 } else if s == JOB_STATUS_CANCELLED {
                     SnapState::ApplyAborted
                 } else if s == JOB_STATUS_FAILED {
-                    // TODO: cleanup region and treat it as tombstone.
-                    panic!("{} applying snapshot failed", self.tag,);
+                    // Cleanup region and treat it as tombstone.
+                    warn!("{} applying snapshot failed", self.tag);
+                    SnapState::ApplyAborted
                 } else {
                     return CheckApplyingSnapStatus::Applying;
                 }
@@ -820,7 +938,7 @@ where
     }
 
     /// Cancel generating snapshot.
-    pub fn cancel_generating_snap(&mut self, compact_to: Option<u64>) {
+    pub fn cancel_generating_snap(&self, compact_to: Option<u64>) {
         let snap_state = self.snap_state.borrow();
         if let SnapState::Generating {
             ref canceled,
@@ -831,11 +949,20 @@ where
             if !canceled.load(Ordering::SeqCst) {
                 if let Some(idx) = compact_to {
                     let snap_index = index.load(Ordering::SeqCst);
+                    // Do not cancel if the snapshot is still valid after the
+                    // compaction.
                     if snap_index == 0 || idx <= snap_index + 1 {
                         return;
                     }
                 }
                 canceled.store(true, Ordering::SeqCst);
+                // Cancel snapshot precheck.
+                self.take_gen_snap_task();
+                info!(
+                    "canceled generating snap";
+                    "region_id" => self.region.get_id(),
+                    "peer_id" => self.peer_id,
+                );
             }
         }
     }
@@ -861,6 +988,7 @@ where
             region_id: self.get_region_id(),
             status,
             peer_id: self.peer_id,
+            create_time: Instant::now_coarse(),
         };
 
         // Don't schedule the snapshot to region worker.
@@ -991,6 +1119,9 @@ where
         // The `region` is updated after persisting in order to stay consistent with the
         // one in `StoreMeta::regions` (will be updated soon).
         // See comments in `apply_snapshot` for more details.
+        (|| {
+            fail_point!("before_set_region_on_peer_3", self.peer_id == 3, |_| {});
+        })();
         self.set_region(res.region.clone());
     }
 }
@@ -1028,6 +1159,117 @@ where
     Ok(())
 }
 
+pub fn clear_meta_in_kv_and_raft<EK, ER>(
+    engines: &Engines<EK, ER>,
+    peer: Peer,
+    region: Region,
+    raft_state: RaftLocalState,
+    merge_state: Option<MergeState>,
+    initialized: bool,
+    local_first_replicate: bool,
+    first_index: u64,
+    // Holding lock to avoid apply worker applies split.
+    store_meta: Arc<Mutex<StoreMeta>>,
+    pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
+) -> Result<PeerClearMetaStat>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    let peer_id = peer.get_id();
+    let mut region = region.clone();
+
+    // Lock the store_meta to ensure safe access to pending_create_peers.
+    // TODO: Find a way to make destroying operations not hold the
+    // store_meta lock in the future.
+    let _meta = store_meta.lock().unwrap();
+
+    let (pending_create_peers, clean) = if local_first_replicate {
+        let mut pending = pending_create_peers.lock().unwrap();
+        if initialized {
+            assert_eq!(pending.get(&region.get_id()), None);
+            (None, true)
+        } else if let Some(status) = pending.get(&region.get_id()) {
+            if *status == (peer_id, false) {
+                pending.remove(&region.get_id());
+                // Hold the lock to avoid apply worker applies split.
+                (Some(pending), true)
+            } else if *status == (peer_id, true) {
+                // It's already marked to split by apply worker, skip delete.
+                (None, false)
+            } else {
+                // Peer id can't be different as router should exist all the time, their is no
+                // chance for store to insert a different peer id. And apply worker should skip
+                // split when meeting a different id.
+                let status = *status;
+                // Avoid panic with lock.
+                drop(pending);
+                panic!(
+                    "[peer = {}] region {:?} unexpected pending states {:?}",
+                    peer_id, region, status
+                );
+            }
+        } else {
+            // The status is inserted when it's created. It will be removed in following
+            // cases:
+            // - By apply worker as it fails to split due to region state key. This is
+            //   impossible to reach this code path because the delete write batch is not
+            //   persisted yet.
+            // - By store fsm as it fails to create peer, which is also invalid obviously.
+            // - By peer fsm after persisting snapshot, then it should be initialized.
+            // - By peer fsm after split.
+            // - By peer fsm when destroy, which should go the above branch instead.
+            (None, false)
+        }
+    } else {
+        (None, true)
+    };
+    let (raft_duration, kv_duration) = if clean {
+        // Set Tombstone state explicitly
+        let mut kv_wb = engines.kv.write_batch();
+        let mut raft_wb = engines.raft.log_batch(1024);
+        // Raft log gc should be flushed before being destroyed, so last_compacted_idx
+        // has to be the minimal index that may still have logs.
+        clear_meta(
+            engines,
+            &mut kv_wb,
+            &mut raft_wb,
+            region.get_id(),
+            first_index,
+            &raft_state,
+        )?;
+
+        // StoreFsmDelegate::check_msg use both epoch and region peer list to check
+        // whether a message is targeting a staled peer. But for an uninitialized peer,
+        // both epoch and peer list are empty, so a removed peer will be created again.
+        // Saving current peer into the peer list of region will fix this problem.
+        if !initialized {
+            region.mut_peers().push(peer.clone());
+        }
+
+        // Persist the Tomstone state of this peer to kvdb.
+        write_peer_state(&mut kv_wb, &region, PeerState::Tombstone, merge_state)?;
+
+        // Write kv rocksdb first in case of restart happen between two write
+        let start = Instant::now();
+        let mut write_opts = WriteOptions::new();
+        write_opts.set_sync(true);
+        kv_wb.write_opt(&write_opts)?;
+        let kv_duration = start.saturating_elapsed();
+
+        drop(pending_create_peers);
+
+        let start = Instant::now();
+        engines.raft.consume(&mut raft_wb, true)?;
+        let raft_duration = start.saturating_elapsed();
+        (raft_duration, kv_duration)
+    } else {
+        (Duration::ZERO, Duration::ZERO)
+    };
+
+    Ok(PeerClearMetaStat::new(raft_duration, kv_duration))
+}
+
 pub fn do_snapshot<E>(
     mgr: SnapManager,
     engine: &E,
@@ -1037,6 +1279,7 @@ pub fn do_snapshot<E>(
     last_applied_state: RaftApplyState,
     for_balance: bool,
     allow_multi_files_snapshot: bool,
+    start: UnixSecs,
 ) -> raft::Result<Snapshot>
 where
     E: KvEngine,
@@ -1094,6 +1337,7 @@ where
         region_state.get_region(),
         allow_multi_files_snapshot,
         for_balance,
+        start,
     )?;
     snapshot.set_data(snap_data.write_to_bytes()?.into());
 
@@ -1166,38 +1410,36 @@ pub mod tests {
         raft::RaftTestEngine,
     };
     use engine_traits::{
-        Engines, Iterable, RaftEngineDebug, RaftEngineReadOnly, SyncMutable, WriteBatch,
-        WriteBatchExt, ALL_CFS, CF_DEFAULT,
+        ALL_CFS, CF_DEFAULT, Engines, Iterable, RaftEngineDebug, RaftEngineReadOnly, SyncMutable,
+        WriteBatch, WriteBatchExt,
     };
     use kvproto::raft_serverpb::RaftSnapshotData;
     use metapb::{Peer, Store, StoreLabel};
     use pd_client::PdClient;
     use raft::{
-        eraftpb::{ConfState, Entry, HardState},
         Error as RaftError, GetEntriesContext, StorageError,
+        eraftpb::{ConfState, Entry, HardState},
     };
     use tempfile::{Builder, TempDir};
     use tikv_util::{
         store::{new_peer, new_witness_peer},
-        worker::{dummy_scheduler, LazyWorker, Scheduler, Worker},
+        thread_name_prefix::{RAFTLOG_FETCH_WORKER_THREAD, SNAP_GENERATOR_THREAD},
+        worker::{LazyWorker, Scheduler, Worker, dummy_scheduler},
     };
 
     use super::*;
-    use crate::{
-        coprocessor::CoprocessorHost,
-        store::{
-            async_io::{read::ReadRunner, write::write_to_db_for_test},
-            bootstrap_store,
-            entry_storage::tests::validate_cache,
-            fsm::apply::compact_raft_log,
-            initial_region, prepare_bootstrap_cluster,
-            worker::{make_region_worker_raftstore_cfg, RegionRunner, RegionTask},
-            AsyncReadNotifier, FetchedLogs, GenSnapRes,
-        },
+    use crate::store::{
+        AsyncReadNotifier, FetchedLogs, GenSnapRes,
+        async_io::{read::ReadRunner, write::write_to_db_for_test},
+        bootstrap_store,
+        entry_storage::tests::validate_cache,
+        fsm::apply::compact_raft_log,
+        initial_region, prepare_bootstrap_cluster,
+        worker::{RegionTask, SnapGenRunner, SnapGenTask},
     };
 
     fn new_storage(
-        region_scheduler: Scheduler<RegionTask<KvTestSnapshot>>,
+        region_scheduler: Scheduler<RegionTask>,
         raftlog_fetch_scheduler: Scheduler<ReadTask<KvTestEngine>>,
         path: &TempDir,
     ) -> PeerStorage<KvTestEngine, RaftTestEngine> {
@@ -1225,12 +1467,13 @@ pub mod tests {
             raftlog_fetch_scheduler,
             1,
             "".to_owned(),
+            &RaftMetrics::new(false),
         )
         .unwrap()
     }
 
     pub fn new_storage_from_ents(
-        region_scheduler: Scheduler<RegionTask<KvTestSnapshot>>,
+        region_scheduler: Scheduler<RegionTask>,
         raftlog_fetch_scheduler: Scheduler<ReadTask<KvTestEngine>>,
         path: &TempDir,
         ents: &[Entry],
@@ -1239,7 +1482,9 @@ pub mod tests {
         let mut write_task: WriteTask<KvTestEngine, _> =
             WriteTask::new(store.get_region_id(), store.peer_id, 1);
         store.append(ents[1..].to_vec(), &mut write_task);
-        store.update_cache_persisted(ents.last().unwrap().get_index());
+        let last_entry = ents.last().unwrap();
+        store.update_cache_persisted(last_entry.get_index());
+        store.update_term_cache(last_entry.get_index(), last_entry.get_term());
         store
             .apply_state_mut()
             .mut_truncated_state()
@@ -1444,7 +1689,7 @@ pub mod tests {
             new_entry(5, 5),
             new_entry(6, 6),
         ];
-        let max_u64 = u64::max_value();
+        let max_u64 = u64::MAX;
         let mut tests = vec![
             (
                 2,
@@ -1503,12 +1748,13 @@ pub mod tests {
             let region_worker = Worker::new("snap-manager").lazy_build("snap-manager");
             let region_scheduler = region_worker.scheduler();
             let mut raftlog_fetch_worker =
-                Worker::new("raftlog-fetch-worker").lazy_build("raftlog-fetch-worker");
+                Worker::new(RAFTLOG_FETCH_WORKER_THREAD).lazy_build(RAFTLOG_FETCH_WORKER_THREAD);
             let raftlog_fetch_scheduler = raftlog_fetch_worker.scheduler();
             let mut store =
                 new_storage_from_ents(region_scheduler, raftlog_fetch_scheduler, &td, &ents);
             raftlog_fetch_worker.start(ReadRunner::new(router, store.engines.raft.clone()));
-            store.compact_entry_cache(5);
+            let mut cache_warmup_state = None;
+            store.compact_entry_cache(5, cache_warmup_state.as_mut());
             let mut e = store.entries(lo, hi, maxsize, GetEntriesContext::empty(true));
             if e == Err(raft::Error::Store(
                 raft::StorageError::LogTemporarilyUnavailable,
@@ -1562,7 +1808,7 @@ pub mod tests {
     fn generate_and_schedule_snapshot(
         gen_task: GenSnapTask,
         engines: &Engines<KvTestEngine, RaftTestEngine>,
-        sched: &Scheduler<RegionTask<KvTestSnapshot>>,
+        sched: &Scheduler<SnapGenTask<KvTestSnapshot>>,
     ) -> Result<()> {
         let apply_state: RaftApplyState = engines
             .kv
@@ -1601,27 +1847,45 @@ pub mod tests {
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
-        let mut worker = Worker::new("region-worker").lazy_build("region-worker");
-        let sched = worker.scheduler();
+        mgr.init().unwrap();
+        let (sched, _) = dummy_scheduler();
         let (dummy_scheduler, _) = dummy_scheduler();
         let mut s = new_storage_from_ents(sched.clone(), dummy_scheduler, &td, &ents);
         let (router, _) = mpsc::sync_channel(100);
-        let cfg = make_region_worker_raftstore_cfg(true);
-        let runner = RegionRunner::new(
+
+        let mut snap_gen_worker = LazyWorker::new(SNAP_GENERATOR_THREAD);
+        let snap_gen_sched = snap_gen_worker.scheduler();
+        let snap_gen_runner = SnapGenRunner::new(
             s.engines.kv.clone(),
             mgr,
-            cfg,
-            CoprocessorHost::<KvTestEngine>::default(),
             router,
             Option::<Arc<TestPdClient>>::None,
+            snap_gen_worker.pool(),
         );
-        worker.start_with_timer(runner);
-        let snap = s.snapshot(0, 1);
+        snap_gen_worker.start(snap_gen_runner);
+
+        let to_peer_id = s.peer_id;
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
+
+        // Verify that an unknown peer asking for a snapshot will be ignored and
+        // won't count toward `tried_cnt`.
+        let unknown_peer_id = 0;
+        assert_eq!(s.snapshot(0, unknown_peer_id).unwrap_err(), unavailable);
+        assert_eq!(*s.snap_tried_cnt.borrow(), 0);
+
+        let snap = s.snapshot(0, to_peer_id);
         assert_eq!(snap.unwrap_err(), unavailable);
         assert_eq!(*s.snap_tried_cnt.borrow(), 1);
+
+        // Verify that a fake cancellation doesn't increment `tried_cnt`. The
+        // `cancel_generating_snap` function should be a no-op if `compact_to`
+        // is so small that it doesn't make the snapshot stale.
+        s.cancel_generating_snap(Some(0));
+        assert_eq!(s.snapshot(0, to_peer_id).unwrap_err(), unavailable);
+        assert_eq!(*s.snap_tried_cnt.borrow(), 1);
+
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
-        generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap();
+        generate_and_schedule_snapshot(gen_task, &s.engines, &snap_gen_sched).unwrap();
         let snap = match *s.snap_state.borrow() {
             SnapState::Generating { ref receiver, .. } => {
                 receiver.recv_timeout(Duration::from_secs(3)).unwrap()
@@ -1640,11 +1904,11 @@ pub mod tests {
         let (tx, rx) = channel();
         s.set_snap_state(gen_snap_for_test(rx));
         // Empty channel should cause snapshot call to wait.
-        assert_eq!(s.snapshot(0, 1).unwrap_err(), unavailable);
+        assert_eq!(s.snapshot(0, to_peer_id).unwrap_err(), unavailable);
         assert_eq!(*s.snap_tried_cnt.borrow(), 1);
 
         tx.send(snap.clone()).unwrap();
-        assert_eq!(s.snapshot(0, 1), Ok(snap.clone()));
+        assert_eq!(s.snapshot(0, to_peer_id), Ok(snap.clone()));
         assert_eq!(*s.snap_tried_cnt.borrow(), 0);
 
         let (tx, rx) = channel();
@@ -1652,7 +1916,7 @@ pub mod tests {
         s.set_snap_state(gen_snap_for_test(rx));
         // stale snapshot should be abandoned, snapshot index < request index.
         assert_eq!(
-            s.snapshot(snap.get_metadata().get_index() + 1, 0)
+            s.snapshot(snap.get_metadata().get_index() + 1, to_peer_id)
                 .unwrap_err(),
             unavailable
         );
@@ -1685,15 +1949,15 @@ pub mod tests {
         s.set_snap_state(gen_snap_for_test(rx));
         *s.snap_tried_cnt.borrow_mut() = 1;
         // stale snapshot should be abandoned, snapshot index < truncated index.
-        assert_eq!(s.snapshot(0, 1).unwrap_err(), unavailable);
+        assert_eq!(s.snapshot(0, to_peer_id).unwrap_err(), unavailable);
         assert_eq!(*s.snap_tried_cnt.borrow(), 1);
 
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
-        generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap();
+        generate_and_schedule_snapshot(gen_task, &s.engines, &snap_gen_sched).unwrap();
         match *s.snap_state.borrow() {
             SnapState::Generating { ref receiver, .. } => {
                 receiver.recv_timeout(Duration::from_secs(3)).unwrap();
-                worker.stop();
+                snap_gen_worker.stop();
                 match receiver.recv_timeout(Duration::from_secs(3)) {
                     Err(RecvTimeoutError::Disconnected) => {}
                     res => panic!("unexpected result: {:?}", res),
@@ -1702,9 +1966,9 @@ pub mod tests {
             ref s => panic!("unexpected state {:?}", s),
         }
         // Disconnected channel should trigger another try.
-        assert_eq!(s.snapshot(0, 1).unwrap_err(), unavailable);
+        assert_eq!(s.snapshot(0, to_peer_id).unwrap_err(), unavailable);
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
-        generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap_err();
+        generate_and_schedule_snapshot(gen_task, &s.engines, &snap_gen_sched).unwrap_err();
         assert_eq!(*s.snap_tried_cnt.borrow(), 2);
 
         for cnt in 2..super::MAX_SNAP_TRY_CNT + 10 {
@@ -1717,13 +1981,13 @@ pub mod tests {
             }
 
             // Scheduled job failed should trigger .
-            assert_eq!(s.snapshot(0, 1).unwrap_err(), unavailable);
+            assert_eq!(s.snapshot(0, to_peer_id).unwrap_err(), unavailable);
             let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
-            generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap_err();
+            generate_and_schedule_snapshot(gen_task, &s.engines, &snap_gen_sched).unwrap_err();
         }
 
         // When retry too many times, it should report a different error.
-        match s.snapshot(0, 1) {
+        match s.snapshot(0, to_peer_id) {
             Err(RaftError::Store(StorageError::Other(_))) => {}
             res => panic!("unexpected res: {:?}", res),
         }
@@ -1737,12 +2001,12 @@ pub mod tests {
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mut mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
+        mgr.init().unwrap();
         mgr.set_enable_multi_snapshot_files(true);
         mgr.set_max_per_file_size(500);
-        let mut worker = Worker::new("region-worker").lazy_build("region-worker");
-        let sched = worker.scheduler();
+        let (sched, _) = dummy_scheduler();
         let (dummy_scheduler, _) = dummy_scheduler();
-        let s = new_storage_from_ents(sched.clone(), dummy_scheduler, &td, &ents);
+        let s = new_storage_from_ents(sched, dummy_scheduler, &td, &ents);
         let (router, _) = mpsc::sync_channel(100);
         let mut pd_client = TestPdClient::new();
         let labels = vec![StoreLabel {
@@ -1753,22 +2017,24 @@ pub mod tests {
         let store = new_store(1, labels);
         pd_client.add_store(store);
         let pd_mock = Arc::new(pd_client);
-        let cfg = make_region_worker_raftstore_cfg(true);
-        let runner = RegionRunner::new(
+
+        let mut snap_gen_worker = LazyWorker::new(SNAP_GENERATOR_THREAD);
+        let snap_gen_sched = snap_gen_worker.scheduler();
+        let snap_gen_runner = SnapGenRunner::new(
             s.engines.kv.clone(),
             mgr,
-            cfg,
-            CoprocessorHost::<KvTestEngine>::default(),
             router,
             Some(pd_mock),
+            snap_gen_worker.pool(),
         );
-        worker.start_with_timer(runner);
+        snap_gen_worker.start(snap_gen_runner);
+
         let snap = s.snapshot(0, 1);
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
         assert_eq!(snap.unwrap_err(), unavailable);
         assert_eq!(*s.snap_tried_cnt.borrow(), 1);
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
-        generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap();
+        generate_and_schedule_snapshot(gen_task, &s.engines, &snap_gen_sched).unwrap();
         let snap = match *s.snap_state.borrow() {
             SnapState::Generating { ref receiver, .. } => {
                 receiver.recv_timeout(Duration::from_secs(3)).unwrap()
@@ -1808,21 +2074,23 @@ pub mod tests {
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
-        let mut worker = Worker::new("region-worker").lazy_build("region-worker");
-        let sched = worker.scheduler();
+        mgr.init().unwrap();
+
+        let (sched, _) = dummy_scheduler();
         let (dummy_scheduler, _) = dummy_scheduler();
-        let mut s = new_storage_from_ents(sched.clone(), dummy_scheduler, &td, &ents);
-        let cfg = make_region_worker_raftstore_cfg(true);
+        let mut s = new_storage_from_ents(sched, dummy_scheduler, &td, &ents);
         let (router, _) = mpsc::sync_channel(100);
-        let runner = RegionRunner::new(
+
+        let mut snap_gen_worker = LazyWorker::new(SNAP_GENERATOR_THREAD);
+        let snap_gen_sched = snap_gen_worker.scheduler();
+        let snap_gen_runner = SnapGenRunner::new(
             s.engines.kv.clone(),
             mgr,
-            cfg,
-            CoprocessorHost::<KvTestEngine>::default(),
             router,
             Option::<Arc<TestPdClient>>::None,
+            snap_gen_worker.pool(),
         );
-        worker.start_with_timer(runner);
+        snap_gen_worker.start(snap_gen_runner);
 
         let mut r = s.region().clone();
         r.mut_peers().push(new_peer(2, 2));
@@ -1841,7 +2109,7 @@ pub mod tests {
             assert_eq!(snap.unwrap_err(), unavailable);
             assert_eq!(*s.snap_tried_cnt.borrow(), 1);
             let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
-            generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap();
+            generate_and_schedule_snapshot(gen_task, &s.engines, &snap_gen_sched).unwrap();
             let snap = match *s.snap_state.borrow() {
                 SnapState::Generating { ref receiver, .. } => {
                     receiver.recv_timeout(Duration::from_secs(3)).unwrap()
@@ -1887,24 +2155,26 @@ pub mod tests {
         let td1 = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let snap_dir = Builder::new().prefix("snap").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
-        let mut worker = LazyWorker::new("snap-manager");
-        let sched = worker.scheduler();
+        mgr.init().unwrap();
+        let (sched, _) = dummy_scheduler();
         let (dummy_scheduler, _) = dummy_scheduler();
         let s1 = new_storage_from_ents(sched.clone(), dummy_scheduler.clone(), &td1, &ents);
         let (router, _) = mpsc::sync_channel(100);
-        let cfg = make_region_worker_raftstore_cfg(true);
-        let runner = RegionRunner::new(
+
+        let mut snap_gen_worker = LazyWorker::new(SNAP_GENERATOR_THREAD);
+        let snap_gen_sched = snap_gen_worker.scheduler();
+        let snap_gen_runner = SnapGenRunner::new(
             s1.engines.kv.clone(),
             mgr,
-            cfg,
-            CoprocessorHost::<KvTestEngine>::default(),
             router,
             Option::<Arc<TestPdClient>>::None,
+            snap_gen_worker.pool(),
         );
-        worker.start(runner);
+        snap_gen_worker.start(snap_gen_runner);
+
         s1.snapshot(0, 1).unwrap_err();
         let gen_task = s1.gen_snap_task.borrow_mut().take().unwrap();
-        generate_and_schedule_snapshot(gen_task, &s1.engines, &sched).unwrap();
+        generate_and_schedule_snapshot(gen_task, &s1.engines, &snap_gen_sched).unwrap();
 
         let snap1 = match *s1.snap_state.borrow() {
             SnapState::Generating { ref receiver, .. } => {
@@ -1914,7 +2184,7 @@ pub mod tests {
         };
         assert_eq!(s1.truncated_index(), 3);
         assert_eq!(s1.truncated_term(), 3);
-        worker.stop();
+        snap_gen_worker.stop();
 
         let td2 = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let mut s2 = new_storage(sched.clone(), dummy_scheduler.clone(), &td2);
@@ -1992,8 +2262,8 @@ pub mod tests {
         s.snap_state = RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(
             JOB_STATUS_FAILED,
         ))));
-        let res = panic_hook::recover_safe(|| s.cancel_applying_snap());
-        res.unwrap_err();
+        assert!(s.cancel_applying_snap());
+        assert_eq!(*s.snap_state.borrow(), SnapState::ApplyAborted);
     }
 
     #[test]
@@ -2042,8 +2312,8 @@ pub mod tests {
         s.snap_state = RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(
             JOB_STATUS_FAILED,
         ))));
-        let res = panic_hook::recover_safe(|| s.check_applying_snap());
-        res.unwrap_err();
+        assert!(s.cancel_applying_snap());
+        assert_eq!(*s.snap_state.borrow(), SnapState::ApplyAborted);
     }
 
     #[test]
@@ -2051,7 +2321,7 @@ pub mod tests {
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let region_worker = LazyWorker::new("snap-manager");
         let region_sched = region_worker.scheduler();
-        let raftlog_fetch_worker = LazyWorker::new("raftlog-fetch-worker");
+        let raftlog_fetch_worker = LazyWorker::new(RAFTLOG_FETCH_WORKER_THREAD);
         let raftlog_fetch_sched = raftlog_fetch_worker.scheduler();
         let kv_db = engine_test::kv::new_engine(td.path().to_str().unwrap(), ALL_CFS).unwrap();
         let raft_path = td.path().join(Path::new("raft"));
@@ -2069,6 +2339,7 @@ pub mod tests {
                 raftlog_fetch_sched.clone(),
                 0,
                 "".to_owned(),
+                &RaftMetrics::new(false),
             )
         };
         let mut s = build_storage().unwrap();
@@ -2109,25 +2380,15 @@ pub mod tests {
         lb.put_raft_state(1, &raft_state).unwrap();
         engines.raft.consume(&mut lb, false).unwrap();
 
-        // applied_index > commit_index is invalid.
-        let mut apply_state = RaftApplyState::default();
-        apply_state.set_applied_index(13);
-        apply_state.mut_truncated_state().set_index(13);
-        apply_state
-            .mut_truncated_state()
-            .set_term(RAFT_INIT_LOG_TERM);
-        let apply_state_key = keys::apply_state_key(1);
-        engines
-            .kv
-            .put_msg_cf(CF_RAFT, &apply_state_key, &apply_state)
-            .unwrap();
-        assert!(build_storage().is_err());
-
         // It should not recover if corresponding log doesn't exist.
         engines.raft.gc(1, 14, 15, &mut lb).unwrap();
         engines.raft.consume(&mut lb, false).unwrap();
+        let mut apply_state = RaftApplyState::default();
+        apply_state.set_applied_index(13);
+        apply_state.mut_truncated_state().set_index(13);
         apply_state.set_commit_index(14);
         apply_state.set_commit_term(RAFT_INIT_LOG_TERM);
+        let apply_state_key = keys::apply_state_key(1);
         engines
             .kv
             .put_msg_cf(CF_RAFT, &apply_state_key, &apply_state)

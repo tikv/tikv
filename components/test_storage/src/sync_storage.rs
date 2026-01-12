@@ -2,23 +2,26 @@
 
 use std::{
     marker::PhantomData,
-    sync::{atomic::AtomicU64, Arc},
+    sync::{Arc, atomic::AtomicU64},
 };
 
 use api_version::{ApiV1, KvFormat};
 use collections::HashMap;
+use engine_traits::KvEngine;
 use futures::executor::block_on;
 use kvproto::{
     kvrpcpb::{ChecksumAlgorithm, Context, GetRequest, KeyRange, LockInfo, RawGetRequest},
     metapb,
 };
-use raftstore::coprocessor::{region_info_accessor::MockRegionInfoProvider, RegionInfoProvider};
+use raftstore::coprocessor::{
+    CoprocessorHost, RegionInfoProvider, region_info_accessor::MockRegionInfoProvider,
+};
 use tikv::{
     server::gc_worker::{AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker},
     storage::{
-        config::Config, kv::RocksEngine, lock_manager::MockLockManager, test_util::GetConsumer,
-        txn::commands, Engine, KvGetStatistics, PrewriteResult, Result, Storage, TestEngineBuilder,
-        TestStorageBuilder, TxnStatus,
+        Engine, KvGetStatistics, PrewriteResult, Result, Storage, TestEngineBuilder,
+        TestStorageBuilder, TxnStatus, config::Config, kv::RocksEngine,
+        lock_manager::MockLockManager, test_util::GetConsumer, txn::commands,
     },
 };
 use tikv_util::time::Instant;
@@ -125,20 +128,12 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
             Default::default(),
             Arc::new(MockRegionInfoProvider::new(Vec::new())),
         );
-        gc_worker.start(store_id)?;
+        let coprocessor = CoprocessorHost::default();
+        gc_worker.start(store_id, coprocessor)?;
         Ok(Self {
             gc_worker,
             store: storage,
         })
-    }
-
-    pub fn start_auto_gc<S: GcSafePointProvider, R: RegionInfoProvider + Clone + 'static>(
-        &mut self,
-        cfg: AutoGcConfig<S, R>,
-    ) {
-        self.gc_worker
-            .start_auto_gc(cfg, Arc::new(AtomicU64::new(0)))
-            .unwrap();
     }
 
     pub fn get_storage(&self) -> Storage<E, MockLockManager, F> {
@@ -165,7 +160,18 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
         keys: &[Key],
         start_ts: impl Into<TimeStamp>,
     ) -> Result<(Vec<Result<KvPair>>, KvGetStatistics)> {
-        block_on(self.store.batch_get(ctx, keys.to_owned(), start_ts.into()))
+        block_on(
+            self.store
+                .batch_get(ctx, keys.to_owned(), start_ts.into(), false),
+        )
+        .map(|(list, stats)| {
+            (
+                list.into_iter()
+                    .map(|r| r.map(|(key, entry)| (key, entry.value)))
+                    .collect(),
+                stats,
+            )
+        })
     }
 
     #[allow(clippy::type_complexity)]
@@ -265,7 +271,7 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
         commit_ts: impl Into<TimeStamp>,
     ) -> Result<TxnStatus> {
         wait_op!(|cb| self.store.sched_txn_command(
-            commands::Commit::new(keys, start_ts.into(), commit_ts.into(), ctx),
+            commands::Commit::new(keys, start_ts.into(), commit_ts.into(), None, ctx),
             cb,
         ))
         .unwrap()
@@ -521,5 +527,20 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
             self.store
                 .raw_checksum(ctx, ChecksumAlgorithm::Crc64Xor, ranges),
         )
+    }
+}
+
+impl<E, F> SyncTestStorage<E, F>
+where
+    E: Engine<Local: KvEngine<DiskEngine = engine_rocks::RocksEngine>>,
+    F: KvFormat,
+{
+    pub fn start_auto_gc<S: GcSafePointProvider, R: RegionInfoProvider + Clone + 'static>(
+        &mut self,
+        cfg: AutoGcConfig<S, R>,
+    ) {
+        self.gc_worker
+            .start_auto_gc(cfg, Arc::new(AtomicU64::new(0)))
+            .unwrap();
     }
 }

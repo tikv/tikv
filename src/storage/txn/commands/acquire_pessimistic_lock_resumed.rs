@@ -7,26 +7,25 @@ use std::{
 
 // #[PerformanceCriticalPath]
 use kvproto::kvrpcpb::ExtraOp;
-use txn_types::{insert_old_value_if_resolved, Key, OldValues};
+use txn_types::{Key, OldValues, insert_old_value_if_resolved};
 
 use crate::storage::{
+    Error as StorageError, PessimisticLockKeyResult, ProcessResult, Result as StorageResult,
+    Snapshot,
     lock_manager::{
-        lock_wait_context::LockWaitContextSharedState, lock_waiting_queue::LockWaitEntry,
-        LockManager, LockWaitToken,
+        LockManager, LockWaitToken, lock_wait_context::LockWaitContextSharedState,
+        lock_waiting_queue::LockWaitEntry,
     },
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader},
     txn::{
-        acquire_pessimistic_lock,
+        Error, Result, acquire_pessimistic_lock,
         commands::{
-            acquire_pessimistic_lock::make_write_data, Command, CommandExt, ReleasedLocks,
-            ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
-            WriteResultLockInfo,
+            Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand,
+            WriteContext, WriteResult, WriteResultLockInfo,
+            acquire_pessimistic_lock::make_write_data,
         },
-        Error, Result,
     },
     types::{PessimisticLockParameters, PessimisticLockResults},
-    Error as StorageError, PessimisticLockKeyResult, ProcessResult, Result as StorageResult,
-    Snapshot,
 };
 
 pub struct ResumedPessimisticLockItem {
@@ -48,16 +47,25 @@ impl Debug for ResumedPessimisticLockItem {
     }
 }
 
+impl tikv_util::memory::HeapSize for ResumedPessimisticLockItem {
+    fn approximate_heap_size(&self) -> usize {
+        // TODO: account heap size for params
+        self.key.approximate_heap_size()
+    }
+}
+
 command! {
     /// Acquire a Pessimistic lock on the keys.
     ///
     /// This can be rolled back with a [`PessimisticRollback`](Command::PessimisticRollback) command.
     AcquirePessimisticLockResumed:
         cmd_ty => StorageResult<PessimisticLockResults>,
-        display => "kv::command::acquirepessimisticlockresumed {:?}",
-        (items),
+        display => { "kv::command::acquirepessimisticlockresumed {:?}", (items), }
         content => {
             items: Vec<ResumedPessimisticLockItem>,
+        }
+        in_heap => {
+            items,
         }
 }
 
@@ -106,7 +114,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLockR
             // TODO: Refine the code for rebuilding txn state.
             if txn
                 .as_ref()
-                .map_or(true, |t: &MvccTxn| t.start_ts != params.start_ts)
+                .is_none_or(|t: &MvccTxn| t.start_ts != params.start_ts)
             {
                 if let Some(mut prev_txn) = txn.replace(MvccTxn::new(
                     params.start_ts,
@@ -194,6 +202,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLockR
             new_acquired_locks,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnProposed,
+            known_txn_status: vec![],
         })
     }
 }
@@ -234,13 +243,14 @@ mod tests {
 
     use super::*;
     use crate::storage::{
+        TestEngineBuilder,
         lock_manager::{MockLockManager, WaitTimeout},
         mvcc::tests::{must_locked, write},
         txn::{
             commands::pessimistic_rollback::tests::must_success as must_pessimistic_rollback,
             tests::{must_commit, must_pessimistic_locked, must_prewrite_put, must_rollback},
+            txn_status_cache::TxnStatusCache,
         },
-        TestEngineBuilder,
     };
 
     #[allow(clippy::vec_box)]
@@ -250,7 +260,7 @@ mod tests {
     ) -> PessimisticLockResults {
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let cm = ConcurrencyManager::new(TimeStamp::zero());
+        let cm = ConcurrencyManager::new_for_test(TimeStamp::zero());
 
         let items_info: Vec<_> = lock_wait_entries
             .iter()
@@ -275,6 +285,7 @@ mod tests {
                     statistics: &mut Default::default(),
                     async_apply_prewrite: false,
                     raw_ext: None,
+                    txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
                 },
             )
             .unwrap();
@@ -340,6 +351,7 @@ mod tests {
             lock_hash,
             parameters,
             should_not_exist: false,
+            is_shared_lock: false,
             lock_wait_token: token,
             legacy_wake_up_index: Some(0),
             req_states,

@@ -64,7 +64,7 @@ impl<E: BatchExecutor, F: FnMut() -> E> Bencher for BatchNextAllBencher<E, F> {
                 loop {
                     let r = block_on(executor.next_batch(1024));
                     black_box(&r);
-                    if r.is_drained.unwrap() {
+                    if r.is_drained.unwrap().stop() {
                         break;
                     }
                 }

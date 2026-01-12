@@ -4,7 +4,34 @@
 
 use std::collections::BTreeMap;
 
-use crate::{errors::Result, CfNamesExt};
+use crate::{CfNamesExt, errors::Result};
+
+#[derive(Clone, Debug)]
+pub struct ManualCompactionOptions {
+    pub exclusive_manual: bool,
+    pub max_subcompactions: u32,
+    pub bottommost_level_force: bool,
+    pub check_range_overlap_on_bottom_level: bool,
+}
+
+impl ManualCompactionOptions {
+    pub fn new(
+        exclusive_manual: bool,
+        max_subcompactions: u32,
+        bottommost_level_force: bool,
+    ) -> Self {
+        Self {
+            exclusive_manual,
+            max_subcompactions,
+            bottommost_level_force,
+            check_range_overlap_on_bottom_level: false,
+        }
+    }
+
+    pub fn set_check_range_overlap_on_bottom_level(&mut self, v: bool) {
+        self.check_range_overlap_on_bottom_level = v;
+    }
+}
 
 pub trait CompactExt: CfNamesExt {
     type CompactedEvent: CompactedEvent;
@@ -17,11 +44,10 @@ pub trait CompactExt: CfNamesExt {
         &self,
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
-        exclusive_manual: bool,
-        max_subcompactions: u32,
+        compaction_option: ManualCompactionOptions,
     ) -> Result<()> {
         for cf in self.cf_names() {
-            self.compact_range_cf(cf, start_key, end_key, exclusive_manual, max_subcompactions)?;
+            self.compact_range_cf(cf, start_key, end_key, compaction_option.clone())?;
         }
         Ok(())
     }
@@ -32,8 +58,7 @@ pub trait CompactExt: CfNamesExt {
         cf: &str,
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
-        exclusive_manual: bool,
-        max_subcompactions: u32,
+        compaction_option: ManualCompactionOptions,
     ) -> Result<()>;
 
     /// Compacts files in the range and above the output level.
@@ -71,9 +96,14 @@ pub trait CompactExt: CfNamesExt {
         max_subcompactions: u32,
         exclude_l0: bool,
     ) -> Result<()>;
+
+    // Check all data is in the range [start, end).
+    fn check_in_range(&self, start: Option<&[u8]>, end: Option<&[u8]>) -> Result<()>;
 }
 
 pub trait CompactedEvent: Send {
+    fn get_key_range(&self) -> (Vec<u8>, Vec<u8>);
+
     fn total_bytes_declined(&self) -> u64;
 
     fn is_size_declining_trivial(&self, split_check_diff: u64) -> bool;

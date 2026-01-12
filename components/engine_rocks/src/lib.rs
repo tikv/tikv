@@ -17,7 +17,7 @@
 
 #![cfg_attr(test, feature(test))]
 #![feature(let_chains)]
-#![feature(option_get_or_insert_default)]
+#![feature(path_file_prefix)]
 
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
@@ -26,13 +26,13 @@ extern crate tikv_alloc;
 extern crate test;
 
 mod cf_names;
-pub use crate::cf_names::*;
+
 mod cf_options;
 pub use crate::cf_options::*;
 mod checkpoint;
 pub use crate::checkpoint::*;
 mod compact;
-pub use crate::compact::*;
+
 mod db_options;
 pub use crate::db_options::*;
 mod db_vector;
@@ -47,7 +47,7 @@ mod misc;
 pub use crate::misc::*;
 pub mod range_properties;
 mod snapshot;
-pub use crate::{range_properties::*, snapshot::*};
+pub use crate::snapshot::*;
 mod sst;
 pub use crate::sst::*;
 mod sst_partitioner;
@@ -107,19 +107,19 @@ pub mod file_system;
 mod raft_engine;
 
 pub use rocksdb::{
-    set_perf_flags, set_perf_level, PerfContext, PerfFlag, PerfFlags, PerfLevel,
-    Statistics as RocksStatistics,
+    PerfContext, PerfFlag, PerfFlags, PerfLevel, Statistics as RocksStatistics, set_perf_flags,
+    set_perf_level,
 };
 
 pub mod flow_control_factors;
-pub use flow_control_factors::*;
+use ::encryption::DataKeyManager;
 
 pub mod raw;
 
 pub fn get_env(
-    key_manager: Option<std::sync::Arc<::encryption::DataKeyManager>>,
+    key_manager: Option<std::sync::Arc<DataKeyManager>>,
     limiter: Option<std::sync::Arc<::file_system::IoRateLimiter>>,
 ) -> engine_traits::Result<std::sync::Arc<raw::Env>> {
     let env = encryption::get_env(None /* base_env */, key_manager)?;
-    file_system::get_env(Some(env), limiter)
+    file_system::get_env(env, limiter)
 }

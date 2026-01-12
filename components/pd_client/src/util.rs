@@ -1,8 +1,9 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use core::panic;
 use std::{
     pin::Pin,
-    sync::{atomic::AtomicU64, Arc, RwLock},
+    sync::{Arc, RwLock, atomic::AtomicU64},
     thread,
     time::Duration,
 };
@@ -22,23 +23,27 @@ use grpcio::{
     Environment, Error::RpcFailure, MetadataBuilder, Result as GrpcResult, RpcStatusCode,
 };
 use kvproto::{
+    meta_storagepb::MetaStorageClient as MetaStorageStub,
     metapb::BucketStats,
     pdpb::{
         ErrorType, GetMembersRequest, GetMembersResponse, Member, PdClient as PdClientStub,
         RegionHeartbeatRequest, RegionHeartbeatResponse, ReportBucketsRequest,
         ReportBucketsResponse, ResponseHeader,
     },
+    resource_manager::{
+        ResourceManagerClient as ResourceManagerStub, TokenBucketsRequest, TokenBucketsResponse,
+    },
 };
 use security::SecurityManager;
 use tikv_util::{
-    box_err, debug, error, info, slow_log, time::Instant, timer::GLOBAL_TIMER_HANDLE, warn, Either,
-    HandyRwLock,
+    Either, HandyRwLock, box_err, debug, error, info, slow_log, time::Instant,
+    timer::GLOBAL_TIMER_HANDLE, warn,
 };
 use tokio_timer::timer::Handle;
 
 use super::{
-    metrics::*, tso::TimestampOracle, BucketMeta, Config, Error, FeatureGate, PdFuture, Result,
-    REQUEST_TIMEOUT,
+    BucketMeta, Config, Error, FeatureGate, PdFuture, REQUEST_TIMEOUT, Result, metrics::*,
+    tso::TimestampOracle,
 };
 
 const RETRY_INTERVAL: Duration = Duration::from_secs(1); // 1s
@@ -46,9 +51,9 @@ const MAX_RETRY_TIMES: u64 = 5;
 // The max duration when retrying to connect to leader. No matter if the
 // MAX_RETRY_TIMES is reached.
 const MAX_RETRY_DURATION: Duration = Duration::from_secs(10);
+const MAX_BACKOFF: Duration = Duration::from_secs(3);
 
 // FIXME: Use a request-independent way to handle reconnection.
-const GLOBAL_RECONNECT_INTERVAL: Duration = Duration::from_millis(100); // 0.1s
 pub const REQUEST_RECONNECT_INTERVAL: Duration = Duration::from_secs(1); // 1s
 
 #[derive(Clone)]
@@ -104,8 +109,16 @@ pub struct Inner {
     pub pending_heartbeat: Arc<AtomicU64>,
     pub pending_buckets: Arc<AtomicU64>,
     pub tso: TimestampOracle,
+    pub meta_storage: MetaStorageStub,
+
+    pub rg_sender: Either<
+        Option<ClientDuplexSender<TokenBucketsRequest>>,
+        UnboundedSender<TokenBucketsRequest>,
+    >,
+    pub rg_resp: Option<ClientDuplexReceiver<TokenBucketsResponse>>,
 
     last_try_reconnect: Instant,
+    bo: ExponentialBackoff,
 }
 
 impl Inner {
@@ -169,6 +182,7 @@ impl Client {
         target: TargetInfo,
         tso: TimestampOracle,
         enable_forwarding: bool,
+        retry_interval: Duration,
     ) -> Client {
         if !target.direct_connected() {
             REQUEST_FORWARDED_GAUGE_VEC
@@ -181,6 +195,16 @@ impl Client {
         let (buckets_tx, buckets_resp) = client_stub
             .report_buckets_opt(target.call_option())
             .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "report_buckets", e));
+        let meta_storage =
+            kvproto::meta_storagepb::MetaStorageClient::new(client_stub.client.channel().clone());
+        let resource_manager = kvproto::resource_manager::ResourceManagerClient::new(
+            client_stub.client.channel().clone(),
+        );
+        let (rg_sender, rg_rx) = resource_manager
+            .acquire_token_buckets_opt(target.call_option())
+            .unwrap_or_else(|e| {
+                panic!("fail to request PD {} err {:?}", "acquire_token_buckets", e)
+            });
         Client {
             timer: GLOBAL_TIMER_HANDLE.clone(),
             inner: RwLock::new(Inner {
@@ -197,7 +221,11 @@ impl Client {
                 pending_heartbeat: Arc::default(),
                 pending_buckets: Arc::default(),
                 last_try_reconnect: Instant::now(),
+                bo: ExponentialBackoff::new(retry_interval),
                 tso,
+                meta_storage,
+                rg_sender: Either::Left(Some(rg_sender)),
+                rg_resp: Some(rg_rx),
             }),
             feature_gate: FeatureGate::default(),
             enable_forwarding,
@@ -238,9 +266,24 @@ impl Client {
         inner.buckets_sender = Either::Left(Some(buckets_tx));
         inner.buckets_resp = Some(buckets_resp);
 
+        inner.meta_storage = MetaStorageStub::new(client_stub.client.channel().clone());
+        let resource_manager = ResourceManagerStub::new(client_stub.client.channel().clone());
         inner.client_stub = client_stub;
         inner.members = members;
         inner.tso = tso;
+
+        let (rg_tx, rg_rx) = resource_manager
+            .acquire_token_buckets_opt(target.call_option())
+            .unwrap_or_else(|e| {
+                panic!("fail to request PD {} err {:?}", "acquire_token_buckets", e)
+            });
+        info!("acquire_token_buckets sender and receiver are stale, refreshing ...");
+        // Try to cancel an unused token buckets sender.
+        if let Either::Left(Some(ref mut r)) = inner.rg_sender {
+            r.cancel();
+        }
+        inner.rg_sender = Either::Left(Some(rg_tx));
+        inner.rg_resp = Some(rg_rx);
         if let Some(ref on_reconnect) = inner.on_reconnect {
             on_reconnect();
         }
@@ -304,7 +347,7 @@ impl Client {
         F: FnMut(&Client, Req) -> PdFuture<Resp> + Send + 'static,
     {
         Request {
-            remain_reconnect_count: retry,
+            remain_request_count: retry,
             request_sent: 0,
             client: self.clone(),
             req,
@@ -322,18 +365,15 @@ impl Client {
     /// Note: Retrying too quickly will return an error due to cancellation.
     /// Please always try to reconnect after sending the request first.
     pub async fn reconnect(&self, force: bool) -> Result<()> {
-        PD_RECONNECT_COUNTER_VEC.with_label_values(&["try"]).inc();
+        PD_RECONNECT_COUNTER_VEC.try_connect.inc();
         let start = Instant::now();
 
         let future = {
             let inner = self.inner.rl();
-            if start.saturating_duration_since(inner.last_try_reconnect) < GLOBAL_RECONNECT_INTERVAL
-            {
+            if start.saturating_duration_since(inner.last_try_reconnect) < inner.bo.get_interval() {
                 // Avoid unnecessary updating.
                 // Prevent a large number of reconnections in a short time.
-                PD_RECONNECT_COUNTER_VEC
-                    .with_label_values(&["cancel"])
-                    .inc();
+                PD_RECONNECT_COUNTER_VEC.cancel.inc();
                 return Err(box_err!("cancel reconnection due to too small interval"));
             }
             let connector = PdConnector::new(inner.env.clone(), inner.security_mgr.clone());
@@ -354,37 +394,38 @@ impl Client {
 
         {
             let mut inner = self.inner.wl();
-            if start.saturating_duration_since(inner.last_try_reconnect) < GLOBAL_RECONNECT_INTERVAL
-            {
+            if start.saturating_duration_since(inner.last_try_reconnect) < inner.bo.get_interval() {
                 // There may be multiple reconnections that pass the read lock at the same time.
                 // Check again in the write lock to avoid unnecessary updating.
-                PD_RECONNECT_COUNTER_VEC
-                    .with_label_values(&["cancel"])
-                    .inc();
+                PD_RECONNECT_COUNTER_VEC.cancel.inc();
                 return Err(box_err!("cancel reconnection due to too small interval"));
             }
             inner.last_try_reconnect = start;
+            inner.bo.next_backoff();
         }
 
         slow_log!(start.saturating_elapsed(), "try reconnect pd");
         let (client, target_info, members, tso) = match future.await {
             Err(e) => {
-                PD_RECONNECT_COUNTER_VEC
-                    .with_label_values(&["failure"])
-                    .inc();
+                PD_RECONNECT_COUNTER_VEC.failure.inc();
                 return Err(e);
             }
-            Ok(None) => {
-                PD_RECONNECT_COUNTER_VEC
-                    .with_label_values(&["no-need"])
-                    .inc();
-                return Ok(());
-            }
-            Ok(Some(tuple)) => {
-                PD_RECONNECT_COUNTER_VEC
-                    .with_label_values(&["success"])
-                    .inc();
-                tuple
+            Ok(res) => {
+                // Reset the retry count.
+                {
+                    let mut inner = self.inner.wl();
+                    inner.bo.reset()
+                }
+                match res {
+                    None => {
+                        PD_RECONNECT_COUNTER_VEC.no_need.inc();
+                        return Ok(());
+                    }
+                    Some(tuple) => {
+                        PD_RECONNECT_COUNTER_VEC.success.inc();
+                        tuple
+                    }
+                }
             }
         };
 
@@ -396,9 +437,9 @@ impl Client {
     }
 }
 
-/// The context of sending requets.
+/// The context of sending request.
 pub struct Request<Req, F> {
-    remain_reconnect_count: usize,
+    remain_request_count: usize,
     request_sent: usize,
     client: Arc<Client>,
     req: Req,
@@ -413,15 +454,11 @@ where
     F: FnMut(&Client, Req) -> PdFuture<Resp> + Send + 'static,
 {
     async fn reconnect_if_needed(&mut self) -> Result<()> {
-        debug!("reconnecting ..."; "remain" => self.remain_reconnect_count);
-        if self.request_sent < MAX_REQUEST_COUNT {
+        debug!("reconnecting ..."; "remain" => self.remain_request_count);
+        if self.request_sent < MAX_REQUEST_COUNT && self.request_sent < self.remain_request_count {
             return Ok(());
         }
-        if self.remain_reconnect_count == 0 {
-            return Err(box_err!("request retry exceeds limit"));
-        }
         // Updating client.
-        self.remain_reconnect_count -= 1;
         // FIXME: should not block the core.
         debug!("(re)connecting PD client");
         match self.client.reconnect(true).await {
@@ -441,19 +478,23 @@ where
     }
 
     async fn send_and_receive(&mut self) -> Result<Resp> {
+        if self.remain_request_count == 0 {
+            return Err(box_err!("request retry exceeds limit"));
+        }
         self.request_sent += 1;
+        self.remain_request_count -= 1;
         debug!("request sent: {}", self.request_sent);
         let r = self.req.clone();
         (self.func)(&self.client, r).await
     }
 
-    fn should_not_retry(resp: &Result<Resp>) -> bool {
+    fn should_not_retry(&self, resp: &Result<Resp>) -> bool {
         match resp {
             Ok(_) => true,
             Err(err) => {
                 // these errors are not caused by network, no need to retry
-                if err.retryable() {
-                    error!(?*err; "request failed, retry");
+                if err.retryable() && self.remain_request_count > 0 {
+                    warn!("request failed, retry"; "err" => ?*err);
                     false
                 } else {
                     true
@@ -469,7 +510,7 @@ where
             loop {
                 {
                     let resp = self.send_and_receive().await;
-                    if Self::should_not_retry(&resp) {
+                    if self.should_not_retry(&resp) {
                         return resp;
                     }
                 }
@@ -509,7 +550,7 @@ where
                 return Ok(r);
             }
             Err(e) => {
-                error!(?e; "request failed");
+                warn!("request failed"; "err" => ?e);
                 if retry == 0 {
                     return Err(e);
                 }
@@ -518,7 +559,7 @@ where
         // try reconnect
         retry -= 1;
         if let Err(e) = block_on(client.reconnect(true)) {
-            error!(?e; "reconnect failed");
+            warn!("reconnect failed"; "err" => ?e);
             thread::sleep(REQUEST_RECONNECT_INTERVAL);
         }
     }
@@ -615,10 +656,14 @@ impl PdConnector {
         });
         let client = PdClientStub::new(channel.clone());
         let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+        let timer = Instant::now();
         let response = client
             .get_members_async_opt(&GetMembersRequest::default(), option)
             .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "get_members", e))
             .await;
+        PD_REQUEST_HISTOGRAM_VEC
+            .get_members
+            .observe(timer.saturating_elapsed_secs());
         match response {
             Ok(resp) => Ok((client, resp)),
             Err(e) => Err(Error::Grpc(e)),
@@ -673,7 +718,7 @@ impl PdConnector {
                         }
                     }
                     Err(e) => {
-                        error!("connect failed"; "endpoints" => ep, "error" => ?e);
+                        warn!("connect failed"; "endpoints" => ep, "error" => ?e);
                         continue;
                     }
                 }
@@ -687,10 +732,11 @@ impl PdConnector {
 
     // There are 3 kinds of situations we will return the new client:
     // 1. the force is true which represents the client is newly created or the
-    // original connection has some problem 2. the previous forwarded host is
-    // not empty and it can connect the leader now which represents the network
-    // partition problem to leader may be recovered 3. the member information of
-    // PD has been changed
+    // original connection has some problem.
+    // 2. the previous forwarded host is not empty and it can connect the leader
+    // now which represents the network partition problem to leader may be
+    // recovered.
+    // 3. the member information of PD has been changed.
     pub async fn reconnect_pd(
         &self,
         members_resp: GetMembersResponse,
@@ -771,7 +817,7 @@ impl PdConnector {
                             network_fail_num += 1;
                         }
                     }
-                    error!("failed to connect to PD member"; "endpoints" => ep, "error" => ?e);
+                    warn!("failed to connect to PD member"; "endpoints" => ep, "error" => ?e);
                 }
                 _ => unreachable!(),
             }
@@ -783,7 +829,7 @@ impl PdConnector {
         Ok((None, has_network_error))
     }
 
-    pub async fn reconnect_leader(
+    async fn reconnect_leader(
         &self,
         leader: &Member,
     ) -> Result<(Option<(PdClientStub, String)>, bool)> {
@@ -829,6 +875,7 @@ impl PdConnector {
                     let client_urls = leader.get_client_urls();
                     for leader_url in client_urls {
                         let target = TargetInfo::new(leader_url.clone(), &ep);
+                        let timer = Instant::now();
                         let response = client
                             .get_members_async_opt(
                                 &GetMembersRequest::default(),
@@ -840,6 +887,9 @@ impl PdConnector {
                                 panic!("fail to request PD {} err {:?}", "get_members", e)
                             })
                             .await;
+                        PD_REQUEST_HISTOGRAM_VEC
+                            .get_members
+                            .observe(timer.saturating_elapsed_secs());
                         match response {
                             Ok(_) => return Ok(Some((client, target))),
                             Err(_) => continue,
@@ -850,6 +900,33 @@ impl PdConnector {
             }
         }
         Err(box_err!("failed to connect to followers"))
+    }
+}
+
+/// Simple backoff strategy.
+struct ExponentialBackoff {
+    base: Duration,
+    interval: Duration,
+}
+
+impl ExponentialBackoff {
+    pub fn new(base: Duration) -> Self {
+        Self {
+            base,
+            interval: base,
+        }
+    }
+    pub fn next_backoff(&mut self) -> Duration {
+        self.interval = std::cmp::min(self.interval * 2, MAX_BACKOFF);
+        self.interval
+    }
+
+    pub fn get_interval(&self) -> Duration {
+        self.interval
+    }
+
+    pub fn reset(&mut self) {
+        self.interval = self.base;
     }
 }
 
@@ -870,13 +947,14 @@ pub fn check_resp_header(header: &ResponseHeader) -> Result<()> {
         ErrorType::IncompatibleVersion => Err(Error::Incompatible),
         ErrorType::StoreTombstone => Err(Error::StoreTombstone(err.get_message().to_owned())),
         ErrorType::RegionNotFound => Err(Error::RegionNotFound(vec![])),
-        ErrorType::GlobalConfigNotFound => {
-            Err(Error::GlobalConfigNotFound(err.get_message().to_owned()))
-        }
+        ErrorType::DataCompacted => Err(Error::DataCompacted(err.get_message().to_owned())),
         ErrorType::Ok => Ok(()),
         ErrorType::DuplicatedEntry | ErrorType::EntryNotFound => Err(box_err!(err.get_message())),
         ErrorType::Unknown => Err(box_err!(err.get_message())),
         ErrorType::InvalidValue => Err(box_err!(err.get_message())),
+        ErrorType::GlobalConfigNotFound => panic!("unexpected error {:?}", err),
+        // It will not happen, because we don't call `batch_scan_regions` in TiKV.
+        ErrorType::RegionsNotContainAllKeyRange => Err(box_err!(err.get_message())),
     }
 }
 
@@ -997,7 +1075,10 @@ pub fn merge_bucket_stats<C: AsRef<[u8]>, I: AsRef<[u8]>>(
 mod test {
     use kvproto::metapb::BucketStats;
 
+    use super::*;
     use crate::{merge_bucket_stats, util::find_bucket_index};
+
+    const BASE_BACKOFF: Duration = Duration::from_millis(100);
 
     #[test]
     fn test_merge_bucket_stats() {
@@ -1113,5 +1194,24 @@ mod test {
         assert_eq!(find_bucket_index(b"k0", &keys), Some(0));
         assert_eq!(find_bucket_index(b"k7", &keys), Some(4));
         assert_eq!(find_bucket_index(b"k8", &keys), Some(4));
+    }
+
+    #[test]
+    fn test_exponential_backoff() {
+        let mut backoff = ExponentialBackoff::new(BASE_BACKOFF);
+        assert_eq!(backoff.get_interval(), BASE_BACKOFF);
+
+        assert_eq!(backoff.next_backoff(), 2 * BASE_BACKOFF);
+        assert_eq!(backoff.next_backoff(), Duration::from_millis(400));
+        assert_eq!(backoff.get_interval(), Duration::from_millis(400));
+
+        // Should not exceed MAX_BACKOFF
+        for _ in 0..20 {
+            backoff.next_backoff();
+        }
+        assert_eq!(backoff.get_interval(), MAX_BACKOFF);
+
+        backoff.reset();
+        assert_eq!(backoff.get_interval(), BASE_BACKOFF);
     }
 }

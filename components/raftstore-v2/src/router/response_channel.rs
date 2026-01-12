@@ -13,25 +13,30 @@
 //! 4. there will be no callback leak.
 
 use std::{
+    any::Any,
     cell::UnsafeCell,
     fmt::{self, Debug, Formatter},
     future::Future,
     pin::Pin,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
     task::{Context, Poll},
 };
 
-use futures::{task::AtomicWaker, FutureExt, Stream};
+use futures::{FutureExt, Stream, task::AtomicWaker};
 use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, raft_cmdpb::RaftCmdResponse};
 use raftstore::store::{
-    local_metrics::TimeTracker, msg::ErrorCallback, region_meta::RegionMeta, ReadCallback,
-    WriteCallback,
+    ReadCallback, WriteCallback, local_metrics::TimeTracker, msg::ErrorCallback,
+    region_meta::RegionMeta,
 };
-use smallvec::SmallVec;
-use tracker::TrackerToken;
+use tracker::{TrackerToken, get_tls_tracker_token};
+
+union Tracker {
+    read: TrackerToken,
+    write: TimeTracker,
+}
 
 /// A struct allows to watch and notify specific events.
 ///
@@ -44,6 +49,7 @@ struct EventCore<Res> {
     /// - 0b01 means the event is fired and not subscribed.
     /// - 0b10 means the event is not fired and subscribed.
     /// - 0b11 means the event is fired and subscribed.
+    ///
     /// Event 0 and Event 31 is reserved as payload and cancel respectively.
     /// Other events should be defined within [1, 30].
     event: AtomicU64,
@@ -54,6 +60,7 @@ struct EventCore<Res> {
     before_set: UnsafeCell<Option<Box<dyn FnOnce(&mut Res) + Send>>>,
     // Waker can be changed, need to use `AtomicWaker` to guarantee no data race.
     waker: AtomicWaker,
+    tracker: UnsafeCell<Tracker>,
 }
 
 unsafe impl<Res: Send> Send for EventCore<Res> {}
@@ -86,7 +93,7 @@ impl<Res> EventCore<Res> {
         }
     }
 
-    /// Set the result.
+    /// Set the result. Caller must guarantee result is set only once.
     ///
     /// After this call, no events should be notified.
     #[inline]
@@ -97,6 +104,8 @@ impl<Res> EventCore<Res> {
             }
             *self.res.get() = Some(result);
         }
+        // FIXME: this is not safe. previous line can be reordered after this unless
+        // with a global barrier.
         let previous = self.event.fetch_or(
             fired_bit_of(PAYLOAD_EVENT) | fired_bit_of(CANCEL_EVENT),
             Ordering::AcqRel,
@@ -144,7 +153,7 @@ fn check_bit(e: u64, fired_bit: u64) -> Option<bool> {
     None
 }
 
-impl<'a, Res> Future for WaitEvent<'a, Res> {
+impl<Res> Future for WaitEvent<'_, Res> {
     type Output = bool;
 
     #[inline]
@@ -178,7 +187,7 @@ struct WaitResult<'a, Res> {
     sub: &'a BaseSubscriber<Res>,
 }
 
-impl<'a, Res> Future for WaitResult<'a, Res> {
+impl<Res> Future for WaitResult<'_, Res> {
     type Output = Option<Res>;
 
     #[inline]
@@ -230,6 +239,30 @@ impl<Res> BaseSubscriber<Res> {
         let e = self.core.event.load(Ordering::Relaxed);
         check_bit(e, fired_bit_of(PAYLOAD_EVENT)).is_some()
     }
+
+    /// Synchronous version of `result`. It cannot be called concurrently with
+    /// another `try_result`, `take_result` or `result`.
+    #[inline]
+    pub fn take_result(&self) -> Option<Res> {
+        let e = self.core.event.load(Ordering::Relaxed);
+        if check_bit(e, fired_bit_of(PAYLOAD_EVENT)).is_some() {
+            let r = unsafe { (*self.core.res.get()).take() };
+            assert!(r.is_some());
+            r
+        } else {
+            None
+        }
+    }
+
+    /// Return an reference of the result. It be called concurrently with
+    /// other `try_result`.
+    pub fn try_result(&self) -> Option<&Res> {
+        if self.has_result() {
+            unsafe { (*self.core.res.get()).as_ref() }
+        } else {
+            None
+        }
+    }
 }
 
 unsafe impl<Res: Send> Send for BaseSubscriber<Res> {}
@@ -240,20 +273,24 @@ pub struct BaseChannel<Res> {
     core: Arc<EventCore<Res>>,
 }
 
-impl<Res> BaseChannel<Res> {
-    /// Creates a pair of channel and subscriber.
-    #[inline]
-    pub fn pair() -> (Self, BaseSubscriber<Res>) {
-        Self::with_mask(u32::MAX)
-    }
+#[inline]
+fn pair<Res>() -> (BaseChannel<Res>, BaseSubscriber<Res>) {
+    let tracker = Tracker {
+        read: get_tls_tracker_token(),
+    };
+    BaseChannel::<Res>::with_mask(u32::MAX, tracker)
+}
 
-    fn with_mask(mask: u32) -> (Self, BaseSubscriber<Res>) {
+impl<Res> BaseChannel<Res> {
+    #[inline]
+    fn with_mask(mask: u32, tracker: Tracker) -> (Self, BaseSubscriber<Res>) {
         let core: Arc<EventCore<Res>> = Arc::new(EventCore {
             event: AtomicU64::new(0),
             res: UnsafeCell::new(None),
             event_mask: mask,
             before_set: UnsafeCell::new(None),
             waker: AtomicWaker::new(),
+            tracker: UnsafeCell::new(tracker),
         });
         (Self { core: core.clone() }, BaseSubscriber { core })
     }
@@ -262,6 +299,14 @@ impl<Res> BaseChannel<Res> {
     #[inline]
     pub fn set_result(self, res: Res) {
         self.core.set_result(res);
+    }
+
+    pub fn with_callback(f: Box<dyn FnOnce(&mut Res) + Send>) -> (Self, BaseSubscriber<Res>) {
+        let (c, s) = pair();
+        unsafe {
+            *c.core.before_set.get() = Some(f);
+        }
+        (c, s)
     }
 }
 
@@ -449,7 +494,10 @@ impl CmdResChannelBuilder {
 
     #[inline]
     pub fn build(self) -> (CmdResChannel, CmdResSubscriber) {
-        let (c, s) = CmdResChannel::with_mask(self.event_mask);
+        let tracker = Tracker {
+            write: TimeTracker::default(),
+        };
+        let (c, s) = CmdResChannel::with_mask(self.event_mask, tracker);
         if let Some(f) = self.before_set {
             unsafe {
                 *c.core.before_set.get() = Some(f);
@@ -459,10 +507,49 @@ impl CmdResChannelBuilder {
     }
 }
 
+pub type AnyResChannel = BaseChannel<(RaftCmdResponse, Option<Box<dyn Any + Send + Sync>>)>;
+
+impl Debug for AnyResChannel {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "AnyResChannel")
+    }
+}
+
+impl ErrorCallback for AnyResChannel {
+    fn report_error(self, err: RaftCmdResponse) {
+        self.set_result((err, None));
+    }
+
+    fn is_none(&self) -> bool {
+        false
+    }
+}
+
+pub type AnyResSubscriber = BaseSubscriber<(RaftCmdResponse, Option<Box<dyn Any + Send + Sync>>)>;
+
+pub fn build_any_channel(
+    f: Box<dyn FnOnce(&mut (RaftCmdResponse, Option<Box<dyn Any + Send + Sync>>)) + Send>,
+) -> (AnyResChannel, AnyResSubscriber) {
+    let (c, s) = pair();
+    unsafe {
+        *c.core.before_set.get() = Some(f);
+    }
+    (c, s)
+}
+
 impl CmdResChannel {
     // Valid range is [1, 30]
     const PROPOSED_EVENT: u64 = 1;
     const COMMITTED_EVENT: u64 = 2;
+
+    /// Creates a pair of channel and subscriber.
+    #[inline]
+    pub fn pair() -> (Self, CmdResSubscriber) {
+        let tracker = Tracker {
+            write: TimeTracker::default(),
+        };
+        Self::with_mask(u32::MAX, tracker)
+    }
 }
 
 impl ErrorCallback for CmdResChannel {
@@ -493,12 +580,15 @@ impl WriteCallback for CmdResChannel {
         self.core.notify_event(Self::COMMITTED_EVENT);
     }
 
-    fn write_trackers(&self) -> Option<&SmallVec<[TimeTracker; 4]>> {
-        None
+    type TimeTrackerListRef<'a> = &'a [TimeTracker];
+    #[inline]
+    fn write_trackers(&self) -> Self::TimeTrackerListRef<'_> {
+        std::slice::from_ref(unsafe { &(*self.core.tracker.get()).write })
     }
 
-    fn write_trackers_mut(&mut self) -> Option<&mut SmallVec<[TimeTracker; 4]>> {
-        None
+    type TimeTrackerListMut<'a> = &'a mut [TimeTracker];
+    fn write_trackers_mut(&mut self) -> Self::TimeTrackerListMut<'_> {
+        std::slice::from_mut(unsafe { &mut (*self.core.tracker.get()).write })
     }
 
     // TODO: support executing hooks inside setting result.
@@ -556,6 +646,13 @@ impl QueryResult {
 
 pub type QueryResChannel = BaseChannel<QueryResult>;
 
+impl QueryResChannel {
+    #[inline]
+    pub fn pair() -> (Self, QueryResSubscriber) {
+        pair()
+    }
+}
+
 impl ErrorCallback for QueryResChannel {
     #[inline]
     fn report_error(self, err: RaftCmdResponse) {
@@ -576,8 +673,8 @@ impl ReadCallback for QueryResChannel {
         self.set_result(res);
     }
 
-    fn read_tracker(&self) -> Option<&TrackerToken> {
-        None
+    fn read_tracker(&self) -> Option<TrackerToken> {
+        Some(unsafe { (*self.core.tracker.get()).read })
     }
 }
 
@@ -592,6 +689,13 @@ impl fmt::Debug for QueryResChannel {
 pub type DebugInfoChannel = BaseChannel<RegionMeta>;
 pub type DebugInfoSubscriber = BaseSubscriber<RegionMeta>;
 
+impl DebugInfoChannel {
+    #[inline]
+    pub fn pair() -> (Self, DebugInfoSubscriber) {
+        pair()
+    }
+}
+
 impl Debug for DebugInfoChannel {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "DebugInfoChannel")
@@ -599,22 +703,34 @@ impl Debug for DebugInfoChannel {
 }
 
 #[cfg(feature = "testexport")]
-pub type FlushChannel = BaseChannel<()>;
-#[cfg(feature = "testexport")]
-pub type FlushSubscriber = BaseSubscriber<()>;
+mod flush_channel {
+    use super::*;
 
-#[cfg(feature = "testexport")]
-impl Debug for FlushChannel {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "FlushChannel")
+    pub type FlushChannel = BaseChannel<()>;
+    pub type FlushSubscriber = BaseSubscriber<()>;
+
+    impl FlushChannel {
+        #[inline]
+        pub fn pair() -> (Self, FlushSubscriber) {
+            pair()
+        }
+    }
+
+    impl Debug for FlushChannel {
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+            write!(f, "FlushChannel")
+        }
     }
 }
+
+#[cfg(feature = "testexport")]
+pub use flush_channel::{FlushChannel, FlushSubscriber};
 
 #[cfg(test)]
 mod tests {
     use std::assert_matches::assert_matches;
 
-    use futures::{executor::block_on, StreamExt};
+    use futures::{StreamExt, executor::block_on};
 
     use super::*;
 

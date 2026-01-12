@@ -11,8 +11,8 @@ use std::{
 
 use engine_rocks::{RocksEngine, RocksEngineIterator, RocksWriteBatchVec};
 use engine_traits::{
-    IterOptions, Iterable, Iterator, Mutable, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT,
-    CF_LOCK, CF_WRITE,
+    CF_DEFAULT, CF_LOCK, CF_WRITE, IterOptions, Iterable, Iterator, Mutable, WriteBatch,
+    WriteBatchExt, WriteOptions,
 };
 use futures::channel::mpsc::UnboundedSender;
 use kvproto::recoverdatapb::ResolveKvDataResponse;
@@ -96,13 +96,10 @@ impl DataResolverManager {
             .name("cleanup_lock".to_string())
             .spawn_wrapper(move || {
                 tikv_util::thread_group::set_properties(props);
-                tikv_alloc::add_thread_memory_accessor();
 
                 worker
                     .cleanup_lock(&mut wb)
                     .expect("cleanup lock failed when delete data from invalid cf");
-
-                tikv_alloc::remove_thread_memory_accessor();
             })
             .expect("failed to spawn resolve_kv_data thread");
         self.workers.lock().unwrap().push(handle);
@@ -123,14 +120,11 @@ impl DataResolverManager {
             .name("resolve_write".to_string())
             .spawn_wrapper(move || {
                 tikv_util::thread_group::set_properties(props);
-                tikv_alloc::add_thread_memory_accessor();
 
                 if let Err(e) = worker.resolve_write(&mut wb) {
                     error!("failed to resolve write cf"; 
                     "error" => ?e);
                 }
-
-                tikv_alloc::remove_thread_memory_accessor();
             })
             .expect("failed to spawn resolve_kv_data thread");
 
@@ -312,7 +306,7 @@ impl WriteResolverWorker {
 }
 #[cfg(test)]
 mod tests {
-    use engine_traits::{WriteBatch, WriteBatchExt, ALL_CFS, CF_LOCK};
+    use engine_traits::{ALL_CFS, CF_LOCK, WriteBatch, WriteBatchExt};
     use futures::channel::mpsc;
     use tempfile::Builder;
     use txn_types::{Lock, LockType, WriteType};
@@ -382,6 +376,7 @@ mod tests {
                 for_update_ts.into(),
                 0,
                 TimeStamp::zero(),
+                false,
             );
             kv.push((CF_LOCK, Key::from_raw(key), lock.to_bytes()));
         }
@@ -429,7 +424,10 @@ mod tests {
         lock_iter.seek_to_first().unwrap();
         let mut remaining_locks = vec![];
         while lock_iter.valid().unwrap() {
-            let lock = Lock::parse(lock_iter.value()).unwrap().to_owned();
+            let lock = txn_types::parse_lock(lock_iter.value())
+                .unwrap()
+                .left()
+                .unwrap();
             let key = lock_iter.key().to_vec();
             lock_iter.next().unwrap();
             remaining_locks.push((key, lock));

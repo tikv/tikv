@@ -1,15 +1,17 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
+use tikv_util::Either;
+
 use crate::storage::{
+    Snapshot, TxnStatus,
     mvcc::{
-        metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
         ErrorInner, Key, MvccTxn, ReleasedLock, Result as MvccResult, SnapshotReader, TimeStamp,
+        metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
     },
     txn::actions::check_txn_status::{
-        check_txn_status_missing_lock, rollback_lock, MissingLockAction,
+        MissingLockAction, check_txn_status_missing_lock, rollback_lock,
     },
-    Snapshot, TxnStatus,
 };
 
 /// Cleanup the lock if it's TTL has expired, comparing with `current_ts`. If
@@ -31,7 +33,7 @@ pub fn cleanup<S: Snapshot>(
     ));
 
     match reader.load_lock(&key)? {
-        Some(ref lock) if lock.ts == reader.start_ts => {
+        Some(Either::Left(ref lock)) if lock.ts == reader.start_ts => {
             // If current_ts is not 0, check the Lock's TTL.
             // If the lock is not expired, do not rollback it but report key is locked.
             if !current_ts.is_zero() && lock.ts.physical() + lock.ttl >= current_ts.physical() {
@@ -48,31 +50,42 @@ pub fn cleanup<S: Snapshot>(
                 !protect_rollback,
             )
         }
-        l => match check_txn_status_missing_lock(
-            txn,
-            reader,
-            key.clone(),
-            l,
-            MissingLockAction::rollback_protect(protect_rollback),
-            false,
-        )? {
-            TxnStatus::Committed { commit_ts } => {
-                MVCC_CONFLICT_COUNTER.rollback_committed.inc();
-                Err(ErrorInner::Committed {
-                    start_ts: reader.start_ts,
-                    commit_ts,
-                    key: key.into_raw()?,
+        Some(Either::Right(_shared_locks)) => {
+            unimplemented!("SharedLocks returned from load_lock is not supported here")
+        }
+        l => {
+            let l = l.map(|lock| match lock {
+                Either::Left(lock) => lock,
+                Either::Right(_shared_locks) => {
+                    unimplemented!("SharedLocks returned from load_lock is not supported here")
                 }
-                .into())
+            });
+            match check_txn_status_missing_lock(
+                txn,
+                reader,
+                key.clone(),
+                l,
+                MissingLockAction::rollback_protect(protect_rollback),
+                false,
+            )? {
+                TxnStatus::Committed { commit_ts } => {
+                    MVCC_CONFLICT_COUNTER.rollback_committed.inc();
+                    Err(ErrorInner::Committed {
+                        start_ts: reader.start_ts,
+                        commit_ts,
+                        key: key.into_raw()?,
+                    }
+                    .into())
+                }
+                TxnStatus::RolledBack => {
+                    // Return Ok on Rollback already exist.
+                    MVCC_DUPLICATE_CMD_COUNTER_VEC.rollback.inc();
+                    Ok(None)
+                }
+                TxnStatus::LockNotExist => Ok(None),
+                _ => unreachable!(),
             }
-            TxnStatus::RolledBack => {
-                // Return Ok on Rollback already exist.
-                MVCC_DUPLICATE_CMD_COUNTER_VEC.rollback.inc();
-                Ok(None)
-            }
-            TxnStatus::LockNotExist => Ok(None),
-            _ => unreachable!(),
-        },
+        }
     }
 }
 
@@ -85,23 +98,23 @@ pub mod tests {
     use txn_types::TimeStamp;
 
     use super::*;
+    use crate::storage::{
+        Engine,
+        mvcc::{
+            Error as MvccError, WriteType,
+            tests::{must_have_write, must_not_have_write, write},
+        },
+        txn::tests::{must_commit, must_prewrite_put},
+    };
     #[cfg(test)]
     use crate::storage::{
+        TestEngineBuilder,
         mvcc::tests::{
             must_get_rollback_protected, must_get_rollback_ts, must_locked, must_unlocked,
             must_written,
         },
         txn::commands::txn_heart_beat,
         txn::tests::{must_acquire_pessimistic_lock, must_pessimistic_prewrite_put},
-        TestEngineBuilder,
-    };
-    use crate::storage::{
-        mvcc::{
-            tests::{must_have_write, must_not_have_write, write},
-            Error as MvccError, WriteType,
-        },
-        txn::tests::{must_commit, must_prewrite_put},
-        Engine,
     };
 
     pub fn must_succeed<E: Engine>(
@@ -113,7 +126,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let current_ts = current_ts.into();
-        let cm = ConcurrencyManager::new(current_ts);
+        let cm = ConcurrencyManager::new_for_test(current_ts);
         let start_ts = start_ts.into();
         let mut txn = MvccTxn::new(start_ts, cm);
         let mut reader = SnapshotReader::new(start_ts, snapshot, true);
@@ -129,7 +142,7 @@ pub mod tests {
     ) -> MvccError {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let current_ts = current_ts.into();
-        let cm = ConcurrencyManager::new(current_ts);
+        let cm = ConcurrencyManager::new_for_test(current_ts);
         let start_ts = start_ts.into();
         let mut txn = MvccTxn::new(start_ts, cm);
         let mut reader = SnapshotReader::new(start_ts, snapshot, true);
@@ -156,7 +169,7 @@ pub mod tests {
             must_commit(engine, key, gc_fence.prev(), gc_fence);
         }
 
-        let cm = ConcurrencyManager::new(current_ts);
+        let cm = ConcurrencyManager::new_for_test(current_ts);
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut txn = MvccTxn::new(start_ts, cm);
         let mut reader = SnapshotReader::new(start_ts, snapshot, true);
@@ -223,8 +236,9 @@ pub mod tests {
         // TTL expired. The lock should be removed.
         must_succeed(&mut engine, k, ts(10, 0), ts(120, 0));
         must_unlocked(&mut engine, k);
-        // Rollbacks of optimistic transactions needn't be protected
-        must_get_rollback_protected(&mut engine, k, ts(10, 0), false);
+        // Rollbacks of optimistic transactions need to be protected
+        // See: https://github.com/tikv/tikv/issues/16620
+        must_get_rollback_protected(&mut engine, k, ts(10, 0), true);
         must_get_rollback_ts(&mut engine, k, ts(10, 0));
 
         // Rollbacks of primary keys in pessimistic transactions should be protected

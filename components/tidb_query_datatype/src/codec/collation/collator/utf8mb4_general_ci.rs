@@ -28,30 +28,58 @@ impl Collator for CollatorUtf8Mb4GeneralCi {
 
     #[inline]
     fn write_sort_key<W: BufferWriter>(writer: &mut W, bstr: &[u8]) -> Result<usize> {
-        let s = str::from_utf8(bstr)?.trim_end_matches(PADDING_SPACE);
+        let mut bstr_rest = trim_end_padding(bstr);
         let mut n = 0;
-        for ch in s.chars() {
-            writer.write_u16_be(Self::char_weight(ch))?;
-            n += 1;
+
+        while !bstr_rest.is_empty() {
+            match next_utf8_char(bstr_rest) {
+                Some((ch_b, b_next)) => {
+                    writer.write_u16_be(Self::char_weight(ch_b))?;
+                    n += 1;
+                    bstr_rest = b_next
+                }
+                _ => break,
+            }
         }
         Ok(n * std::mem::size_of::<u16>())
     }
 
     #[inline]
-    fn sort_compare(a: &[u8], b: &[u8]) -> Result<Ordering> {
-        let sa = str::from_utf8(a)?.trim_end_matches(PADDING_SPACE);
-        let sb = str::from_utf8(b)?.trim_end_matches(PADDING_SPACE);
-        Ok(sa
-            .chars()
-            .map(Self::char_weight)
-            .cmp(sb.chars().map(Self::char_weight)))
+    fn sort_compare(a: &[u8], b: &[u8], force_no_pad: bool) -> Result<Ordering> {
+        let a = if force_no_pad { a } else { trim_end_padding(a) };
+        let b = if force_no_pad { b } else { trim_end_padding(b) };
+
+        let mut a_rest = a;
+        let mut b_rest = b;
+
+        while !a_rest.is_empty() && !b_rest.is_empty() {
+            match (next_utf8_char(a_rest), next_utf8_char(b_rest)) {
+                (Some((ch_a, a_next)), Some((ch_b, b_next))) => {
+                    let ord = Self::char_weight(ch_a).cmp(&Self::char_weight(ch_b));
+                    if ord != Ordering::Equal {
+                        return Ok(ord);
+                    }
+                    a_rest = a_next;
+                    b_rest = b_next;
+                }
+                _ => return Ok(Ordering::Equal),
+            }
+        }
+
+        Ok(a_rest.len().cmp(&b_rest.len()))
     }
 
     #[inline]
     fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8]) -> Result<()> {
-        let s = str::from_utf8(bstr)?.trim_end_matches(PADDING_SPACE);
-        for ch in s.chars().map(Self::char_weight) {
-            ch.hash(state);
+        let mut bstr_rest = trim_end_padding(bstr);
+        while !bstr_rest.is_empty() {
+            match next_utf8_char(bstr_rest) {
+                Some((ch_b, b_next)) => {
+                    Self::char_weight(ch_b).hash(state);
+                    bstr_rest = b_next
+                }
+                _ => break,
+            }
         }
         Ok(())
     }

@@ -3,11 +3,11 @@
 use std::{sync::Arc, thread, time::Duration};
 
 use grpcio::{ChannelBuilder, Environment, ServerBuilder};
-use grpcio_health::{create_health, proto::HealthCheckRequest, HealthClient, ServingStatus};
+use grpcio_health::{HealthClient, ServingStatus, create_health, proto::HealthCheckRequest};
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
-use tikv_util::{config::ReadableDuration, HandyRwLock};
+use tikv_util::{HandyRwLock, config::ReadableDuration};
 
 /// When encountering raft/batch_raft mismatch store id error, the service is
 /// expected to drop connections in order to let raft_client re-resolve store
@@ -95,7 +95,7 @@ fn test_send_raft_channel_full() {
     fail::cfg(on_batch_raft_stream_drop_by_err_fp, "panic").unwrap();
 
     // send request while channel full should not cause the connection drop
-    cluster.async_put(b"k2", b"v2").unwrap();
+    let _ = cluster.async_put(b"k2", b"v2").unwrap();
 
     fail::remove(send_raft_message_full_fp);
     cluster.must_put(b"k3", b"v3");
@@ -112,9 +112,9 @@ fn test_serving_status() {
     cluster.cfg.raft_store.inspect_interval = ReadableDuration::millis(10);
     cluster.run();
 
-    let service = cluster.sim.rl().health_services.get(&1).unwrap().clone();
-    let builder =
-        ServerBuilder::new(Arc::new(Environment::new(1))).register_service(create_health(service));
+    let health_controller = cluster.sim.rl().health_controllers.get(&1).unwrap().clone();
+    let builder = ServerBuilder::new(Arc::new(Environment::new(1)))
+        .register_service(create_health(health_controller.get_grpc_health_service()));
     let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
     server.start();
 
@@ -135,9 +135,19 @@ fn test_serving_status() {
     thread::sleep(Duration::from_millis(500));
     assert_eq!(check(), ServingStatus::Serving);
 
+    health_controller.set_is_serving(false);
+    assert_eq!(check(), ServingStatus::NotServing);
+    health_controller.set_is_serving(true);
+    assert_eq!(check(), ServingStatus::Serving);
+
     fail::cfg("pause_on_peer_collect_message", "pause").unwrap();
 
     thread::sleep(Duration::from_secs(1));
+    assert_eq!(check(), ServingStatus::ServiceUnknown);
+
+    health_controller.set_is_serving(false);
+    assert_eq!(check(), ServingStatus::NotServing);
+    health_controller.set_is_serving(true);
     assert_eq!(check(), ServingStatus::ServiceUnknown);
 
     fail::remove("pause_on_peer_collect_message");
@@ -145,4 +155,48 @@ fn test_serving_status() {
     // It should recover within one round.
     thread::sleep(Duration::from_millis(200));
     assert_eq!(check(), ServingStatus::Serving);
+}
+
+#[test]
+fn test_raft_message_observer() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.pd_client.disable_default_operator();
+    let r1 = cluster.run_conf_change();
+
+    cluster.must_put(b"k1", b"v1");
+
+    fail::cfg("force_reject_raft_append_message", "return").unwrap();
+    fail::cfg("force_reject_raft_snapshot_message", "return").unwrap();
+
+    cluster.pd_client.add_peer(r1, new_peer(2, 2));
+
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    must_get_none(&cluster.get_engine(2), b"k1");
+
+    fail::remove("force_reject_raft_append_message");
+    fail::remove("force_reject_raft_snapshot_message");
+
+    cluster.pd_client.must_have_peer(r1, new_peer(2, 2));
+    cluster.pd_client.must_add_peer(r1, new_peer(3, 3));
+
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    fail::cfg("force_reject_raft_append_message", "return").unwrap();
+
+    let _ = cluster.async_put(b"k2", b"v2").unwrap();
+
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    must_get_none(&cluster.get_engine(2), b"k2");
+    must_get_none(&cluster.get_engine(3), b"k2");
+
+    fail::remove("force_reject_raft_append_message");
+
+    cluster.must_put(b"k3", b"v3");
+    for id in 1..=3 {
+        must_get_equal(&cluster.get_engine(id), b"k3", b"v3");
+    }
+    cluster.shutdown();
 }

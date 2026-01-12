@@ -7,7 +7,7 @@ use lazy_static::lazy_static;
 use parking_lot::Mutex;
 use slab::Slab;
 
-use crate::{metrics::*, Tracker};
+use crate::{Tracker, metrics::*};
 
 const SLAB_SHARD_BITS: u32 = 6;
 const SLAB_SHARD_COUNT: usize = 1 << SLAB_SHARD_BITS; // 64
@@ -20,7 +20,7 @@ lazy_static! {
 
 fn next_shard_id() -> usize {
     thread_local! {
-        static CURRENT_SHARD_ID: Cell<usize> = Cell::new(0);
+        static CURRENT_SHARD_ID: Cell<usize> = const {Cell::new(0)};
     }
     CURRENT_SHARD_ID.with(|c| {
         let shard_id = c.get();
@@ -188,12 +188,54 @@ impl Default for TrackerToken {
     }
 }
 
+pub struct TrackerTokenArray<'a>(&'a [TrackerToken]);
+impl slog::Value for TrackerTokenArray<'_> {
+    fn serialize(
+        &self,
+        _record: &slog::Record<'_>,
+        key: slog::Key,
+        serializer: &mut dyn slog::Serializer,
+    ) -> slog::Result {
+        let trackers_str = self
+            .0
+            .iter()
+            .map(|tracker_token| {
+                format!(
+                    "{:?}",
+                    GLOBAL_TRACKERS.with_tracker(*tracker_token, |t| t.req_info.clone())
+                )
+            })
+            .collect::<Vec<String>>()
+            .join(", ");
+        serializer.emit_str(key, &trackers_str)
+    }
+}
+
+impl<'a> TrackerTokenArray<'a> {
+    pub fn new(tokens: &'a [TrackerToken]) -> Self {
+        TrackerTokenArray(tokens)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, thread};
+    use std::{sync::Arc, thread, time::Instant};
 
     use super::*;
-    use crate::RequestInfo;
+    use crate::{RequestInfo, RequestType};
+
+    fn new_req_info(task_id: u64) -> RequestInfo {
+        RequestInfo {
+            region_id: 0,
+            start_ts: 0,
+            task_id,
+            resource_group_tag: vec![],
+            begin: Instant::now(),
+            request_type: RequestType::default(),
+            cid: 0,
+            is_external_req: false,
+        }
+    }
 
     #[test]
     fn test_tracker_token() {
@@ -212,10 +254,7 @@ mod tests {
         // Insert 192 trackers
         let tokens: Vec<TrackerToken> = (0..192)
             .map(|i| {
-                let tracker = Tracker::new(RequestInfo {
-                    task_id: i,
-                    ..Default::default()
-                });
+                let tracker = Tracker::new(new_req_info(i));
                 slab.insert(tracker)
             })
             .collect();
@@ -232,10 +271,7 @@ mod tests {
         }
         // Insert another 192 trackers
         for i in 192..384 {
-            let tracker = Tracker::new(RequestInfo {
-                task_id: i,
-                ..Default::default()
-            });
+            let tracker = Tracker::new(new_req_info(i));
             slab.insert(tracker);
         }
         // Iterate over all trackers in the slab
@@ -252,10 +288,7 @@ mod tests {
             let slab = slab.clone();
             thread::spawn(move || {
                 for _ in 0..SLAB_SHARD_COUNT {
-                    slab.insert(Tracker::new(RequestInfo {
-                        task_id: i,
-                        ..Default::default()
-                    }));
+                    slab.insert(Tracker::new(new_req_info(i)));
                 }
             })
         });

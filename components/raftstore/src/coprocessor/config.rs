@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{perf_level_serde, PerfLevel};
+use engine_traits::{KvEngine, PerfLevel, perf_level_serde};
 use online_config::{ConfigChange, ConfigManager, OnlineConfig};
 use serde::{Deserialize, Serialize};
 use tikv_util::{box_err, config::ReadableSize, worker::Scheduler};
@@ -25,7 +25,7 @@ pub struct Config {
     /// [b,c), [c,d) will be region_split_size (maybe a little larger).
     /// by default, region_max_size = region_split_size * 2 / 3.
     pub region_max_size: Option<ReadableSize>,
-    pub region_split_size: ReadableSize,
+    pub region_split_size: Option<ReadableSize>,
 
     /// When the number of keys in region [a,e) meets the region_max_keys,
     /// it will be split into two several regions [a,b), [b,c), [c,d), [d,e).
@@ -46,7 +46,7 @@ pub struct Config {
     pub perf_level: PerfLevel,
 
     // enable subsplit ranges (aka bucket) within the region
-    pub enable_region_bucket: bool,
+    pub enable_region_bucket: Option<bool>,
     pub region_bucket_size: ReadableSize,
     // region size threshold for using approximate size instead of scan
     pub region_size_threshold_for_approximate: ReadableSize,
@@ -69,28 +69,35 @@ pub enum ConsistencyCheckMethod {
     Mvcc = 1,
 }
 
-/// Default region split size.
-pub const SPLIT_SIZE_MB: u64 = 96;
+/// Default region split size. In version < 8.3.0, the default split size is
+/// 96MB. In version >= 8.3.0, the default split size is increased to 256MB to
+/// allow for larger region size in TiKV.
+pub const SPLIT_SIZE: ReadableSize = ReadableSize::mb(256);
+pub const RAFTSTORE_V2_SPLIT_SIZE: ReadableSize = ReadableSize::gb(10);
+
 /// Default batch split limit.
 pub const BATCH_SPLIT_LIMIT: u64 = 10;
 
-pub const DEFAULT_BUCKET_SIZE: ReadableSize = ReadableSize::mb(96);
+// A bucket will be split only when its size is larger than 2x of
+// DEFAULT_BUCKET_SIZE So the avg of the actual bucket size is 75MB, which is
+// slightly less than region size We don't use 48MB size because it will enable
+// the automatic bucket under default 96MB region size.
+pub const DEFAULT_BUCKET_SIZE: ReadableSize = ReadableSize::mb(50);
 
 pub const DEFAULT_REGION_BUCKET_MERGE_SIZE_RATIO: f64 = 0.33;
 
 impl Default for Config {
     fn default() -> Config {
-        let split_size = ReadableSize::mb(SPLIT_SIZE_MB);
         Config {
             split_region_on_table: false,
             batch_split_limit: BATCH_SPLIT_LIMIT,
-            region_split_size: split_size,
+            region_split_size: None,
             region_max_size: None,
             region_split_keys: None,
             region_max_keys: None,
             consistency_check_method: ConsistencyCheckMethod::Mvcc,
             perf_level: PerfLevel::Uninitialized,
-            enable_region_bucket: false,
+            enable_region_bucket: None,
             region_bucket_size: DEFAULT_BUCKET_SIZE,
             region_size_threshold_for_approximate: DEFAULT_BUCKET_SIZE * BATCH_SPLIT_LIMIT / 2 * 3,
             region_bucket_merge_size_ratio: DEFAULT_REGION_BUCKET_MERGE_SIZE_RATIO,
@@ -100,39 +107,85 @@ impl Default for Config {
 }
 
 impl Config {
+    pub fn region_split_size(&self) -> ReadableSize {
+        self.region_split_size.unwrap_or(SPLIT_SIZE)
+    }
+
     pub fn region_max_keys(&self) -> u64 {
-        let default_split_keys = self.region_split_size.as_mb_f64() * 10000.0;
+        let default_split_keys = self.region_split_size().as_mb_f64() * 10000.0;
         self.region_max_keys
             .unwrap_or(default_split_keys as u64 / 2 * 3)
     }
 
     pub fn region_max_size(&self) -> ReadableSize {
         self.region_max_size
-            .unwrap_or(self.region_split_size / 2 * 3)
+            .unwrap_or(self.region_split_size() / 2 * 3)
     }
 
     pub fn region_split_keys(&self) -> u64 {
         // Assume the average size of KVs is 100B.
         self.region_split_keys
-            .unwrap_or((self.region_split_size.as_mb_f64() * 10000.0) as u64)
+            .unwrap_or((self.region_split_size().as_mb_f64() * 10000.0) as u64)
     }
 
-    pub fn validate(&mut self) -> Result<()> {
+    pub fn enable_region_bucket(&self) -> bool {
+        self.enable_region_bucket.unwrap_or(false)
+    }
+
+    pub fn optimize_for(&mut self, raftstore_v2: bool) {
+        // overwrite the default region_split_size when it's multi-rocksdb
+        if self.region_split_size.is_none() {
+            if raftstore_v2 {
+                self.region_split_size = Some(RAFTSTORE_V2_SPLIT_SIZE);
+            } else {
+                self.region_split_size = Some(self.region_split_size());
+            }
+        }
+    }
+
+    fn validate_bucket_size(&self) -> Result<()> {
+        if self.region_split_size().0 < self.region_bucket_size.0 {
+            return Err(box_err!(
+                "region split size {} must >= region bucket size {}",
+                self.region_split_size().0,
+                self.region_bucket_size.0
+            ));
+        }
+        if self.region_size_threshold_for_approximate.0 < self.region_bucket_size.0 {
+            return Err(box_err!(
+                "large region threshold size {} must >= region bucket size {}",
+                self.region_size_threshold_for_approximate.0,
+                self.region_bucket_size.0
+            ));
+        }
+        if self.region_bucket_size.0 == 0 {
+            return Err(box_err!("region_bucket size cannot be 0."));
+        }
+        if self.region_bucket_merge_size_ratio <= 0.0 || self.region_bucket_merge_size_ratio >= 0.5
+        {
+            return Err(box_err!(
+                "region-bucket-merge-size-ratio should be 0 to 0.5 (not include both ends)."
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn validate(&mut self, raft_kv_v2: bool) -> Result<()> {
         if self.region_split_keys.is_none() {
-            self.region_split_keys = Some((self.region_split_size.as_mb_f64() * 10000.0) as u64);
+            self.region_split_keys = Some((self.region_split_size().as_mb_f64() * 10000.0) as u64);
         }
 
         match self.region_max_size {
             Some(region_max_size) => {
-                if region_max_size.0 < self.region_split_size.0 {
+                if region_max_size.0 < self.region_split_size().0 {
                     return Err(box_err!(
                         "region max size {} must >= split size {}",
                         region_max_size.0,
-                        self.region_split_size.0
+                        self.region_split_size().0
                     ));
                 }
             }
-            None => self.region_max_size = Some(self.region_split_size / 2 * 3),
+            None => self.region_max_size = Some(self.region_split_size() / 2 * 3),
         }
 
         match self.region_max_keys {
@@ -147,39 +200,27 @@ impl Config {
             }
             None => self.region_max_keys = Some(self.region_split_keys() / 2 * 3),
         }
-        if self.enable_region_bucket {
-            if self.region_split_size.0 < self.region_bucket_size.0 {
-                return Err(box_err!(
-                    "region split size {} must >= region bucket size {}",
-                    self.region_split_size.0,
-                    self.region_bucket_size.0
-                ));
-            }
-            if self.region_size_threshold_for_approximate.0 < self.region_bucket_size.0 {
-                return Err(box_err!(
-                    "large region threshold size {} must >= region bucket size {}",
-                    self.region_size_threshold_for_approximate.0,
-                    self.region_bucket_size.0
-                ));
-            }
-            if self.region_bucket_size.0 == 0 {
-                return Err(box_err!("region_bucket size cannot be 0."));
-            }
-            if self.region_bucket_merge_size_ratio <= 0.0
-                || self.region_bucket_merge_size_ratio >= 0.5
-            {
-                return Err(box_err!(
-                    "region-bucket-merge-size-ratio should be 0 to 0.5 (not include both ends)."
-                ));
-            }
+        let res = self.validate_bucket_size();
+        // If it's OK to enable bucket, we will prefer to enable it if useful for
+        // raftstore-v2.
+        if let Ok(()) = res
+            && self.enable_region_bucket.is_none()
+            && raft_kv_v2
+        {
+            let useful = self.region_split_size() >= self.region_bucket_size * 2;
+            self.enable_region_bucket = Some(useful);
+        } else if let Err(e) = res
+            && self.enable_region_bucket()
+        {
+            return Err(e);
         }
         Ok(())
     }
 }
 
-pub struct SplitCheckConfigManager(pub Scheduler<SplitCheckTask>);
+pub struct SplitCheckConfigManager<EK: KvEngine>(pub Scheduler<SplitCheckTask<EK>>);
 
-impl ConfigManager for SplitCheckConfigManager {
+impl<EK: KvEngine> ConfigManager for SplitCheckConfigManager<EK> {
     fn dispatch(
         &mut self,
         change: ConfigChange,
@@ -189,8 +230,8 @@ impl ConfigManager for SplitCheckConfigManager {
     }
 }
 
-impl std::ops::Deref for SplitCheckConfigManager {
-    type Target = Scheduler<SplitCheckTask>;
+impl<EK: KvEngine> std::ops::Deref for SplitCheckConfigManager<EK> {
+    type Target = Scheduler<SplitCheckTask<EK>>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -204,39 +245,39 @@ mod tests {
     #[test]
     fn test_config_validate() {
         let mut cfg = Config::default();
-        cfg.validate().unwrap();
+        cfg.validate(false).unwrap();
 
         cfg = Config::default();
         cfg.region_max_size = Some(ReadableSize(10));
-        cfg.region_split_size = ReadableSize(20);
-        cfg.validate().unwrap_err();
+        cfg.region_split_size = Some(ReadableSize(20));
+        cfg.validate(false).unwrap_err();
 
         cfg = Config::default();
         cfg.region_max_size = None;
-        cfg.region_split_size = ReadableSize(20);
-        cfg.validate().unwrap();
+        cfg.region_split_size = Some(ReadableSize(20));
+        cfg.validate(false).unwrap();
         assert_eq!(cfg.region_max_size, Some(ReadableSize(30)));
 
         cfg = Config::default();
         cfg.region_max_keys = Some(10);
         cfg.region_split_keys = Some(20);
-        cfg.validate().unwrap_err();
+        cfg.validate(false).unwrap_err();
 
         cfg = Config::default();
         cfg.region_max_keys = None;
         cfg.region_split_keys = Some(20);
-        cfg.validate().unwrap();
+        cfg.validate(false).unwrap();
         assert_eq!(cfg.region_max_keys, Some(30));
 
         cfg = Config::default();
-        cfg.enable_region_bucket = false;
-        cfg.region_split_size = ReadableSize(20);
+        cfg.enable_region_bucket = Some(false);
+        cfg.region_split_size = Some(ReadableSize(20));
         cfg.region_bucket_size = ReadableSize(30);
-        cfg.validate().unwrap();
+        cfg.validate(false).unwrap();
 
         cfg = Config::default();
-        cfg.region_split_size = ReadableSize::mb(20);
-        cfg.validate().unwrap();
+        cfg.region_split_size = Some(ReadableSize::mb(20));
+        cfg.validate(false).unwrap();
         assert_eq!(cfg.region_split_keys, Some(200000));
     }
 }

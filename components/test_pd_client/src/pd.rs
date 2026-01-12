@@ -7,8 +7,8 @@ use std::{
         Bound::{Excluded, Unbounded},
     },
     sync::{
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc, RwLock,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -19,7 +19,7 @@ use futures::{
     channel::mpsc::{self, UnboundedReceiver, UnboundedSender},
     compat::Future01CompatExt,
     executor::block_on,
-    future::{err, ok, ready, BoxFuture, FutureExt},
+    future::{BoxFuture, FutureExt, err, ok, ready},
     stream,
     stream::StreamExt,
 };
@@ -27,8 +27,8 @@ use keys::{self, data_key, enc_end_key, enc_start_key};
 use kvproto::{
     metapb::{self, PeerRole},
     pdpb::{
-        self, ChangePeer, ChangePeerV2, CheckPolicy, Merge, RegionHeartbeatResponse, SplitRegion,
-        TransferLeader,
+        self, BatchSwitchWitness, ChangePeer, ChangePeerV2, CheckPolicy, Merge,
+        RegionHeartbeatResponse, SplitRegion, SwitchWitness, TransferLeader,
     },
     replication_modepb::{
         DrAutoSyncState, RegionReplicationStatus, ReplicationMode, ReplicationStatus,
@@ -40,13 +40,13 @@ use pd_client::{
 };
 use raft::eraftpb::ConfChangeType;
 use tikv_util::{
-    store::{check_key_in_region, find_peer, is_learner, new_peer, QueryStats},
+    Either, HandyRwLock,
+    store::{QueryStats, check_key_in_region, find_peer, find_peer_by_id, is_learner, new_peer},
     time::{Instant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
-    Either, HandyRwLock,
 };
 use tokio_timer::timer::Handle;
-use txn_types::{TimeStamp, TSO_PHYSICAL_SHIFT_BITS};
+use txn_types::{TSO_PHYSICAL_SHIFT_BITS, TimeStamp};
 
 use super::*;
 
@@ -135,6 +135,11 @@ enum Operator {
         remove_peers: Vec<metapb::Peer>,
         policy: SchedulePolicy,
     },
+    BatchSwitchWitness {
+        peer_ids: Vec<u64>,
+        is_witnesses: Vec<bool>,
+        policy: SchedulePolicy,
+    },
 }
 
 pub fn sleep_ms(ms: u64) {
@@ -198,6 +203,22 @@ pub fn new_pd_merge_region(target_region: metapb::Region) -> RegionHeartbeatResp
 
     let mut resp = RegionHeartbeatResponse::default();
     resp.set_merge(merge);
+    resp
+}
+
+fn switch_witness(peer_id: u64, is_witness: bool) -> SwitchWitness {
+    let mut sw = SwitchWitness::default();
+    sw.set_peer_id(peer_id);
+    sw.set_is_witness(is_witness);
+    sw
+}
+
+pub fn new_pd_batch_switch_witnesses(switches: Vec<SwitchWitness>) -> RegionHeartbeatResponse {
+    let mut switch_witnesses = BatchSwitchWitness::default();
+    switch_witnesses.set_switch_witnesses(switches.into());
+
+    let mut resp = RegionHeartbeatResponse::default();
+    resp.set_switch_witnesses(switch_witnesses);
     resp
 }
 
@@ -275,6 +296,17 @@ impl Operator {
                     cps.push(change_peer(ConfChangeType::RemoveNode, peer.clone()));
                 }
                 new_pd_change_peer_v2(cps)
+            }
+            Operator::BatchSwitchWitness {
+                ref peer_ids,
+                ref is_witnesses,
+                ..
+            } => {
+                let mut switches = Vec::with_capacity(peer_ids.len());
+                for (peer_id, is_witness) in peer_ids.iter().zip(is_witnesses.iter()) {
+                    switches.push(switch_witness(*peer_id, *is_witness));
+                }
+                new_pd_batch_switch_witnesses(switches)
             }
         }
     }
@@ -360,6 +392,26 @@ impl Operator {
 
                 add && remove || !policy.schedule()
             }
+            Operator::BatchSwitchWitness {
+                ref peer_ids,
+                ref is_witnesses,
+                ref mut policy,
+            } => {
+                if !policy.schedule() {
+                    return true;
+                }
+                for (peer_id, is_witness) in peer_ids.iter().zip(is_witnesses.iter()) {
+                    if region
+                        .get_peers()
+                        .iter()
+                        .any(|p| (p.get_id() == *peer_id) && (p.get_is_witness() != *is_witness))
+                        || cluster.pending_peers.contains_key(peer_id)
+                    {
+                        return false;
+                    }
+                }
+                true
+            }
         }
     }
 }
@@ -387,6 +439,7 @@ struct PdCluster {
     // region id -> leader
     leaders: HashMap<u64, metapb::Peer>,
     down_peers: HashMap<u64, pdpb::PeerStats>,
+    // peer id -> peer
     pending_peers: HashMap<u64, metapb::Peer>,
     is_bootstraped: bool,
 
@@ -476,7 +529,7 @@ impl PdCluster {
         if self
             .stores
             .get(&store_id)
-            .map_or(true, |s| s.store.get_id() != 0)
+            .is_none_or(|s| s.store.get_id() != 0)
         {
             self.stores.insert(
                 store_id,
@@ -494,7 +547,9 @@ impl PdCluster {
     fn get_store(&self, store_id: u64) -> Result<metapb::Store> {
         match self.stores.get(&store_id) {
             Some(s) if s.store.get_id() != 0 => Ok(s.store.clone()),
-            _ => Err(box_err!("store {} not found", store_id)),
+            // Matches PD error message.
+            // See https://github.com/tikv/pd/blob/v7.3.0/server/grpc_service.go#L777-L780
+            _ => Err(box_err!("invalid store ID {}, not found", store_id)),
         }
     }
 
@@ -524,6 +579,20 @@ impl PdCluster {
             .region_id_keys
             .get(&region_id)
             .and_then(|k| self.regions.get(k).cloned()))
+    }
+
+    fn scan_regions(&self, start: &[u8], end: &[u8], limit: i32) -> Vec<metapb::Region> {
+        let mut regions = vec![];
+        for (_, region) in self.regions.range((Excluded(start.to_vec()), Unbounded)) {
+            if !end.is_empty() && region.start_key.as_slice() >= end {
+                break;
+            }
+            regions.push(region.clone());
+            if regions.len() as i32 >= limit {
+                break;
+            }
+        }
+        regions
     }
 
     fn get_region_approximate_size(&self, region_id: u64) -> Option<u64> {
@@ -771,10 +840,18 @@ impl PdCluster {
         }
         self.leaders.insert(region.get_id(), leader.clone());
 
-        self.region_approximate_size
-            .insert(region.get_id(), region_stat.approximate_size);
-        self.region_approximate_keys
-            .insert(region.get_id(), region_stat.approximate_keys);
+        // only update region approximate size/keys when the stats data > 0.
+        // 0 value means the stats data is uninitialized.
+        // The equvalent logic in pd is: https://github.com/tikv/pd/blob/23550ebb90464948a2d6539d9dc9d6d067924d79/pkg/core/region.go#L275
+        if region_stat.approximate_size > 0 {
+            self.region_approximate_size
+                .insert(region.get_id(), region_stat.approximate_size);
+        }
+        if region_stat.approximate_keys > 0 {
+            self.region_approximate_keys
+                .insert(region.get_id(), region_stat.approximate_keys);
+        }
+
         self.region_last_report_ts
             .insert(region.get_id(), region_stat.last_report_ts);
         self.region_last_report_term.insert(region.get_id(), term);
@@ -868,12 +945,12 @@ pub struct TestPdClient {
     feature_gate: FeatureGate,
     trigger_leader_info_loss: AtomicBool,
 
-    pub gc_safepoints: RwLock<Vec<GcSafePoint>>,
+    pub gc_safepoints: RwLock<Vec<ServiceSafePoint>>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct GcSafePoint {
-    pub serivce: String,
+pub struct ServiceSafePoint {
+    pub service: String,
     pub ttl: Duration,
     pub safepoint: TimeStamp,
 }
@@ -1010,10 +1087,10 @@ impl TestPdClient {
             };
             let add = add_peers
                 .iter()
-                .all(|peer| find_peer(&region, peer.get_store_id()).map_or(false, |p| p == peer));
+                .all(|peer| find_peer(&region, peer.get_store_id()).is_some_and(|p| p == peer));
             let remove = remove_peers
                 .iter()
-                .all(|peer| find_peer(&region, peer.get_store_id()).map_or(true, |p| p != peer));
+                .all(|peer| find_peer(&region, peer.get_store_id()) != Some(peer));
             if add && remove {
                 return;
             }
@@ -1043,6 +1120,48 @@ impl TestPdClient {
         panic!("region {:?} failed to leave joint", region);
     }
 
+    pub fn must_finish_switch_witnesses(
+        &self,
+        region_id: u64,
+        peer_ids: Vec<u64>,
+        is_witnesses: Vec<bool>,
+    ) {
+        for _ in 1..500 {
+            sleep_ms(10);
+            let region = match block_on(self.get_region_by_id(region_id)).unwrap() {
+                Some(region) => region,
+                None => continue,
+            };
+
+            for p in region.get_peers().iter() {
+                error!("in must_finish_switch_witnesses, p: {:?}", p);
+            }
+
+            let mut need_retry = false;
+            for (peer_id, is_witness) in peer_ids.iter().zip(is_witnesses.iter()) {
+                match find_peer_by_id(&region, *peer_id) {
+                    Some(p) => {
+                        if p.get_is_witness() != *is_witness
+                            || self.cluster.rl().pending_peers.contains_key(&p.get_id())
+                        {
+                            need_retry = true;
+                            break;
+                        }
+                    }
+                    None => {
+                        need_retry = true;
+                        break;
+                    }
+                }
+            }
+            if !need_retry {
+                return;
+            }
+        }
+        let region = block_on(self.get_region_by_id(region_id)).unwrap();
+        panic!("region {:?} failed to finish switch witnesses", region);
+    }
+
     pub fn add_region(&self, region: &metapb::Region) {
         self.cluster.wl().add_region(region)
     }
@@ -1067,6 +1186,15 @@ impl TestPdClient {
     pub fn remove_peer(&self, region_id: u64, peer: metapb::Peer) {
         let op = Operator::RemovePeer {
             peer,
+            policy: SchedulePolicy::TillSuccess,
+        };
+        self.schedule_operator(region_id, op);
+    }
+
+    pub fn switch_witnesses(&self, region_id: u64, peer_ids: Vec<u64>, is_witnesses: Vec<bool>) {
+        let op = Operator::BatchSwitchWitness {
+            peer_ids,
+            is_witnesses,
             policy: SchedulePolicy::TillSuccess,
         };
         self.schedule_operator(region_id, op);
@@ -1189,6 +1317,16 @@ impl TestPdClient {
         self.must_none_peer(region_id, peer);
     }
 
+    pub fn must_switch_witnesses(
+        &self,
+        region_id: u64,
+        peer_ids: Vec<u64>,
+        is_witnesses: Vec<bool>,
+    ) {
+        self.switch_witnesses(region_id, peer_ids.clone(), is_witnesses.clone());
+        self.must_finish_switch_witnesses(region_id, peer_ids, is_witnesses);
+    }
+
     pub fn must_joint_confchange(
         &self,
         region_id: u64,
@@ -1214,9 +1352,21 @@ impl TestPdClient {
     }
 
     pub fn must_merge(&self, from: u64, target: u64) {
+        let epoch = self.get_region_epoch(target);
         self.merge_region(from, target);
 
-        self.check_merged_timeout(from, Duration::from_secs(5));
+        self.check_merged_timeout(from, Duration::from_secs(10));
+        let timer = Instant::now();
+        loop {
+            if epoch.get_version() == self.get_region_epoch(target).get_version() {
+                if timer.saturating_elapsed() > Duration::from_secs(1) {
+                    panic!("region {:?} is still not merged.", target);
+                }
+            } else {
+                return;
+            }
+            sleep_ms(10);
+        }
     }
 
     pub fn check_merged(&self, from: u64) -> bool {
@@ -1241,13 +1391,19 @@ impl TestPdClient {
     pub fn region_leader_must_be(&self, region_id: u64, peer: metapb::Peer) {
         for _ in 0..500 {
             sleep_ms(10);
-            if let Some(p) = self.cluster.rl().leaders.get(&region_id) {
-                if *p == peer {
-                    return;
-                }
+            if self.check_region_leader(region_id, peer.clone()) {
+                return;
             }
         }
         panic!("region {} must have leader: {:?}", region_id, peer);
+    }
+
+    pub fn check_region_leader(&self, region_id: u64, peer: metapb::Peer) -> bool {
+        self.cluster
+            .rl()
+            .leaders
+            .get(&region_id)
+            .is_some_and(|p| *p == peer)
     }
 
     // check whether region is split by split_key or not.
@@ -1309,12 +1465,23 @@ impl TestPdClient {
         cluster.replication_status = Some(status);
     }
 
-    pub fn switch_replication_mode(&self, state: DrAutoSyncState, available_stores: Vec<u64>) {
+    pub fn switch_replication_mode(
+        &self,
+        state: Option<DrAutoSyncState>,
+        available_stores: Vec<u64>,
+    ) {
         let mut cluster = self.cluster.wl();
         let status = cluster.replication_status.as_mut().unwrap();
-        let mut dr = status.mut_dr_auto_sync();
+        if state.is_none() {
+            status.set_mode(ReplicationMode::Majority);
+            let dr = status.mut_dr_auto_sync();
+            dr.state_id += 1;
+            return;
+        }
+        status.set_mode(ReplicationMode::DrAutoSync);
+        let dr = status.mut_dr_auto_sync();
         dr.state_id += 1;
-        dr.set_state(state);
+        dr.set_state(state.unwrap());
         dr.available_stores = available_stores;
     }
 
@@ -1517,6 +1684,28 @@ impl PdClient for TestPdClient {
         }
     }
 
+    fn scan_regions(
+        &self,
+        start_key: &[u8],
+        end_key: &[u8],
+        limit: i32,
+    ) -> Result<Vec<pdpb::Region>> {
+        self.check_bootstrap()?;
+
+        let result: Vec<_> = self
+            .cluster
+            .rl()
+            .scan_regions(start_key, end_key, limit)
+            .into_iter()
+            .map(|r| {
+                let mut res = pdpb::Region::new();
+                res.set_region(r);
+                res
+            })
+            .collect();
+        Ok(result)
+    }
+
     fn get_cluster_config(&self) -> Result<metapb::Cluster> {
         self.check_bootstrap()?;
         Ok(self.cluster.rl().meta.clone())
@@ -1540,6 +1729,7 @@ impl PdClient for TestPdClient {
             region_stat,
             replication_status,
         );
+        fail_point!("test_pd_client::finish_region_heartbeat");
         match resp {
             Ok(resp) => {
                 let store_id = leader.get_store_id();
@@ -1623,6 +1813,7 @@ impl PdClient for TestPdClient {
         &self,
         region: metapb::Region,
         count: usize,
+        _reason: pdpb::SplitReason,
     ) -> PdFuture<pdpb::AskBatchSplitResponse> {
         if self.is_incompatible {
             return Box::pin(err(Error::Incompatible));
@@ -1799,8 +1990,8 @@ impl PdClient for TestPdClient {
         ttl: Duration,
     ) -> PdFuture<()> {
         if ttl.as_secs() > 0 {
-            self.gc_safepoints.wl().push(GcSafePoint {
-                serivce: name,
+            self.gc_safepoints.wl().push(ServiceSafePoint {
+                service: name,
                 ttl,
                 safepoint,
             });
@@ -1833,13 +2024,7 @@ impl PdClient for TestPdClient {
                 if current.meta < buckets.meta {
                     std::mem::swap(current, &mut buckets);
                 }
-
-                pd_client::merge_bucket_stats(
-                    &current.meta.keys,
-                    &mut current.stats,
-                    &buckets.meta.keys,
-                    &buckets.stats,
-                );
+                current.merge(&buckets);
             })
             .or_insert(buckets);
         ready(Ok(())).boxed()

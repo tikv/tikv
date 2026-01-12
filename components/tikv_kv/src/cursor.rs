@@ -2,7 +2,7 @@
 
 use std::{cell::Cell, cmp::Ordering, ops::Bound};
 
-use engine_traits::{CfName, IterOptions, DATA_KEY_PREFIX_LEN};
+use engine_traits::{CfName, DATA_KEY_PREFIX_LEN, IterOptions};
 use tikv_util::{
     keybuilder::KeyBuilder, metrics::CRITICAL_ERROR, panic_when_unexpected_key_or_data,
     set_panic_mark,
@@ -10,8 +10,8 @@ use tikv_util::{
 use txn_types::{Key, TimeStamp};
 
 use crate::{
+    CfStatistics, Error, Iterator, Result, SEEK_BOUND, ScanMode, Snapshot,
     stats::{StatsCollector, StatsKind},
-    CfStatistics, Error, Iterator, Result, ScanMode, Snapshot, SEEK_BOUND,
 };
 
 pub struct Cursor<I: Iterator> {
@@ -83,11 +83,7 @@ impl<I: Iterator> Cursor<I> {
         });
 
         assert_ne!(self.scan_mode, ScanMode::Backward);
-        if self
-            .max_key
-            .as_ref()
-            .map_or(false, |k| k <= key.as_encoded())
-        {
+        if self.max_key.as_ref().is_some_and(|k| k <= key.as_encoded()) {
             self.iter.validate_key(key)?;
             return Ok(false);
         }
@@ -130,11 +126,7 @@ impl<I: Iterator> Cursor<I> {
         {
             return Ok(true);
         }
-        if self
-            .max_key
-            .as_ref()
-            .map_or(false, |k| k <= key.as_encoded())
-        {
+        if self.max_key.as_ref().is_some_and(|k| k <= key.as_encoded()) {
             self.iter.validate_key(key)?;
             return Ok(false);
         }
@@ -201,11 +193,7 @@ impl<I: Iterator> Cursor<I> {
 
     pub fn seek_for_prev(&mut self, key: &Key, statistics: &mut CfStatistics) -> Result<bool> {
         assert_ne!(self.scan_mode, ScanMode::Forward);
-        if self
-            .min_key
-            .as_ref()
-            .map_or(false, |k| k >= key.as_encoded())
-        {
+        if self.min_key.as_ref().is_some_and(|k| k >= key.as_encoded()) {
             self.iter.validate_key(key)?;
             return Ok(false);
         }
@@ -238,11 +226,7 @@ impl<I: Iterator> Cursor<I> {
             return Ok(true);
         }
 
-        if self
-            .min_key
-            .as_ref()
-            .map_or(false, |k| k >= key.as_encoded())
-        {
+        if self.min_key.as_ref().is_some_and(|k| k >= key.as_encoded()) {
             self.iter.validate_key(key)?;
             return Ok(false);
         }
@@ -333,7 +317,8 @@ impl<I: Iterator> Cursor<I> {
     pub fn seek_to_first(&mut self, statistics: &mut CfStatistics) -> bool {
         assert!(!self.prefix_seek);
         self.mark_unread();
-        let _guard = StatsCollector::new(StatsKind::Seek, statistics);
+        let _guard =
+            StatsCollector::new(self.iter.metrics_collector(), StatsKind::Seek, statistics);
         self.iter.seek_to_first().expect("Invalid Iterator")
     }
 
@@ -341,14 +326,16 @@ impl<I: Iterator> Cursor<I> {
     pub fn seek_to_last(&mut self, statistics: &mut CfStatistics) -> bool {
         assert!(!self.prefix_seek);
         self.mark_unread();
-        let _guard = StatsCollector::new(StatsKind::Seek, statistics);
+        let _guard =
+            StatsCollector::new(self.iter.metrics_collector(), StatsKind::Seek, statistics);
         self.iter.seek_to_last().expect("Invalid Iterator")
     }
 
     #[inline]
     pub fn internal_seek(&mut self, key: &Key, statistics: &mut CfStatistics) -> Result<bool> {
         self.mark_unread();
-        let _guard = StatsCollector::new(StatsKind::Seek, statistics);
+        let _guard =
+            StatsCollector::new(self.iter.metrics_collector(), StatsKind::Seek, statistics);
         self.iter.seek(key)
     }
 
@@ -359,21 +346,27 @@ impl<I: Iterator> Cursor<I> {
         statistics: &mut CfStatistics,
     ) -> Result<bool> {
         self.mark_unread();
-        let _guard = StatsCollector::new(StatsKind::SeekForPrev, statistics);
+        let _guard = StatsCollector::new(
+            self.iter.metrics_collector(),
+            StatsKind::SeekForPrev,
+            statistics,
+        );
         self.iter.seek_for_prev(key)
     }
 
     #[inline]
     pub fn next(&mut self, statistics: &mut CfStatistics) -> bool {
         self.mark_unread();
-        let _guard = StatsCollector::new(StatsKind::Next, statistics);
+        let _guard =
+            StatsCollector::new(self.iter.metrics_collector(), StatsKind::Next, statistics);
         self.iter.next().expect("Invalid Iterator")
     }
 
     #[inline]
     pub fn prev(&mut self, statistics: &mut CfStatistics) -> bool {
         self.mark_unread();
-        let _guard = StatsCollector::new(StatsKind::Prev, statistics);
+        let _guard =
+            StatsCollector::new(self.iter.metrics_collector(), StatsKind::Prev, statistics);
         self.iter.prev().expect("Invalid Iterator")
     }
 
@@ -576,10 +569,10 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
 #[cfg(test)]
 mod tests {
     use engine_rocks::{
-        util::{new_engine_opt, FixedPrefixSliceTransform},
         RocksCfOptions, RocksDbOptions, RocksEngine, RocksSnapshot,
+        util::{FixedPrefixSliceTransform, new_engine_opt},
     };
-    use engine_traits::{IterOptions, SyncMutable, CF_DEFAULT};
+    use engine_traits::{CF_DEFAULT, IterOptions, SyncMutable};
     use keys::data_key;
     use kvproto::metapb::{Peer, Region};
     use raftstore::store::RegionSnapshot;
@@ -605,7 +598,7 @@ mod tests {
             (b"a9".to_vec(), b"v9".to_vec()),
         ];
 
-        for &(ref k, ref v) in &base_data {
+        for (k, v) in &base_data {
             engine.put(&data_key(k), v).unwrap();
         }
         (r, base_data)

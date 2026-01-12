@@ -1,9 +1,10 @@
 [package]
 name = "test_sst_importer"
 version = "0.1.0"
-edition = "2018"
+edition = "2021"
 publish = false
 description = "test helpers for sst_importer"
+license = "Apache-2.0"
 
 [lib]
 test = false
@@ -12,6 +13,12 @@ test = false
 crc32fast = "1.2"
 engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
+external_storage ={ workspace = true }
+futures = "0.3"
+grpcio = { workspace = true }
 keys = { workspace = true }
 kvproto = { workspace = true }
+tempfile = "3.0"
+tikv_util = { workspace = true }
+txn_types = { workspace = true }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }

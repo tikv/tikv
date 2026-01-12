@@ -21,9 +21,11 @@ define_error_codes!(
     BAD_FORMAT_WRITE => ("BadFormatWrite", "",""),
     KEY_IS_LOCKED => ("KeyIsLocked", "", ""),
     MAX_TIMESTAMP_NOT_SYNCED => ("MaxTimestampNotSynced", "", ""),
+    FLASHBACK_NOT_PREPARED => ("FlashbackNotPrepared", "", ""),
     DEADLINE_EXCEEDED => ("DeadlineExceeded", "", ""),
     API_VERSION_NOT_MATCHED => ("ApiVersionNotMatched", "", ""),
     INVALID_KEY_MODE => ("InvalidKeyMode", "", ""),
+    INVALID_MAX_TS_UPDATE => ("InvalidMaxTsUpdate", "", ""),
 
     COMMITTED => ("Committed", "", ""),
     PESSIMISTIC_LOCK_ROLLED_BACK => ("PessimisticLockRolledBack", "", ""),
@@ -41,6 +43,10 @@ define_error_codes!(
 
     ASSERTION_FAILED => ("AssertionFailed", "", ""),
     LOCK_IF_EXISTS_FAILED => ("LockIfExistsFailed", "", ""),
+
+    PRIMARY_MISMATCH => ("PrimaryMismatch", "", ""),
+    UNDETERMINED => ("Undetermined", "", ""),
+    GENERATION_OUT_OF_ORDER => ("GenerationOutOfOrder", "", ""),
 
     UNKNOWN => ("Unknown", "", "")
 );

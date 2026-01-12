@@ -6,14 +6,15 @@ use std::{
 };
 
 use collections::HashMap;
+use lazy_static::lazy_static;
 use prometheus::{exponential_buckets, local::LocalIntCounter, *};
 use prometheus_static_metric::*;
 use tikv_util::time::Instant;
 
+use crate::storage::ErrorHeaderKind;
 pub use crate::storage::kv::metrics::{
     GcKeysCF, GcKeysCounterVec, GcKeysCounterVecInner, GcKeysDetail,
 };
-use crate::storage::ErrorHeaderKind;
 
 make_auto_flush_static_metric! {
     pub label_enum GrpcTypeKind {
@@ -63,6 +64,10 @@ make_auto_flush_static_metric! {
         read_index,
         check_leader,
         batch_commands,
+        kv_flush,
+        kv_buffer_batch_get,
+        get_health_feedback,
+        broadcast_txn_status,
     }
 
     pub label_enum GcCommandKind {
@@ -76,7 +81,10 @@ make_auto_flush_static_metric! {
 
     pub label_enum SnapTask {
         send,
+        send_dropped,
         recv,
+        recv_dropped,
+        recv_v2,
     }
 
     pub label_enum ResolveStore {
@@ -85,6 +93,7 @@ make_auto_flush_static_metric! {
         failed,
         success,
         tombstone,
+        not_found,
     }
 
     pub label_enum ReplicaReadLockCheckResult {
@@ -95,6 +104,24 @@ make_auto_flush_static_metric! {
     pub label_enum WhetherSuccess {
         success,
         fail,
+    }
+
+    pub label_enum ResourcePriority {
+        high,
+        medium,
+        low,
+        unknown,
+    }
+
+    pub label_enum RaftMessageDurationKind {
+        // This duration **begins** when the RaftStore thread sends the RaftMessage to
+        // the RaftClient and **ends** when the RaftMessage leaves the
+        // BatchRaftMessage buffer, just before being flushed to the gRPC client.
+        send_wait,
+        // This duration **begins** after the send_wait finishes and continues as the
+        // message is sent over the network, **ends** when the target peer receives it.
+        // This metric is reported by the receiver, so it is named receive delay.
+        receive_delay,
     }
 
     pub struct GcCommandCounterVec: LocalIntCounter {
@@ -132,10 +159,15 @@ make_auto_flush_static_metric! {
 
     pub struct GrpcMsgHistogramVec: LocalHistogram {
         "type" => GrpcTypeKind,
+        "priority" => ResourcePriority,
     }
 
     pub struct ReplicaReadLockCheckHistogramVec: LocalHistogram {
         "result" => ReplicaReadLockCheckResult,
+    }
+
+    pub struct RaftMessageDurationVec: LocalHistogram {
+        "type" => RaftMessageDurationKind,
     }
 }
 
@@ -207,6 +239,13 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
+    // TODO: deprecate the "name" label in v8.0.
+    pub static ref GRPC_RESOURCE_GROUP_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_grpc_resource_group_total",
+        "Total number of handle grpc message for each resource group",
+        &["name", "resource_group"]
+    )
+    .unwrap();
     pub static ref GRPC_PROXY_MSG_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_grpc_proxy_msg_total",
         "Total number of handle grpc proxy message",
@@ -226,7 +265,13 @@ lazy_static! {
     pub static ref GRPC_MSG_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_grpc_msg_duration_seconds",
         "Bucketed histogram of grpc server messages",
-        &["type"],
+        &["type","priority"],
+        exponential_buckets(5e-5, 2.0, 22).unwrap() // 50us ~ 104s
+    )
+    .unwrap();
+    pub static ref GRPC_BATCH_COMMANDS_WAIT_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_grpc_batch_commands_wait_duration_seconds",
+        "Bucketed histogram of grpc server batch commands waiting duration",
         exponential_buckets(5e-5, 2.0, 22).unwrap() // 50us ~ 104s
     )
     .unwrap();
@@ -393,6 +438,20 @@ lazy_static! {
         &["type", "store_id"]
     )
     .unwrap();
+    pub static ref RAFT_CLIENT_WAIT_CONN_READY_DURATION_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
+        "tikv_server_raft_client_wait_ready_duration",
+        "Duration of wait raft client connection ready",
+        &["to"],
+        exponential_buckets(5e-5, 2.0, 22).unwrap() // 50us ~ 104s
+    )
+    .unwrap();
+    pub static ref RAFT_MESSAGE_DURATION_VEC: HistogramVec = register_histogram_vec!(
+        "tikv_server_raft_message_duration_seconds",
+        "Duration of raft messages.",
+        &["type"],
+        exponential_buckets(0.00001, 2.0, 26).unwrap()
+    )
+    .unwrap();
     pub static ref RAFT_MESSAGE_FLUSH_COUNTER: RaftMessageFlushCounterVec =
         register_static_int_counter_vec!(
             RaftMessageFlushCounterVec,
@@ -401,10 +460,22 @@ lazy_static! {
             &["reason"]
         )
         .unwrap();
-    pub static ref CONFIG_ROCKSDB_GAUGE: GaugeVec = register_gauge_vec!(
-        "tikv_config_rocksdb",
-        "Config information of rocksdb",
+    pub static ref CONFIG_ROCKSDB_DB_GAUGE: GaugeVec = register_gauge_vec!(
+        "tikv_config_rocksdb_db",
+        "DB Config information of rocksdb",
+        &["db", "name"]
+    )
+    .unwrap();
+    pub static ref CONFIG_ROCKSDB_CF_GAUGE: GaugeVec = register_gauge_vec!(
+        "tikv_config_rocksdb_cf",
+        "CF Config information of rocksdb",
         &["cf", "name"]
+    )
+    .unwrap();
+    pub static ref CONFIG_FLOW_CONTROL_GAUGE: GaugeVec = register_gauge_vec!(
+        "tikv_config_flow_control",
+        "Config information of flow control",
+        &["name"]
     )
     .unwrap();
     pub static ref REQUEST_BATCH_SIZE_HISTOGRAM_VEC: RequestBatchSizeHistogramVec =
@@ -434,12 +505,27 @@ lazy_static! {
         "Count for rejected Raft append messages"
     )
     .unwrap();
+    pub static ref RAFT_SNAPSHOT_REJECTS: IntCounter = register_int_counter!(
+        "tikv_server_raft_snapshot_rejects",
+        "Count for rejected Raft snapshot messages"
+    )
+    .unwrap();
     pub static ref SNAP_LIMIT_TRANSPORT_BYTES_COUNTER: IntCounterVec = register_int_counter_vec!(
         "tikv_snapshot_limit_transport_bytes",
         "Total snapshot limit transport used",
         &["type"],
     )
     .unwrap();
+    pub static ref MEMORY_LIMIT_GAUGE: Gauge = register_gauge!(
+        "tikv_server_memory_quota_bytes",
+        "Total memory bytes quota for TiKV server"
+    )
+    .unwrap();
+}
+
+lazy_static! {
+    pub static ref RAFT_MESSAGE_DURATION: RaftMessageDurationVec =
+        auto_flush_from!(RAFT_MESSAGE_DURATION_VEC, RaftMessageDurationVec);
 }
 
 make_auto_flush_static_metric! {
@@ -462,11 +548,28 @@ make_auto_flush_static_metric! {
         err_store_not_match,
         err_raft_entry_too_large,
         err_leader_memory_lock_check,
+        err_read_index_not_ready,
+        err_proposal_in_merging_mode,
+        err_data_is_not_ready,
+        err_region_not_initialized,
+        err_disk_full,
+        err_recovery_in_progress,
+        err_flashback_in_progress,
+        err_buckets_version_not_match,
+        err_undetermind,
     }
 
     pub label_enum RequestTypeKind {
         write,
         snapshot,
+        // exclude those handled by raftstore
+        snapshot_local_read,
+        // If async snapshot is involved with read index request(due to lease
+        // expire or explicitly specified), the async snapshot duration will
+        // includes the duration before raft leader propsoe it (snapshot_read_index_propose_wait)
+        // and the time used for checking quorum (snapshot_read_index_confirm).
+        snapshot_read_index_propose_wait,
+        snapshot_read_index_confirm,
     }
 
     pub struct AsyncRequestsCounterVec: LocalIntCounter {
@@ -490,6 +593,16 @@ impl From<ErrorHeaderKind> for RequestStatusKind {
             ErrorHeaderKind::StaleCommand => RequestStatusKind::err_stale_command,
             ErrorHeaderKind::StoreNotMatch => RequestStatusKind::err_store_not_match,
             ErrorHeaderKind::RaftEntryTooLarge => RequestStatusKind::err_raft_entry_too_large,
+            ErrorHeaderKind::ReadIndexNotReady => RequestStatusKind::err_read_index_not_ready,
+            ErrorHeaderKind::ProposalInMergeMode => RequestStatusKind::err_proposal_in_merging_mode,
+            ErrorHeaderKind::DataNotReady => RequestStatusKind::err_data_is_not_ready,
+            ErrorHeaderKind::RegionNotInitialized => RequestStatusKind::err_region_not_found,
+            ErrorHeaderKind::DiskFull => RequestStatusKind::err_disk_full,
+            ErrorHeaderKind::RecoveryInProgress => RequestStatusKind::err_recovery_in_progress,
+            ErrorHeaderKind::FlashbackInProgress => RequestStatusKind::err_flashback_in_progress,
+            ErrorHeaderKind::BucketsVersionNotMatch => {
+                RequestStatusKind::err_buckets_version_not_match
+            }
             ErrorHeaderKind::Other => RequestStatusKind::err_other,
         }
     }
@@ -506,7 +619,7 @@ lazy_static! {
         "tikv_storage_engine_async_request_duration_seconds",
         "Bucketed histogram of processing successful asynchronous requests.",
         &["type"],
-        exponential_buckets(0.00001, 2.0, 26).unwrap()
+        exponential_buckets(0.00001, 2.0, 32).unwrap() // 10us ~ 42949s.
     )
     .unwrap();
 }
@@ -564,4 +677,20 @@ pub fn record_request_source_metrics(source: String, duration: Duration) {
             metrics.duration_us.flush();
         }
     });
+}
+
+impl From<u64> for ResourcePriority {
+    fn from(priority: u64) -> Self {
+        // the mapping definition of priority in TIDB repo,
+        // see: https://github.com/tikv/tikv/blob/a0dbe2d0b893489015fc99ae73c6646f7989fe32/components/resource_control/src/resource_group.rs#L79-L89
+        if priority == 0 {
+            Self::unknown
+        } else if priority < 6 {
+            Self::low
+        } else if priority < 11 {
+            Self::medium
+        } else {
+            Self::high
+        }
+    }
 }

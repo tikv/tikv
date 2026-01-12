@@ -4,8 +4,8 @@ use std::{
     fmt,
     marker::PhantomData,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
 };
 
@@ -14,14 +14,15 @@ use fail::fail_point;
 use file_system::{IoType, WithIoType};
 use kvproto::raft_serverpb::{PeerState, RaftSnapshotData, RegionLocalState};
 use protobuf::Message;
-use raft::{eraftpb::Snapshot, GetEntriesContext};
+use raft::{GetEntriesContext, eraftpb::Snapshot};
 use tikv_util::{error, info, time::Instant, worker::Runnable};
 
 use crate::store::{
+    MAX_INIT_ENTRY_COUNT, RaftlogFetchResult, TabletSnapKey, TabletSnapManager,
+    metrics::{SNAPSHOT_KV_COUNT_HISTOGRAM, SNAPSHOT_SIZE_HISTOGRAM},
     snap::TABLET_SNAPSHOT_VERSION,
     util,
     worker::metrics::{SNAP_COUNTER, SNAP_HISTOGRAM},
-    RaftlogFetchResult, TabletSnapKey, TabletSnapManager, MAX_INIT_ENTRY_COUNT,
 };
 
 pub enum ReadTask<EK> {
@@ -95,7 +96,7 @@ where
 {
     notifier: N,
     raft_engine: ER,
-    sanp_mgr: Option<TabletSnapManager>,
+    snap_mgr: Option<TabletSnapManager>,
     _phantom: PhantomData<EK>,
 }
 
@@ -104,31 +105,34 @@ impl<EK: KvEngine, ER: RaftEngine, N: AsyncReadNotifier> ReadRunner<EK, ER, N> {
         ReadRunner {
             notifier,
             raft_engine,
-            sanp_mgr: None,
+            snap_mgr: None,
             _phantom: PhantomData,
         }
     }
 
     #[inline]
     pub fn set_snap_mgr(&mut self, mgr: TabletSnapManager) {
-        self.sanp_mgr = Some(mgr);
+        self.snap_mgr = Some(mgr);
     }
 
     #[inline]
     fn snap_mgr(&self) -> &TabletSnapManager {
-        self.sanp_mgr.as_ref().unwrap()
+        self.snap_mgr.as_ref().unwrap()
     }
 
     fn generate_snap(&self, snap_key: &TabletSnapKey, tablet: EK) -> crate::Result<()> {
         let checkpointer_path = self.snap_mgr().tablet_gen_path(snap_key);
-        if checkpointer_path.as_path().exists() {
+        if checkpointer_path.exists() {
+            // TODO: make `delete_snapshot` return error so we can use it here.
             // Remove the old checkpoint directly.
-            std::fs::remove_dir_all(checkpointer_path.as_path())?;
+            encryption::trash_dir_all(
+                &checkpointer_path,
+                self.snap_mgr().key_manager().as_deref(),
+            )?;
         }
         // Here not checkpoint to a temporary directory first, the temporary directory
         // logic already implemented in rocksdb.
         let mut checkpointer = tablet.new_checkpointer()?;
-
         checkpointer.create_at(checkpointer_path.as_path(), None, 0)?;
         Ok(())
     }
@@ -152,6 +156,7 @@ where
                 tried_cnt,
                 term,
             } => {
+                let _guard = WithIoType::new(IoType::Replication);
                 let mut ents =
                     Vec::with_capacity(std::cmp::min((high - low) as usize, MAX_INIT_ENTRY_COUNT));
                 let res = self.raft_engine.fetch_entries_to(
@@ -213,24 +218,41 @@ where
                 snapshot.mut_metadata().set_index(last_applied_index);
                 let conf_state = util::conf_state_from_region(region_state.get_region());
                 snapshot.mut_metadata().set_conf_state(conf_state);
+
                 // Set snapshot data.
                 let mut snap_data = RaftSnapshotData::default();
                 snap_data.set_region(region_state.get_region().clone());
                 snap_data.set_version(TABLET_SNAPSHOT_VERSION);
                 snap_data.mut_meta().set_for_balance(for_balance);
+                snap_data.set_removed_records(region_state.get_removed_records().into());
+                snap_data.set_merged_records(region_state.get_merged_records().into());
                 snapshot.set_data(snap_data.write_to_bytes().unwrap().into());
-
                 // create checkpointer.
                 let snap_key = TabletSnapKey::from_region_snap(region_id, to_peer, &snapshot);
                 let mut res = None;
+                let total_size = tablet.get_engine_used_size().unwrap_or(0);
+                let total_keys = tablet.get_num_keys().unwrap_or(0);
                 if let Err(e) = self.generate_snap(&snap_key, tablet) {
                     error!("failed to create checkpointer"; "region_id" => region_id, "error" => %e);
                     SNAP_COUNTER.generate.fail.inc();
                 } else {
+                    let generate_duration_secs = start.saturating_elapsed().as_secs();
+                    let elapsed = start.saturating_elapsed_secs();
+                    info!(
+                        "snapshot generated";
+                        "region_id" => region_id,
+                        "elapsed" => elapsed,
+                        "key" => ?snap_key,
+                        "for_balance" => for_balance,
+                        "total_size" => total_size,
+                        "total_keys" => total_keys,
+                    );
+                    self.snap_mgr()
+                        .begin_snapshot(snap_key, start, generate_duration_secs);
                     SNAP_COUNTER.generate.success.inc();
-                    SNAP_HISTOGRAM
-                        .generate
-                        .observe(start.saturating_elapsed_secs());
+                    SNAP_HISTOGRAM.generate.observe(elapsed);
+                    SNAPSHOT_SIZE_HISTOGRAM.observe(total_size as f64);
+                    SNAPSHOT_KV_COUNT_HISTOGRAM.observe(total_keys as f64);
                     res = Some(Box::new((snapshot, to_peer)))
                 }
 

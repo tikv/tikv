@@ -1,9 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{borrow::ToOwned, str, string::ToString, sync::LazyLock, u64};
+use std::{borrow::ToOwned, str, string::ToString, sync::LazyLock};
 
-use clap::{crate_authors, AppSettings};
-use engine_traits::CF_DEFAULT;
+use clap::{AppSettings, crate_authors};
+use engine_traits::{CF_DEFAULT, SstCompressionType};
+use raft_engine::ReadableSize;
 use structopt::StructOpt;
 
 const RAW_KEY_HINT: &str = "Raw key (generally starts with \"z\") in escaped form";
@@ -29,6 +30,9 @@ pub struct Opt {
     #[structopt(long, default_value = "warn")]
     /// Set the log level
     pub log_level: String,
+
+    #[structopt(long, default_value = "text")]
+    pub log_format: String,
 
     #[structopt(long)]
     /// Set the remote host
@@ -496,11 +500,11 @@ pub enum Cmd {
     /// Show range properties
     RangeProperties {
         #[structopt(long, default_value = "")]
-        /// hex start key
+        /// hex start key (not starts with "z")
         start: String,
 
         #[structopt(long, default_value = "")]
-        /// hex end key
+        /// hex end key (not starts with "z")
         end: String,
     },
     /// Split the region
@@ -565,6 +569,175 @@ pub enum Cmd {
     },
     #[structopt(external_subcommand)]
     External(Vec<String>),
+    /// Usage: tikv-ctl show-cluster-id --config <config-path>
+    ShowClusterId {
+        /// Data directory path of the given TiKV instance.
+        #[structopt(long)]
+        data_dir: String,
+    },
+    /// Usage: tikv-ctl fork-readonly-tikv
+    ///
+    /// fork-readonly-tikv is for creating a tikv-server agent based on a
+    /// read-only TiKV remains. The agent can be used for recovery because
+    /// all committed transactions can be accessed correctly, without any
+    /// modifications on the remained TiKV.
+    ///
+    /// NOTE: The remained TiKV can't run concurrently with the agent.
+    ReuseReadonlyRemains {
+        /// Data directory path of the remained TiKV.
+        #[structopt(long)]
+        data_dir: String,
+
+        /// Data directory to create the agent.
+        #[structopt(long)]
+        agent_dir: String,
+
+        /// Reuse snapshot files of the remained TiKV: symlink or copy.
+        #[structopt(long, default_value = "symlink")]
+        snaps: String,
+
+        /// Reuse rocksdb files of the remained TiKV: symlink or copy.
+        ///
+        /// NOTE: the last one WAL file will still be copied even if `symlink`
+        /// is specified, because the last one WAL file isn't read-only when
+        /// opening a RocksDB instance.
+        #[structopt(long, default_value = "symlink")]
+        rocksdb_files: String,
+    },
+    /// flashback data in cluster to a certain version
+    ///
+    /// NOTE: Should use `./pd-ctl config set halt-scheduling true` to halt PD
+    /// scheduling before flashback.
+    Flashback {
+        #[structopt(short = "v")]
+        /// the version to flashback
+        version: u64,
+
+        #[structopt(
+            short = "r",
+            aliases = &["region"],
+            use_delimiter = true,
+            require_delimiter = true,
+            value_delimiter = ","
+        )]
+        /// specific regions to flashback
+        regions: Option<Vec<u64>>,
+
+        #[structopt(long, default_value = "")]
+        /// hex start key
+        start: String,
+
+        #[structopt(long, default_value = "")]
+        /// hex end key
+        end: String,
+    },
+    CompactLogBackup {
+        #[structopt(
+            short,
+            long,
+            default_value = "compaction",
+            help(
+                "name of the compaction, register this will help you find the compaction easier."
+            )
+        )]
+        name: String,
+        #[structopt(
+            long = "from",
+            help(
+                "from when we need to include files into the compaction.\
+                files contains any record within the [--from, --until) will be selected."
+            )
+        )]
+        from_ts: u64,
+        #[structopt(
+            long = "until",
+            help(
+                "until when we need to include files into the compaction.\
+                files contains any record within the [--from, --until) will be selected."
+            )
+        )]
+        until_ts: u64,
+        #[structopt(
+            short = "N",
+            long = "concurrency",
+            default_value = "32",
+            help("how many compactions can be executed concurrently.")
+        )]
+        max_concurrent_compactions: u64,
+        #[structopt(
+            short = "s",
+            long = "storage-base64",
+            help(
+                "the base-64 encoded protocol buffer message `StorageBackend`. \
+                `br` CLI should provide a subcommand that converts an URL to it."
+            )
+        )]
+        storage_base64: String,
+        #[structopt(
+            long,
+            default_value = "lz4",
+            help(
+                "the compression method will use when generating SSTs. (hint: zstd | lz4 | snappy)"
+            )
+        )]
+        compression: SstCompressionType,
+        #[structopt(
+            long,
+            help(
+                "the compression level. it definition and effect varies by the algorithm we choose."
+            )
+        )]
+        compression_level: Option<i32>,
+
+        #[structopt(
+            long,
+            help(
+                "if set, all checkpoints will be ignored. i.e. all finished compaction will be regenerated."
+            )
+        )]
+        force_regenerate: bool,
+
+        #[structopt(
+            long,
+            default_value = "16M",
+            help(
+                "specify the minimal compaction size in bytes, if backup data of a region doesn't reach this threshold, it won't be compacted"
+            )
+        )]
+        minimal_compaction_size: ReadableSize,
+
+        #[structopt(
+            long,
+            default_value = "128",
+            help("specify the maximum count of running tasks to download a metadata")
+        )]
+        prefetch_running_count: u64,
+
+        #[structopt(
+            long,
+            default_value = "1024",
+            help("specify the maximum count of spawning tasks to download a metadata")
+        )]
+        prefetch_buffer_count: u64,
+    },
+    /// Get the state of a region's RegionReadProgress.
+    GetRegionReadProgress {
+        #[structopt(short = "r", long)]
+        /// The target region id
+        region: u64,
+
+        #[structopt(long)]
+        /// When specified, prints the locks associated with the transaction
+        /// that has the smallest 'start_ts' in the resolver, which is
+        /// preventing the 'resolved_ts' from advancing.
+        log: bool,
+
+        #[structopt(long, requires = "log")]
+        /// The smallest start_ts of the target transaction. Namely, only the
+        /// transaction whose start_ts is greater than or equal to this value
+        /// can be recorded in TiKV logs.
+        min_start_ts: Option<u64>,
+    },
 }
 
 #[derive(StructOpt)]
@@ -586,6 +759,8 @@ pub enum RaftCmd {
             help = RAW_KEY_HINT,
         )]
         key: Option<String>,
+        #[structopt(short = "b")]
+        binary: bool,
     },
     /// print region info
     Region {

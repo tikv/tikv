@@ -11,11 +11,13 @@ pub use self::response_channel::FlushChannel;
 #[cfg(feature = "testexport")]
 pub use self::response_channel::FlushSubscriber;
 pub use self::{
-    imp::RaftRouter,
-    internal_message::ApplyRes,
+    imp::{RaftRouter, UnsafeRecoveryRouter},
+    internal_message::{ApplyRes, SstApplyIndex},
     message::{PeerMsg, PeerTick, RaftRequest, StoreMsg, StoreTick},
     response_channel::{
-        CmdResChannel, CmdResChannelBuilder, CmdResEvent, CmdResStream, CmdResSubscriber,
-        DebugInfoChannel, DebugInfoSubscriber, QueryResChannel, QueryResult, ReadResponse,
+        AnyResChannel, AnyResSubscriber, BaseSubscriber, CmdResChannel, CmdResChannelBuilder,
+        CmdResEvent, CmdResStream, CmdResSubscriber, DebugInfoChannel, DebugInfoSubscriber,
+        QueryResChannel, QueryResult, ReadResponse, build_any_channel,
     },
 };
+pub use super::operation::DiskSnapBackupHandle;

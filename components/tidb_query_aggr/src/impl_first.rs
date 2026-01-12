@@ -4,7 +4,7 @@ use std::marker::PhantomData;
 
 use tidb_query_codegen::AggrFunction;
 use tidb_query_common::Result;
-use tidb_query_datatype::{codec::data_type::*, expr::EvalContext, EvalType};
+use tidb_query_datatype::{EvalType, codec::data_type::*, expr::EvalContext};
 use tidb_query_expr::RpnExpression;
 use tipb::{Expr, ExprType, FieldType};
 
@@ -29,8 +29,6 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserFirst {
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
     ) -> Result<Box<dyn AggrFunction>> {
-        use std::convert::TryFrom;
-
         use tidb_query_datatype::FieldTypeAccessor;
 
         assert_eq!(root_expr.get_tp(), ExprType::First);
@@ -64,6 +62,7 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserFirst {
                 Bytes => BytesRef<'static>,
                 Enum => EnumRef<'static>,
                 Set => SetRef<'static>,
+                VectorFloat32 => VectorFloat32Ref<'static>,
             ],
             match eval_type {
                 EvalType::TT => Ok(Box::new(AggrFnFirst::<TT>::new())),
@@ -298,6 +297,7 @@ mod tests {
         let mut state = function.create_state();
         let mut result = [VectorValue::with_capacity(0, EvalType::Int)];
 
+        #[allow(clippy::zero_repeat_side_effects)]
         update_vector!(
             state,
             &mut ctx,

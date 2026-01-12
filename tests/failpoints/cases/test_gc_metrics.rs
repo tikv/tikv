@@ -1,13 +1,13 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{atomic::AtomicU64, mpsc, Arc},
+    sync::{Arc, atomic::AtomicU64, mpsc},
     thread,
     time::Duration,
 };
 
 use api_version::{ApiV2, KvFormat, RawValue};
-use engine_rocks::{util::get_cf_handle, RocksEngine};
+use engine_rocks::{RocksEngine, raw::FlushOptions, util::get_cf_handle};
 use engine_traits::{CF_DEFAULT, CF_WRITE};
 use kvproto::{
     kvrpcpb::*,
@@ -16,28 +16,27 @@ use kvproto::{
 use pd_client::FeatureGate;
 use raft::StateRole;
 use raftstore::{
-    coprocessor::{
-        region_info_accessor::MockRegionInfoProvider, CoprocessorHost, RegionChangeEvent,
-    },
     RegionInfoAccessor,
+    coprocessor::{
+        CoprocessorHost, RegionChangeEvent, region_info_accessor::MockRegionInfoProvider,
+    },
 };
 use tikv::{
     config::DbConfig,
     server::gc_worker::{
+        AutoGcConfig, GcConfig, GcWorker, MockSafePointProvider, PrefixedEngine, STAT_RAW_KEYMODE,
+        STAT_TXN_KEYMODE, TestGcRunner,
         compaction_filter::{
-            GC_COMPACTION_FILTERED, GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED,
-            GC_COMPACTION_FILTER_MVCC_DELETION_MET, GC_COMPACTION_FILTER_PERFORM,
-            GC_COMPACTION_FILTER_SKIP,
+            GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED, GC_COMPACTION_FILTER_MVCC_DELETION_MET,
+            GC_COMPACTION_FILTER_PERFORM, GC_COMPACTION_FILTER_SKIP, GC_COMPACTION_FILTERED,
         },
         rawkv_compaction_filter::make_key,
-        AutoGcConfig, GcConfig, GcWorker, MockSafePointProvider, PrefixedEngine, TestGcRunner,
-        STAT_RAW_KEYMODE, STAT_TXN_KEYMODE,
     },
     storage::{
-        kv::{Modify, TestEngineBuilder, WriteData},
-        mvcc::{tests::must_get, MVCC_VERSIONS_HISTOGRAM},
-        txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put},
         Engine,
+        kv::{Modify, TestEngineBuilder, WriteData},
+        mvcc::{MVCC_VERSIONS_HISTOGRAM, tests::must_get},
+        txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put},
     },
 };
 use txn_types::{Key, TimeStamp};
@@ -146,7 +145,8 @@ fn test_txn_gc_keys_handled() {
         feature_gate,
         Arc::new(MockRegionInfoProvider::new(vec![])),
     );
-    gc_worker.start(store_id).unwrap();
+    let coprocessor_host = CoprocessorHost::default();
+    gc_worker.start(store_id, coprocessor_host).unwrap();
 
     let mut r1 = Region::default();
     r1.set_id(1);
@@ -158,7 +158,7 @@ fn test_txn_gc_keys_handled() {
 
     let sp_provider = MockSafePointProvider(200);
     let mut host = CoprocessorHost::<RocksEngine>::default();
-    let ri_provider = RegionInfoAccessor::new(&mut host);
+    let ri_provider = RegionInfoAccessor::new(&mut host, Arc::new(|| false), Box::new(|| 0));
     let auto_gc_cfg = AutoGcConfig::new(sp_provider, ri_provider, 1);
     let safe_point = Arc::new(AtomicU64::new(500));
 
@@ -176,7 +176,9 @@ fn test_txn_gc_keys_handled() {
         must_commit(&mut prefixed_engine, &k, 151, 152);
     }
 
-    db.flush_cf(cf, true).unwrap();
+    let mut fopts = FlushOptions::default();
+    fopts.set_wait(true);
+    db.flush_cf(cf, &fopts).unwrap();
 
     db.compact_range_cf(cf, None, None);
 
@@ -289,7 +291,8 @@ fn test_raw_gc_keys_handled() {
         feature_gate,
         Arc::new(MockRegionInfoProvider::new(vec![])),
     );
-    gc_worker.start(store_id).unwrap();
+    let coprocessor_host = CoprocessorHost::default();
+    gc_worker.start(store_id, coprocessor_host).unwrap();
 
     let mut r1 = Region::default();
     r1.set_id(1);
@@ -301,7 +304,7 @@ fn test_raw_gc_keys_handled() {
 
     let sp_provider = MockSafePointProvider(200);
     let mut host = CoprocessorHost::<RocksEngine>::default();
-    let ri_provider = RegionInfoAccessor::new(&mut host);
+    let ri_provider = RegionInfoAccessor::new(&mut host, Arc::new(|| false), Box::new(|| 0));
     let auto_gc_cfg = AutoGcConfig::new(sp_provider, ri_provider, store_id);
     let safe_point = Arc::new(AtomicU64::new(500));
 
@@ -344,7 +347,9 @@ fn test_raw_gc_keys_handled() {
     engine.write(&ctx, batch).unwrap();
 
     let cf = get_cf_handle(&db, CF_DEFAULT).unwrap();
-    db.flush_cf(cf, true).unwrap();
+    let mut fopts = FlushOptions::default();
+    fopts.set_wait(true);
+    db.flush_cf(cf, &fopts).unwrap();
 
     db.compact_range_cf(cf, None, None);
 

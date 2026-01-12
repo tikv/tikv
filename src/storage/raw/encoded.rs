@@ -4,12 +4,15 @@
 use std::marker::PhantomData;
 
 use api_version::KvFormat;
-use engine_traits::{raw_ttl::ttl_current_ts, CfName, IterOptions, ReadOptions};
+use engine_rocks::PerfContext;
+use engine_traits::{
+    CfName, IterMetricsCollector, IterOptions, MetricsExt, ReadOptions, raw_ttl::ttl_current_ts,
+};
 use txn_types::{Key, Value};
 
 use crate::storage::{
-    kv::{Iterator, Result, Snapshot, RAW_VALUE_TOMBSTONE},
     Statistics,
+    kv::{Iterator, RAW_VALUE_TOMBSTONE, Result, Snapshot},
 };
 
 #[derive(Clone)]
@@ -61,7 +64,10 @@ impl<S: Snapshot, F: KvFormat> RawEncodeSnapshot<S, F> {
 
 impl<S: Snapshot, F: KvFormat> Snapshot for RawEncodeSnapshot<S, F> {
     type Iter = RawEncodeIterator<S::Iter, F>;
-    type Ext<'a> = S::Ext<'a> where S: 'a;
+    type Ext<'a>
+        = S::Ext<'a>
+    where
+        S: 'a;
 
     fn get(&self, key: &Key) -> Result<Option<Value>> {
         self.map_value(self.snap.get(key))
@@ -191,5 +197,25 @@ impl<I: Iterator, F: KvFormat> Iterator for RawEncodeIterator<I, F> {
 
     fn value(&self) -> &[u8] {
         F::decode_raw_value(self.inner.value()).unwrap().user_value
+    }
+}
+
+pub struct RawEncodeIterMetricsCollector;
+
+impl IterMetricsCollector for RawEncodeIterMetricsCollector {
+    fn internal_delete_skipped_count(&self) -> u64 {
+        PerfContext::get().internal_delete_skipped_count()
+    }
+
+    fn internal_key_skipped_count(&self) -> u64 {
+        PerfContext::get().internal_key_skipped_count()
+    }
+}
+
+impl<I: Iterator, F: KvFormat> MetricsExt for RawEncodeIterator<I, F> {
+    type Collector = RawEncodeIterMetricsCollector;
+
+    fn metrics_collector(&self) -> Self::Collector {
+        RawEncodeIterMetricsCollector {}
     }
 }

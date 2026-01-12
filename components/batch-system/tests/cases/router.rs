@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{atomic::*, Arc},
+    sync::{Arc, atomic::*},
     time::Duration,
 };
 
@@ -30,7 +30,7 @@ fn test_basic() {
     let (control_drop_tx, control_drop_rx) = mpsc::unbounded();
     control_fsm.sender = Some(control_drop_tx);
     let (router, mut system) =
-        batch_system::create_system(&Config::default(), control_tx, control_fsm);
+        batch_system::create_system(&Config::default(), control_tx, control_fsm, None);
     let builder = Builder::new();
     system.spawn("test".to_owned(), builder);
 
@@ -130,7 +130,7 @@ fn test_basic() {
 fn test_router_trace() {
     let (control_tx, control_fsm) = Runner::new(10);
     let (router, mut system) =
-        batch_system::create_system(&Config::default(), control_tx, control_fsm);
+        batch_system::create_system(&Config::default(), control_tx, control_fsm, None);
     let builder = Builder::new();
     system.spawn("test".to_owned(), builder);
 
@@ -143,25 +143,19 @@ fn test_router_trace() {
         router.close(addr);
     };
 
-    let router_clone = router.clone();
+    let mut mailboxes = vec![];
     for i in 0..10 {
         register_runner(i);
-        // Read mailbox to cache.
-        router_clone.mailbox(i).unwrap();
+        mailboxes.push(router.mailbox(i).unwrap());
     }
-    assert_eq!(router.alive_cnt().load(Ordering::Relaxed), 10);
+    assert_eq!(router.alive_cnt(), 10);
     assert_eq!(router.state_cnt().load(Ordering::Relaxed), 11);
-    // Routers closed but exist in the cache.
     for i in 0..10 {
         close_runner(i);
     }
-    assert_eq!(router.alive_cnt().load(Ordering::Relaxed), 0);
+    assert_eq!(router.alive_cnt(), 0);
     assert_eq!(router.state_cnt().load(Ordering::Relaxed), 11);
-    for i in 0..1024 {
-        register_runner(i);
-        // Read mailbox to cache, closed routers should be evicted.
-        router_clone.mailbox(i).unwrap();
-    }
-    assert_eq!(router.alive_cnt().load(Ordering::Relaxed), 1024);
-    assert_eq!(router.state_cnt().load(Ordering::Relaxed), 1025);
+    drop(mailboxes);
+    assert_eq!(router.alive_cnt(), 0);
+    assert_eq!(router.state_cnt().load(Ordering::Relaxed), 1);
 }

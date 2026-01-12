@@ -6,23 +6,27 @@
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
-mod lock;
-mod timestamp;
-mod types;
-mod write;
-
 use std::io;
 
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::kvrpcpb;
-pub use lock::{Lock, LockType, PessimisticLock};
+pub use lock::{
+    Lock, LockOrSharedLocks, LockType, PessimisticLock, TxnLockRef, check_ts_conflict,
+    check_ts_conflict_for_replica_read, decode_lock_start_ts, decode_lock_type, parse_lock,
+};
 use thiserror::Error;
-pub use timestamp::{TimeStamp, TsSet, TSO_PHYSICAL_SHIFT_BITS};
+pub use timestamp::{TSO_PHYSICAL_SHIFT_BITS, TimeStamp, TsSet};
 pub use types::{
-    insert_old_value_if_resolved, is_short_value, Key, KvPair, Mutation, MutationType, OldValue,
-    OldValues, TxnExtra, TxnExtraScheduler, Value, WriteBatchFlags, SHORT_VALUE_MAX_LEN,
+    CommitRole, Key, KvPair, KvPairEntry, LastChange, Mutation, MutationType, OldValue, OldValues,
+    SHORT_VALUE_MAX_LEN, TxnExtra, TxnExtraScheduler, Value, ValueEntry, WriteBatchFlags,
+    insert_old_value_if_resolved, is_short_value,
 };
 pub use write::{Write, WriteRef, WriteType};
+
+mod lock;
+mod timestamp;
+mod types;
+mod write;
 
 #[derive(Debug, Error)]
 pub enum ErrorInner {
@@ -78,6 +82,8 @@ impl ErrorInner {
     }
 }
 
+pub static ENABLE_DUP_KEY_DEBUG: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct Error(#[from] pub Box<ErrorInner>);

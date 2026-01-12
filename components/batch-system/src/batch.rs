@@ -10,105 +10,81 @@
 use std::{
     borrow::Cow,
     ops::{Deref, DerefMut},
-    sync::{atomic::AtomicUsize, Arc, Mutex},
-    thread::{self, current, JoinHandle, ThreadId},
+    sync::{Arc, Mutex, atomic::AtomicUsize},
+    thread::{self, JoinHandle, ThreadId, current},
     time::Duration,
 };
 
-use crossbeam::channel::{self, SendError};
 use fail::fail_point;
-use file_system::{set_io_type, IoType};
+use file_system::{IoType, set_io_type};
+use resource_control::{
+    ResourceController,
+    channel::{Receiver, Sender, unbounded},
+};
 use tikv_util::{
     debug, error, info, mpsc, safe_panic, sys::thread::StdThreadBuildWrapper, thd_name,
-    time::Instant, warn,
+    time::Instant,
 };
 
 use crate::{
     config::Config,
     fsm::{Fsm, FsmScheduler, Priority},
     mailbox::BasicMailbox,
+    metrics::*,
     router::Router,
+    scheduler::{ControlScheduler, NormalScheduler},
 };
 
 /// A unify type for FSMs so that they can be sent to channel easily.
 pub enum FsmTypes<N, C> {
-    Normal(Box<N>),
-    Control(Box<C>),
+    Normal((Box<N>, Instant)),
+    Control((Box<C>, Instant)),
     // Used as a signal that scheduler should be shutdown.
     Empty,
 }
 
-// A macro to introduce common definition of scheduler.
-macro_rules! impl_sched {
-    ($name:ident, $ty:path,Fsm = $fsm:tt) => {
-        pub struct $name<N, C> {
-            sender: channel::Sender<FsmTypes<N, C>>,
-            low_sender: channel::Sender<FsmTypes<N, C>>,
-        }
-
-        impl<N, C> Clone for $name<N, C> {
-            #[inline]
-            fn clone(&self) -> $name<N, C> {
-                $name {
-                    sender: self.sender.clone(),
-                    low_sender: self.low_sender.clone(),
-                }
-            }
-        }
-
-        impl<N, C> FsmScheduler for $name<N, C>
-        where
-            $fsm: Fsm,
-        {
-            type Fsm = $fsm;
-
-            #[inline]
-            fn schedule(&self, fsm: Box<Self::Fsm>) {
-                let sender = match fsm.get_priority() {
-                    Priority::Normal => &self.sender,
-                    Priority::Low => &self.low_sender,
-                };
-                match sender.send($ty(fsm)) {
-                    Ok(()) => {}
-                    // TODO: use debug instead.
-                    Err(SendError($ty(fsm))) => warn!("failed to schedule fsm {:p}", fsm),
-                    _ => unreachable!(),
-                }
-            }
-
-            fn shutdown(&self) {
-                // TODO: close it explicitly once it's supported.
-                // Magic number, actually any number greater than poll pool size works.
-                for _ in 0..256 {
-                    let _ = self.sender.send(FsmTypes::Empty);
-                    let _ = self.low_sender.send(FsmTypes::Empty);
-                }
-            }
-        }
-    };
+struct MetricsCollector<N: Fsm> {
+    timer: Instant, // time since polled
+    round: usize,   // how many round the fsm has been continuously polled
+    _phantom: std::marker::PhantomData<N>,
 }
 
-impl_sched!(NormalScheduler, FsmTypes::Normal, Fsm = N);
-impl_sched!(ControlScheduler, FsmTypes::Control, Fsm = C);
-
-pub struct NormalFsm<N> {
-    fsm: Box<N>,
-    timer: Instant,
-    policy: Option<ReschedulePolicy>,
-}
-
-impl<N> NormalFsm<N> {
-    #[inline]
-    fn new(fsm: Box<N>) -> NormalFsm<N> {
-        NormalFsm {
-            fsm,
+impl<N: Fsm> MetricsCollector<N> {
+    fn new() -> MetricsCollector<N> {
+        MetricsCollector {
             timer: Instant::now_coarse(),
-            policy: None,
+            round: 0,
+            _phantom: std::marker::PhantomData,
         }
     }
 }
 
-impl<N> Deref for NormalFsm<N> {
+impl<N: Fsm> Drop for MetricsCollector<N> {
+    fn drop(&mut self) {
+        FSM_POLL_ROUND.get(N::FSM_TYPE).observe(self.round as f64);
+        FSM_POLL_DURATION
+            .get(N::FSM_TYPE)
+            .observe(self.timer.saturating_elapsed_secs());
+    }
+}
+
+pub struct NormalFsm<N: Fsm> {
+    fsm: Box<N>,
+    metrics: MetricsCollector<N>,
+    policy: Option<ReschedulePolicy>,
+}
+
+impl<N: Fsm> NormalFsm<N> {
+    #[inline]
+    fn new(fsm: Box<N>) -> NormalFsm<N> {
+        NormalFsm {
+            fsm,
+            metrics: MetricsCollector::<N>::new(),
+            policy: None,
+        }
+    }
+}
+impl<N: Fsm> Deref for NormalFsm<N> {
     type Target = N;
 
     #[inline]
@@ -117,7 +93,7 @@ impl<N> Deref for NormalFsm<N> {
     }
 }
 
-impl<N> DerefMut for NormalFsm<N> {
+impl<N: Fsm> DerefMut for NormalFsm<N> {
     #[inline]
     fn deref_mut(&mut self) -> &mut N {
         &mut self.fsm
@@ -126,7 +102,7 @@ impl<N> DerefMut for NormalFsm<N> {
 
 /// A basic struct for a round of polling.
 #[allow(clippy::vec_box)]
-pub struct Batch<N, C> {
+pub struct Batch<N: Fsm, C: Fsm> {
     normals: Vec<Option<NormalFsm<N>>>,
     control: Option<Box<C>>,
 }
@@ -140,12 +116,27 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
         }
     }
 
+    fn tick_round(&mut self) {
+        FSM_COUNT_PER_POLL
+            .get(N::FSM_TYPE)
+            .observe(self.normals.len() as f64);
+        for f in self.normals.iter_mut().filter_map(Option::as_mut) {
+            f.metrics.round += 1;
+        }
+    }
+
     fn push(&mut self, fsm: FsmTypes<N, C>) -> bool {
         match fsm {
-            FsmTypes::Normal(n) => {
+            FsmTypes::Normal((n, schedule_time)) => {
+                FSM_SCHEDULE_WAIT_DURATION
+                    .get(N::FSM_TYPE)
+                    .observe(schedule_time.saturating_elapsed_secs());
                 self.normals.push(Some(NormalFsm::new(n)));
             }
-            FsmTypes::Control(c) => {
+            FsmTypes::Control((c, schedule_time)) => {
+                FSM_SCHEDULE_WAIT_DURATION
+                    .get(C::FSM_TYPE)
+                    .observe(schedule_time.saturating_elapsed_secs());
                 assert!(self.control.is_none());
                 self.control = Some(c);
             }
@@ -168,7 +159,7 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
     ///
     /// When pending messages of the FSM is different than `expected_len`,
     /// attempts to schedule it in this poller again. Returns the `fsm` if the
-    /// re-scheduling suceeds.
+    /// re-scheduling succeeds.
     fn release(&mut self, mut fsm: NormalFsm<N>, expected_len: usize) -> Option<NormalFsm<N>> {
         let mailbox = fsm.take_mailbox().unwrap();
         mailbox.release(fsm.fsm);
@@ -217,6 +208,7 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
             Some(ReschedulePolicy::Release(l)) => self.release(to_schedule, l),
             Some(ReschedulePolicy::Remove) => self.remove(to_schedule),
             Some(ReschedulePolicy::Schedule) => {
+                FSM_RESCHEDULE_COUNTER.get(N::FSM_TYPE).inc();
                 router.normal_scheduler.schedule(to_schedule.fsm);
                 None
             }
@@ -341,7 +333,7 @@ pub trait PollHandler<N, C>: Send + 'static {
 /// Internal poller that fetches batch and call handler hooks for readiness.
 pub struct Poller<N: Fsm, C: Fsm, Handler> {
     pub router: Router<N, C, NormalScheduler<N, C>, ControlScheduler<N, C>>,
-    pub fsm_receiver: channel::Receiver<FsmTypes<N, C>>,
+    pub fsm_receiver: Receiver<FsmTypes<N, C>>,
     pub handler: Handler,
     pub max_batch_size: usize,
     pub reschedule_duration: Duration,
@@ -399,20 +391,14 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
         // `self.max_batch_size`.
         let mut run = true;
         while run && self.fetch_fsm(&mut batch) {
-            // If there is some region wait to be deal, we must deal with it even if it has
-            // overhead max size of batch. It's helpful to protect regions from becoming
-            // hungry if some regions are hot points.
+            // If there is a region that waits to be dealt, we must deal with it even if it
+            // has overhead max size of batch. It's helpful to protect regions
+            // from becoming hungry if some regions are hot points.
             let mut max_batch_size = std::cmp::max(self.max_batch_size, batch.normals.len());
             // Update some online config if needed.
-            {
-                // TODO: rust 2018 does not support capture disjoint field within a closure.
-                // See https://github.com/rust-lang/rust/issues/53488 for more details.
-                // We can remove this once we upgrade to rust 2021 or later edition.
-                let batch_size = &mut self.max_batch_size;
-                self.handler.begin(max_batch_size, |cfg| {
-                    *batch_size = cfg.max_batch_size();
-                });
-            }
+            self.handler.begin(max_batch_size, |cfg| {
+                self.max_batch_size = cfg.max_batch_size();
+            });
             max_batch_size = std::cmp::max(self.max_batch_size, batch.normals.len());
 
             if batch.control.is_some() {
@@ -435,7 +421,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                     p.policy = Some(ReschedulePolicy::Schedule);
                     reschedule_fsms.push(i);
                 } else {
-                    if p.timer.saturating_elapsed() >= self.reschedule_duration {
+                    if p.metrics.timer.saturating_elapsed() >= self.reschedule_duration {
                         hot_fsm_count += 1;
                         // We should only reschedule a half of the hot regions, otherwise,
                         // it's possible all the hot regions are fetched in a batch the
@@ -489,6 +475,8 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
             to_skip_end.clear();
             self.handler.end(&mut batch.normals);
 
+            // Update round times for metrics.
+            batch.tick_round();
             // Iterate larger index first, so that `swap_reclaim` won't affect other FSMs
             // in the list.
             for index in reschedule_fsms.iter().rev() {
@@ -534,8 +522,8 @@ pub trait HandlerBuilder<N, C> {
 pub struct BatchSystem<N: Fsm, C: Fsm> {
     name_prefix: Option<String>,
     router: BatchRouter<N, C>,
-    receiver: channel::Receiver<FsmTypes<N, C>>,
-    low_receiver: channel::Receiver<FsmTypes<N, C>>,
+    receiver: Receiver<FsmTypes<N, C>>,
+    low_receiver: Receiver<FsmTypes<N, C>>,
     pool_size: usize,
     max_batch_size: usize,
     workers: Arc<Mutex<Vec<JoinHandle<()>>>>,
@@ -649,15 +637,15 @@ where
     }
 }
 
-struct PoolStateBuilder<N, C> {
+struct PoolStateBuilder<N: Fsm, C: Fsm> {
     max_batch_size: usize,
     reschedule_duration: Duration,
-    fsm_receiver: channel::Receiver<FsmTypes<N, C>>,
-    fsm_sender: channel::Sender<FsmTypes<N, C>>,
+    fsm_receiver: Receiver<FsmTypes<N, C>>,
+    fsm_sender: Sender<FsmTypes<N, C>>,
     pool_size: usize,
 }
 
-impl<N, C> PoolStateBuilder<N, C> {
+impl<N: Fsm, C: Fsm> PoolStateBuilder<N, C> {
     fn build<H: HandlerBuilder<N, C>>(
         self,
         name_prefix: String,
@@ -683,11 +671,11 @@ impl<N, C> PoolStateBuilder<N, C> {
     }
 }
 
-pub struct PoolState<N, C, H: HandlerBuilder<N, C>> {
+pub struct PoolState<N: Fsm, C: Fsm, H: HandlerBuilder<N, C>> {
     pub name_prefix: String,
     pub handler_builder: H,
-    pub fsm_receiver: channel::Receiver<FsmTypes<N, C>>,
-    pub fsm_sender: channel::Sender<FsmTypes<N, C>>,
+    pub fsm_receiver: Receiver<FsmTypes<N, C>>,
+    pub fsm_sender: Sender<FsmTypes<N, C>>,
     pub low_priority_pool_size: usize,
     pub expected_pool_size: usize,
     pub workers: Arc<Mutex<Vec<JoinHandle<()>>>>,
@@ -707,32 +695,32 @@ pub fn create_system<N: Fsm, C: Fsm>(
     cfg: &Config,
     sender: mpsc::LooseBoundedSender<C::Message>,
     controller: Box<C>,
+    resource_ctl: Option<Arc<ResourceController>>,
 ) -> (BatchRouter<N, C>, BatchSystem<N, C>) {
     let state_cnt = Arc::new(AtomicUsize::new(0));
     let control_box = BasicMailbox::new(sender, controller, state_cnt.clone());
-    let (tx, rx) = channel::unbounded();
-    let (tx2, rx2) = channel::unbounded();
+    let (sender, receiver) = unbounded(resource_ctl);
+    let (low_sender, low_receiver) = unbounded(None); // no resource control for low fsm
     let normal_scheduler = NormalScheduler {
-        sender: tx.clone(),
-        low_sender: tx2.clone(),
+        sender: sender.clone(),
+        low_sender,
     };
     let control_scheduler = ControlScheduler {
-        sender: tx.clone(),
-        low_sender: tx2,
+        sender: sender.clone(),
     };
     let pool_state_builder = PoolStateBuilder {
         max_batch_size: cfg.max_batch_size(),
         reschedule_duration: cfg.reschedule_duration.0,
-        fsm_receiver: rx.clone(),
-        fsm_sender: tx,
+        fsm_receiver: receiver.clone(),
+        fsm_sender: sender,
         pool_size: cfg.pool_size,
     };
     let router = Router::new(control_box, normal_scheduler, control_scheduler, state_cnt);
     let system = BatchSystem {
         name_prefix: None,
         router: router.clone(),
-        receiver: rx,
-        low_receiver: rx2,
+        receiver,
+        low_receiver,
         pool_size: cfg.pool_size,
         max_batch_size: cfg.max_batch_size(),
         workers: Arc::new(Mutex::new(Vec::new())),

@@ -52,8 +52,8 @@ where
 
 enum LimitationState<'a> {
     NotLimited,
-    Acquiring,
-    Acuqired(SemaphorePermit<'a>),
+    Acquiring(Instant),
+    Acquired { _permit: SemaphorePermit<'a> },
 }
 
 impl<'a, PF, F> ConcurrencyLimiter<'a, PF, F>
@@ -86,21 +86,22 @@ where
             LimitationState::NotLimited if this.execution_time > this.time_limit_without_permit => {
                 match this.permit_fut.poll(cx) {
                     Poll::Ready(permit) => {
-                        *this.state = LimitationState::Acuqired(permit);
+                        *this.state = LimitationState::Acquired { _permit: permit };
                         COPR_ACQUIRE_SEMAPHORE_TYPE.acquired.inc();
                     }
                     Poll::Pending => {
-                        *this.state = LimitationState::Acquiring;
+                        *this.state = LimitationState::Acquiring(Instant::now());
                         COPR_WAITING_FOR_SEMAPHORE.inc();
                         return Poll::Pending;
                     }
                 }
             }
-            LimitationState::Acquiring => match this.permit_fut.poll(cx) {
+            LimitationState::Acquiring(wait_start) => match this.permit_fut.poll(cx) {
                 Poll::Ready(permit) => {
-                    *this.state = LimitationState::Acuqired(permit);
+                    COPR_SEMAPHORE_WAIT_TIME.observe(wait_start.saturating_elapsed().as_secs_f64());
                     COPR_WAITING_FOR_SEMAPHORE.dec();
                     COPR_ACQUIRE_SEMAPHORE_TYPE.acquired.inc();
+                    *this.state = LimitationState::Acquired { _permit: permit };
                 }
                 Poll::Pending => {
                     return Poll::Pending;
@@ -126,7 +127,13 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, thread};
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        thread,
+    };
 
     use futures::future::FutureExt;
     use tokio::{
@@ -162,11 +169,15 @@ mod tests {
         // than t1, it starts with t1
         smp.add_permits(1);
         let smp2 = smp.clone();
-        let mut t1 =
-            tokio::spawn(
-                async move { limit_concurrency(work(8), &smp2, Duration::default()).await },
-            )
-            .fuse();
+
+        let t1_finished = Arc::new(AtomicBool::new(false));
+
+        let t1_finished_cloned = t1_finished.clone();
+        let mut t1 = tokio::spawn(async move {
+            limit_concurrency(work(8), &smp2, Duration::default()).await;
+            t1_finished_cloned.store(true, Ordering::Release);
+        })
+        .fuse();
 
         sleep(Duration::from_millis(100)).await;
         let smp2 = smp.clone();
@@ -178,14 +189,11 @@ mod tests {
 
         let deadline = sleep(Duration::from_millis(1500)).fuse();
         futures::pin_mut!(deadline);
-        let mut t1_finished = false;
         loop {
             futures_util::select! {
-                _ = t1 => {
-                    t1_finished = true;
-                },
+                _ = t1 => {},
                 _ = t2 => {
-                    if t1_finished {
+                    if t1_finished.load(Ordering::Acquire) {
                         return;
                     } else {
                         panic!("t2 should finish later than t1");

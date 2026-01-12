@@ -1,22 +1,35 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
+use std::sync::{Arc, mpsc::SyncSender};
 
+use collections::HashSet;
+use health_controller::types::LatencyInspector;
 use kvproto::{
+    import_sstpb::SstMeta,
     metapb,
+    metapb::RegionEpoch,
+    pdpb,
     raft_cmdpb::{RaftCmdRequest, RaftRequestHeader},
     raft_serverpb::RaftMessage,
 };
-use raftstore::store::{metrics::RaftEventDurationType, FetchedLogs, GenSnapRes};
+use raftstore::store::{
+    FetchedLogs, GenSnapRes, RaftCmdExtraOpts, TabletSnapKey, UnsafeRecoveryExecutePlanSyncer,
+    UnsafeRecoveryFillOutReportSyncer, UnsafeRecoveryForceLeaderSyncer,
+    UnsafeRecoveryWaitApplySyncer, fsm::ChangeObserver, metrics::RaftEventDurationType,
+    simple_write::SimpleWriteBinary,
+};
+use resource_control::ResourceMetered;
 use tikv_util::time::Instant;
 
-use super::{
-    response_channel::{
-        CmdResChannel, CmdResSubscriber, DebugInfoChannel, QueryResChannel, QueryResSubscriber,
-    },
-    ApplyRes,
+use super::response_channel::{
+    AnyResChannel, CmdResChannel, CmdResSubscriber, DebugInfoChannel, QueryResChannel,
+    QueryResSubscriber,
 };
-use crate::operation::{RequestSplit, SimpleWriteBinary, SplitInit};
+use crate::{
+    operation::{CatchUpLogs, ReplayWatch, RequestHalfSplit, RequestSplit, SplitInit},
+    router::ApplyRes,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]
 #[repr(u8)]
@@ -32,6 +45,7 @@ pub enum PeerTick {
     ReactivateMemoryLock = 8,
     ReportBuckets = 9,
     CheckLongUncommitted = 10,
+    GcPeer = 11,
 }
 
 impl PeerTick {
@@ -51,6 +65,7 @@ impl PeerTick {
             PeerTick::ReactivateMemoryLock => "reactivate_memory_lock",
             PeerTick::ReportBuckets => "report_buckets",
             PeerTick::CheckLongUncommitted => "check_long_uncommitted",
+            PeerTick::GcPeer => "gc_peer",
         }
     }
 
@@ -67,6 +82,7 @@ impl PeerTick {
             PeerTick::ReactivateMemoryLock,
             PeerTick::ReportBuckets,
             PeerTick::CheckLongUncommitted,
+            PeerTick::GcPeer,
         ];
         TICKS
     }
@@ -79,6 +95,7 @@ pub enum StoreTick {
     SnapGc,
     ConsistencyCheck,
     CleanupImportSst,
+    CompactCheck,
 }
 
 impl StoreTick {
@@ -89,6 +106,7 @@ impl StoreTick {
             StoreTick::SnapGc => RaftEventDurationType::snap_gc,
             StoreTick::ConsistencyCheck => RaftEventDurationType::consistency_check,
             StoreTick::CleanupImportSst => RaftEventDurationType::cleanup_import_sst,
+            StoreTick::CompactCheck => RaftEventDurationType::compact_check,
         }
     }
 }
@@ -117,6 +135,7 @@ pub struct SimpleWrite {
     pub header: Box<RaftRequestHeader>,
     pub data: SimpleWriteBinary,
     pub ch: CmdResChannel,
+    pub extra_opts: RaftCmdExtraOpts,
 }
 
 #[derive(Debug)]
@@ -125,13 +144,21 @@ pub struct UnsafeWrite {
     pub data: SimpleWriteBinary,
 }
 
+#[derive(Debug)]
+pub struct CaptureChange {
+    pub observer: ChangeObserver,
+    pub region_epoch: RegionEpoch,
+    // A callback accepts a snapshot.
+    pub snap_cb: AnyResChannel,
+}
+
 /// Message that can be sent to a peer.
 #[derive(Debug)]
 pub enum PeerMsg {
     /// Raft message is the message sent between raft nodes in the same
     /// raft group. Messages need to be redirected to raftstore if target
     /// peer doesn't exist.
-    RaftMessage(Box<RaftMessage>),
+    RaftMessage(Box<RaftMessage>, Option<Instant>),
     /// Query won't change any state. A typical query is KV read. In most cases,
     /// it will be processed using lease or read index.
     RaftQuery(RaftRequest<QueryResChannel>),
@@ -149,7 +176,7 @@ pub enum PeerMsg {
     LogsFetched(FetchedLogs),
     SnapshotGenerated(GenSnapRes),
     /// Start the FSM.
-    Start,
+    Start(Option<Arc<ReplayWatch>>),
     /// Messages from peer to peer in the same store
     SplitInit(Box<SplitInit>),
     SplitInitFinish(u64),
@@ -172,6 +199,11 @@ pub enum PeerMsg {
     StoreUnreachable {
         to_store_id: u64,
     },
+    // A store may be tombstone. Use it with caution, it also means store not
+    // found, PD can not distinguish them now, as PD may delete tombstone stores.
+    StoreMaybeTombstone {
+        store_id: u64,
+    },
     /// Reports whether the snapshot sending is successful or not.
     SnapshotSent {
         to_peer_id: u64,
@@ -179,6 +211,15 @@ pub enum PeerMsg {
     },
     RequestSplit {
         request: RequestSplit,
+        ch: CmdResChannel,
+    },
+    RefreshRegionBuckets {
+        region_epoch: RegionEpoch,
+        buckets: Vec<raftstore::store::Bucket>,
+        bucket_ranges: Option<Vec<raftstore::store::BucketRange>>,
+    },
+    RequestHalfSplit {
+        request: RequestHalfSplit,
         ch: CmdResChannel,
     },
     UpdateRegionSize {
@@ -192,10 +233,56 @@ pub enum PeerMsg {
     TabletTrimmed {
         tablet_index: u64,
     },
+    CleanupImportSst(Box<[SstMeta]>),
+    AskCommitMerge(RaftCmdRequest),
+    AckCommitMerge {
+        index: u64,
+        target_id: u64,
+    },
+    RejectCommitMerge {
+        index: u64,
+    },
+    // From target [`Apply`] to target [`Peer`].
+    RedirectCatchUpLogs(CatchUpLogs),
+    // From target [`Peer`] to source [`Peer`].
+    CatchUpLogs(CatchUpLogs),
+    /// Capture changes of a region.
+    CaptureChange(CaptureChange),
+    LeaderCallback(QueryResChannel),
     /// A message that used to check if a flush is happened.
     #[cfg(feature = "testexport")]
     WaitFlush(super::FlushChannel),
+    FlushBeforeClose {
+        tx: SyncSender<()>,
+    },
+    /// A message that used to check if a snapshot gc is happened.
+    SnapGc(Box<[TabletSnapKey]>),
+
+    /// Let a peer enters force leader state during unsafe recovery.
+    EnterForceLeaderState {
+        syncer: UnsafeRecoveryForceLeaderSyncer,
+        failed_stores: HashSet<u64>,
+    },
+    /// Let a peer exits force leader state.
+    ExitForceLeaderState,
+    /// Let a peer campaign directly after exit force leader.
+    ExitForceLeaderStateCampaign,
+    /// Wait for a peer to apply to the latest commit index.
+    UnsafeRecoveryWaitApply(UnsafeRecoveryWaitApplySyncer),
+    /// Wait for a peer to fill its status to the report.
+    UnsafeRecoveryFillOutReport(UnsafeRecoveryFillOutReportSyncer),
+    /// Wait for a peer to be initialized.
+    UnsafeRecoveryWaitInitialized(UnsafeRecoveryExecutePlanSyncer),
+    /// Destroy a peer.
+    UnsafeRecoveryDestroy(UnsafeRecoveryExecutePlanSyncer),
+    // Demote failed voter peers.
+    UnsafeRecoveryDemoteFailedVoters {
+        failed_voters: Vec<metapb::Peer>,
+        syncer: UnsafeRecoveryExecutePlanSyncer,
+    },
 }
+
+impl ResourceMetered for PeerMsg {}
 
 impl PeerMsg {
     pub fn raft_query(req: RaftCmdRequest) -> (Self, QueryResSubscriber) {
@@ -212,6 +299,14 @@ impl PeerMsg {
         header: Box<RaftRequestHeader>,
         data: SimpleWriteBinary,
     ) -> (Self, CmdResSubscriber) {
+        PeerMsg::simple_write_with_opt(header, data, RaftCmdExtraOpts::default())
+    }
+
+    pub fn simple_write_with_opt(
+        header: Box<RaftRequestHeader>,
+        data: SimpleWriteBinary,
+        extra_opts: RaftCmdExtraOpts,
+    ) -> (Self, CmdResSubscriber) {
         let (ch, sub) = CmdResChannel::pair();
         (
             PeerMsg::SimpleWrite(SimpleWrite {
@@ -219,6 +314,7 @@ impl PeerMsg {
                 header,
                 data,
                 ch,
+                extra_opts,
             }),
             sub,
         )
@@ -235,6 +331,7 @@ impl PeerMsg {
         epoch: metapb::RegionEpoch,
         split_keys: Vec<Vec<u8>>,
         source: String,
+        share_source_region_size: bool,
     ) -> (Self, CmdResSubscriber) {
         let (ch, sub) = CmdResChannel::pair();
         (
@@ -243,6 +340,29 @@ impl PeerMsg {
                     epoch,
                     split_keys,
                     source: source.into(),
+                    share_source_region_size,
+                },
+                ch,
+            },
+            sub,
+        )
+    }
+
+    #[cfg(feature = "testexport")]
+    pub fn request_split_with_callback(
+        epoch: metapb::RegionEpoch,
+        split_keys: Vec<Vec<u8>>,
+        source: String,
+        f: Box<dyn FnOnce(&mut kvproto::raft_cmdpb::RaftCmdResponse) + Send>,
+    ) -> (Self, CmdResSubscriber) {
+        let (ch, sub) = CmdResChannel::with_callback(f);
+        (
+            PeerMsg::RequestSplit {
+                request: RequestSplit {
+                    epoch,
+                    split_keys,
+                    source: source.into(),
+                    share_source_region_size: false,
                 },
                 ch,
             },
@@ -257,5 +377,28 @@ pub enum StoreMsg {
     SplitInit(Box<SplitInit>),
     Tick(StoreTick),
     Start,
-    StoreUnreachable { to_store_id: u64 },
+    StoreUnreachable {
+        to_store_id: u64,
+    },
+    AskCommitMerge(RaftCmdRequest),
+    /// A message that used to check if a flush is happened.
+    #[cfg(feature = "testexport")]
+    WaitFlush {
+        region_id: u64,
+        ch: super::FlushChannel,
+    },
+    /// Inspect the latency of raftstore.
+    LatencyInspect {
+        send_time: Instant,
+        inspector: LatencyInspector,
+    },
+    /// Send a store report for unsafe recovery.
+    UnsafeRecoveryReport(pdpb::StoreReport),
+    /// Create a peer for unsafe recovery.
+    UnsafeRecoveryCreatePeer {
+        region: metapb::Region,
+        syncer: UnsafeRecoveryExecutePlanSyncer,
+    },
 }
+
+impl ResourceMetered for StoreMsg {}

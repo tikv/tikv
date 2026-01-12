@@ -1,6 +1,6 @@
 <img src="images/tikv-logo.png" alt="tikv_logo" width="300"/>
 
-## [Website](https://tikv.org) | [Documentation](https://tikv.org/docs/latest/concepts/overview/) | [Community Chat](https://tikv.org/chat)
+## [Website](https://tikv.org) | [Documentation](https://tikv.org/docs/latest/concepts/overview/) | [Community Chat](https://slack.tidb.io/invite?team=tikv-wg&channel=general)
 
 [![Build Status](https://ci.pingcap.net/buildStatus/icon?job=tikv_ghpr_build_master)](https://ci.pingcap.net/blue/organizations/jenkins/tikv_ghpr_build_master/activity)
 [![Coverage Status](https://codecov.io/gh/tikv/tikv/branch/master/graph/badge.svg)](https://codecov.io/gh/tikv/tikv)
@@ -85,7 +85,7 @@ TiKV is able to run separately with PD, which is the minimal deployment required
 1. Download and extract binaries.
 
 ```bash
-$ export TIKV_VERSION=v4.0.12
+$ export TIKV_VERSION=v7.5.0
 $ export GOOS=darwin  # only {darwin, linux} are supported
 $ export GOARCH=amd64 # only {amd64, arm64} are supported
 $ curl -O  https://tiup-mirrors.pingcap.com/tikv-$TIKV_VERSION-$GOOS-$GOARCH.tar.gz
@@ -115,7 +115,7 @@ $ pip3 install -i https://test.pypi.org/simple/ tikv-client
 ```python
 from tikv_client import RawClient
 
-client = RawClient.connect("127.0.0.1:2379")
+client = RawClient.connect(["127.0.0.1:2379"])
 
 client.put(b'foo', b'bar')
 print(client.get(b'foo')) # b'bar'
@@ -123,6 +123,33 @@ print(client.get(b'foo')) # b'bar'
 client.put(b'foo', b'baz')
 print(client.get(b'foo')) # b'baz'
 ```
+
+### Deploy a cluster with Docker Compose
+
+The easiest way to run a complete TiKV cluster (3 PD + 3 TiKV nodes) for development and testing is using Docker Compose. The setup uses pre-built TiKV and PD nightly images from Docker Hub, so no building is required.
+
+> **Note:** On macOS, use `docker compose` (space) instead of `docker-compose` (hyphen) in all commands.
+
+1. Start the cluster:
+
+```bash
+$ docker-compose up -d
+# On macOS, use: docker compose up -d
+```
+
+2. Check cluster status:
+
+```bash
+$ docker-compose ps
+# On macOS, use: docker compose ps
+```
+
+3. Access the cluster:
+
+- PD endpoints: `127.0.0.1:23791`, `127.0.0.1:23792`, `127.0.0.1:23793`
+- TiKV status: `http://localhost:20181/status`, `http://localhost:20182/status`, `http://localhost:20183/status`
+
+For more details, see [docker-compose.README.md](./docker-compose.README.md).
 
 ### Deploy a cluster with TiUP
 

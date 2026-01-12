@@ -5,21 +5,21 @@ use collections::HashMap;
 use txn_types::{Key, Lock, TimeStamp};
 
 use crate::storage::{
+    ProcessResult, Snapshot,
     kv::WriteData,
     lock_manager::LockManager,
     mvcc::{
-        Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader,
-        MAX_TXN_WRITE_SIZE,
+        Error as MvccError, ErrorInner as MvccErrorInner, MAX_TXN_WRITE_SIZE, MvccTxn,
+        SnapshotReader,
     },
     txn::{
-        cleanup,
+        Error, ErrorInner, Result, cleanup,
         commands::{
             Command, CommandExt, ReaderWithStats, ReleasedLocks, ResolveLockReadPhase,
             ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
         },
-        commit, Error, ErrorInner, Result,
+        commit,
     },
-    ProcessResult, Snapshot,
 };
 
 command! {
@@ -30,7 +30,10 @@ command! {
     /// This should follow after a `ResolveLockReadPhase`.
     ResolveLock:
         cmd_ty => (),
-        display => "kv::resolve_lock {:?} scan_key({:?}) key_locks({:?})", (txn_status, scan_key, key_locks),
+        display => {
+            "kv::resolve_lock {:?} scan_key({:?}) key_locks({:?})",
+            (txn_status, scan_key, key_locks),
+        }
         content => {
             /// Maps lock_ts to commit_ts. If a transaction was rolled back, it is mapped to 0.
             ///
@@ -51,6 +54,11 @@ command! {
             txn_status: HashMap<TimeStamp, TimeStamp>,
             scan_key: Option<Key>,
             key_locks: Vec<(Key, Lock)>,
+        }
+        in_heap => {
+            txn_status,
+            scan_key,
+            key_locks,
         }
 }
 
@@ -83,6 +91,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
         let mut scan_key = self.scan_key.take();
         let rows = key_locks.len();
         let mut released_locks = ReleasedLocks::new();
+        let mut known_txn_status = vec![];
         for (current_key, current_lock) in key_locks {
             txn.start_ts = current_lock.ts;
             reader.start_ts = current_lock.ts;
@@ -102,8 +111,11 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
                 // Continue to resolve locks if the not found committed locks are pessimistic
                 // type. They could be left if the transaction is finally committed and
                 // pessimistic conflict retry happens during execution.
-                match commit(&mut txn, &mut reader, current_key.clone(), commit_ts) {
-                    Ok(res) => res,
+                match commit(&mut txn, &mut reader, current_key.clone(), commit_ts, None) {
+                    Ok(res) => {
+                        known_txn_status.push((current_lock.ts, commit_ts));
+                        res
+                    }
                     Err(MvccError(box MvccErrorInner::TxnLockNotFound { .. }))
                         if current_lock.is_pessimistic_lock() =>
                     {
@@ -124,6 +136,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
                 break;
             }
         }
+
+        known_txn_status.sort();
+        known_txn_status.dedup();
 
         let pr = if scan_key.is_none() {
             ProcessResult::Res
@@ -151,6 +166,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
             new_acquired_locks,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
+            known_txn_status,
         })
     }
 }

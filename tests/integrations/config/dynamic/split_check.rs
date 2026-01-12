@@ -10,8 +10,8 @@ use engine_rocks::RocksEngine;
 use engine_traits::CF_DEFAULT;
 use raftstore::{
     coprocessor::{
-        config::{Config, SplitCheckConfigManager},
         CoprocessorHost,
+        config::{Config, SplitCheckConfigManager},
     },
     store::{SplitCheckRunner as Runner, SplitCheckTask as Task},
 };
@@ -26,12 +26,16 @@ fn tmp_engine<P: AsRef<Path>>(path: P) -> RocksEngine {
     .unwrap()
 }
 
-fn setup(cfg: TikvConfig, engine: RocksEngine) -> (ConfigController, LazyWorker<Task>) {
+fn setup(
+    cfg: TikvConfig,
+    engine: RocksEngine,
+) -> (ConfigController, LazyWorker<Task<RocksEngine>>) {
     let (router, _) = sync_channel(1);
     let runner = Runner::new(
         engine,
         router.clone(),
         CoprocessorHost::new(router, cfg.coprocessor.clone()),
+        None,
     );
     let share_worker = Worker::new("split-check-config");
     let mut worker = share_worker.lazy_build("split-check-config");
@@ -46,7 +50,7 @@ fn setup(cfg: TikvConfig, engine: RocksEngine) -> (ConfigController, LazyWorker<
     (cfg_controller, worker)
 }
 
-fn validate<F>(scheduler: &Scheduler<Task>, f: F)
+fn validate<F>(scheduler: &Scheduler<Task<RocksEngine>>, f: F)
 where
     F: FnOnce(&Config) + Send + 'static,
 {

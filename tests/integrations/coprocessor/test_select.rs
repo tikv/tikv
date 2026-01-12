@@ -4,17 +4,19 @@ use std::{cmp, thread, time::Duration};
 
 use engine_traits::CF_LOCK;
 use kvproto::{
-    coprocessor::{Request, Response, StoreBatchTask},
-    errorpb,
-    kvrpcpb::{Context, IsolationLevel, LockInfo},
+    coprocessor::{Request, Response, StoreBatchTask, StoreBatchTaskResponse},
+    kvrpcpb::{Context, IsolationLevel},
+    metapb::{Peer, Region},
 };
-use protobuf::{Message, SingularPtrField};
-use raftstore::store::Bucket;
+use protobuf::Message;
+use raftstore::{coprocessor::region_info_accessor::MockRegionInfoProvider, store::Bucket};
 use test_coprocessor::*;
-use test_raftstore::{Cluster, ServerCluster};
+use test_raftstore::*;
+use test_raftstore_macro::test_case;
 use test_storage::*;
 use tidb_query_datatype::{
-    codec::{datum, Datum},
+    FieldTypeTp,
+    codec::{Datum, datum, table::encode_row_key},
     expr::EvalContext,
 };
 use tikv::{
@@ -22,11 +24,17 @@ use tikv::{
     server::Config,
     storage::TestEngineBuilder,
 };
-use tikv_util::{codec::number::*, config::ReadableSize};
+use tikv_kv::{RocksEngine, destroy_tls_engine, set_tls_engine, with_tls_engine};
+use tikv_util::{
+    HandyRwLock,
+    codec::number::*,
+    config::{ReadableDuration, ReadableSize},
+};
 use tipb::{
     AnalyzeColumnsReq, AnalyzeReq, AnalyzeType, ChecksumRequest, Chunk, Expr, ExprType,
     ScalarFuncSig, SelectResponse,
 };
+use tipb_helper::ExprDefBuilder;
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
 const FLAG_IGNORE_TRUNCATE: u64 = 1;
@@ -167,7 +175,7 @@ fn test_stream_batch_row_limit() {
 
     let resps = handle_streaming_select(&endpoint, req, check_range);
     assert_eq!(resps.len(), 3);
-    let expected_output_counts = vec![vec![2_i64], vec![2_i64], vec![1_i64]];
+    let expected_output_counts = [vec![2_i64], vec![2_i64], vec![1_i64]];
     for (i, resp) in resps.into_iter().enumerate() {
         let mut chunk = Chunk::default();
         chunk.merge_from_bytes(resp.get_data()).unwrap();
@@ -227,6 +235,44 @@ fn test_select_after_lease() {
     }
 }
 
+/// If a failed read should not trigger panic.
+#[test]
+fn test_select_failed() {
+    let mut cluster = test_raftstore::new_server_cluster(0, 3);
+    cluster.cfg.raft_store.check_leader_lease_interval = ReadableDuration::hours(10);
+    cluster.run();
+    // make sure leader has been elected.
+    assert_eq!(cluster.must_get(b""), None);
+    let region = cluster.get_region(b"");
+    let leader = cluster.leader_of_region(region.get_id()).unwrap();
+    let engine = cluster.sim.rl().storages[&leader.get_id()].clone();
+    let mut ctx = Context::default();
+    ctx.set_region_id(region.get_id());
+    ctx.set_region_epoch(region.get_region_epoch().clone());
+    ctx.set_peer(leader);
+
+    let product = ProductTable::new();
+    let (_, endpoint, _) =
+        init_data_with_engine_and_commit(ctx.clone(), engine, &product, &[], true);
+
+    // Sleep until the leader lease is expired.
+    thread::sleep(
+        cluster.cfg.raft_store.raft_heartbeat_interval()
+            * cluster.cfg.raft_store.raft_election_timeout_ticks as u32
+            * 2,
+    );
+    for id in 1..=3 {
+        if id != ctx.get_peer().get_store_id() {
+            cluster.stop_node(id);
+        }
+    }
+    let req = DagSelect::from(&product).build_with(ctx.clone(), &[0]);
+    let f = endpoint.parse_and_handle_unary_request(req, None);
+    cluster.stop_node(ctx.get_peer().get_store_id());
+    drop(cluster);
+    let _ = futures::executor::block_on(f);
+}
+
 #[test]
 fn test_scan_detail() {
     let data = vec![
@@ -262,6 +308,7 @@ fn test_scan_detail() {
         assert_eq!(scan_detail.get_lock().get_total(), 1);
 
         assert!(resp.get_exec_details_v2().has_time_detail());
+        assert!(resp.get_exec_details_v2().has_time_detail_v2());
         let scan_detail_v2 = resp.get_exec_details_v2().get_scan_detail_v2();
         assert_eq!(scan_detail_v2.get_total_versions(), 5);
         assert_eq!(scan_detail_v2.get_processed_versions(), 4);
@@ -976,6 +1023,7 @@ fn test_del_select() {
     assert_eq!(row_count, 5);
 
     assert!(resp.get_exec_details_v2().has_time_detail());
+    assert!(resp.get_exec_details_v2().has_time_detail_v2());
     let scan_detail_v2 = resp.get_exec_details_v2().get_scan_detail_v2();
     assert_eq!(scan_detail_v2.get_total_versions(), 8);
     assert_eq!(scan_detail_v2.get_processed_versions(), 5);
@@ -1681,6 +1729,7 @@ fn test_exec_details() {
     assert!(resp.has_exec_details_v2());
     let exec_details = resp.get_exec_details_v2();
     assert!(exec_details.has_time_detail());
+    assert!(exec_details.has_time_detail_v2());
     assert!(exec_details.has_scan_detail_v2());
 }
 
@@ -1718,18 +1767,34 @@ fn test_snapshot_failed() {
     assert!(resp.get_region_error().has_store_not_match());
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
+fn test_empty_data_cache_miss() {
+    let mut cluster = new_cluster(0, 1);
+    let (raft_engine, ctx) = prepare_raft_engine!(cluster, "");
+
+    let product = ProductTable::new();
+    let (_, endpoint, _) =
+        init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &[], false);
+    let mut req = DagSelect::from(&product).build_with(ctx, &[0]);
+    req.set_is_cache_enabled(true);
+    let resp = handle_request(&endpoint, req);
+    assert!(!resp.get_is_cache_hit());
+}
+
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_cache() {
+    let mut cluster = new_cluster(0, 1);
+    let (raft_engine, ctx) = prepare_raft_engine!(cluster, "");
+
     let data = vec![
         (1, Some("name:0"), 2),
         (2, Some("name:4"), 3),
         (4, Some("name:3"), 1),
         (5, Some("name:1"), 4),
     ];
-
     let product = ProductTable::new();
-    let (_cluster, raft_engine, ctx) = new_raft_engine(1, "");
-
     let (_, endpoint, _) =
         init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &data, true);
 
@@ -2011,6 +2076,44 @@ fn test_buckets() {
 }
 
 #[test]
+fn test_select_v2_format_with_checksum() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (4, Some("name:3"), 1),
+        (5, Some("name:1"), 4),
+        (9, Some("name:8"), 7),
+        (10, Some("name:6"), 8),
+    ];
+
+    let product = ProductTable::new();
+    for extra_checksum in [None, Some(132423)] {
+        // The row value encoded with checksum bytes should have no impact on cop task
+        // processing and related result chunk filling.
+        let (mut store, endpoint) =
+            init_data_with_commit_v2_checksum(&product, &data, true, extra_checksum);
+        store.insert_all_null_row(&product, Context::default(), true, extra_checksum);
+        let req = DagSelect::from(&product).build();
+        let mut resp = handle_select(&endpoint, req);
+        let mut spliter = DagChunkSpliter::new(resp.take_chunks().into(), 3);
+        let first_row = spliter.next().unwrap();
+        assert_eq!(first_row[0], Datum::I64(0));
+        assert_eq!(first_row[1], Datum::Null);
+        assert_eq!(first_row[2], Datum::Null);
+        for (row, (id, name, cnt)) in spliter.zip(data.clone()) {
+            let name_datum = name.map(|s| s.as_bytes()).into();
+            let expected_encoded = datum::encode_value(
+                &mut EvalContext::default(),
+                &[Datum::I64(id), name_datum, cnt.into()],
+            )
+            .unwrap();
+            let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
+            assert_eq!(result_encoded, &*expected_encoded);
+        }
+    }
+}
+
+#[test]
 fn test_batch_request() {
     let data = vec![
         (1, Some("name:0"), 2),
@@ -2116,7 +2219,7 @@ fn test_batch_request() {
     ];
     let prepare_req =
         |cluster: &mut Cluster<ServerCluster>, ranges: &Vec<HandleRange>| -> Request {
-            let original_range = ranges.get(0).unwrap();
+            let original_range = ranges.first().unwrap();
             let key_range = product.get_record_range(original_range.start, original_range.end);
             let region_key = Key::from_raw(&key_range.start);
             let mut req = DagSelect::from(&product)
@@ -2151,11 +2254,14 @@ fn test_batch_request() {
             }
             req
         };
-    let verify_response = |result: &QueryResult,
-                           data: &[u8],
-                           region_err: &SingularPtrField<errorpb::Error>,
-                           locked: &SingularPtrField<LockInfo>,
-                           other_err: &String| {
+    let verify_response = |result: &QueryResult, resp: &Response| {
+        let (data, details, region_err, locked, other_err) = (
+            resp.get_data(),
+            resp.get_exec_details_v2(),
+            &resp.region_error,
+            &resp.locked,
+            &resp.other_error,
+        );
         match result {
             QueryResult::Valid(res) => {
                 let expected_len = res.len();
@@ -2179,6 +2285,12 @@ fn test_batch_request() {
                 assert!(region_err.is_none());
                 assert!(locked.is_none());
                 assert!(other_err.is_empty());
+                let scan_details = details.get_scan_detail_v2();
+                assert_eq!(scan_details.processed_versions, row_count as u64);
+                if row_count > 0 {
+                    assert!(scan_details.processed_versions_size > 0);
+                    assert!(scan_details.total_versions > 0);
+                }
             }
             QueryResult::ErrRegion => {
                 assert!(region_err.is_some());
@@ -2196,6 +2308,20 @@ fn test_batch_request() {
                 assert!(!other_err.is_empty())
             }
         }
+    };
+
+    let batch_resp_2_resp = |batch_resp: &mut StoreBatchTaskResponse| -> Response {
+        let mut response = Response::default();
+        response.set_data(batch_resp.take_data());
+        if let Some(err) = batch_resp.region_error.take() {
+            response.set_region_error(err);
+        }
+        if let Some(lock_info) = batch_resp.locked.take() {
+            response.set_locked(lock_info);
+        }
+        response.set_other_error(batch_resp.take_other_error());
+        response.set_exec_details_v2(batch_resp.take_exec_details_v2());
+        response
     };
 
     for (ranges, results, invalid_epoch, key_is_locked) in cases.iter() {
@@ -2224,30 +2350,19 @@ fn test_batch_request() {
                     TimeStamp::zero(),
                     1,
                     TimeStamp::zero(),
+                    false,
                 );
                 cluster.must_put_cf(CF_LOCK, lock_key.as_encoded(), lock.to_bytes().as_slice());
             }
         }
         let mut resp = handle_request(&endpoint, req);
-        let batch_results = resp.take_batch_responses().to_vec();
+        let mut batch_results = resp.take_batch_responses().to_vec();
         for (i, result) in results.iter().enumerate() {
             if i == 0 {
-                verify_response(
-                    result,
-                    resp.get_data(),
-                    &resp.region_error,
-                    &resp.locked,
-                    &resp.other_error,
-                );
+                verify_response(result, &resp);
             } else {
-                let batch_resp = batch_results.get(i - 1).unwrap();
-                verify_response(
-                    result,
-                    batch_resp.get_data(),
-                    &batch_resp.region_error,
-                    &batch_resp.locked,
-                    &batch_resp.other_error,
-                );
+                let batch_resp = batch_results.get_mut(i - 1).unwrap();
+                verify_response(result, &batch_resp_2_resp(batch_resp));
             };
         }
         if *key_is_locked {
@@ -2258,4 +2373,165 @@ fn test_batch_request() {
             }
         }
     }
+}
+
+// Make sure the response has process_wall_time_ns. Zero process_wall_time_ns
+// makes the response not be added into the TiDB coprocessor cache, which
+// will downgrade the performance.
+#[test]
+fn test_select_time_details() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (4, Some("name:3"), 1),
+        (5, Some("name:1"), 4),
+    ];
+
+    let product = ProductTable::new();
+    let (_, endpoint, limiter) = init_with_data_ext(&product, &data);
+    limiter.set_read_bandwidth_limit(ReadableSize::kb(1), true);
+    let req = DagSelect::from(&product).build();
+    let resp = handle_request(&endpoint, req);
+
+    let time_details_v2 = resp.get_exec_details_v2().get_time_detail_v2();
+    assert!(time_details_v2.process_wall_time_ns != 0, "{:?}", resp);
+}
+
+#[test]
+fn test_index_lookup_select() {
+    set_tls_engine(TestEngineBuilder::new().build().unwrap());
+    defer! {
+         unsafe {destroy_tls_engine::<RocksEngine>()}
+    }
+
+    let product = ProductTable::new();
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (3, Some("name:2"), 5),
+        (4, Some("name:3"), 1),
+        (5, Some("name:7"), 6),
+        (15, Some("name:1"), 4),
+    ];
+    let index_scan_peer = {
+        let mut peer = Peer::default();
+        peer.set_id(1);
+        peer.set_store_id(1);
+        peer
+    };
+
+    let region = {
+        let mut peer = index_scan_peer.clone();
+        peer.set_id(10);
+        let mut r = Region::default();
+        r.set_id(10);
+        // only handle [2, 4] can be found in the local region.
+        r.set_start_key(Key::from_raw(&encode_row_key(product.table_id(), 2)).into_encoded());
+        r.set_end_key(Key::from_raw(&encode_row_key(product.table_id(), 15)).into_encoded());
+        r.set_peers(vec![peer].into());
+        r
+    };
+
+    let (_, endpoint, _) = unsafe {
+        with_tls_engine(|e: &mut RocksEngine| {
+            e.set_region_info_provider(MockRegionInfoProvider::new(vec![region]));
+            init_data_with_details(
+                Context::default(),
+                e.clone(),
+                &product,
+                &data,
+                true,
+                &Config::default(),
+            )
+        })
+    };
+    let mut ctx = Context::default();
+    ctx.set_peer(index_scan_peer);
+    let req = DagSelect::from_index(&product, &product["name"])
+        .index_lookup(&product, vec![2])
+        // id < 5
+        .where_expr({
+            let mut cond =
+                ExprDefBuilder::scalar_func(ScalarFuncSig::LtInt, FieldTypeTp::LongLong).build();
+            cond.mut_children().push(
+                ExprDefBuilder::column_ref(
+                    offset_for_column(&product.columns_info(), product["id"].id) as usize,
+                    FieldTypeTp::Long,
+                )
+                .build(),
+            );
+            cond.mut_children()
+                .push(ExprDefBuilder::constant_int(5).build());
+            cond
+        }).projection(vec![
+            ExprDefBuilder::column_ref(
+                offset_for_column(&product.columns_info(), product["id"].id) as usize,
+                FieldTypeTp::Long,
+            ).build(),
+            ExprDefBuilder::column_ref(
+                offset_for_column(&product.columns_info(), product["name"].id) as usize,
+                FieldTypeTp::Long,
+            ).build(),
+            {
+                let mut expr =
+                ExprDefBuilder::scalar_func(ScalarFuncSig::MultiplyInt, FieldTypeTp::LongLong).build();
+                expr.mut_children().push(
+                    ExprDefBuilder::column_ref(
+                        offset_for_column(&product.columns_info(), product["count"].id) as usize,
+                        FieldTypeTp::Long,
+                    )
+                    .build(),
+                );
+                expr.mut_children().push(
+                    ExprDefBuilder::constant_int(100).build(),
+                );
+                expr
+            },
+        ])
+        .build_with(ctx, &[0]);
+    let mut resp = handle_select(&endpoint, req);
+    // check the primary row results that can be found locally.
+    let chunks = resp.take_chunks().to_vec();
+    let rows: Vec<_> = DagChunkSpliter::new(chunks, 3).collect();
+    assert_eq!(
+        vec![
+            vec![
+                Datum::I64(2),
+                Datum::Bytes(b"name:4".to_vec()),
+                Datum::I64(300),
+            ],
+            vec![
+                Datum::I64(3),
+                Datum::Bytes(b"name:2".to_vec()),
+                Datum::I64(500),
+            ],
+            vec![
+                Datum::I64(4),
+                Datum::Bytes(b"name:3".to_vec()),
+                Datum::I64(100),
+            ]
+        ],
+        rows
+    );
+
+    // check the index results that cannot perform index-lookup locally.
+    let mut intermediate_outputs = resp.take_intermediate_outputs();
+    assert_eq!(1, intermediate_outputs.len());
+    let intermediate_chunks = intermediate_outputs[0].take_chunks().to_vec();
+    let intermediate_rows: Vec<_> = DagChunkSpliter::new(intermediate_chunks, 3).collect();
+    assert_eq!(
+        vec![
+            vec![
+                Datum::Bytes(b"name:0".to_vec()),
+                Datum::I64(2),
+                Datum::I64(1)
+            ],
+            vec![
+                Datum::Bytes(b"name:1".to_vec()),
+                Datum::I64(4),
+                Datum::I64(15)
+            ],
+        ],
+        intermediate_rows
+    );
 }

@@ -9,8 +9,8 @@ use std::{
 };
 
 use tikv_util::codec::{
-    number::{self, NumberEncoder},
     Result,
+    number::{self, NumberEncoder},
 };
 
 #[derive(Clone, Debug, Default)]

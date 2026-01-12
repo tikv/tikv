@@ -246,7 +246,7 @@ pub(crate) fn make_txn_error(
 ) -> crate::storage::mvcc::ErrorInner {
     use kvproto::kvrpcpb::WriteConflictReason;
 
-    use crate::storage::mvcc::ErrorInner;
+    use crate::storage::mvcc::{ErrorInner, PessimisticLockNotFoundReason};
     if let Some(s) = s {
         match s.to_ascii_lowercase().as_str() {
             "keyislocked" => {
@@ -269,6 +269,7 @@ pub(crate) fn make_txn_error(
                 start_ts,
                 commit_ts: TimeStamp::zero(),
                 key: key.to_raw().unwrap(),
+                mvcc_info: None,
             },
             "txnnotfound" => ErrorInner::TxnNotFound {
                 start_ts,
@@ -296,16 +297,19 @@ pub(crate) fn make_txn_error(
             },
             "alreadyexist" => ErrorInner::AlreadyExist {
                 key: key.to_raw().unwrap(),
+                existing_start_ts: start_ts,
             },
             "committsexpired" => ErrorInner::CommitTsExpired {
                 start_ts,
                 commit_ts: TimeStamp::zero(),
                 key: key.to_raw().unwrap(),
                 min_commit_ts: TimeStamp::zero(),
+                mvcc_info: None,
             },
             "pessimisticlocknotfound" => ErrorInner::PessimisticLockNotFound {
                 start_ts,
                 key: key.to_raw().unwrap(),
+                reason: PessimisticLockNotFoundReason::FailpointInjected,
             },
             _ => ErrorInner::Other(box_err!("unexpected error string")),
         }
@@ -317,17 +321,17 @@ pub(crate) fn make_txn_error(
 #[cfg(test)]
 pub(crate) mod tests {
     use kvproto::kvrpcpb::{AssertionLevel, Context, PrewriteRequestPessimisticAction::*};
-    use txn_types::{TimeStamp, WriteType, SHORT_VALUE_MAX_LEN};
+    use txn_types::{SHORT_VALUE_MAX_LEN, TimeStamp, WriteType};
 
     use super::*;
     use crate::storage::{
-        kv::{Engine, RocksEngine, ScanMode, TestEngineBuilder, WriteData},
-        mvcc::{tests::*, Error, ErrorInner, Mutation, MvccReader, SnapshotReader},
-        txn::{
-            commands::*, commit, prewrite, tests::*, CommitKind, TransactionKind,
-            TransactionProperties,
-        },
         SecondaryLocksStatus, TxnStatus,
+        kv::{Engine, RocksEngine, ScanMode, TestEngineBuilder, WriteData},
+        mvcc::{Error, ErrorInner, Mutation, MvccReader, SnapshotReader, tests::*},
+        txn::{
+            CommitKind, TransactionKind, TransactionProperties, commands::*, commit, prewrite,
+            tests::*,
+        },
     };
 
     fn test_mvcc_txn_read_imp(k1: &[u8], k2: &[u8], v: &[u8]) {
@@ -352,9 +356,9 @@ pub(crate) mod tests {
         // should read pending locks
         must_get_err(&mut engine, k1, 7);
         // should ignore the primary lock and get none when reading the latest record
-        must_get_none(&mut engine, k1, u64::max_value());
+        must_get_none(&mut engine, k1, u64::MAX);
         // should read secondary locks even when reading the latest record
-        must_get_err(&mut engine, k2, u64::max_value());
+        must_get_err(&mut engine, k2, u64::MAX);
 
         must_commit(&mut engine, k1, 5, 10);
         must_commit(&mut engine, k2, 5, 10);
@@ -363,12 +367,12 @@ pub(crate) mod tests {
         must_get_none(&mut engine, k1, 7);
         // should read with ts > commit_ts
         must_get(&mut engine, k1, 13, v);
-        // should read the latest record if `ts == u64::max_value()`
-        must_get(&mut engine, k1, u64::max_value(), v);
+        // should read the latest record if `ts == u64::MAX`
+        must_get(&mut engine, k1, u64::MAX, v);
 
         must_prewrite_delete(&mut engine, k1, k1, 15);
         // should ignore the lock and get previous record when reading the latest record
-        must_get(&mut engine, k1, u64::max_value(), v);
+        must_get(&mut engine, k1, u64::MAX, v);
         must_commit(&mut engine, k1, 15, 20);
         must_get_none(&mut engine, k1, 3);
         must_get_none(&mut engine, k1, 7);
@@ -385,9 +389,9 @@ pub(crate) mod tests {
         must_get(&mut engine, k1, 30, v);
         must_pessimistic_prewrite_delete(&mut engine, k1, k1, 23, 29, DoPessimisticCheck);
         must_get_err(&mut engine, k1, 30);
-        // should read the latest record when `ts == u64::max_value()`
+        // should read the latest record when `ts == u64::MAX`
         // even if lock.start_ts(23) < latest write.commit_ts(27)
-        must_get(&mut engine, k1, u64::max_value(), v);
+        must_get(&mut engine, k1, u64::MAX, v);
         must_commit(&mut engine, k1, 23, 31);
         must_get(&mut engine, k1, 30, v);
         must_get_none(&mut engine, k1, 32);
@@ -522,7 +526,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_mvcc_txn_pessmistic_prewrite_check_not_exist() {
+    fn test_mvcc_txn_pessimistic_prewrite_check_not_exist() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let k = b"k1";
         try_pessimistic_prewrite_check_not_exists(&mut engine, k, k, 3).unwrap_err();
@@ -542,8 +546,10 @@ pub(crate) mod tests {
 
         // Rollback lock
         must_rollback(&mut engine, k, 15, false);
-        // Rollbacks of optimistic transactions needn't be protected
-        must_get_rollback_protected(&mut engine, k, 15, false);
+        // Rollbacks of optimistic transactions need to be protected
+        // TODO: Re-check how the test can be better written after refinement of
+        // `must_rollback`'s       semantics.
+        must_get_rollback_protected(&mut engine, k, 15, true);
     }
 
     #[test]
@@ -802,7 +808,7 @@ pub(crate) mod tests {
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let cm = ConcurrencyManager::new(10.into());
+        let cm = ConcurrencyManager::new_for_test(10.into());
         let mut txn = MvccTxn::new(10.into(), cm.clone());
         let mut reader = SnapshotReader::new(10.into(), snapshot, true);
         let key = Key::from_raw(k);
@@ -815,6 +821,7 @@ pub(crate) mod tests {
             Mutation::make_put(key.clone(), v.to_vec()),
             &None,
             SkipPessimisticCheck,
+            None,
         )
         .unwrap();
         assert!(txn.write_size() > 0);
@@ -825,7 +832,7 @@ pub(crate) mod tests {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut txn = MvccTxn::new(10.into(), cm);
         let mut reader = SnapshotReader::new(10.into(), snapshot, true);
-        commit(&mut txn, &mut reader, key, 15.into()).unwrap();
+        commit(&mut txn, &mut reader, key, 15.into(), None).unwrap();
         assert!(txn.write_size() > 0);
         engine
             .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
@@ -849,7 +856,7 @@ pub(crate) mod tests {
         must_commit(&mut engine, key, 5, 10);
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let cm = ConcurrencyManager::new(10.into());
+        let cm = ConcurrencyManager::new_for_test(10.into());
         let mut txn = MvccTxn::new(5.into(), cm.clone());
         let mut reader = SnapshotReader::new(5.into(), snapshot, true);
         prewrite(
@@ -859,6 +866,7 @@ pub(crate) mod tests {
             Mutation::make_put(Key::from_raw(key), value.to_vec()),
             &None,
             SkipPessimisticCheck,
+            None,
         )
         .unwrap_err();
 
@@ -872,6 +880,7 @@ pub(crate) mod tests {
             Mutation::make_put(Key::from_raw(key), value.to_vec()),
             &None,
             SkipPessimisticCheck,
+            None,
         )
         .unwrap();
     }
@@ -892,16 +901,20 @@ pub(crate) mod tests {
     #[test]
     fn test_collapse_prev_rollback() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
-        let (key, value) = (b"key", b"value");
+        let (key, pk, value) = (b"key", b"pk", b"value");
+
+        // Worked around the problem that `must_rollback` always protects primary lock
+        // by setting different PK.
+        // TODO: Cover primary when working on https://github.com/tikv/tikv/issues/16625
 
         // Add a Rollback whose start ts is 1.
-        must_prewrite_put(&mut engine, key, value, key, 1);
+        must_prewrite_put(&mut engine, key, value, pk, 1);
         must_rollback(&mut engine, key, 1, false);
         must_get_rollback_ts(&mut engine, key, 1);
 
         // Add a Rollback whose start ts is 2, the previous Rollback whose
         // start ts is 1 will be collapsed.
-        must_prewrite_put(&mut engine, key, value, key, 2);
+        must_prewrite_put(&mut engine, key, value, pk, 2);
         must_rollback(&mut engine, key, 2, false);
         must_get_none(&mut engine, key, 2);
         must_get_rollback_ts(&mut engine, key, 2);
@@ -1232,9 +1245,9 @@ pub(crate) mod tests {
 
         let k = b"k";
         must_acquire_pessimistic_lock(&mut engine, k, k, 10, 10);
-        must_commit_err(&mut engine, k, 20, 30);
+        must_commit_err(&mut engine, k, 20, 30, None);
         must_commit(&mut engine, k, 10, 20);
-        must_seek_write(&mut engine, k, 30, 10, 20, WriteType::Lock);
+        must_seek_write_none(&mut engine, k, 30);
     }
 
     #[test]
@@ -1291,7 +1304,7 @@ pub(crate) mod tests {
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let mut engine_clone = engine.clone();
         let ctx = Context::default();
-        let cm = ConcurrencyManager::new(42.into());
+        let cm = ConcurrencyManager::new_for_test(42.into());
 
         let mut do_prewrite = || {
             let snapshot = engine_clone.snapshot(Default::default()).unwrap();
@@ -1312,6 +1325,7 @@ pub(crate) mod tests {
                 mutation,
                 &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
                 SkipPessimisticCheck,
+                None,
             )
             .unwrap();
             let modifies = txn.into_modifies();
@@ -1327,7 +1341,12 @@ pub(crate) mod tests {
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true);
-        let lock = reader.load_lock(&Key::from_raw(b"key")).unwrap().unwrap();
+        let lock = reader
+            .load_lock(&Key::from_raw(b"key"))
+            .unwrap()
+            .unwrap()
+            .left()
+            .unwrap();
         assert_eq!(lock.ts, TimeStamp::new(2));
         assert_eq!(lock.use_async_commit, true);
         assert_eq!(
@@ -1347,7 +1366,7 @@ pub(crate) mod tests {
     fn test_async_pessimistic_prewrite_primary() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let ctx = Context::default();
-        let cm = ConcurrencyManager::new(42.into());
+        let cm = ConcurrencyManager::new_for_test(42.into());
 
         must_acquire_pessimistic_lock(&mut engine, b"key", b"key", 2, 2);
 
@@ -1370,6 +1389,7 @@ pub(crate) mod tests {
                 mutation,
                 &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
                 DoPessimisticCheck,
+                None,
             )
             .unwrap();
             let modifies = txn.into_modifies();
@@ -1385,7 +1405,12 @@ pub(crate) mod tests {
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true);
-        let lock = reader.load_lock(&Key::from_raw(b"key")).unwrap().unwrap();
+        let lock = reader
+            .load_lock(&Key::from_raw(b"key"))
+            .unwrap()
+            .unwrap()
+            .left()
+            .unwrap();
         assert_eq!(lock.ts, TimeStamp::new(2));
         assert_eq!(lock.use_async_commit, true);
         assert_eq!(
@@ -1404,7 +1429,7 @@ pub(crate) mod tests {
     #[test]
     fn test_async_commit_pushed_min_commit_ts() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
-        let cm = ConcurrencyManager::new(42.into());
+        let cm = ConcurrencyManager::new_for_test(42.into());
 
         // Simulate that min_commit_ts is pushed forward larger than latest_ts
         must_acquire_pessimistic_lock_impl(
@@ -1439,6 +1464,7 @@ pub(crate) mod tests {
             mutation,
             &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
             DoPessimisticCheck,
+            None,
         )
         .unwrap();
         assert_eq!(min_commit_ts.into_inner(), 100);

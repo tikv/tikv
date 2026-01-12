@@ -10,11 +10,11 @@ use std::{
 use async_trait::async_trait;
 use collections::{HashMap, HashMapEntry};
 use tidb_query_aggr::*;
-use tidb_query_common::{storage::IntervalRange, Result};
+use tidb_query_common::{Result, storage::IntervalRange};
 use tidb_query_datatype::{
+    EvalType, FieldTypeAccessor,
     codec::batch::{LazyBatchColumn, LazyBatchColumnVec},
     expr::{EvalConfig, EvalContext},
-    EvalType, FieldTypeAccessor,
 };
 use tidb_query_expr::{RpnExpression, RpnExpressionBuilder, RpnStackNode};
 use tipb::{Aggregation, Expr, FieldType};
@@ -40,6 +40,19 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSlowHashAggregationExecutor<Src>
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.0.schema()
+    }
+
+    #[inline]
+    fn intermediate_schema(&self, index: usize) -> Result<&[FieldType]> {
+        self.0.intermediate_schema(index)
+    }
+
+    #[inline]
+    fn consume_and_fill_intermediate_results(
+        &mut self,
+        results: &mut [Vec<BatchExecuteResult>],
+    ) -> Result<()> {
+        self.0.consume_and_fill_intermediate_results(results)
     }
 
     #[inline]
@@ -435,10 +448,10 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
     fn iterate_available_groups(
         &mut self,
         entities: &mut Entities<Src>,
-        src_is_drained: bool,
+        src_is_drained: BatchExecIsDrain,
         mut iteratee: impl FnMut(&mut Entities<Src>, &[Box<dyn AggrFunctionState>]) -> Result<()>,
     ) -> Result<Vec<LazyBatchColumn>> {
-        assert!(src_is_drained);
+        assert!(src_is_drained.stop());
 
         let number_of_groups = self.groups.len();
         let mut group_by_columns: Vec<_> = self
@@ -514,10 +527,10 @@ impl Eq for GroupKeyRefUnsafe {}
 #[cfg(test)]
 mod tests {
     use futures::executor::block_on;
-    use tidb_query_datatype::{codec::data_type::*, FieldTypeTp};
+    use tidb_query_datatype::{FieldTypeTp, codec::data_type::*};
     use tidb_query_expr::{
-        impl_arithmetic::{arithmetic_fn_meta, RealPlus},
         RpnExpressionBuilder,
+        impl_arithmetic::{RealPlus, arithmetic_fn_meta},
     };
     use tipb::ScalarFuncSig;
 
@@ -577,12 +590,12 @@ mod tests {
         let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
-        assert!(!r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().is_remain());
 
         let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
-        assert!(!r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().is_remain());
 
         let mut r = block_on(exec.next_batch(1));
         // col_4 (sort_key),    col_0 + 1 can result in:

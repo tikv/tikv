@@ -4,18 +4,17 @@
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
+    ProcessResult, Snapshot,
     kv::WriteData,
     lock_manager::LockManager,
     mvcc::{MvccTxn, SnapshotReader},
     txn::{
-        cleanup,
+        Result, cleanup,
         commands::{
             Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
             WriteCommand, WriteContext, WriteResult,
         },
-        Result,
     },
-    ProcessResult, Snapshot,
 };
 
 command! {
@@ -24,11 +23,17 @@ command! {
     /// This should be following a [`Prewrite`](Command::Prewrite) on the given key.
     Rollback:
         cmd_ty => (),
-        display => "kv::command::rollback keys({:?}) @ {} | {:?}", (keys, start_ts, ctx),
+        display => {
+            "kv::command::rollback keys({:?}) @ {} | {:?}",
+            (keys, start_ts, ctx),
+        }
         content => {
             keys: Vec<Key>,
             /// The transaction timestamp.
             start_ts: TimeStamp,
+        }
+        in_heap => {
+            keys,
         }
 }
 
@@ -71,6 +76,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Rollback {
             new_acquired_locks,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
+            known_txn_status: vec![],
         })
     }
 }
@@ -79,7 +85,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Rollback {
 mod tests {
     use kvproto::kvrpcpb::PrewriteRequestPessimisticAction::*;
 
-    use crate::storage::{txn::tests::*, TestEngineBuilder};
+    use crate::storage::{TestEngineBuilder, txn::tests::*};
 
     #[test]
     fn rollback_lock_with_existing_rollback() {

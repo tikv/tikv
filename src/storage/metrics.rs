@@ -7,11 +7,12 @@ use std::{cell::RefCell, mem, sync::Arc};
 use collections::HashMap;
 use engine_traits::{PerfContext, PerfContextExt, PerfContextKind, PerfLevel};
 use kvproto::{kvrpcpb::KeyRange, metapb, pdpb::QueryKind};
-use pd_client::BucketMeta;
+use lazy_static::lazy_static;
+use pd_client::{BucketMeta, RegionWriteCfCopDetail};
 use prometheus::*;
 use prometheus_static_metric::*;
-use raftstore::store::{util::build_key_range, ReadStats};
-use tikv_kv::{with_tls_engine, Engine};
+use raftstore::store::{ReadStats, util::build_key_range};
+use tikv_kv::Engine;
 use tracker::get_tls_tracker_token;
 
 use crate::{
@@ -63,7 +64,7 @@ pub fn tls_collect_scan_details(cmd: CommandKind, stats: &Statistics) {
         m.borrow_mut()
             .local_scan_details
             .entry(cmd)
-            .or_insert_with(Default::default)
+            .or_default()
             .add(stats);
     });
 }
@@ -84,6 +85,11 @@ pub fn tls_collect_read_flow(
             end,
             &statistics.write.flow_stats,
             &statistics.data.flow_stats,
+            &RegionWriteCfCopDetail::new(
+                statistics.write.next,
+                statistics.write.prev,
+                statistics.write.processed_keys,
+            ),
         );
     });
 }
@@ -123,6 +129,7 @@ make_auto_flush_static_metric! {
         raw_batch_get_command,
         scan,
         batch_get,
+        buffer_batch_get,
         batch_get_command,
         prewrite,
         acquire_pessimistic_lock,
@@ -131,6 +138,7 @@ make_auto_flush_static_metric! {
         cleanup,
         rollback,
         pessimistic_rollback,
+        pessimistic_rollback_read_phase,
         txn_heart_beat,
         check_txn_status,
         check_secondary_locks,
@@ -141,7 +149,12 @@ make_auto_flush_static_metric! {
         pause,
         key_mvcc,
         start_ts_mvcc,
-        flashback_to_version,
+        flashback_to_version_read_lock,
+        flashback_to_version_read_write,
+        flashback_to_version_rollback_lock,
+        flashback_to_version_write,
+        flush,
+        update_txn_status_cache,
         raw_get,
         raw_batch_get,
         raw_scan,
@@ -325,11 +338,14 @@ where
         static SCAN_LOCK: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
         static RESOLVE_LOCK: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
         static RESOLVE_LOCK_LITE: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
+        static FLUSH: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
+        static BUFFER_BATCH_GET: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
     }
     let tls_cell = match cmd {
         CommandKind::get => &GET,
         CommandKind::batch_get => &BATCH_GET,
         CommandKind::batch_get_command => &BATCH_GET_COMMAND,
+        CommandKind::buffer_batch_get => &BUFFER_BATCH_GET,
         CommandKind::scan => &SCAN,
         CommandKind::prewrite => &PREWRITE,
         CommandKind::acquire_pessimistic_lock => &ACQUIRE_PESSIMISTIC_LOCK,
@@ -343,27 +359,20 @@ where
         CommandKind::scan_lock => &SCAN_LOCK,
         CommandKind::resolve_lock => &RESOLVE_LOCK,
         CommandKind::resolve_lock_lite => &RESOLVE_LOCK_LITE,
+        CommandKind::flush => &FLUSH,
         _ => return f(),
     };
     tls_cell.with(|c| {
         let mut c = c.borrow_mut();
-        if c.is_none() {
-            *c = with_tls_engine(|engine: &mut E| {
-                engine.kv_engine().map(|c| {
-                    Box::new(c.get_perf_context(
-                        PerfLevel::Uninitialized,
-                        PerfContextKind::Storage(cmd.get_str()),
-                    )) as Box<dyn PerfContext>
-                })
-            });
-        };
-        if let Some(c) = &mut *c {
-            c.start_observe();
-        }
+        let perf_context = c.get_or_insert_with(|| {
+            Box::new(E::Local::get_perf_context(
+                PerfLevel::Uninitialized,
+                PerfContextKind::Storage(cmd.get_str()),
+            )) as Box<dyn PerfContext>
+        });
+        perf_context.start_observe();
         let res = f();
-        if let Some(c) = &mut *c {
-            c.report_metrics(&[get_tls_tracker_token()]);
-        }
+        perf_context.report_metrics(&[get_tls_tracker_token()]);
         res
     })
 }
@@ -374,6 +383,20 @@ make_static_metric! {
             waiters,
             keys,
         },
+    }
+
+    pub struct TxnStatusCacheSizeGauge: IntGauge {
+        "type" =>  {
+            used,
+            allocated,
+        }
+    }
+
+    pub struct MemoryQuotaGauge: IntGauge {
+        "type" =>  {
+            in_use,
+            capacity,
+        }
     }
 }
 
@@ -509,13 +532,15 @@ lazy_static! {
     .unwrap();
     pub static ref SCHED_PROCESSING_READ_HISTOGRAM_STATIC: ProcessingReadVec =
         auto_flush_from!(SCHED_PROCESSING_READ_HISTOGRAM_VEC, ProcessingReadVec);
-    pub static ref SCHED_PROCESSING_WRITE_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
-        "tikv_scheduler_processing_write_duration_seconds",
-        "Bucketed histogram of processing write duration",
+    pub static ref SCHED_BLOCK_READ_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
+        "tikv_scheduler_block_read_duration_seconds",
+        "Bucketed histogram of block read duration while processing read",
         &["type"],
-        exponential_buckets(0.00001, 2.0, 26).unwrap()
+        exponential_buckets(0.001, 2.0, 18).unwrap()
     )
     .unwrap();
+    pub static ref SCHED_BLOCK_READ_HISTOGRAM_VEC_STATIC: ProcessingReadVec =
+        auto_flush_from!(SCHED_BLOCK_READ_HISTOGRAM_VEC, ProcessingReadVec);
     pub static ref SCHED_TOO_BUSY_COUNTER: IntCounterVec = register_int_counter_vec!(
         "tikv_scheduler_too_busy_total",
         "Total count of scheduler too busy",
@@ -604,6 +629,28 @@ lazy_static! {
         "tikv_lock_wait_queue_length",
         "Statistics of length of queues counted when enqueueing",
         exponential_buckets(1.0, 2.0, 16).unwrap()
+    )
+    .unwrap();
+
+    pub static ref SCHED_TXN_STATUS_CACHE_SIZE: TxnStatusCacheSizeGauge = register_static_int_gauge_vec!(
+        TxnStatusCacheSizeGauge,
+        "tikv_scheduler_txn_status_cache_size",
+        "Statistics of size and capacity of txn status cache (represented in count of entries)",
+        &["type"]
+    )
+    .unwrap();
+
+    pub static ref SCHED_TXN_MEMORY_QUOTA: MemoryQuotaGauge = register_static_int_gauge_vec!(
+        MemoryQuotaGauge,
+        "tikv_scheduler_memory_quota_size",
+        "Statistics of in_use and capacity of scheduler memory quota",
+        &["type"]
+    )
+    .unwrap();
+
+    pub static ref SCHED_TXN_RUNNING_COMMANDS: IntGauge = register_int_gauge!(
+        "tikv_scheduler_running_commands",
+        "The count of running scheduler commands"
     )
     .unwrap();
 }

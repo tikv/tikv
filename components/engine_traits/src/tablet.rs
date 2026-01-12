@@ -4,8 +4,8 @@ use std::{
     fmt::{self, Debug, Formatter},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
     },
 };
 
@@ -13,6 +13,8 @@ use collections::HashMap;
 use kvproto::metapb::Region;
 use tikv_util::box_err;
 
+#[cfg(any(test, feature = "testexport"))]
+use crate::StateStorage;
 use crate::{Error, FlushState, Result};
 
 #[derive(Debug)]
@@ -32,7 +34,7 @@ pub struct CachedTablet<EK> {
 }
 
 impl<EK> CachedTablet<EK> {
-    fn release(&mut self) {
+    pub fn release(&mut self) {
         self.cache = None;
         self.version = 0;
     }
@@ -44,10 +46,11 @@ impl<EK: Clone> CachedTablet<EK> {
         CachedTablet {
             latest: Arc::new(LatestTablet {
                 data: Mutex::new(data.clone()),
-                version: AtomicU64::new(0),
+                version: AtomicU64::new(1),
             }),
             cache: data,
-            version: 0,
+            // We use 0 in release, so it needs to be intialized to 1.
+            version: 1,
         }
     }
 
@@ -145,6 +148,11 @@ pub trait TabletFactory<EK>: Send + Sync {
 
     /// Check if the tablet with specified path exists
     fn exists(&self, path: &Path) -> bool;
+
+    #[cfg(feature = "testexport")]
+    fn set_state_storage(&self, _: Arc<dyn StateStorage>) {
+        unimplemented!()
+    }
 }
 
 pub struct SingletonFactory<EK> {
@@ -233,7 +241,7 @@ impl<EK> TabletRegistry<EK> {
         let mut parts = name.rsplit('_');
         let suffix = parts.next()?.parse().ok()?;
         let id = parts.next()?.parse().ok()?;
-        let prefix = parts.as_str();
+        let prefix = parts.remainder().unwrap_or("");
         Some((prefix, id, suffix))
     }
 

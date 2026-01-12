@@ -6,14 +6,29 @@
 //! Batch executor common structures.
 
 use async_trait::async_trait;
-pub use tidb_query_common::execute_stats::{
-    ExecSummaryCollector, ExecuteStats, WithSummaryCollector,
-};
+pub use tidb_query_common::execute_stats::{ExecSummaryCollector, ExecuteStats};
 use tidb_query_common::{
-    execute_stats::ExecSummaryCollectorEnabled, storage::IntervalRange, Result,
+    Result, execute_stats::ExecSummaryCollectorEnabled, storage::IntervalRange,
 };
 use tidb_query_datatype::{codec::batch::LazyBatchColumnVec, expr::EvalWarnings};
 use tipb::FieldType;
+
+/// Combines an `ExecSummaryCollector` with another type. This inner type `T`
+/// typically `Executor`/`BatchExecutor`, such that `WithSummaryCollector<C, T>`
+/// would implement the same trait and collects the statistics into `C`.
+pub struct WithSummaryCollector<C: ExecSummaryCollector, T> {
+    pub summary_collector: C,
+    pub inner: T,
+    #[cfg(test)]
+    pub inner_type: &'static str,
+}
+
+impl<C: ExecSummaryCollector, T> WithSummaryCollector<C, T> {
+    #[cfg(test)]
+    pub fn into_inner(self) -> T {
+        self.inner
+    }
+}
 
 /// The interface for pull-based executors. It is similar to the Volcano
 /// Iterator model, but pulls data in batch and stores data by column.
@@ -23,6 +38,15 @@ pub trait BatchExecutor: Send {
 
     /// Gets the schema of the output.
     fn schema(&self) -> &[FieldType];
+
+    /// Gets the schema of intermediate result
+    fn intermediate_schema(&self, index: usize) -> Result<&[FieldType]>;
+
+    /// Consumes the inner intermediate results and fills the arguments vector.
+    fn consume_and_fill_intermediate_results(
+        &mut self,
+        results: &mut [Vec<BatchExecuteResult>],
+    ) -> Result<()>;
 
     /// Pulls next several rows of data (stored by column).
     ///
@@ -66,6 +90,8 @@ pub trait BatchExecutor: Send {
         WithSummaryCollector {
             summary_collector: ExecSummaryCollectorEnabled::new(output_index),
             inner: self,
+            #[cfg(test)]
+            inner_type: std::any::type_name::<Self>(),
         }
     }
 }
@@ -76,6 +102,19 @@ impl<T: BatchExecutor + ?Sized> BatchExecutor for Box<T> {
 
     fn schema(&self) -> &[FieldType] {
         (**self).schema()
+    }
+
+    #[inline]
+    fn intermediate_schema(&self, index: usize) -> Result<&[FieldType]> {
+        (**self).intermediate_schema(index)
+    }
+
+    #[inline]
+    fn consume_and_fill_intermediate_results(
+        &mut self,
+        results: &mut [Vec<BatchExecuteResult>],
+    ) -> Result<()> {
+        (**self).consume_and_fill_intermediate_results(results)
     }
 
     async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
@@ -107,6 +146,19 @@ impl<C: ExecSummaryCollector + Send, T: BatchExecutor> BatchExecutor
 
     fn schema(&self) -> &[FieldType] {
         self.inner.schema()
+    }
+
+    #[inline]
+    fn intermediate_schema(&self, index: usize) -> Result<&[FieldType]> {
+        self.inner.intermediate_schema(index)
+    }
+
+    #[inline]
+    fn consume_and_fill_intermediate_results(
+        &mut self,
+        results: &mut [Vec<BatchExecuteResult>],
+    ) -> Result<()> {
+        self.inner.consume_and_fill_intermediate_results(results)
     }
 
     async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
@@ -174,17 +226,45 @@ pub struct BatchExecuteResult {
     /// Whether or not there is no more data.
     ///
     /// This structure is a `Result`. When it is:
-    /// - `Ok(false)`: The normal case, means that there could be more data. The
-    ///   caller should continue calling `next_batch()` although for each call
-    ///   the returned data may be empty.
-    /// - `Ok(true)`:  Means that the executor is drained and no more data will
-    ///   be returned in future. However there could be some (last) data in the
-    ///   `data` field this time. The caller should NOT call `next_batch()` any
-    ///   more.
+    /// - `Ok(batch_exec_is_drain)`: See the comment of `BatchExecIsDrain`.
     /// - `Err(_)`: Means that there is an error when trying to retrieve more
     ///   data. In this case, the error is returned and the executor is also
     ///   drained. Similar to `Ok(true)`, there could be some remaining data in
     ///   the `data` field which is valid data and should be processed. The
     ///   caller should NOT call `next_batch()` any more.
-    pub is_drained: Result<bool>,
+    pub is_drained: Result<BatchExecIsDrain>,
+}
+
+/// The result of batch execution.
+/// - `Drain`: The executor is completely drained and no more data will be
+///   returned in the given range.However there could be some (last) data in
+///   `data` field this time. The caller should NOT call `next_batch()` any
+///   more.
+/// - `PagingDrain`: The executor output enough rows of the paging request,
+///   there may be following data in the next paging request, the paging request
+///   should be returned with scanned range in this case. Only used in paging
+///   mode, Also check the last data in `data` field.
+/// - `Remain`: The normal case, means that there could be more data. The caller
+///   should continue calling `next_batch()` although for each call the returned
+///   data may be empty.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BatchExecIsDrain {
+    Remain,
+    Drain,
+    PagingDrain,
+}
+
+impl BatchExecIsDrain {
+    #[inline]
+    pub fn is_remain(&self) -> bool {
+        *self == BatchExecIsDrain::Remain
+    }
+
+    /// the batch execution need to stop when the result status is Drain or
+    /// PagingDrain, but only when we meet Drain, the resultset is really
+    /// drained.
+    #[inline]
+    pub fn stop(&self) -> bool {
+        !self.is_remain()
+    }
 }

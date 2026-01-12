@@ -2,9 +2,9 @@
 
 use std::{
     sync::{
-        atomic::{AtomicBool, Ordering},
-        mpsc::{channel, RecvTimeoutError},
         Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{RecvTimeoutError, channel},
     },
     thread,
     time::Duration,
@@ -22,31 +22,33 @@ use kvproto::{
     },
     tikvpb::TikvClient,
 };
+use resource_control::ResourceGroupManager;
 use test_raftstore::*;
+use test_raftstore_macro::test_case;
 use tikv::{
     config::{ConfigController, Module},
     storage::{
-        self,
+        self, Error as StorageError, ErrorInner as StorageErrorInner,
         config_manager::StorageConfigManger,
         kv::{Error as KvError, ErrorInner as KvErrorInner, SnapContext, SnapshotExt},
         lock_manager::MockLockManager,
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
         test_util::*,
         txn::{
-            commands,
+            Error as TxnError, ErrorInner as TxnErrorInner, commands,
             flow_controller::{EngineFlowController, FlowController},
-            Error as TxnError, ErrorInner as TxnErrorInner,
         },
-        Error as StorageError, ErrorInner as StorageErrorInner, *,
+        *,
     },
 };
-use tikv_util::{future::paired_future_callback, worker::dummy_scheduler, HandyRwLock};
+use tikv_util::{HandyRwLock, future::paired_future_callback, worker::dummy_scheduler};
 use txn_types::{Key, Mutation, TimeStamp};
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_scheduler_leader_change_twice() {
     let snapshot_fp = "scheduler_async_snapshot_finish";
-    let mut cluster = new_server_cluster(0, 2);
+    let mut cluster = new_cluster(0, 2);
     cluster.run();
     let region0 = cluster.get_region(b"");
     let peers = region0.get_peers();
@@ -107,10 +109,11 @@ fn test_scheduler_leader_change_twice() {
     }
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_server_catching_api_error() {
     let raftkv_fp = "raftkv_early_error_report";
-    let mut cluster = new_server_cluster(0, 1);
+    let mut cluster = new_cluster(0, 1);
     cluster.run();
     let region = cluster.get_region(b"");
     let leader = region.get_peers()[0].clone();
@@ -167,10 +170,11 @@ fn test_server_catching_api_error() {
     must_get_equal(&cluster.get_engine(1), b"k3", b"v3");
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_raftkv_early_error_report() {
     let raftkv_fp = "raftkv_early_error_report";
-    let mut cluster = new_server_cluster(0, 1);
+    let mut cluster = new_cluster(0, 1);
     cluster.run();
     cluster.must_split(&cluster.get_region(b"k0"), b"k1");
 
@@ -232,10 +236,12 @@ fn test_raftkv_early_error_report() {
     fail::remove(raftkv_fp);
 }
 
-#[test]
+// FIXME: #[test_case(test_raftstore_v2::new_server_cluster)]
+// Raftstore-v2 not support get the storage engine, returning `None` currently.
+#[test_case(test_raftstore::new_server_cluster)]
 fn test_scale_scheduler_pool() {
     let snapshot_fp = "scheduler_start_execute";
-    let mut cluster = new_server_cluster(0, 1);
+    let mut cluster = new_cluster(0, 1);
     cluster.run();
     let origin_pool_size = cluster.cfg.storage.scheduler_worker_pool_size;
 
@@ -270,9 +276,89 @@ fn test_scale_scheduler_pool() {
             scheduler,
             flow_controller,
             storage.get_scheduler(),
+            storage.get_concurrency_manager(),
         )),
     );
     let scheduler = storage.get_scheduler();
+
+    let region = cluster.get_region(b"k1");
+    let mut ctx = Context::default();
+    ctx.set_region_id(region.id);
+    ctx.set_region_epoch(region.get_region_epoch().clone());
+    ctx.set_peer(cluster.leader_of_region(region.id).unwrap());
+    let do_prewrite = |key: &[u8], val: &[u8]| {
+        // prewrite
+        let (prewrite_tx, prewrite_rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::Prewrite::new(
+                    vec![Mutation::make_put(Key::from_raw(key), val.to_vec())],
+                    key.to_vec(),
+                    10.into(),
+                    100,
+                    false,
+                    2,
+                    TimeStamp::default(),
+                    TimeStamp::default(),
+                    None,
+                    false,
+                    AssertionLevel::Off,
+                    ctx.clone(),
+                ),
+                Box::new(move |res: storage::Result<_>| {
+                    let _ = prewrite_tx.send(res);
+                }),
+            )
+            .unwrap();
+        prewrite_rx.recv_timeout(Duration::from_secs(2))
+    };
+
+    let scale_pool = |size: usize| {
+        cfg_controller
+            .update_config("storage.scheduler-worker-pool-size", &format!("{}", size))
+            .unwrap();
+        assert_eq!(
+            scheduler.get_sched_pool().get_pool_size(CommandPri::Normal),
+            size
+        );
+    };
+
+    scale_pool(1);
+    fail::cfg(snapshot_fp, "1*pause").unwrap();
+    // propose one prewrite to block the only worker
+    do_prewrite(b"k1", b"v1").unwrap_err();
+
+    scale_pool(2);
+
+    // do prewrite again, as we scale another worker, this request should success
+    do_prewrite(b"k2", b"v2").unwrap().unwrap();
+
+    // restore to original config.
+    scale_pool(origin_pool_size);
+    fail::remove(snapshot_fp);
+}
+
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
+fn test_scheduler_pool_auto_switch_for_resource_ctl() {
+    let mut cluster = new_cluster(0, 1);
+    cluster.run();
+
+    let engine = cluster
+        .sim
+        .read()
+        .unwrap()
+        .storages
+        .get(&1)
+        .unwrap()
+        .clone();
+    let resource_manager = Arc::new(ResourceGroupManager::default());
+    let resource_ctl = resource_manager.derive_controller("test".to_string(), true);
+
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, MockLockManager::new())
+        .config(cluster.cfg.tikv.storage.clone())
+        .build_for_resource_controller(resource_manager.clone(), resource_ctl)
+        .unwrap();
 
     let region = cluster.get_region(b"k1");
     let mut ctx = Context::default();
@@ -307,32 +393,58 @@ fn test_scale_scheduler_pool() {
         prewrite_rx.recv_timeout(Duration::from_secs(2))
     };
 
-    let scale_pool = |size: usize| {
-        cfg_controller
-            .update_config("storage.scheduler-worker-pool-size", &format!("{}", size))
-            .unwrap();
-        assert_eq!(
-            scheduler
-                .get_sched_pool(CommandPri::Normal)
-                .pool
-                .get_pool_size(),
-            size
-        );
-    };
+    let (sender, receiver) = channel();
+    let priority_queue_sender = Mutex::new(sender.clone());
+    let single_queue_sender = Mutex::new(sender);
+    fail::cfg_callback("priority_pool_task", move || {
+        let sender = priority_queue_sender.lock().unwrap();
+        sender.send("priority_queue").unwrap();
+    })
+    .unwrap();
+    fail::cfg_callback("single_queue_pool_task", move || {
+        let sender = single_queue_sender.lock().unwrap();
+        sender.send("single_queue").unwrap();
+    })
+    .unwrap();
 
-    scale_pool(1);
-    fail::cfg(snapshot_fp, "1*pause").unwrap();
-    // propose one prewrite to block the only worker
-    do_prewrite(b"k1", b"v1").unwrap_err();
+    // Default is use single queue
+    assert_eq!(do_prewrite(b"k1", b"v1").is_ok(), true);
+    assert_eq!(
+        receiver.recv_timeout(Duration::from_millis(500)).unwrap(),
+        "single_queue"
+    );
 
-    scale_pool(2);
+    // Add group use priority queue
+    use kvproto::resource_manager::{GroupMode, GroupRequestUnitSettings, ResourceGroup};
+    let mut group = ResourceGroup::new();
+    group.set_name("rg1".to_string());
+    group.set_mode(GroupMode::RuMode);
+    let mut ru_setting = GroupRequestUnitSettings::new();
+    ru_setting.mut_r_u().mut_settings().set_fill_rate(100000);
+    group.set_r_u_settings(ru_setting);
+    resource_manager.add_resource_group(group);
+    thread::sleep(Duration::from_millis(200));
+    assert_eq!(do_prewrite(b"k2", b"v2").is_ok(), true);
+    assert_eq!(
+        receiver.recv_timeout(Duration::from_millis(500)).unwrap(),
+        "priority_queue"
+    );
 
-    // do prewrite again, as we scale another worker, this request should success
-    do_prewrite(b"k2", b"v2").unwrap().unwrap();
+    // Delete group use single queue
+    resource_manager.remove_resource_group("rg1");
+    thread::sleep(Duration::from_millis(200));
+    assert_eq!(do_prewrite(b"k3", b"v3").is_ok(), true);
+    assert_eq!(
+        receiver.recv_timeout(Duration::from_millis(500)).unwrap(),
+        "single_queue"
+    );
 
-    // restore to original config.
-    scale_pool(origin_pool_size);
-    fail::remove(snapshot_fp);
+    // Scale pool size
+    let scheduler = storage.get_scheduler();
+    let pool = scheduler.get_sched_pool();
+    assert_eq!(pool.get_pool_size(CommandPri::Normal), 1);
+    pool.scale_pool_size(2);
+    assert_eq!(pool.get_pool_size(CommandPri::Normal), 2);
 }
 
 #[test]
@@ -411,6 +523,7 @@ fn test_pipelined_pessimistic_lock() {
                 None,
                 false,
                 AssertionLevel::Off,
+                vec![],
                 Context::default(),
             ),
             expect_ok_callback(tx.clone(), 0),
@@ -419,7 +532,13 @@ fn test_pipelined_pessimistic_lock() {
     rx.recv().unwrap();
     storage
         .sched_txn_command(
-            commands::Commit::new(vec![key.clone()], 10.into(), 20.into(), Context::default()),
+            commands::Commit::new(
+                vec![key.clone()],
+                10.into(),
+                20.into(),
+                None,
+                Context::default(),
+            ),
             expect_ok_callback(tx.clone(), 0),
         )
         .unwrap();
@@ -762,6 +881,7 @@ fn test_async_commit_prewrite_with_stale_max_ts_impl<F: KvFormat>() {
                     Some(vec![b"xk2".to_vec()]),
                     false,
                     AssertionLevel::Off,
+                    vec![],
                     ctx.clone(),
                 ),
                 Box::new(move |res: storage::Result<_>| {
@@ -832,7 +952,7 @@ fn test_async_apply_prewrite_impl<E: Engine, F: KvFormat>(
         storage
             .sched_txn_command(
                 commands::AcquirePessimisticLock::new(
-                    vec![(Key::from_raw(key), false)],
+                    vec![(Key::from_raw(key), false, false)],
                     key.to_vec(),
                     start_ts,
                     0,
@@ -901,6 +1021,7 @@ fn test_async_apply_prewrite_impl<E: Engine, F: KvFormat>(
                     secondaries,
                     false,
                     AssertionLevel::Off,
+                    vec![],
                     ctx.clone(),
                 ),
                 Box::new(move |r| tx.send(r).unwrap()),
@@ -935,6 +1056,7 @@ fn test_async_apply_prewrite_impl<E: Engine, F: KvFormat>(
                     vec![Key::from_raw(key)],
                     start_ts,
                     min_commit_ts,
+                    None,
                     ctx.clone(),
                 ),
                 Box::new(move |r| tx.send(r).unwrap()),
@@ -969,7 +1091,13 @@ fn test_async_apply_prewrite_impl<E: Engine, F: KvFormat>(
         let (tx, rx) = channel();
         storage
             .sched_txn_command(
-                commands::Commit::new(vec![Key::from_raw(key)], start_ts, commit_ts, ctx.clone()),
+                commands::Commit::new(
+                    vec![Key::from_raw(key)],
+                    start_ts,
+                    commit_ts,
+                    None,
+                    ctx.clone(),
+                ),
                 Box::new(move |r| tx.send(r).unwrap()),
             )
             .unwrap();
@@ -982,9 +1110,10 @@ fn test_async_apply_prewrite_impl<E: Engine, F: KvFormat>(
     }
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_async_apply_prewrite() {
-    let mut cluster = new_server_cluster(0, 1);
+    let mut cluster = new_cluster(0, 1);
     cluster.run();
 
     let engine = cluster
@@ -1041,7 +1170,6 @@ fn test_async_apply_prewrite() {
         true,
         true,
     );
-
     test_async_apply_prewrite_impl(
         &storage,
         ctx.clone(),
@@ -1080,9 +1208,10 @@ fn test_async_apply_prewrite() {
     );
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_async_apply_prewrite_fallback() {
-    let mut cluster = new_server_cluster(0, 1);
+    let mut cluster = new_cluster(0, 1);
     cluster.run();
 
     let engine = cluster
@@ -1146,7 +1275,13 @@ fn test_async_apply_prewrite_fallback() {
     let (tx, rx) = channel();
     storage
         .sched_txn_command(
-            commands::Commit::new(vec![Key::from_raw(key)], 10.into(), res.min_commit_ts, ctx),
+            commands::Commit::new(
+                vec![Key::from_raw(key)],
+                10.into(),
+                res.min_commit_ts,
+                None,
+                ctx,
+            ),
             Box::new(move |r| tx.send(r).unwrap()),
         )
         .unwrap();
@@ -1171,7 +1306,7 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine, F: KvFormat>(
         storage
             .sched_txn_command(
                 commands::AcquirePessimisticLock::new(
-                    vec![(Key::from_raw(key), false)],
+                    vec![(Key::from_raw(key), false, false)],
                     key.to_vec(),
                     start_ts,
                     0,
@@ -1235,6 +1370,7 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine, F: KvFormat>(
                     None,
                     true,
                     AssertionLevel::Off,
+                    vec![],
                     ctx.clone(),
                 ),
                 Box::new(move |r| tx.send(r).unwrap()),
@@ -1269,9 +1405,10 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine, F: KvFormat>(
     }
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_async_apply_prewrite_1pc() {
-    let mut cluster = new_server_cluster(0, 1);
+    let mut cluster = new_cluster(0, 1);
     cluster.run();
 
     let engine = cluster
@@ -1296,9 +1433,10 @@ fn test_async_apply_prewrite_1pc() {
     test_async_apply_prewrite_1pc_impl(&storage, ctx, b"key", b"value2", 20, true);
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_atomic_cas_lock_by_latch() {
-    let mut cluster = new_server_cluster(0, 1);
+    let mut cluster = new_cluster(0, 1);
     cluster.run();
 
     let engine = cluster
@@ -1384,9 +1522,10 @@ fn test_atomic_cas_lock_by_latch() {
     assert_eq!(b"v2".to_vec(), ret);
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_before_async_write_deadline() {
-    let mut cluster = new_server_cluster(0, 1);
+    let mut cluster = new_cluster(0, 1);
     cluster.run();
 
     let engine = cluster
@@ -1423,9 +1562,70 @@ fn test_before_async_write_deadline() {
     ));
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
+fn test_deadline_exceeded_on_get_and_batch_get() {
+    use tikv_util::time::Instant;
+    use tracker::INVALID_TRACKER_TOKEN;
+
+    let mut cluster = new_cluster(0, 1);
+    cluster.run();
+
+    let engine = cluster
+        .sim
+        .read()
+        .unwrap()
+        .storages
+        .get(&1)
+        .unwrap()
+        .clone();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, MockLockManager::new())
+        .build()
+        .unwrap();
+
+    fail::cfg("after-snapshot", "sleep(100)").unwrap();
+    let mut ctx = Context::default();
+    ctx.set_region_id(1);
+    ctx.set_region_epoch(cluster.get_region_epoch(1));
+    ctx.set_peer(cluster.leader_of_region(1).unwrap());
+    ctx.max_execution_duration_ms = 20;
+    let f = storage.get(ctx.clone(), Key::from_raw(b"a"), 1.into());
+    assert!(matches!(
+        block_on(f),
+        Err(StorageError(box StorageErrorInner::DeadlineExceeded))
+    ));
+    let f = storage.batch_get(ctx.clone(), vec![Key::from_raw(b"a")], 1.into(), false);
+    assert!(matches!(
+        block_on(f),
+        Err(StorageError(box StorageErrorInner::DeadlineExceeded))
+    ));
+
+    let consumer = GetConsumer::new();
+    let mut get_req = GetRequest::default();
+    get_req.set_key(b"a".to_vec());
+    get_req.set_version(1_u64);
+    get_req.set_context(ctx.clone());
+    block_on(storage.batch_get_command(
+        vec![get_req],
+        vec![1],
+        vec![INVALID_TRACKER_TOKEN; 1],
+        consumer.clone(),
+        Instant::now(),
+    ))
+    .unwrap();
+    let result = consumer.take_data();
+    assert_eq!(1, result.len());
+    assert!(matches!(
+        result[0],
+        Err(StorageError(box StorageErrorInner::DeadlineExceeded))
+    ));
+    fail::remove("after-snapshot");
+}
+
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_before_propose_deadline() {
-    let mut cluster = new_server_cluster(0, 1);
+    let mut cluster = new_cluster(0, 1);
     cluster.run();
 
     let engine = cluster.sim.read().unwrap().storages[&1].clone();
@@ -1448,17 +1648,21 @@ fn test_before_propose_deadline() {
             }),
         )
         .unwrap();
-    assert!(matches!(
-        rx.recv().unwrap(),
-        Err(StorageError(box StorageErrorInner::Kv(KvError(
-            box KvErrorInner::Request(_),
-        ))))
-    ));
+    let res = rx.recv().unwrap();
+    assert!(
+        matches!(
+            res,
+            Err(StorageError(box StorageErrorInner::Kv(KvError(box KvErrorInner::Request(_)))))
+        ),
+        "actual: {:?}",
+        res
+    );
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_resolve_lock_deadline() {
-    let mut cluster = new_server_cluster(0, 1);
+    let mut cluster = new_cluster(0, 1);
     cluster.run();
 
     let engine = cluster.sim.read().unwrap().storages[&1].clone();
@@ -1616,10 +1820,11 @@ fn test_mvcc_concurrent_commit_and_rollback_at_shutdown() {
     assert_eq!(get_resp.value, v);
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_raw_put_deadline() {
     let deadline_fp = "deadline_check_fail";
-    let mut cluster = new_server_cluster(0, 1);
+    let mut cluster = new_cluster(0, 1);
     cluster.run();
     let region = cluster.get_region(b"");
     let leader = region.get_peers()[0].clone();

@@ -1,7 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_rocks::{RocksCfOptions, RocksDbOptions, RocksEngine, RocksWriteBatchVec};
-use engine_traits::{Mutable, WriteBatch, WriteBatchExt, CF_DEFAULT};
+use engine_traits::{CF_DEFAULT, Mutable, WriteBatch, WriteBatchExt};
 use tempfile::Builder;
 use test::Bencher;
 

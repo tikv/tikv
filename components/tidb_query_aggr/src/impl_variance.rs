@@ -3,8 +3,8 @@
 use tidb_query_codegen::AggrFunction;
 use tidb_query_common::Result;
 use tidb_query_datatype::{
-    builder::FieldTypeBuilder, codec::data_type::*, expr::EvalContext, EvalType, FieldTypeFlag,
-    FieldTypeTp,
+    EvalType, FieldTypeFlag, FieldTypeTp, builder::FieldTypeBuilder, codec::data_type::*,
+    expr::EvalContext,
 };
 use tidb_query_expr::RpnExpression;
 use tipb::{Expr, ExprType, FieldType};
@@ -71,8 +71,6 @@ impl<V: VarianceType> super::AggrDefinitionParser for AggrFnDefinitionParserVari
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
     ) -> Result<Box<dyn AggrFunction>> {
-        use std::convert::TryFrom;
-
         use tidb_query_datatype::FieldTypeAccessor;
 
         assert!(V::check_expr_type(root_expr.get_tp()));
@@ -455,8 +453,8 @@ mod tests {
     use std::sync::Arc;
 
     use tidb_query_datatype::{
-        codec::batch::{LazyBatchColumn, LazyBatchColumnVec},
         FieldTypeAccessor, FieldTypeTp,
+        codec::batch::{LazyBatchColumn, LazyBatchColumnVec},
     };
     use tikv_util::buffer_vec::BufferVec;
     use tipb_helper::ExprDefBuilder;

@@ -7,7 +7,10 @@ use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::{errorpb, metapb, raft_serverpb};
 use protobuf::ProtobufError;
 use thiserror::Error;
-use tikv_util::{codec, deadline::DeadlineError};
+use tikv_util::{
+    codec,
+    deadline::{DeadlineError, set_deadline_exceeded_busy_error},
+};
 
 use super::{coprocessor::Error as CopError, store::SnapError};
 
@@ -58,8 +61,8 @@ pub enum Error {
     #[error("region {0} is in the recovery progress")]
     RecoveryInProgress(u64),
 
-    #[error("region {0} is in the flashback progress")]
-    FlashbackInProgress(u64),
+    #[error("region {0} is in the flashback progress with start_ts {1}")]
+    FlashbackInProgress(u64, u64),
 
     #[error("region {0} not prepared the flashback")]
     FlashbackNotPrepared(u64),
@@ -140,6 +143,15 @@ pub enum Error {
         region_id: u64,
         local_state: raft_serverpb::RegionLocalState,
     },
+
+    #[error("peer is a witness of region {0}")]
+    IsWitness(u64),
+
+    #[error("mismatch peer id {} != {}", .request_peer_id, .store_peer_id)]
+    MismatchPeerId {
+        request_peer_id: u64,
+        store_peer_id: u64,
+    },
 }
 
 pub type Result<T> = result::Result<T, Error>;
@@ -214,7 +226,7 @@ impl From<Error> for errorpb::Error {
                     .mut_proposal_in_merging_mode()
                     .set_region_id(region_id);
             }
-            Error::Transport(reason) if reason == DiscardReason::Full => {
+            Error::Transport(DiscardReason::Full) => {
                 let mut server_is_busy_err = errorpb::ServerIsBusy::default();
                 server_is_busy_err.set_reason(RAFTSTORE_IS_BUSY.to_owned());
                 errorpb.set_server_is_busy(server_is_busy_err);
@@ -253,15 +265,42 @@ impl From<Error> for errorpb::Error {
                 e.set_region_id(region_id);
                 errorpb.set_recovery_in_progress(e);
             }
-            Error::FlashbackInProgress(region_id) => {
+            Error::FlashbackInProgress(region_id, flashback_start_ts) => {
                 let mut e = errorpb::FlashbackInProgress::default();
                 e.set_region_id(region_id);
+                e.set_flashback_start_ts(flashback_start_ts);
                 errorpb.set_flashback_in_progress(e);
             }
             Error::FlashbackNotPrepared(region_id) => {
                 let mut e = errorpb::FlashbackNotPrepared::default();
                 e.set_region_id(region_id);
                 errorpb.set_flashback_not_prepared(e);
+            }
+            Error::IsWitness(region_id) => {
+                let mut e = errorpb::IsWitness::default();
+                e.set_region_id(region_id);
+                errorpb.set_is_witness(e);
+            }
+            Error::MismatchPeerId {
+                request_peer_id,
+                store_peer_id,
+            } => {
+                let mut e = errorpb::MismatchPeerId::default();
+                e.set_request_peer_id(request_peer_id);
+                e.set_store_peer_id(store_peer_id);
+                errorpb.set_mismatch_peer_id(e);
+            }
+            Error::DeadlineExceeded => {
+                set_deadline_exceeded_busy_error(&mut errorpb);
+            }
+            Error::Coprocessor(CopError::RequireDelay {
+                after,
+                reason: hint,
+            }) => {
+                let mut e = errorpb::ServerIsBusy::new();
+                e.set_backoff_ms(after.as_millis() as _);
+                e.set_reason(hint);
+                errorpb.set_server_is_busy(e);
             }
             _ => {}
         };
@@ -319,8 +358,27 @@ impl ErrorCodeExt for Error {
             Error::DataIsNotReady { .. } => error_code::raftstore::DATA_IS_NOT_READY,
             Error::DeadlineExceeded => error_code::raftstore::DEADLINE_EXCEEDED,
             Error::PendingPrepareMerge => error_code::raftstore::PENDING_PREPARE_MERGE,
+            Error::IsWitness(..) => error_code::raftstore::IS_WITNESS,
+            Error::MismatchPeerId { .. } => error_code::raftstore::MISMATCH_PEER_ID,
 
             Error::Other(_) | Error::RegionNotRegistered { .. } => error_code::raftstore::UNKNOWN,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kvproto::errorpb;
+
+    use crate::Error;
+
+    #[test]
+    fn test_deadline_exceeded_error() {
+        let err: errorpb::Error = Error::DeadlineExceeded.into();
+        assert_eq!(
+            err.get_server_is_busy().reason,
+            "deadline is exceeded".to_string()
+        );
+        assert_eq!(err.get_message(), "Deadline is exceeded");
     }
 }

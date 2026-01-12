@@ -2,7 +2,7 @@
 # This script checks if all cargo targets have path specifications.
 set -euo pipefail
 
-for i in $(git ls-files | grep 'Cargo.toml' | grep -v 'fuzz/\|./profiler/'); do
+for i in $(git ls-files | grep 'Cargo.toml' | grep -v 'fuzz/'); do
     for target in "test" "bench" "bin" "example"; do
         # from "[[test]]" to the first trailing empty line
         matches=$(sed -n "/\[\[$target\]\]/,/^$/ p" $i)

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use engine_rocks::RocksSnapshot;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
-use test::{black_box, Bencher};
+use test::{Bencher, black_box};
 use test_storage::SyncTestStorageBuilder;
 use tidb_query_datatype::codec::table;
 use tikv::storage::{Engine, SnapshotStore, Statistics, Store};
@@ -72,7 +72,7 @@ fn bench_table_lookup_mvcc_incremental_get(b: &mut Bencher) {
     let (mut store, keys) = table_lookup_gen_data();
     b.iter(|| {
         for key in &keys {
-            black_box(store.incremental_get(key).unwrap());
+            black_box(store.incremental_get_entry(key, false).unwrap());
         }
     })
 }

@@ -23,8 +23,8 @@ use std::{
     num::NonZeroU64,
     ops::{Add, Deref, DerefMut},
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
@@ -237,6 +237,7 @@ macro_rules! mem_trace {
     }
 }
 
+#[derive(Default)]
 pub struct MemoryTraceGuard<T: Default> {
     item: T,
     size: usize,

@@ -1,20 +1,21 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use txn_types::Key;
+use txn_types::{CommitRole, Key};
 
 use crate::storage::{
+    ProcessResult, Snapshot, TxnStatus,
     kv::WriteData,
     lock_manager::LockManager,
     mvcc::{MvccTxn, SnapshotReader},
     txn::{
+        Error, ErrorInner, Result,
         commands::{
             Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
             WriteCommand, WriteContext, WriteResult,
         },
-        commit, Error, ErrorInner, Result,
+        commit,
     },
-    ProcessResult, Snapshot, TxnStatus,
 };
 
 command! {
@@ -23,7 +24,7 @@ command! {
     /// This should be following a [`Prewrite`](Command::Prewrite).
     Commit:
         cmd_ty => TxnStatus,
-        display => "kv::command::commit {:?} {} -> {} | {:?}", (keys, lock_ts, commit_ts, ctx),
+        display => { "kv::command::commit {:?} {} -> {} | {:?}", (keys, lock_ts, commit_ts, ctx), }
         content => {
             /// The keys affected.
             keys: Vec<Key>,
@@ -31,6 +32,11 @@ command! {
             lock_ts: txn_types::TimeStamp,
             /// The commit timestamp.
             commit_ts: txn_types::TimeStamp,
+            /// The commit role of the transaction.
+            commit_role: Option<CommitRole>,
+        }
+        in_heap => {
+            keys,
         }
 }
 
@@ -61,7 +67,13 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Commit {
         // Pessimistic txn needs key_hashes to wake up waiters
         let mut released_locks = ReleasedLocks::new();
         for k in self.keys {
-            released_locks.push(commit(&mut txn, &mut reader, k, self.commit_ts)?);
+            released_locks.push(commit(
+                &mut txn,
+                &mut reader,
+                k,
+                self.commit_ts,
+                self.commit_role,
+            )?);
         }
 
         let pr = ProcessResult::TxnStatus {
@@ -80,6 +92,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Commit {
             new_acquired_locks,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
+            known_txn_status: vec![(self.lock_ts, self.commit_ts)],
         })
     }
 }

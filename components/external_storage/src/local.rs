@@ -3,17 +3,23 @@
 use std::{
     fs::File as StdFile,
     io::{self, BufReader, Read, Seek},
+    os::unix::ffi::OsStrExt,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
 use async_trait::async_trait;
-use futures::io::AllowStdIo;
-use futures_util::stream::TryStreamExt;
+use cloud::blob::BlobObject;
+use futures::{io::AllowStdIo, prelude::Stream};
+use futures_util::{
+    future::{FutureExt, LocalBoxFuture},
+    stream::TryStreamExt,
+};
 use rand::Rng;
 use tikv_util::stream::error_stream;
 use tokio::fs::{self, File};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
+use walkdir::WalkDir;
 
 use super::ExternalStorage;
 use crate::UnpinReader;
@@ -31,6 +37,22 @@ impl LocalStorage {
     /// Create a new local storage in the given path.
     pub fn new(base: &Path) -> io::Result<LocalStorage> {
         info!("create local storage"; "base" => base.display());
+        (|| {
+            fail::fail_point!("create_local_storage_yield", |v| {
+                info!("inject create storage sleep time: {:?}ms", v);
+                let v = v.unwrap().parse::<u64>().unwrap();
+                // Using block_in_place to execute a sleep in the current runtime.
+                // This simulates a task yielding execution,
+                // and allowing other tasks to run on this thread,
+                // which helps test potential deadlock scenarios when multiple tasks
+                // compete for the same resources.
+                tokio::task::block_in_place(move || {
+                    tokio::runtime::Handle::current().block_on(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(v)).await;
+                    })
+                });
+            })
+        })();
         let base_dir = Arc::new(File::from_std(StdFile::open(base)?));
         Ok(LocalStorage {
             base: base.to_owned(),
@@ -64,7 +86,12 @@ impl ExternalStorage for LocalStorage {
         Ok(url_for(self.base.as_path()))
     }
 
-    async fn write(&self, name: &str, reader: UnpinReader, _content_length: u64) -> io::Result<()> {
+    async fn write(
+        &self,
+        name: &str,
+        reader: UnpinReader<'_>,
+        _content_length: u64,
+    ) -> io::Result<()> {
         let p = Path::new(name);
         if p.is_absolute() {
             return Err(io::Error::new(
@@ -144,6 +171,76 @@ impl ExternalStorage for LocalStorage {
         let reader = BufReader::new(file);
         let take = reader.take(len);
         Box::new(AllowStdIo::new(take)) as _
+    }
+
+    fn iter_prefix(
+        &self,
+        prefix: &str,
+    ) -> std::pin::Pin<Box<dyn Stream<Item = io::Result<BlobObject>> + '_>> {
+        let p = Path::new(prefix);
+        let (dir_name, require_prefix) = if self.base.join(p).is_dir() {
+            // Fast path: when we are going to enumerate content of a directory, just walk
+            // through this dir.
+            (p.to_owned(), None)
+        } else {
+            let dir = p.parent().unwrap_or_else(|| Path::new("")).to_owned();
+            let qualified_prefix = self.base.join(prefix).to_owned();
+            (dir, Some(qualified_prefix))
+        };
+
+        Box::pin(
+            futures::stream::iter(
+                WalkDir::new(self.base.join(dir_name))
+                    .follow_links(false)
+                    .into_iter()
+                    .filter(move |v| {
+                        let require_prefix = require_prefix.as_ref();
+                        v.as_ref().map(|d| {
+                            let is_file = d.file_type().is_file();
+                            let target_file_name = match require_prefix {
+                                None => true,
+                                // We need to compare by bytes instead of using Path::starts_with.
+                                // Because we want get ``
+                                Some(pfx) => d.path().as_os_str().as_bytes().starts_with(pfx.as_os_str().as_bytes()),
+                            };
+                            is_file && target_file_name
+                        })
+                    }.unwrap_or(false)),
+            )
+            .map_err(|err| {
+                let kind = err
+                    .io_error()
+                    .map(|err| err.kind())
+                    .unwrap_or(io::ErrorKind::Other);
+                io::Error::new(kind, err)
+            })
+            .and_then(|v| {
+                let rel = v
+                    .path()
+                    .strip_prefix(&self.base);
+                    match rel {
+                        Err(_) => futures::future::err(io::Error::other(
+                            format!("unknown: we found something not match the prefix... it is {}, our prefix is {}", v.path().display(), self.base.display()),
+                        )),
+                        Ok(item) => futures::future::ok(BlobObject{
+                            key: item.to_string_lossy().into_owned(),
+                        })
+                    }
+            })
+        )
+    }
+
+    fn delete(&self, name: &str) -> LocalBoxFuture<'_, io::Result<()>> {
+        let path = self.base.join(name);
+        async move {
+            match fs::remove_file(&path).await {
+                Err(err) if err.kind() != io::ErrorKind::NotFound => return Err(err),
+                _ => {}
+            };
+            // sync the inode.
+            self.base_dir.sync_all().await
+        }
+        .boxed_local()
     }
 }
 

@@ -1,6 +1,10 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{CfName, IterOptions, ReadOptions, CF_DEFAULT, DATA_KEY_PREFIX_LEN};
+use engine_rocks::PerfContext;
+use engine_traits::{
+    CF_DEFAULT, CfName, DATA_KEY_PREFIX_LEN, IterMetricsCollector, IterOptions, MetricsExt,
+    ReadOptions,
+};
 use txn_types::{Key, TimeStamp, Value};
 
 use crate::storage::kv::{Error, ErrorInner, Iterator, Result, Snapshot};
@@ -24,7 +28,7 @@ impl<S: Snapshot> RawMvccSnapshot<S> {
         key: &Key,
     ) -> Result<Option<Value>> {
         let mut iter_opt = IterOptions::default();
-        iter_opt.set_fill_cache(opts.map_or(true, |v| v.fill_cache()));
+        iter_opt.set_fill_cache(opts.is_none_or(|v| v.fill_cache()));
         iter_opt.use_prefix_seek();
         iter_opt.set_prefix_same_as_start(true);
         let upper_bound = key.clone().append_ts(TimeStamp::zero()).into_encoded();
@@ -40,7 +44,10 @@ impl<S: Snapshot> RawMvccSnapshot<S> {
 
 impl<S: Snapshot> Snapshot for RawMvccSnapshot<S> {
     type Iter = RawMvccIterator<S::Iter>;
-    type Ext<'a> = S::Ext<'a> where S: 'a;
+    type Ext<'a>
+        = S::Ext<'a>
+    where
+        S: 'a;
 
     fn get(&self, key: &Key) -> Result<Option<Value>> {
         self.seek_first_key_value_cf(CF_DEFAULT, None, key)
@@ -230,17 +237,37 @@ impl<I: Iterator> Iterator for RawMvccIterator<I> {
     }
 }
 
+pub struct RawMvccIterMetricsCollector;
+
+impl IterMetricsCollector for RawMvccIterMetricsCollector {
+    fn internal_delete_skipped_count(&self) -> u64 {
+        PerfContext::get().internal_delete_skipped_count()
+    }
+
+    fn internal_key_skipped_count(&self) -> u64 {
+        PerfContext::get().internal_key_skipped_count()
+    }
+}
+
+impl<I: Iterator> MetricsExt for RawMvccIterator<I> {
+    type Collector = RawMvccIterMetricsCollector;
+
+    fn metrics_collector(&self) -> Self::Collector {
+        RawMvccIterMetricsCollector {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::iter::Iterator as StdIterator;
 
     use api_version::{ApiV2, KvFormat, RawValue};
-    use engine_traits::{raw_ttl::ttl_to_expire_ts, CF_DEFAULT};
+    use engine_traits::{CF_DEFAULT, raw_ttl::ttl_to_expire_ts};
     use kvproto::kvrpcpb::Context;
     use tikv_kv::{Engine, Iterator as EngineIterator, Modify, WriteData};
 
     use super::*;
-    use crate::storage::{kv, raw::encoded::RawEncodeSnapshot, TestEngineBuilder};
+    use crate::storage::{TestEngineBuilder, kv, raw::encoded::RawEncodeSnapshot};
 
     #[test]
     fn test_raw_mvcc_snapshot() {
@@ -290,7 +317,7 @@ mod tests {
             RawEncodeSnapshot::from_snapshot(raw_mvcc_snapshot);
 
         // get_cf
-        for &(ref key, ref value, _) in &test_data[6..12] {
+        for (key, value, _) in &test_data[6..12] {
             let res = encode_snapshot.get_cf(CF_DEFAULT, &ApiV2::encode_raw_key(key, None));
             assert_eq!(res.unwrap(), Some(value.to_owned()));
         }

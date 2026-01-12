@@ -2,7 +2,7 @@
 
 use std::{
     convert::From,
-    fs::{read_dir, File},
+    fs::{File, read_dir},
     io::{BufRead, BufReader, Seek, SeekFrom},
     path::Path,
 };
@@ -38,10 +38,10 @@ struct LogIterator {
 #[allow(clippy::enum_variant_names)]
 // Allowing this is actually more understandabled when used in code.
 pub enum Error {
-    InvalidRequest(String),
-    ParseError(String),
-    SearchError(String),
-    IoError(std::io::Error),
+    InvalidRequest(#[allow(dead_code)] String),
+    ParseError(#[allow(dead_code)] String),
+    SearchError(#[allow(dead_code)] String),
+    IoError(#[allow(dead_code)] std::io::Error),
 }
 
 impl From<std::io::Error> for Error {
@@ -612,7 +612,7 @@ Some invalid logs 4: Welcome to TiKV - test-filter"#
             vec![],
         )
         .unwrap();
-        let expected = vec![
+        let expected = [
             "2019/08/23 18:09:56.387 +08:00",
             "2019/08/23 18:09:56.387 +08:00", // for invalid line
             "2019/08/23 18:09:57.387 +08:00",
@@ -639,7 +639,7 @@ Some invalid logs 4: Welcome to TiKV - test-filter"#
             vec![],
         )
         .unwrap();
-        let expected = vec![
+        let expected = [
             "2019/08/23 18:09:56.387 +08:00",
             "2019/08/23 18:09:56.387 +08:00", // for invalid line
             "2019/08/23 18:09:57.387 +08:00",
@@ -662,7 +662,7 @@ Some invalid logs 4: Welcome to TiKV - test-filter"#
             vec![],
         )
         .unwrap();
-        let expected = vec!["2019/08/23 18:09:53.387 +08:00"]
+        let expected = ["2019/08/23 18:09:53.387 +08:00"]
             .iter()
             .map(|s| timestamp(s))
             .collect::<Vec<i64>>();
@@ -680,7 +680,7 @@ Some invalid logs 4: Welcome to TiKV - test-filter"#
                 vec![],
             )
             .unwrap();
-            let expected = vec![
+            let expected = [
                 "2019/08/23 18:09:58.387 +08:00",
                 "2019/08/23 18:09:59.387 +08:00",
                 "2019/08/23 18:10:06.387 +08:00",
@@ -704,7 +704,7 @@ Some invalid logs 4: Welcome to TiKV - test-filter"#
             vec![regex::Regex::new(".*test-filter.*").unwrap()],
         )
         .unwrap();
-        let expected = vec![
+        let expected = [
             "2019/08/23 18:09:58.387 +08:00",
             "2019/08/23 18:10:06.387 +08:00", // for invalid line
         ]
@@ -783,7 +783,7 @@ Some invalid logs 2: Welcome to TiKV - test-filter"#
         req.set_end_time(i64::MAX);
         req.set_levels(vec![LogLevel::Warn as _]);
         req.set_patterns(vec![".*test-filter.*".to_string()].into());
-        let expected = vec![
+        let expected = [
             "2019/08/23 18:09:58.387 +08:00",
             "2019/08/23 18:11:58.387 +08:00",
             "2019/08/23 18:11:59.387 +08:00", // for invalid line
@@ -796,9 +796,7 @@ Some invalid logs 2: Welcome to TiKV - test-filter"#
             s.collect::<Vec<SearchLogResponse>>()
                 .await
                 .into_iter()
-                .map(|mut resp| resp.take_messages().into_iter())
-                .into_iter()
-                .flatten()
+                .flat_map(|mut resp| resp.take_messages().into_iter())
                 .map(|msg| msg.get_time())
                 .collect::<Vec<i64>>()
         });

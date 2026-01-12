@@ -32,7 +32,7 @@ impl Debug for RocksDbVector {
     }
 }
 
-impl<'a> PartialEq<&'a [u8]> for RocksDbVector {
+impl PartialEq<&[u8]> for RocksDbVector {
     fn eq(&self, rhs: &&[u8]) -> bool {
         **rhs == **self
     }

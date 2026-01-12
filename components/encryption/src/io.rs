@@ -1,12 +1,14 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    io::{Error as IoError, ErrorKind, Read, Result as IoResult, Seek, SeekFrom, Write},
+    io::{Error as IoError, Read, Result as IoResult, Seek, SeekFrom, Write},
     pin::Pin,
+    task::ready,
 };
 
 use file_system::File;
 use futures_util::{
+    AsyncWrite,
     io::AsyncRead,
     task::{Context, Poll},
 };
@@ -81,6 +83,10 @@ impl<R> DecrypterReader<R> {
             Mode::Decrypt,
             iv,
         )?))
+    }
+
+    pub fn inner(&self) -> &R {
+        &self.0.reader
     }
 }
 
@@ -170,6 +176,36 @@ impl EncrypterWriter<File> {
     }
 }
 
+// SAFETY: all callings to `Pin::map_unchecked_mut` are trivial projection.
+impl<W: AsyncWrite> AsyncWrite for DecrypterWriter<W> {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<IoResult<usize>> {
+        unsafe { self.map_unchecked_mut(|this| &mut this.0) }.poll_write(cx, buf)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<IoResult<()>> {
+        unsafe { self.map_unchecked_mut(|this| &mut this.0) }.poll_flush(cx)
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<IoResult<()>> {
+        unsafe { self.map_unchecked_mut(|this| &mut this.0) }.poll_close(cx)
+    }
+}
+
+// SAFETY: all callings to `Pin::map_unchecked_mut` are trivial projection.
+impl<W: AsyncWrite> AsyncWrite for EncrypterWriter<W> {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<IoResult<usize>> {
+        unsafe { self.map_unchecked_mut(|this| &mut this.0) }.poll_write(cx, buf)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<IoResult<()>> {
+        unsafe { self.map_unchecked_mut(|this| &mut this.0) }.poll_flush(cx)
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<IoResult<()>> {
+        unsafe { self.map_unchecked_mut(|this| &mut this.0) }.poll_close(cx)
+    }
+}
+
 /// Decrypt content as data being written.
 pub struct DecrypterWriter<W>(CrypterWriter<W>);
 
@@ -251,7 +287,11 @@ impl<R: Read> Read for CrypterReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {
         let count = self.reader.read(buf)?;
         if let Some(crypter) = self.crypter.as_mut() {
-            crypter.do_crypter_in_place(&mut buf[..count])?;
+            if let Err(e) = crypter.do_crypter_in_place(&mut buf[..count]) {
+                // FIXME: We can't recover from this without rollback `reader` to old offset.
+                // But that requires `Seek` which requires a wider refactor of user code.
+                panic!("`do_crypter_in_place` failed: {:?}", e);
+            }
         }
         Ok(count)
     }
@@ -283,7 +323,9 @@ impl<R: AsyncRead + Unpin> AsyncRead for CrypterReader<R> {
         };
         if let Some(crypter) = inner.crypter.as_mut() {
             if let Err(e) = crypter.do_crypter_in_place(&mut buf[..read_count]) {
-                return Poll::Ready(Err(e));
+                // FIXME: We can't recover from this without rollback `reader` to old offset.
+                // But that requires `Seek` which requires a wider refactor of user code.
+                panic!("`do_crypter_in_place` failed: {:?}", e);
             }
         }
         Poll::Ready(Ok(read_count))
@@ -330,7 +372,10 @@ impl<W: Write> Write for CrypterWriter<W> {
         if let Some(crypter) = self.crypter.as_mut() {
             let crypted = crypter.do_crypter(buf)?;
             debug_assert!(crypted.len() == buf.len());
-            self.writer.write(crypted)
+            let r = self.writer.write(crypted);
+            let missing = buf.len() - r.as_ref().unwrap_or(&0);
+            crypter.lazy_reset_crypter(crypter.offset - missing as u64);
+            r
         } else {
             self.writer.write(buf)
         }
@@ -350,6 +395,64 @@ impl<W: Seek> Seek for CrypterWriter<W> {
             crypter.reset_crypter(offset)?;
         }
         Ok(offset)
+    }
+}
+
+impl<W: AsyncWrite> AsyncWrite for CrypterWriter<W> {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<IoResult<usize>> {
+        // SAFETY: trivial projection.
+        let (mut writer, crypt) = unsafe {
+            let this = self.get_unchecked_mut();
+            (Pin::new_unchecked(&mut this.writer), &mut this.crypter)
+        };
+        let crypter = match crypt.as_mut() {
+            Some(crypter) => crypter,
+            None => {
+                return writer.poll_write(cx, buf);
+            }
+        };
+
+        // All encrypted content must be written. The write uses an internal buffer to
+        // store the encrypted content. For async writing, the write may be
+        // suspended. We need a status to record whether we have already encrypted
+        // something.
+        loop {
+            match crypter.async_write {
+                AsyncWriteState::Consuming { count } => {
+                    let res = ready!(writer.as_mut().poll_write(cx, &crypter.buffer[..count]));
+                    crypter.async_write = AsyncWriteState::Idle;
+
+                    // We need to reset the status on failed or partial write.
+                    let n = *res.as_ref().unwrap_or(&0);
+                    if n < count {
+                        let missing = count - n;
+                        let new_offset = crypter.offset - missing as u64;
+                        // Match the behavior of sync `write`. Rollback offset for partital writes.
+                        // NOTE: it is also possible to have the semantic of `write_all` or
+                        // `BufWriter`.
+                        crypter.lazy_reset_crypter(new_offset);
+                    }
+                    res?;
+                    return Ok(n).into();
+                }
+                AsyncWriteState::Idle => {
+                    let buf = crypter.do_crypter(buf)?;
+                    let count = buf.len();
+                    crypter.async_write = AsyncWriteState::Consuming { count };
+                }
+            }
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<IoResult<()>> {
+        let writer = unsafe { Pin::new_unchecked(&mut self.get_unchecked_mut().writer) };
+        AsyncWrite::poll_flush(writer, cx)
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<IoResult<()>> {
+        // SAFETY: trivial projection.
+        let writer = unsafe { Pin::new_unchecked(&mut self.get_unchecked_mut().writer) };
+        AsyncWrite::poll_close(writer, cx)
     }
 }
 
@@ -377,7 +480,18 @@ pub fn create_aes_ctr_crypter(
         EncryptionMethod::Aes128Ctr => OCipher::aes_128_ctr(),
         EncryptionMethod::Aes192Ctr => OCipher::aes_192_ctr(),
         EncryptionMethod::Aes256Ctr => OCipher::aes_256_ctr(),
-        EncryptionMethod::Sm4Ctr => OCipher::sm4_ctr(),
+        EncryptionMethod::Sm4Ctr => {
+            #[cfg(feature = "sm4")]
+            {
+                OCipher::sm4_ctr()
+            }
+            #[cfg(not(feature = "sm4"))]
+            {
+                return Err(box_err!(
+                    "sm4-ctr is not supported by dynamically linked openssl"
+                ));
+            }
+        }
     };
     let crypter = OCrypter::new(cipher, mode, key, Some(iv.as_slice()))?;
     Ok((cipher, crypter))
@@ -388,10 +502,22 @@ struct CrypterCore {
     key: Vec<u8>,
     mode: Mode,
     initial_iv: Iv,
+
+    // Used to ensure the atomicity of operation over a chunk of data. Only advance it when
+    // operation succeeds.
+    offset: u64,
     crypter: Option<OCrypter>,
     block_size: usize,
 
     buffer: Vec<u8>,
+
+    async_write: AsyncWriteState,
+}
+
+#[derive(PartialEq, Eq, Debug)]
+enum AsyncWriteState {
+    Consuming { count: usize },
+    Idle,
 }
 
 impl CrypterCore {
@@ -401,10 +527,12 @@ impl CrypterCore {
             method,
             key: key.to_owned(),
             mode,
+            initial_iv: iv,
+            offset: 0,
             crypter: None,
             block_size: 0,
-            initial_iv: iv,
             buffer: Vec::new(),
+            async_write: AsyncWriteState::Idle,
         })
     }
 
@@ -414,6 +542,17 @@ impl CrypterCore {
         self.buffer.resize(size + self.block_size, 0);
     }
 
+    // Delay the reset to future operations that use crypter. Guarantees those
+    // operations can only succeed after crypter is properly reset.
+    pub fn lazy_reset_crypter(&mut self, offset: u64) {
+        if self.offset != offset {
+            self.crypter.take();
+            self.offset = offset;
+        }
+    }
+
+    // It has the same guarantee as `lazy_reset_crypter`. In addition, it attempts
+    // to reset immediately and returns any error.
     pub fn reset_crypter(&mut self, offset: u64) -> IoResult<()> {
         let mut iv = self.initial_iv;
         iv.add_offset(offset / AES_BLOCK_SIZE as u64)?;
@@ -424,14 +563,13 @@ impl CrypterCore {
         self.reset_buffer(partial_offset);
         let crypter_count = crypter.update(&partial_block, &mut self.buffer)?;
         if crypter_count != partial_offset {
-            return Err(IoError::new(
-                ErrorKind::Other,
-                format!(
-                    "crypter output size mismatch, expect {} vs actual {}",
-                    partial_offset, crypter_count,
-                ),
-            ));
+            self.lazy_reset_crypter(offset);
+            return Err(IoError::other(format!(
+                "crypter output size mismatch, expect {} vs actual {}",
+                partial_offset, crypter_count,
+            )));
         }
+        self.offset = offset;
         self.crypter = Some(crypter);
         self.block_size = cipher.block_size();
         Ok(())
@@ -443,7 +581,7 @@ impl CrypterCore {
     /// this code needs to be updated.
     pub fn do_crypter_in_place(&mut self, buf: &mut [u8]) -> IoResult<()> {
         if self.crypter.is_none() {
-            self.reset_crypter(0)?;
+            self.reset_crypter(self.offset)?;
         }
         let count = buf.len();
         self.reset_buffer(std::cmp::min(count, MAX_INPLACE_CRYPTION_SIZE));
@@ -454,38 +592,44 @@ impl CrypterCore {
             debug_assert!(self.buffer.len() >= target - encrypted);
             let crypter_count = crypter.update(&buf[encrypted..target], &mut self.buffer)?;
             if crypter_count != target - encrypted {
-                return Err(IoError::new(
-                    ErrorKind::Other,
-                    format!(
-                        "crypter output size mismatch, expect {} vs actual {}",
-                        target - encrypted,
-                        crypter_count,
-                    ),
-                ));
+                self.crypter.take();
+                return Err(IoError::other(format!(
+                    "crypter output size mismatch, expect {} vs actual {}",
+                    target - encrypted,
+                    crypter_count,
+                )));
             }
             buf[encrypted..target].copy_from_slice(&self.buffer[..crypter_count]);
             encrypted += crypter_count;
         }
+        self.offset += count as u64;
         Ok(())
     }
 
     pub fn do_crypter(&mut self, buf: &[u8]) -> IoResult<&[u8]> {
+        assert_eq!(
+            self.async_write,
+            AsyncWriteState::Idle,
+            "unreachable: try to override the encrypted content \
+            when there is pending async writing. \
+            (canceled future? concurrency call to `write`?)"
+        );
+
         if self.crypter.is_none() {
-            self.reset_crypter(0)?;
+            self.reset_crypter(self.offset)?;
         }
         let count = buf.len();
         self.reset_buffer(count);
         let crypter = self.crypter.as_mut().unwrap();
         let crypter_count = crypter.update(buf, &mut self.buffer)?;
         if crypter_count != count {
-            return Err(IoError::new(
-                ErrorKind::Other,
-                format!(
-                    "crypter output size mismatch, expect {} vs actual {}",
-                    count, crypter_count,
-                ),
-            ));
+            self.crypter.take();
+            return Err(IoError::other(format!(
+                "crypter output size mismatch, expect {} vs actual {}",
+                count, crypter_count,
+            )));
         }
+        self.offset += count as u64;
         Ok(&self.buffer[..count])
     }
 
@@ -505,20 +649,93 @@ impl CrypterCore {
 
 #[cfg(test)]
 mod tests {
-    use std::{cmp::min, io::Cursor};
+    use std::{cmp::min, io::Cursor, task::Waker};
 
     use byteorder::{BigEndian, ByteOrder};
-    use futures::AsyncReadExt;
-    use rand::{rngs::OsRng, RngCore};
+    use matches::assert_matches;
+    use openssl::rand;
 
     use super::*;
-    use crate::crypter;
+    use crate::manager::generate_data_key;
 
-    fn generate_data_key(method: EncryptionMethod) -> Vec<u8> {
-        let key_length = crypter::get_method_key_length(method);
-        let mut key = vec![0; key_length];
-        OsRng.fill_bytes(&mut key);
-        key
+    struct DecoratedCursor {
+        cursor: Cursor<Vec<u8>>,
+        read_size: usize,
+        inject_write_err: Option<Box<dyn FnMut() -> std::io::Result<()>>>,
+    }
+
+    impl DecoratedCursor {
+        fn new(buff: Vec<u8>, read_size: usize) -> DecoratedCursor {
+            Self {
+                cursor: Cursor::new(buff.to_vec()),
+                read_size,
+                inject_write_err: None,
+            }
+        }
+
+        fn into_inner(self) -> Vec<u8> {
+            self.cursor.into_inner()
+        }
+    }
+
+    impl AsyncRead for DecoratedCursor {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+            buf: &mut [u8],
+        ) -> Poll<IoResult<usize>> {
+            let len = min(self.read_size, buf.len());
+            Poll::Ready(self.cursor.read(&mut buf[..len]))
+        }
+    }
+
+    impl AsyncWrite for DecoratedCursor {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<IoResult<usize>> {
+            if let Some(err_func) = &mut self.inject_write_err {
+                err_func()?;
+            }
+            let max_size = self.read_size;
+            let n = self
+                .cursor
+                .get_mut()
+                .write(&buf[..buf.len().min(max_size)])?;
+            Ok(n).into()
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<IoResult<()>> {
+            Ok(()).into()
+        }
+
+        fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<IoResult<()>> {
+            Ok(()).into()
+        }
+    }
+
+    impl Read for DecoratedCursor {
+        fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {
+            let len = min(self.read_size, buf.len());
+            self.cursor.read(&mut buf[..len])
+        }
+    }
+
+    impl Write for DecoratedCursor {
+        fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
+            let len = min(self.read_size, buf.len());
+            self.cursor.write(&buf[0..len])
+        }
+        fn flush(&mut self) -> IoResult<()> {
+            self.cursor.flush()
+        }
+    }
+
+    impl Seek for DecoratedCursor {
+        fn seek(&mut self, s: SeekFrom) -> IoResult<u64> {
+            self.cursor.seek(s)
+        }
     }
 
     #[test]
@@ -531,7 +748,7 @@ mod tests {
             EncryptionMethod::Sm4Ctr,
         ];
         let ivs = [
-            Iv::new_ctr(),
+            Iv::new_ctr().unwrap(),
             // Iv overflow
             Iv::from_slice(&{
                 let mut v = vec![0; 16];
@@ -548,28 +765,34 @@ mod tests {
         ];
         for method in methods {
             for iv in ivs {
-                let key = generate_data_key(method);
+                let (_, key) = generate_data_key(method).unwrap();
 
                 let mut plaintext = vec![0; 1024];
-                OsRng.fill_bytes(&mut plaintext);
-                let buf = Vec::with_capacity(1024);
-                let mut encrypter = EncrypterWriter::new(buf, method, &key, iv).unwrap();
+                rand::rand_bytes(&mut plaintext).unwrap();
+                let mut encrypter = EncrypterWriter::new(
+                    DecoratedCursor::new(plaintext.clone(), 1),
+                    method,
+                    &key,
+                    iv,
+                )
+                .unwrap();
                 encrypter.write_all(&plaintext).unwrap();
 
-                let buf = encrypter.finalize().unwrap();
+                let encrypted = encrypter.finalize().unwrap().into_inner();
                 // Make sure it's properly encrypted.
                 if method != EncryptionMethod::Plaintext {
-                    assert_ne!(buf, plaintext);
+                    assert_ne!(encrypted, plaintext);
                 } else {
-                    assert_eq!(buf, plaintext);
+                    assert_eq!(encrypted, plaintext);
                 }
-                let buf_reader = std::io::Cursor::new(buf);
-                let mut decrypter = DecrypterReader::new(buf_reader, method, &key, iv).unwrap();
+                let mut decrypter =
+                    DecrypterReader::new(DecoratedCursor::new(encrypted, 1), method, &key, iv)
+                        .unwrap();
                 let mut piece = vec![0; 5];
                 // Read the first two blocks randomly.
                 for i in 0..31 {
                     assert_eq!(decrypter.seek(SeekFrom::Start(i as u64)).unwrap(), i as u64);
-                    assert_eq!(decrypter.read(&mut piece).unwrap(), piece.len());
+                    decrypter.read_exact(&mut piece).unwrap();
                     assert_eq!(piece, plaintext[i..i + piece.len()]);
                 }
                 // Read the rest of the data sequentially.
@@ -579,13 +802,14 @@ mod tests {
                     cursor as u64
                 );
                 while cursor + piece.len() <= plaintext.len() {
-                    assert_eq!(decrypter.read(&mut piece).unwrap(), piece.len());
+                    decrypter.read_exact(&mut piece).unwrap();
                     assert_eq!(piece, plaintext[cursor..cursor + piece.len()]);
                     cursor += piece.len();
                 }
                 let tail = plaintext.len() - cursor;
-                assert_eq!(decrypter.read(&mut piece).unwrap(), tail);
-                assert_eq!(piece[..tail], plaintext[cursor..cursor + tail]);
+                let mut short_piece = vec![0; tail];
+                decrypter.read_exact(&mut short_piece).unwrap();
+                assert_eq!(short_piece[..], plaintext[cursor..cursor + tail]);
             }
         }
     }
@@ -600,14 +824,15 @@ mod tests {
             EncryptionMethod::Sm4Ctr,
         ];
         let mut plaintext = vec![0; 10240];
-        OsRng.fill_bytes(&mut plaintext);
+        rand::rand_bytes(&mut plaintext).unwrap();
         let offsets = [1024, 1024 + 1, 10240 - 1, 10240, 10240 + 1];
         let sizes = [1024, 10240];
         for method in methods {
-            let key = generate_data_key(method);
-            let readable_text = std::io::Cursor::new(plaintext.clone());
-            let iv = Iv::new_ctr();
-            let encrypter = EncrypterReader::new(readable_text, method, &key, iv).unwrap();
+            let (_, key) = generate_data_key(method).unwrap();
+            let iv = Iv::new_ctr().unwrap();
+            let encrypter =
+                EncrypterReader::new(DecoratedCursor::new(plaintext.clone(), 1), method, &key, iv)
+                    .unwrap();
             let mut decrypter = DecrypterReader::new(encrypter, method, &key, iv).unwrap();
             let mut read = vec![0; 10240];
             for offset in offsets {
@@ -617,7 +842,7 @@ mod tests {
                         offset as u64
                     );
                     let actual_size = std::cmp::min(plaintext.len().saturating_sub(offset), size);
-                    assert_eq!(decrypter.read(&mut read[..size]).unwrap(), actual_size);
+                    decrypter.read_exact(&mut read[..actual_size]).unwrap();
                     if actual_size > 0 {
                         assert_eq!(read[..actual_size], plaintext[offset..offset + actual_size]);
                     }
@@ -636,19 +861,20 @@ mod tests {
             EncryptionMethod::Sm4Ctr,
         ];
         let mut plaintext = vec![0; 10240];
-        OsRng.fill_bytes(&mut plaintext);
+        rand::rand_bytes(&mut plaintext).unwrap();
         let offsets = [1024, 1024 + 1, 10240 - 1];
         let sizes = [1024, 8000];
         let written = vec![0; 10240];
         for method in methods {
-            let key = generate_data_key(method);
-            let writable_text = std::io::Cursor::new(written.clone());
-            let iv = Iv::new_ctr();
-            let encrypter = EncrypterWriter::new(writable_text, method, &key, iv).unwrap();
+            let (_, key) = generate_data_key(method).unwrap();
+            let iv = Iv::new_ctr().unwrap();
+            let encrypter =
+                EncrypterWriter::new(DecoratedCursor::new(written.clone(), 1), method, &key, iv)
+                    .unwrap();
             let mut decrypter = DecrypterWriter::new(encrypter, method, &key, iv).unwrap();
             // First write full data.
             assert_eq!(decrypter.seek(SeekFrom::Start(0)).unwrap(), 0);
-            assert_eq!(decrypter.write(&plaintext).unwrap(), plaintext.len());
+            decrypter.write_all(&plaintext).unwrap();
             // Then overwrite specific locations.
             for offset in offsets {
                 for size in sizes {
@@ -657,10 +883,9 @@ mod tests {
                         offset as u64
                     );
                     let size = std::cmp::min(plaintext.len().saturating_sub(offset), size);
-                    assert_eq!(
-                        decrypter.write(&plaintext[offset..offset + size]).unwrap(),
-                        size
-                    );
+                    decrypter
+                        .write_all(&plaintext[offset..offset + size])
+                        .unwrap();
                 }
             }
             let written = decrypter
@@ -673,33 +898,8 @@ mod tests {
         }
     }
 
-    struct MockCursorReader {
-        cursor: Cursor<Vec<u8>>,
-        read_maxsize_once: usize,
-    }
-
-    impl MockCursorReader {
-        fn new(buff: &mut [u8], size_once: usize) -> MockCursorReader {
-            Self {
-                cursor: Cursor::new(buff.to_vec()),
-                read_maxsize_once: size_once,
-            }
-        }
-    }
-
-    impl AsyncRead for MockCursorReader {
-        fn poll_read(
-            mut self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-            buf: &mut [u8],
-        ) -> Poll<IoResult<usize>> {
-            let len = min(self.read_maxsize_once, buf.len());
-            let r = self.cursor.read(&mut buf[..len]).unwrap();
-            Poll::Ready(IoResult::Ok(r))
-        }
-    }
-
     async fn test_poll_read() {
+        use futures::AsyncReadExt;
         let methods = [
             EncryptionMethod::Plaintext,
             EncryptionMethod::Aes128Ctr,
@@ -707,47 +907,48 @@ mod tests {
             EncryptionMethod::Aes256Ctr,
             EncryptionMethod::Sm4Ctr,
         ];
-        let iv = Iv::new_ctr();
+        let iv = Iv::new_ctr().unwrap();
         let mut plain_text = vec![0; 10240];
-        OsRng.fill_bytes(&mut plain_text);
+        rand::rand_bytes(&mut plain_text).unwrap();
 
         for method in methods {
-            let key = generate_data_key(method);
+            let (_, key) = generate_data_key(method).unwrap();
             // encrypt plaintext into encrypt_text
             let read_once = 16;
             let mut encrypt_reader = EncrypterReader::new(
-                MockCursorReader::new(&mut plain_text[..], read_once),
+                DecoratedCursor::new(plain_text.clone(), read_once),
                 method,
                 &key[..],
                 iv,
             )
             .unwrap();
-            let mut encrypt_text = [0; 20480];
+            let mut encrypt_text = vec![0; 20480];
             let mut encrypt_read_len = 0;
 
             loop {
-                let read_len = encrypt_reader
-                    .read(&mut encrypt_text[encrypt_read_len..])
-                    .await
-                    .unwrap();
+                let read_len =
+                    AsyncReadExt::read(&mut encrypt_reader, &mut encrypt_text[encrypt_read_len..])
+                        .await
+                        .unwrap();
                 if read_len == 0 {
                     break;
                 }
                 encrypt_read_len += read_len;
             }
 
+            encrypt_text.truncate(encrypt_read_len);
             if method == EncryptionMethod::Plaintext {
-                assert_eq!(encrypt_text[..encrypt_read_len], plain_text);
+                assert_eq!(encrypt_text, plain_text);
             } else {
-                assert_ne!(encrypt_text[..encrypt_read_len], plain_text);
+                assert_ne!(encrypt_text, plain_text);
             }
 
             // decrypt encrypt_text into decrypt_text
-            let mut decrypt_text = [0; 20480];
+            let mut decrypt_text = vec![0; 20480];
             let mut decrypt_read_len = 0;
             let read_once = 20;
             let mut decrypt_reader = DecrypterReader::new(
-                MockCursorReader::new(&mut encrypt_text[..encrypt_read_len], read_once),
+                DecoratedCursor::new(encrypt_text.clone(), read_once),
                 method,
                 &key[..],
                 iv,
@@ -755,22 +956,165 @@ mod tests {
             .unwrap();
 
             loop {
-                let read_len = decrypt_reader
-                    .read(&mut decrypt_text[decrypt_read_len..])
-                    .await
-                    .unwrap();
+                let read_len =
+                    AsyncReadExt::read(&mut decrypt_reader, &mut decrypt_text[decrypt_read_len..])
+                        .await
+                        .unwrap();
                 if read_len == 0 {
                     break;
                 }
                 decrypt_read_len += read_len;
             }
 
-            assert_eq!(decrypt_text[..decrypt_read_len], plain_text);
+            decrypt_text.truncate(decrypt_read_len);
+            assert_eq!(decrypt_text, plain_text);
+        }
+    }
+
+    async fn test_async_write() {
+        use futures_util::AsyncWriteExt;
+
+        let methods = [
+            EncryptionMethod::Plaintext,
+            EncryptionMethod::Aes128Ctr,
+            EncryptionMethod::Aes192Ctr,
+            EncryptionMethod::Aes256Ctr,
+            #[cfg(feature = "sm4")]
+            EncryptionMethod::Sm4Ctr,
+        ];
+        let iv = Iv::new_ctr().unwrap();
+        let size = 128;
+        let mut plain_text = vec![0; size];
+        rand::rand_bytes(&mut plain_text).unwrap();
+
+        for method in methods {
+            let key = generate_data_key(method).unwrap().1;
+            let pipe = DecoratedCursor::new(vec![], 17);
+            let mut writer = EncrypterWriter::new(pipe, method, &key, iv).unwrap();
+            AsyncWriteExt::write_all(&mut writer, plain_text.as_slice())
+                .await
+                .unwrap();
+            futures_util::AsyncWriteExt::flush(&mut writer)
+                .await
+                .unwrap();
+            let enc_buf = writer.finalize().unwrap().cursor.into_inner();
+            if method == EncryptionMethod::Plaintext {
+                assert_eq!(enc_buf, plain_text);
+            } else {
+                assert_ne!(enc_buf, plain_text);
+            }
+            let dec_pipe = DecoratedCursor::new(vec![], 15);
+            let mut writer = DecrypterWriter::new(dec_pipe, method, &key, iv).unwrap();
+            AsyncWriteExt::write_all(&mut writer, enc_buf.as_slice())
+                .await
+                .unwrap();
+            futures_util::AsyncWriteExt::flush(&mut writer)
+                .await
+                .unwrap();
+            let dec_buf = writer.finalize().unwrap().cursor.into_inner();
+            assert_eq!(plain_text, dec_buf);
         }
     }
 
     #[test]
-    fn test_async_read() {
-        futures::executor::block_on(test_poll_read());
+    #[should_panic(
+        expected = "try to override the encrypted content when there is pending async writing."
+    )]
+    fn test_abort_poll() {
+        struct YieldOnce<R>(R, bool);
+        impl<R: AsyncWrite + Unpin> AsyncWrite for YieldOnce<R> {
+            fn poll_write(
+                self: Pin<&mut Self>,
+                cx: &mut Context<'_>,
+                buf: &[u8],
+            ) -> Poll<IoResult<usize>> {
+                if self.1 {
+                    self.get_mut().1 = false;
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                } else {
+                    Pin::new(&mut self.get_mut().0).poll_write(cx, buf)
+                }
+            }
+
+            fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<IoResult<()>> {
+                Pin::new(&mut self.get_mut().0).poll_flush(cx)
+            }
+
+            fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<IoResult<()>> {
+                Pin::new(&mut self.get_mut().0).poll_close(cx)
+            }
+        }
+        impl<R: Write> Write for YieldOnce<R> {
+            fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
+                self.0.write(buf)
+            }
+
+            fn flush(&mut self) -> IoResult<()> {
+                Ok(())
+            }
+        }
+        impl<R> YieldOnce<R> {
+            fn new(r: R) -> Self {
+                Self(r, true)
+            }
+        }
+
+        let iv = Iv::new_ctr().unwrap();
+        let method = EncryptionMethod::Aes256Ctr;
+        let size = 128;
+        let plain_text = vec![0; size];
+        let buf = DecoratedCursor::new(vec![], size);
+        let key = generate_data_key(method).unwrap().1;
+        let mut wt = EncrypterWriter::new(YieldOnce::new(buf), method, &key, iv).unwrap();
+        let waker = Waker::noop();
+        let mut cx = Context::from_waker(waker);
+        assert_matches!(
+            Pin::new(&mut wt).poll_write(&mut cx, &plain_text[..size / 2]),
+            Poll::Pending
+        );
+        std::io::Write::write(&mut wt.0, &plain_text[size / 2..]).unwrap();
+    }
+
+    async fn test_failure() {
+        use futures_util::AsyncWriteExt;
+
+        let methods = [
+            EncryptionMethod::Plaintext,
+            EncryptionMethod::Aes128Ctr,
+            EncryptionMethod::Aes192Ctr,
+            EncryptionMethod::Aes256Ctr,
+            #[cfg(feature = "sm4")]
+            EncryptionMethod::Sm4Ctr,
+        ];
+        let iv = Iv::new_ctr().unwrap();
+        let size = 128;
+        let mut plain_text = vec![0; size];
+        rand::rand_bytes(&mut plain_text).unwrap();
+
+        for method in methods {
+            let key = generate_data_key(method).unwrap().1;
+            let mut pipe = DecoratedCursor::new(vec![], 17);
+            pipe.inject_write_err = Some(Box::new(move || {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "injected error",
+                ))
+            }));
+            let mut writer = EncrypterWriter::new(pipe, method, &key, iv).unwrap();
+            let err = AsyncWriteExt::write_all(&mut writer, plain_text.as_slice())
+                .await
+                .unwrap_err();
+            assert_eq!(err.to_string(), "injected error")
+        }
+    }
+
+    #[test]
+    fn test_async() {
+        futures::executor::block_on(async {
+            test_poll_read().await;
+            test_async_write().await;
+            test_failure().await;
+        });
     }
 }

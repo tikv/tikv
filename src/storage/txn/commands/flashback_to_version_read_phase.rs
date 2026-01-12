@@ -1,22 +1,23 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use std::ops::Bound;
 
-// #[PerformanceCriticalPath]
 use txn_types::{Key, Lock, TimeStamp};
 
 use crate::storage::{
+    Context, ScanMode, Snapshot, Statistics,
+    metrics::{CommandKind, KV_COMMAND_COUNTER_VEC_STATIC},
     mvcc::MvccReader,
     txn::{
+        Error, ErrorInner, Result,
         actions::flashback_to_version::{check_flashback_commit, get_first_user_key},
         commands::{
             Command, CommandExt, FlashbackToVersion, ProcessResult, ReadCommand, TypedCommand,
         },
         flashback_to_version_read_lock, flashback_to_version_read_write,
         sched_pool::tls_collect_keyread_histogram_vec,
-        Error, ErrorInner, Result,
     },
-    Context, ScanMode, Snapshot, Statistics,
 };
 
 #[derive(Debug)]
@@ -83,7 +84,10 @@ pub fn new_flashback_write_cmd(
 command! {
     FlashbackToVersionReadPhase:
         cmd_ty => (),
-        display => "kv::command::flashback_to_version_read_phase -> {} | {} {} | {:?}", (version, start_ts, commit_ts, ctx),
+        display => {
+            "kv::command::flashback_to_version_read_phase -> {} | {} {} | {:?}",
+            (version, start_ts, commit_ts, ctx),
+        }
         content => {
             start_ts: TimeStamp,
             commit_ts: TimeStamp,
@@ -92,11 +96,14 @@ command! {
             end_key: Option<Key>,
             state: FlashbackToVersionState,
         }
+        in_heap => {
+            start_key,
+            end_key,
+        }
 }
 
 impl CommandExt for FlashbackToVersionReadPhase {
     ctx!();
-    tag!(flashback_to_version);
     request_type!(KvFlashbackToVersion);
     property!(readonly);
     gen_lock!(empty);
@@ -104,27 +111,56 @@ impl CommandExt for FlashbackToVersionReadPhase {
     fn write_bytes(&self) -> usize {
         0
     }
+
+    fn tag(&self) -> CommandKind {
+        match self.state {
+            FlashbackToVersionState::RollbackLock { .. } => {
+                CommandKind::flashback_to_version_read_lock
+            }
+            FlashbackToVersionState::FlashbackWrite { .. } => {
+                CommandKind::flashback_to_version_read_write
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn incr_cmd_metric(&self) {
+        match self.state {
+            FlashbackToVersionState::RollbackLock { .. } => {
+                KV_COMMAND_COUNTER_VEC_STATIC
+                    .flashback_to_version_read_lock
+                    .inc();
+            }
+            FlashbackToVersionState::FlashbackWrite { .. } => {
+                KV_COMMAND_COUNTER_VEC_STATIC
+                    .flashback_to_version_read_write
+                    .inc();
+            }
+            _ => unreachable!(),
+        }
+    }
 }
 
 /// The whole flashback progress contains four phases:
 ///   1. [PrepareFlashback] RollbackLock phase:
-///     - Scan all locks.
-///     - Rollback all these locks.
+///      - Scan all locks.
+///      - Rollback all these locks.
 ///   2. [PrepareFlashback] Prewrite phase:
-///     - Prewrite the first user key after `self.start_key` specifically to
-///       prevent the `resolved_ts` from advancing.
+///      - Prewrite the first user key after `self.start_key` specifically to
+///        prevent the `resolved_ts` from advancing.
 ///   3. [FinishFlashback] FlashbackWrite phase:
-///     - Scan all the latest writes and their corresponding values at
-///       `self.version`.
-///     - Write the old MVCC version writes again for all these keys with
-///       `self.commit_ts` excluding the first user key after `self.start_key`.
+///      - Scan all the latest writes and their corresponding values at
+///        `self.version`.
+///      - Write the old MVCC version writes again for all these keys with
+///        `self.commit_ts` excluding the first user key after `self.start_key`.
 ///   4. [FinishFlashback] Commit phase:
-///     - Commit the first user key after `self.start_key` we write at the
-///       second phase to finish the flashback.
+///      - Commit the first user key after `self.start_key` we write at the
+///        second phase to finish the flashback.
 impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
     fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult> {
         let tag = self.tag().get_str();
         let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &self.ctx);
+        reader.set_allow_in_flashback(true);
         // Filter out the SST that does not have a newer version than `self.version` in
         // `CF_WRITE`, i.e, whose latest `commit_ts` <= `self.version` in the later
         // scan. By doing this, we can only flashback those keys that have version
@@ -213,6 +249,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                         &start_key,
                         self.start_ts,
                         self.commit_ts,
+                        self.ctx.get_region_id(),
                     )? {
                         statistics.add(&reader.statistics);
                         return Ok(ProcessResult::Res);

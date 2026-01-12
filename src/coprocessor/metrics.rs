@@ -4,10 +4,12 @@ use std::{cell::RefCell, mem, sync::Arc};
 
 use collections::HashMap;
 use kvproto::{metapb, pdpb::QueryKind};
-use pd_client::BucketMeta;
+use lazy_static::lazy_static;
+use pd_client::{BucketMeta, RegionWriteCfCopDetail};
 use prometheus::*;
 use prometheus_static_metric::*;
-use raftstore::store::{util::build_key_range, ReadStats};
+use raftstore::store::{ReadStats, util::build_key_range};
+use tikv_util::memory::MemoryQuota;
 
 use crate::{
     server::metrics::{GcKeysCF, GcKeysDetail},
@@ -17,7 +19,9 @@ use crate::{
 make_auto_flush_static_metric! {
     pub label_enum ReqTag {
         select,
+        select_by_in_memory_engine,
         index,
+        index_by_in_memory_engine,
         // For AnalyzeType::{TypeColumn,TypeMixed}.
         analyze_table,
         // For AnalyzeType::{TypeIndex,TypeCommonHandle}.
@@ -59,6 +63,7 @@ make_auto_flush_static_metric! {
         all,
         schedule,
         snapshot,
+        suspend,
     }
 
     pub label_enum MemLockCheckResult {
@@ -175,6 +180,11 @@ lazy_static! {
         "The number of tasks waiting for the semaphore"
     )
     .unwrap();
+    pub static ref COPR_SEMAPHORE_WAIT_TIME: Histogram = register_histogram!(
+        "tikv_coprocessor_semaphore_wait_time_duration_seconds",
+        "The duration of heavy tasks waiting for the semaphore",
+        exponential_buckets(0.00001, 2.0, 26).unwrap()
+    ).unwrap();
     pub static ref MEM_LOCK_CHECK_HISTOGRAM_VEC: HistogramVec =
         register_histogram_vec!(
             "tikv_coprocessor_mem_lock_check_duration_seconds",
@@ -201,6 +211,19 @@ make_static_metric! {
 pub struct CopLocalMetrics {
     local_scan_details: HashMap<ReqTag, Statistics>,
     local_read_stats: ReadStats,
+}
+
+impl CopLocalMetrics {
+    #[cfg(test)]
+    pub fn local_read_stats(&self) -> &ReadStats {
+        &self.local_read_stats
+    }
+
+    #[cfg(test)]
+    pub fn clear(&mut self) {
+        self.local_read_stats.region_infos.clear();
+        self.local_read_stats.region_buckets.clear();
+    }
 }
 
 thread_local! {
@@ -272,7 +295,7 @@ pub fn tls_collect_scan_details(cmd: ReqTag, stats: &Statistics) {
         m.borrow_mut()
             .local_scan_details
             .entry(cmd)
-            .or_insert_with(Default::default)
+            .or_default()
             .add(stats);
     });
 }
@@ -293,6 +316,11 @@ pub fn tls_collect_read_flow(
             end,
             &statistics.write.flow_stats,
             &statistics.data.flow_stats,
+            &RegionWriteCfCopDetail::new(
+                statistics.write.next,
+                statistics.write.prev,
+                statistics.write.processed_keys,
+            ),
         );
     });
 }
@@ -310,4 +338,38 @@ pub fn tls_collect_query(
         m.local_read_stats
             .add_query_num(region_id, peer, key_range, QueryKind::Coprocessor);
     });
+}
+
+pub fn register_coprocessor_memory_quota_metrics(source: Arc<MemoryQuota>) {
+    struct MemoryQuotaCollector {
+        gauges: IntGaugeVec,
+        source: Arc<MemoryQuota>,
+    }
+    impl prometheus::core::Collector for MemoryQuotaCollector {
+        fn desc(&self) -> Vec<&prometheus::core::Desc> {
+            self.gauges.desc()
+        }
+        fn collect(&self) -> Vec<prometheus::proto::MetricFamily> {
+            self.gauges
+                .with_label_values(&["capacity"])
+                .set(self.source.capacity() as _);
+            self.gauges
+                .with_label_values(&["in_use"])
+                .set(self.source.in_use() as _);
+            self.gauges.collect()
+        }
+    }
+    let gauges = IntGaugeVec::new(
+        Opts::new(
+            "tikv_coprocessor_memory_quota",
+            "Statistics of in_use and capacity of coprocessor memory quota",
+        ),
+        &["type"],
+    )
+    .unwrap();
+    if let Err(e) =
+        prometheus::default_registry().register(Box::new(MemoryQuotaCollector { gauges, source }))
+    {
+        warn!("register memory quota metrics failed"; "error" => ?e);
+    }
 }

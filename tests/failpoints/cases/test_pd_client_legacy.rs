@@ -1,16 +1,16 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{mpsc, Arc},
+    sync::{Arc, mpsc},
     thread,
     time::Duration,
 };
 
 use grpcio::EnvBuilder;
-use kvproto::metapb::*;
+use kvproto::{metapb::*, pdpb};
 use pd_client::{PdClient, RegionInfo, RegionStat, RpcClient};
 use security::{SecurityConfig, SecurityManager};
-use test_pd::{mocker::*, util::*, Server as MockServer};
+use test_pd::{Server as MockServer, mocker::*, util::*};
 use tikv_util::config::ReadableDuration;
 
 fn new_test_server_and_client(
@@ -65,7 +65,7 @@ fn test_pd_client_deadlock() {
         request!(client => block_on(get_region_by_id(0))),
         request!(client => block_on(region_heartbeat(0, Region::default(), Peer::default(), RegionStat::default(), None))),
         request!(client => block_on(ask_split(Region::default()))),
-        request!(client => block_on(ask_batch_split(Region::default(), 1))),
+        request!(client => block_on(ask_batch_split(Region::default(), 1, pdpb::SplitReason::Admin))),
         request!(client => block_on(store_heartbeat(Default::default(), None, None))),
         request!(client => block_on(report_batch_split(vec![]))),
         request!(client => scatter_region(RegionInfo::new(Region::default(), None))),
@@ -73,7 +73,6 @@ fn test_pd_client_deadlock() {
         request!(client => block_on(get_store_stats_async(0))),
         request!(client => get_operator(0)),
         request!(client => block_on(get_tso())),
-        request!(client => load_global_config(vec![])),
     ];
 
     for (name, func) in test_funcs {
@@ -105,68 +104,6 @@ fn test_pd_client_deadlock() {
     fail::remove(pd_client_reconnect_fp);
 }
 
-#[test]
-fn test_load_global_config() {
-    let (mut _server, client) = new_test_server_and_client(ReadableDuration::millis(100));
-    let res = futures::executor::block_on(async move {
-        client
-            .load_global_config(
-                ["abc", "123", "xyz"]
-                    .iter()
-                    .map(|x| x.to_string())
-                    .collect::<Vec<_>>(),
-            )
-            .await
-    });
-    for (k, v) in res.unwrap() {
-        assert_eq!(k, format!("/global/config/{}", v))
-    }
-}
-
-#[test]
-fn test_watch_global_config_on_closed_server() {
-    let (mut server, client) = new_test_server_and_client(ReadableDuration::millis(100));
-    let client = Arc::new(client);
-    use futures::StreamExt;
-    let j = std::thread::spawn(move || {
-        futures::executor::block_on(async move {
-            let mut r = client.watch_global_config().unwrap();
-            let mut i: usize = 0;
-            while let Some(r) = r.next().await {
-                match r {
-                    Ok(res) => {
-                        let change = &res.get_changes()[0];
-                        assert_eq!(
-                            change
-                                .get_name()
-                                .split('/')
-                                .collect::<Vec<_>>()
-                                .last()
-                                .unwrap()
-                                .to_owned(),
-                            format!("{:?}", i)
-                        );
-                        assert_eq!(change.get_value().to_owned(), format!("{:?}", i));
-                        i += 1;
-                    }
-                    Err(e) => {
-                        if let grpcio::Error::RpcFailure(e) = e {
-                            // 14-UNAVAILABLE
-                            assert_eq!(e.code(), grpcio::RpcStatusCode::from(14));
-                            break;
-                        } else {
-                            panic!("other error occur {:?}", e)
-                        }
-                    }
-                }
-            }
-        });
-    });
-    thread::sleep(Duration::from_millis(200));
-    server.stop();
-    j.join().unwrap();
-}
-
 // Updating pd leader may be slow, we need to make sure it does not block other
 // RPC in the same gRPC Environment.
 #[test]
@@ -189,8 +126,8 @@ fn test_slow_periodical_update() {
 
     fail::cfg(pd_client_reconnect_fp, "pause").unwrap();
     // Wait for the PD client thread blocking on the fail point.
-    // The GLOBAL_RECONNECT_INTERVAL is 0.1s so sleeps 0.2s here.
-    thread::sleep(Duration::from_millis(200));
+    // The retry interval is 300ms so sleeps 400ms here.
+    thread::sleep(Duration::from_millis(400));
 
     let (tx, rx) = mpsc::channel();
     let handle = thread::spawn(move || {
@@ -214,8 +151,8 @@ fn test_reconnect_limit() {
     let pd_client_reconnect_fp = "pd_client_reconnect";
     let (_server, client) = new_test_server_and_client(ReadableDuration::secs(100));
 
-    // The GLOBAL_RECONNECT_INTERVAL is 0.1s so sleeps 0.2s here.
-    thread::sleep(Duration::from_millis(200));
+    // The default retry interval is 300ms so sleeps 400ms here.
+    thread::sleep(Duration::from_millis(400));
 
     // The first reconnection will succeed, and the last_update will not be updated.
     fail::cfg(pd_client_reconnect_fp, "return").unwrap();

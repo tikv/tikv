@@ -1,18 +1,21 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{mpsc::channel, Arc},
+    sync::{Arc, mpsc::channel},
     thread,
     time::Duration,
 };
 
 use kvproto::metapb::Region;
+use pd_client::PdClient;
 use raft::StateRole;
 use raftstore::coprocessor::{RangeKey, RegionInfo, RegionInfoAccessor};
-use test_raftstore::{configure_for_merge, new_node_cluster, Cluster, NodeCluster};
+use test_raftstore::{Cluster, NodeCluster, configure_for_merge, new_node_cluster};
+use test_raftstore_macro::test_case;
+use tikv_kv::Engine;
 use tikv_util::{
-    store::{find_peer, new_peer},
     HandyRwLock,
+    store::{find_peer, new_peer},
 };
 
 fn dump(c: &RegionInfoAccessor) -> Vec<(Region, StateRole)> {
@@ -172,7 +175,7 @@ fn test_region_info_accessor_impl(cluster: &mut Cluster<NodeCluster>, c: &Region
 #[test]
 fn test_node_cluster_region_info_accessor() {
     let mut cluster = new_node_cluster(1, 3);
-    configure_for_merge(&mut cluster);
+    configure_for_merge(&mut cluster.cfg);
 
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -184,7 +187,7 @@ fn test_node_cluster_region_info_accessor() {
         .wl()
         .post_create_coprocessor_host(Box::new(move |id, host| {
             if id == 1 {
-                let c = RegionInfoAccessor::new(host);
+                let c = RegionInfoAccessor::new(host, Arc::new(|| false), Box::new(|| 0));
                 tx.send(c).unwrap();
             }
         }));
@@ -198,4 +201,65 @@ fn test_node_cluster_region_info_accessor() {
 
     drop(cluster);
     c.stop();
+}
+
+#[test_case(test_raftstore::new_server_cluster)]
+fn test_raft_engine_seek_region() {
+    let mut cluster = new_cluster(0, 3);
+    configure_for_snapshot(&mut cluster.cfg);
+    cluster.run_conf_change();
+    let pd_client = cluster.pd_client.clone();
+    for key in [b"a", b"b", b"c", b"d"] {
+        let region = pd_client.get_region(key).unwrap();
+        cluster.must_split(&region, key);
+    }
+
+    let stores = pd_client.get_stores().unwrap();
+    assert_eq!(stores.len(), 3);
+    let r0 = pd_client.get_region_info(b"").unwrap();
+    let r1 = pd_client.get_region_info(b"a").unwrap();
+    let r2 = pd_client.get_region_info(b"b").unwrap();
+    let r3 = pd_client.get_region_info(b"c").unwrap();
+    let r4 = pd_client.get_region_info(b"d").unwrap();
+
+    for (i, r) in [&r0, &r1, &r2, &r3, &r4].iter().enumerate() {
+        let leader_store = stores[i % stores.len()].get_id();
+        if r.leader.is_none() || r.leader.as_ref().unwrap().store_id != leader_store {
+            let leader_peer = find_peer(r, leader_store).unwrap().clone();
+            pd_client.transfer_leader(r.get_id(), leader_peer.clone(), vec![]);
+            pd_client.region_leader_must_be(r.get_id(), leader_peer);
+        }
+    }
+
+    let raft_engine = cluster.must_get_raft_engine(stores[0].get_id());
+    let (tx, rx) = channel();
+    raft_engine
+        .seek_region(
+            b"b",
+            Box::new(move |iter| {
+                let mut regions = vec![];
+                for info in iter {
+                    regions.push(info.clone());
+                }
+                tx.send(regions).unwrap();
+            }),
+        )
+        .unwrap();
+
+    // seek_region should be available for raft engine
+    let scanned_regions = rx
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .iter()
+        .map(|info| (info.region.clone(), info.role))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        scanned_regions,
+        vec![
+            (r2.region.clone(), StateRole::Follower),
+            (r3.region.clone(), StateRole::Leader),
+            (r4.region.clone(), StateRole::Follower),
+        ]
+    );
 }

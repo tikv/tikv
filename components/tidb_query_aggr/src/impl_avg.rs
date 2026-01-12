@@ -3,8 +3,8 @@
 use tidb_query_codegen::AggrFunction;
 use tidb_query_common::Result;
 use tidb_query_datatype::{
-    builder::FieldTypeBuilder, codec::data_type::*, expr::EvalContext, EvalType, FieldTypeFlag,
-    FieldTypeTp,
+    EvalType, FieldTypeFlag, FieldTypeTp, builder::FieldTypeBuilder, codec::data_type::*,
+    expr::EvalContext,
 };
 use tidb_query_expr::RpnExpression;
 use tipb::{Expr, ExprType, FieldType};
@@ -30,8 +30,6 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserAvg {
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
     ) -> Result<Box<dyn AggrFunction>> {
-        use std::convert::TryFrom;
-
         use tidb_query_datatype::FieldTypeAccessor;
 
         assert_eq!(root_expr.get_tp(), ExprType::Avg);
@@ -40,7 +38,7 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserAvg {
         let col_sum_et = box_try!(EvalType::try_from(col_sum_ft.as_accessor().tp()));
 
         // Rewrite expression to insert CAST() if needed.
-        super::util::rewrite_exp_for_sum_avg(src_schema, &mut exp).unwrap();
+        super::util::rewrite_exp_for_sum_avg(src_schema, &mut exp)?;
 
         let rewritten_eval_type =
             EvalType::try_from(exp.ret_field_type(src_schema).as_accessor().tp()).unwrap();
@@ -314,8 +312,8 @@ mod tests {
     use std::sync::Arc;
 
     use tidb_query_datatype::{
-        codec::batch::{LazyBatchColumn, LazyBatchColumnVec},
         FieldTypeAccessor,
+        codec::batch::{LazyBatchColumn, LazyBatchColumnVec},
     };
     use tikv_util::buffer_vec::BufferVec;
     use tipb_helper::ExprDefBuilder;

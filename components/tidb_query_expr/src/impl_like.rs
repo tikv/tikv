@@ -27,14 +27,13 @@ pub fn like<C: Collator, CS: Charset>(
                 }
             } else if code == '%' as u32 {
                 // update the backtrace point.
-                next_px = px;
                 px += poff;
+                next_px = px;
+                // Last '%' can match all left characters
+                if next_px >= pattern.len() {
+                    return Ok(Some(true as i64));
+                }
                 next_tx = tx;
-                next_tx += if let Some((_, toff)) = CS::decode_one(&target[tx..]) {
-                    toff
-                } else {
-                    1
-                };
                 continue;
             } else {
                 if code == escape && px + poff < pattern.len() {
@@ -47,7 +46,7 @@ pub fn like<C: Collator, CS: Charset>(
                 }
                 if let Some((_, toff)) = CS::decode_one(&target[tx..]) {
                     if let Ok(std::cmp::Ordering::Equal) =
-                        C::sort_compare(&target[tx..tx + toff], &pattern[px..px + poff])
+                        C::sort_compare(&target[tx..tx + toff], &pattern[px..px + poff], true)
                     {
                         tx += toff;
                         px += poff;
@@ -56,8 +55,13 @@ pub fn like<C: Collator, CS: Charset>(
                 }
             }
         }
-        // mismatch and backtrace to last %.
-        if 0 < next_tx && next_tx <= target.len() {
+        // mismatch and backtrace to position after last %.
+        if 0 < next_px && next_tx < target.len() {
+            next_tx += if let Some((_, toff)) = CS::decode_one(&target[next_tx..]) {
+                toff
+            } else {
+                1
+            };
             px = next_px;
             tx = next_tx;
             continue;
@@ -70,7 +74,7 @@ pub fn like<C: Collator, CS: Charset>(
 
 #[cfg(test)]
 mod tests {
-    use tidb_query_datatype::{builder::FieldTypeBuilder, Collation, FieldTypeTp};
+    use tidb_query_datatype::{Collation, FieldTypeTp, builder::FieldTypeBuilder};
     use tipb::ScalarFuncSig;
 
     use crate::test_util::RpnFnScalarEvaluator;
@@ -104,6 +108,10 @@ mod tests {
             (r#"test"#, r#"te%%st"#, '\\', Collation::Binary, Some(1)),
             (r#"test"#, r#"test%"#, '\\', Collation::Binary, Some(1)),
             (r#"test"#, r#"%test%"#, '\\', Collation::Binary, Some(1)),
+            (r#"test"#, r#"%%test%"#, '\\', Collation::Binary, Some(1)),
+            (r#"test"#, r#"%test%%"#, '\\', Collation::Binary, Some(1)),
+            (r#"testAAA"#, r#"%test%"#, '\\', Collation::Binary, Some(1)),
+            (r#"testBBB"#, r#"%test%%"#, '\\', Collation::Binary, Some(1)),
             (r#"test"#, r#"t%e%s%t"#, '\\', Collation::Binary, Some(1)),
             (r#"test"#, r#"_%_%_%_"#, '\\', Collation::Binary, Some(1)),
             (r#"test"#, r#"_%_%st"#, '\\', Collation::Binary, Some(1)),
@@ -199,17 +207,35 @@ mod tests {
                 Collation::Utf8Mb4GeneralCi,
                 Some(0),
             ),
+            (r#"Ⱕ"#, r#"ⱕ"#, '\\', Collation::Utf8Mb40900AiCi, Some(1)),
+            (
+                r#"a　a"#,
+                r#"a a"#,
+                '\\',
+                Collation::Utf8Mb4UnicodeCi,
+                Some(1),
+            ),
+            (
+                r#"abcabcabcd"#,
+                r#"%abcd%"#,
+                '\\',
+                Collation::Utf8Mb4UnicodeCi,
+                Some(1),
+            ),
         ];
         for (target, pattern, escape, collation, expected) in cases {
+            let ret_ft = FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .collation(collation)
+                .build();
+            let arg_ft = FieldTypeBuilder::new()
+                .tp(FieldTypeTp::String)
+                .collation(collation)
+                .build();
             let output = RpnFnScalarEvaluator::new()
-                .return_field_type(
-                    FieldTypeBuilder::new()
-                        .tp(FieldTypeTp::LongLong)
-                        .collation(collation)
-                        .build(),
-                )
-                .push_param(target.to_owned().into_bytes())
-                .push_param(pattern.to_owned().into_bytes())
+                .return_field_type(ret_ft.clone())
+                .push_param_with_field_type(target.to_owned().into_bytes(), arg_ft.clone())
+                .push_param_with_field_type(pattern.to_owned().into_bytes(), arg_ft)
                 .push_param(escape as i64)
                 .evaluate(ScalarFuncSig::LikeSig)
                 .unwrap();
@@ -333,6 +359,18 @@ mod tests {
                 Collation::Utf8Mb4Bin,
                 Collation::Utf8Mb4Bin,
                 Some(1),
+            ),
+            // This can happen when the new collation is not enabled, and TiDB
+            // doesn't push down the collation information. Though the two collations
+            // are the same, we still use the binary order.
+            (
+                r#"测试A"#,
+                r#"测_a"#,
+                '\\',
+                Collation::Binary,
+                Collation::Utf8Mb4UnicodeCi,
+                Collation::Utf8Mb4UnicodeCi,
+                Some(0),
             ),
         ];
         for (target, pattern, escape, collation, target_collation, pattern_collation, expected) in

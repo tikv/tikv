@@ -83,7 +83,7 @@ impl ProcessStat {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 mod imp {
     use std::{fs::File, io, io::Read, time::Duration};
 
@@ -109,7 +109,7 @@ mod imp {
                 guest_nice: parts.next()?.parse::<u64>().ok()?,
             })
         })()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "first line of /proc/stat malformed"))
+        .ok_or_else(|| io::Error::other("first line of /proc/stat malformed"))
     }
 
     pub fn cpu_time() -> io::Result<Duration> {
@@ -191,15 +191,12 @@ mod imp {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(target_os = "windows")]
 mod imp {
     use std::io;
 
     pub fn current() -> io::Result<super::LinuxStyleCpuTime> {
-        Err(io::Error::new(
-            io::ErrorKind::Other,
-            "unsupported platform to learn CPU state",
-        ))
+        Err(io::Error::other("unsupported platform to learn CPU state"))
     }
 
     use std::{io, mem, time::Duration};
@@ -333,7 +330,7 @@ mod tests {
         for _ in 0..num * 10 {
             std::thread::spawn(move || {
                 loop {
-                    let _ = (0..10_000_000).into_iter().sum::<u128>();
+                    let _ = (0..10_000_000).sum::<u128>();
                 }
             });
         }

@@ -2,14 +2,14 @@
 
 use std::sync::Arc;
 
-use api_version::{dispatch_api_version, match_template_api_version, KeyMode, KvFormat, RawValue};
+use api_version::{KeyMode, KvFormat, RawValue, dispatch_api_version, match_template_api_version};
 use encryption::DataKeyManager;
-use engine_traits::{raw_ttl::ttl_to_expire_ts, KvEngine, SstWriter};
+use engine_traits::{KvEngine, SstWriter, raw_ttl::ttl_to_expire_ts};
 use kvproto::{import_sstpb::*, kvrpcpb::ApiVersion};
 use tikv_util::time::Instant;
-use txn_types::{is_short_value, Key, TimeStamp, Write as KvWrite, WriteType};
+use txn_types::{Key, TimeStamp, Write as KvWrite, WriteType, is_short_value};
 
-use crate::{import_file::ImportPath, metrics::*, Error, Result};
+use crate::{Error, Result, import_file::ImportPath, metrics::*};
 
 #[derive(Debug)]
 pub enum SstWriterType {
@@ -30,6 +30,7 @@ pub struct TxnSstWriter<E: KvEngine> {
     write_meta: SstMeta,
     key_manager: Option<Arc<DataKeyManager>>,
     api_version: ApiVersion,
+    txn_source: u64,
 }
 
 impl<E: KvEngine> TxnSstWriter<E> {
@@ -42,6 +43,7 @@ impl<E: KvEngine> TxnSstWriter<E> {
         write_meta: SstMeta,
         key_manager: Option<Arc<DataKeyManager>>,
         api_version: ApiVersion,
+        txn_source: u64,
     ) -> Self {
         TxnSstWriter {
             default,
@@ -56,6 +58,7 @@ impl<E: KvEngine> TxnSstWriter<E> {
             write_meta,
             key_manager,
             api_version,
+            txn_source,
         }
     }
 
@@ -75,6 +78,13 @@ impl<E: KvEngine> TxnSstWriter<E> {
         let start = Instant::now_coarse();
 
         let commit_ts = TimeStamp::new(batch.get_commit_ts());
+        if commit_ts.is_zero() {
+            return Err(Error::BadFormat(format!(
+                "invalid commit-ts {}",
+                commit_ts.into_inner()
+            )));
+        }
+
         for m in batch.get_pairs().iter() {
             dispatch_api_version!(self.api_version, {
                 self.check_api_version::<API>(m.get_key())?;
@@ -102,6 +112,7 @@ impl<E: KvEngine> TxnSstWriter<E> {
                 KvWrite::new(WriteType::Put, commit_ts, None)
             }
         };
+        let w = w.set_txn_source(self.txn_source);
         let write = w.as_ref().to_bytes();
         self.write.put(&k, &write)?;
         self.write_entries += 1;
@@ -130,10 +141,10 @@ impl<E: KvEngine> TxnSstWriter<E> {
         }
 
         info!("finish write to sst";
-            "default entries" => default_entries,
-            "default bytes" => default_bytes,
-            "write entries" => write_entries,
-            "write bytes" => write_bytes,
+            "default_entries" => default_entries,
+            "default_bytes" => default_bytes,
+            "write_entries" => write_entries,
+            "write_bytes" => write_bytes,
         );
         IMPORT_LOCAL_WRITE_KEYS_VEC
             .with_label_values(&["txn_default_cf"])
@@ -270,9 +281,9 @@ impl<E: KvEngine> RawSstWriter<E> {
 
         info!(
             "finish raw write to sst";
-            "default entries" => self.default_entries,
-            "default bytes" => self.default_deletes,
-            "default bytes" => self.default_bytes
+            "default_entries" => self.default_entries,
+            "default_deletes" => self.default_deletes,
+            "default_bytes" => self.default_bytes
         );
         IMPORT_LOCAL_WRITE_KEYS_VEC
             .with_label_values(&["raw_default_cf"])
@@ -301,7 +312,7 @@ mod tests {
     use crate::{Config, SstImporter};
 
     // Return the temp dir path to avoid it drop out of the scope.
-    fn new_writer<W, F: Fn(&SstImporter, &RocksEngine, SstMeta) -> Result<W>>(
+    fn new_writer<W, F: Fn(&SstImporter<RocksEngine>, &RocksEngine, SstMeta, u64) -> Result<W>>(
         f: F,
         api_version: ApiVersion,
     ) -> (W, TempDir) {
@@ -310,10 +321,28 @@ mod tests {
 
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let importer = SstImporter::new(&cfg, &importer_dir, None, api_version).unwrap();
+        let importer =
+            SstImporter::<RocksEngine>::new(&cfg, &importer_dir, None, api_version, false).unwrap();
         let db_path = importer_dir.path().join("db");
         let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
-        (f(&importer, &db, meta).unwrap(), importer_dir)
+        (f(&importer, &db, meta, 0).unwrap(), importer_dir)
+    }
+
+    #[test]
+    fn test_new_txn_writer_with_lightning_txn_source() {
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer =
+            SstImporter::<RocksEngine>::new(&cfg, &importer_dir, None, ApiVersion::V1, false)
+                .unwrap();
+        let db_path = importer_dir.path().join("db");
+        let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
+
+        let mut meta = SstMeta::default();
+        meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
+
+        let writer = SstImporter::new_txn_writer(&importer, &db, meta, 1 << 16);
+        assert_eq!(writer.unwrap().txn_source, 1 << 16);
     }
 
     #[test]
@@ -350,6 +379,26 @@ mod tests {
 
         let metas = w.finish().unwrap();
         assert_eq!(metas.len(), 2);
+    }
+
+    #[test]
+    fn test_write_txn_sst_with_invalid_ts() {
+        let (mut w, _handle) = new_writer(SstImporter::new_txn_writer, ApiVersion::V1);
+        let mut batch = WriteBatch::default();
+        let mut pairs = vec![];
+
+        // put short value kv in write cf
+        let mut pair = Pair::default();
+        pair.set_key(b"k1".to_vec());
+        pair.set_value(b"short_value".to_vec());
+        pairs.push(pair);
+
+        // generate two cf metas
+        batch.set_commit_ts(0);
+        batch.set_pairs(pairs.into());
+        let r = w.write(batch);
+        assert!(r.is_err());
+        assert_eq!(r.unwrap_err().to_string(), "bad format invalid commit-ts 0");
     }
 
     #[test]

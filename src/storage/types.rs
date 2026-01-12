@@ -5,19 +5,19 @@
 use std::fmt::Debug;
 
 use kvproto::kvrpcpb;
-use txn_types::{Key, Value};
+use txn_types::{Key, LastChange, Value};
 
 use crate::storage::{
+    Callback, Result,
     errors::SharedError,
     lock_manager::WaitTimeout,
     mvcc::{Lock, LockType, TimeStamp, Write, WriteType},
     txn::ProcessResult,
-    Callback, Result,
 };
 
 /// `MvccInfo` stores all mvcc information of given key.
 /// Used by `MvccGetByKey` and `MvccGetByStartTs`.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct MvccInfo {
     pub lock: Option<Lock>,
     /// commit_ts and write
@@ -53,9 +53,18 @@ impl MvccInfo {
                     write_info.set_start_ts(write.start_ts.into_inner());
                     write_info.set_commit_ts(commit_ts.into_inner());
                     write_info.set_short_value(write.short_value.unwrap_or_default());
-                    if !write.last_change_ts.is_zero() {
-                        write_info.set_last_change_ts(write.last_change_ts.into_inner());
-                        write_info.set_versions_to_last_change(write.versions_to_last_change);
+                    write_info.set_has_overlapped_rollback(write.has_overlapped_rollback);
+                    if let Some(gc_fence) = write.gc_fence {
+                        write_info.set_has_gc_fence(true);
+                        write_info.set_gc_fence(gc_fence.into_inner());
+                    }
+                    if !matches!(
+                        write.last_change,
+                        LastChange::NotExist | LastChange::Exist { .. }
+                    ) {
+                        let (last_change_ts, versions) = write.last_change.to_parts();
+                        write_info.set_last_change_ts(last_change_ts.into_inner());
+                        write_info.set_versions_to_last_change(versions);
                     }
                     write_info
                 })
@@ -70,14 +79,19 @@ impl MvccInfo {
                 LockType::Delete => kvrpcpb::Op::Del,
                 LockType::Lock => kvrpcpb::Op::Lock,
                 LockType::Pessimistic => kvrpcpb::Op::PessimisticLock,
+                LockType::Shared => kvrpcpb::Op::SharedLock,
             };
             lock_info.set_type(op);
             lock_info.set_start_ts(lock.ts.into_inner());
             lock_info.set_primary(lock.primary);
             lock_info.set_short_value(lock.short_value.unwrap_or_default());
-            if !lock.last_change_ts.is_zero() {
-                lock_info.set_last_change_ts(lock.last_change_ts.into_inner());
-                lock_info.set_versions_to_last_change(lock.versions_to_last_change);
+            if matches!(
+                lock.last_change,
+                LastChange::NotExist | LastChange::Exist { .. }
+            ) {
+                let (last_change_ts, versions) = lock.last_change.to_parts();
+                lock_info.set_last_change_ts(last_change_ts.into_inner());
+                lock_info.set_versions_to_last_change(versions);
             }
             mvcc_info.set_lock(lock_info);
         }
@@ -121,6 +135,14 @@ impl TxnStatus {
 
     pub fn committed(commit_ts: TimeStamp) -> Self {
         Self::Committed { commit_ts }
+    }
+
+    // Returns if the transaction is already committed or rolled back.
+    pub fn is_decided(&self) -> bool {
+        matches!(
+            self,
+            TxnStatus::RolledBack | TxnStatus::TtlExpire | TxnStatus::Committed { .. }
+        )
     }
 }
 
@@ -223,7 +245,13 @@ impl PessimisticLockKeyResult {
     }
 
     pub fn assert_empty(&self) {
-        assert!(matches!(self, Self::Empty));
+        match self {
+            Self::Empty => (),
+            x => panic!(
+                "pessimistic lock key result not match, expected Empty, got {:?}",
+                x
+            ),
+        }
     }
 
     #[cfg(test)]
@@ -374,6 +402,33 @@ impl PessimisticLockResults {
             }
             _ => unreachable!(),
         }
+    }
+
+    pub fn estimate_resp_size(&self) -> u64 {
+        AsRef::<Vec<PessimisticLockKeyResult>>::as_ref(&self.0)
+            .iter()
+            .map(|res| {
+                match res {
+                    PessimisticLockKeyResult::Empty => 1,
+                    PessimisticLockKeyResult::Value(v) => v.as_ref().map_or(0, |v| v.len() as u64),
+                    PessimisticLockKeyResult::Existence(_) => {
+                        2 // type + bool
+                    }
+                    PessimisticLockKeyResult::LockedWithConflict {
+                        value,
+                        conflict_ts: _,
+                    } => {
+                        10 + value.as_ref().map_or(0, |v| v.len() as u64) // 10 stands for type + bool + conflict_ts
+                    }
+                    PessimisticLockKeyResult::Waiting => {
+                        1 // for test only 
+                    }
+                    PessimisticLockKeyResult::Failed(_) => {
+                        1 // type, ignoring error message
+                    }
+                }
+            })
+            .sum::<u64>()
     }
 }
 

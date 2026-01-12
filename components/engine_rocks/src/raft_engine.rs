@@ -2,9 +2,9 @@
 
 // #[PerformanceCriticalPath]
 use engine_traits::{
-    Error, Iterable, KvEngine, MiscExt, Mutable, Peekable, RaftEngine, RaftEngineDebug,
-    RaftEngineReadOnly, RaftLogBatch, Result, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT,
-    RAFT_LOG_MULTI_GET_CNT,
+    CF_DEFAULT, Error, Iterable, KvEngine, MiscExt, Mutable, Peekable, RAFT_LOG_MULTI_GET_CNT,
+    RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch, Result, WriteBatch,
+    WriteBatchExt, WriteOptions,
 };
 use kvproto::{
     metapb::Region,
@@ -16,7 +16,7 @@ use protobuf::Message;
 use raft::eraftpb::Entry;
 use tikv_util::{box_err, box_try};
 
-use crate::{util, RocksEngine, RocksWriteBatchVec};
+use crate::{RocksEngine, RocksWriteBatchVec, util};
 
 impl RaftEngineReadOnly for RocksEngine {
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>> {
@@ -108,24 +108,6 @@ impl RaftEngineReadOnly for RocksEngine {
         Err(Error::EntriesUnavailable)
     }
 
-    fn get_all_entries_to(&self, region_id: u64, buf: &mut Vec<Entry>) -> Result<()> {
-        let start_key = keys::raft_log_key(region_id, 0);
-        let end_key = keys::raft_log_key(region_id, u64::MAX);
-        self.scan(
-            CF_DEFAULT,
-            &start_key,
-            &end_key,
-            false, // fill_cache
-            |_, value| {
-                let mut entry = Entry::default();
-                entry.merge_from_bytes(value)?;
-                buf.push(entry);
-                Ok(true)
-            },
-        )?;
-        Ok(())
-    }
-
     fn is_empty(&self) -> Result<bool> {
         let mut is_empty = true;
         self.scan(CF_DEFAULT, b"", b"", false, |_, _| {
@@ -178,7 +160,7 @@ impl RaftEngineReadOnly for RocksEngine {
 impl RaftEngineDebug for RocksEngine {
     fn scan_entries<F>(&self, raft_group_id: u64, mut f: F) -> Result<()>
     where
-        F: FnMut(&Entry) -> Result<bool>,
+        F: FnMut(Entry) -> Result<bool>,
     {
         let start_key = keys::raft_log_key(raft_group_id, 0);
         let end_key = keys::raft_log_key(raft_group_id, u64::MAX);
@@ -190,7 +172,7 @@ impl RaftEngineDebug for RocksEngine {
             |_, value| {
                 let mut entry = Entry::default();
                 entry.merge_from_bytes(value)?;
-                f(&entry)
+                f(entry)
             },
         )
     }
@@ -372,7 +354,9 @@ impl RaftLogBatch for RocksWriteBatchVec {
         entries: Vec<Entry>,
     ) -> Result<()> {
         let overwrite_to = overwrite_to.unwrap_or(0);
-        if let Some(last) = entries.last() && last.get_index() + 1 < overwrite_to {
+        if let Some(last) = entries.last()
+            && last.get_index() + 1 < overwrite_to
+        {
             for index in last.get_index() + 1..overwrite_to {
                 let key = keys::raft_log_key(raft_group_id, index);
                 self.delete(&key).unwrap();

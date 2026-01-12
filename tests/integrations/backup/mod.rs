@@ -3,9 +3,9 @@
 use std::{fs::File, time::Duration};
 
 use engine_traits::{CF_DEFAULT, CF_WRITE};
-use external_storage_export::{create_storage, make_local_backend};
+use external_storage::{create_storage, make_local_backend};
 use file_system::calc_crc32_bytes;
-use futures::{executor::block_on, AsyncReadExt, StreamExt};
+use futures::{AsyncReadExt, StreamExt, executor::block_on};
 use kvproto::{
     import_sstpb::*,
     kvrpcpb::*,
@@ -16,6 +16,8 @@ use test_backup::*;
 use tikv::coprocessor::checksum_crc64_xor;
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
+
+mod disk_snap;
 
 fn assert_same_file_name(s1: String, s2: String) {
     let tokens1: Vec<&str> = s1.split('_').collect();
@@ -492,6 +494,8 @@ fn test_backup_raw_meta() {
 }
 
 #[test]
+// this test relies on file permissions which are ignored when run in docker under the root
+#[cfg(not(feature = "docker_test"))]
 fn test_invalid_external_storage() {
     let mut suite = TestSuite::new(1, 144 * 1024 * 1024, ApiVersion::V1);
     // Put some data.
@@ -518,6 +522,7 @@ fn test_invalid_external_storage() {
     let resps = block_on(rx.collect::<Vec<_>>());
     assert!(resps[0].has_error());
 
+    #[allow(clippy::permissions_set_readonly_false)]
     perms.set_readonly(false);
     f.set_permissions(perms).unwrap();
 

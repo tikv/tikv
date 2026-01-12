@@ -1,7 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::u64;
-
+use api_version::{ApiV1, keyspace::KvPairEntry};
 use futures::executor::block_on;
 use kvproto::{
     coprocessor::{KeyRange, Request},
@@ -10,8 +9,8 @@ use kvproto::{
 use protobuf::Message;
 use test_coprocessor::*;
 use tidb_query_common::storage::{
-    scanner::{RangesScanner, RangesScannerOptions},
     Range,
+    scanner::{RangesScanner, RangesScannerOptions},
 };
 use tikv::{
     coprocessor::{dag::TikvStorage, *},
@@ -79,20 +78,22 @@ fn reversed_checksum_crc64_xor<E: Engine>(store: &Store<E>, range: KeyRange) -> 
         Default::default(),
         false,
     );
-    let mut scanner = RangesScanner::new(RangesScannerOptions {
+    let mut scanner = RangesScanner::<_, ApiV1>::new(RangesScannerOptions {
         storage: TikvStorage::new(store, false),
         ranges: vec![Range::from_pb_range(range, false)],
         scan_backward_in_range: true,
         is_key_only: false,
         is_scanned_range_aware: false,
+        load_commit_ts: false,
     });
 
     let mut checksum = 0;
     let digest = crc64fast::Digest::new();
-    while let Some((k, v)) = block_on(scanner.next()).unwrap() {
+    while let Some(row) = block_on(scanner.next()).unwrap() {
+        let (k, v) = row.kv();
         let mut digest = digest.clone();
-        digest.write(&k);
-        digest.write(&v);
+        digest.write(k);
+        digest.write(v);
         checksum ^= digest.sum64();
     }
     checksum

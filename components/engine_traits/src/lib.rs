@@ -253,7 +253,7 @@
 #![feature(assert_matches)]
 #![feature(linked_list_cursors)]
 #![feature(let_chains)]
-#![feature(str_split_as_str)]
+#![feature(str_split_remainder)]
 
 #[macro_use(fail_point)]
 extern crate fail;
@@ -288,12 +288,12 @@ mod misc;
 pub use misc::*;
 mod snapshot;
 pub use crate::snapshot::*;
+mod snapshot_misc;
+pub use crate::snapshot_misc::SnapshotMiscExt;
 mod sst;
 pub use crate::sst::*;
 mod write_batch;
 pub use crate::write_batch::*;
-mod encryption;
-pub use crate::encryption::*;
 mod mvcc_properties;
 mod sst_partitioner;
 pub use crate::sst_partitioner::*;
@@ -311,6 +311,8 @@ mod table_properties;
 pub use crate::table_properties::*;
 mod checkpoint;
 pub use crate::checkpoint::*;
+mod region_cache_engine;
+pub use crate::region_cache_engine::*;
 
 // These modules contain more general traits, some of which may be implemented
 // by multiple types.
@@ -340,8 +342,8 @@ pub use crate::range::*;
 
 mod raft_engine;
 pub use raft_engine::{
-    CacheStats, RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch,
-    RAFT_LOG_MULTI_GET_CNT,
+    CacheStats, RAFT_LOG_MULTI_GET_CNT, RaftEngine, RaftEngineDebug, RaftEngineReadOnly,
+    RaftLogBatch,
 };
 
 // These modules need further scrutiny

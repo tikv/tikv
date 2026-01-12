@@ -7,12 +7,11 @@ use tikv_util::{box_try, debug, info, warn};
 
 use super::{
     super::{
-        error::Result, metrics::*, Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver,
-        SplitChecker,
+        Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker, error::Result,
+        metrics::*,
     },
-    calc_split_keys_count,
+    Host, calc_split_keys_count,
     size::get_approximate_split_keys,
-    Host,
 };
 use crate::coprocessor::dispatcher::StoreHandle;
 
@@ -157,9 +156,11 @@ impl<C: StoreHandle, E: KvEngine> SplitCheckObserver<E> for KeysCheckObserver<C>
             }
         };
 
-        self.router.update_approximate_keys(region_id, region_keys);
+        self.router
+            .update_approximate_keys(region_id, Some(region_keys), None);
 
         REGION_KEYS_HISTOGRAM.observe(region_keys as f64);
+
         // if bucket checker using scan is added, to utilize the scan,
         // add keys checker as well for free
         // It has the assumption that the size's checker is before the keys's check in
@@ -207,10 +208,10 @@ pub fn get_region_approximate_keys(
 
 #[cfg(test)]
 mod tests {
-    use std::{cmp, sync::mpsc, u64};
+    use std::{cmp, sync::mpsc};
 
     use engine_test::ctor::{CfOptions, DbOptions};
-    use engine_traits::{KvEngine, MiscExt, SyncMutable, ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
+    use engine_traits::{ALL_CFS, CF_DEFAULT, CF_WRITE, KvEngine, LARGE_CFS, MiscExt, SyncMutable};
     use kvproto::{
         metapb::{Peer, Region},
         pdpb::CheckPolicy,
@@ -230,7 +231,7 @@ mod tests {
         *,
     };
     use crate::{
-        coprocessor::{dispatcher::SchedTask, Config, CoprocessorHost},
+        coprocessor::{Config, CoprocessorHost, dispatcher::SchedTask},
         store::{SplitCheckRunner, SplitCheckTask},
     };
 
@@ -287,8 +288,12 @@ mod tests {
             ..Default::default()
         };
 
-        let mut runnable =
-            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
+        let mut runnable = SplitCheckRunner::new(
+            engine.clone(),
+            tx.clone(),
+            CoprocessorHost::new(tx, cfg),
+            None,
+        );
 
         // so split key will be z0080
         put_data(&engine, 0, 90, false);
@@ -299,12 +304,28 @@ mod tests {
             None,
         ));
         // keys has not reached the max_keys 100 yet.
-        match rx.try_recv() {
-            Ok(SchedTask::UpdateApproximateSize { region_id, .. })
-            | Ok(SchedTask::UpdateApproximateKeys { region_id, .. }) => {
-                assert_eq!(region_id, region.get_id());
+        let mut recv_cnt = 0;
+        loop {
+            match rx.try_recv() {
+                Ok(SchedTask::UpdateApproximateSize {
+                    region_id,
+                    splitable,
+                    ..
+                })
+                | Ok(SchedTask::UpdateApproximateKeys {
+                    region_id,
+                    splitable,
+                    ..
+                }) => {
+                    assert_eq!(region_id, region.get_id());
+                    assert!(splitable.is_none());
+                    recv_cnt += 1;
+                    if recv_cnt == 2 {
+                        break;
+                    }
+                }
+                others => panic!("expect recv empty, but got {:?}", others),
             }
-            others => panic!("expect recv empty, but got {:?}", others),
         }
 
         put_data(&engine, 90, 160, true);
@@ -392,8 +413,12 @@ mod tests {
             ..Default::default()
         };
 
-        let mut runnable =
-            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
+        let mut runnable = SplitCheckRunner::new(
+            engine.clone(),
+            tx.clone(),
+            CoprocessorHost::new(tx, cfg),
+            None,
+        );
 
         put_data(&engine, 0, 90, false);
         runnable.run(SplitCheckTask::split_check(
@@ -403,12 +428,28 @@ mod tests {
             None,
         ));
         // keys has not reached the max_keys 100 yet.
-        match rx.try_recv() {
-            Ok(SchedTask::UpdateApproximateSize { region_id, .. })
-            | Ok(SchedTask::UpdateApproximateKeys { region_id, .. }) => {
-                assert_eq!(region_id, region.get_id());
+        let mut recv_cnt = 0;
+        loop {
+            match rx.try_recv() {
+                Ok(SchedTask::UpdateApproximateSize {
+                    region_id,
+                    splitable,
+                    ..
+                })
+                | Ok(SchedTask::UpdateApproximateKeys {
+                    region_id,
+                    splitable,
+                    ..
+                }) => {
+                    assert_eq!(region_id, region.get_id());
+                    assert!(splitable.is_none());
+                    recv_cnt += 1;
+                    if recv_cnt == 2 {
+                        break;
+                    }
+                }
+                others => panic!("expect recv empty, but got {:?}", others),
             }
-            others => panic!("expect recv empty, but got {:?}", others),
         }
 
         put_data(&engine, 90, 160, true);
@@ -555,7 +596,7 @@ mod tests {
             region_max_keys: Some(159),
             region_split_keys: Some(80),
             batch_split_limit: 5,
-            enable_region_bucket: true,
+            enable_region_bucket: Some(true),
             // need check split region buckets, but region size does not exceed the split threshold
             region_bucket_size: ReadableSize(100),
             ..Default::default()
@@ -565,6 +606,7 @@ mod tests {
             engine.clone(),
             tx.clone(),
             CoprocessorHost::new(tx.clone(), cfg.clone()),
+            None,
         );
 
         put_data(&engine, 0, 90, false);
@@ -590,8 +632,8 @@ mod tests {
         // The split by keys should still work. But if the bug in on_kv() in size.rs
         // exists, it will result in split by keys failed.
         cfg.region_max_size = Some(ReadableSize(region_size * 6 / 5));
-        cfg.region_split_size = ReadableSize(region_size * 4 / 5);
-        runnable = SplitCheckRunner::new(engine, tx.clone(), CoprocessorHost::new(tx, cfg));
+        cfg.region_split_size = Some(ReadableSize(region_size * 4 / 5));
+        runnable = SplitCheckRunner::new(engine, tx.clone(), CoprocessorHost::new(tx, cfg), None);
         runnable.run(SplitCheckTask::split_check(
             region.clone(),
             true,

@@ -1,16 +1,18 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use api_version::{KvFormat, keyspace::KvPairEntry};
 use async_trait::async_trait;
 use kvproto::coprocessor::KeyRange;
 use tidb_query_common::{
-    storage::{
-        scanner::{RangesScanner, RangesScannerOptions},
-        IntervalRange, Range, Storage,
-    },
     Result,
+    storage::{
+        IntervalRange, Range, Storage,
+        scanner::{RangesScanner, RangesScannerOptions},
+    },
 };
 use tidb_query_datatype::{codec::batch::LazyBatchColumnVec, expr::EvalContext};
 use tipb::{ColumnInfo, FieldType};
+use txn_types::TimeStamp;
 
 use crate::interface::*;
 
@@ -34,18 +36,19 @@ pub trait ScanExecutorImpl: Send {
         key: &[u8],
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
+        commit_ts: Option<TimeStamp>,
     ) -> Result<()>;
 }
 
 /// A shared executor implementation for both table scan and index scan.
 /// Implementation differences between table scan and index scan are further
 /// given via `ScanExecutorImpl`.
-pub struct ScanExecutor<S: Storage, I: ScanExecutorImpl> {
+pub struct ScanExecutor<S: Storage, I: ScanExecutorImpl, F: KvFormat> {
     /// The internal scanning implementation.
     imp: I,
 
     /// The scanner that scans over ranges.
-    scanner: RangesScanner<S>,
+    scanner: RangesScanner<S, F>,
 
     /// A flag indicating whether this executor is ended. When table is drained
     /// or there was an error scanning the table, this flag will be set to
@@ -61,9 +64,10 @@ pub struct ScanExecutorOptions<S, I> {
     pub is_key_only: bool,
     pub accept_point_range: bool,
     pub is_scanned_range_aware: bool,
+    pub load_commit_ts: bool,
 }
 
-impl<S: Storage, I: ScanExecutorImpl> ScanExecutor<S, I> {
+impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> ScanExecutor<S, I, F> {
     pub fn new(
         ScanExecutorOptions {
             imp,
@@ -73,9 +77,10 @@ impl<S: Storage, I: ScanExecutorImpl> ScanExecutor<S, I> {
             is_key_only,
             accept_point_range,
             is_scanned_range_aware,
+            load_commit_ts,
         }: ScanExecutorOptions<S, I>,
     ) -> Result<Self> {
-        tidb_query_datatype::codec::table::check_table_ranges(&key_ranges)?;
+        tidb_query_datatype::codec::table::check_table_ranges::<F>(&key_ranges)?;
         if is_backward {
             key_ranges.reverse();
         }
@@ -90,6 +95,7 @@ impl<S: Storage, I: ScanExecutorImpl> ScanExecutor<S, I> {
                 scan_backward_in_range: is_backward,
                 is_key_only,
                 is_scanned_range_aware,
+                load_commit_ts,
             }),
             is_ended: false,
         })
@@ -108,10 +114,14 @@ impl<S: Storage, I: ScanExecutorImpl> ScanExecutor<S, I> {
 
         for i in 0..scan_rows {
             let some_row = self.scanner.next_opt(i == scan_rows - 1).await?;
-            if let Some((key, value)) = some_row {
+            if let Some(row) = some_row {
                 // Retrieved one row from point range or non-point range.
 
-                if let Err(e) = self.imp.process_kv_pair(&key, &value, columns) {
+                let (key, value) = row.kv();
+                if let Err(e) = self
+                    .imp
+                    .process_kv_pair(key, value, columns, row.commit_ts())
+                {
                     // When there are errors in `process_kv_pair`, columns' length may not be
                     // identical. For example, the filling process may be partially done so that
                     // first several columns have N rows while the rest have N-1 rows. Since we do
@@ -149,8 +159,6 @@ pub fn field_type_from_column_info(ci: &ColumnInfo) -> FieldType {
 
 /// Checks whether the given columns info are supported.
 pub fn check_columns_info_supported(columns_info: &[ColumnInfo]) -> Result<()> {
-    use std::convert::TryFrom;
-
     use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 
     for column in columns_info {
@@ -162,12 +170,29 @@ pub fn check_columns_info_supported(columns_info: &[ColumnInfo]) -> Result<()> {
 }
 
 #[async_trait]
-impl<S: Storage, I: ScanExecutorImpl> BatchExecutor for ScanExecutor<S, I> {
+impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> BatchExecutor for ScanExecutor<S, I, F> {
     type StorageStats = S::Statistics;
 
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.imp.schema()
+    }
+
+    #[inline]
+    fn intermediate_schema(&self, index: usize) -> Result<&[FieldType]> {
+        Err(other_err!(
+            "The intermediate schema is not found until root executor, index: {}",
+            index
+        ))
+    }
+
+    #[inline]
+    fn consume_and_fill_intermediate_results(
+        &mut self,
+        _results: &mut [Vec<BatchExecuteResult>],
+    ) -> Result<()> {
+        // Do nothing.
+        Ok(())
     }
 
     #[inline]
@@ -186,10 +211,17 @@ impl<S: Storage, I: ScanExecutorImpl> BatchExecutor for ScanExecutor<S, I> {
         // *successfully* retrieving these rows. After that, if we only consumes
         // some of the rows (TopN / Limit), we should ignore this error.
 
-        match &is_drained {
+        let is_drained = match is_drained {
             // Note: `self.is_ended` is only used for assertion purpose.
-            Err(_) | Ok(true) => self.is_ended = true,
-            Ok(false) => {}
+            Err(e) => {
+                self.is_ended = true;
+                Err(e)
+            }
+            Ok(true) => {
+                self.is_ended = true;
+                Ok(BatchExecIsDrain::Drain)
+            }
+            Ok(false) => Ok(BatchExecIsDrain::Remain),
         };
 
         BatchExecuteResult {

@@ -1,19 +1,28 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    borrow::ToOwned, cmp::Ordering, pin::Pin, str, string::ToString, sync::Arc, time::Duration, u64,
+    borrow::ToOwned, cmp::Ordering, path::Path, result, str, string::ToString, sync::Arc,
+    time::Duration,
 };
 
+use api_version::{ApiV1, KvFormat};
 use encryption_export::data_key_manager_from_config;
 use engine_rocks::util::{db_exist, new_engine_opt};
 use engine_traits::{
-    Engines, Error as EngineError, RaftEngine, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
+    ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS, Engines, Error as EngineError, RaftEngine,
+    TabletRegistry,
 };
-use futures::{executor::block_on, future, stream, Stream, StreamExt, TryStreamExt};
+use file_system::read_dir;
+use futures::{
+    StreamExt, TryStreamExt,
+    executor::block_on,
+    future,
+    stream::{self, BoxStream},
+};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
     debugpb::{Db as DbType, *},
-    kvrpcpb::MvccInfo,
+    kvrpcpb::{KeyRange, MvccInfo},
     metapb::{Peer, Region},
     raft_cmdpb::RaftCmdRequest,
     raft_serverpb::PeerState,
@@ -22,14 +31,23 @@ use pd_client::{Config as PdConfig, PdClient, RpcClient};
 use protobuf::Message;
 use raft::eraftpb::{ConfChange, ConfChangeV2, Entry, EntryType};
 use raft_log_engine::RaftLogEngine;
-use raftstore::store::{util::build_key_range, INIT_EPOCH_CONF_VER};
+use raftstore::store::{INIT_EPOCH_CONF_VER, util::build_key_range};
 use security::SecurityManager;
 use serde_json::json;
+use server::fatal;
+use slog_global::crit;
 use tikv::{
     config::{ConfigController, TikvConfig},
     server::{
-        debug::{BottommostLevelCompaction, Debugger, RegionInfo},
         KvEngineFactoryBuilder,
+        debug::{BottommostLevelCompaction, Debugger, DebuggerImpl, RegionInfo},
+        debug2::DebuggerImplV2,
+    },
+    storage::{
+        Engine,
+        config::EngineType,
+        kv::MockEngine,
+        lock_manager::{LockManager, MockLockManager},
     },
 };
 use tikv_util::escape;
@@ -42,20 +60,44 @@ pub const METRICS_ROCKSDB_RAFT: &str = "rocksdb_raft";
 pub const METRICS_JEMALLOC: &str = "jemalloc";
 pub const LOCK_FILE_ERROR: &str = "IO error: While lock file";
 
-type MvccInfoStream = Pin<Box<dyn Stream<Item = Result<(Vec<u8>, MvccInfo), String>>>>;
+type MvccInfoStream = BoxStream<'static, result::Result<(Vec<u8>, MvccInfo), String>>;
+
+fn get_engine_type(dir: &str) -> EngineType {
+    let mut entries = read_dir(dir).unwrap();
+    let mut engine1 = false;
+    let mut engine2 = false;
+    while let Some(Ok(e)) = entries.next() {
+        if let Ok(ty) = e.file_type()
+            && ty.is_dir()
+        {
+            if e.file_name() == "tablets" {
+                engine2 = true;
+            } else if e.file_name() == "db" {
+                engine1 = true;
+            }
+        }
+    }
+    assert_ne!(engine1, engine2);
+    if engine1 {
+        EngineType::RaftKv
+    } else {
+        EngineType::RaftKv2
+    }
+}
 
 pub fn new_debug_executor(
     cfg: &TikvConfig,
     data_dir: Option<&str>,
     host: Option<&str>,
     mgr: Arc<SecurityManager>,
-) -> Box<dyn DebugExecutor> {
+) -> Box<dyn DebugExecutor + Send> {
     if let Some(remote) = host {
-        return Box::new(new_debug_client(remote, mgr)) as Box<dyn DebugExecutor>;
+        return Box::new(new_debug_client(remote, mgr)) as Box<_>;
     }
 
     // TODO: perhaps we should allow user skip specifying data path.
     let data_dir = data_dir.unwrap();
+    let engine_type = get_engine_type(data_dir);
 
     let key_manager = data_key_manager_from_config(&cfg.security.encryption, &cfg.storage.data_dir)
         .unwrap()
@@ -66,16 +108,19 @@ pub fn new_debug_executor(
         .build_shared_rocks_env(key_manager.clone(), None /* io_rate_limiter */)
         .unwrap();
 
-    let factory = KvEngineFactoryBuilder::new(env.clone(), cfg, cache)
-        .lite(true)
-        .build();
-    let kv_db = match factory.create_shared_db(data_dir) {
-        Ok(db) => db,
-        Err(e) => handle_engine_error(e),
-    };
+    let factory = KvEngineFactoryBuilder::new(
+        env.clone(),
+        cfg,
+        cache,
+        key_manager.clone(),
+        Default::default(),
+    )
+    .lite(true)
+    .build();
 
     let cfg_controller = ConfigController::default();
     if !cfg.raft_engine.enable {
+        assert_eq!(EngineType::RaftKv, engine_type);
         let raft_db_opts = cfg.raftdb.build_opt(env, None);
         let raft_db_cf_opts = cfg.raftdb.build_cf_opts(factory.block_cache());
         let raft_path = cfg.infer_raft_db_path(Some(data_dir)).unwrap();
@@ -87,8 +132,16 @@ pub fn new_debug_executor(
             Ok(db) => db,
             Err(e) => handle_engine_error(e),
         };
-        let debugger = Debugger::new(Engines::new(kv_db, raft_db), cfg_controller);
-        Box::new(debugger) as Box<dyn DebugExecutor>
+
+        let kv_db = match factory.create_shared_db(data_dir) {
+            Ok(db) => db,
+            Err(e) => handle_engine_error(e),
+        };
+
+        let debugger: DebuggerImpl<_, MockEngine, MockLockManager, ApiV1> =
+            DebuggerImpl::new(Engines::new(kv_db, raft_db), cfg_controller, None);
+
+        Box::new(debugger) as Box<_>
     } else {
         let mut config = cfg.raft_engine.config();
         config.dir = cfg.infer_raft_engine_path(Some(data_dir)).unwrap();
@@ -97,8 +150,25 @@ pub fn new_debug_executor(
             tikv_util::logger::exit_process_gracefully(-1);
         }
         let raft_db = RaftLogEngine::new(config, key_manager, None /* io_rate_limiter */).unwrap();
-        let debugger = Debugger::new(Engines::new(kv_db, raft_db), cfg_controller);
-        Box::new(debugger) as Box<dyn DebugExecutor>
+        match engine_type {
+            EngineType::RaftKv => {
+                let kv_db = match factory.create_shared_db(data_dir) {
+                    Ok(db) => db,
+                    Err(e) => handle_engine_error(e),
+                };
+
+                let debugger: DebuggerImpl<_, MockEngine, MockLockManager, ApiV1> =
+                    DebuggerImpl::new(Engines::new(kv_db, raft_db), cfg_controller, None);
+                Box::new(debugger) as Box<_>
+            }
+            EngineType::RaftKv2 => {
+                let registry =
+                    TabletRegistry::new(Box::new(factory), Path::new(data_dir).join("tablets"))
+                        .unwrap_or_else(|e| fatal!("failed to create tablet registry {:?}", e));
+                let debugger = DebuggerImplV2::new(registry, raft_db, cfg_controller);
+                Box::new(debugger) as Box<_>
+            }
+        }
     }
 }
 
@@ -159,7 +229,7 @@ pub trait DebugExecutor {
             let r = self.get_region_info(region_id);
             if skip_tombstone {
                 let region_state = r.region_local_state.as_ref();
-                if region_state.map_or(false, |s| s.get_state() == PeerState::Tombstone) {
+                if region_state.is_some_and(|s| s.get_state() == PeerState::Tombstone) {
                     continue;
                 }
             }
@@ -183,6 +253,7 @@ pub trait DebugExecutor {
                     json!({
                         "region": json!({
                             "id": r.get_id(),
+                            "state": format!("{:?}", s.get_state()),
                             "start_key": hex::encode_upper(r.get_start_key()),
                             "end_key": hex::encode_upper(r.get_end_key()),
                             "region_epoch": json!({
@@ -230,7 +301,7 @@ pub trait DebugExecutor {
         );
     }
 
-    fn dump_raft_log(&self, region: u64, index: u64) {
+    fn dump_raft_log(&self, region: u64, index: u64, binary: bool) {
         let idx_key = keys::raft_log_key(region, index);
         println!("idx_key: {}", escape(&idx_key));
         println!("region: {}", region);
@@ -242,6 +313,11 @@ pub trait DebugExecutor {
         println!("msg len: {}", data.len());
 
         if data.is_empty() {
+            return;
+        }
+
+        if binary {
+            println!("data: \n{}", hex::encode_upper(&data));
             return;
         }
 
@@ -316,21 +392,21 @@ pub trait DebugExecutor {
                     println!("key: {}", escape(&key));
                     if cfs.contains(&CF_LOCK) && mvcc.has_lock() {
                         let lock_info = mvcc.get_lock();
-                        if start_ts.map_or(true, |ts| lock_info.get_start_ts() == ts) {
+                        if start_ts.is_none_or(|ts| lock_info.get_start_ts() == ts) {
                             println!("\tlock cf value: {:?}", lock_info);
                         }
                     }
                     if cfs.contains(&CF_DEFAULT) {
                         for value_info in mvcc.get_values() {
-                            if commit_ts.map_or(true, |ts| value_info.get_start_ts() == ts) {
+                            if commit_ts.is_none_or(|ts| value_info.get_start_ts() == ts) {
                                 println!("\tdefault cf value: {:?}", value_info);
                             }
                         }
                     }
                     if cfs.contains(&CF_WRITE) {
                         for write_info in mvcc.get_writes() {
-                            if start_ts.map_or(true, |ts| write_info.get_start_ts() == ts)
-                                && commit_ts.map_or(true, |ts| write_info.get_commit_ts() == ts)
+                            if start_ts.is_none_or(|ts| write_info.get_start_ts() == ts)
+                                && commit_ts.is_none_or(|ts| write_info.get_commit_ts() == ts)
                             {
                                 println!("\t write cf value: {:?}", write_info);
                             }
@@ -645,6 +721,17 @@ pub trait DebugExecutor {
     fn dump_cluster_info(&self);
 
     fn reset_to_version(&self, version: u64);
+
+    fn flashback_to_version(
+        &self,
+        _version: u64,
+        _region_id: u64,
+        _key_range: KeyRange,
+        _start_ts: u64,
+        _commit_ts: u64,
+    ) -> Result<(), (KeyRange, grpcio::Error)>;
+
+    fn get_region_read_progress(&self, region_id: u64, log: bool, min_start_ts: u64);
 }
 
 impl DebugExecutor for DebugClient {
@@ -654,7 +741,7 @@ impl DebugExecutor for DebugClient {
     }
 
     fn get_all_regions_in_store(&self) -> Vec<u64> {
-        DebugClient::get_all_regions_in_store(self, &GetAllRegionsInStoreRequest::default())
+        self.get_all_regions_in_store(&GetAllRegionsInStoreRequest::default())
             .unwrap_or_else(|e| perror_and_exit("DebugClient::get_all_regions_in_store", e))
             .take_regions()
     }
@@ -832,8 +919,16 @@ impl DebugExecutor for DebugClient {
         }
     }
 
-    fn dump_range_properties(&self, _: Vec<u8>, _: Vec<u8>) {
-        unimplemented!("only available for local mode");
+    fn dump_range_properties(&self, start: Vec<u8>, end: Vec<u8>) {
+        let mut req = GetRangePropertiesRequest::default();
+        req.set_start_key(start);
+        req.set_end_key(end);
+        let resp = self
+            .get_range_properties(&req)
+            .unwrap_or_else(|e| perror_and_exit("DebugClient::get_range_properties", e));
+        for prop in resp.get_properties() {
+            println!("{}: {}", prop.get_key(), prop.get_value())
+        }
     }
 
     fn dump_store_info(&self) {
@@ -856,16 +951,126 @@ impl DebugExecutor for DebugClient {
     fn reset_to_version(&self, version: u64) {
         let mut req = ResetToVersionRequest::default();
         req.set_ts(version);
-        DebugClient::reset_to_version(self, &req)
+        self.reset_to_version(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::get_cluster_info", e));
+    }
+
+    fn flashback_to_version(
+        &self,
+        version: u64,
+        region_id: u64,
+        key_range: KeyRange,
+        start_ts: u64,
+        commit_ts: u64,
+    ) -> Result<(), (KeyRange, grpcio::Error)> {
+        let mut req = FlashbackToVersionRequest::default();
+        req.set_version(version);
+        req.set_region_id(region_id);
+        req.set_start_key(key_range.get_start_key().to_owned());
+        req.set_end_key(key_range.get_end_key().to_owned());
+        req.set_start_ts(start_ts);
+        req.set_commit_ts(commit_ts);
+        match self.flashback_to_version(&req) {
+            Ok(_) => Ok(()),
+            Err(err) => {
+                println!(
+                    "flashback key_range {:?} with start_ts {:?}, commit_ts {:?} need to retry, err is {:?}",
+                    key_range, start_ts, commit_ts, err
+                );
+                Err((key_range, err))
+            }
+        }
+    }
+
+    fn get_region_read_progress(&self, region_id: u64, log: bool, min_start_ts: u64) {
+        let mut req = GetRegionReadProgressRequest::default();
+        req.set_region_id(region_id);
+        req.set_log_locks(log);
+        req.set_min_start_ts(min_start_ts);
+        let opt = grpcio::CallOption::default().timeout(Duration::from_secs(10));
+        let resp = self
+            .get_region_read_progress_opt(&req, opt)
+            .unwrap_or_else(|e| perror_and_exit("DebugClient::get_region_read_progress", e));
+        if !resp.get_error().is_empty() {
+            println!("error: {}", resp.get_error());
+        }
+        let fields = [
+            ("Region read progress:", "".to_owned()),
+            ("exist", resp.get_region_read_progress_exist().to_string()),
+            ("safe_ts", resp.get_safe_ts().to_string()),
+            ("applied_index", resp.get_applied_index().to_string()),
+            ("read_state.ts", resp.get_read_state_ts().to_string()),
+            (
+                "read_state.apply_index",
+                resp.get_read_state_apply_index().to_string(),
+            ),
+            (
+                "pending front item (oldest) ts",
+                resp.get_pending_front_ts().to_string(),
+            ),
+            (
+                "pending front item (oldest) applied index",
+                resp.get_pending_front_applied_index().to_string(),
+            ),
+            (
+                "pending back item (latest) ts",
+                resp.get_pending_back_ts().to_string(),
+            ),
+            (
+                "pending back item (latest) applied index",
+                resp.get_pending_back_applied_index().to_string(),
+            ),
+            ("paused", resp.get_region_read_progress_paused().to_string()),
+            ("discarding", resp.get_discard().to_string()),
+            (
+                "duration since resolved-ts last called update_safe_ts()",
+                match resp.get_duration_to_last_update_safe_ts_ms() {
+                    u64::MAX => "none".to_owned(),
+                    x => format!("{} ms", x),
+                },
+            ),
+            (
+                "duration to last consume_leader_info()",
+                match resp.get_duration_to_last_consume_leader_ms() {
+                    u64::MAX => "none".to_owned(),
+                    x => format!("{} ms", x),
+                },
+            ),
+            ("Resolver:", "".to_owned()),
+            ("exist", resp.get_resolver_exist().to_string()),
+            ("resolved_ts", resp.get_resolved_ts().to_string()),
+            (
+                "tracked index",
+                resp.get_resolver_tracked_index().to_string(),
+            ),
+            ("number of locks", resp.get_num_locks().to_string()),
+            (
+                "number of transactions",
+                resp.get_num_transactions().to_string(),
+            ),
+            ("stopped", resp.get_resolver_stopped().to_string()),
+        ];
+        for (name, value) in &fields {
+            if value.is_empty() {
+                println!("{}", name);
+            } else {
+                println!("    {}: {}, ", name, value);
+            }
+        }
     }
 }
 
-impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
+impl<ER, E, L, K> DebugExecutor for DebuggerImpl<ER, E, L, K>
+where
+    ER: RaftEngine,
+    E: Engine,
+    L: LockManager,
+    K: KvFormat,
+{
     fn check_local_mode(&self) {}
 
     fn get_all_regions_in_store(&self) -> Vec<u64> {
-        self.get_all_regions_in_store()
+        Debugger::get_all_regions_in_store(self)
             .unwrap_or_else(|e| perror_and_exit("Debugger::get_all_regions_in_store", e))
     }
 
@@ -921,7 +1126,7 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
         threads: u32,
         bottommost: BottommostLevelCompaction,
     ) {
-        self.compact(db, cf, from, to, threads, bottommost)
+        Debugger::compact(self, db, cf, from, to, threads, bottommost)
             .unwrap_or_else(|e| perror_and_exit("Debugger::compact", e));
     }
 
@@ -965,7 +1170,7 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
     }
 
     fn recover_all(&self, threads: usize, read_only: bool) {
-        Debugger::recover_all(self, threads, read_only)
+        DebuggerImpl::recover_all(self, threads, read_only)
             .unwrap_or_else(|e| perror_and_exit("Debugger::recover all", e));
     }
 
@@ -1044,7 +1249,8 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
     }
 
     fn dump_metrics(&self, _tags: Vec<&str>) {
-        unimplemented!("only available for online mode");
+        println!("only available for remote mode");
+        tikv_util::logger::exit_process_gracefully(-1);
     }
 
     fn check_region_consistency(&self, _: u64) {
@@ -1093,6 +1299,22 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
     fn reset_to_version(&self, version: u64) {
         Debugger::reset_to_version(self, version);
     }
+
+    fn flashback_to_version(
+        &self,
+        _version: u64,
+        _region_id: u64,
+        _key_range: KeyRange,
+        _start_ts: u64,
+        _commit_ts: u64,
+    ) -> Result<(), (KeyRange, grpcio::Error)> {
+        unimplemented!("only available for remote mode");
+    }
+
+    fn get_region_read_progress(&self, _region_id: u64, _log: bool, _min_start_ts: u64) {
+        println!("only available for remote mode");
+        tikv_util::logger::exit_process_gracefully(-1);
+    }
 }
 
 fn handle_engine_error(err: EngineError) -> ! {
@@ -1108,4 +1330,211 @@ fn handle_engine_error(err: EngineError) -> ! {
     }
 
     tikv_util::logger::exit_process_gracefully(-1);
+}
+
+impl<ER: RaftEngine> DebugExecutor for DebuggerImplV2<ER> {
+    fn check_local_mode(&self) {}
+
+    fn get_all_regions_in_store(&self) -> Vec<u64> {
+        Debugger::get_all_regions_in_store(self)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::get_all_regions_in_store", e))
+    }
+
+    fn get_value_by_key(&self, cf: &str, key: Vec<u8>) -> Vec<u8> {
+        self.get(DbType::Kv, cf, &key)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::get", e))
+    }
+
+    fn get_region_size(&self, region: u64, cfs: Vec<&str>) -> Vec<(String, usize)> {
+        match self.region_size(region, cfs) {
+            Ok(v) => v
+                .into_iter()
+                .map(|(cf, size)| (cf.to_owned(), size))
+                .collect(),
+            Err(e) => {
+                println!("Debugger::region_size: {}", e);
+                vec![]
+            }
+        }
+    }
+
+    fn get_region_info(&self, region: u64) -> RegionInfo {
+        self.region_info(region)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::region_info", e))
+    }
+
+    fn get_raft_log(&self, region: u64, index: u64) -> Entry {
+        self.raft_log(region, index)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::raft_log", e))
+    }
+
+    fn get_mvcc_infos(&self, from: Vec<u8>, to: Vec<u8>, limit: u64) -> MvccInfoStream {
+        let iter = self
+            .scan_mvcc(&from, &to, limit)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::scan_mvcc", e));
+        let stream = stream::iter(iter).map_err(|e| e.to_string());
+        Box::pin(stream)
+    }
+
+    fn raw_scan_impl(&self, _from_key: &[u8], _end_key: &[u8], _limit: usize, _cf: &str) {
+        unimplemented!()
+    }
+
+    fn do_compaction(
+        &self,
+        db: DbType,
+        cf: &str,
+        from: &[u8],
+        to: &[u8],
+        threads: u32,
+        bottommost: BottommostLevelCompaction,
+    ) {
+        Debugger::compact(self, db, cf, from, to, threads, bottommost)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::compact", e));
+    }
+
+    fn set_region_tombstone(&self, regions: Vec<Region>) {
+        let ret = self
+            .set_region_tombstone(regions)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::set_region_tombstone", e));
+        if ret.is_empty() {
+            println!("success!");
+            return;
+        }
+        for (region_id, error) in ret {
+            println!("region: {}, error: {}", region_id, error);
+        }
+    }
+
+    fn set_region_tombstone_by_id(&self, region_ids: Vec<u64>) {
+        let ret = self
+            .set_region_tombstone_by_id(region_ids)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::set_region_tombstone_by_id", e));
+        if ret.is_empty() {
+            println!("success!");
+            return;
+        }
+        for (region_id, error) in ret {
+            println!("region: {}, error: {}", region_id, error);
+        }
+    }
+
+    fn recover_regions(&self, regions: Vec<Region>, read_only: bool) {
+        let ret = self
+            .recover_regions(regions, read_only)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::recover regions", e));
+        if ret.is_empty() {
+            println!("success!");
+            return;
+        }
+        for (region_id, error) in ret {
+            println!("region: {}, error: {}", region_id, error);
+        }
+    }
+
+    fn recover_all(&self, threads: usize, read_only: bool) {
+        DebuggerImplV2::recover_all(self, threads, read_only)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::recover all", e));
+    }
+
+    fn print_bad_regions(&self) {
+        let bad_regions = self
+            .bad_regions()
+            .unwrap_or_else(|e| perror_and_exit("Debugger::bad_regions", e));
+        if !bad_regions.is_empty() {
+            for (region_id, error) in bad_regions {
+                println!("{}: {}", region_id, error);
+            }
+            return;
+        }
+        println!("all regions are healthy")
+    }
+
+    fn drop_unapplied_raftlog(&self, region_ids: Option<Vec<u64>>) {
+        println!("removing unapplied raftlog on region {:?} ...", region_ids);
+        self.drop_unapplied_raftlog(region_ids)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::remove_fail_stores", e));
+        println!("success");
+    }
+
+    fn remove_fail_stores(
+        &self,
+        _store_ids: Vec<u64>,
+        _region_ids: Option<Vec<u64>>,
+        _promote_learner: bool,
+    ) {
+        unimplemented!()
+    }
+
+    fn recreate_region(&self, _mgr: Arc<SecurityManager>, _pd_cfg: &PdConfig, _region_id: u64) {
+        unimplemented!()
+    }
+
+    fn dump_metrics(&self, _tags: Vec<&str>) {
+        println!("only available for remote mode");
+        tikv_util::logger::exit_process_gracefully(-1);
+    }
+
+    fn check_region_consistency(&self, _: u64) {
+        println!("only support remote mode");
+        tikv_util::logger::exit_process_gracefully(-1);
+    }
+
+    fn modify_tikv_config(&self, _: &str, _: &str) {
+        println!("only support remote mode");
+        tikv_util::logger::exit_process_gracefully(-1);
+    }
+
+    fn dump_region_properties(&self, region_id: u64) {
+        let props = self
+            .get_region_properties(region_id)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::get_region_properties", e));
+        for (name, value) in props {
+            println!("{}: {}", name, value);
+        }
+    }
+
+    fn dump_range_properties(&self, start: Vec<u8>, end: Vec<u8>) {
+        let props = self
+            .get_range_properties(&start, &end)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::get_range_properties", e));
+        for (name, value) in props {
+            println!("{}: {}", name, value);
+        }
+    }
+
+    fn dump_store_info(&self) {
+        let store_ident_info = self.get_store_ident();
+        if let Ok(ident) = store_ident_info {
+            println!("store id: {}", ident.get_store_id());
+            println!("api version: {:?}", ident.get_api_version());
+        }
+    }
+
+    fn dump_cluster_info(&self) {
+        let store_ident_info = self.get_store_ident();
+        if let Ok(ident) = store_ident_info {
+            println!("cluster id: {}", ident.get_cluster_id());
+        }
+    }
+
+    fn reset_to_version(&self, _version: u64) {
+        unimplemented!()
+    }
+
+    fn flashback_to_version(
+        &self,
+        _region_id: u64,
+        _version: u64,
+        _key_range: KeyRange,
+        _start_ts: u64,
+        _commit_ts: u64,
+    ) -> Result<(), (KeyRange, grpcio::Error)> {
+        unimplemented!("only available for remote mode");
+    }
+
+    fn get_region_read_progress(&self, _region_id: u64, _log: bool, _min_start_ts: u64) {
+        println!("only available for remote mode");
+        tikv_util::logger::exit_process_gracefully(-1);
+    }
 }

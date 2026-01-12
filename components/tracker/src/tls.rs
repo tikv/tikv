@@ -9,10 +9,10 @@ use std::{
 
 use pin_project::pin_project;
 
-use crate::{slab::TrackerToken, Tracker, GLOBAL_TRACKERS, INVALID_TRACKER_TOKEN};
+use crate::{GLOBAL_TRACKERS, INVALID_TRACKER_TOKEN, Tracker, slab::TrackerToken};
 
 thread_local! {
-    static TLS_TRACKER_TOKEN: Cell<TrackerToken> = Cell::new(INVALID_TRACKER_TOKEN);
+    static TLS_TRACKER_TOKEN: Cell<TrackerToken> = const { Cell::new(INVALID_TRACKER_TOKEN) };
 }
 
 pub fn set_tls_tracker_token(token: TrackerToken) {
@@ -38,29 +38,32 @@ where
     });
 }
 
+/// A future that sets the TLS tracker token before polling the inner future.
+/// It is used to propagate the tracker token to the inner future.
+/// The tracker token will be cleared after polling the inner future.
 #[pin_project]
-pub struct TrackedFuture<F> {
+pub struct TlsTrackedFuture<F> {
     #[pin]
     future: F,
-    tracker: TrackerToken,
+    token: TrackerToken,
 }
 
-impl<F> TrackedFuture<F> {
-    pub fn new(future: F) -> TrackedFuture<F> {
-        TrackedFuture {
+impl<F> TlsTrackedFuture<F> {
+    pub fn new(future: F) -> TlsTrackedFuture<F> {
+        TlsTrackedFuture {
             future,
-            tracker: get_tls_tracker_token(),
+            token: get_tls_tracker_token(),
         }
     }
 }
 
-impl<F: Future> Future for TrackedFuture<F> {
+impl<F: Future> Future for TlsTrackedFuture<F> {
     type Output = F::Output;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
         TLS_TRACKER_TOKEN.with(|c| {
-            c.set(*this.tracker);
+            c.set(*this.token);
             let res = this.future.poll(cx);
             c.set(INVALID_TRACKER_TOKEN);
             res

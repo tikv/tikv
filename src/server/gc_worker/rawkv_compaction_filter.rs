@@ -3,19 +3,18 @@
 use std::{
     ffi::CString,
     mem,
-    sync::{atomic::Ordering, Arc},
+    sync::{Arc, atomic::Ordering},
 };
 
 use api_version::{ApiV2, KeyMode, KvFormat};
 use engine_rocks::{
-    raw::{
-        new_compaction_filter_raw, CompactionFilter, CompactionFilterContext,
-        CompactionFilterDecision, CompactionFilterFactory, CompactionFilterValueType,
-        DBCompactionFilter,
-    },
     RocksEngine,
+    raw::{
+        CompactionFilter, CompactionFilterContext, CompactionFilterDecision,
+        CompactionFilterFactory, CompactionFilterValueType,
+    },
 };
-use engine_traits::{raw_ttl::ttl_current_ts, MiscExt};
+use engine_traits::{MiscExt, raw_ttl::ttl_current_ts};
 use prometheus::local::LocalHistogramVec;
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::worker::{ScheduleError, Scheduler};
@@ -23,28 +22,30 @@ use txn_types::Key;
 
 use crate::{
     server::gc_worker::{
-        compaction_filter::{
-            check_need_gc, CompactionFilterStats, DEFAULT_DELETE_BATCH_COUNT,
-            GC_COMPACTION_FAILURE, GC_COMPACTION_FILTERED, GC_COMPACTION_FILTER_MVCC_DELETION_MET,
-            GC_COMPACTION_FILTER_ORPHAN_VERSIONS, GC_COMPACTION_FILTER_PERFORM,
-            GC_COMPACTION_FILTER_SKIP, GC_CONTEXT,
-        },
         GcTask, STAT_RAW_KEYMODE,
+        compaction_filter::{
+            CompactionFilterStats, DEFAULT_DELETE_BATCH_COUNT, GC_COMPACTION_FAILURE,
+            GC_COMPACTION_FILTER_MVCC_DELETION_MET, GC_COMPACTION_FILTER_ORPHAN_VERSIONS,
+            GC_COMPACTION_FILTER_PERFORM, GC_COMPACTION_FILTER_SKIP, GC_COMPACTION_FILTERED,
+            GC_CONTEXT, check_need_gc,
+        },
     },
     storage::mvcc::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM},
 };
 pub struct RawCompactionFilterFactory;
 
 impl CompactionFilterFactory for RawCompactionFilterFactory {
+    type Filter = RawCompactionFilter;
+
     fn create_compaction_filter(
         &self,
         context: &CompactionFilterContext,
-    ) -> *mut DBCompactionFilter {
+    ) -> Option<(CString, Self::Filter)> {
         //---------------- GC context --------------
         let gc_context_option = GC_CONTEXT.lock().unwrap();
         let gc_context = match *gc_context_option {
             Some(ref ctx) => ctx,
-            None => return std::ptr::null_mut(),
+            None => return None,
         };
         //---------------- GC context END --------------
 
@@ -57,7 +58,7 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
         if safe_point == 0 {
             // Safe point has not been initialized yet.
             debug!("skip gc in compaction filter because of no safe point");
-            return std::ptr::null_mut();
+            return None;
         }
 
         let ratio_threshold = {
@@ -73,10 +74,10 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
         if gc_context
             .db
             .as_ref()
-            .map_or(false, RocksEngine::is_stalled_or_stopped)
+            .is_some_and(RocksEngine::is_stalled_or_stopped)
         {
             debug!("skip gc in compaction filter because the DB is stalled");
-            return std::ptr::null_mut();
+            return None;
         }
 
         drop(gc_context_option);
@@ -90,7 +91,7 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
             GC_COMPACTION_FILTER_SKIP
                 .with_label_values(&[STAT_RAW_KEYMODE])
                 .inc();
-            return std::ptr::null_mut();
+            return None;
         }
 
         let filter = RawCompactionFilter::new(
@@ -101,11 +102,11 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
             (store_id, region_info_provider),
         );
         let name = CString::new("raw_compaction_filter").unwrap();
-        unsafe { new_compaction_filter_raw(name, filter) }
+        Some((name, filter))
     }
 }
 
-struct RawCompactionFilter {
+pub struct RawCompactionFilter {
     safe_point: u64,
     is_bottommost_level: bool,
     gc_scheduler: Scheduler<GcTask<RocksEngine>>,
@@ -146,7 +147,6 @@ impl CompactionFilter for RawCompactionFilter {
         &mut self,
         level: usize,
         key: &[u8],
-        sequence: u64,
         value: &[u8],
         value_type: CompactionFilterValueType,
     ) -> CompactionFilterDecision {
@@ -155,7 +155,7 @@ impl CompactionFilter for RawCompactionFilter {
             return CompactionFilterDecision::Keep;
         }
 
-        match self.do_filter(level, key, sequence, value, value_type) {
+        match self.do_filter(level, key, value, value_type) {
             Ok(decision) => decision,
             Err(e) => {
                 warn!("compaction filter meet error: {}", e);
@@ -205,7 +205,6 @@ impl RawCompactionFilter {
         &mut self,
         _start_level: usize,
         key: &[u8],
-        _sequence: u64,
         value: &[u8],
         value_type: CompactionFilterValueType,
     ) -> Result<CompactionFilterDecision, String> {
@@ -358,7 +357,7 @@ pub mod tests {
     use std::time::Duration;
 
     use api_version::RawValue;
-    use engine_traits::{DeleteStrategy, Peekable, Range, CF_DEFAULT};
+    use engine_traits::{CF_DEFAULT, DeleteStrategy, Peekable, Range, WriteOptions};
     use kvproto::kvrpcpb::{ApiVersion, Context};
     use tikv_kv::{Engine, Modify, WriteData};
     use txn_types::TimeStamp;
@@ -515,6 +514,7 @@ pub mod tests {
         );
         raw_engine
             .delete_ranges_cf(
+                &WriteOptions::default(),
                 CF_DEFAULT,
                 DeleteStrategy::DeleteByKey,
                 &[Range::new(

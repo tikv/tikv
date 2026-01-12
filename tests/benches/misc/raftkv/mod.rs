@@ -5,7 +5,7 @@ use std::sync::{Arc, RwLock};
 use collections::HashSet;
 use crossbeam::channel::TrySendError;
 use engine_rocks::{RocksEngine, RocksSnapshot};
-use engine_traits::{KvEngine, ALL_CFS, CF_DEFAULT};
+use engine_traits::{ALL_CFS, CF_DEFAULT, KvEngine};
 use futures::future::FutureExt;
 use kvproto::{
     kvrpcpb::{Context, ExtraOp as TxnExtraOp},
@@ -14,23 +14,23 @@ use kvproto::{
     raft_serverpb::RaftMessage,
 };
 use raftstore::{
-    router::{LocalReadRouter, RaftStoreRouter},
-    store::{
-        cmd_resp, Callback, CasualMessage, CasualRouter, PeerMsg, ProposalRouter, RaftCmdExtraOpts,
-        RaftCommand, ReadResponse, RegionSnapshot, SignificantMsg, SignificantRouter, StoreMsg,
-        StoreRouter, WriteResponse,
-    },
     Result,
+    router::{LocalReadRouter, RaftStoreRouter, ReadContext},
+    store::{
+        Callback, CasualMessage, CasualRouter, PeerMsg, ProposalRouter, RaftCmdExtraOpts,
+        RaftCommand, ReadResponse, RegionSnapshot, SignificantMsg, SignificantRouter, StoreMsg,
+        StoreRouter, WriteResponse, cmd_resp,
+    },
 };
 use tempfile::{Builder, TempDir};
 use tikv::{
     server::raftkv::{CmdRes, RaftKv},
     storage::{
-        kv::{Callback as EngineCallback, Modify, SnapContext, WriteData},
         Engine,
+        kv::{Callback as EngineCallback, Modify, SnapContext, WriteData},
     },
 };
-use tikv_util::{store::new_peer, time::ThreadReadId};
+use tikv_util::store::new_peer;
 use txn_types::Key;
 
 use crate::test;
@@ -121,7 +121,7 @@ impl RaftStoreRouter<RocksEngine> for SyncBenchRouter {
 impl LocalReadRouter<RocksEngine> for SyncBenchRouter {
     fn read(
         &mut self,
-        _: Option<ThreadReadId>,
+        _: ReadContext,
         req: RaftCmdRequest,
         cb: Callback<RocksSnapshot>,
     ) -> Result<()> {
@@ -184,6 +184,7 @@ fn bench_async_snapshot(b: &mut test::Bencher) {
     let mut kv = RaftKv::new(
         SyncBenchRouter::new(region.clone(), db.clone()),
         db,
+        None,
         Arc::new(RwLock::new(HashSet::default())),
     );
 
@@ -218,6 +219,7 @@ fn bench_async_write(b: &mut test::Bencher) {
     let kv = RaftKv::new(
         SyncBenchRouter::new(region.clone(), db.clone()),
         db,
+        None,
         Arc::new(RwLock::new(HashSet::default())),
     );
 

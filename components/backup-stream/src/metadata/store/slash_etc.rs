@@ -9,8 +9,8 @@ use std::{
 
 use async_trait::async_trait;
 use tokio::sync::{
-    mpsc::{self, Sender},
     Mutex,
+    mpsc::{self, Sender},
 };
 use tokio_stream::StreamExt;
 
@@ -39,11 +39,7 @@ struct Key(Vec<u8>, i64);
 impl std::fmt::Debug for Key {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("Key")
-            .field(&format_args!(
-                "{}@{}",
-                log_wrappers::Value::key(&self.0),
-                self.1
-            ))
+            .field(&format_args!("{}@{}", self.0.escape_ascii(), self.1))
             .finish()
     }
 }
@@ -117,7 +113,7 @@ impl SlashEtc {
             .collect::<Vec<_>>();
         let kvs = mvccs
             .as_slice()
-            .group_by(|k1, k2| k1.0.0 == k2.0.0)
+            .chunk_by(|k1, k2| k1.0.0 == k2.0.0)
             .filter_map(|k| {
                 let (k, v) = k.last()?;
                 match v {

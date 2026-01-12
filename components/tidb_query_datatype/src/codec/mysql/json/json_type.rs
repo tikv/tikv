@@ -18,7 +18,7 @@ const JSON_TYPE_DATE: &[u8] = b"DATE";
 const JSON_TYPE_DATETIME: &[u8] = b"DATETIME";
 const JSON_TYPE_TIME: &[u8] = b"TIME";
 
-impl<'a> JsonRef<'a> {
+impl JsonRef<'_> {
     /// `json_type` is the implementation for
     /// <https://dev.mysql.com/doc/refman/5.7/en/json-attribute-functions.html#function_json-type>
     pub fn json_type(&self) -> &'static [u8] {
@@ -65,7 +65,8 @@ mod tests {
             (r#"["a", "b"]"#, JSON_TYPE_ARRAY),
             ("-5", JSON_TYPE_INTEGER),
             ("5", JSON_TYPE_INTEGER),
-            ("18446744073709551615", JSON_TYPE_DOUBLE),
+            ("18446744073709551615", JSON_TYPE_UNSIGNED_INTEGER),
+            ("18446744073709551616", JSON_TYPE_DOUBLE),
             ("5.6", JSON_TYPE_DOUBLE),
             (r#""hello, world""#, JSON_TYPE_STRING),
             ("true", JSON_TYPE_BOOLEAN),

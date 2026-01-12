@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    mem::{forget, ManuallyDrop},
+    mem::{ManuallyDrop, forget},
     thread,
 };
 
@@ -28,7 +28,7 @@ fn test_memory_usage() {
     const LOCK_COUNT: usize = 100 * 1024 * 1024 / KEY_LEN;
 
     // Let system collect the memory to avoid drop time at the end of the test.
-    let cm = ManuallyDrop::new(ConcurrencyManager::new(1.into()));
+    let cm = ManuallyDrop::new(ConcurrencyManager::new_for_test(1.into()));
 
     const THR_NUM: usize = 8;
     let mut ths = Vec::with_capacity(THR_NUM);
@@ -48,6 +48,7 @@ fn test_memory_usage() {
                     10.into(),
                     1,
                     20.into(),
+                    false,
                 );
 
                 // Key already exists

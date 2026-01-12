@@ -1,12 +1,12 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{i64, mem, sync::Arc, u64};
+use std::{mem, sync::Arc};
 
 use bitflags::bitflags;
 use tipb::DagRequest;
 
 use super::{Error, Result};
-use crate::codec::mysql::Tz;
+use crate::codec::mysql::{DEFAULT_DIV_FRAC_INCR, Tz};
 
 bitflags! {
     /// Please refer to SQLMode in `mysql/const.go` in repo `pingcap/parser` for details.
@@ -72,6 +72,8 @@ pub struct EvalConfig {
     pub sql_mode: SqlMode,
 
     pub paging_size: Option<u64>,
+    pub div_precision_increment: u8,
+    pub is_test: bool,
 }
 
 impl Default for EvalConfig {
@@ -98,6 +100,9 @@ impl EvalConfig {
         if req.has_sql_mode() {
             eval_cfg.set_sql_mode(SqlMode::from_bits_truncate(req.get_sql_mode()));
         }
+        if req.has_div_precision_increment() {
+            eval_cfg.set_div_precision_incr(req.get_div_precision_increment() as u8);
+        }
         Ok(eval_cfg)
     }
 
@@ -108,6 +113,8 @@ impl EvalConfig {
             max_warning_cnt: DEFAULT_MAX_WARNING_CNT,
             sql_mode: SqlMode::empty(),
             paging_size: None,
+            div_precision_increment: DEFAULT_DIV_FRAC_INCR,
+            is_test: false,
         }
     }
 
@@ -124,6 +131,11 @@ impl EvalConfig {
 
     pub fn set_sql_mode(&mut self, new_value: SqlMode) -> &mut Self {
         self.sql_mode = new_value;
+        self
+    }
+
+    pub fn set_div_precision_incr(&mut self, new_value: u8) -> &mut Self {
+        self.div_precision_increment = new_value;
         self
     }
 

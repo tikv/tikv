@@ -1,20 +1,23 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp::Ordering, collections::BinaryHeap, ptr::NonNull, sync::Arc};
+use std::sync::Arc;
 
 use async_trait::async_trait;
-use tidb_query_common::{storage::IntervalRange, Result};
+use tidb_query_common::{Result, storage::IntervalRange};
 use tidb_query_datatype::{
-    codec::{
-        batch::{LazyBatchColumn, LazyBatchColumnVec},
-        data_type::*,
-    },
+    codec::{batch::LazyBatchColumnVec, data_type::*},
     expr::{EvalConfig, EvalContext, EvalWarnings},
 };
 use tidb_query_expr::{RpnExpression, RpnExpressionBuilder, RpnStackNode};
 use tipb::{Expr, FieldType, TopN};
 
-use crate::{interface::*, util::*};
+use crate::{
+    interface::*,
+    util::{
+        top_n_heap::{HeapItemSourceData, HeapItemUnsafe, TopNHeap},
+        *,
+    },
+};
 
 pub struct BatchTopNExecutor<Src: BatchExecutor> {
     /// The heap, which contains N rows at most.
@@ -22,7 +25,7 @@ pub struct BatchTopNExecutor<Src: BatchExecutor> {
     /// This field is placed before `eval_columns_buffer_unsafe`, `order_exprs`,
     /// `order_is_desc` and `src` because it relies on data in those fields
     /// and we want this field to be dropped first.
-    heap: BinaryHeap<HeapItemUnsafe>,
+    heap: TopNHeap,
 
     /// A collection of all evaluated columns. This is to avoid repeated
     /// allocations in each `next_batch()`.
@@ -35,8 +38,8 @@ pub struct BatchTopNExecutor<Src: BatchExecutor> {
     /// 1. `BatchTopNExecutor` is valid (i.e. not dropped).
     ///
     /// 2. The referenced `LazyBatchColumnVec` of the element must be valid,
-    /// which only happens    when at least one of the row is in the `heap`.
-    /// Note that rows may be swapped out from    `heap` at any time.
+    ///    which only happens when at least one of the row is in the `heap`.
+    ///    Note that rows may be swapped out from    `heap` at any time.
     ///
     /// This field is placed before `order_exprs` and `src` because it relies on
     /// data in those fields and we want this field to be dropped first.
@@ -97,7 +100,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
             .collect();
 
         Self {
-            heap: BinaryHeap::new(),
+            heap: TopNHeap::new(n),
             eval_columns_buffer_unsafe: Box::<Vec<_>>::default(),
             order_exprs: order_exprs.into_boxed_slice(),
             order_exprs_field_type: order_exprs_field_type.into_boxed_slice(),
@@ -126,7 +129,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
             .collect();
 
         Self {
-            heap: BinaryHeap::new(),
+            heap: TopNHeap::new(n),
             eval_columns_buffer_unsafe: Box::<Vec<_>>::default(),
             order_exprs: order_exprs.into_boxed_slice(),
             order_exprs_field_type: order_exprs_field_type.into_boxed_slice(),
@@ -140,7 +143,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
     }
 
     pub fn new(
-        config: std::sync::Arc<EvalConfig>,
+        config: Arc<EvalConfig>,
         src: Src,
         order_exprs_def: Vec<Expr>,
         order_is_desc: Vec<bool>,
@@ -163,8 +166,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
             .collect();
 
         Ok(Self {
-            // Avoid large N causing OOM
-            heap: BinaryHeap::with_capacity(n.min(1024)),
+            heap: TopNHeap::new(n),
             // Simply large enough to avoid repeated allocations
             eval_columns_buffer_unsafe: Box::new(Vec::with_capacity(512)),
             order_exprs: order_exprs.into_boxed_slice(),
@@ -182,7 +184,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
     async fn handle_next_batch(&mut self) -> Result<Option<LazyBatchColumnVec>> {
         // Use max batch size from the beginning because top N
         // always needs to calculate over all data.
-        let src_result = self.src.next_batch(crate::runner::BATCH_MAX_SIZE).await;
+        let src_result = self.src.next_batch(BATCH_MAX_SIZE).await;
 
         self.context.warnings = src_result.warnings;
 
@@ -192,8 +194,8 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
             self.process_batch_input(src_result.physical_columns, src_result.logical_rows)?;
         }
 
-        if src_is_drained {
-            Ok(Some(self.heap_take_all()))
+        if src_is_drained.stop() {
+            Ok(Some(self.heap.take_all()))
         } else {
             Ok(None)
         }
@@ -240,83 +242,10 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
                 eval_columns_offset: eval_offset,
                 logical_row_index,
             };
-            self.heap_add_row(row)?;
+            self.heap.add_row(row)?;
         }
 
         Ok(())
-    }
-
-    fn heap_add_row(&mut self, row: HeapItemUnsafe) -> Result<()> {
-        if self.heap.len() < self.n {
-            // HeapItemUnsafe must be checked valid to compare in advance, or else it may
-            // panic inside BinaryHeap.
-            row.cmp_sort_key(&row)?;
-
-            // Push into heap when heap is not full.
-            self.heap.push(row);
-        } else {
-            // Swap the greatest row in the heap if this row is smaller than that row.
-            let mut greatest_row = self.heap.peek_mut().unwrap();
-            if row.cmp_sort_key(&greatest_row)? == Ordering::Less {
-                *greatest_row = row;
-            }
-        }
-
-        Ok(())
-    }
-
-    #[allow(clippy::clone_on_copy)]
-    fn heap_take_all(&mut self) -> LazyBatchColumnVec {
-        let heap = std::mem::take(&mut self.heap);
-        let sorted_items = heap.into_sorted_vec();
-        if sorted_items.is_empty() {
-            return LazyBatchColumnVec::empty();
-        }
-
-        let mut result = sorted_items[0]
-            .source_data
-            .physical_columns
-            .clone_empty(sorted_items.len());
-
-        for (column_index, result_column) in result.as_mut_slice().iter_mut().enumerate() {
-            match result_column {
-                LazyBatchColumn::Raw(dest_column) => {
-                    for item in &sorted_items {
-                        let src = item.source_data.physical_columns[column_index].raw();
-                        dest_column
-                            .push(&src[item.source_data.logical_rows[item.logical_row_index]]);
-                    }
-                }
-                LazyBatchColumn::Decoded(dest_vector_value) => {
-                    match_template::match_template! {
-                        TT = [
-                            Int,
-                            Real,
-                            Duration,
-                            Decimal,
-                            DateTime,
-                            Bytes => BytesRef,
-                            Json => JsonRef,
-                            Enum => EnumRef,
-                            Set => SetRef,
-                        ],
-                        match dest_vector_value {
-                            VectorValue::TT(dest_column) => {
-                                for item in &sorted_items {
-                                    let src: &VectorValue = item.source_data.physical_columns[column_index].decoded();
-                                    let src_ref = TT::borrow_vector_value(src);
-                                    // TODO: This clone is not necessary.
-                                    dest_column.push(src_ref.get_option_ref(item.source_data.logical_rows[item.logical_row_index]).map(|x| x.into_owned_value()));
-                                }
-                            },
-                        }
-                    }
-                }
-            }
-        }
-
-        result.assert_columns_equal_length();
-        result
     }
 }
 
@@ -330,6 +259,19 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
     }
 
     #[inline]
+    fn intermediate_schema(&self, index: usize) -> Result<&[FieldType]> {
+        self.src.intermediate_schema(index)
+    }
+
+    #[inline]
+    fn consume_and_fill_intermediate_results(
+        &mut self,
+        results: &mut [Vec<BatchExecuteResult>],
+    ) -> Result<()> {
+        self.src.consume_and_fill_intermediate_results(results)
+    }
+
+    #[inline]
     async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         assert!(!self.is_ended);
 
@@ -339,7 +281,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
                 physical_columns: LazyBatchColumnVec::empty(),
                 logical_rows: Vec::new(),
                 warnings: EvalWarnings::default(),
-                is_drained: Ok(true),
+                is_drained: Ok(BatchExecIsDrain::Drain),
             };
         }
 
@@ -369,14 +311,14 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
                     physical_columns: logical_columns,
                     logical_rows,
                     warnings: self.context.take_warnings(),
-                    is_drained: Ok(true),
+                    is_drained: Ok(BatchExecIsDrain::Drain),
                 }
             }
             Ok(None) => BatchExecuteResult {
                 physical_columns: LazyBatchColumnVec::empty(),
                 logical_rows: Vec::new(),
                 warnings: self.context.take_warnings(),
-                is_drained: Ok(false),
+                is_drained: Ok(BatchExecIsDrain::Remain),
             },
         }
     }
@@ -402,116 +344,11 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
     }
 }
 
-struct HeapItemSourceData {
-    physical_columns: LazyBatchColumnVec,
-    logical_rows: Vec<usize>,
-}
-
-/// The item in the heap of `BatchTopNExecutor`.
-///
-/// WARN: The content of this structure is valid only if `BatchTopNExecutor` is
-/// valid (i.e. not dropped). Thus it is called unsafe.
-struct HeapItemUnsafe {
-    /// A pointer to the `order_is_desc` field in `BatchTopNExecutor`.
-    order_is_desc_ptr: NonNull<[bool]>,
-
-    /// A pointer to the `order_exprs_field_type` field in `order_exprs`.
-    order_exprs_field_type_ptr: NonNull<[FieldType]>,
-
-    /// The source data that evaluated column in this structure is using.
-    source_data: Arc<HeapItemSourceData>,
-
-    /// A pointer to the `eval_columns_buffer` field in `BatchTopNExecutor`.
-    eval_columns_buffer_ptr: NonNull<Vec<RpnStackNode<'static>>>,
-
-    /// The begin offset of the evaluated columns stored in the buffer.
-    ///
-    /// The length of evaluated columns in the buffer is `order_is_desc.len()`.
-    eval_columns_offset: usize,
-
-    /// Which logical row in the evaluated columns this heap item is
-    /// representing.
-    logical_row_index: usize,
-}
-
-impl HeapItemUnsafe {
-    fn get_order_is_desc(&self) -> &[bool] {
-        unsafe { self.order_is_desc_ptr.as_ref() }
-    }
-
-    fn get_order_exprs_field_type(&self) -> &[FieldType] {
-        unsafe { self.order_exprs_field_type_ptr.as_ref() }
-    }
-
-    fn get_eval_columns(&self, len: usize) -> &[RpnStackNode<'_>] {
-        let offset_begin = self.eval_columns_offset;
-        let offset_end = offset_begin + len;
-        let vec_buf = unsafe { self.eval_columns_buffer_ptr.as_ref() };
-        &vec_buf[offset_begin..offset_end]
-    }
-
-    fn cmp_sort_key(&self, other: &Self) -> Result<Ordering> {
-        // Only debug assert because this function is called pretty frequently.
-        debug_assert_eq!(self.get_order_is_desc(), other.get_order_is_desc());
-
-        let order_is_desc = self.get_order_is_desc();
-        let order_exprs_field_type = self.get_order_exprs_field_type();
-        let columns_len = order_is_desc.len();
-        let eval_columns_lhs = self.get_eval_columns(columns_len);
-        let eval_columns_rhs = other.get_eval_columns(columns_len);
-
-        for column_idx in 0..columns_len {
-            let lhs_node = &eval_columns_lhs[column_idx];
-            let rhs_node = &eval_columns_rhs[column_idx];
-            let lhs = lhs_node.get_logical_scalar_ref(self.logical_row_index);
-            let rhs = rhs_node.get_logical_scalar_ref(other.logical_row_index);
-
-            // There is panic inside, but will never panic, since the data type of
-            // corresponding column should be consistent for each
-            // `HeapItemUnsafe`.
-            let ord = lhs.cmp_sort_key(&rhs, &order_exprs_field_type[column_idx])?;
-
-            if ord == Ordering::Equal {
-                continue;
-            }
-            if !order_is_desc[column_idx] {
-                return Ok(ord);
-            } else {
-                return Ok(ord.reverse());
-            }
-        }
-
-        Ok(Ordering::Equal)
-    }
-}
-
-/// WARN: HeapItemUnsafe implements partial ordering. It panics when Collator
-/// fails to parse. So make sure that it is valid before putting it into a heap.
-impl Ord for HeapItemUnsafe {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.cmp_sort_key(other).unwrap()
-    }
-}
-
-impl PartialOrd for HeapItemUnsafe {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl PartialEq for HeapItemUnsafe {
-    fn eq(&self, other: &Self) -> bool {
-        self.cmp(other) == Ordering::Equal
-    }
-}
-
-impl Eq for HeapItemUnsafe {}
-
 #[cfg(test)]
 mod tests {
     use futures::executor::block_on;
     use tidb_query_datatype::{
-        builder::FieldTypeBuilder, expr::EvalWarnings, Collation, FieldTypeFlag, FieldTypeTp,
+        Collation, FieldTypeFlag, FieldTypeTp, builder::FieldTypeBuilder, expr::EvalWarnings,
     };
     use tidb_query_expr::RpnExpressionBuilder;
 
@@ -528,7 +365,7 @@ mod tests {
                 )]),
                 logical_rows: (0..1).collect(),
                 warnings: EvalWarnings::default(),
-                is_drained: Ok(true),
+                is_drained: Ok(BatchExecIsDrain::Drain),
             }],
         );
 
@@ -545,7 +382,7 @@ mod tests {
 
         let r = block_on(exec.next_batch(1));
         assert_eq!(r.physical_columns.rows_len(), 0);
-        assert!(r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     #[test]
@@ -559,13 +396,13 @@ mod tests {
                     )]),
                     logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(false),
+                    is_drained: Ok(BatchExecIsDrain::Remain),
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::empty(),
                     logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(true),
+                    is_drained: Ok(BatchExecIsDrain::Drain),
                 },
             ],
         );
@@ -583,11 +420,11 @@ mod tests {
 
         let r = block_on(exec.next_batch(1));
         assert_eq!(r.physical_columns.rows_len(), 0);
-        assert!(!r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().is_remain());
 
         let r = block_on(exec.next_batch(1));
         assert_eq!(r.physical_columns.rows_len(), 0);
-        assert!(r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     /// Builds an executor that will return these data:
@@ -629,7 +466,7 @@ mod tests {
                     ]),
                     logical_rows: vec![3, 0, 1],
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(false),
+                    is_drained: Ok(BatchExecIsDrain::Remain),
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
@@ -639,7 +476,7 @@ mod tests {
                     ]),
                     logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(false),
+                    is_drained: Ok(BatchExecIsDrain::Remain),
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
@@ -663,7 +500,7 @@ mod tests {
                     ]),
                     logical_rows: vec![1, 2, 0, 4],
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(true),
+                    is_drained: Ok(BatchExecIsDrain::Drain),
                 },
             ],
         )
@@ -705,12 +542,12 @@ mod tests {
         let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
-        assert!(!r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().is_remain());
 
         let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
-        assert!(!r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().is_remain());
 
         let r = block_on(exec.next_batch(1));
         assert_eq!(&r.logical_rows, &[0, 1, 2, 3, 4, 5, 6]);
@@ -736,7 +573,7 @@ mod tests {
                 Real::new(4.0).ok()
             ]
         );
-        assert!(r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     #[test]
@@ -775,12 +612,12 @@ mod tests {
         let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
-        assert!(!r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().is_remain());
 
         let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
-        assert!(!r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().is_remain());
 
         let r = block_on(exec.next_batch(1));
         assert_eq!(&r.logical_rows, &[0, 1, 2, 3, 4, 5, 6]);
@@ -806,13 +643,13 @@ mod tests {
                 Real::new(4.0).ok()
             ]
         );
-        assert!(r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     #[test]
     fn test_integration_3() {
         use tidb_query_expr::{
-            impl_arithmetic::{arithmetic_fn_meta, IntIntPlus},
+            impl_arithmetic::{IntIntPlus, arithmetic_fn_meta},
             impl_op::is_null_fn_meta,
         };
 
@@ -858,12 +695,12 @@ mod tests {
         let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
-        assert!(!r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().is_remain());
 
         let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
-        assert!(!r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().is_remain());
 
         let r = block_on(exec.next_batch(1));
         assert_eq!(&r.logical_rows, &[0, 1, 2, 3, 4]);
@@ -887,7 +724,7 @@ mod tests {
                 Real::new(4.0).ok()
             ]
         );
-        assert!(r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     /// Builds an executor that will return these data:
@@ -939,13 +776,13 @@ mod tests {
                     ]),
                     logical_rows: vec![2, 1, 0],
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(false),
+                    is_drained: Ok(BatchExecIsDrain::Remain),
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::empty(),
                     logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(false),
+                    is_drained: Ok(BatchExecIsDrain::Remain),
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
@@ -979,7 +816,7 @@ mod tests {
                     ]),
                     logical_rows: vec![0, 1, 2, 3],
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(true),
+                    is_drained: Ok(BatchExecIsDrain::Drain),
                 },
             ],
         )
@@ -1022,12 +859,12 @@ mod tests {
         let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
-        assert!(!r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().is_remain());
 
         let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
-        assert!(!r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().is_remain());
 
         let r = block_on(exec.next_batch(1));
         assert_eq!(&r.logical_rows, &[0, 1, 2, 3, 4]);
@@ -1063,7 +900,7 @@ mod tests {
                 Some(b"aa".to_vec()),
             ]
         );
-        assert!(r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     #[test]
@@ -1103,12 +940,12 @@ mod tests {
         let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
-        assert!(!r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().is_remain());
 
         let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
-        assert!(!r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().is_remain());
 
         let r = block_on(exec.next_batch(1));
         assert_eq!(&r.logical_rows, &[0, 1, 2, 3, 4]);
@@ -1144,7 +981,7 @@ mod tests {
                 Some(b"aa".to_vec()),
             ]
         );
-        assert!(r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     /// Builds an executor that will return these data:
@@ -1200,13 +1037,13 @@ mod tests {
                     ]),
                     logical_rows: vec![2, 1, 0],
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(false),
+                    is_drained: Ok(BatchExecIsDrain::Remain),
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::empty(),
                     logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(false),
+                    is_drained: Ok(BatchExecIsDrain::Remain),
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
@@ -1240,7 +1077,7 @@ mod tests {
                     ]),
                     logical_rows: vec![2, 1, 0, 3],
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(true),
+                    is_drained: Ok(BatchExecIsDrain::Drain),
                 },
             ],
         )
@@ -1264,12 +1101,12 @@ mod tests {
             let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
-            assert!(!r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().is_remain());
 
             let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
-            assert!(!r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().is_remain());
 
             let r = block_on(exec.next_batch(1));
             assert_eq!(&r.logical_rows, &[0, 1, 2, 3, 4]);
@@ -1279,7 +1116,7 @@ mod tests {
                 r.physical_columns[col_index].decoded().to_int_vec(),
                 expected
             );
-            assert!(r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().stop());
         };
 
         test_top5(
@@ -1378,12 +1215,12 @@ mod tests {
             let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
-            assert!(!r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().is_remain());
 
             let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
-            assert!(!r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().is_remain());
 
             let r = block_on(exec.next_batch(1));
             assert_eq!(&r.logical_rows, &[0, 1, 2, 3, 4]);
@@ -1393,7 +1230,7 @@ mod tests {
                 r.physical_columns[col_index].decoded().to_int_vec(),
                 expected
             );
-            assert!(r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().stop());
         };
 
         test_top5_paging6(
@@ -1501,7 +1338,7 @@ mod tests {
                 );
                 let r1_is_drained = r1.is_drained.unwrap();
                 assert_eq!(r1_is_drained, r2.is_drained.unwrap());
-                if r1_is_drained {
+                if r1_is_drained.stop() {
                     break;
                 }
             }
@@ -1510,5 +1347,101 @@ mod tests {
         test_top5_paging4(make_src_executor_unsigned);
         test_top5_paging4(make_src_executor);
         test_top5_paging4(make_bytes_src_executor);
+    }
+
+    #[test]
+    fn test_extra_common_handle_keys() {
+        fn make_result(vals: Vec<i64>, logical_rows: Vec<usize>, last: bool) -> BatchExecuteResult {
+            let vals1 = vals.iter().map(|&v| Some(v)).collect::<Vec<_>>();
+            let vals2 = vals.iter().map(|&v| Some(1000 + v)).collect::<Vec<_>>();
+            let mut extra_handle_keys = vals
+                .iter()
+                .map(|&v| format!("h{}", v).into_bytes())
+                .collect::<Vec<_>>();
+            let mut physical_columns = LazyBatchColumnVec::from(vec![
+                VectorValue::Int(vals1.into()),
+                VectorValue::Int(vals2.into()),
+            ]);
+            physical_columns
+                .mut_extra_common_handle_keys()
+                .append(&mut extra_handle_keys);
+
+            BatchExecuteResult {
+                physical_columns,
+                logical_rows,
+                is_drained: Ok(if last {
+                    BatchExecIsDrain::Drain
+                } else {
+                    BatchExecIsDrain::Remain
+                }),
+                warnings: EvalWarnings::default(),
+            }
+        }
+
+        let src_exec = MockExecutor::new(
+            vec![FieldTypeTp::LongLong.into(), FieldTypeTp::LongLong.into()],
+            vec![
+                make_result(vec![0, 1, 2, 103, 4, 505], vec![5, 4, 2, 0, 3], false),
+                make_result(vec![3, 15, 12], vec![], false),
+                make_result(vec![], vec![], false),
+                make_result(vec![20, 16, 25], vec![1, 2], true),
+            ],
+        );
+
+        let mut exec = BatchTopNExecutor::new_for_test(
+            src_exec,
+            vec![
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(1)
+                    .build_for_test(),
+            ],
+            vec![false],
+            100,
+        );
+
+        let mut rows = vec![];
+        let mut handle_keys = vec![];
+        loop {
+            let mut r = block_on(exec.next_batch(1));
+            if !r.logical_rows.is_empty() {
+                let result_handle_keys = r
+                    .physical_columns
+                    .take_extra_common_handle_keys()
+                    .unwrap_or(vec![]);
+                let vals1 = r.physical_columns[0].decoded().to_int_vec();
+                let vals2 = r.physical_columns[1].decoded().to_int_vec();
+                for row in r.logical_rows {
+                    rows.push((vals1[row].unwrap(), vals2[row].unwrap()));
+                    handle_keys.push(result_handle_keys[row].clone());
+                }
+            }
+            if r.is_drained.unwrap().stop() {
+                break;
+            }
+        }
+        assert_eq!(
+            rows,
+            vec![
+                (0, 1000),
+                (2, 1002),
+                (4, 1004),
+                (16, 1016),
+                (25, 1025),
+                (103, 1103),
+                (505, 1505),
+            ]
+        );
+        assert_eq!(
+            handle_keys,
+            vec![
+                b"h0".to_vec(),
+                b"h2".to_vec(),
+                b"h4".to_vec(),
+                b"h16".to_vec(),
+                b"h25".to_vec(),
+                b"h103".to_vec(),
+                b"h505".to_vec(),
+            ]
+        )
     }
 }

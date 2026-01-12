@@ -3,13 +3,13 @@
 use std::mem::size_of;
 
 use codec::prelude::NumberDecoder;
-use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
+use tikv_util::codec::number::{self, MAX_VAR_U64_LEN, NumberEncoder};
 
 use crate::{
+    Error, ErrorInner, LastChange, Result,
     lock::LockType,
     timestamp::TimeStamp,
-    types::{Value, SHORT_VALUE_PREFIX},
-    Error, ErrorInner, Result,
+    types::{SHORT_VALUE_PREFIX, Value},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -43,6 +43,7 @@ impl WriteType {
             LockType::Delete => Some(WriteType::Delete),
             LockType::Lock => Some(WriteType::Lock),
             LockType::Pessimistic => None,
+            LockType::Shared => None,
         }
     }
 
@@ -105,9 +106,9 @@ pub struct Write {
     ///
     /// 1. `Key_100_put`, `Key_120_del` applied
     /// 2. GC with safepoint = 130 started and `Key_100_put`, `Key_120_del` are
-    /// deleted 3. Finished applying `Key_100_put_R`, which means to rewrite
-    /// `Key_100_put` 4. Read at `140` should get nothing (since it's
-    /// MVCC-deleted at 120) but finds `Key_100_put`
+    ///    deleted 3. Finished applying `Key_100_put_R`, which means to rewrite
+    ///    `Key_100_put` 4. Read at `140` should get nothing (since it's
+    ///    MVCC-deleted at 120) but finds `Key_100_put`
     ///
     /// To solve the problem, when marking `has_overlapped_rollback` on an
     /// already-existed commit record, add a special field `gc_fence` on it. If
@@ -154,11 +155,9 @@ pub struct Write {
     ///   rollback, and it's next version's `commit_ts` is `ts`
     pub gc_fence: Option<TimeStamp>,
 
-    /// The commit TS of the latest PUT/DELETE record
-    pub last_change_ts: TimeStamp,
-    /// The number of versions that need skipping from this record
-    /// to find the latest PUT/DELETE record
-    pub versions_to_last_change: u64,
+    /// The position of the last actual write (PUT or DELETE), used to skip
+    /// consecutive LOCK records when reading.
+    pub last_change: LastChange,
     /// The source of this txn.
     pub txn_source: u64,
 }
@@ -180,8 +179,7 @@ impl std::fmt::Debug for Write {
             )
             .field("has_overlapped_rollback", &self.has_overlapped_rollback)
             .field("gc_fence", &self.gc_fence)
-            .field("last_change_ts", &self.last_change_ts)
-            .field("versions_to_last_change", &self.versions_to_last_change)
+            .field("last_change", &self.last_change)
             .field("txn_source", &self.txn_source)
             .finish()
     }
@@ -197,8 +195,7 @@ impl Write {
             short_value,
             has_overlapped_rollback: false,
             gc_fence: None,
-            last_change_ts: TimeStamp::zero(),
-            versions_to_last_change: 0,
+            last_change: LastChange::default(),
             txn_source: 0,
         }
     }
@@ -217,8 +214,7 @@ impl Write {
             short_value,
             has_overlapped_rollback: false,
             gc_fence: None,
-            last_change_ts: TimeStamp::zero(),
-            versions_to_last_change: 0,
+            last_change: LastChange::default(),
             txn_source: 0,
         }
     }
@@ -236,13 +232,8 @@ impl Write {
     }
 
     #[must_use]
-    pub fn set_last_change(
-        mut self,
-        last_change_ts: TimeStamp,
-        versions_to_last_change: u64,
-    ) -> Self {
-        self.last_change_ts = last_change_ts;
-        self.versions_to_last_change = versions_to_last_change;
+    pub fn set_last_change(mut self, last_change: LastChange) -> Self {
+        self.last_change = last_change;
         self
     }
 
@@ -269,28 +260,8 @@ impl Write {
             short_value: self.short_value.as_deref(),
             has_overlapped_rollback: self.has_overlapped_rollback,
             gc_fence: self.gc_fence,
-            last_change_ts: self.last_change_ts,
-            versions_to_last_change: self.versions_to_last_change,
+            last_change: self.last_change.clone(),
             txn_source: self.txn_source,
-        }
-    }
-
-    /// Returns the new `last_change_ts` and `versions_to_last_change` according
-    /// to this write record.
-    pub fn next_last_change_info(&self, commit_ts: TimeStamp) -> (TimeStamp, u64) {
-        match self.write_type {
-            WriteType::Put | WriteType::Delete => (commit_ts, 1),
-            WriteType::Lock | WriteType::Rollback => {
-                // If neither `last_change_ts` nor `versions_to_last_change` exists, do not
-                // set `last_change_ts` to indicate we don't know where is the last change.
-                // This should not happen if data is written in new version TiKV. If we hope to
-                // support data from old TiKV, consider iterating to the last change to find it.
-                if !self.last_change_ts.is_zero() || self.versions_to_last_change != 0 {
-                    (self.last_change_ts, self.versions_to_last_change + 1)
-                } else {
-                    (TimeStamp::zero(), 0)
-                }
-            }
         }
     }
 }
@@ -316,14 +287,7 @@ pub struct WriteRef<'a> {
     /// See [`Write::gc_fence`] for more detail.
     pub gc_fence: Option<TimeStamp>,
 
-    /// The commit TS of the last PUT/DELETE record before this write record.
-    /// It only exists if this is a LOCK/ROLLBACK record.
-    pub last_change_ts: TimeStamp,
-    /// The number of versions that need skipping from this record
-    /// to find the latest PUT/DELETE record.
-    /// If versions_to_last_change > 0 but last_change_ts == 0, the key does not
-    /// have a PUT/DELETE record before this write record.
-    pub versions_to_last_change: u64,
+    pub last_change: LastChange,
     /// The source of this txn.
     pub txn_source: u64,
 }
@@ -344,7 +308,7 @@ impl WriteRef<'_> {
         let mut has_overlapped_rollback = false;
         let mut gc_fence = None;
         let mut last_change_ts = TimeStamp::zero();
-        let mut versions_to_last_change = 0;
+        let mut estimated_versions_to_last_change = 0;
         let mut txn_source = 0;
 
         while !b.is_empty() {
@@ -372,7 +336,7 @@ impl WriteRef<'_> {
                 GC_FENCE_PREFIX => gc_fence = Some(number::decode_u64(&mut b)?.into()),
                 LAST_CHANGE_PREFIX => {
                     last_change_ts = number::decode_u64(&mut b)?.into();
-                    versions_to_last_change = number::decode_var_u64(&mut b)?;
+                    estimated_versions_to_last_change = number::decode_var_u64(&mut b)?;
                 }
                 TXN_SOURCE_PREFIX => {
                     txn_source = number::decode_var_u64(&mut b)?;
@@ -391,8 +355,7 @@ impl WriteRef<'_> {
             short_value,
             has_overlapped_rollback,
             gc_fence,
-            last_change_ts,
-            versions_to_last_change,
+            last_change: LastChange::from_parts(last_change_ts, estimated_versions_to_last_change),
             txn_source,
         })
     }
@@ -413,10 +376,14 @@ impl WriteRef<'_> {
             b.push(GC_FENCE_PREFIX);
             b.encode_u64(ts.into_inner()).unwrap();
         }
-        if !self.last_change_ts.is_zero() || self.versions_to_last_change != 0 {
+        if matches!(
+            self.last_change,
+            LastChange::NotExist | LastChange::Exist { .. }
+        ) {
+            let (last_change_ts, versions) = self.last_change.to_parts();
             b.push(LAST_CHANGE_PREFIX);
-            b.encode_u64(self.last_change_ts.into_inner()).unwrap();
-            b.encode_var_u64(self.versions_to_last_change).unwrap();
+            b.encode_u64(last_change_ts.into_inner()).unwrap();
+            b.encode_var_u64(versions).unwrap();
         }
         if self.txn_source != 0 {
             b.push(TXN_SOURCE_PREFIX);
@@ -434,7 +401,10 @@ impl WriteRef<'_> {
         if self.gc_fence.is_some() {
             size += 1 + size_of::<u64>();
         }
-        if !self.last_change_ts.is_zero() || self.versions_to_last_change != 0 {
+        if matches!(
+            self.last_change,
+            LastChange::NotExist | LastChange::Exist { .. }
+        ) {
             size += 1 + size_of::<u64>() + MAX_VAR_U64_LEN;
         }
         if self.txn_source != 0 {
@@ -448,6 +418,7 @@ impl WriteRef<'_> {
     ///     found by reading at `read_ts`
     ///   * The `read_ts` is safe, which means, it's not earlier than the
     ///     current GC safepoint.
+    ///
     /// Return:
     ///   Whether the `Write` record is valid, ie. there's no GC fence or GC
     /// fence doesn't points to any other version.
@@ -488,7 +459,7 @@ impl WriteRef<'_> {
             self.short_value.map(|v| v.to_owned()),
         )
         .set_overlapped_rollback(self.has_overlapped_rollback, self.gc_fence)
-        .set_last_change(self.last_change_ts, self.versions_to_last_change)
+        .set_last_change(self.last_change.clone())
         .set_txn_source(self.txn_source)
     }
 }
@@ -548,8 +519,9 @@ mod tests {
                 .set_overlapped_rollback(true, Some(2345678.into())),
             Write::new(WriteType::Put, 456.into(), Some(b"short_value".to_vec()))
                 .set_overlapped_rollback(true, Some(421397468076048385.into())),
-            Write::new(WriteType::Lock, 456.into(), None).set_last_change(345.into(), 11),
-            Write::new(WriteType::Lock, 456.into(), None).set_last_change(0.into(), 11),
+            Write::new(WriteType::Lock, 456.into(), None)
+                .set_last_change(LastChange::make_exist(345.into(), 11)),
+            Write::new(WriteType::Lock, 456.into(), None).set_last_change(LastChange::NotExist),
             Write::new(WriteType::Lock, 456.into(), None).set_txn_source(1),
         ];
         for (i, write) in writes.drain(..).enumerate() {
@@ -596,13 +568,13 @@ mod tests {
         let cases: Vec<(Option<u64>, u64, bool)> = vec![
             (None, 10, true),
             (None, 100, true),
-            (None, u64::max_value(), true),
+            (None, u64::MAX, true),
             (Some(0), 100, true),
-            (Some(0), u64::max_value(), true),
+            (Some(0), u64::MAX, true),
             (Some(100), 50, true),
             (Some(100), 100, false),
             (Some(100), 150, false),
-            (Some(100), u64::max_value(), false),
+            (Some(100), u64::MAX, false),
         ];
 
         for case in cases {

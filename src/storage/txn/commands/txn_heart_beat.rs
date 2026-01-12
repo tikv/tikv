@@ -1,20 +1,21 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
+use tikv_util::Either;
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
+    ProcessResult, Snapshot, TxnStatus,
     kv::WriteData,
     lock_manager::LockManager,
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader},
     txn::{
+        Result,
         commands::{
             Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
             WriteCommand, WriteContext, WriteResult,
         },
-        Result,
     },
-    ProcessResult, Snapshot, TxnStatus,
 };
 
 command! {
@@ -25,7 +26,10 @@ command! {
     /// [`Prewrite`](Command::Prewrite).
     TxnHeartBeat:
         cmd_ty => TxnStatus,
-        display => "kv::command::txn_heart_beat {} @ {} ttl {} | {:?}", (primary_key, start_ts, advise_ttl, ctx),
+        display => {
+            "kv::command::txn_heart_beat {} @ {} ttl {} | {:?}",
+            (primary_key, start_ts, advise_ttl, ctx),
+        }
         content => {
             /// The primary key of the transaction.
             primary_key: Key,
@@ -34,6 +38,11 @@ command! {
             /// The new TTL that will be used to update the lock's TTL. If the lock's TTL is already
             /// greater than `advise_ttl`, nothing will happen.
             advise_ttl: u64,
+            /// The updated min_commit_ts of the primary key. Piggybacked on the heartbeat command.
+            min_commit_ts: u64,
+        }
+        in_heap => {
+            primary_key,
         }
 }
 
@@ -64,12 +73,33 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
         ));
 
         let lock = match reader.load_lock(&self.primary_key)? {
-            Some(mut lock) if lock.ts == self.start_ts => {
+            Some(Either::Left(mut lock)) if lock.ts == self.start_ts => {
+                let mut updated = false;
+
                 if lock.ttl < self.advise_ttl {
                     lock.ttl = self.advise_ttl;
+                    updated = true;
+                }
+
+                // only for non-async-commit pipelined transactions, we can update the
+                // min_commit_ts
+                if !lock.use_async_commit
+                    && lock.generation > 0
+                    && self.min_commit_ts > 0
+                    && lock.min_commit_ts < self.min_commit_ts.into()
+                {
+                    lock.min_commit_ts = self.min_commit_ts.into();
+                    updated = true;
+                }
+
+                if updated {
                     txn.put_lock(self.primary_key.clone(), &lock, false);
                 }
+
                 lock
+            }
+            Some(Either::Right(_shared_locks)) => {
+                unimplemented!("SharedLocks returned from load_lock is not supported here")
             }
             _ => {
                 return Err(MvccError::from(MvccErrorInner::TxnNotFound {
@@ -96,23 +126,29 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
             new_acquired_locks,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
+            known_txn_status: vec![],
         })
     }
 }
 
 #[cfg(test)]
 pub mod tests {
+    use std::sync::Arc;
+
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
     use tikv_util::deadline::Deadline;
 
     use super::*;
     use crate::storage::{
+        Engine,
         kv::TestEngineBuilder,
         lock_manager::MockLockManager,
         mvcc::tests::*,
-        txn::{commands::WriteCommand, scheduler::DEFAULT_EXECUTION_DURATION_LIMIT, tests::*},
-        Engine,
+        txn::{
+            commands::WriteCommand, scheduler::DEFAULT_EXECUTION_DURATION_LIMIT, tests::*,
+            txn_status_cache::TxnStatusCache,
+        },
     };
 
     pub fn must_success<E: Engine>(
@@ -125,13 +161,14 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let start_ts = start_ts.into();
-        let cm = ConcurrencyManager::new(start_ts);
-        let command = crate::storage::txn::commands::TxnHeartBeat {
+        let cm = ConcurrencyManager::new_for_test(start_ts);
+        let command = TxnHeartBeat {
             ctx: Context::default(),
             primary_key: Key::from_raw(primary_key),
             start_ts,
             advise_ttl,
             deadline: Deadline::from_now(DEFAULT_EXECUTION_DURATION_LIMIT),
+            min_commit_ts: 0,
         };
         let result = command
             .process_write(
@@ -143,6 +180,7 @@ pub mod tests {
                     statistics: &mut Default::default(),
                     async_apply_prewrite: false,
                     raw_ext: None,
+                    txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
                 },
             )
             .unwrap();
@@ -166,13 +204,14 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let start_ts = start_ts.into();
-        let cm = ConcurrencyManager::new(start_ts);
-        let command = crate::storage::txn::commands::TxnHeartBeat {
+        let cm = ConcurrencyManager::new_for_test(start_ts);
+        let command = TxnHeartBeat {
             ctx,
             primary_key: Key::from_raw(primary_key),
             start_ts,
             advise_ttl,
             deadline: Deadline::from_now(DEFAULT_EXECUTION_DURATION_LIMIT),
+            min_commit_ts: 0,
         };
         assert!(
             command
@@ -185,6 +224,7 @@ pub mod tests {
                         statistics: &mut Default::default(),
                         async_apply_prewrite: false,
                         raw_ext: None,
+                        txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
                     },
                 )
                 .is_err()
@@ -238,5 +278,53 @@ pub mod tests {
         test(8, k, &mut engine);
 
         must_pessimistic_locked(&mut engine, k, 8, 15);
+    }
+
+    #[test]
+    fn test_heartbeat_piggyback_min_commit_ts() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+
+        let (k, v) = (b"k1", b"v1");
+
+        // Create a lock with TTL=100.
+        must_flush_put(&mut engine, k, v, k, 5, 1);
+        must_locked(&mut engine, k, 5);
+
+        let ctx = Context::default();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let start_ts = 5.into();
+        let cm = ConcurrencyManager::new_for_test(start_ts);
+        let command = TxnHeartBeat {
+            ctx: ctx.clone(),
+            primary_key: Key::from_raw(k),
+            start_ts,
+            advise_ttl: 3333,
+            min_commit_ts: 10,
+            deadline: Deadline::from_now(DEFAULT_EXECUTION_DURATION_LIMIT),
+        };
+        let result = command
+            .process_write(
+                snapshot,
+                WriteContext {
+                    lock_mgr: &MockLockManager::new(),
+                    concurrency_manager: cm,
+                    extra_op: Default::default(),
+                    statistics: &mut Default::default(),
+                    async_apply_prewrite: false,
+                    raw_ext: None,
+                    txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
+                },
+            )
+            .unwrap();
+        if let ProcessResult::TxnStatus {
+            txn_status: TxnStatus::Uncommitted { lock, .. },
+        } = result.pr
+        {
+            write(&engine, &ctx, result.to_be_write.modifies);
+            assert_eq!(lock.ttl, 3333);
+            assert_eq!(lock.min_commit_ts, 10.into());
+        } else {
+            unreachable!();
+        }
     }
 }

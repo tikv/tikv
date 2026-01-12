@@ -5,14 +5,17 @@ use std::{borrow::Cow, cmp::Ordering};
 
 use engine_traits::CF_DEFAULT;
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel, WriteConflictReason};
-use txn_types::{Key, Lock, LockType, OldValue, TimeStamp, Value, WriteRef, WriteType};
+use tikv_util::Either;
+use txn_types::{
+    Key, LastChange, Lock, LockType, OldValue, TimeStamp, ValueEntry, WriteRef, WriteType,
+};
 
 use super::ScannerConfig;
 use crate::storage::{
+    Cursor, Snapshot, Statistics,
     kv::SEEK_BOUND,
     mvcc::{ErrorInner::WriteConflict, NewerTsCheckState, Result},
     txn::{Result as TxnResult, TxnEntry, TxnEntryScanner},
-    Cursor, Snapshot, Statistics,
 };
 
 /// Defines the behavior of the scanner.
@@ -91,6 +94,7 @@ impl<S: Snapshot> Cursors<S> {
                 }
             }
         }
+        statistics.write.over_seek_bound += 1;
 
         // We have not found another user key for now, so we directly `seek()`.
         // After that, we must pointing to another key, or out of bound.
@@ -314,7 +318,6 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
         // and if we have not reached where we want, we use `seek()`.
 
         // Whether we have *not* reached where we want by `next()`.
-        let mut needs_seek = true;
 
         for i in 0..SEEK_BOUND {
             if i > 0 {
@@ -333,8 +336,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                 let key_commit_ts = Key::decode_ts_from(current_key)?;
                 if key_commit_ts <= self.cfg.ts {
                     // Founded, don't need to seek again.
-                    needs_seek = false;
-                    break;
+                    return Ok(true);
                 } else if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
                     self.met_newer_ts_data = NewerTsCheckState::Met;
                 }
@@ -356,24 +358,22 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                 }
             }
         }
-        // If we have not found `${user_key}_${ts}` in a few `next()`, directly
-        // `seek()`.
-        if needs_seek {
-            // `user_key` must have reserved space here, so its clone has reserved space
-            // too. So no reallocation happens in `append_ts`.
-            self.cursors.write.seek(
-                &user_key.clone().append_ts(self.cfg.ts),
-                &mut self.statistics.write,
-            )?;
-            if !self.cursors.write.valid()? {
-                // Key space ended.
-                return Ok(false);
-            }
-            let current_key = self.cursors.write.key(&mut self.statistics.write);
-            if !Key::is_user_key_eq(current_key, user_key.as_encoded().as_slice()) {
-                // Meet another key.
-                return Ok(false);
-            }
+        self.statistics.write.over_seek_bound += 1;
+
+        // `user_key` must have reserved space here, so its clone has reserved space
+        // too. So no reallocation happens in `append_ts`.
+        self.cursors.write.seek(
+            &user_key.clone().append_ts(self.cfg.ts),
+            &mut self.statistics.write,
+        )?;
+        if !self.cursors.write.valid()? {
+            // Key space ended.
+            return Ok(false);
+        }
+        let current_key = self.cursors.write.key(&mut self.statistics.write);
+        if !Key::is_user_key_eq(current_key, user_key.as_encoded().as_slice()) {
+            // Meet another key.
+            return Ok(false);
         }
         Ok(true)
     }
@@ -383,7 +383,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
 pub struct LatestKvPolicy;
 
 impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
-    type Output = (Key, Value);
+    type Output = (Key, ValueEntry);
 
     fn handle_lock(
         &mut self,
@@ -397,22 +397,25 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
         }
         // Only needs to check lock in SI
         let lock_cursor = cursors.lock.as_mut().unwrap();
-        let lock = {
+        let lock_or_shared_locks = {
             let lock_value = lock_cursor.value(&mut statistics.lock);
-            Lock::parse(lock_value)?
+            txn_types::parse_lock(lock_value)?
         };
         lock_cursor.next(&mut statistics.lock);
-        if let Err(e) = Lock::check_ts_conflict(
-            Cow::Borrowed(&lock),
+        if let Err(e) = txn_types::check_ts_conflict(
+            Cow::Borrowed(&lock_or_shared_locks),
             &current_user_key,
             cfg.ts,
             &cfg.bypass_locks,
             cfg.isolation_level,
         ) {
+            let lock = lock_or_shared_locks
+                .left()
+                .expect("Err result only for single lock");
             statistics.lock.processed_keys += 1;
             // Skip current_user_key because this key is either blocked or handled.
             cursors.move_write_cursor_to_next_user_key(&current_user_key, statistics)?;
-            if cfg.access_locks.contains(lock.ts) {
+            if !cfg.load_commit_ts && cfg.access_locks.contains(lock.ts) {
                 cursors.ensure_default_cursor(cfg)?;
                 return super::load_data_by_lock(
                     &current_user_key,
@@ -422,10 +425,9 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
                     statistics,
                 )
                 .map(|val| match val {
-                    Some(v) => HandleRes::Return((current_user_key, v)),
+                    Some(v) => HandleRes::Return((current_user_key, ValueEntry::new(v, None))),
                     None => HandleRes::MoveToNext,
-                })
-                .map_err(Into::into);
+                });
             }
             return Err(e.into());
         }
@@ -439,7 +441,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
         cursors: &mut Cursors<S>,
         statistics: &mut Statistics,
     ) -> Result<HandleRes<Self::Output>> {
-        let value: Option<Value> = loop {
+        let value: Option<ValueEntry> = loop {
             let write = WriteRef::parse(cursors.write.value(&mut statistics.write))?;
 
             if !write.check_gc_fence_as_latest_version(cfg.ts) {
@@ -448,13 +450,20 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
 
             match write.write_type {
                 WriteType::Put => {
+                    let commit_ts = if cfg.load_commit_ts {
+                        Some(Key::decode_ts_from(
+                            cursors.write.key(&mut statistics.write),
+                        )?)
+                    } else {
+                        None
+                    };
                     if cfg.omit_value {
-                        break Some(vec![]);
+                        break Some(ValueEntry::new(vec![], commit_ts));
                     }
                     match write.short_value {
                         Some(value) => {
                             // Value is carried in `write`.
-                            break Some(value.to_vec());
+                            break Some(ValueEntry::new(value.to_vec(), commit_ts));
                         }
                         None => {
                             // Value is in the default CF.
@@ -466,23 +475,28 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
                                 start_ts,
                                 statistics,
                             )?;
-                            break Some(value);
+                            break Some(ValueEntry::new(value, commit_ts));
                         }
                     }
                 }
                 WriteType::Delete => break None,
                 WriteType::Lock | WriteType::Rollback => {
-                    if write.versions_to_last_change > 0 && write.last_change_ts.is_zero() {
-                        break None;
-                    }
-                    if write.versions_to_last_change < SEEK_BOUND {
-                        // Continue iterate next `write`.
-                        cursors.write.next(&mut statistics.write);
-                    } else {
-                        // Seek to the expected version directly.
-                        let commit_ts = write.last_change_ts;
-                        let key_with_ts = current_user_key.clone().append_ts(commit_ts);
-                        cursors.write.seek(&key_with_ts, &mut statistics.write)?;
+                    match write.last_change {
+                        LastChange::NotExist => {
+                            break None;
+                        }
+                        LastChange::Exist {
+                            last_change_ts,
+                            estimated_versions_to_last_change,
+                        } if estimated_versions_to_last_change >= SEEK_BOUND => {
+                            // Seek to the expected version directly.
+                            let key_with_ts = current_user_key.clone().append_ts(last_change_ts);
+                            cursors.write.seek(&key_with_ts, &mut statistics.write)?;
+                        }
+                        _ => {
+                            // Continue iterate next `write`.
+                            cursors.write.next(&mut statistics.write);
+                        }
                     }
                 }
             }
@@ -505,7 +519,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
     }
 
     fn output_size(&mut self, output: &Self::Output) -> usize {
-        output.0.len() + output.1.len()
+        output.0.len() + output.1.value.len()
     }
 }
 
@@ -637,14 +651,14 @@ fn scan_latest_handle_lock<S: Snapshot, T>(
     }
     // Only needs to check lock in SI
     let lock_cursor = cursors.lock.as_mut().unwrap();
-    let lock = {
+    let lock_or_shared_locks = {
         let lock_value = lock_cursor.value(&mut statistics.lock);
-        Lock::parse(lock_value)?
+        txn_types::parse_lock(lock_value)?
     };
     lock_cursor.next(&mut statistics.lock);
 
-    Lock::check_ts_conflict(
-        Cow::Owned(lock),
+    txn_types::check_ts_conflict(
+        Cow::Owned(lock_or_shared_locks),
         &current_user_key,
         cfg.ts,
         &cfg.bypass_locks,
@@ -697,55 +711,71 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
             .unwrap()
             .value(&mut statistics.lock)
             .to_owned();
-        let lock = Lock::parse(&lock_value)?;
-        let result = if lock.ts > cfg.ts {
-            Ok(HandleRes::Skip(current_user_key))
-        } else {
-            let load_default_res = if lock.lock_type == LockType::Put && lock.short_value.is_none()
-            {
-                let default_cursor = cursors.default.as_mut().unwrap();
-                super::near_load_data_by_write(
-                    default_cursor,
-                    &current_user_key,
-                    lock.ts,
-                    statistics,
-                )
-                .map(|v| {
-                    let key = default_cursor.key(&mut statistics.data).to_vec();
-                    (key, v)
-                })
-            } else {
-                Ok((vec![], vec![]))
-            };
+        match txn_types::parse_lock(&lock_value)? {
+            Either::Left(lock) => {
+                let result = if lock.ts > cfg.ts {
+                    Ok(HandleRes::Skip(current_user_key))
+                } else {
+                    let load_default_res =
+                        if lock.lock_type == LockType::Put && lock.short_value.is_none() {
+                            let default_cursor = cursors.default.as_mut().unwrap();
+                            super::near_load_data_by_write(
+                                default_cursor,
+                                &current_user_key,
+                                lock.ts,
+                                statistics,
+                            )
+                            .map(|v| {
+                                let key = default_cursor.key(&mut statistics.data).to_vec();
+                                (key, v)
+                            })
+                        } else {
+                            Ok((vec![], vec![]))
+                        };
 
-            let mut old_value = OldValue::None;
-            if self.extra_op == ExtraOp::ReadOldValue
-                && matches!(lock.lock_type, LockType::Put | LockType::Delete)
-            {
-                // When meet a lock, the write cursor must indicate the same user key.
-                // Seek for the last valid committed here.
-                old_value = super::seek_for_valid_value(
-                    &mut cursors.write,
-                    cursors.default.as_mut().unwrap(),
-                    &current_user_key,
-                    std::cmp::max(lock.ts, lock.for_update_ts),
-                    self.from_ts,
-                    cfg.hint_min_ts,
-                    statistics,
-                )?;
+                    let mut old_value = OldValue::None;
+                    if self.extra_op == ExtraOp::ReadOldValue
+                        && matches!(lock.lock_type, LockType::Put | LockType::Delete)
+                    {
+                        // When meet a lock, the write cursor must indicate the same user key.
+                        // Seek for the last valid committed here.
+                        old_value = super::seek_for_valid_value(
+                            &mut cursors.write,
+                            cursors.default.as_mut().unwrap(),
+                            &current_user_key,
+                            std::cmp::max(lock.ts, lock.for_update_ts),
+                            self.from_ts,
+                            cfg.hint_min_ts,
+                            statistics,
+                        )?;
+                    }
+                    load_default_res.map(|default| {
+                        HandleRes::Return(TxnEntry::Prewrite {
+                            default,
+                            lock: (current_user_key.into_encoded(), lock_value),
+                            old_value,
+                        })
+                    })
+                };
+
+                cursors.lock.as_mut().unwrap().next(&mut statistics.lock);
+
+                result
             }
-            load_default_res.map(|default| {
-                HandleRes::Return(TxnEntry::Prewrite {
-                    default,
-                    lock: (current_user_key.into_encoded(), lock_value),
-                    old_value,
+            Either::Right(shared_locks) => {
+                let should_output = shared_locks.iter_ts().any(|start_ts| *start_ts <= cfg.ts);
+                cursors.lock.as_mut().unwrap().next(&mut statistics.lock);
+                Ok(if should_output {
+                    HandleRes::Return(TxnEntry::Prewrite {
+                        default: (vec![], vec![]),
+                        lock: (current_user_key.into_encoded(), lock_value),
+                        old_value: OldValue::None,
+                    })
+                } else {
+                    HandleRes::Skip(current_user_key)
                 })
-            })
-        };
-
-        cursors.lock.as_mut().unwrap().next(&mut statistics.lock);
-
-        result.map_err(Into::into)
+            }
+        }
     }
 
     fn handle_write(
@@ -877,14 +907,16 @@ where
 }
 
 pub mod test_util {
+    use txn_types::LastChange;
+
     use super::*;
     use crate::storage::{
+        Engine,
         mvcc::Write,
         txn::tests::{
             must_cleanup_with_gc_fence, must_commit, must_prewrite_delete, must_prewrite_lock,
             must_prewrite_put,
         },
-        Engine,
     };
 
     pub struct EntryBuilder {
@@ -896,7 +928,7 @@ pub mod test_util {
         pub for_update_ts: TimeStamp,
         pub old_value: OldValue,
         pub last_change_ts: TimeStamp,
-        pub versions_to_last_change: u64,
+        pub estimated_versions_to_last_change: u64,
     }
 
     impl Default for EntryBuilder {
@@ -910,7 +942,7 @@ pub mod test_util {
                 for_update_ts: 0.into(),
                 old_value: OldValue::None,
                 last_change_ts: TimeStamp::zero(),
-                versions_to_last_change: 0,
+                estimated_versions_to_last_change: 0,
             }
         }
     }
@@ -947,10 +979,10 @@ pub mod test_util {
         pub fn last_change(
             &mut self,
             last_change_ts: TimeStamp,
-            versions_to_last_change: u64,
+            estimated_versions_to_last_change: u64,
         ) -> &mut Self {
             self.last_change_ts = last_change_ts;
-            self.versions_to_last_change = versions_to_last_change;
+            self.estimated_versions_to_last_change = estimated_versions_to_last_change;
             self
         }
         pub fn build_commit(&self, wt: WriteType, is_short_value: bool) -> TxnEntry {
@@ -971,8 +1003,9 @@ pub mod test_util {
                     None,
                 )
             };
-            let write_value = Write::new(wt, self.start_ts, short)
-                .set_last_change(self.last_change_ts, self.versions_to_last_change);
+            let write_value = Write::new(wt, self.start_ts, short).set_last_change(
+                LastChange::from_parts(self.last_change_ts, self.estimated_versions_to_last_change),
+            );
             TxnEntry::Commit {
                 default: (key, value),
                 write: (write_key.into_encoded(), write_value.as_ref().to_bytes()),
@@ -1007,8 +1040,12 @@ pub mod test_util {
                 self.for_update_ts,
                 0,
                 0.into(),
+                false,
             )
-            .set_last_change(self.last_change_ts, self.versions_to_last_change);
+            .set_last_change(LastChange::from_parts(
+                self.last_change_ts,
+                self.estimated_versions_to_last_change,
+            ));
             TxnEntry::Prewrite {
                 default: (key, value),
                 lock: (lock_key.into_encoded(), lock_value.to_bytes()),
@@ -1134,10 +1171,10 @@ mod latest_kv_tests {
 
     use super::{super::ScannerBuilder, test_util::prepare_test_data_for_check_gc_fence, *};
     use crate::storage::{
+        Scanner,
         kv::{Engine, Modify, TestEngineBuilder},
         mvcc::tests::write,
         txn::tests::*,
-        Scanner,
     };
 
     /// Check whether everything works as usual when `ForwardKvScanner::get()`
@@ -1624,7 +1661,7 @@ mod latest_kv_tests {
         must_prewrite_put(&mut engine, b"k4", b"v41", b"k4", 3);
         must_commit(&mut engine, b"k4", 3, 7);
 
-        for start_ts in (10..30).into_iter().step_by(2) {
+        for start_ts in (10..30).step_by(2) {
             must_prewrite_lock(&mut engine, b"k1", b"k1", start_ts);
             must_commit(&mut engine, b"k1", start_ts, start_ts + 1);
             must_prewrite_lock(&mut engine, b"k3", b"k1", start_ts);
@@ -1699,12 +1736,12 @@ mod latest_entry_tests {
 
     use super::{super::ScannerBuilder, test_util::*, *};
     use crate::storage::{
+        Engine, Modify, TestEngineBuilder,
         mvcc::tests::write,
         txn::{
-            tests::{must_commit, must_prewrite_delete, must_prewrite_put},
             EntryBatch,
+            tests::{must_commit, must_prewrite_delete, must_prewrite_put},
         },
-        Engine, Modify, TestEngineBuilder,
     };
 
     /// Check whether everything works as usual when `EntryScanner::get()` goes
@@ -2135,10 +2172,11 @@ mod latest_entry_tests {
 mod delta_entry_tests {
     use engine_traits::{CF_LOCK, CF_WRITE};
     use kvproto::kvrpcpb::{Context, PrewriteRequestPessimisticAction::*};
-    use txn_types::{is_short_value, SHORT_VALUE_MAX_LEN};
+    use txn_types::{SHORT_VALUE_MAX_LEN, is_short_value};
 
     use super::{super::ScannerBuilder, test_util::*, *};
-    use crate::storage::{mvcc::tests::write, txn::tests::*, Engine, Modify, TestEngineBuilder};
+    use crate::storage::{Engine, Modify, TestEngineBuilder, mvcc::tests::write, txn::tests::*};
+
     /// Check whether everything works as usual when `Delta::get()` goes out of
     /// bound.
     #[test]
@@ -2649,7 +2687,7 @@ mod delta_entry_tests {
                         for_update_ts,
                         DoPessimisticCheck,
                     ),
-                    LockType::Pessimistic => {}
+                    LockType::Pessimistic | LockType::Shared => {}
                 }
             }
         }
@@ -2692,18 +2730,18 @@ mod delta_entry_tests {
             }
         };
 
-        check(b"", b"", 0, u64::max_value());
+        check(b"", b"", 0, u64::MAX);
         check(b"", b"", 20, 30);
         check(b"", b"", 14, 24);
         check(b"", b"", 15, 16);
         check(b"", b"", 80, 90);
-        check(b"", b"", 24, u64::max_value());
-        check(b"a", b"g", 0, u64::max_value());
+        check(b"", b"", 24, u64::MAX);
+        check(b"a", b"g", 0, u64::MAX);
         check(b"b", b"c", 20, 30);
         check(b"g", b"h", 14, 24);
         check(b"", b"a", 80, 90);
-        check(b"h", b"", 24, u64::max_value());
-        check(b"c", b"d", 0, u64::max_value());
+        check(b"h", b"", 24, u64::MAX);
+        check(b"c", b"d", 0, u64::MAX);
     }
 
     #[test]

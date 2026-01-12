@@ -3,7 +3,7 @@
 // #[PerformanceCriticalPath]
 use std::{
     borrow::Cow,
-    sync::{atomic::AtomicUsize, Arc},
+    sync::{Arc, atomic::AtomicUsize},
 };
 
 use crossbeam::channel::{SendError, TrySendError};
@@ -15,7 +15,7 @@ use crate::fsm::{Fsm, FsmScheduler, FsmState};
 ///
 /// A mailbox holds an FSM owner, and the sending end of a channel to send
 /// messages to that owner. Multiple producers share the same mailbox to
-/// communicate with a FSM.
+/// communicate with an FSM.
 ///
 /// The mailbox's FSM owner needs to be scheduled to a [`Poller`] to handle its
 /// pending messages. Therefore, the producer of messages also needs to provide
@@ -75,6 +75,7 @@ impl<Owner: Fsm> BasicMailbox<Owner> {
         msg: Owner::Message,
         scheduler: &S,
     ) -> Result<(), SendError<Owner::Message>> {
+        scheduler.consume_msg_resource(&msg);
         self.sender.force_send(msg)?;
         self.state.notify(scheduler, Cow::Borrowed(self));
         Ok(())
@@ -89,6 +90,7 @@ impl<Owner: Fsm> BasicMailbox<Owner> {
         msg: Owner::Message,
         scheduler: &S,
     ) -> Result<(), TrySendError<Owner::Message>> {
+        scheduler.consume_msg_resource(&msg);
         self.sender.try_send(msg)?;
         self.state.notify(scheduler, Cow::Borrowed(self));
         Ok(())

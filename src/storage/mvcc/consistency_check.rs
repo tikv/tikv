@@ -6,24 +6,24 @@ use std::{
     convert::TryInto,
     marker::PhantomData,
     sync::{
-        atomic::{AtomicU64, Ordering as AtomicOrdering},
         Arc,
+        atomic::{AtomicU64, Ordering as AtomicOrdering},
     },
 };
 
 use engine_traits::{
-    IterOptions, Iterable, Iterator as EngineIterator, KvEngine, Peekable, CF_DEFAULT, CF_LOCK,
-    CF_RAFT, CF_WRITE,
+    CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, IterOptions, Iterable, Iterator as EngineIterator,
+    KvEngine, Peekable,
 };
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
 use raftstore::{
-    coprocessor::{ConsistencyCheckMethod, ConsistencyCheckObserver, Coprocessor},
     Result,
+    coprocessor::{ConsistencyCheckMethod, ConsistencyCheckObserver, Coprocessor},
 };
-use tikv_util::keybuilder::KeyBuilder;
+use tikv_util::{Either, keybuilder::KeyBuilder};
 use txn_types::Key;
 
-use crate::storage::mvcc::{Lock, LockType, WriteRef, WriteType};
+use crate::storage::mvcc::{LockType, WriteRef, WriteType};
 
 const PHYSICAL_SHIFT_BITS: usize = 18;
 const SAFE_POINT_WINDOW: usize = 120;
@@ -175,7 +175,7 @@ impl<Iter: EngineIterator, Ob: MvccInfoObserver> MvccInfoScanner<Iter, Ob> {
         })
     }
 
-    fn next_item(&mut self) -> Result<Option<Ob::Target>> {
+    pub fn next_item(&mut self) -> Result<Option<Ob::Target>> {
         let mut lock_ok = box_try!(self.lock_iter.valid());
         let mut writes_ok = box_try!(self.write_iter.valid());
 
@@ -221,7 +221,7 @@ impl<Iter: EngineIterator, Ob: MvccInfoObserver> MvccInfoScanner<Iter, Ob> {
 }
 
 #[derive(Clone, Default)]
-struct MvccInfoCollector {
+pub struct MvccInfoCollector {
     current_item: Vec<u8>,
     mvcc_info: MvccInfo,
 }
@@ -268,13 +268,21 @@ impl MvccInfoObserver for MvccInfoCollector {
             return Ok(false);
         }
 
-        let lock = box_try!(Lock::parse(value));
+        let lock = match box_try!(txn_types::parse_lock(value)) {
+            Either::Left(lock) => lock,
+            Either::Right(_shared_locks) => {
+                unimplemented!(
+                    "SharedLocks returned from txn_types::parse_lock is not supported here"
+                )
+            }
+        };
         let mut lock_info = MvccLock::default();
         match lock.lock_type {
             LockType::Put => lock_info.set_type(Op::Put),
             LockType::Delete => lock_info.set_type(Op::Del),
             LockType::Lock => lock_info.set_type(Op::Lock),
             LockType::Pessimistic => lock_info.set_type(Op::PessimisticLock),
+            LockType::Shared => lock_info.set_type(Op::SharedLock),
         }
         lock_info.set_start_ts(lock.ts.into_inner());
         lock_info.set_primary(lock.primary);
@@ -392,7 +400,14 @@ impl MvccInfoObserver for MvccChecksum {
     }
 
     fn on_lock(&mut self, key: &[u8], value: &[u8]) -> Result<bool> {
-        let lock = box_try!(Lock::parse(value));
+        let lock = match box_try!(txn_types::parse_lock(value)) {
+            Either::Left(lock) => lock,
+            Either::Right(_shared_locks) => {
+                unimplemented!(
+                    "SharedLocks returned from txn_types::parse_lock is not supported here"
+                )
+            }
+        };
         if lock.ts.into_inner() <= self.safe_point {
             // Skip stale records.
             return Ok(true);
@@ -426,6 +441,7 @@ impl MvccInfoObserver for MvccChecksum {
 #[cfg(test)]
 mod tests {
     use engine_test::kv::KvTestEngine;
+    use txn_types::Lock;
 
     use super::*;
     use crate::storage::{
@@ -532,6 +548,7 @@ mod tests {
                 TimeStamp::zero(),
                 0,
                 TimeStamp::zero(),
+                false,
             );
             let value = lock.to_bytes();
             engine

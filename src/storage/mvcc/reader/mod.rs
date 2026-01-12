@@ -12,8 +12,8 @@ pub use self::{
     point_getter::{PointGetter, PointGetterBuilder},
     reader::{MvccReader, SnapshotReader},
     scanner::{
-        has_data_in_range, near_load_data_by_write, seek_for_valid_write, test_util, DeltaScanner,
-        EntryScanner, Scanner, ScannerBuilder,
+        DeltaScanner, EntryScanner, Scanner, ScannerBuilder, has_data_in_range,
+        near_load_data_by_write, seek_for_valid_write, test_util,
     },
 };
 
@@ -83,10 +83,14 @@ impl TxnCommitRecord {
         }
     }
 
-    pub fn unwrap_none(self) -> Option<OverlappedWrite> {
+    #[inline]
+    pub fn unwrap_none(self, region_id: u64) -> Option<OverlappedWrite> {
         match self {
             Self::None { overlapped_write } => overlapped_write,
-            _ => panic!("txn record found but not expected: {:?}", self),
+            _ => panic!(
+                "txn record found but not expected: {:?} [region_id={}]",
+                self, region_id
+            ),
         }
     }
 }

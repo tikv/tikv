@@ -4,8 +4,8 @@ use std::{
     fmt::{self, Debug, Display, Formatter},
     pin::Pin,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
     },
     task::Poll,
     time::Duration,
@@ -14,25 +14,29 @@ use std::{
 use collections::HashMap;
 pub use engine_rocks::RocksSnapshot;
 use engine_rocks::{
-    get_env, RocksCfOptions, RocksDbOptions, RocksEngine as BaseRocksEngine, RocksEngineIterator,
+    RocksCfOptions, RocksDbOptions, RocksEngine as BaseRocksEngine, RocksEngineIterator, get_env,
 };
 use engine_traits::{
     CfName, Engines, IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions,
 };
 use file_system::IoRateLimiter;
 use futures::{
+    Future, Stream,
     channel::{mpsc, oneshot},
-    stream, Future, Stream,
+    stream,
 };
 use kvproto::{kvrpcpb::Context, metapb, raft_cmdpb};
-use raftstore::coprocessor::CoprocessorHost;
+use raftstore::{
+    SeekRegionCallback,
+    coprocessor::{CoprocessorHost, RegionInfoProvider},
+};
 use tempfile::{Builder, TempDir};
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 use txn_types::{Key, Value};
 
 use super::{
-    write_modifies, Callback, DummySnapshotExt, Engine, Error, ErrorInner,
-    Iterator as EngineIterator, Modify, Result, SnapContext, Snapshot, WriteData,
+    Callback, DummySnapshotExt, Engine, Error, ErrorInner, Iterator as EngineIterator, Modify,
+    Result, SnapContext, Snapshot, WriteData, write_modifies,
 };
 use crate::{FakeExtension, OnAppliedCb, RaftExtension, WriteEvent};
 
@@ -93,6 +97,7 @@ pub struct RocksEngine<RE = FakeExtension> {
     engines: Engines<BaseRocksEngine, BaseRocksEngine>,
     not_leader: Arc<AtomicBool>,
     coprocessor: CoprocessorHost<BaseRocksEngine>,
+    region_info_provider: Option<Arc<Box<dyn RegionInfoProvider>>>,
     ext: RE,
 }
 
@@ -104,6 +109,7 @@ impl<RE> RocksEngine<RE> {
             engines: self.engines,
             not_leader: self.not_leader,
             coprocessor: self.coprocessor,
+            region_info_provider: None,
             ext,
         }
     }
@@ -141,6 +147,7 @@ impl RocksEngine {
             not_leader: Arc::new(AtomicBool::new(false)),
             engines,
             coprocessor: CoprocessorHost::default(),
+            region_info_provider: None,
             ext: FakeExtension,
         })
     }
@@ -205,6 +212,14 @@ impl<RE> RocksEngine<RE> {
             .map(Into::into)
             .collect::<Vec<_>>();
         Ok(batch)
+    }
+
+    pub fn set_region_info_provider(&mut self, provider: impl RegionInfoProvider + 'static) {
+        self.region_info_provider = Some(Arc::new(Box::new(provider)))
+    }
+
+    pub fn clear_region_info_provider(&mut self) {
+        self.region_info_provider = None;
     }
 }
 
@@ -284,7 +299,7 @@ impl<RE: RaftExtension + 'static> Engine for RocksEngine<RE> {
         })();
         let mut res = Some(res);
         stream::poll_fn(move |cx| {
-            if res.as_ref().map_or(false, |r| r.is_err()) {
+            if res.as_ref().is_some_and(|r| r.is_err()) {
                 return Poll::Ready(res.take().map(WriteEvent::Finished));
             }
             // If it's none, it means an error is returned, it should not be polled again.
@@ -310,6 +325,23 @@ impl<RE: RaftExtension + 'static> Engine for RocksEngine<RE> {
         })();
 
         async move { Ok(res?.await.unwrap()) }
+    }
+
+    type IMSnap = Self::Snap;
+    // TODO: revert this once https://github.com/rust-lang/rust/issues/140222 is fixed.
+    // type IMSnapshotRes = Self::SnapshotRes;
+    type IMSnapshotRes = impl Future<Output = Result<Self::Snap>> + Send;
+    fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
+        self.async_snapshot(ctx)
+    }
+
+    fn seek_region(&self, from: &[u8], callback: SeekRegionCallback) -> Result<()> {
+        match self.region_info_provider {
+            Some(ref accessor) => accessor
+                .seek_region(from, callback)
+                .map_err(|e| box_err!(e)),
+            None => Err(box_err!("region_info_accessor is not available")),
+        }
     }
 }
 

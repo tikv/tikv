@@ -3,8 +3,8 @@
 use std::{
     fmt::{self, Debug, Formatter},
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     vec::IntoIter,
 };
@@ -13,10 +13,14 @@ use engine_traits::{CfName, SstMetaInfo};
 use kvproto::{
     metapb::Region,
     pdpb::CheckPolicy,
-    raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request},
+    raft_cmdpb::{
+        AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request,
+        TransferLeaderRequest,
+    },
     raft_serverpb::RaftApplyState,
 };
-use raft::{eraftpb, StateRole};
+use pd_client::RegionStat;
+use raft::{StateRole, eraftpb};
 
 pub mod config;
 mod consistency_check;
@@ -26,24 +30,31 @@ mod metrics;
 pub mod region_info_accessor;
 mod split_check;
 pub mod split_observer;
+use kvproto::raft_serverpb::RaftMessage;
+mod read_write;
 
 pub use self::{
     config::{Config, ConsistencyCheckMethod},
     consistency_check::{ConsistencyCheckObserver, Raw as RawConsistencyCheckObserver},
     dispatcher::{
         BoxAdminObserver, BoxApplySnapshotObserver, BoxCmdObserver, BoxConsistencyCheckObserver,
-        BoxPdTaskObserver, BoxQueryObserver, BoxRegionChangeObserver, BoxRoleObserver,
-        BoxSplitCheckObserver, BoxUpdateSafeTsObserver, CoprocessorHost, Registry, StoreHandle,
+        BoxPdTaskObserver, BoxQueryObserver, BoxRaftMessageObserver, BoxRegionChangeObserver,
+        BoxRoleObserver, BoxSplitCheckObserver, BoxUpdateSafeTsObserver, CoprocessorHost, Registry,
+        StoreHandle,
     },
     error::{Error, Result},
+    read_write::{
+        ObservableWriteBatch, ObservedSnapshot, SnapshotObserver, WriteBatchObserver,
+        WriteBatchWrapper,
+    },
     region_info_accessor::{
         Callback as RegionInfoCallback, RangeKey, RegionCollector, RegionInfo, RegionInfoAccessor,
         RegionInfoProvider, SeekRegionCallback,
     },
     split_check::{
-        get_region_approximate_keys, get_region_approximate_middle, get_region_approximate_size,
         HalfCheckObserver, Host as SplitCheckerHost, KeysCheckObserver, SizeCheckObserver,
-        TableCheckObserver,
+        TableCheckObserver, get_region_approximate_keys, get_region_approximate_middle,
+        get_region_approximate_size,
     },
 };
 pub use crate::store::{Bucket, KeyEntry};
@@ -62,7 +73,7 @@ pub struct ObserverContext<'a> {
     pub bypass: bool,
 }
 
-impl<'a> ObserverContext<'a> {
+impl ObserverContext<'_> {
     pub fn new(region: &Region) -> ObserverContext<'_> {
         ObserverContext {
             region,
@@ -81,6 +92,7 @@ pub struct RegionState {
     pub peer_id: u64,
     pub pending_remove: bool,
     pub modified_region: Option<Region>,
+    pub new_regions: Vec<Region>,
 }
 
 /// Context for exec observers of mutation to be applied to ApplyContext.
@@ -204,9 +216,23 @@ pub trait ApplySnapshotObserver: Coprocessor {
     ) {
     }
 
+    fn cancel_apply_snapshot(&self, _: u64, _: u64) {}
+
     /// We call pre_apply_snapshot only when one of the observer returns true.
     fn should_pre_apply_snapshot(&self) -> bool {
         false
+    }
+
+    // Hook when apply snapshot is ingested, and the state has been changed to
+    // Normal and persisted. The snapshot will not be re-iningested after the
+    // restart if this hook is called.
+    fn on_apply_snapshot_committed(
+        &self,
+        _: &mut ObserverContext<'_>,
+        _: u64,
+        _: &crate::store::SnapKey,
+        _: Option<&crate::store::Snapshot>,
+    ) {
     }
 }
 
@@ -269,17 +295,18 @@ pub struct RoleChange {
     /// Which peer is voted by itself.
     pub vote: u64,
     pub initialized: bool,
+    pub peer_id: u64,
 }
 
 impl RoleChange {
-    #[cfg(feature = "testexport")]
-    pub fn new(state: StateRole) -> Self {
+    pub fn new_for_test(state: StateRole) -> Self {
         RoleChange {
             state,
             leader_id: raft::INVALID_ID,
             prev_lead_transferee: raft::INVALID_ID,
             vote: raft::INVALID_ID,
             initialized: true,
+            peer_id: raft::INVALID_ID,
         }
     }
 }
@@ -300,6 +327,8 @@ pub enum RegionChangeReason {
     PrepareMerge,
     CommitMerge,
     RollbackMerge,
+    SwitchWitness,
+    Flashback,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -329,6 +358,16 @@ pub trait RegionChangeObserver: Coprocessor {
     /// applying. Return a bool which indicates whether we can actually do
     /// this write.
     fn pre_write_apply_state(&self, _: &mut ObserverContext<'_>) -> bool {
+        true
+    }
+}
+pub trait RegionHeartbeatObserver: Coprocessor {
+    fn on_region_heartbeat(&self, _: &mut ObserverContext<'_>, _: &RegionStat) {}
+}
+
+pub trait RaftMessageObserver: Coprocessor {
+    /// Returns false if the message should not be stepped later.
+    fn on_raft_message(&self, _: &RaftMessage) -> bool {
         true
     }
 }
@@ -426,7 +465,7 @@ impl CmdObserveInfo {
     /// PiTR: Observer supports the `backup-log` function.
     /// RTS: Observer supports the `resolved-ts` advancing (and follower read,
     /// etc.).
-    fn observe_level(&self) -> ObserveLevel {
+    pub fn observe_level(&self) -> ObserveLevel {
         let cdc = if self.cdc_id.is_observing() {
             // `cdc` observe all data
             ObserveLevel::All
@@ -500,6 +539,19 @@ impl CmdBatch {
         self.cmds.push(cmd)
     }
 
+    pub fn extend<I: IntoIterator<Item = Cmd>>(
+        &mut self,
+        observe_info: &CmdObserveInfo,
+        region_id: u64,
+        cmds: I,
+    ) {
+        assert_eq!(region_id, self.region_id);
+        assert_eq!(observe_info.cdc_id.id, self.cdc_id);
+        assert_eq!(observe_info.rts_id.id, self.rts_id);
+        assert_eq!(observe_info.pitr_id.id, self.pitr_id);
+        self.cmds.extend(cmds)
+    }
+
     pub fn into_iter(self, region_id: u64) -> IntoIter<Cmd> {
         assert_eq!(region_id, self.region_id);
         self.cmds.into_iter()
@@ -549,12 +601,64 @@ pub trait CmdObserver<E>: Coprocessor {
 
 pub trait ReadIndexObserver: Coprocessor {
     // Hook to call when stepping in raft and the message is a read index message.
-    fn on_step(&self, _msg: &mut eraftpb::Message, _role: StateRole) {}
+    fn on_step(
+        &self,
+        _msg: &mut eraftpb::Message,
+        _role: StateRole,
+        _region_start_key: Option<&[u8]>,
+        _region_end_key: Option<&[u8]>,
+    ) {
+    }
 }
 
 pub trait UpdateSafeTsObserver: Coprocessor {
     /// Hook after update self safe_ts and received leader safe_ts.
     fn on_update_safe_ts(&self, _: u64, _: u64, _: u64) {}
+}
+
+pub trait DestroyPeerObserver: Coprocessor {
+    /// Hook to call when destroying a peer.
+    fn on_destroy_peer(&self, _: &Region) {}
+}
+
+#[derive(PartialEq)]
+pub struct TransferLeaderCustomContext {
+    pub key: Vec<u8>,
+    pub value: Vec<u8>,
+}
+
+impl fmt::Debug for TransferLeaderCustomContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TransferLeaderCustomContext")
+            .field("key", &log_wrappers::Value(&self.key))
+            .field("value", &log_wrappers::Value(&self.value))
+            .finish()
+    }
+}
+
+pub trait TransferLeaderObserver: Coprocessor {
+    /// Hook to call before proposing transfer leader request.
+    /// The return value is a custom context which will be set as the context
+    /// of the transfer leader request.
+    ///
+    /// Called by a leader.
+    fn pre_transfer_leader(
+        &self,
+        _ctx: &mut ObserverContext<'_>,
+        _tr: &TransferLeaderRequest,
+    ) -> Result<Option<TransferLeaderCustomContext>> {
+        Ok(None)
+    }
+
+    /// Hook to call after acknowledging a transfer leader request.
+    /// Implementations can decode the custom context from the transfer leader
+    /// request and initiates necessary preparations.
+    /// Return false to delay acknowledging the transfer leader request.
+    ///
+    /// Called by a leader transferee.
+    fn pre_ack_transfer_leader(&self, _: &mut ObserverContext<'_>, _: &eraftpb::Message) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]

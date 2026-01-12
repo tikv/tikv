@@ -3,6 +3,11 @@
 use std::{io, path, process::Stdio};
 
 use async_trait::async_trait;
+use cloud::blob::BlobObject;
+use futures_util::{
+    future::{FutureExt, LocalBoxFuture},
+    stream::LocalBoxStream,
+};
 use tokio::{io as async_io, process::Command};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use url::Url;
@@ -32,7 +37,7 @@ pub struct HdfsStorage {
 
 impl HdfsStorage {
     pub fn new(remote: &str, config: HdfsConfig) -> io::Result<HdfsStorage> {
-        let mut remote = Url::parse(remote).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let mut remote = Url::parse(remote).map_err(|e| io::Error::other(e))?;
         if !remote.path().ends_with('/') {
             let mut new_path = remote.path().to_owned();
             new_path.push('/');
@@ -76,19 +81,21 @@ impl ExternalStorage for HdfsStorage {
         Ok(self.remote.clone())
     }
 
-    async fn write(&self, name: &str, reader: UnpinReader, _content_length: u64) -> io::Result<()> {
+    async fn write(
+        &self,
+        name: &str,
+        reader: UnpinReader<'_>,
+        _content_length: u64,
+    ) -> io::Result<()> {
         if name.contains(path::MAIN_SEPARATOR) {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("[{}] parent is not allowed in storage", name),
-            ));
+            return Err(io::Error::other(format!(
+                "[{}] parent is not allowed in storage",
+                name
+            )));
         }
 
         let cmd_path = self.get_hdfs_bin().ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                "Cannot found hdfs command, please specify HADOOP_HOME",
-            )
+            io::Error::other("Cannot found hdfs command, please specify HADOOP_HOME")
         })?;
         let remote_url = self.remote.clone().join(name).unwrap();
         let path = try_convert_to_path(&remote_url);
@@ -124,10 +131,10 @@ impl ExternalStorage for HdfsStorage {
                 "stdout" => stdout.as_ref(),
                 "stderr" => stderr.as_ref(),
             );
-            Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("hdfs returned non-zero status: {:?}", output.status.code()),
-            ))
+            Err(io::Error::other(format!(
+                "hdfs returned non-zero status: {:?}",
+                output.status.code()
+            )))
         }
     }
 
@@ -137,6 +144,19 @@ impl ExternalStorage for HdfsStorage {
 
     fn read_part(&self, _name: &str, _off: u64, _len: u64) -> ExternalData<'_> {
         unimplemented!("currently only HDFS export is implemented")
+    }
+
+    /// Walk the prefix of the blob storage.
+    /// It returns the stream of items.
+    fn iter_prefix(
+        &self,
+        _prefix: &str,
+    ) -> LocalBoxStream<'_, std::result::Result<BlobObject, io::Error>> {
+        Box::pin(futures::future::err(crate::unimplemented()).into_stream())
+    }
+
+    fn delete(&self, _name: &str) -> LocalBoxFuture<'_, io::Result<()>> {
+        Box::pin(futures::future::err(crate::unimplemented()))
     }
 }
 

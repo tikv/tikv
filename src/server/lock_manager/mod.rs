@@ -8,8 +8,8 @@ pub mod waiter_manager;
 
 use std::{
     sync::{
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     thread::JoinHandle,
 };
@@ -19,7 +19,10 @@ use kvproto::metapb::RegionEpoch;
 use pd_client::PdClient;
 use raftstore::coprocessor::CoprocessorHost;
 use security::SecurityManager;
-use tikv_util::worker::FutureWorker;
+use tikv_util::{
+    thread_name_prefix::{DEADLOCK_DETECTOR_THREAD, WAITER_MANAGER_THREAD},
+    worker::FutureWorker,
+};
 use txn_types::TimeStamp;
 
 pub use self::{
@@ -33,14 +36,14 @@ use self::{
 };
 use crate::{
     server::{
-        lock_manager::deadlock::RoleChangeNotifier, resolve::StoreAddrResolver, Error, Result,
+        Error, Result, lock_manager::deadlock::RoleChangeNotifier, resolve::StoreAddrResolver,
     },
     storage::{
+        DynamicConfigs as StorageDynamicConfigs,
         lock_manager::{
             CancellationCallback, DiagnosticContext, KeyLockWaitInfo,
             LockManager as LockManagerTrait, LockWaitToken, UpdateWaitForEvent, WaitTimeout,
         },
-        DynamicConfigs as StorageDynamicConfigs,
     },
 };
 
@@ -64,6 +67,9 @@ pub struct LockManager {
     in_memory: Arc<AtomicBool>,
 
     wake_up_delay_duration_ms: Arc<AtomicU64>,
+
+    in_memory_peer_size_limit: Arc<AtomicU64>,
+    in_memory_instance_size_limit: Arc<AtomicU64>,
 }
 
 impl Clone for LockManager {
@@ -78,14 +84,16 @@ impl Clone for LockManager {
             pipelined: self.pipelined.clone(),
             in_memory: self.in_memory.clone(),
             wake_up_delay_duration_ms: self.wake_up_delay_duration_ms.clone(),
+            in_memory_peer_size_limit: self.in_memory_peer_size_limit.clone(),
+            in_memory_instance_size_limit: self.in_memory_instance_size_limit.clone(),
         }
     }
 }
 
 impl LockManager {
     pub fn new(cfg: &Config) -> Self {
-        let waiter_mgr_worker = FutureWorker::new("waiter-manager");
-        let detector_worker = FutureWorker::new("deadlock-detector");
+        let waiter_mgr_worker = FutureWorker::new(WAITER_MANAGER_THREAD);
+        let detector_worker = FutureWorker::new(DEADLOCK_DETECTOR_THREAD);
 
         Self {
             waiter_mgr_scheduler: WaiterMgrScheduler::new(waiter_mgr_worker.scheduler()),
@@ -98,6 +106,10 @@ impl LockManager {
             in_memory: Arc::new(AtomicBool::new(cfg.in_memory)),
             wake_up_delay_duration_ms: Arc::new(AtomicU64::new(
                 cfg.wake_up_delay_duration.as_millis(),
+            )),
+            in_memory_peer_size_limit: Arc::new(AtomicU64::new(cfg.in_memory_peer_size_limit.0)),
+            in_memory_instance_size_limit: Arc::new(AtomicU64::new(
+                cfg.in_memory_instance_size_limit.0,
             )),
         }
     }
@@ -221,6 +233,8 @@ impl LockManager {
             self.pipelined.clone(),
             self.in_memory.clone(),
             self.wake_up_delay_duration_ms.clone(),
+            self.in_memory_peer_size_limit.clone(),
+            self.in_memory_instance_size_limit.clone(),
         )
     }
 
@@ -229,6 +243,8 @@ impl LockManager {
             pipelined_pessimistic_lock: self.pipelined.clone(),
             in_memory_pessimistic_lock: self.in_memory.clone(),
             wake_up_delay_duration_ms: self.wake_up_delay_duration_ms.clone(),
+            in_memory_peer_size_limit: self.in_memory_peer_size_limit.clone(),
+            in_memory_instance_size_limit: self.in_memory_instance_size_limit.clone(),
         }
     }
 }
@@ -277,7 +293,10 @@ impl LockManagerTrait for LockManager {
 
         // If it is the first lock the transaction tries to lock, it won't cause
         // deadlock.
-        if !is_first_lock {
+        // The lock waiting for shared lock is not tracked yet, because the shared lock
+        // may grow after this detection. After we implement the shrinking of
+        // shared lock, we can track it then.
+        if !is_first_lock && wait_info.lock_info.lock_type != kvproto::kvrpcpb::Op::SharedLock {
             self.detector_scheduler
                 .detect(start_ts, wait_info, diag_ctx);
         }
@@ -312,13 +331,13 @@ mod tests {
     use raft::StateRole;
     use raftstore::coprocessor::RegionChangeEvent;
     use security::SecurityConfig;
-    use tikv_util::config::ReadableDuration;
-    use tracker::{TrackerToken, INVALID_TRACKER_TOKEN};
+    use tikv_util::config::{ReadableDuration, ReadableSize};
+    use tracker::{INVALID_TRACKER_TOKEN, TrackerToken};
     use txn_types::Key;
 
     use self::{deadlock::tests::*, metrics::*, waiter_manager::tests::*};
     use super::*;
-    use crate::storage::lock_manager::LockDigest;
+    use crate::{server::resolve::MockStoreAddrResolver, storage::lock_manager::LockDigest};
 
     fn start_lock_manager() -> LockManager {
         let mut coprocessor_host = CoprocessorHost::<KvTestEngine>::default();
@@ -328,6 +347,8 @@ mod tests {
             wake_up_delay_duration: ReadableDuration::millis(100),
             pipelined: false,
             in_memory: false,
+            in_memory_peer_size_limit: ReadableSize::kb(512),
+            in_memory_instance_size_limit: ReadableSize::mb(100),
         };
         let mut lock_mgr = LockManager::new(&cfg);
 
@@ -336,7 +357,7 @@ mod tests {
             .start(
                 1,
                 Arc::new(MockPdClient {}),
-                MockResolver {},
+                MockStoreAddrResolver::default(),
                 Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap()),
                 &cfg,
             )

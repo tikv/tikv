@@ -3,13 +3,14 @@
 use std::io::Read;
 
 use byteorder::{ByteOrder, LittleEndian};
+use crypto::rand;
 use flate2::{
-    read::{ZlibDecoder, ZlibEncoder},
     Compression,
+    read::{ZlibDecoder, ZlibEncoder},
 };
 use openssl::hash::{self, MessageDigest};
 use tidb_query_codegen::rpn_fn;
-use tidb_query_common::Result;
+use tidb_query_common::{Result, error::EvaluateError};
 use tidb_query_datatype::{
     codec::data_type::*,
     expr::{Error, EvalContext},
@@ -78,9 +79,9 @@ pub fn compress(input: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
     }
     let mut e = ZlibEncoder::new(input, Compression::default());
     // preferred capacity is input length plus four bytes length header and one
-    // extra end "." max capacity is isize::max_value(), or will panic with
+    // extra end "." max capacity is isize::MAX, or will panic with
     // "capacity overflow"
-    let mut vec = Vec::with_capacity((input.len() + 5).min(isize::max_value() as usize));
+    let mut vec = Vec::with_capacity((input.len() + 5).min(isize::MAX as usize));
     vec.resize(4, 0);
     LittleEndian::write_u32(&mut vec, input.len() as u32);
     match e.read_to_end(&mut vec) {
@@ -190,9 +191,12 @@ pub fn random_bytes(_ctx: &mut EvalContext, arg: Option<&Int>) -> Result<Option<
             if *arg < 1 || *arg > MAX_RAND_BYTES_LENGTH {
                 return Err(Error::overflow("length", "random_bytes").into());
             }
-            Ok(Some(
-                (0..*arg as usize).map(|_| rand::random::<u8>()).collect(),
-            ))
+            let len = *arg as usize;
+            let mut rand_bytes = vec![0; len];
+            rand::rand_bytes(&mut rand_bytes).map_err(|_| {
+                EvaluateError::Other("SSL library can't generate random bytes".to_owned())
+            })?;
+            Ok(Some(rand_bytes))
         }
         _ => Ok(None),
     }
@@ -205,9 +209,10 @@ mod tests {
     use super::*;
     use crate::types::test_util::RpnFnScalarEvaluator;
 
-    fn test_unary_func_ok_none<'a, I: EvaluableRef<'a>, O: EvaluableRet>(sig: ScalarFuncSig)
+    fn test_unary_func_ok_none<'a, I, O>(sig: ScalarFuncSig)
     where
-        O: PartialEq,
+        I: EvaluableRef<'a>,
+        O: EvaluableRet + PartialEq,
         Option<I>: Into<ScalarValue>,
         Option<O>: From<ScalarValue>,
     {

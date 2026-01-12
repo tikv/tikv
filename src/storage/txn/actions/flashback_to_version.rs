@@ -1,11 +1,12 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+use tikv_util::Either;
 use txn_types::{Key, Lock, LockType, TimeStamp, Write, WriteType};
 
 use crate::storage::{
-    mvcc::{self, MvccReader, MvccTxn, SnapshotReader, MAX_TXN_WRITE_SIZE},
-    txn::{self, actions::check_txn_status::rollback_lock, Result as TxnResult},
     Snapshot,
+    mvcc::{self, MAX_TXN_WRITE_SIZE, MvccReader, MvccTxn, SnapshotReader},
+    txn::{self, Result as TxnResult, actions::check_txn_status::rollback_lock},
 };
 
 pub const FLASHBACK_BATCH_SIZE: usize = 256 + 1 /* To store the next key for multiple batches */;
@@ -16,15 +17,26 @@ pub fn flashback_to_version_read_lock(
     end_key: Option<&Key>,
     flashback_start_ts: TimeStamp,
 ) -> TxnResult<Vec<(Key, Lock)>> {
-    let result = reader.scan_locks(
+    let result = reader.scan_locks_from_storage(
         Some(&next_lock_key),
         end_key,
         // Skip the `prewrite_lock`. This lock will appear when retrying prepare
-        |lock| lock.ts != flashback_start_ts,
+        |_, lock| lock.ts != flashback_start_ts,
         FLASHBACK_BATCH_SIZE,
     );
     let (key_locks, _) = result?;
-    Ok(key_locks)
+    Ok(key_locks
+        .into_iter()
+        .map(|(key, lock)| {
+            let lock = match lock {
+                Either::Left(lock) => lock,
+                Either::Right(_shared_locks) => unimplemented!(
+                    "SharedLocks returned from scan_locks_from_storage is not supported here"
+                ),
+            };
+            (key, lock)
+        })
+        .collect())
 }
 
 pub fn flashback_to_version_read_write(
@@ -185,6 +197,7 @@ pub fn prewrite_flashback_key(
             TimeStamp::zero(),
             1,
             TimeStamp::zero(),
+            false,
         ),
         false, // Assuming flashback transactions won't participate any lock conflicts.
     );
@@ -198,7 +211,13 @@ pub fn commit_flashback_key(
     flashback_start_ts: TimeStamp,
     flashback_commit_ts: TimeStamp,
 ) -> TxnResult<()> {
-    if let Some(mut lock) = reader.load_lock(key_to_commit)? {
+    if let Some(lock) = reader.load_lock(key_to_commit)? {
+        let mut lock = match lock {
+            Either::Left(lock) => lock,
+            Either::Right(_shared_locks) => {
+                unimplemented!("SharedLocks returned from load_lock is not supported here")
+            }
+        };
         txn.put_write(
             key_to_commit.clone(),
             flashback_commit_ts,
@@ -207,7 +226,7 @@ pub fn commit_flashback_key(
                 flashback_start_ts,
                 lock.short_value.take(),
             )
-            .set_last_change(lock.last_change_ts, lock.versions_to_last_change)
+            .set_last_change(lock.last_change.clone())
             .set_txn_source(lock.txn_source)
             .as_ref()
             .to_bytes(),
@@ -222,6 +241,7 @@ pub fn commit_flashback_key(
             start_ts: flashback_start_ts,
             commit_ts: flashback_commit_ts,
             key: key_to_commit.to_raw()?,
+            mvcc_info: None,
         }));
     }
     Ok(())
@@ -233,15 +253,22 @@ pub fn check_flashback_commit(
     key_to_commit: &Key,
     flashback_start_ts: TimeStamp,
     flashback_commit_ts: TimeStamp,
+    region_id: u64,
 ) -> TxnResult<bool> {
     match reader.load_lock(key_to_commit)? {
         // If the lock exists, it means the flashback hasn't been finished.
         Some(lock) => {
+            let lock = match lock {
+                Either::Left(lock) => lock,
+                Either::Right(_shared_locks) => {
+                    unimplemented!("SharedLocks returned from load_lock is not supported here")
+                }
+            };
             if lock.ts == flashback_start_ts {
                 return Ok(false);
             }
             error!(
-                "check flashback commit exception: lock not found";
+                "check flashback commit exception: lock record mismatched";
                 "key_to_commit" => log_wrappers::Value::key(key_to_commit.as_encoded()),
                 "flashback_start_ts" => flashback_start_ts,
                 "flashback_commit_ts" => flashback_commit_ts,
@@ -266,11 +293,11 @@ pub fn check_flashback_commit(
             );
         }
     }
-    Err(txn::Error::from_mvcc(mvcc::ErrorInner::TxnLockNotFound {
-        start_ts: flashback_start_ts,
-        commit_ts: flashback_commit_ts,
-        key: key_to_commit.to_raw()?,
-    }))
+    // If both the flashback lock and commit records are mismatched, it means
+    // the current region is not in the flashback state.
+    Err(txn::Error::from(txn::ErrorInner::FlashbackNotPrepared(
+        region_id,
+    )))
 }
 
 pub fn get_first_user_key(
@@ -294,10 +321,11 @@ pub mod tests {
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::{Context, PrewriteRequestPessimisticAction::DoPessimisticCheck};
     use tikv_kv::ScanMode;
-    use txn_types::{TimeStamp, SHORT_VALUE_MAX_LEN};
+    use txn_types::{SHORT_VALUE_MAX_LEN, TimeStamp};
 
     use super::*;
     use crate::storage::{
+        Engine, TestEngineBuilder,
         mvcc::tests::{must_get, must_get_none, write},
         txn::{
             actions::{
@@ -307,7 +335,6 @@ pub mod tests {
             },
             tests::{must_acquire_pessimistic_lock, must_pessimistic_prewrite_put_err},
         },
-        Engine, TestEngineBuilder,
     };
 
     fn must_rollback_lock<E: Engine>(
@@ -324,7 +351,7 @@ pub mod tests {
         let key_locks =
             flashback_to_version_read_lock(&mut reader, key, Some(next_key).as_ref(), start_ts)
                 .unwrap();
-        let cm = ConcurrencyManager::new(TimeStamp::zero());
+        let cm = ConcurrencyManager::new_for_test(TimeStamp::zero());
         let mut txn = MvccTxn::new(start_ts, cm);
         rollback_locks(&mut txn, snapshot, key_locks).unwrap();
         let rows = txn.modifies.len();
@@ -339,7 +366,7 @@ pub mod tests {
         start_ts: impl Into<TimeStamp>,
     ) -> usize {
         let (version, start_ts) = (version.into(), start_ts.into());
-        let cm = ConcurrencyManager::new(TimeStamp::zero());
+        let cm = ConcurrencyManager::new_for_test(TimeStamp::zero());
         let mut txn = MvccTxn::new(start_ts, cm);
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let ctx = Context::default();
@@ -386,7 +413,7 @@ pub mod tests {
             commit_ts,
         )
         .unwrap();
-        let cm = ConcurrencyManager::new(TimeStamp::zero());
+        let cm = ConcurrencyManager::new_for_test(TimeStamp::zero());
         let mut txn = MvccTxn::new(start_ts, cm);
         flashback_to_version_write(&mut txn, &mut reader, keys, version, start_ts, commit_ts)
             .unwrap();
@@ -403,7 +430,7 @@ pub mod tests {
         commit_ts: impl Into<TimeStamp>,
     ) -> usize {
         let (version, start_ts, commit_ts) = (version.into(), start_ts.into(), commit_ts.into());
-        let cm = ConcurrencyManager::new(TimeStamp::zero());
+        let cm = ConcurrencyManager::new_for_test(TimeStamp::zero());
         let mut txn = MvccTxn::new(start_ts, cm);
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let ctx = Context::default();

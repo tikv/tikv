@@ -1,11 +1,15 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod metrics;
 /// Provides profilers for TiKV.
 mod profile;
+
+pub mod lite;
+
 use std::{
+    env::args,
     error::Error as StdError,
     net::SocketAddr,
-    path::PathBuf,
     pin::Pin,
     str::{self, FromStr},
     sync::Arc,
@@ -15,53 +19,60 @@ use std::{
 
 use async_stream::stream;
 use collections::HashMap;
-use flate2::{write::GzEncoder, Compression};
+use flate2::{Compression, write::GzEncoder};
 use futures::{
-    compat::{Compat01As03, Stream01CompatExt},
+    compat::Compat01As03,
     future::{ok, poll_fn},
     prelude::*,
 };
-use http::header::{HeaderValue, ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_TYPE};
+use http::header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_TYPE, HeaderValue};
 use hyper::{
-    self, header,
+    self, Body, Method, Request, Response, Server, StatusCode, header,
     server::{
+        Builder as HyperBuilder,
         accept::Accept,
         conn::{AddrIncoming, AddrStream},
-        Builder as HyperBuilder,
     },
     service::{make_service_fn, service_fn},
-    Body, Method, Request, Response, Server, StatusCode,
 };
+use in_memory_engine::RegionCacheMemoryEngine;
+use kvproto::resource_manager::ResourceGroup;
+use lazy_static::lazy_static;
+use metrics::STATUS_REQUEST_DURATION;
 use online_config::OnlineConfig;
 use openssl::{
     ssl::{Ssl, SslAcceptor, SslContext, SslFiletype, SslMethod, SslVerifyMode},
     x509::X509,
 };
 use pin_project::pin_project;
-pub use profile::{
-    activate_heap_profile, deactivate_heap_profile, jeprof_heap_profile, list_heap_profiles,
-    read_file, start_one_cpu_profile, start_one_heap_profile,
-};
+use profile::*;
 use prometheus::TEXT_FORMAT;
+use raftstore::store::ForcePartitionRangeManager;
 use regex::Regex;
+use resource_control::ResourceGroupManager;
 use security::{self, SecurityConfig};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use service::service_manager::GrpcServiceManager;
 use tikv_kv::RaftExtension;
 use tikv_util::{
+    GLOBAL_SERVER_READINESS,
     logger::set_log_level,
     metrics::{dump, dump_to},
+    thread_name_prefix::STATUS_SERVER_THREAD,
     timer::GLOBAL_TIMER_HANDLE,
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite},
-    runtime::{Builder, Handle, Runtime},
+    runtime::{Builder, Runtime},
     sync::oneshot::{self, Receiver, Sender},
 };
 use tokio_openssl::SslStream;
+use tracing_active_tree::tree::formating::FormatFlat;
 
 use crate::{
     config::{ConfigController, LogLevel},
-    server::Result,
+    server::{Result, debug},
     tikv_util::sys::thread::ThreadBuildWrapper,
 };
 
@@ -88,7 +99,10 @@ pub struct StatusServer<R> {
     cfg_controller: ConfigController,
     router: R,
     security_config: Arc<SecurityConfig>,
-    store_path: PathBuf,
+    resource_manager: Option<Arc<ResourceGroupManager>>,
+    grpc_service_mgr: GrpcServiceManager,
+    in_memory_engine: Option<RegionCacheMemoryEngine>,
+    force_partition_range_mgr: ForcePartitionRangeManager,
 }
 
 impl<R> StatusServer<R>
@@ -100,14 +114,19 @@ where
         cfg_controller: ConfigController,
         security_config: Arc<SecurityConfig>,
         router: R,
-        store_path: PathBuf,
+        resource_manager: Option<Arc<ResourceGroupManager>>,
+        grpc_service_mgr: GrpcServiceManager,
+        in_memory_engine: Option<RegionCacheMemoryEngine>,
+        force_partition_range_mgr: ForcePartitionRangeManager,
     ) -> Result<Self> {
         let thread_pool = Builder::new_multi_thread()
             .enable_all()
             .worker_threads(status_thread_pool_size)
-            .thread_name("status-server")
-            .after_start_wrapper(|| debug!("Status server started"))
-            .before_stop_wrapper(|| debug!("stopping status server"))
+            .thread_name(STATUS_SERVER_THREAD)
+            .with_sys_and_custom_hooks(
+                || debug!("Status server started"),
+                || debug!("stopping status server"),
+            )
             .build()?;
 
         let (tx, rx) = oneshot::channel::<()>();
@@ -119,103 +138,30 @@ where
             cfg_controller,
             router,
             security_config,
-            store_path,
+            resource_manager,
+            grpc_service_mgr,
+            in_memory_engine,
+            force_partition_range_mgr,
         })
     }
 
-    fn list_heap_prof(_req: Request<Body>) -> hyper::Result<Response<Body>> {
-        let profiles = match list_heap_profiles() {
-            Ok(s) => s,
-            Err(e) => return Ok(make_response(StatusCode::INTERNAL_SERVER_ERROR, e)),
-        };
-
-        let text = profiles
-            .into_iter()
-            .map(|(f, ct)| format!("{}\t\t{}", f, ct))
-            .collect::<Vec<_>>()
-            .join("\n")
-            .into_bytes();
-
-        let response = Response::builder()
-            .header("Content-Type", mime::TEXT_PLAIN.to_string())
-            .header("Content-Length", text.len())
-            .body(text.into())
-            .unwrap();
-        Ok(response)
-    }
-
-    async fn activate_heap_prof(
-        req: Request<Body>,
-        store_path: PathBuf,
-    ) -> hyper::Result<Response<Body>> {
-        let query = req.uri().query().unwrap_or("");
-        let query_pairs: HashMap<_, _> = url::form_urlencoded::parse(query.as_bytes()).collect();
-
-        let interval: u64 = match query_pairs.get("interval") {
-            Some(val) => match val.parse() {
-                Ok(val) => val,
-                Err(err) => return Ok(make_response(StatusCode::BAD_REQUEST, err.to_string())),
-            },
-            None => 60,
-        };
-
-        let interval = Duration::from_secs(interval);
-        let period = GLOBAL_TIMER_HANDLE
-            .interval(Instant::now() + interval, interval)
-            .compat()
-            .map_ok(|_| ())
-            .map_err(|_| TIMER_CANCELED.to_owned())
-            .into_stream();
-        let (tx, rx) = oneshot::channel();
-        let callback = move || tx.send(()).unwrap_or_default();
-        let res = Handle::current().spawn(activate_heap_profile(period, store_path, callback));
-        if rx.await.is_ok() {
-            let msg = "activate heap profile success";
-            Ok(make_response(StatusCode::OK, msg))
-        } else {
-            let errmsg = format!("{:?}", res.await);
-            Ok(make_response(StatusCode::INTERNAL_SERVER_ERROR, errmsg))
-        }
-    }
-
-    fn deactivate_heap_prof(_req: Request<Body>) -> hyper::Result<Response<Body>> {
-        let body = if deactivate_heap_profile() {
-            "deactivate heap profile success"
-        } else {
-            "no heap profile is running"
-        };
-        Ok(make_response(StatusCode::OK, body))
-    }
-
-    #[allow(dead_code)]
-    async fn dump_heap_prof_to_resp(req: Request<Body>) -> hyper::Result<Response<Body>> {
+    fn dump_heap_prof_to_resp(req: Request<Body>) -> hyper::Result<Response<Body>> {
         let query = req.uri().query().unwrap_or("");
         let query_pairs: HashMap<_, _> = url::form_urlencoded::parse(query.as_bytes()).collect();
 
         let use_jeprof = query_pairs.get("jeprof").map(|x| x.as_ref()) == Some("true");
 
-        let result = if let Some(name) = query_pairs.get("name") {
+        let result = {
+            let file = match dump_one_heap_profile() {
+                Ok(file) => file,
+                Err(e) => return Ok(make_response(StatusCode::INTERNAL_SERVER_ERROR, e)),
+            };
+            let path = file.path();
             if use_jeprof {
-                jeprof_heap_profile(name)
+                jeprof_heap_profile(path.to_str().unwrap())
             } else {
-                read_file(name)
+                read_file(path.to_str().unwrap())
             }
-        } else {
-            let mut seconds = 10;
-            if let Some(s) = query_pairs.get("seconds") {
-                match s.parse() {
-                    Ok(val) => seconds = val,
-                    Err(_) => {
-                        let errmsg = "request should have seconds argument".to_owned();
-                        return Ok(make_response(StatusCode::BAD_REQUEST, errmsg));
-                    }
-                }
-            }
-            let timer = GLOBAL_TIMER_HANDLE.delay(Instant::now() + Duration::from_secs(seconds));
-            let end = Compat01As03::new(timer)
-                .map_err(|_| TIMER_CANCELED.to_owned())
-                .into_future();
-            start_one_heap_profile(end, use_jeprof).await
         };
 
         match result {
@@ -239,7 +185,7 @@ where
         }
     }
 
-    async fn get_config(
+    fn get_config(
         req: Request<Body>,
         cfg_controller: &ConfigController,
     ) -> hyper::Result<Response<Body>> {
@@ -271,11 +217,100 @@ where
         })
     }
 
+    fn get_cmdline(_req: Request<Body>) -> hyper::Result<Response<Body>> {
+        let args = args().fold(String::new(), |mut a, b| {
+            a.push_str(&b);
+            a.push('\x00');
+            a
+        });
+        let response = Response::builder()
+            .header("Content-Type", mime::TEXT_PLAIN.to_string())
+            .header("X-Content-Type-Options", "nosniff")
+            .body(args.into())
+            .unwrap();
+        Ok(response)
+    }
+
+    fn get_symbol_count(req: Request<Body>) -> hyper::Result<Response<Body>> {
+        assert_eq!(req.method(), Method::GET);
+        // We don't know how many symbols we have, but we
+        // do have symbol information. pprof only cares whether
+        // this number is 0 (no symbols available) or > 0.
+        let text = "num_symbols: 1\n";
+        let response = Response::builder()
+            .header("Content-Type", mime::TEXT_PLAIN.to_string())
+            .header("X-Content-Type-Options", "nosniff")
+            .header("Content-Length", text.len())
+            .body(text.into())
+            .unwrap();
+        Ok(response)
+    }
+
+    // The request and response format follows pprof remote server
+    // https://gperftools.github.io/gperftools/pprof_remote_servers.html
+    // Here is the go pprof implementation:
+    // https://github.com/golang/go/blob/3857a89e7eb872fa22d569e70b7e076bec74ebbb/src/net/http/pprof/pprof.go#L191
+    async fn get_symbol(req: Request<Body>) -> hyper::Result<Response<Body>> {
+        assert_eq!(req.method(), Method::POST);
+        let mut text = String::new();
+        let body_bytes = hyper::body::to_bytes(req.into_body()).await?;
+        let body = String::from_utf8(body_bytes.to_vec()).unwrap();
+
+        // The request body is a list of addr to be resolved joined by '+'.
+        // Resolve addrs with addr2line and write the symbols each per line in
+        // response.
+        for pc in body.split('+') {
+            let addr = usize::from_str_radix(pc.trim_start_matches("0x"), 16).unwrap_or(0);
+            if addr == 0 {
+                info!("invalid addr: {}", addr);
+                continue;
+            }
+
+            // Would be multiple symbols if inlined.
+            let mut syms = vec![];
+            backtrace::resolve(addr as *mut std::ffi::c_void, |sym| {
+                let name = sym
+                    .name()
+                    .unwrap_or_else(|| backtrace::SymbolName::new(b"<unknown>"));
+                syms.push(name.to_string());
+            });
+
+            if !syms.is_empty() {
+                // join inline functions with '--'
+                let f = syms.join("--");
+                // should be <hex address> <function name>
+                text.push_str(format!("{:#x} {}\n", addr, f).as_str());
+            } else {
+                info!("can't resolve mapped addr: {:#x}", addr);
+                text.push_str(format!("{:#x} ??\n", addr).as_str());
+            }
+        }
+        let response = Response::builder()
+            .header("Content-Type", mime::TEXT_PLAIN.to_string())
+            .header("X-Content-Type-Options", "nosniff")
+            .header("Content-Length", text.len())
+            .body(text.into())
+            .unwrap();
+        Ok(response)
+    }
+
     async fn update_config(
         cfg_controller: ConfigController,
         req: Request<Body>,
     ) -> hyper::Result<Response<Body>> {
         let mut body = Vec::new();
+        let mut persist = true;
+        if let Some(query) = req.uri().query() {
+            let query_pairs: HashMap<_, _> =
+                url::form_urlencoded::parse(query.as_bytes()).collect();
+            persist = match query_pairs.get("persist") {
+                Some(val) => match val.parse() {
+                    Ok(val) => val,
+                    Err(err) => return Ok(make_response(StatusCode::BAD_REQUEST, err.to_string())),
+                },
+                None => true,
+            };
+        }
         req.into_body()
             .try_for_each(|bytes| {
                 body.extend(bytes);
@@ -283,7 +318,11 @@ where
             })
             .await?;
         Ok(match decode_json(&body) {
-            Ok(change) => match cfg_controller.update(change) {
+            Ok(change) => match if persist {
+                cfg_controller.update(change)
+            } else {
+                cfg_controller.update_without_persist(change)
+            } {
                 Err(e) => {
                     if let Some(e) = e.downcast_ref::<std::io::Error>() {
                         make_response(
@@ -313,7 +352,7 @@ where
         })
     }
 
-    async fn update_config_from_toml_file(
+    fn update_config_from_toml_file(
         cfg_controller: ConfigController,
         _req: Request<Body>,
     ) -> hyper::Result<Response<Body>> {
@@ -405,6 +444,16 @@ where
         }
     }
 
+    fn get_engine_type(cfg_controller: &ConfigController) -> hyper::Result<Response<Body>> {
+        let engine_type = cfg_controller.get_engine_type();
+        let response = Response::builder()
+            .header("Content-Type", mime::TEXT_PLAIN.to_string())
+            .header("Content-Length", engine_type.len())
+            .body(engine_type.into())
+            .unwrap();
+        Ok(response)
+    }
+
     pub fn stop(self) {
         let _ = self.tx.send(());
         self.thread_pool.shutdown_timeout(Duration::from_secs(3));
@@ -416,12 +465,176 @@ where
     pub fn listening_addr(&self) -> SocketAddr {
         self.addr.unwrap()
     }
+
+    pub fn dump_async_trace() -> hyper::Result<Response<Body>> {
+        Ok(make_response(
+            StatusCode::OK,
+            tracing_active_tree::layer::global().fmt_bytes_with(|t, buf| {
+                t.traverse_with(FormatFlat::new(buf)).unwrap_or_else(|err| {
+                    error!("failed to format tree, unreachable!"; "err" => %err);
+                })
+            }),
+        ))
+    }
+
+    pub fn dump_partition_ranges(
+        force_partition_range_mgr: &ForcePartitionRangeManager,
+    ) -> hyper::Result<Response<Body>> {
+        let mut ranges = vec![];
+        force_partition_range_mgr.iter_all_ranges(|start, end, ttl| {
+            ranges.push(HexRange {
+                start: hex::encode(keys::origin_key(start)),
+                end: hex::encode(keys::origin_end_key(end)),
+                ttl,
+            });
+        });
+
+        let body = match serde_json::to_vec(&ranges) {
+            Ok(body) => body,
+            Err(err) => {
+                return Ok(make_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("fails to json: {}", err),
+                ));
+            }
+        };
+        match Response::builder()
+            .header("content-type", "application/json")
+            .body(hyper::Body::from(body))
+        {
+            Ok(resp) => Ok(resp),
+            Err(err) => Ok(make_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("fails to build response: {}", err),
+            )),
+        }
+    }
+
+    async fn add_partition_ranges(
+        req: Request<Body>,
+        force_partition_range_mgr: &ForcePartitionRangeManager,
+    ) -> hyper::Result<Response<Body>> {
+        let mut body = Vec::new();
+        req.into_body()
+            .try_for_each(|bytes| {
+                body.extend(bytes);
+                ok(())
+            })
+            .await?;
+
+        let res = || -> std::result::Result<_, String> {
+            let range: HexRange = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
+            let start = hex::decode(&range.start)
+                .map_err(|e| format!("invalie start key, err: {:?}", e))?;
+            let end =
+                hex::decode(&range.end).map_err(|e| format!("invalie end key, err: {:?}", e))?;
+            Ok((range, (keys::data_key(&start), keys::data_end_key(&end))))
+        }();
+
+        match res {
+            Ok((hex_range, range)) => {
+                let added = force_partition_range_mgr.add_range(range.0, range.1, 3600);
+                info!("add force partition range"; "start" => &hex_range.start, "end" => &hex_range.end, "added" => added);
+                Ok(Response::new(Body::empty()))
+            }
+            Err(err) => Ok(make_response(StatusCode::BAD_REQUEST, err)),
+        }
+    }
+
+    async fn remove_partition_ranges(
+        req: Request<Body>,
+        force_partition_range_mgr: &ForcePartitionRangeManager,
+    ) -> hyper::Result<Response<Body>> {
+        let mut body = Vec::new();
+        req.into_body()
+            .try_for_each(|bytes| {
+                body.extend(bytes);
+                ok(())
+            })
+            .await?;
+
+        let res = || -> std::result::Result<_, String> {
+            let range: HexRange = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
+            let start = hex::decode(&range.start)
+                .map_err(|e| format!("invalie start key, err: {:?}", e))?;
+            let end =
+                hex::decode(&range.end).map_err(|e| format!("invalie end key, err: {:?}", e))?;
+            Ok((range, (keys::data_key(&start), keys::data_end_key(&end))))
+        }();
+
+        match res {
+            Ok((hex_range, range)) => {
+                let removed = force_partition_range_mgr.remove_range(&range.0, &range.1);
+                info!("remove force partition range"; "start" => &hex_range.start, "end" => &hex_range.end, "removed" => removed);
+                Ok(Response::new(Body::empty()))
+            }
+            Err(err) => Ok(make_response(StatusCode::BAD_REQUEST, err)),
+        }
+    }
+
+    fn metrics_to_resp(req: Request<Body>, should_simplify: bool) -> hyper::Result<Response<Body>> {
+        let gz_encoding = client_accept_gzip(&req);
+        let metrics = if gz_encoding {
+            // gzip can reduce the body size to less than 1/10.
+            let mut encoder = GzEncoder::new(vec![], Compression::default());
+            dump_to(&mut encoder, should_simplify);
+            encoder.finish().unwrap()
+        } else {
+            dump(should_simplify).into_bytes()
+        };
+        let mut resp = Response::new(metrics.into());
+        resp.headers_mut()
+            .insert(CONTENT_TYPE, HeaderValue::from_static(TEXT_FORMAT));
+        if gz_encoding {
+            resp.headers_mut()
+                .insert(CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+        }
+
+        Ok(resp)
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct HexRange {
+    start: String,
+    end: String,
+    ttl: u64,
 }
 
 impl<R> StatusServer<R>
 where
     R: 'static + Send + RaftExtension + Clone,
 {
+    fn handle_pause_grpc(
+        mut grpc_service_mgr: GrpcServiceManager,
+    ) -> hyper::Result<Response<Body>> {
+        if let Err(err) = grpc_service_mgr.pause() {
+            return Ok(make_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("fails to pause grpc: {}", err),
+            ));
+        }
+        Ok(make_response(
+            StatusCode::OK,
+            "Successfully pause grpc service",
+        ))
+    }
+
+    fn handle_resume_grpc(
+        mut grpc_service_mgr: GrpcServiceManager,
+    ) -> hyper::Result<Response<Body>> {
+        if let Err(err) = grpc_service_mgr.resume() {
+            return Ok(make_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("fails to resume grpc: {}", err),
+            ));
+        }
+        Ok(make_response(
+            StatusCode::OK,
+            "Successfully resume grpc service",
+        ))
+    }
+
     pub async fn dump_region_meta(req: Request<Body>, router: R) -> hyper::Result<Response<Body>> {
         lazy_static! {
             static ref REGION: Regex = Regex::new(r"/region/(?P<id>\d+)").unwrap();
@@ -470,6 +683,22 @@ where
                 ));
             }
         };
+
+        #[cfg(feature = "trace-tablet-lifetime")]
+        let body = {
+            let query = req.uri().query().unwrap_or("");
+            let query_pairs: HashMap<_, _> =
+                url::form_urlencoded::parse(query.as_bytes()).collect();
+
+            let mut body = body;
+            if query_pairs.contains_key("trace-tablet") {
+                for s in engine_rocks::RocksEngine::trace(id) {
+                    body.push(b'\n');
+                    body.extend_from_slice(s.as_bytes());
+                }
+            };
+            body
+        };
         match Response::builder()
             .header("content-type", "application/json")
             .body(hyper::Body::from(body))
@@ -487,24 +716,27 @@ where
         mgr: &ConfigController,
     ) -> hyper::Result<Response<Body>> {
         let should_simplify = mgr.get_current().server.simplify_metrics;
-        let gz_encoding = client_accept_gzip(&req);
-        let metrics = if gz_encoding {
-            // gzip can reduce the body size to less than 1/10.
-            let mut encoder = GzEncoder::new(vec![], Compression::default());
-            dump_to(&mut encoder, should_simplify);
-            encoder.finish().unwrap()
-        } else {
-            dump(should_simplify).into_bytes()
-        };
-        let mut resp = Response::new(metrics.into());
-        resp.headers_mut()
-            .insert(CONTENT_TYPE, HeaderValue::from_static(TEXT_FORMAT));
-        if gz_encoding {
-            resp.headers_mut()
-                .insert(CONTENT_ENCODING, HeaderValue::from_static("gzip"));
-        }
+        Self::metrics_to_resp(req, should_simplify)
+    }
 
-        Ok(resp)
+    fn handle_ready_request(req: Request<Body>) -> hyper::Result<Response<Body>> {
+        let verbose = req
+            .uri()
+            .query()
+            .is_some_and(|query| query.contains("verbose"));
+
+        let status_code = if GLOBAL_SERVER_READINESS.is_ready() {
+            StatusCode::OK
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        };
+
+        let body = if verbose {
+            GLOBAL_SERVER_READINESS.to_json()
+        } else {
+            "".to_string()
+        };
+        Ok(make_response(status_code, body))
     }
 
     fn start_serve<I, C>(&mut self, builder: HyperBuilder<I>)
@@ -517,14 +749,20 @@ where
         let security_config = self.security_config.clone();
         let cfg_controller = self.cfg_controller.clone();
         let router = self.router.clone();
-        let store_path = self.store_path.clone();
+        let resource_manager = self.resource_manager.clone();
+        let grpc_service_mgr = self.grpc_service_mgr.clone();
+        let in_memory_engine = self.in_memory_engine.clone();
+        let force_partition_range_mgr = self.force_partition_range_mgr.clone();
         // Start to serve.
         let server = builder.serve(make_service_fn(move |conn: &C| {
             let x509 = conn.get_x509();
             let security_config = security_config.clone();
             let cfg_controller = cfg_controller.clone();
             let router = router.clone();
-            let store_path = store_path.clone();
+            let resource_manager = resource_manager.clone();
+            let in_memory_engine = in_memory_engine.clone();
+            let grpc_service_mgr = grpc_service_mgr.clone();
+            let force_partition_range_mgr = force_partition_range_mgr.clone();
             async move {
                 // Create a status service.
                 Ok::<_, hyper::Error>(service_fn(move |req: Request<Body>| {
@@ -532,7 +770,10 @@ where
                     let security_config = security_config.clone();
                     let cfg_controller = cfg_controller.clone();
                     let router = router.clone();
-                    let store_path = store_path.clone();
+                    let resource_manager = resource_manager.clone();
+                    let grpc_service_mgr = grpc_service_mgr.clone();
+                    let in_memory_engine = in_memory_engine.clone();
+                    let force_partition_range_mgr = force_partition_range_mgr.clone();
                     async move {
                         let path = req.uri().path().to_owned();
                         let method = req.method().to_owned();
@@ -563,26 +804,50 @@ where
                             ));
                         }
 
-                        match (method, path.as_ref()) {
+                        let mut is_unknown_path = false;
+                        let start = Instant::now();
+                        let res = match (method.clone(), path.as_ref()) {
                             (Method::GET, "/metrics") => {
                                 Self::handle_get_metrics(req, &cfg_controller)
                             }
                             (Method::GET, "/status") => Ok(Response::default()),
-                            (Method::GET, "/debug/pprof/heap_list") => Self::list_heap_prof(req),
+                            (Method::GET, "/ready") => {
+                                Self::handle_ready_request(req)
+                            }
+                            (Method::GET, "/debug/pprof/heap_list") => {
+                                Ok(make_response(
+                                    StatusCode::GONE,
+                                    "Deprecated, heap profiling is always enabled by default, just use /debug/pprof/heap to get the heap profile when needed",
+                                ))
+                            }
                             (Method::GET, "/debug/pprof/heap_activate") => {
-                                Self::activate_heap_prof(req, store_path).await
+                                Ok(make_response(
+                                    StatusCode::GONE,
+                                    "Deprecated, use config `memory.enable_heap_profiling` to toggle",
+                                ))
                             }
                             (Method::GET, "/debug/pprof/heap_deactivate") => {
-                                Self::deactivate_heap_prof(req)
+                                Ok(make_response(
+                                    StatusCode::GONE,
+                                    "Deprecated, use config `memory.enable_heap_profiling` to toggle",
+                                ))
                             }
-                            // (Method::GET, "/debug/pprof/heap") => {
-                            //     Self::dump_heap_prof_to_resp(req).await
-                            // }
+                            (Method::GET, "/debug/pprof/heap") => {
+                                Self::dump_heap_prof_to_resp(req)
+                            }
+                            (Method::GET, "/debug/pprof/cmdline") => Self::get_cmdline(req),
+                            (Method::GET, "/debug/pprof/symbol") => {
+                                Self::get_symbol_count(req)
+                            }
+                            (Method::POST, "/debug/pprof/symbol") => Self::get_symbol(req).await,
                             (Method::GET, "/config") => {
-                                Self::get_config(req, &cfg_controller).await
+                                Self::get_config(req, &cfg_controller)
                             }
                             (Method::POST, "/config") => {
                                 Self::update_config(cfg_controller.clone(), req).await
+                            }
+                            (Method::GET, "/engine_type") => {
+                                Self::get_engine_type(&cfg_controller)
                             }
                             // This interface is used for configuration file hosting scenarios,
                             // TiKV will not update configuration files, and this interface will
@@ -590,7 +855,6 @@ where
                             // hand it over to the hosting platform for processing.
                             (Method::PUT, "/config/reload") => {
                                 Self::update_config_from_toml_file(cfg_controller.clone(), req)
-                                    .await
                             }
                             (Method::GET, "/debug/pprof/profile") => {
                                 Self::dump_cpu_prof_to_resp(req).await
@@ -607,8 +871,38 @@ where
                             (Method::PUT, path) if path.starts_with("/log-level") => {
                                 Self::change_log_level(req).await
                             }
-                            _ => Ok(make_response(StatusCode::NOT_FOUND, "path not found")),
-                        }
+                            (Method::GET, "/resource_groups") => {
+                                Self::handle_get_all_resource_groups(resource_manager.as_ref())
+                            }
+                            (Method::PUT, "/pause_grpc") => {
+                                Self::handle_pause_grpc(grpc_service_mgr)
+                            }
+                            (Method::PUT, "/resume_grpc") => {
+                                Self::handle_resume_grpc(grpc_service_mgr)
+                            }
+                            (Method::GET, "/async_tasks") => Self::dump_async_trace(),
+                            (Method::GET, "debug/ime/cached_regions") => Self::handle_dumple_cached_regions(in_memory_engine.as_ref()),
+                            (Method::GET, "/force_partition_ranges") => Self::dump_partition_ranges(&force_partition_range_mgr),
+                            (Method::POST, "/force_partition_ranges") => Self::add_partition_ranges(req, &force_partition_range_mgr).await,
+                            (Method::DELETE, "/force_partition_ranges") => Self::remove_partition_ranges(req, &force_partition_range_mgr).await,
+                            (_, path) if path.starts_with("/debug/dup-key") => {
+                                debug::handle_dup_key_debug(req)
+                            }
+                            _ => {
+                                is_unknown_path = true;
+                                Ok(make_response(StatusCode::NOT_FOUND, "path not found"))
+                            },
+                        };
+                        // Using "unknown" for unknown paths to void creating high cardinality.
+                        let path_label = if is_unknown_path {
+                            "unknown".to_owned()
+                        } else {
+                            path
+                        };
+                        STATUS_REQUEST_DURATION
+                            .with_label_values(&[method.as_str(), &path_label])
+                            .observe(start.elapsed().as_secs_f64());
+                        res
                     }
                 }))
             }
@@ -643,6 +937,144 @@ where
             self.start_serve(server);
         }
         Ok(())
+    }
+
+    pub fn handle_get_all_resource_groups(
+        mgr: Option<&Arc<ResourceGroupManager>>,
+    ) -> hyper::Result<Response<Body>> {
+        let groups = if let Some(mgr) = mgr {
+            mgr.get_all_resource_groups()
+                .into_iter()
+                .map(into_debug_request_group)
+                .collect()
+        } else {
+            vec![]
+        };
+        let body = match serde_json::to_vec(&groups) {
+            Ok(body) => body,
+            Err(err) => {
+                return Ok(make_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("fails to json: {}", err),
+                ));
+            }
+        };
+        match Response::builder()
+            .header("content-type", "application/json")
+            .body(hyper::Body::from(body))
+        {
+            Ok(resp) => Ok(resp),
+            Err(err) => Ok(make_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("fails to build response: {}", err),
+            )),
+        }
+    }
+
+    fn handle_dumple_cached_regions(
+        engine: Option<&RegionCacheMemoryEngine>,
+    ) -> hyper::Result<Response<Body>> {
+        // We use this function to workaround the false-positive check in
+        // `scripts/check-redact-log`.
+        fn to_hex_string(data: &[u8]) -> String {
+            hex::ToHex::encode_hex_upper(&data)
+        }
+
+        let Some(engine) = engine else {
+            return Ok(make_response(
+                StatusCode::BAD_REQUEST,
+                "In memory engine is not enabled",
+            ));
+        };
+        let body = {
+            let regions_map = engine.core().region_manager().regions_map().read();
+            let mut cached_regions = Vec::with_capacity(regions_map.regions().len());
+            for r in regions_map.regions().values() {
+                let rg_meta = CachedRegion {
+                    id: r.get_region().id,
+                    epoch_version: r.get_region().epoch_version,
+                    start: to_hex_string(keys::origin_key(&r.get_region().start)),
+                    end: to_hex_string(keys::origin_key(&r.get_region().end)),
+                    in_gc: r.is_in_gc(),
+                    safe_point: r.safe_point(),
+                    state: format!("{:?}", r.get_state()),
+                    is_written: r.is_written(),
+                };
+                cached_regions.push(rg_meta);
+            }
+            // order by region range.
+            cached_regions.sort();
+            match serde_json::to_vec(&cached_regions) {
+                Ok(body) => body,
+                Err(err) => {
+                    return Ok(make_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("fails to json: {}", err),
+                    ));
+                }
+            }
+        };
+        match Response::builder()
+            .header("content-type", "application/json")
+            .body(hyper::Body::from(body))
+        {
+            Ok(resp) => Ok(resp),
+            Err(err) => Ok(make_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("fails to build response: {}", err),
+            )),
+        }
+    }
+}
+
+#[derive(Serialize, Ord, PartialOrd, PartialEq, Eq)]
+struct CachedRegion {
+    start: String,
+    end: String,
+    id: u64,
+    epoch_version: u64,
+    in_gc: bool,
+    safe_point: u64,
+    state: String,
+    is_written: bool,
+}
+
+#[derive(Serialize)]
+struct BackgroundSetting {
+    task_types: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct ResourceGroupSetting {
+    name: String,
+    ru: u64,
+    priority: u32,
+    burst_limit: i64,
+    background: BackgroundSetting,
+}
+
+fn into_debug_request_group(mut rg: ResourceGroup) -> ResourceGroupSetting {
+    ResourceGroupSetting {
+        name: rg.name,
+        ru: rg
+            .r_u_settings
+            .get_ref()
+            .get_r_u()
+            .get_settings()
+            .get_fill_rate(),
+        priority: rg.priority,
+        burst_limit: rg
+            .r_u_settings
+            .get_ref()
+            .get_r_u()
+            .get_settings()
+            .get_burst_limit(),
+        background: BackgroundSetting {
+            task_types: rg
+                .background_settings
+                .as_mut()
+                .map_or(vec![], |s| s.take_job_types().into()),
+        },
     }
 }
 
@@ -914,29 +1346,36 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{env, io::Read, path::PathBuf, sync::Arc};
+    use std::{
+        env,
+        io::Read,
+        path::PathBuf,
+        sync::{Arc, atomic::Ordering},
+    };
 
     use collections::HashSet;
     use flate2::read::GzDecoder;
     use futures::{
         executor::block_on,
-        future::{ok, BoxFuture},
+        future::{BoxFuture, ok},
         prelude::*,
     };
-    use http::header::{HeaderValue, ACCEPT_ENCODING};
-    use hyper::{body::Buf, client::HttpConnector, Body, Client, Method, Request, StatusCode, Uri};
+    use http::header::{ACCEPT_ENCODING, HeaderValue};
+    use hyper::{Body, Client, Method, Request, StatusCode, Uri, body::Buf, client::HttpConnector};
     use hyper_openssl::HttpsConnector;
     use online_config::OnlineConfig;
     use openssl::ssl::{SslConnector, SslFiletype, SslMethod};
     use raftstore::store::region_meta::RegionMeta;
     use security::SecurityConfig;
+    use service::service_manager::GrpcServiceManager;
     use test_util::new_security_cfg;
     use tikv_kv::RaftExtension;
-    use tikv_util::logger::get_log_level;
+    use tikv_util::{GLOBAL_SERVER_READINESS, logger::get_log_level};
 
     use crate::{
         config::{ConfigController, TikvConfig},
-        server::status_server::{profile::TEST_PROFILE_MUTEX, LogLevelRequest, StatusServer},
+        server::status_server::{LogLevelRequest, StatusServer, profile::TEST_PROFILE_MUTEX},
+        storage::config::EngineType,
     };
 
     #[derive(Clone)]
@@ -950,13 +1389,15 @@ mod tests {
 
     #[test]
     fn test_status_service() {
-        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            temp_dir.path().to_path_buf(),
+            None,
+            GrpcServiceManager::dummy(),
+            None,
+            Default::default(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -998,13 +1439,15 @@ mod tests {
 
     #[test]
     fn test_config_endpoint() {
-        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            temp_dir.path().to_path_buf(),
+            None,
+            GrpcServiceManager::dummy(),
+            None,
+            Default::default(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1039,17 +1482,90 @@ mod tests {
         status_server.stop();
     }
 
+    #[test]
+    fn test_update_config_endpoint() {
+        let test_config = |persist: bool| {
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            let mut config = TikvConfig::default();
+            config.cfg_path = temp_dir
+                .path()
+                .join("tikv.toml")
+                .to_str()
+                .unwrap()
+                .to_string();
+            let mut status_server = StatusServer::new(
+                1,
+                ConfigController::new(config),
+                Arc::new(SecurityConfig::default()),
+                MockRouter,
+                None,
+                GrpcServiceManager::dummy(),
+                None,
+                Default::default(),
+            )
+            .unwrap();
+            let addr = "127.0.0.1:0".to_owned();
+            let _ = status_server.start(addr);
+            let client = Client::new();
+            let uri = if persist {
+                Uri::builder()
+                    .scheme("http")
+                    .authority(status_server.listening_addr().to_string().as_str())
+                    .path_and_query("/config")
+                    .build()
+                    .unwrap()
+            } else {
+                Uri::builder()
+                    .scheme("http")
+                    .authority(status_server.listening_addr().to_string().as_str())
+                    .path_and_query("/config?persist=false")
+                    .build()
+                    .unwrap()
+            };
+            let mut req = Request::new(Body::from("{\"coprocessor.region-split-size\": \"1GB\"}"));
+            *req.method_mut() = Method::POST;
+            *req.uri_mut() = uri.clone();
+            let handle = status_server.thread_pool.spawn(async move {
+                let resp = client.request(req).await.unwrap();
+                assert_eq!(resp.status(), StatusCode::OK);
+            });
+            block_on(handle).unwrap();
+
+            let client = Client::new();
+            let handle2 = status_server.thread_pool.spawn(async move {
+                let resp = client.get(uri).await.unwrap();
+                assert_eq!(resp.status(), StatusCode::OK);
+                let mut v = Vec::new();
+                resp.into_body()
+                    .try_for_each(|bytes| {
+                        v.extend(bytes);
+                        ok(())
+                    })
+                    .await
+                    .unwrap();
+                let resp_json = String::from_utf8_lossy(&v).to_string();
+                assert!(resp_json.contains("\"region-split-size\":\"1GiB\""));
+            });
+            block_on(handle2).unwrap();
+            status_server.stop();
+        };
+        test_config(true);
+        test_config(false);
+    }
+
     #[cfg(feature = "failpoints")]
     #[test]
     fn test_status_service_fail_endpoints() {
         let _guard = fail::FailScenario::setup();
-        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            temp_dir.path().to_path_buf(),
+            None,
+            GrpcServiceManager::dummy(),
+            None,
+            Default::default(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1159,13 +1675,15 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints_can_trigger_fails() {
         let _guard = fail::FailScenario::setup();
-        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            temp_dir.path().to_path_buf(),
+            None,
+            GrpcServiceManager::dummy(),
+            None,
+            Default::default(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1203,13 +1721,15 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints_should_give_404_when_failpoints_are_disable() {
         let _guard = fail::FailScenario::setup();
-        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            temp_dir.path().to_path_buf(),
+            None,
+            GrpcServiceManager::dummy(),
+            None,
+            Default::default(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1239,13 +1759,15 @@ mod tests {
     }
 
     fn do_test_security_status_service(allowed_cn: HashSet<String>, expected: bool) {
-        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(new_security_cfg(Some(allowed_cn))),
             MockRouter,
-            temp_dir.path().to_path_buf(),
+            None,
+            GrpcServiceManager::dummy(),
+            None,
+            Default::default(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1310,15 +1832,16 @@ mod tests {
 
     #[cfg(feature = "mem-profiling")]
     #[test]
-    #[ignore]
     fn test_pprof_heap_service() {
-        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            temp_dir.path().to_path_buf(),
+            None,
+            GrpcServiceManager::dummy(),
+            None,
+            Default::default(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1342,13 +1865,15 @@ mod tests {
     #[test]
     fn test_pprof_profile_service() {
         let _test_guard = TEST_PROFILE_MUTEX.lock().unwrap();
-        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            temp_dir.path().to_path_buf(),
+            None,
+            GrpcServiceManager::dummy(),
+            None,
+            Default::default(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1373,15 +1898,70 @@ mod tests {
     }
 
     #[test]
-    fn test_metrics() {
+    fn test_pprof_symbol_service() {
         let _test_guard = TEST_PROFILE_MUTEX.lock().unwrap();
-        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            temp_dir.path().to_path_buf(),
+            None,
+            GrpcServiceManager::dummy(),
+            None,
+            Default::default(),
+        )
+        .unwrap();
+        let addr = "127.0.0.1:0".to_owned();
+        let _ = status_server.start(addr);
+        let client = Client::new();
+
+        let mut addr = None;
+        backtrace::trace(|f| {
+            addr = Some(f.ip());
+            false
+        });
+        assert!(addr.is_some());
+
+        let uri = Uri::builder()
+            .scheme("http")
+            .authority(status_server.listening_addr().to_string().as_str())
+            .path_and_query("/debug/pprof/symbol")
+            .build()
+            .unwrap();
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri(uri)
+            .body(Body::from(format!("{:p}", addr.unwrap())))
+            .unwrap();
+        let handle = status_server
+            .thread_pool
+            .spawn(async move { client.request(req).await.unwrap() });
+        let resp = block_on(handle).unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body_bytes = block_on(hyper::body::to_bytes(resp.into_body())).unwrap();
+        assert!(
+            String::from_utf8(body_bytes.as_ref().to_owned())
+                .unwrap()
+                .split(' ')
+                .next_back()
+                .unwrap()
+                .starts_with("backtrace::backtrace")
+        );
+        status_server.stop();
+    }
+
+    #[test]
+    fn test_metrics() {
+        let _test_guard = TEST_PROFILE_MUTEX.lock().unwrap();
+        let mut status_server = StatusServer::new(
+            1,
+            ConfigController::default(),
+            Arc::new(SecurityConfig::default()),
+            MockRouter,
+            None,
+            GrpcServiceManager::dummy(),
+            None,
+            Default::default(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1430,13 +2010,15 @@ mod tests {
 
     #[test]
     fn test_change_log_level() {
-        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            temp_dir.path().to_path_buf(),
+            None,
+            GrpcServiceManager::dummy(),
+            None,
+            Default::default(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1474,6 +2056,147 @@ mod tests {
                 .unwrap()
         });
         block_on(handle).unwrap();
+        status_server.stop();
+    }
+
+    #[test]
+    fn test_get_engine_type() {
+        let mut multi_rocks_cfg = TikvConfig::default();
+        multi_rocks_cfg.storage.engine = EngineType::RaftKv2;
+        let cfgs = [TikvConfig::default(), multi_rocks_cfg];
+        let resp_strs = ["raft-kv", "partitioned-raft-kv"];
+        for (cfg, resp_str) in IntoIterator::into_iter(cfgs).zip(resp_strs) {
+            let mut status_server = StatusServer::new(
+                1,
+                ConfigController::new(cfg),
+                Arc::new(SecurityConfig::default()),
+                MockRouter,
+                None,
+                GrpcServiceManager::dummy(),
+                None,
+                Default::default(),
+            )
+            .unwrap();
+            let addr = "127.0.0.1:0".to_owned();
+            let _ = status_server.start(addr);
+            let client = Client::new();
+            let uri = Uri::builder()
+                .scheme("http")
+                .authority(status_server.listening_addr().to_string().as_str())
+                .path_and_query("/engine_type")
+                .build()
+                .unwrap();
+
+            let handle = status_server.thread_pool.spawn(async move {
+                let res = client.get(uri).await.unwrap();
+                assert_eq!(res.status(), StatusCode::OK);
+                let body_bytes = hyper::body::to_bytes(res.into_body()).await.unwrap();
+                let engine_type = String::from_utf8(body_bytes.as_ref().to_owned()).unwrap();
+                assert_eq!(engine_type, resp_str);
+            });
+            block_on(handle).unwrap();
+            status_server.stop();
+        }
+    }
+
+    #[test]
+    fn test_control_grpc_service() {
+        let mut multi_rocks_cfg = TikvConfig::default();
+        multi_rocks_cfg.storage.engine = EngineType::RaftKv2;
+        let cfgs = [TikvConfig::default(), multi_rocks_cfg];
+        for cfg in IntoIterator::into_iter(cfgs) {
+            let mut status_server = StatusServer::new(
+                1,
+                ConfigController::new(cfg),
+                Arc::new(SecurityConfig::default()),
+                MockRouter,
+                None,
+                GrpcServiceManager::dummy(),
+                None,
+                Default::default(),
+            )
+            .unwrap();
+            let addr = "127.0.0.1:0".to_owned();
+            let _ = status_server.start(addr);
+            for req in ["/pause_grpc", "/resume_grpc"] {
+                let client = Client::new();
+                let uri = Uri::builder()
+                    .scheme("http")
+                    .authority(status_server.listening_addr().to_string().as_str())
+                    .path_and_query(req)
+                    .build()
+                    .unwrap();
+
+                let mut grpc_req = Request::default();
+                *grpc_req.method_mut() = Method::PUT;
+                *grpc_req.uri_mut() = uri;
+                let handle = status_server.thread_pool.spawn(async move {
+                    let res = client.request(grpc_req).await.unwrap();
+                    // Dummy grpc service manager, should return error.
+                    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+                });
+                block_on(handle).unwrap();
+            }
+            status_server.stop();
+        }
+    }
+
+    #[test]
+    fn test_ready_endpoint() {
+        let mut status_server = StatusServer::new(
+            1,
+            ConfigController::default(),
+            Arc::new(SecurityConfig::default()),
+            MockRouter,
+            None,
+            GrpcServiceManager::dummy(),
+            None,
+            Default::default(),
+        )
+        .unwrap();
+        let addr = "127.0.0.1:0".to_owned();
+        let _ = status_server.start(addr);
+        let client = Client::new();
+        let uri = Uri::builder()
+            .scheme("http")
+            .authority(status_server.listening_addr().to_string().as_str())
+            .path_and_query("/ready?verbose")
+            .build()
+            .unwrap();
+        let uri2 = uri.clone();
+        // Set one readiness condition to true.
+        GLOBAL_SERVER_READINESS
+            .connected_to_pd
+            .store(true, Ordering::Relaxed);
+        let handle = status_server.thread_pool.spawn(async move {
+            let resp = client.get(uri).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+            let body_bytes = hyper::body::to_bytes(resp.into_body()).await.unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+            assert_eq!(
+                json["connected_to_pd"], true,
+                "connected_to_pd should be false"
+            );
+            assert_eq!(
+                json["raft_peers_caught_up"], false,
+                "raft_peers_caught_up should be false"
+            );
+        });
+        block_on(handle).unwrap();
+
+        // Set the remaining readiness conditions to true.
+        GLOBAL_SERVER_READINESS
+            .raft_peers_caught_up
+            .store(true, Ordering::Relaxed);
+
+        let client = Client::new();
+        let handle2 = status_server.thread_pool.spawn(async move {
+            let resp = client.get(uri2).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+        });
+        block_on(handle2).unwrap();
+
         status_server.stop();
     }
 }

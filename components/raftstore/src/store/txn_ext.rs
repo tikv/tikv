@@ -1,16 +1,16 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    collections::{BTreeMap, Bound},
     fmt,
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use collections::HashMap;
 use kvproto::metapb;
 use lazy_static::lazy_static;
 use parking_lot::RwLock;
-use prometheus::{register_int_gauge, IntGauge};
-use txn_types::{Key, PessimisticLock};
+use prometheus::{IntGauge, register_int_gauge};
+use txn_types::{Key, Lock, PessimisticLock};
 
 /// Transaction extensions related to a peer.
 #[derive(Default)]
@@ -49,18 +49,12 @@ impl fmt::Debug for TxnExt {
 }
 
 lazy_static! {
-    pub static ref GLOBAL_MEM_SIZE: IntGauge = register_int_gauge!(
+    pub static ref INSTANCE_MEM_SIZE: IntGauge = register_int_gauge!(
         "tikv_pessimistic_lock_memory_size",
         "Total memory size of pessimistic locks in bytes."
     )
     .unwrap();
 }
-
-const GLOBAL_MEM_SIZE_LIMIT: usize = 100 << 20; // 100 MiB
-
-// 512 KiB, so pessimistic locks in one region can be proposed in a single
-// command.
-const PEER_MEM_SIZE_LIMIT: usize = 512 << 10;
 
 /// Pessimistic locks of a region peer.
 #[derive(PartialEq)]
@@ -84,7 +78,7 @@ pub struct PeerPessimisticLocks {
     ///   likely to be proposed successfully, while the leader will need at
     ///   least another round to receive the transfer leader message from the
     ///   transferee.
-    ///  
+    ///
     /// - Split region The lock with the deleted mark SHOULD be moved to new
     ///   regions on region split. Considering the following cases with
     ///   different orders: 1. Propose write -> propose split -> apply write ->
@@ -106,7 +100,7 @@ pub struct PeerPessimisticLocks {
     ///   skipped because of version mismatch. So, no lock should be deleted.
     ///   It's correct that we include the locks that are marked deleted in the
     ///   commit merge request.
-    map: HashMap<Key, (PessimisticLock, bool)>,
+    map: BTreeMap<Key, (PessimisticLock, bool)>,
     /// Status of the pessimistic lock map.
     /// The map is writable only in the Normal state.
     pub status: LocksStatus,
@@ -125,6 +119,7 @@ pub enum LocksStatus {
     TransferringLeader,
     MergingRegion,
     NotLeader,
+    IsInFlashback,
 }
 
 impl fmt::Debug for PeerPessimisticLocks {
@@ -142,7 +137,7 @@ impl fmt::Debug for PeerPessimisticLocks {
 impl Default for PeerPessimisticLocks {
     fn default() -> Self {
         PeerPessimisticLocks {
-            map: HashMap::default(),
+            map: BTreeMap::default(),
             status: LocksStatus::Normal,
             term: 0,
             version: 0,
@@ -155,7 +150,12 @@ impl PeerPessimisticLocks {
     /// Inserts pessimistic locks into the map.
     ///
     /// Returns whether the operation succeeds.
-    pub fn insert<P: PessimisticLockPair>(&mut self, pairs: Vec<P>) -> Result<(), Vec<P>> {
+    pub fn insert<P: PessimisticLockPair>(
+        &mut self,
+        pairs: Vec<P>,
+        peer_mem_size_limit: usize,
+        instance_mem_size_limit: usize,
+    ) -> Result<(), Vec<P>> {
         let mut incr = 0;
         // Pre-check the memory limit of pessimistic locks.
         for pair in &pairs {
@@ -167,8 +167,8 @@ impl PeerPessimisticLocks {
                 incr += key.len() + lock.memory_size();
             }
         }
-        if self.memory_size + incr > PEER_MEM_SIZE_LIMIT
-            || GLOBAL_MEM_SIZE.get() as usize + incr > GLOBAL_MEM_SIZE_LIMIT
+        if self.memory_size + incr > peer_mem_size_limit
+            || INSTANCE_MEM_SIZE.get() as usize + incr > instance_mem_size_limit
         {
             return Err(pairs);
         }
@@ -178,7 +178,7 @@ impl PeerPessimisticLocks {
             self.map.insert(key, (lock, false));
         }
         self.memory_size += incr;
-        GLOBAL_MEM_SIZE.add(incr as i64);
+        INSTANCE_MEM_SIZE.add(incr as i64);
         Ok(())
     }
 
@@ -186,13 +186,13 @@ impl PeerPessimisticLocks {
         if let Some((lock, _)) = self.map.remove(key) {
             let desc = key.len() + lock.memory_size();
             self.memory_size -= desc;
-            GLOBAL_MEM_SIZE.sub(desc as i64);
+            INSTANCE_MEM_SIZE.sub(desc as i64);
         }
     }
 
     pub fn clear(&mut self) {
-        self.map = HashMap::default();
-        GLOBAL_MEM_SIZE.sub(self.memory_size as i64);
+        self.map = BTreeMap::default();
+        INSTANCE_MEM_SIZE.sub(self.memory_size as i64);
         self.memory_size = 0;
     }
 
@@ -243,24 +243,60 @@ impl PeerPessimisticLocks {
         // Locks that are marked deleted still need to be moved to the new regions,
         // and the deleted mark should also be cleared.
         // Refer to the comment in `PeerPessimisticLocks` for details.
-        let removed_locks = self.map.drain_filter(|key, _| {
-            let key = &**key.as_encoded();
+        // There is no drain_filter for BtreeMap, so extra clone are needed.
+        let mut removed_locks = Vec::new();
+        self.map.retain(|key, value| {
+            let key_ref = key.as_encoded().as_slice();
             let (start_key, end_key) = (derived.get_start_key(), derived.get_end_key());
-            key < start_key || (!end_key.is_empty() && key >= end_key)
+            if key_ref < start_key || (!end_key.is_empty() && key_ref >= end_key) {
+                removed_locks.push((key.clone(), value.clone()));
+                false
+            } else {
+                true
+            }
         });
-        for (key, (lock, _)) in removed_locks {
-            let idx = match regions
+
+        for (key, (lock, _)) in removed_locks.into_iter() {
+            let idx = regions
                 .binary_search_by_key(&&**key.as_encoded(), |region| region.get_start_key())
-            {
-                Ok(idx) => idx,
-                Err(idx) => idx - 1,
-            };
+                .unwrap_or_else(|idx| idx - 1);
             let size = key.len() + lock.memory_size();
             self.memory_size -= size;
             res[idx].map.insert(key, (lock, false));
             res[idx].memory_size += size;
         }
         res
+    }
+
+    /// Scan and return locks in the current pessimistic lock map, the map
+    /// should be locked first before calling this method.
+    pub fn scan_locks<F>(
+        &self,
+        start: Option<&Key>,
+        end: Option<&Key>,
+        filter: F,
+        limit: usize,
+    ) -> (Vec<(Key, Lock)>, bool)
+    where
+        F: Fn(&Key, &PessimisticLock) -> bool,
+    {
+        if let (Some(start_key), Some(end_key)) = (start, end) {
+            assert!(end_key >= start_key);
+        }
+        let mut locks = Vec::new();
+        let mut iter = self.map.range((
+            start.map_or(Bound::Unbounded, |k| Bound::Included(k)),
+            end.map_or(Bound::Unbounded, |k| Bound::Excluded(k)),
+        ));
+        while let Some((key, (lock, _))) = iter.next() {
+            if filter(key, lock) {
+                locks.push((key.clone(), lock.clone().into_lock()));
+            }
+            if limit > 0 && locks.len() >= limit {
+                return (locks, iter.next().is_some());
+            }
+        }
+        (locks, false)
     }
 
     #[cfg(test)]
@@ -276,7 +312,7 @@ impl PeerPessimisticLocks {
 
 impl<'a> IntoIterator for &'a PeerPessimisticLocks {
     type Item = (&'a Key, &'a (PessimisticLock, bool));
-    type IntoIter = std::collections::hash_map::Iter<'a, Key, (PessimisticLock, bool)>;
+    type IntoIter = std::collections::btree_map::Iter<'a, Key, (PessimisticLock, bool)>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.map.iter()
@@ -285,7 +321,7 @@ impl<'a> IntoIterator for &'a PeerPessimisticLocks {
 
 impl Drop for PeerPessimisticLocks {
     fn drop(&mut self) {
-        GLOBAL_MEM_SIZE.sub(self.memory_size as i64);
+        INSTANCE_MEM_SIZE.sub(self.memory_size as i64);
     }
 }
 
@@ -310,6 +346,7 @@ mod tests {
     use std::sync::Mutex;
 
     use tikv_util::defer;
+    use txn_types::LastChange;
 
     use super::*;
 
@@ -324,9 +361,27 @@ mod tests {
             ttl: 3000,
             for_update_ts: 110.into(),
             min_commit_ts: 110.into(),
-            last_change_ts: 105.into(),
-            versions_to_last_change: 2,
+            last_change: LastChange::make_exist(105.into(), 2),
+            is_locked_with_conflict: false,
         }
+    }
+
+    fn lock_with_key(key: &[u8], deleted: bool) -> (Key, (PessimisticLock, bool)) {
+        (
+            Key::from_raw(key),
+            (
+                PessimisticLock {
+                    primary: key.to_vec().into_boxed_slice(),
+                    start_ts: 10.into(),
+                    ttl: 1000,
+                    for_update_ts: 10.into(),
+                    min_commit_ts: 20.into(),
+                    last_change: LastChange::make_exist(5.into(), 2),
+                    is_locked_with_conflict: false,
+                },
+                deleted,
+            ),
+        )
     }
 
     #[test]
@@ -338,12 +393,26 @@ mod tests {
         let k1 = Key::from_raw(b"k1");
         let k2 = Key::from_raw(b"k22");
         let k3 = Key::from_raw(b"k333");
+        let peer_mem_size_limit = 512 << 10;
+        let instance_mem_size_limit = 100 << 20;
 
         // Test the memory size of peer pessimistic locks after inserting.
-        locks1.insert(vec![(k1.clone(), lock(b"k1"))]).unwrap();
+        locks1
+            .insert(
+                vec![(k1.clone(), lock(b"k1"))],
+                peer_mem_size_limit,
+                instance_mem_size_limit,
+            )
+            .unwrap();
         assert_eq!(locks1.get(&k1), Some(&(lock(b"k1"), false)));
         assert_eq!(locks1.memory_size, k1.len() + lock(b"k1").memory_size());
-        locks1.insert(vec![(k2.clone(), lock(b"k1"))]).unwrap();
+        locks1
+            .insert(
+                vec![(k2.clone(), lock(b"k1"))],
+                peer_mem_size_limit,
+                instance_mem_size_limit,
+            )
+            .unwrap();
         assert_eq!(locks1.get(&k2), Some(&(lock(b"k1"), false)));
         assert_eq!(
             locks1.memory_size,
@@ -351,22 +420,34 @@ mod tests {
         );
 
         // Test the global memory size after inserting.
-        locks2.insert(vec![(k3.clone(), lock(b"k1"))]).unwrap();
+        locks2
+            .insert(
+                vec![(k3.clone(), lock(b"k1"))],
+                peer_mem_size_limit,
+                instance_mem_size_limit,
+            )
+            .unwrap();
         assert_eq!(locks2.get(&k3), Some(&(lock(b"k1"), false)));
         assert_eq!(
-            GLOBAL_MEM_SIZE.get() as usize,
+            INSTANCE_MEM_SIZE.get() as usize,
             locks1.memory_size + locks2.memory_size
         );
 
         // Test the memory size after replacing, it should not change.
-        locks1.insert(vec![(k2.clone(), lock(b"k2"))]).unwrap();
+        locks1
+            .insert(
+                vec![(k2.clone(), lock(b"k2"))],
+                peer_mem_size_limit,
+                instance_mem_size_limit,
+            )
+            .unwrap();
         assert_eq!(locks1.get(&k2), Some(&(lock(b"k2"), false)));
         assert_eq!(
             locks1.memory_size,
             k1.len() + k2.len() + 2 * lock(b"k1").memory_size()
         );
         assert_eq!(
-            GLOBAL_MEM_SIZE.get() as usize,
+            INSTANCE_MEM_SIZE.get() as usize,
             locks1.memory_size + locks2.memory_size
         );
 
@@ -375,7 +456,7 @@ mod tests {
         assert!(locks1.get(&k1).is_none());
         assert_eq!(locks1.memory_size, k2.len() + lock(b"k2").memory_size());
         assert_eq!(
-            GLOBAL_MEM_SIZE.get() as usize,
+            INSTANCE_MEM_SIZE.get() as usize,
             locks1.memory_size + locks2.memory_size
         );
 
@@ -383,56 +464,53 @@ mod tests {
         locks2.clear();
         assert!(locks2.is_empty());
         assert_eq!(locks2.memory_size, 0);
-        assert_eq!(GLOBAL_MEM_SIZE.get() as usize, locks1.memory_size);
+        assert_eq!(INSTANCE_MEM_SIZE.get() as usize, locks1.memory_size);
 
         // Test the global memory size after dropping.
         drop(locks1);
         drop(locks2);
-        assert_eq!(GLOBAL_MEM_SIZE.get(), 0);
+        assert_eq!(INSTANCE_MEM_SIZE.get(), 0);
     }
 
     #[test]
     fn test_insert_checking_memory_limit() {
         let _guard = TEST_MUTEX.lock().unwrap();
-        defer!(GLOBAL_MEM_SIZE.set(0));
+        defer!(INSTANCE_MEM_SIZE.set(0));
+        let peer_mem_size_limit = 512 << 10;
+        let instance_mem_size_limit = 100 << 20;
 
         let mut locks = PeerPessimisticLocks::default();
         locks
-            .insert(vec![(Key::from_raw(b"k1"), lock(&[0; 512000]))])
+            .insert(
+                vec![(Key::from_raw(b"k1"), lock(&[0; 512000]))],
+                peer_mem_size_limit,
+                instance_mem_size_limit,
+            )
             .unwrap();
 
         // Exceeding the region limit
         locks
-            .insert(vec![(Key::from_raw(b"k2"), lock(&[0; 32000]))])
+            .insert(
+                vec![(Key::from_raw(b"k2"), lock(&[0; 32000]))],
+                peer_mem_size_limit,
+                instance_mem_size_limit,
+            )
             .unwrap_err();
         assert!(locks.get(&Key::from_raw(b"k2")).is_none());
 
         // Not exceeding the region limit, but exceeding the global limit
-        GLOBAL_MEM_SIZE.set(101 << 20);
-        let res = locks.insert(vec![(Key::from_raw(b"k2"), lock(b"abc"))]);
+        INSTANCE_MEM_SIZE.set(101 << 20);
+        let res = locks.insert(
+            vec![(Key::from_raw(b"k2"), lock(b"abc"))],
+            peer_mem_size_limit,
+            instance_mem_size_limit,
+        );
         res.unwrap_err();
         assert!(locks.get(&Key::from_raw(b"k2")).is_none());
     }
 
     #[test]
     fn test_group_locks_by_regions() {
-        fn lock(key: &[u8], deleted: bool) -> (Key, (PessimisticLock, bool)) {
-            (
-                Key::from_raw(key),
-                (
-                    PessimisticLock {
-                        primary: key.to_vec().into_boxed_slice(),
-                        start_ts: 10.into(),
-                        ttl: 1000,
-                        for_update_ts: 10.into(),
-                        min_commit_ts: 20.into(),
-                        last_change_ts: 5.into(),
-                        versions_to_last_change: 2,
-                    },
-                    deleted,
-                ),
-            )
-        }
         fn region(start_key: &[u8], end_key: &[u8]) -> metapb::Region {
             let mut region = metapb::Region::default();
             region.set_start_key(start_key.to_vec());
@@ -440,14 +518,14 @@ mod tests {
             region
         }
         let _guard = TEST_MUTEX.lock().unwrap();
-        defer!(GLOBAL_MEM_SIZE.set(0));
+        defer!(INSTANCE_MEM_SIZE.set(0));
 
         let mut original = PeerPessimisticLocks::from_locks(vec![
-            lock(b"a", true),
-            lock(b"c", false),
-            lock(b"e", true),
-            lock(b"g", false),
-            lock(b"i", false),
+            lock_with_key(b"a", true),
+            lock_with_key(b"c", false),
+            lock_with_key(b"e", true),
+            lock_with_key(b"g", false),
+            lock_with_key(b"i", false),
         ]);
         let regions = vec![
             region(b"", b"b"),  // test leftmost region
@@ -458,10 +536,10 @@ mod tests {
         ];
         let output = original.group_by_regions(&regions, &regions[4]);
         let expected: Vec<_> = vec![
-            vec![lock(b"a", false)],
+            vec![lock_with_key(b"a", false)],
             vec![],
-            vec![lock(b"c", false)],
-            vec![lock(b"e", false), lock(b"g", false)],
+            vec![lock_with_key(b"c", false)],
+            vec![lock_with_key(b"e", false), lock_with_key(b"g", false)],
             vec![], // the position of the derived region is empty
         ]
         .into_iter()
@@ -471,7 +549,164 @@ mod tests {
         // The lock that belongs to the derived region is kept in the original map.
         assert_eq!(
             original,
-            PeerPessimisticLocks::from_locks(vec![lock(b"i", false)])
+            PeerPessimisticLocks::from_locks(vec![lock_with_key(b"i", false)])
         );
+    }
+
+    #[test]
+    fn test_scan_memory_lock() {
+        // Create a sample PeerPessimisticLocks instance with some locks.
+        let peer_locks = PeerPessimisticLocks::from_locks(vec![
+            lock_with_key(b"key1", false),
+            lock_with_key(b"key2", false),
+            lock_with_key(b"key3", false),
+        ]);
+
+        fn txn_lock(key: &[u8], deleted: bool) -> Lock {
+            let (_, (pessimistic_lock, _)) = lock_with_key(key, deleted);
+            pessimistic_lock.into_lock()
+        }
+
+        type LockFilter = fn(&Key, &PessimisticLock) -> bool;
+
+        fn filter_pass_all(_: &Key, _: &PessimisticLock) -> bool {
+            true
+        }
+
+        fn filter_pass_key2(key: &Key, _: &PessimisticLock) -> bool {
+            key.as_encoded().starts_with(b"key2")
+        }
+
+        // Case parameter: start_key, end_key, filter, limit, expected results, expected
+        // has more.
+        let cases: [(
+            Option<Key>,
+            Option<Key>,
+            LockFilter,
+            usize,
+            Vec<(Key, Lock)>,
+            bool,
+        ); 12] = [
+            (
+                None,
+                None,
+                filter_pass_all,
+                1,
+                vec![(Key::from_raw(b"key1"), txn_lock(b"key1", false))],
+                true,
+            ),
+            (
+                None,
+                None,
+                filter_pass_all,
+                10,
+                vec![
+                    (Key::from_raw(b"key1"), txn_lock(b"key1", false)),
+                    (Key::from_raw(b"key2"), txn_lock(b"key2", false)),
+                    (Key::from_raw(b"key3"), txn_lock(b"key3", false)),
+                ],
+                false,
+            ),
+            (
+                Some(Key::from_raw(b"key0")),
+                Some(Key::from_raw(b"key1")),
+                filter_pass_all,
+                10,
+                vec![],
+                false,
+            ),
+            (
+                Some(Key::from_raw(b"key0")),
+                Some(Key::from_raw(b"key2")),
+                filter_pass_all,
+                10,
+                vec![(Key::from_raw(b"key1"), txn_lock(b"key1", false))],
+                false,
+            ),
+            (
+                Some(Key::from_raw(b"key1")),
+                Some(Key::from_raw(b"key3")),
+                filter_pass_all,
+                10,
+                vec![
+                    (Key::from_raw(b"key1"), txn_lock(b"key1", false)),
+                    (Key::from_raw(b"key2"), txn_lock(b"key2", false)),
+                ],
+                false,
+            ),
+            (
+                Some(Key::from_raw(b"key1")),
+                Some(Key::from_raw(b"key4")),
+                filter_pass_all,
+                2,
+                vec![
+                    (Key::from_raw(b"key1"), txn_lock(b"key1", false)),
+                    (Key::from_raw(b"key2"), txn_lock(b"key2", false)),
+                ],
+                true,
+            ),
+            (
+                Some(Key::from_raw(b"key1")),
+                Some(Key::from_raw(b"key4")),
+                filter_pass_all,
+                10,
+                vec![
+                    (Key::from_raw(b"key1"), txn_lock(b"key1", false)),
+                    (Key::from_raw(b"key2"), txn_lock(b"key2", false)),
+                    (Key::from_raw(b"key3"), txn_lock(b"key3", false)),
+                ],
+                false,
+            ),
+            (
+                Some(Key::from_raw(b"key2")),
+                Some(Key::from_raw(b"key4")),
+                filter_pass_all,
+                10,
+                vec![
+                    (Key::from_raw(b"key2"), txn_lock(b"key2", false)),
+                    (Key::from_raw(b"key3"), txn_lock(b"key3", false)),
+                ],
+                false,
+            ),
+            (
+                Some(Key::from_raw(b"key4")),
+                Some(Key::from_raw(b"key4")),
+                filter_pass_all,
+                10,
+                vec![],
+                false,
+            ),
+            (
+                None,
+                None,
+                filter_pass_key2,
+                10,
+                vec![(Key::from_raw(b"key2"), txn_lock(b"key2", false))],
+                false,
+            ),
+            (
+                Some(Key::from_raw(b"key2")),
+                None,
+                filter_pass_key2,
+                1,
+                vec![(Key::from_raw(b"key2"), txn_lock(b"key2", false))],
+                true,
+            ),
+            (
+                None,
+                Some(Key::from_raw(b"key2")),
+                filter_pass_key2,
+                1,
+                vec![],
+                false,
+            ),
+        ];
+
+        for (start_key, end_key, filter, limit, expected_locks, expected_has_more) in cases {
+            let (locks, has_more) =
+                peer_locks.scan_locks(start_key.as_ref(), end_key.as_ref(), filter, limit);
+            assert_eq!(locks, expected_locks);
+            assert_eq!(has_more, expected_has_more);
+        }
     }
 }

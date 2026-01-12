@@ -2,34 +2,39 @@
 
 use std::{collections::HashSet, sync::Arc};
 
+use api_version::{ApiV1, KvFormat};
 use async_trait::async_trait;
 use collections::HashMap;
 use kvproto::coprocessor::KeyRange;
 use smallvec::SmallVec;
 use tidb_query_common::{
-    storage::{IntervalRange, Storage},
     Result,
+    storage::{IntervalRange, Storage},
 };
 use tidb_query_datatype::{
+    EvalType, FieldTypeAccessor,
     codec::{
         batch::{LazyBatchColumn, LazyBatchColumnVec},
-        row, table,
+        row,
+        table::{self, EXTRA_COMMIT_TS_COL_ID},
     },
     expr::{EvalConfig, EvalContext},
-    EvalType, FieldTypeAccessor,
 };
 use tipb::{ColumnInfo, FieldType, TableScan};
+use txn_types::TimeStamp;
 
 use super::util::scan_executor::*;
 use crate::interface::*;
 
-pub struct BatchTableScanExecutor<S: Storage>(ScanExecutor<S, TableScanExecutorImpl>);
+pub struct BatchTableScanExecutor<S: Storage, F: KvFormat>(
+    ScanExecutor<S, TableScanExecutorImpl, F>,
+);
 
 type HandleIndicesVec = SmallVec<[usize; 2]>;
 
 // We assign a dummy type `Box<dyn Storage<Statistics = ()>>` so that we can
 // omit the type when calling `check_supported`.
-impl BatchTableScanExecutor<Box<dyn Storage<Statistics = ()>>> {
+impl BatchTableScanExecutor<Box<dyn Storage<Statistics = ()>>, ApiV1> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &TableScan) -> Result<()> {
@@ -37,7 +42,7 @@ impl BatchTableScanExecutor<Box<dyn Storage<Statistics = ()>>> {
     }
 }
 
-impl<S: Storage> BatchTableScanExecutor<S> {
+impl<S: Storage, F: KvFormat> BatchTableScanExecutor<S, F> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         storage: S,
@@ -86,6 +91,7 @@ impl<S: Storage> BatchTableScanExecutor<S> {
             // id are given, we will only preserve the *last* one.
         }
 
+        let load_commit_ts = column_id_index.contains_key(&EXTRA_COMMIT_TS_COL_ID);
         let no_common_handle = primary_column_ids.is_empty();
         let imp = TableScanExecutorImpl {
             context: EvalContext::new(config),
@@ -104,18 +110,32 @@ impl<S: Storage> BatchTableScanExecutor<S> {
             is_key_only,
             accept_point_range: no_common_handle,
             is_scanned_range_aware,
+            load_commit_ts,
         })?;
         Ok(Self(wrapper))
     }
 }
 
 #[async_trait]
-impl<S: Storage> BatchExecutor for BatchTableScanExecutor<S> {
+impl<S: Storage, F: KvFormat> BatchExecutor for BatchTableScanExecutor<S, F> {
     type StorageStats = S::Statistics;
 
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.0.schema()
+    }
+
+    #[inline]
+    fn intermediate_schema(&self, index: usize) -> Result<&[FieldType]> {
+        self.0.intermediate_schema(index)
+    }
+
+    #[inline]
+    fn consume_and_fill_intermediate_results(
+        &mut self,
+        results: &mut [Vec<BatchExecuteResult>],
+    ) -> Result<()> {
+        self.0.consume_and_fill_intermediate_results(results)
     }
 
     #[inline]
@@ -289,6 +309,10 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
             .column_id_index
             .get(&table::EXTRA_PHYSICAL_TABLE_ID_COL_ID)
             .copied();
+        let commit_ts_column_idx = self
+            .column_id_index
+            .get(&table::EXTRA_COMMIT_TS_COL_ID)
+            .copied();
         let mut last_index = 0usize;
         for handle_index in &self.handle_indices {
             // `handle_indices` is expected to be sorted.
@@ -321,7 +345,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         // on 0..columns_len. For the example above, this loop will push:
         // [non-pk, non-pk]
         for i in last_index..columns_len {
-            if Some(i) == physical_table_id_column_idx {
+            if Some(i) == physical_table_id_column_idx || Some(i) == commit_ts_column_idx {
                 columns.push(LazyBatchColumn::decoded_with_capacity_and_tp(
                     scan_rows,
                     EvalType::Int,
@@ -340,6 +364,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         key: &[u8],
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
+        commit_ts: Option<TimeStamp>,
     ) -> Result<()> {
         use tidb_query_datatype::codec::datum;
 
@@ -392,13 +417,25 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
             table::check_record_key(key)?;
         }
 
-        let some_physical_table_id_column_index = self
+        if let Some(idx) = self
             .column_id_index
-            .get(&table::EXTRA_PHYSICAL_TABLE_ID_COL_ID);
-        if let Some(idx) = some_physical_table_id_column_index {
+            .get(&table::EXTRA_PHYSICAL_TABLE_ID_COL_ID)
+        {
             let table_id = table::decode_table_id(key)?;
             columns[*idx].mut_decoded().push_int(Some(table_id));
             self.is_column_filled[*idx] = true;
+        }
+        if let Some(idx) = self.column_id_index.get(&table::EXTRA_COMMIT_TS_COL_ID) {
+            if let Some(ts) = commit_ts {
+                columns[*idx]
+                    .mut_decoded()
+                    .push_int(Some(ts.into_inner() as i64));
+                self.is_column_filled[*idx] = true;
+            } else {
+                return Err(other_err!(
+                    "Query asks for _tidb_commit_ts, but the data is missing"
+                ));
+            }
         }
 
         // Some fields may be missing in the row, we push corresponding default value to
@@ -431,7 +468,6 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
                 self.is_column_filled[i] = false;
             }
         }
-
         Ok(())
     }
 }
@@ -446,9 +482,9 @@ mod tests {
         execute_stats::*, storage::test_fixture::FixtureStorage, util::convert_to_prefix_next,
     };
     use tidb_query_datatype::{
-        codec::{batch::LazyBatchColumnVec, data_type::*, datum, table, Datum},
-        expr::EvalConfig,
         Collation, EvalType, FieldTypeAccessor, FieldTypeTp,
+        codec::{Datum, batch::LazyBatchColumnVec, data_type::*, datum, table},
+        expr::EvalConfig,
     };
     use tipb::{ColumnInfo, FieldType};
 
@@ -477,7 +513,7 @@ mod tests {
         fn new() -> TableScanTestHelper {
             const TABLE_ID: i64 = 7;
             // [(row_id, columns)] where each column: (column id, datum)
-            let data = vec![
+            let data = [
                 (
                     1,
                     vec![
@@ -702,7 +738,7 @@ mod tests {
         batch_expect_rows: &[usize],
     ) {
         let columns_info = helper.columns_info_by_idx(col_idxs);
-        let mut executor = BatchTableScanExecutor::new(
+        let mut executor = BatchTableScanExecutor::<_, ApiV1>::new(
             helper.store(),
             Arc::new(EvalConfig::default()),
             columns_info,
@@ -720,7 +756,7 @@ mod tests {
             let expect_rows = *expect_rows;
             let expect_drained = start_row + expect_rows > total_rows;
             let result = block_on(executor.next_batch(expect_rows));
-            assert_eq!(*result.is_drained.as_ref().unwrap(), expect_drained);
+            assert_eq!(result.is_drained.as_ref().unwrap().stop(), expect_drained);
             if expect_drained {
                 // all remaining rows are fetched
                 helper.expect_table_values(
@@ -786,7 +822,7 @@ mod tests {
     fn test_execution_summary() {
         let helper = TableScanTestHelper::new();
 
-        let mut executor = BatchTableScanExecutor::new(
+        let mut executor = BatchTableScanExecutor::<_, ApiV1>::new(
             helper.store(),
             Arc::new(EvalConfig::default()),
             helper.columns_info_by_idx(&[0]),
@@ -925,7 +961,7 @@ mod tests {
         // For row 0 + row 1 + (row 2 ~ row 4), we should only get row 0, row 1 and an
         // error.
         for corrupted_row_index in 2..=4 {
-            let mut executor = BatchTableScanExecutor::new(
+            let mut executor = BatchTableScanExecutor::<_, ApiV1>::new(
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 columns_info.clone(),
@@ -1032,7 +1068,7 @@ mod tests {
         // We should get row 0 and error because no further rows should be scanned when
         // there is an error.
         {
-            let mut executor = BatchTableScanExecutor::new(
+            let mut executor = BatchTableScanExecutor::<_, ApiV1>::new(
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 columns_info.clone(),
@@ -1080,7 +1116,7 @@ mod tests {
             });
             let mut schema = schema.clone();
             schema.push(FieldTypeTp::LongLong.into());
-            let mut executor = BatchTableScanExecutor::new(
+            let mut executor = BatchTableScanExecutor::<_, ApiV1>::new(
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 columns_info,
@@ -1122,7 +1158,7 @@ mod tests {
 
         // Let's also repeat case 1 for smaller batch size
         {
-            let mut executor = BatchTableScanExecutor::new(
+            let mut executor = BatchTableScanExecutor::<_, ApiV1>::new(
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 columns_info.clone(),
@@ -1165,7 +1201,7 @@ mod tests {
         // Case 2: row 1 + row 2
         // We should get error and no row, for the same reason as above.
         {
-            let mut executor = BatchTableScanExecutor::new(
+            let mut executor = BatchTableScanExecutor::<_, ApiV1>::new(
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 columns_info.clone(),
@@ -1186,7 +1222,7 @@ mod tests {
         // Case 3: row 2 + row 0
         // We should get row 2 and row 0. There is no error.
         {
-            let mut executor = BatchTableScanExecutor::new(
+            let mut executor = BatchTableScanExecutor::<_, ApiV1>::new(
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 columns_info.clone(),
@@ -1220,7 +1256,7 @@ mod tests {
         // Case 4: row 1
         // We should get error.
         {
-            let mut executor = BatchTableScanExecutor::new(
+            let mut executor = BatchTableScanExecutor::<_, ApiV1>::new(
                 store,
                 Arc::new(EvalConfig::default()),
                 columns_info,
@@ -1270,7 +1306,7 @@ mod tests {
 
         let store = FixtureStorage::new(iter::once((key, (Ok(value)))).collect());
 
-        let mut executor = BatchTableScanExecutor::new(
+        let mut executor = BatchTableScanExecutor::<_, ApiV1>::new(
             store,
             Arc::new(EvalConfig::default()),
             columns_info,
@@ -1283,7 +1319,7 @@ mod tests {
         .unwrap();
 
         let mut result = block_on(executor.next_batch(10));
-        assert_eq!(result.is_drained.unwrap(), true);
+        assert!(result.is_drained.unwrap().stop());
         assert_eq!(result.logical_rows.len(), 1);
         assert_eq!(result.physical_columns.columns_len(), columns_is_pk.len());
         for i in 0..columns_is_pk.len() {
@@ -1366,19 +1402,19 @@ mod tests {
         }
 
         let handle = datum::encode_key(&mut EvalContext::default(), &handle).unwrap();
-        let key = table::encode_common_handle_for_test(TABLE_ID, &handle);
+        let key = table::encode_common_handle(TABLE_ID, &handle);
         let value = table::encode_row(&mut EvalContext::default(), row, &column_ids).unwrap();
 
         // Constructs a range that includes the constructed key.
         let mut key_range = KeyRange::default();
-        let begin = table::encode_common_handle_for_test(TABLE_ID - 1, &handle);
-        let end = table::encode_common_handle_for_test(TABLE_ID + 1, &handle);
+        let begin = table::encode_common_handle(TABLE_ID - 1, &handle);
+        let end = table::encode_common_handle(TABLE_ID + 1, &handle);
         key_range.set_start(begin);
         key_range.set_end(end);
 
         let store = FixtureStorage::new(iter::once((key, (Ok(value)))).collect());
 
-        let mut executor = BatchTableScanExecutor::new(
+        let mut executor = BatchTableScanExecutor::<_, ApiV1>::new(
             store,
             Arc::new(EvalConfig::default()),
             columns_info,
@@ -1391,7 +1427,7 @@ mod tests {
         .unwrap();
 
         let mut result = block_on(executor.next_batch(10));
-        assert_eq!(result.is_drained.unwrap(), true);
+        assert!(result.is_drained.unwrap().stop());
         assert_eq!(result.logical_rows.len(), 1);
 
         // We expect we fill the primary column with the value embedded in the common
@@ -1547,19 +1583,19 @@ mod tests {
 
         let handle = datum::encode_key(&mut EvalContext::default(), &handle).unwrap();
 
-        let key = table::encode_common_handle_for_test(TABLE_ID, &handle);
+        let key = table::encode_common_handle(TABLE_ID, &handle);
         let value = table::encode_row(&mut EvalContext::default(), row, &column_ids).unwrap();
 
         // Constructs a range that includes the constructed key.
         let mut key_range = KeyRange::default();
-        let begin = table::encode_common_handle_for_test(TABLE_ID - 1, &handle);
-        let end = table::encode_common_handle_for_test(TABLE_ID + 1, &handle);
+        let begin = table::encode_common_handle(TABLE_ID - 1, &handle);
+        let end = table::encode_common_handle(TABLE_ID + 1, &handle);
         key_range.set_start(begin);
         key_range.set_end(end);
 
         let store = FixtureStorage::new(iter::once((key, (Ok(value)))).collect());
 
-        let mut executor = BatchTableScanExecutor::new(
+        let mut executor = BatchTableScanExecutor::<_, ApiV1>::new(
             store,
             Arc::new(EvalConfig::default()),
             columns_info.clone(),
@@ -1572,7 +1608,7 @@ mod tests {
         .unwrap();
 
         let mut result = block_on(executor.next_batch(10));
-        assert_eq!(result.is_drained.unwrap(), true);
+        assert!(result.is_drained.unwrap().stop());
         if !columns_info.is_empty() {
             assert_eq!(result.logical_rows.len(), 1);
         }

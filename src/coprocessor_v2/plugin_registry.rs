@@ -5,7 +5,7 @@ use std::{
     ffi::{OsStr, OsString},
     ops::Range,
     path::{Path, PathBuf},
-    sync::{mpsc, Arc, RwLock},
+    sync::{Arc, RwLock, mpsc},
     thread,
     time::Duration,
 };
@@ -32,9 +32,7 @@ pub enum PluginLoadingError {
         tikv_rustc: String,
     },
 
-    #[error(
-        "target mismatch: plugin was compiled for {plugin_target}, but TiKV for {tikv_target}"
-    )]
+    #[error("target mismatch: plugin was compiled for {plugin_target}, but TiKV for {tikv_target}")]
     TargetMismatch {
         plugin_target: String,
         tikv_target: String,
@@ -458,7 +456,7 @@ impl CoprocessorPlugin for LoadedPlugin {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 fn is_library_file<P: AsRef<Path>>(path: P) -> bool {
     path.as_ref().extension() == Some(OsStr::new("so"))
 }

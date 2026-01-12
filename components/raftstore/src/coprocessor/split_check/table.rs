@@ -2,7 +2,7 @@
 
 use std::cmp::Ordering;
 
-use engine_traits::{IterOptions, Iterator, KvEngine, CF_WRITE};
+use engine_traits::{CF_WRITE, IterOptions, Iterator, KvEngine};
 use error_code::ErrorCodeExt;
 use kvproto::{metapb::Region, pdpb::CheckPolicy};
 use tidb_query_datatype::codec::table as table_codec;
@@ -229,7 +229,7 @@ mod tests {
     use std::{io::Write, sync::mpsc};
 
     use engine_test::kv::new_engine;
-    use engine_traits::{SyncMutable, ALL_CFS};
+    use engine_traits::{ALL_CFS, SyncMutable};
     use kvproto::{metapb::Peer, pdpb::CheckPolicy};
     use tempfile::Builder;
     use tidb_query_datatype::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
@@ -238,7 +238,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        coprocessor::{dispatcher::SchedTask, Config, CoprocessorHost},
+        coprocessor::{Config, CoprocessorHost, dispatcher::SchedTask},
         store::{SplitCheckRunner, SplitCheckTask},
     };
 
@@ -300,7 +300,7 @@ mod tests {
             // ["t1", "") => t2_xx
             (Some(1), None, data_keys.get(1).cloned()),
             // ["t1", "t2") => t1_xx
-            (Some(1), Some(2), data_keys.get(0).cloned()),
+            (Some(1), Some(2), data_keys.first().cloned()),
         ]);
     }
 
@@ -326,7 +326,7 @@ mod tests {
             split_region_on_table: true,
             // Try to "disable" size split.
             region_max_size: Some(ReadableSize::gb(2)),
-            region_split_size: ReadableSize::gb(1),
+            region_split_size: Some(ReadableSize::gb(1)),
             // Try to "disable" keys split
             region_max_keys: Some(2000000000),
             region_split_keys: Some(1000000000),
@@ -335,7 +335,7 @@ mod tests {
 
         // Try to ignore the ApproximateRegionSize
         let coprocessor = CoprocessorHost::new(stx, cfg);
-        let mut runnable = SplitCheckRunner::new(engine.clone(), tx, coprocessor);
+        let mut runnable = SplitCheckRunner::new(engine.clone(), tx, coprocessor, None);
 
         type Case = (Option<Vec<u8>>, Option<Vec<u8>>, Option<i64>);
         let mut check_cases = |cases: Vec<Case>| {

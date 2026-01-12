@@ -9,11 +9,13 @@ use std::{
 use batch_system::Fsm;
 use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine};
-use futures::{compat::Future01CompatExt, FutureExt};
+use futures::{FutureExt, compat::Future01CompatExt};
 use keys::{data_end_key, data_key};
 use kvproto::metapb::Region;
-use raftstore::store::{fsm::store::StoreRegionMeta, Config, RegionReadProgressRegistry};
-use slog::{info, o, Logger};
+use raftstore::store::{
+    Config, ReadDelegate, RegionReadProgressRegistry, Transport, fsm::store::StoreRegionMeta,
+};
+use slog::{Logger, info, o};
 use tikv_util::{
     future::poll_future_notify,
     is_zero_duration,
@@ -40,7 +42,7 @@ pub struct StoreMeta<EK> {
     /// to avoid end key conflict.
     pub(crate) region_ranges: BTreeMap<(Vec<u8>, u64), u64>,
     /// region_id -> (region, initialized)
-    pub(crate) regions: HashMap<u64, (Region, bool)>,
+    pub regions: HashMap<u64, (Region, bool)>,
 }
 
 impl<EK> StoreMeta<EK> {
@@ -61,13 +63,28 @@ impl<EK> StoreMeta<EK> {
             .regions
             .insert(region_id, (region.clone(), initialized));
         // `prev` only makes sense when it's initialized.
-        if let Some((prev, prev_init)) = prev && prev_init {
+        if let Some((prev, prev_init)) = prev
+            && prev_init
+        {
             assert!(initialized, "{} region corrupted", SlogFormat(logger));
             if prev.get_region_epoch().get_version() != version {
-                let prev_id = self.region_ranges.remove(&(data_end_key(prev.get_end_key()), prev.get_region_epoch().get_version()));
-                assert_eq!(prev_id, Some(region_id), "{} region corrupted", SlogFormat(logger));
+                let prev_id = self.region_ranges.remove(&(
+                    data_end_key(prev.get_end_key()),
+                    prev.get_region_epoch().get_version(),
+                ));
+                assert_eq!(
+                    prev_id,
+                    Some(region_id),
+                    "{} region corrupted",
+                    SlogFormat(logger)
+                );
             } else {
-                assert!(self.region_ranges.get(&(data_end_key(prev.get_end_key()), version)).is_some(), "{} region corrupted", SlogFormat(logger));
+                assert!(
+                    self.region_ranges
+                        .contains_key(&(data_end_key(prev.get_end_key()), version)),
+                    "{} region corrupted",
+                    SlogFormat(logger)
+                );
                 return;
             }
         }
@@ -131,10 +148,16 @@ impl<EK: Send> StoreRegionMeta for StoreMeta<EK> {
             }
         }
     }
+
+    #[inline]
+    fn reader(&self, region_id: u64) -> Option<&ReadDelegate> {
+        self.readers.get(&region_id).map(|e| &e.0)
+    }
 }
 
 pub struct Store {
     id: u64,
+    last_compact_checked_key: Vec<u8>,
     // Unix time when it's started.
     start_time: Option<u64>,
     logger: Logger,
@@ -144,6 +167,7 @@ impl Store {
     pub fn new(id: u64, logger: Logger) -> Store {
         Store {
             id,
+            last_compact_checked_key: keys::DATA_MIN_KEY.to_vec(),
             start_time: None,
             logger: logger.new(o!("store_id" => id)),
         }
@@ -151,6 +175,14 @@ impl Store {
 
     pub fn store_id(&self) -> u64 {
         self.id
+    }
+
+    pub fn last_compact_checked_key(&self) -> &Vec<u8> {
+        &self.last_compact_checked_key
+    }
+
+    pub fn set_last_compact_checked_key(&mut self, key: Vec<u8>) {
+        self.last_compact_checked_key = key;
     }
 
     pub fn start_time(&self) -> Option<u64> {
@@ -200,6 +232,8 @@ impl StoreFsm {
 impl Fsm for StoreFsm {
     type Message = StoreMsg;
 
+    const FSM_TYPE: batch_system::FsmType = batch_system::FsmType::store;
+
     #[inline]
     fn is_stopped(&self) -> bool {
         false
@@ -228,6 +262,15 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
         );
 
         self.on_pd_store_heartbeat();
+        self.schedule_tick(
+            StoreTick::CleanupImportSst,
+            self.store_ctx.cfg.cleanup_import_sst_interval.0,
+        );
+
+        self.schedule_tick(
+            StoreTick::SnapGc,
+            self.store_ctx.cfg.snap_mgr_gc_tick_interval.0,
+        );
     }
 
     pub fn schedule_tick(&mut self, tick: StoreTick, timeout: Duration) {
@@ -251,21 +294,64 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
     fn on_tick(&mut self, tick: StoreTick) {
         match tick {
             StoreTick::PdStoreHeartbeat => self.on_pd_store_heartbeat(),
-            _ => unimplemented!(),
+            StoreTick::CleanupImportSst => self.on_cleanup_import_sst(),
+            StoreTick::SnapGc => self.on_snapshot_gc(),
+            _ => slog_panic!(
+                self.store_ctx.logger,
+                "unimplemented";
+                "tick" => ?tick,
+            ),
         }
     }
 
-    pub fn handle_msgs(&mut self, store_msg_buf: &mut Vec<StoreMsg>) {
+    pub fn handle_msgs(&mut self, store_msg_buf: &mut Vec<StoreMsg>)
+    where
+        T: Transport,
+    {
         for msg in store_msg_buf.drain(..) {
             match msg {
                 StoreMsg::Start => self.on_start(),
                 StoreMsg::Tick(tick) => self.on_tick(tick),
-                StoreMsg::RaftMessage(msg) => self.fsm.store.on_raft_message(self.store_ctx, msg),
-                StoreMsg::SplitInit(msg) => self.fsm.store.on_split_init(self.store_ctx, msg),
+                StoreMsg::RaftMessage(msg) => {
+                    self.fsm.store.on_raft_message(self.store_ctx, msg);
+                }
+                StoreMsg::SplitInit(msg) => {
+                    // For normal region split, it must not skip sending
+                    // SplitInit message, otherwise it requests a snapshot from
+                    // leader which is expensive.
+                    self.fsm.store.on_split_init(
+                        self.store_ctx,
+                        msg,
+                        false, // skip_if_exists
+                    )
+                }
                 StoreMsg::StoreUnreachable { to_store_id } => self
                     .fsm
                     .store
                     .on_store_unreachable(self.store_ctx, to_store_id),
+                StoreMsg::AskCommitMerge(req) => {
+                    self.fsm.store.on_ask_commit_merge(self.store_ctx, req)
+                }
+                #[cfg(feature = "testexport")]
+                StoreMsg::WaitFlush { region_id, ch } => {
+                    self.fsm.store.on_wait_flush(self.store_ctx, region_id, ch)
+                }
+                StoreMsg::LatencyInspect {
+                    send_time,
+                    inspector,
+                } => self.fsm.store.on_update_latency_inspectors(
+                    self.store_ctx,
+                    send_time,
+                    inspector,
+                ),
+                StoreMsg::UnsafeRecoveryReport(report) => self
+                    .fsm
+                    .store
+                    .on_unsafe_recovery_report(self.store_ctx, report),
+                StoreMsg::UnsafeRecoveryCreatePeer { region, syncer } => self
+                    .fsm
+                    .store
+                    .on_unsafe_recovery_create_peer(self.store_ctx, region, syncer),
             }
         }
     }

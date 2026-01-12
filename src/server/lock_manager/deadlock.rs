@@ -19,7 +19,7 @@ use grpcio::{
     WriteFlags,
 };
 use kvproto::{deadlock::*, metapb::Region};
-use pd_client::{PdClient, INVALID_ID};
+use pd_client::{INVALID_ID, PdClient};
 use raft::StateRole;
 use raftstore::{
     coprocessor::{
@@ -38,11 +38,11 @@ use tokio::task::spawn_local;
 use txn_types::TimeStamp;
 
 use super::{
+    Error, Result,
     client::{self, Client},
     config::Config,
     metrics::*,
     waiter_manager::Scheduler as WaiterMgrScheduler,
-    Error, Result,
 };
 use crate::{
     server::resolve::StoreAddrResolver,
@@ -361,18 +361,13 @@ impl DetectTable {
 }
 
 /// The role of the detector.
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy, Default)]
 pub enum Role {
     /// The node is the leader of the detector.
     Leader,
     /// The node is a follower of the leader.
+    #[default]
     Follower,
-}
-
-impl Default for Role {
-    fn default() -> Role {
-        Role::Follower
-    }
 }
 
 impl From<StateRole> for Role {
@@ -1119,7 +1114,7 @@ pub mod tests {
     use tikv_util::worker::FutureWorker;
 
     use super::*;
-    use crate::server::resolve::Callback;
+    use crate::server::resolve;
 
     #[test]
     fn test_detect_table() {
@@ -1467,15 +1462,6 @@ pub mod tests {
 
     impl PdClient for MockPdClient {}
 
-    #[derive(Clone)]
-    pub(crate) struct MockResolver;
-
-    impl StoreAddrResolver for MockResolver {
-        fn resolve(&self, _store_id: u64, _cb: Callback) -> Result<()> {
-            Err(Error::Other(box_err!("unimplemented")))
-        }
-    }
-
     fn start_deadlock_detector(
         host: &mut CoprocessorHost<KvTestEngine>,
     ) -> (FutureWorker<Task>, Scheduler) {
@@ -1485,7 +1471,7 @@ pub mod tests {
         let detector_runner = Detector::new(
             1,
             Arc::new(MockPdClient {}),
-            MockResolver {},
+            resolve::MockStoreAddrResolver::default(),
             Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap()),
             waiter_mgr_scheduler,
             &Config::default(),
@@ -1575,19 +1561,19 @@ pub mod tests {
         host.on_region_changed(&region, RegionChangeEvent::Create, StateRole::Follower);
         check_role(Role::Follower);
         for &follower_role in &follower_roles {
-            host.on_role_change(&region, RoleChange::new(follower_role));
+            host.on_role_change(&region, RoleChange::new_for_test(follower_role));
             check_role(Role::Follower);
-            host.on_role_change(&invalid, RoleChange::new(StateRole::Leader));
+            host.on_role_change(&invalid, RoleChange::new_for_test(StateRole::Leader));
             check_role(Role::Follower);
-            host.on_role_change(&other, RoleChange::new(StateRole::Leader));
+            host.on_role_change(&other, RoleChange::new_for_test(StateRole::Leader));
             check_role(Role::Follower);
-            host.on_role_change(&region, RoleChange::new(StateRole::Leader));
+            host.on_role_change(&region, RoleChange::new_for_test(StateRole::Leader));
             check_role(Role::Leader);
-            host.on_role_change(&invalid, RoleChange::new(follower_role));
+            host.on_role_change(&invalid, RoleChange::new_for_test(follower_role));
             check_role(Role::Leader);
-            host.on_role_change(&other, RoleChange::new(follower_role));
+            host.on_role_change(&other, RoleChange::new_for_test(follower_role));
             check_role(Role::Leader);
-            host.on_role_change(&region, RoleChange::new(follower_role));
+            host.on_role_change(&region, RoleChange::new_for_test(follower_role));
             check_role(Role::Follower);
         }
 

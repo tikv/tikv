@@ -2,16 +2,17 @@
 
 // #[PerformanceCriticalPath]
 use std::{
+    fmt,
     num::NonZeroU64,
     sync::{
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
-        Arc,
     },
 };
 
 use engine_traits::{
-    util::check_key_in_range, Error as EngineError, IterOptions, Iterable, Iterator, KvEngine,
-    Peekable, RaftEngine, ReadOptions, Result as EngineResult, Snapshot, CF_RAFT,
+    CF_RAFT, Error as EngineError, IterOptions, Iterable, Iterator, KvEngine, MetricsExt, Peekable,
+    RaftEngine, ReadOptions, Result as EngineResult, Snapshot, util::check_key_in_range,
 };
 use fail::fail_point;
 use keys::DATA_PREFIX_KEY;
@@ -23,23 +24,40 @@ use tikv_util::{
 };
 
 use crate::{
-    store::{util, PeerStorage, TxnExt},
     Error, Result,
+    coprocessor::ObservedSnapshot,
+    store::{PeerStorage, TxnExt, util},
 };
 
 /// Snapshot of a region.
 ///
 /// Only data within a region can be accessed.
-#[derive(Debug)]
 pub struct RegionSnapshot<S: Snapshot> {
     snap: Arc<S>,
     region: Arc<Region>,
     apply_index: Arc<AtomicU64>,
+    from_v2: bool,
     pub term: Option<NonZeroU64>,
     pub txn_extra_op: TxnExtraOp,
     // `None` means the snapshot does not provide peer related transaction extensions.
     pub txn_ext: Option<Arc<TxnExt>>,
     pub bucket_meta: Option<Arc<BucketMeta>>,
+
+    observed_snap: Option<Arc<Mutex<Option<Box<dyn ObservedSnapshot>>>>>,
+}
+
+impl<S: Snapshot> fmt::Debug for RegionSnapshot<S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RegionSnapshot")
+            .field("region", &self.region)
+            .field("apply_index", &self.apply_index)
+            .field("from_v2", &self.from_v2)
+            .field("term", &self.term)
+            .field("txn_extra_op", &self.txn_extra_op)
+            .field("txn_ext", &self.txn_ext)
+            .field("bucket_meta", &self.bucket_meta)
+            .finish()
+    }
 }
 
 impl<S> RegionSnapshot<S>
@@ -68,10 +86,48 @@ where
             // Use 0 to indicate that the apply index is missing and we need to KvGet it,
             // since apply index must be >= RAFT_INIT_LOG_INDEX.
             apply_index: Arc::new(AtomicU64::new(0)),
+            from_v2: false,
             term: None,
             txn_extra_op: TxnExtraOp::Noop,
             txn_ext: None,
             bucket_meta: None,
+            observed_snap: None,
+        }
+    }
+
+    pub fn set_observed_snapshot(&mut self, observed_snap: Box<dyn ObservedSnapshot>) {
+        self.observed_snap = Some(Arc::new(Mutex::new(Some(observed_snap))));
+    }
+
+    /// Replace underlying snapshot with its observed snapshot.
+    ///
+    /// One use case is to allow callers to build a `RegionSnapshot` with an
+    /// optimized snapshot. See RaftKv::async_in_memory_snapshot for an example.
+    ///
+    /// # Panics
+    ///
+    /// It panics, if it has been cloned before this calling `replace_snapshot`
+    /// or if `snap_fn` panics, the panic is propagated to the caller.
+    pub fn replace_snapshot<Sp, F>(mut self, snap_fn: F) -> RegionSnapshot<Sp>
+    where
+        Sp: Snapshot,
+        F: FnOnce(S, Option<Box<dyn ObservedSnapshot>>) -> Sp,
+    {
+        let mut observed = None;
+        if let Some(observed_snap) = self.observed_snap.take() {
+            observed = observed_snap.lock().unwrap().take();
+        }
+        let inner = Arc::into_inner(self.snap).unwrap();
+        RegionSnapshot {
+            snap: Arc::new(snap_fn(inner, observed)),
+            region: self.region,
+            apply_index: self.apply_index,
+            from_v2: self.from_v2,
+            term: self.term,
+            txn_extra_op: self.txn_extra_op,
+            txn_ext: self.txn_ext,
+            bucket_meta: self.bucket_meta,
+            observed_snap: None,
         }
     }
 
@@ -83,6 +139,27 @@ where
     #[inline]
     pub fn get_snapshot(&self) -> &S {
         self.snap.as_ref()
+    }
+
+    pub fn set_from_v2(&mut self) {
+        self.from_v2 = true;
+    }
+
+    pub fn get_data_version(&self) -> Result<u64> {
+        if self.from_v2 {
+            if self.snap.sequence_number() != 0 {
+                Ok(self.snap.sequence_number())
+            } else {
+                Err(box_err!("Snapshot sequence number 0"))
+            }
+        } else {
+            self.get_apply_index()
+        }
+    }
+
+    #[inline]
+    pub fn set_apply_index(&self, apply_index: u64) {
+        self.apply_index.store(apply_index, Ordering::SeqCst);
     }
 
     #[inline]
@@ -163,10 +240,12 @@ where
             snap: self.snap.clone(),
             region: Arc::clone(&self.region),
             apply_index: Arc::clone(&self.apply_index),
+            from_v2: self.from_v2,
             term: self.term,
             txn_extra_op: self.txn_extra_op,
             txn_ext: self.txn_ext.clone(),
             bucket_meta: self.bucket_meta.clone(),
+            observed_snap: self.observed_snap.clone(),
         }
     }
 }
@@ -249,6 +328,13 @@ where
 pub struct RegionIterator<S: Snapshot> {
     iter: <S as Iterable>::Iterator,
     region: Arc<Region>,
+}
+
+impl<S: Snapshot> MetricsExt for RegionIterator<S> {
+    type Collector = <<S as Iterable>::Iterator as MetricsExt>::Collector;
+    fn metrics_collector(&self) -> Self::Collector {
+        self.iter.metrics_collector()
+    }
 }
 
 fn update_lower_bound(iter_opt: &mut IterOptions, region: &Region) {
@@ -366,14 +452,17 @@ fn handle_check_key_in_region_error(e: crate::Error) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use engine_test::{kv::KvTestSnapshot, new_temp_engine};
-    use engine_traits::{Engines, KvEngine, Peekable, RaftEngine, SyncMutable, CF_DEFAULT};
+    use engine_traits::{CF_DEFAULT, Engines, KvEngine, Peekable, RaftEngine, SyncMutable};
     use keys::data_key;
     use kvproto::metapb::{Peer, Region};
     use tempfile::Builder;
     use tikv_util::worker;
 
     use super::*;
-    use crate::{store::PeerStorage, Result};
+    use crate::{
+        Result,
+        store::{PeerStorage, local_metrics::RaftMetrics},
+    };
 
     type DataSet = Vec<(Vec<u8>, Vec<u8>)>;
 
@@ -391,6 +480,7 @@ mod tests {
             raftlog_fetch_sched,
             0,
             "".to_owned(),
+            &RaftMetrics::new(false),
         )
         .unwrap()
     }
@@ -414,7 +504,7 @@ mod tests {
             (b"a9".to_vec(), b"v9".to_vec()),
         ];
 
-        for &(ref k, ref v) in &base_data {
+        for (k, v) in &base_data {
             engines.kv.put(&data_key(k), v).unwrap();
         }
         let store = new_peer_storage(engines, &r);

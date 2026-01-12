@@ -5,18 +5,18 @@ use std::{borrow::Cow, fmt::Display};
 use tipb::FieldType;
 
 use super::{
-    mysql::{RoundMode, DEFAULT_FSP},
     Error, Result,
+    mysql::{DEFAULT_FSP, RoundMode, charset::MULTI_BYTES_CHARSETS},
 };
 // use crate::{self, FieldTypeTp, UNSPECIFIED_LENGTH};
 use crate::{
+    Collation, FieldTypeAccessor, FieldTypeTp, UNSPECIFIED_LENGTH,
     codec::{
         data_type::*,
         error::ERR_DATA_OUT_OF_RANGE,
-        mysql::{charset, decimal::max_or_min_dec, Res},
+        mysql::{Res, decimal::max_or_min_dec},
     },
     expr::{EvalContext, Flag},
-    Collation, FieldTypeAccessor, FieldTypeTp, UNSPECIFIED_LENGTH,
 };
 
 /// A trait for converting a value to an `Int`.
@@ -25,6 +25,20 @@ pub trait ToInt {
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64>;
     /// Converts the given value to an `u64`
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64>;
+}
+
+/// A trait for converting a value to a `String`.
+///
+/// NOTE: we can't resue the `ToString` trait becuase this trait may return
+/// different value with `fmt::Display`.
+pub trait ToStringValue {
+    fn to_string_value(&self) -> String;
+}
+
+impl<T: ToString> ToStringValue for T {
+    default fn to_string_value(&self) -> String {
+        self.to_string()
+    }
 }
 
 /// A trait for converting a value to `T`
@@ -78,26 +92,26 @@ where
 
 impl<T> ConvertTo<String> for T
 where
-    T: ToString + EvaluableRet,
+    T: ToStringValue + EvaluableRet,
 {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<String> {
         // FIXME: There is an additional step `ProduceStrWithSpecifiedTp` in TiDB.
-        Ok(self.to_string())
+        Ok(self.to_string_value())
     }
 }
 
 impl<T> ConvertTo<Bytes> for T
 where
-    T: ToString + EvaluableRet,
+    T: ToStringValue + EvaluableRet,
 {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Bytes> {
-        Ok(self.to_string().into_bytes())
+        Ok(self.to_string_value().into_bytes())
     }
 }
 
-impl<'a> ConvertTo<Real> for JsonRef<'a> {
+impl ConvertTo<Real> for JsonRef<'_> {
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<Real> {
         let val = self.convert(ctx)?;
@@ -106,25 +120,25 @@ impl<'a> ConvertTo<Real> for JsonRef<'a> {
     }
 }
 
-impl<'a> ConvertTo<String> for JsonRef<'a> {
+impl ConvertTo<String> for JsonRef<'_> {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<String> {
         // FIXME: There is an additional step `ProduceStrWithSpecifiedTp` in TiDB.
-        Ok(self.to_string())
+        Ok(self.to_string_value())
     }
 }
 
-impl<'a> ConvertTo<Bytes> for JsonRef<'a> {
+impl ConvertTo<Bytes> for JsonRef<'_> {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Bytes> {
-        Ok(self.to_string().into_bytes())
+        Ok(self.to_string_value().into_bytes())
     }
 }
 
-impl<'a> ConvertTo<Bytes> for EnumRef<'a> {
+impl ConvertTo<Bytes> for EnumRef<'_> {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Bytes> {
-        Ok(self.to_string().into_bytes())
+        Ok(self.to_string_value().into_bytes())
     }
 }
 
@@ -289,7 +303,7 @@ impl ToInt for f64 {
     /// anymore.
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
         #![allow(clippy::float_cmp)]
-        let val = self.round();
+        let val = self.round_ties_even();
         let lower_bound = integer_signed_lower_bound(tp);
         if val < lower_bound as f64 {
             ctx.handle_overflow_err(overflow(val, tp))?;
@@ -500,7 +514,7 @@ impl ToInt for Json {
     }
 }
 
-impl<'a> ToInt for JsonRef<'a> {
+impl ToInt for JsonRef<'_> {
     // Port from TiDB's types.ConvertJSONToInt
     #[inline]
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
@@ -516,7 +530,10 @@ impl<'a> ToInt for JsonRef<'a> {
             JsonType::Double => self.get_double().to_int(ctx, tp),
             JsonType::String => self.get_str_bytes()?.to_int(ctx, tp),
             _ => Ok(ctx
-                .handle_truncate_err(Error::truncated_wrong_val("Integer", self.to_string()))
+                .handle_truncate_err(Error::truncated_wrong_val(
+                    "Integer",
+                    self.to_string_value(),
+                ))
                 .map(|_| 0)?),
         }?;
         val.to_int(ctx, tp)
@@ -532,7 +549,10 @@ impl<'a> ToInt for JsonRef<'a> {
             JsonType::Double => self.get_double().to_uint(ctx, tp),
             JsonType::String => self.get_str_bytes()?.to_uint(ctx, tp),
             _ => Ok(ctx
-                .handle_truncate_err(Error::truncated_wrong_val("Integer", self.to_string()))
+                .handle_truncate_err(Error::truncated_wrong_val(
+                    "Integer",
+                    self.to_string_value(),
+                ))
                 .map(|_| 0)?),
         }?;
         val.to_uint(ctx, tp)
@@ -574,13 +594,13 @@ pub fn bytes_to_int_without_context(bytes: &[u8]) -> Result<i64> {
     if let Some(&c) = trimed.next() {
         if c == b'-' {
             negative = true;
-        } else if (b'0'..=b'9').contains(&c) {
+        } else if c.is_ascii_digit() {
             r = Some(i64::from(c) - i64::from(b'0'));
         } else if c != b'+' {
             return Ok(0);
         }
 
-        for c in trimed.take_while(|&c| (b'0'..=b'9').contains(c)) {
+        for c in trimed.take_while(|&c| c.is_ascii_digit()) {
             let cur = i64::from(*c - b'0');
             r = r.and_then(|r| r.checked_mul(10)).and_then(|r| {
                 if negative {
@@ -605,13 +625,13 @@ pub fn bytes_to_uint_without_context(bytes: &[u8]) -> Result<u64> {
     let mut trimed = bytes.iter().skip_while(|&&b| b == b' ' || b == b'\t');
     let mut r = Some(0u64);
     if let Some(&c) = trimed.next() {
-        if (b'0'..=b'9').contains(&c) {
+        if c.is_ascii_digit() {
             r = Some(u64::from(c) - u64::from(b'0'));
         } else if c != b'+' {
             return Ok(0);
         }
 
-        for c in trimed.take_while(|&c| (b'0'..=b'9').contains(c)) {
+        for c in trimed.take_while(|&c| c.is_ascii_digit()) {
             r = r
                 .and_then(|r| r.checked_mul(10))
                 .and_then(|r| r.checked_add(u64::from(*c - b'0')));
@@ -713,9 +733,10 @@ pub fn produce_str_with_specified_tp<'a>(
         return Ok(s);
     }
     let flen = flen as usize;
-    // flen is the char length, not byte length, for UTF8 charset, we need to
-    // calculate the char count and truncate to flen chars if it is too long.
-    if chs == charset::CHARSET_UTF8 || chs == charset::CHARSET_UTF8MB4 {
+    // flen is the char length, not byte length, for UTF8 and GBK/GB18030 charset,
+    // we need to calculate the char count and truncate to flen chars if it is
+    // too long.
+    if MULTI_BYTES_CHARSETS.contains(chs) {
         let (char_count, truncate_pos) = {
             let s = &String::from_utf8_lossy(&s);
             let mut truncate_pos = 0;
@@ -856,7 +877,7 @@ pub fn get_valid_int_prefix_helper<'a>(
             if (c == '+' || c == '-') && i == 0 {
                 continue;
             }
-            if ('0'..='9').contains(&c) {
+            if c.is_ascii_digit() {
                 valid_len = i + 1;
                 continue;
             }
@@ -917,7 +938,7 @@ pub fn get_valid_float_prefix_helper<'a>(
                     break;
                 }
                 e_idx = i
-            } else if !('0'..='9').contains(&c) {
+            } else if !c.is_ascii_digit() {
                 break;
             } else {
                 saw_digit = true;
@@ -1010,7 +1031,7 @@ fn exp_float_str_to_int_str<'a>(
     let int_cnt: i64;
     match dot_idx {
         None => {
-            digits.extend_from_slice(valid_float[..e_idx].as_bytes());
+            digits.extend_from_slice(&valid_float.as_bytes()[..e_idx]);
             // if digits.len() > i64::MAX,
             // then the input str has at least 9223372036854775808 chars,
             // which make the str >= 8388608.0 TB,
@@ -1018,9 +1039,9 @@ fn exp_float_str_to_int_str<'a>(
             int_cnt = digits.len() as i64;
         }
         Some(dot_idx) => {
-            digits.extend_from_slice(valid_float[..dot_idx].as_bytes());
+            digits.extend_from_slice(&valid_float.as_bytes()[..dot_idx]);
             int_cnt = digits.len() as i64;
-            digits.extend_from_slice(valid_float[(dot_idx + 1)..e_idx].as_bytes());
+            digits.extend_from_slice(&valid_float.as_bytes()[(dot_idx + 1)..e_idx]);
         }
     }
     // make `digits` immutable
@@ -1137,15 +1158,15 @@ mod tests {
 
     use super::*;
     use crate::{
+        Collation, FieldTypeFlag,
         codec::{
             error::{
                 ERR_DATA_OUT_OF_RANGE, ERR_M_BIGGER_THAN_D, ERR_TRUNCATE_WRONG_VALUE,
                 WARN_DATA_TRUNCATED,
             },
-            mysql::{Res, UNSPECIFIED_FSP},
+            mysql::{Res, UNSPECIFIED_FSP, charset},
         },
         expr::{EvalConfig, EvalContext, Flag},
-        Collation, FieldTypeFlag,
     };
 
     #[test]
@@ -1230,14 +1251,14 @@ mod tests {
             (-256.6, FieldTypeTp::Short, Some(-257)),
             (65535.5, FieldTypeTp::Short, None),
             (65536.1, FieldTypeTp::Int24, Some(65536)),
-            (65536.5, FieldTypeTp::Int24, Some(65537)),
+            (65536.5, FieldTypeTp::Int24, Some(65536)),
             (-65536.1, FieldTypeTp::Int24, Some(-65536)),
-            (-65536.5, FieldTypeTp::Int24, Some(-65537)),
+            (-65536.5, FieldTypeTp::Int24, Some(-65536)),
             (8388610.2, FieldTypeTp::Int24, None),
             (8388610.4, FieldTypeTp::Long, Some(8388610)),
-            (8388610.5, FieldTypeTp::Long, Some(8388611)),
+            (8388610.5, FieldTypeTp::Long, Some(8388610)),
             (-8388610.4, FieldTypeTp::Long, Some(-8388610)),
-            (-8388610.5, FieldTypeTp::Long, Some(-8388611)),
+            (-8388610.5, FieldTypeTp::Long, Some(-8388610)),
             (4294967296.8, FieldTypeTp::Long, None),
             (4294967296.8, FieldTypeTp::LongLong, Some(4294967297)),
             (4294967297.1, FieldTypeTp::LongLong, Some(4294967297)),
@@ -1518,7 +1539,7 @@ mod tests {
             ("3", 3),
             ("-3", -3),
             ("4.1", 4),
-            ("4.5", 5),
+            ("4.5", 4),
             ("true", 1),
             ("false", 0),
             ("null", 0),
@@ -2221,6 +2242,19 @@ mod tests {
             ("世界，中国", 4, charset::CHARSET_ASCII),
             ("世界，中国", 5, charset::CHARSET_ASCII),
             ("世界，中国", 6, charset::CHARSET_ASCII),
+            // GBK/GB18030
+            ("世界，中国", 1, charset::CHARSET_GBK),
+            ("世界，中国", 2, charset::CHARSET_GBK),
+            ("世界，中国", 3, charset::CHARSET_GBK),
+            ("世界，中国", 4, charset::CHARSET_GBK),
+            ("世界，中国", 5, charset::CHARSET_GBK),
+            ("世界，中国", 6, charset::CHARSET_GBK),
+            ("世界，中国", 1, charset::CHARSET_GB18030),
+            ("世界，中国", 2, charset::CHARSET_GB18030),
+            ("世界，中国", 3, charset::CHARSET_GB18030),
+            ("世界，中国", 4, charset::CHARSET_GB18030),
+            ("世界，中国", 5, charset::CHARSET_GB18030),
+            ("世界，中国", 6, charset::CHARSET_GB18030),
         ];
 
         let cfg = EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING);
@@ -2232,10 +2266,10 @@ mod tests {
             ft.set_flen(char_num);
             let bs = s.as_bytes();
             let r = produce_str_with_specified_tp(&mut ctx, Cow::Borrowed(bs), &ft, false);
-            assert!(r.is_ok(), "{}, {}, {}", s, char_num, cs);
+            assert!(r.is_ok(), "{}, {}, {}, {}", s, char_num, cs, r.unwrap_err());
             let p = r.unwrap();
 
-            if cs == charset::CHARSET_UTF8MB4 || cs == charset::CHARSET_UTF8 {
+            if MULTI_BYTES_CHARSETS.contains(cs) {
                 let ns: String = s.chars().take(char_num as usize).collect();
                 assert_eq!(p.as_ref(), ns.as_bytes(), "{}, {}, {}", s, char_num, cs);
             } else {
@@ -2271,7 +2305,7 @@ mod tests {
             ft.set_flen(char_num);
             let bs = s.as_bytes();
             let r = produce_str_with_specified_tp(&mut ctx, Cow::Borrowed(bs), &ft, true);
-            assert!(r.is_ok(), "{}, {}, {}", s, char_num, cs);
+            assert!(r.is_ok(), "{}, {}, {}, {}", s, char_num, cs, r.unwrap_err());
 
             let p = r.unwrap();
             assert_eq!(p.len(), char_num as usize, "{}, {}, {}", s, char_num, cs);
@@ -2306,7 +2340,15 @@ mod tests {
             ft.set_charset(cs.to_string());
             ft.set_flen(char_num);
             let r = produce_str_with_specified_tp(&mut ctx, Cow::Borrowed(&s), &ft, true);
-            assert!(r.is_ok(), "{:?}, {}, {}, {:?}", &s, char_num, cs, result);
+            assert!(
+                r.is_ok(),
+                "{:?}, {}, {}, {:?}, {}",
+                &s,
+                char_num,
+                cs,
+                result,
+                r.unwrap_err()
+            );
 
             let p = r.unwrap();
             assert_eq!(p, result, "{:?}, {}, {}, {:?}", &s, char_num, cs, result);
@@ -2354,7 +2396,18 @@ mod tests {
             ft.set_flen(flen);
             ft.set_decimal(decimal);
             let nd = produce_dec_with_specified_tp(&mut ctx, dec, &ft).unwrap();
-            assert_eq!(nd, want, "{}, {}, {}, {}, {}", dec, nd, want, flen, decimal);
+            assert_eq!(
+                nd.frac_cnt(),
+                nd.result_frac_cnt(),
+                "frac_cnt {} is not equal to result_frac_cnt {}",
+                nd.frac_cnt(),
+                nd.result_frac_cnt()
+            );
+            assert_eq!(
+                nd, want,
+                "{:?}, {:?}, {:?}, {}, {}",
+                dec, nd, want, flen, decimal
+            );
         }
     }
 
@@ -2742,8 +2795,8 @@ mod tests {
                 let r = produce_dec_with_specified_tp(&mut ctx, input, &rft);
 
                 // make log
-                let rs = r.as_ref().map(|x| x.to_string());
-                let expect_str = expect.as_ref().map(|x| x.to_string());
+                let rs = r.as_ref().map(|x| x.to_string_value());
+                let expect_str = expect.as_ref().map(|x| x.to_string_value());
                 let log = format!(
                     "input: {}, origin_flen: {}, origin_decimal: {}, \
                      res_flen: {}, res_decimal: {}, is_unsigned: {}, \
@@ -2765,6 +2818,13 @@ mod tests {
                 match &expect {
                     Ok(d) => {
                         assert!(r.is_ok(), "{}", log);
+                        assert_eq!(
+                            d.frac_cnt(),
+                            d.result_frac_cnt(),
+                            "frac_cnt {} is not equal to result_frac_cnt {}",
+                            d.frac_cnt(),
+                            d.result_frac_cnt()
+                        );
                         assert_eq!(&r.unwrap(), d, "{}", log);
                     }
                     Err(Error::Eval(..)) => {

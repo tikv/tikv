@@ -2,8 +2,8 @@
 
 use std::cmp;
 
-use engine_traits::{CfNamesExt, CompactExt, Result};
-use rocksdb::{CompactOptions, CompactionOptions, DBCompressionType};
+use engine_traits::{CfNamesExt, CompactExt, ManualCompactionOptions, Result};
+use rocksdb::{CompactOptions, CompactionOptions, DBBottommostLevelCompaction, DBCompressionType};
 
 use crate::{engine::RocksEngine, r2e, util};
 
@@ -29,16 +29,20 @@ impl CompactExt for RocksEngine {
         cf: &str,
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
-        exclusive_manual: bool,
-        max_subcompactions: u32,
+        option: ManualCompactionOptions,
     ) -> Result<()> {
         let db = self.as_inner();
         let handle = util::get_cf_handle(db, cf)?;
         let mut compact_opts = CompactOptions::new();
         // `exclusive_manual == false` means manual compaction can
         // concurrently run with other background compactions.
-        compact_opts.set_exclusive_manual_compaction(exclusive_manual);
-        compact_opts.set_max_subcompactions(max_subcompactions as i32);
+        compact_opts.set_exclusive_manual_compaction(option.exclusive_manual);
+        compact_opts.set_max_subcompactions(option.max_subcompactions as i32);
+        if option.bottommost_level_force {
+            compact_opts.set_bottommost_level_compaction(DBBottommostLevelCompaction::Force);
+        }
+        compact_opts
+            .set_check_range_overlap_on_bottom_level(option.check_range_overlap_on_bottom_level);
         db.compact_range_cf_opt(handle, &compact_opts, start_key, end_key);
         Ok(())
     }
@@ -121,6 +125,10 @@ impl CompactExt for RocksEngine {
         db.compact_files_cf(handle, &opts, &files, output_level)
             .map_err(r2e)
     }
+
+    fn check_in_range(&self, start: Option<&[u8]>, end: Option<&[u8]>) -> Result<()> {
+        self.as_inner().check_in_range(start, end).map_err(r2e)
+    }
 }
 
 #[cfg(test)]
@@ -128,7 +136,7 @@ mod tests {
     use engine_traits::{CfNamesExt, CfOptionsExt, CompactExt, MiscExt, SyncMutable};
     use tempfile::Builder;
 
-    use crate::{util, RocksCfOptions, RocksDbOptions};
+    use crate::{RocksCfOptions, RocksDbOptions, util};
 
     #[test]
     fn test_compact_files_in_range() {

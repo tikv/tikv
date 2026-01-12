@@ -2,11 +2,17 @@
 
 use std::result;
 
-use kvproto::pdpb::*;
+use kvproto::{
+    meta_storagepb as mpb,
+    pdpb::*,
+    resource_manager::{TokenBucketsRequest, TokenBucketsResponse},
+};
 
 mod bootstrap;
+pub mod etcd;
 mod incompatible;
 mod leader_change;
+mod meta_storage;
 mod retry;
 mod service;
 mod split;
@@ -15,6 +21,7 @@ pub use self::{
     bootstrap::AlreadyBootstrapped,
     incompatible::Incompatible,
     leader_change::LeaderChange,
+    meta_storage::MetaStorage,
     retry::{NotRetry, Retry},
     service::Service,
     split::Split,
@@ -25,31 +32,25 @@ pub const DEFAULT_CLUSTER_ID: u64 = 42;
 pub type Result<T> = result::Result<T, String>;
 
 pub trait PdMocker {
-    fn load_global_config(
-        &self,
-        req: &LoadGlobalConfigRequest,
-    ) -> Option<Result<LoadGlobalConfigResponse>> {
-        let mut send = vec![];
-        for r in req.get_names() {
-            let mut i = GlobalConfigItem::default();
-            i.set_name(format!("/global/config/{}", r.clone()));
-            i.set_value(r.clone());
-            send.push(i);
-        }
-        let mut res = LoadGlobalConfigResponse::default();
-        res.set_items(send.into());
-        Some(Ok(res))
+    fn meta_store_get(&self, _req: mpb::GetRequest) -> Option<Result<mpb::GetResponse>> {
+        None
     }
 
-    fn store_global_config(
-        &self,
-        _: &StoreGlobalConfigRequest,
-    ) -> Option<Result<StoreGlobalConfigResponse>> {
-        unimplemented!()
+    fn meta_store_put(&self, _req: mpb::PutRequest) -> Option<Result<mpb::PutResponse>> {
+        None
     }
 
-    fn watch_global_config(&self) -> Option<Result<WatchGlobalConfigResponse>> {
-        panic!("could not mock this function due to it should return a stream")
+    fn meta_store_delete(&self, _req: mpb::DeleteRequest) -> Option<Result<mpb::DeleteResponse>> {
+        None
+    }
+
+    fn meta_store_watch(
+        &self,
+        _req: mpb::WatchRequest,
+        _sink: grpcio::ServerStreamingSink<mpb::WatchResponse>,
+        _ctx: &grpcio::RpcContext<'_>,
+    ) -> bool {
+        false
     }
 
     fn get_members(&self, _: &GetMembersRequest) -> Option<Result<GetMembersResponse>> {
@@ -92,6 +93,10 @@ pub trait PdMocker {
         &self,
         _: &RegionHeartbeatRequest,
     ) -> Option<Result<RegionHeartbeatResponse>> {
+        None
+    }
+
+    fn report_buckets(&self, _: &ReportBucketsRequest) -> Option<Result<ReportBucketsResponse>> {
         None
     }
 
@@ -153,6 +158,20 @@ pub trait PdMocker {
     }
 
     fn get_operator(&self, _: &GetOperatorRequest) -> Option<Result<GetOperatorResponse>> {
+        None
+    }
+
+    fn report_ru_metrics(&self, req: &TokenBucketsRequest) -> Option<Result<TokenBucketsResponse>> {
+        req.get_requests().iter().for_each(|r| {
+            assert_eq!(r.get_is_background(), true);
+        });
+        None
+    }
+
+    fn update_service_gc_safe_point(
+        &self,
+        _: &UpdateServiceGcSafePointRequest,
+    ) -> Option<Result<UpdateServiceGcSafePointResponse>> {
         None
     }
 }

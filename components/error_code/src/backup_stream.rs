@@ -3,9 +3,6 @@
 define_error_codes! {
     "KV:LogBackup:",
 
-    ETCD => ("Etcd",
-        "Error during requesting the meta store(etcd)",
-        "Please check the connectivity between TiKV and PD."),
     PROTO => ("Proto",
         "Error during decode / encoding protocol buffer messages",
         "Please check the version of TiKV / BR are compatible, or whether data is corrupted."
@@ -13,6 +10,10 @@ define_error_codes! {
     NO_SUCH_TASK => ("NoSuchTask",
         "A task not found.",
         "Please check the spell of your task name."
+    ),
+    OUT_OF_QUOTA => ("OutOfQuota",
+        "Some of quota has been exceed, hence the task cannot continue.",
+        "For memory quotas, please check whether there are huge transactions. You may also increase the quota by modifying config."
     ),
     OBSERVE_CANCELED => (
         "ObserveCancel",
@@ -50,6 +51,10 @@ define_error_codes! {
     GRPC => ("gRPC",
         "Error happened during executing gRPC",
         "This error is often relative to the network, please check the network connection and network config, say, TLS config."
+    ),
+    ENCRYPTION => ("Encryption",
+        "Error happened during interacting with the encryption library.",
+        "This is an internal error, please ask the community for help."
     ),
 
     OTHER => ("Unknown",

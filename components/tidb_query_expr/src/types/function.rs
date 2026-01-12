@@ -26,10 +26,10 @@ use std::{any::Any, convert::TryFrom, marker::PhantomData};
 
 use static_assertions::assert_eq_size;
 use tidb_query_common::Result;
-use tidb_query_datatype::{codec::data_type::*, expr::EvalContext, EvalType, FieldTypeAccessor};
+use tidb_query_datatype::{EvalType, FieldTypeAccessor, codec::data_type::*, expr::EvalContext};
 use tipb::{Expr, FieldType};
 
-use super::{expr_eval::LogicalRows, RpnStackNode};
+use super::{RpnStackNode, expr_eval::LogicalRows};
 
 /// Metadata of an RPN function.
 #[derive(Clone, Copy)]
@@ -343,6 +343,9 @@ thread_local! {
         std::cell::RefCell::new(Vec::with_capacity(20));
 
     pub static VARG_PARAM_BUF_JSON_REF: std::cell::RefCell<Vec<Option<JsonRef<'static>>>> =
+        std::cell::RefCell::new(Vec::with_capacity(20));
+
+    pub static VARG_PARAM_BUF_VECTOR_FLOAT32_REF: std::cell::RefCell<Vec<Option<VectorFloat32Ref<'static>>>> =
         std::cell::RefCell::new(Vec::with_capacity(20));
 
     pub static RAW_VARG_PARAM_BUF: std::cell::RefCell<Vec<ScalarValueRef<'static>>> =

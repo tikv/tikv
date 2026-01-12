@@ -12,14 +12,15 @@ use std::{
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::{errorpb, kvrpcpb, kvrpcpb::ApiVersion};
 use thiserror::Error;
-use tikv_util::deadline::DeadlineError;
-use txn_types::{KvPair, TimeStamp};
+use tikv_util::deadline::{DeadlineError, set_deadline_exceeded_busy_error};
+use txn_types::{KvPair, KvPairEntry, TimeStamp, ValueEntry};
 
 use crate::storage::{
+    CommandKind, Result,
     kv::{self, Error as KvError, ErrorInner as KvErrorInner},
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
     txn::{self, Error as TxnError, ErrorInner as TxnErrorInner},
-    CommandKind, Result,
+    types,
 };
 
 #[derive(Debug, Error)]
@@ -176,6 +177,14 @@ pub enum ErrorHeaderKind {
     StaleCommand,
     StoreNotMatch,
     RaftEntryTooLarge,
+    ReadIndexNotReady,
+    ProposalInMergeMode,
+    DataNotReady,
+    RegionNotInitialized,
+    DiskFull,
+    RecoveryInProgress,
+    FlashbackInProgress,
+    BucketsVersionNotMatch,
     Other,
 }
 
@@ -193,6 +202,14 @@ impl ErrorHeaderKind {
             ErrorHeaderKind::StaleCommand => "stale_command",
             ErrorHeaderKind::StoreNotMatch => "store_not_match",
             ErrorHeaderKind::RaftEntryTooLarge => "raft_entry_too_large",
+            ErrorHeaderKind::ReadIndexNotReady => "read_index_not_ready",
+            ErrorHeaderKind::ProposalInMergeMode => "proposal_in_merge_mode",
+            ErrorHeaderKind::DataNotReady => "data_not_ready",
+            ErrorHeaderKind::RegionNotInitialized => "region_not_initialized",
+            ErrorHeaderKind::DiskFull => "disk_full",
+            ErrorHeaderKind::RecoveryInProgress => "recovery_in_progress",
+            ErrorHeaderKind::FlashbackInProgress => "flashback_in_progress",
+            ErrorHeaderKind::BucketsVersionNotMatch => "buckets_version_not_match",
             ErrorHeaderKind::Other => "other",
         }
     }
@@ -206,7 +223,6 @@ impl Display for ErrorHeaderKind {
 
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
-const DEADLINE_EXCEEDED: &str = "deadline is exceeded";
 
 /// Get the `ErrorHeaderKind` enum that corresponds to the error in the protobuf
 /// message. Returns `ErrorHeaderKind::Other` if no match found.
@@ -227,6 +243,22 @@ pub fn get_error_kind_from_header(header: &errorpb::Error) -> ErrorHeaderKind {
         ErrorHeaderKind::StoreNotMatch
     } else if header.has_raft_entry_too_large() {
         ErrorHeaderKind::RaftEntryTooLarge
+    } else if header.has_read_index_not_ready() {
+        ErrorHeaderKind::ReadIndexNotReady
+    } else if header.has_proposal_in_merging_mode() {
+        ErrorHeaderKind::ProposalInMergeMode
+    } else if header.has_data_is_not_ready() {
+        ErrorHeaderKind::DataNotReady
+    } else if header.has_region_not_initialized() {
+        ErrorHeaderKind::RegionNotInitialized
+    } else if header.has_disk_full() {
+        ErrorHeaderKind::DiskFull
+    } else if header.has_recovery_in_progress() {
+        ErrorHeaderKind::RecoveryInProgress
+    } else if header.has_flashback_in_progress() {
+        ErrorHeaderKind::FlashbackInProgress
+    } else if header.has_bucket_version_not_match() {
+        ErrorHeaderKind::BucketsVersionNotMatch
     } else {
         ErrorHeaderKind::Other
     }
@@ -255,6 +287,37 @@ pub fn extract_region_error_from_error(e: &Error) -> Option<errorpb::Error> {
             err.set_max_timestamp_not_synced(Default::default());
             Some(err)
         }
+        Error(box ErrorInner::Txn(
+            e @ TxnError(box TxnErrorInner::RawKvMaxTimestampNotSynced { .. }),
+        )) => {
+            let mut err = errorpb::Error::default();
+            err.set_max_timestamp_not_synced(Default::default());
+            err.set_message(format!("{}", e));
+            Some(err)
+        }
+        Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::FlashbackNotPrepared(
+            region_id,
+        )))) => {
+            let mut err = errorpb::Error::default();
+            let mut flashback_not_prepared_err = errorpb::FlashbackNotPrepared::default();
+            flashback_not_prepared_err.set_region_id(*region_id);
+            err.set_flashback_not_prepared(flashback_not_prepared_err);
+            Some(err)
+        }
+        Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::InvalidMaxTsUpdate(
+            invalid_max_ts_update,
+        )))) => {
+            let mut err = errorpb::Error::default();
+            err.set_message(invalid_max_ts_update.to_string());
+            Some(err)
+        }
+        Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+            box MvccErrorInner::InvalidMaxTsUpdate(invalid_max_ts_update),
+        ))))) => {
+            let mut err = errorpb::Error::default();
+            err.set_message(invalid_max_ts_update.to_string());
+            Some(err)
+        }
         Error(box ErrorInner::SchedTooBusy) => {
             let mut err = errorpb::Error::default();
             let mut server_is_busy_err = errorpb::ServerIsBusy::default();
@@ -278,9 +341,8 @@ pub fn extract_region_error_from_error(e: &Error) -> Option<errorpb::Error> {
         }
         Error(box ErrorInner::DeadlineExceeded) => {
             let mut err = errorpb::Error::default();
-            let mut server_is_busy_err = errorpb::ServerIsBusy::default();
-            server_is_busy_err.set_reason(DEADLINE_EXCEEDED.to_owned());
-            err.set_server_is_busy(server_is_busy_err);
+            err.set_message(e.to_string());
+            set_deadline_exceeded_busy_error(&mut err);
             Some(err)
         }
         _ => None,
@@ -300,6 +362,34 @@ pub fn extract_committed(err: &Error) -> Option<TimeStamp> {
             box MvccErrorInner::Committed { commit_ts, .. },
         ))))) => Some(commit_ts),
         _ => None,
+    }
+}
+
+fn get_or_insert_default_for_key_error_debug_info(
+    err: &mut kvrpcpb::KeyError,
+) -> &mut kvrpcpb::DebugInfo {
+    let debug_info = &mut err.debug_info;
+    if debug_info.is_none() {
+        debug_info.set_default()
+    } else {
+        debug_info.as_mut().unwrap()
+    }
+}
+
+fn add_debug_mvcc_for_key_error(
+    err: &mut kvrpcpb::KeyError,
+    key: &[u8],
+    mvcc_info: Option<types::MvccInfo>,
+) {
+    if let Some(mut mvcc) = mvcc_info {
+        let debug_info = get_or_insert_default_for_key_error_debug_info(err);
+        // remove the values in default CF to reduce the size of the response.
+        mvcc.values.clear();
+        // set mvcc info to debug_info
+        let mut mvcc_debug_info = kvrpcpb::MvccDebugInfo::default();
+        mvcc_debug_info.set_key(key.to_owned());
+        mvcc_debug_info.set_mvcc(mvcc.into_proto());
+        debug_info.mvcc_info.push(mvcc_debug_info);
     }
 }
 
@@ -338,7 +428,7 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
             key_error.set_retryable(format!("{:?}", err));
         }
         Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-            box MvccErrorInner::AlreadyExist { key },
+            box MvccErrorInner::AlreadyExist { key, .. },
         ))))) => {
             let mut exist = kvrpcpb::AlreadyExist::default();
             exist.set_key(key.clone());
@@ -346,10 +436,29 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
         }
         // failed in commit
         Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-            box MvccErrorInner::TxnLockNotFound { .. },
+            box MvccErrorInner::TxnLockNotFound {
+                start_ts,
+                commit_ts,
+                key,
+                mvcc_info,
+            },
         ))))) => {
-            warn!("txn conflicts"; "err" => ?err);
-            key_error.set_retryable(format!("{:?}", err));
+            // use an error without mvcc_info to construct error the error message
+            let err_without_mvcc = &Error::from(TxnError::from(MvccError::from(
+                MvccErrorInner::TxnLockNotFound {
+                    start_ts: *start_ts,
+                    commit_ts: *commit_ts,
+                    key: key.clone(),
+                    mvcc_info: None,
+                },
+            )));
+
+            warn!("txn conflicts"; "err" => ?err_without_mvcc);
+            key_error.set_retryable(format!("{:?}", err_without_mvcc));
+            let mut txn_lock_not_found = kvrpcpb::TxnLockNotFound::default();
+            txn_lock_not_found.set_key(key.clone());
+            key_error.set_txn_lock_not_found(txn_lock_not_found);
+            add_debug_mvcc_for_key_error(&mut key_error, key, mvcc_info.clone());
         }
         Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
             box MvccErrorInner::TxnNotFound { start_ts, key },
@@ -382,6 +491,7 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
                 commit_ts,
                 key,
                 min_commit_ts,
+                mvcc_info,
             },
         ))))) => {
             let mut commit_ts_expired = kvrpcpb::CommitTsExpired::default();
@@ -390,6 +500,7 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
             commit_ts_expired.set_key(key.to_owned());
             commit_ts_expired.set_min_commit_ts(min_commit_ts.into_inner());
             key_error.set_commit_ts_expired(commit_ts_expired);
+            add_debug_mvcc_for_key_error(&mut key_error, key, mvcc_info.clone());
         }
         Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
             box MvccErrorInner::CommitTsTooLarge { min_commit_ts, .. },
@@ -415,8 +526,15 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
             assertion_failed.set_existing_commit_ts(existing_commit_ts.into_inner());
             key_error.set_assertion_failed(assertion_failed);
         }
+        Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+            box MvccErrorInner::PrimaryMismatch(lock_info),
+        ))))) => {
+            let mut primary_mismatch = kvrpcpb::PrimaryMismatch::default();
+            primary_mismatch.set_lock_info(lock_info.clone());
+            key_error.set_primary_mismatch(primary_mismatch);
+        }
         _ => {
-            error!(?*err; "txn aborts");
+            warn!("txn aborts"; "err" => ?err);
             key_error.set_abort(format!("{:?}", err));
         }
     }
@@ -436,20 +554,32 @@ pub fn extract_kv_pairs(res: Result<Vec<Result<KvPair>>>) -> Vec<kvrpcpb::KvPair
 
 pub fn map_kv_pairs(r: Vec<Result<KvPair>>) -> Vec<kvrpcpb::KvPair> {
     r.into_iter()
-        .map(|r| match r {
-            Ok((key, value)) => {
-                let mut pair = kvrpcpb::KvPair::default();
-                pair.set_key(key);
-                pair.set_value(value);
-                pair
-            }
-            Err(e) => {
-                let mut pair = kvrpcpb::KvPair::default();
-                pair.set_error(extract_key_error(&e));
-                pair
-            }
-        })
+        .map(|r| r.map(|(k, v)| (k, ValueEntry::from_value(v))))
+        .map(entry_result_to_kv_pair)
         .collect()
+}
+
+pub fn map_kv_pair_entries(r: Vec<Result<KvPairEntry>>) -> Vec<kvrpcpb::KvPair> {
+    r.into_iter().map(entry_result_to_kv_pair).collect()
+}
+
+fn entry_result_to_kv_pair(result: Result<KvPairEntry>) -> kvrpcpb::KvPair {
+    match result {
+        Ok((key, value)) => {
+            let mut pair = kvrpcpb::KvPair::default();
+            pair.set_key(key);
+            pair.set_value(value.value);
+            if let Some(commit_ts) = value.commit_ts {
+                pair.set_commit_ts(commit_ts.into_inner());
+            }
+            pair
+        }
+        Err(e) => {
+            let mut pair = kvrpcpb::KvPair::default();
+            pair.set_error(extract_key_error(&e));
+            pair
+        }
+    }
 }
 
 pub fn extract_key_errors(res: Result<Vec<Result<()>>>) -> Vec<kvrpcpb::KeyError> {
@@ -503,8 +633,10 @@ impl TryFrom<SharedError> for Error {
 #[cfg(test)]
 mod test {
     use kvproto::kvrpcpb::WriteConflictReason;
+    use txn_types::{Lock, LockType, Write, WriteType};
 
     use super::*;
+    use crate::storage::types::MvccInfo;
 
     #[test]
     fn test_extract_key_error_write_conflict() {
@@ -536,5 +668,121 @@ mod test {
 
         let got = extract_key_error(&case);
         assert_eq!(got, expect);
+    }
+
+    fn mock_mvcc_info() -> MvccInfo {
+        MvccInfo {
+            lock: Some(Lock::new(
+                LockType::Lock,
+                b"k".to_vec(),
+                10.into(),
+                100,
+                None,
+                10.into(),
+                1,
+                10.into(),
+                false,
+            )),
+            writes: vec![(
+                TimeStamp::new(8),
+                Write::new(WriteType::Lock, 7.into(), None),
+            )],
+            values: vec![(TimeStamp::new(7), b"v".to_vec())],
+        }
+    }
+
+    fn expected_debug_info_from_mvcc(key: Vec<u8>, mvcc: MvccInfo) -> kvrpcpb::DebugInfo {
+        let mut expect_pb_mvcc_info = mvcc.clone().into_proto();
+        // should clear the values in default CF to reduce the size of the response.
+        expect_pb_mvcc_info.values.clear();
+        kvrpcpb::DebugInfo {
+            mvcc_info: vec![kvrpcpb::MvccDebugInfo {
+                key,
+                mvcc: Some(expect_pb_mvcc_info).into(),
+                ..Default::default()
+            }]
+            .into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_extract_key_error_txn_lock_not_found() {
+        fn mock_txn_lock_not_found_err(has_mvcc: bool) -> kvrpcpb::KeyError {
+            extract_key_error(&Error::from(TxnError::from(MvccError::from(
+                MvccErrorInner::TxnLockNotFound {
+                    start_ts: TimeStamp::new(123),
+                    commit_ts: TimeStamp::new(456),
+                    key: b"key".to_vec(),
+                    mvcc_info: has_mvcc.then(|| mock_mvcc_info()),
+                },
+            ))))
+        }
+
+        let key = b"key".to_vec();
+        let mut expect = kvrpcpb::KeyError::default();
+        let mut txn_lock_not_found = kvrpcpb::TxnLockNotFound::default();
+        txn_lock_not_found.set_key(key.clone());
+        expect.set_txn_lock_not_found(txn_lock_not_found);
+        let expected_retryable_msg = format!(
+            "{:?}",
+            Error::from(TxnError::from(MvccError::from(
+                MvccErrorInner::TxnLockNotFound {
+                    start_ts: TimeStamp::new(123),
+                    commit_ts: TimeStamp::new(456),
+                    key: key.clone(),
+                    mvcc_info: None,
+                }
+            ))),
+        );
+        expect.set_retryable(expected_retryable_msg);
+
+        // without mvcc
+        expect.clear_debug_info();
+        assert_eq!(mock_txn_lock_not_found_err(false), expect);
+
+        // with mvcc
+        let mvcc_info = Some(mock_mvcc_info());
+        expect.set_debug_info(expected_debug_info_from_mvcc(
+            key.clone(),
+            mvcc_info.clone().unwrap(),
+        ));
+        assert_eq!(mock_txn_lock_not_found_err(true), expect);
+    }
+
+    #[test]
+    fn test_extract_key_error_commit_ts_expired() {
+        fn mock_commit_ts_expired_err(has_mvcc: bool) -> kvrpcpb::KeyError {
+            extract_key_error(&Error::from(TxnError::from(MvccError::from(
+                MvccErrorInner::CommitTsExpired {
+                    start_ts: TimeStamp::new(123),
+                    commit_ts: TimeStamp::new(456),
+                    key: b"key".to_vec(),
+                    min_commit_ts: TimeStamp::new(789),
+                    mvcc_info: has_mvcc.then(|| mock_mvcc_info()),
+                },
+            ))))
+        }
+
+        let key = b"key".to_vec();
+        let mut expect = kvrpcpb::KeyError::default();
+        let mut commit_ts_expired = kvrpcpb::CommitTsExpired::default();
+        commit_ts_expired.set_key(key.clone());
+        commit_ts_expired.set_start_ts(123);
+        commit_ts_expired.set_attempted_commit_ts(456);
+        commit_ts_expired.set_min_commit_ts(789);
+        expect.set_commit_ts_expired(commit_ts_expired);
+
+        // without mvcc
+        expect.clear_debug_info();
+        assert_eq!(mock_commit_ts_expired_err(false), expect);
+
+        // with mvcc
+        let mvcc = Some(mock_mvcc_info());
+        expect.set_debug_info(expected_debug_info_from_mvcc(
+            key.clone(),
+            mvcc.clone().unwrap(),
+        ));
+        assert_eq!(mock_commit_ts_expired_err(true), expect);
     }
 }

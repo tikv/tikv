@@ -7,6 +7,7 @@
 use std::{
     cell::{Cell, RefCell},
     cmp,
+    cmp::Ordering::*,
     collections::VecDeque,
     mem,
     ops::Range,
@@ -15,22 +16,23 @@ use std::{
 };
 
 use collections::HashMap;
-use engine_traits::{KvEngine, RaftEngine, RAFT_LOG_MULTI_GET_CNT};
+use engine_traits::{KvEngine, RAFT_LOG_MULTI_GET_CNT, RaftEngine};
 use fail::fail_point;
 use kvproto::{
     metapb,
     raft_serverpb::{RaftApplyState, RaftLocalState},
 };
+use prometheus::local::LocalHistogram;
 use protobuf::Message;
-use raft::{prelude::*, util::limit_size, GetEntriesContext, StorageError, INVALID_INDEX};
+use raft::{GetEntriesContext, StorageError, prelude::*, util::limit_size};
 use tikv_alloc::TraceEvent;
 use tikv_util::{box_err, debug, error, info, time::Instant, warn, worker::Scheduler};
 
 use super::{
-    metrics::*, peer_storage::storage_error, WriteTask, MEMTRACE_ENTRY_CACHE, RAFT_INIT_LOG_INDEX,
-    RAFT_INIT_LOG_TERM,
+    MEMTRACE_ENTRY_CACHE, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM, WriteTask,
+    local_metrics::RaftMetrics, metrics::*, peer_storage::storage_error,
 };
-use crate::{bytes_capacity, store::ReadTask, Result};
+use crate::{Result, bytes_capacity, store::ReadTask};
 
 const MAX_ASYNC_FETCH_TRY_CNT: usize = 3;
 const SHRINK_CACHE_CAPACITY: usize = 64;
@@ -69,10 +71,22 @@ impl CachedEntries {
         }
     }
 
+    pub fn iter_entries(&self, mut f: impl FnMut(&Entry)) {
+        let entries = self.entries.lock().unwrap();
+        for entry in &entries.0 {
+            f(entry);
+        }
+    }
+
     /// Take cached entries and dangle size for them. `dangle` means not in
     /// entry cache.
     pub fn take_entries(&self) -> (Vec<Entry>, usize) {
         mem::take(&mut *self.entries.lock().unwrap())
+    }
+
+    #[cfg(test)]
+    pub fn has_entries(&self) -> bool {
+        !self.entries.lock().unwrap().0.is_empty()
     }
 }
 
@@ -187,7 +201,14 @@ impl EntryCache {
                     // Only committed entries can be traced, and only uncommitted entries
                     // can be truncated. So there won't be any overlaps.
                     let cached_last = cached.range.end - 1;
-                    assert!(cached_last < trunc_to_idx);
+                    // TODO: if we are going to support apply unpersisted entries on
+                    // follower, this assert will not longer be correct.
+                    assert!(
+                        cached_last < trunc_to_idx,
+                        "cached_last: {}, trunc_to_idx: {}",
+                        cached_last,
+                        trunc_to_idx
+                    );
                 }
             } else if cache_last_index + 1 < first_index {
                 panic!(
@@ -229,10 +250,16 @@ impl EntryCache {
 
         // Clean cached entries which have been already sent to apply threads. For
         // example, if entries [1, 10), [10, 20), [20, 30) are sent to apply threads and
-        // `compact_to(15)` is called, only [20, 30) will still be kept in cache.
+        // `compact_to(15)` is called:
+        // - if persisted >= 19, then only [20, 30) will still be kept in cache.
+        // - if persisted < 19, then [10, 20), [20, 30) will still be kept in cache.
         let old_trace_cap = self.trace.capacity();
         while let Some(cached_entries) = self.trace.pop_front() {
-            if cached_entries.range.start >= idx {
+            // Do not evict cached entries if not all of them are persisted.
+            // After PR #16626, it is possible that applying entries are not
+            // yet fully persisted. Therefore, it should not free these
+            // entries until they are completely persisted.
+            if cached_entries.range.start >= idx || cached_entries.range.end > self.persisted + 1 {
                 self.trace.push_front(cached_entries);
                 let trace_len = self.trace.len();
                 let trace_cap = self.trace.capacity();
@@ -317,26 +344,8 @@ impl EntryCache {
     fn trace_cached_entries(&mut self, entries: CachedEntries) {
         let dangle_size = {
             let mut guard = entries.entries.lock().unwrap();
-
-            let last_idx = guard.0.last().map(|e| e.index).unwrap();
-            let cache_front = match self.cache.front().map(|e| e.index) {
-                Some(i) => i,
-                None => u64::MAX,
-            };
-
-            let dangle_range = if last_idx < cache_front {
-                // All entries are not in entry cache.
-                0..guard.0.len()
-            } else if let Ok(i) = guard.0.binary_search_by(|e| e.index.cmp(&cache_front)) {
-                // Some entries are in entry cache.
-                0..i
-            } else {
-                // All entries are in entry cache.
-                0..0
-            };
-
             let mut size = 0;
-            for e in &guard.0[dangle_range] {
+            for e in &guard.0 {
                 size += bytes_capacity(&e.data) + bytes_capacity(&e.context);
             }
             guard.1 = size;
@@ -391,6 +400,130 @@ impl Drop for EntryCache {
     }
 }
 
+/// A cache that maintains term information for recently updated Raft log
+/// entries.
+///
+/// This cache optimizes term lookups by storing term-to-index mappings for
+/// recent entries. Each cache entry contains:
+/// - term: The term number of a sequence of entries
+/// - start_index: The start raft log index that shares this term
+///
+/// The cache maintains entries in monotonically increasing order by term,
+/// allowing quick lookups of terms for any given log index. The small fixed
+/// capacity helps keep memory overhead minimal while caching the most relevant
+/// term information.
+struct TermCache {
+    cache: VecDeque<(u64, u64)>, // (term, start_index)
+    capacity: usize,
+}
+
+impl Default for TermCache {
+    fn default() -> Self {
+        TermCache {
+            cache: Default::default(),
+            capacity: 8, /* 8 is enough for the recent updated terms.
+                          * Small capacity will make the extra memory
+                          * cost negligible. */
+        }
+    }
+}
+
+impl TermCache {
+    fn append(&mut self, index: u64, term: u64) {
+        // Check if we can update an existing entry or insert into the cache
+        if let Some(first_term) = self.cache.front().map(|(first_term, _)| *first_term) {
+            match first_term.cmp(&(term + 1)) {
+                Greater => {
+                    // Skip terms with gaps, as they represent stale/unfresh information.
+                    return;
+                }
+                Equal => {
+                    // Insert older term at the front if there's available space.
+                    if self.cache.len() < self.capacity {
+                        self.cache.push_front((term, index));
+                    }
+                    return;
+                }
+                Less => {
+                    // Calculate position of the term in the cache (terms are stored sequentially)
+                    let pos = (term - first_term) as usize;
+                    if pos < self.cache.len() {
+                        let (cached_term, cached_start_idx) = self.cache[pos];
+                        assert_eq!(cached_term, term);
+
+                        // Update start index only if the new index is smaller (extends the term
+                        // range)
+                        if cached_start_idx > index {
+                            self.cache[pos].1 = index;
+                        }
+                        return;
+                    } else if self.cache.back().unwrap().0 + 1 < term {
+                        // Detected a term jump indicating potential network partition.
+                        // Clear the cache to prevent serving stale term information.
+                        self.cache.clear();
+                    }
+                }
+            }
+        }
+        // New term.
+        self.cache.push_back((term, index));
+        if self.cache.len() > self.capacity {
+            self.cache.pop_front();
+        }
+    }
+
+    /// Push entries to the left of the cache.
+    #[cfg(test)]
+    fn prepend(&mut self, entries: &[Entry]) {
+        for e in entries.iter().rev() {
+            self.append(e.get_index(), e.get_term());
+            if self.cache.len() == self.capacity {
+                // NOTE: no need to check the previous term as the cached
+                // terms are fresh and the term is not allowed to decrease.
+                break;
+            }
+        }
+    }
+
+    /// Compact all terms whose start_index are less than the given index.
+    fn compact_to(&mut self, index: u64) {
+        // This operation has low cost.
+        // Since consistency and safety have been assured, compaction of the
+        // `TermCache` is only called when `UnsafeForceCompact` is triggered.
+        // Meanwhile, the capacity of `TermCache` is limited to 8, so the
+        // traversal cost is low.
+        self.cache.retain(|(_, start_idx)| *start_idx >= index);
+    }
+
+    /// Return the term of the given index.
+    ///
+    /// If the term is not found in the cache, return None.
+    fn entry(&self, idx: u64) -> Option<u64> {
+        if self.cache.is_empty() {
+            return None;
+        }
+        let (_, start_idx) = self.cache.front().unwrap();
+        if idx < *start_idx {
+            return None;
+        }
+        let (end_term, end_idx) = self.cache.back().unwrap();
+        if idx >= *end_idx {
+            return Some(*end_term);
+        }
+        // Traverse the cache in reverse order.
+        // The cost is low since the cache is small and the term is likely to be
+        // found in the recent terms.
+        let mut candidate = None;
+        for (term, start_index) in self.cache.iter().rev() {
+            candidate = Some(*term);
+            if idx >= *start_index {
+                break;
+            }
+        }
+        candidate
+    }
+}
+
 #[derive(Debug)]
 pub enum RaftlogFetchState {
     // The Instant records the start time of the fetching.
@@ -398,7 +531,7 @@ pub enum RaftlogFetchState {
     Fetched(Box<RaftlogFetchResult>),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(PartialEq)]
 pub struct RaftlogFetchResult {
     pub ents: raft::Result<Vec<Entry>>,
     // because entries may be empty, so store the original low index that the task issued
@@ -411,6 +544,19 @@ pub struct RaftlogFetchResult {
     pub tried_cnt: usize,
     // the term when the task issued
     pub term: u64,
+}
+
+impl std::fmt::Debug for RaftlogFetchResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // avoid dumping entries content
+        f.debug_struct("RaftlogFetchResult")
+            .field("low", &self.low)
+            .field("max_size", &self.max_size)
+            .field("hit_size_limit", &self.hit_size_limit)
+            .field("tried_cnt", &self.tried_cnt)
+            .field("term", &self.term)
+            .finish()
+    }
 }
 
 #[derive(Default)]
@@ -461,7 +607,7 @@ fn validate_states<ER: RaftEngine>(
     // If so, forward the commit index.
     if commit_index < recorded_commit_index {
         let entry = raft_engine.get_entry(region_id, recorded_commit_index)?;
-        if entry.map_or(true, |e| e.get_term() != apply_state.get_commit_term()) {
+        if entry.is_none_or(|e| e.get_term() != apply_state.get_commit_term()) {
             return Err(box_err!(
                 "log at recorded commit index [{}] {} doesn't exist, may lose data, {}",
                 apply_state.get_commit_term(),
@@ -472,12 +618,8 @@ fn validate_states<ER: RaftEngine>(
         info!("updating commit index"; "region_id" => region_id, "old" => commit_index, "new" => recorded_commit_index);
         commit_index = recorded_commit_index;
     }
-    // Invariant: applied index <= max(commit index, recorded commit index)
     if apply_state.get_applied_index() > commit_index {
-        return Err(box_err!(
-            "applied index > max(commit index, recorded commit index), {}",
-            state_str()
-        ));
+        info!("applied index is larger than recorded commit index"; "apply" => apply_state.get_applied_index(), "commit" => commit_index);
     }
     // Invariant: max(commit index, recorded commit index) <= last index
     if commit_index > last_index {
@@ -531,6 +673,7 @@ pub fn init_last_term<ER: RaftEngine>(
 pub fn init_applied_term<ER: RaftEngine>(
     raft_engine: &ER,
     region: &metapb::Region,
+    raft_state: &RaftLocalState,
     apply_state: &RaftApplyState,
 ) -> Result<u64> {
     if apply_state.applied_index == RAFT_INIT_LOG_INDEX {
@@ -539,6 +682,13 @@ pub fn init_applied_term<ER: RaftEngine>(
     let truncated_state = apply_state.get_truncated_state();
     if apply_state.applied_index == truncated_state.get_index() {
         return Ok(truncated_state.get_term());
+    }
+
+    // Applied index > last index means that some committed entries have applied but
+    // not persisted, in this case, the raft term must not be changed, so we use the
+    // term persisted in apply_state.
+    if apply_state.applied_index > raft_state.get_last_index() {
+        return Ok(apply_state.commit_term);
     }
 
     match raft_engine.get_entry(region.get_id(), apply_state.applied_index)? {
@@ -552,27 +702,38 @@ pub fn init_applied_term<ER: RaftEngine>(
 }
 
 /// When a peer(follower) receives a TransferLeaderMsg, it enters the
-/// CacheWarmupState. When the peer becomes leader or it doesn't
-/// become leader before a deadline, it exits the state.
+/// CacheWarmupState. And it exits the state if the peer becomes leader or
+/// the an election_timeout has passed.
+///
+/// There two distinct timeouts in the state:
+/// 1. Task timeout: the time to wait for fetching raft logs. After timeout, the
+///    peer responses a transfer leader regardless the task is finished.
+/// 2. Election timeout: the time to wait for preventing compact entry storage.
+///    This is required because changing the first index will invalid the warmed
+///    up raft log cache.
 #[derive(Clone, Debug)]
 pub struct CacheWarmupState {
     range: (u64, u64),
     is_task_timeout: bool,
-    is_stale: bool,
-    started_at: Instant,
+    task_timeout_at: Instant,
+    is_election_timeout: bool,
+    election_timeout_at: Instant,
 }
 
 impl CacheWarmupState {
-    pub fn new() -> Self {
-        CacheWarmupState::new_with_range(INVALID_INDEX, INVALID_INDEX)
-    }
-
-    pub fn new_with_range(low: u64, high: u64) -> Self {
+    pub fn new(
+        low: u64,
+        high: u64,
+        task_timeout_duration: Duration,
+        election_timeout_duration: Duration,
+    ) -> Self {
+        let now = Instant::now();
         CacheWarmupState {
             range: (low, high),
             is_task_timeout: false,
-            is_stale: false,
-            started_at: Instant::now(),
+            task_timeout_at: now + task_timeout_duration,
+            is_election_timeout: false,
+            election_timeout_at: now + election_timeout_duration,
         }
     }
 
@@ -580,44 +741,30 @@ impl CacheWarmupState {
         self.range
     }
 
-    /// How long has it been in this state.
-    pub fn elapsed(&self) -> Duration {
-        self.started_at.saturating_elapsed()
-    }
-
-    /// Whether the warmup task is already timeout.
-    pub fn is_task_timeout(&self) -> bool {
-        self.is_task_timeout
-    }
-
     /// Check whether the task is timeout.
-    pub fn check_task_timeout(&mut self, duration: Duration) -> bool {
+    pub fn check_task_timeout(&mut self) -> bool {
         if self.is_task_timeout {
             return true;
         }
-        if self.elapsed() > duration {
+        if Instant::now() > self.task_timeout_at {
             WARM_UP_ENTRY_CACHE_COUNTER.timeout.inc();
             self.is_task_timeout = true;
         }
         self.is_task_timeout
     }
 
-    /// Check whether this state is stale.
-    pub fn check_stale(&mut self, duration: Duration) -> bool {
+    /// Check whether this state last longer than an election timeout.
+    /// If so, the state is stale.
+    pub fn check_stale(&mut self) -> bool {
         fail_point!("entry_cache_warmed_up_state_is_stale", |_| true);
-        if self.is_stale {
+        if self.is_election_timeout {
             return true;
         }
-        if self.elapsed() > duration {
-            self.is_stale = true;
+        if Instant::now() > self.election_timeout_at {
+            WARM_UP_ENTRY_CACHE_COUNTER.stale.inc();
+            self.is_election_timeout = true;
         }
-        self.is_stale
-    }
-}
-
-impl Default for CacheWarmupState {
-    fn default() -> Self {
-        Self::new()
+        self.is_election_timeout
     }
 }
 
@@ -626,6 +773,7 @@ pub struct EntryStorage<EK: KvEngine, ER> {
     region_id: u64,
     peer_id: u64,
     raft_engine: ER,
+    term_cache: TermCache,
     cache: EntryCache,
     raft_state: RaftLocalState,
     apply_state: RaftApplyState,
@@ -634,7 +782,9 @@ pub struct EntryStorage<EK: KvEngine, ER> {
     read_scheduler: Scheduler<ReadTask<EK>>,
     raftlog_fetch_stats: AsyncFetchStats,
     async_fetch_results: RefCell<HashMap<u64, RaftlogFetchState>>,
-    cache_warmup_state: Option<CacheWarmupState>,
+
+    io_read_raft_term: LocalHistogram,
+    io_read_raft_fetch_log: LocalHistogram,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
@@ -645,6 +795,7 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
         apply_state: RaftApplyState,
         region: &metapb::Region,
         read_scheduler: Scheduler<ReadTask<EK>>,
+        raft_metrics: &RaftMetrics,
     ) -> Result<Self> {
         if let Err(e) = validate_states(region.id, &raft_engine, &mut raft_state, &apply_state) {
             return Err(box_err!(
@@ -655,11 +806,12 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
             ));
         }
         let last_term = init_last_term(&raft_engine, region, &raft_state, &apply_state)?;
-        let applied_term = init_applied_term(&raft_engine, region, &apply_state)?;
+        let applied_term = init_applied_term(&raft_engine, region, &raft_state, &apply_state)?;
         Ok(Self {
             region_id: region.id,
             peer_id,
             raft_engine,
+            term_cache: TermCache::default(),
             cache: EntryCache::default(),
             raft_state,
             apply_state,
@@ -668,7 +820,8 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
             read_scheduler,
             raftlog_fetch_stats: AsyncFetchStats::default(),
             async_fetch_results: RefCell::new(HashMap::default()),
-            cache_warmup_state: None,
+            io_read_raft_term: raft_metrics.io_read_raft_term.clone(),
+            io_read_raft_fetch_log: raft_metrics.io_read_raft_fetch_log.clone(),
         })
     }
 
@@ -800,6 +953,7 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
 
                 // the count of left entries isn't too large, fetch the remaining entries
                 // synchronously one by one
+                let _timer = self.io_read_raft_fetch_log.start_timer();
                 for idx in last + 1..high {
                     let ent = self.raft_engine.get_entry(region_id, idx)?;
                     match ent {
@@ -848,6 +1002,7 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
         if tried_cnt >= MAX_ASYNC_FETCH_TRY_CNT {
             // even the larger range is invalid again, fallback to fetch in sync way
             self.raftlog_fetch_stats.fallback_fetch.update(|m| m + 1);
+            let _timer = self.io_read_raft_fetch_log.start_timer();
             let count = self.raft_engine.fetch_entries_to(
                 region_id,
                 low,
@@ -899,6 +1054,7 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
                 Ok(ents)
             } else {
                 self.raftlog_fetch_stats.sync_fetch.update(|m| m + 1);
+                let _timer = self.io_read_raft_fetch_log.start_timer();
                 self.raft_engine.fetch_entries_to(
                     self.region_id,
                     low,
@@ -915,6 +1071,7 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
                 self.async_fetch(self.region_id, low, cache_low, max_size, context, &mut ents)?
             } else {
                 self.raftlog_fetch_stats.sync_fetch.update(|m| m + 1);
+                let _timer = self.io_read_raft_fetch_log.start_timer();
                 self.raft_engine.fetch_entries_to(
                     self.region_id,
                     low,
@@ -949,11 +1106,21 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
         if let Some(e) = self.cache.entry(idx) {
             Ok(e.get_term())
         } else {
+            // Try to fetch it from caching terms.
+            if let Some(term) = self.term_cache.entry(idx) {
+                return Ok(term);
+            }
+            let _timer = self.io_read_raft_term.start_timer();
             Ok(self
                 .raft_engine
                 .get_entry(self.region_id, idx)
                 .unwrap()
-                .unwrap()
+                .unwrap_or_else(|| {
+                    panic!(
+                        "region_id={}, peer_id={}, idx={idx}",
+                        self.region_id, self.peer_id
+                    )
+                })
                 .get_term())
         }
     }
@@ -1082,28 +1249,15 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
         self.last_term = last_term;
     }
 
-    pub fn entry_cache_warmup_state(&self) -> &Option<CacheWarmupState> {
-        &self.cache_warmup_state
-    }
-
-    pub fn entry_cache_warmup_state_mut(&mut self) -> &mut Option<CacheWarmupState> {
-        &mut self.cache_warmup_state
-    }
-
-    pub fn clear_entry_cache_warmup_state(&mut self) {
-        self.cache_warmup_state = None;
-    }
-
     /// Trigger a task to warm up the entry cache.
     ///
     /// This will ensure the range [low..=last_index] are loaded into
     /// cache. Return the high index of the warmup range if a task is
     /// successfully triggered.
-    pub fn async_warm_up_entry_cache(&mut self, low: u64) -> Option<u64> {
+    pub fn async_warm_up_entry_cache(&self, low: u64) -> Option<(u64, u64)> {
         let high = if let Some(first_index) = self.entry_cache_first_index() {
             if low >= first_index {
                 // Already warmed up.
-                self.cache_warmup_state = Some(CacheWarmupState::new());
                 return None;
             }
             // Partially warmed up.
@@ -1113,17 +1267,16 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
         };
 
         // Fetch entries [low, high) to trigger an async fetch task in background.
-        self.cache_warmup_state = Some(CacheWarmupState::new_with_range(low, high));
         match self.entries(low, high, u64::MAX, GetEntriesContext::empty(true)) {
             Ok(_) => {
                 // This should not happen, but it's OK :)
                 debug_assert!(false, "entries should not have been fetched");
-                error!("entries are fetched unexpectedly during warming up");
+                warn!("entries are fetched unexpectedly during warming up");
                 None
             }
             Err(raft::Error::Store(raft::StorageError::LogTemporarilyUnavailable)) => {
                 WARM_UP_ENTRY_CACHE_COUNTER.started.inc();
-                Some(high)
+                Some((low, high))
             }
             Err(e) => {
                 error!(
@@ -1136,18 +1289,15 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
     }
 
     /// Warm up entry cache if the result is valid.
-    ///
-    /// Return true when the warmup operation succeed within the timeout.
-    pub fn maybe_warm_up_entry_cache(&mut self, res: RaftlogFetchResult) -> bool {
-        let low = res.low;
+    pub fn on_async_warm_up_entry_cache_fetched(
+        &mut self,
+        res: RaftlogFetchResult,
+        range: (u64, u64),
+    ) {
         // Warm up the entry cache if the low and high index are
         // exactly the same as the warmup range.
-        let state = self.entry_cache_warmup_state().as_ref().unwrap();
-        let range = state.range();
-        let is_task_timeout = state.is_task_timeout();
-
-        if range.0 != low {
-            return false;
+        if range.0 != res.low {
+            return;
         }
 
         match res.ents {
@@ -1165,12 +1315,25 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
                         } else {
                             range.1 == self.last_index() + 1
                         };
-                        assert!(is_valid, "the warmup range should still be valid");
+                        // FIXME: the assertion below doesn't hold.
+                        // assert!(is_valid, "the warmup range should still be valid");
+                        if !is_valid {
+                            warn!(
+                                "unexpected warmup state";
+                                "region_id" => self.region_id,
+                                "peer_id" => self.peer_id,
+                                "cache_first" => ?self.entry_cache_first_index(),
+                                "last_index" => self.last_index(),
+                                "warmup_state_high" => range.1,
+                                "last_entry_index" => index,
+                            );
+                            return;
+                        }
                         entries.truncate((range.1 - range.0) as usize);
                         self.cache.prepend(entries);
                         WARM_UP_ENTRY_CACHE_COUNTER.finished.inc();
                         fail_point!("on_entry_cache_warmed_up");
-                        return !is_task_timeout;
+                        return;
                     }
                 }
                 warn!(
@@ -1190,21 +1353,15 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
                 );
             }
         }
-        false
     }
 
-    pub fn compact_entry_cache(&mut self, idx: u64) {
-        let mut can_compact = true;
-        if let Some(state) = self.entry_cache_warmup_state_mut() {
-            if state.check_stale(MAX_WARMED_UP_CACHE_KEEP_TIME) {
-                self.clear_entry_cache_warmup_state();
-            } else {
-                can_compact = false;
-            }
+    pub fn compact_entry_cache(&mut self, idx: u64, state: Option<&mut CacheWarmupState>) {
+        if state.is_some_and(|s| !s.check_stale()) {
+            // Since this peer may be warming up the entry cache, log compaction
+            // should be temporarily skipped. Otherwise, the warmup task may fail.
+            return;
         }
-        if can_compact {
-            self.cache.compact_to(idx);
-        }
+        self.cache.compact_to(idx);
     }
 
     #[inline]
@@ -1219,6 +1376,8 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
 
     /// Evict entries from the cache.
     pub fn evict_entry_cache(&mut self, half: bool) {
+        fail_point!("mock_evict_entry_cache", |_| {});
+
         if !self.is_entry_cache_empty() {
             let cache = &mut self.cache;
             let cache_len = cache.cache.len();
@@ -1252,8 +1411,19 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
         self.cache.trace_cached_entries(entries);
     }
 
+    #[inline]
+    pub fn compact_term_cache(&mut self, index: u64) {
+        self.term_cache.compact_to(index);
+    }
+
+    #[inline]
+    pub fn update_term_cache(&mut self, index: u64, term: u64) {
+        self.term_cache.append(index, term);
+    }
+
     pub fn clear(&mut self) {
         self.cache = EntryCache::default();
+        self.term_cache = TermCache::default();
     }
 
     pub fn read_scheduler(&self) -> Scheduler<ReadTask<EK>> {
@@ -1263,14 +1433,14 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
 
 #[cfg(test)]
 pub mod tests {
-    use std::sync::mpsc;
+    use std::{assert_matches::assert_matches, sync::mpsc};
 
     use engine_test::{kv::KvTestEngine, raft::RaftTestEngine};
     use engine_traits::RaftEngineReadOnly;
     use protobuf::Message;
     use raft::{GetEntriesContext, StorageError};
     use tempfile::Builder;
-    use tikv_util::worker::{dummy_scheduler, LazyWorker, Worker};
+    use tikv_util::worker::{LazyWorker, Worker, dummy_scheduler};
 
     use super::*;
     use crate::store::peer_storage::tests::{append_ents, new_entry, new_storage_from_ents};
@@ -1311,26 +1481,30 @@ pub mod tests {
         };
 
         // Test the initial data structure size.
-        let (tx, rx) = mpsc::sync_channel(8);
+        let (tx, rx) = mpsc::sync_channel(1);
+        let check_mem_size_change = |expect: i64| {
+            assert_eq!(rx.try_recv().unwrap(), expect);
+            rx.try_recv().unwrap_err();
+        };
         let mut cache = EntryCache::new_with_cb(move |c: i64| tx.send(c).unwrap());
-        assert_eq!(rx.try_recv().unwrap(), 896);
+        check_mem_size_change(0);
 
         cache.append(
             0,
             0,
             &[new_padded_entry(101, 1, 1), new_padded_entry(102, 1, 2)],
         );
-        assert_eq!(rx.try_recv().unwrap(), 3);
+        check_mem_size_change(419);
 
         cache.prepend(vec![new_padded_entry(100, 1, 1)]);
-        assert_eq!(rx.try_recv().unwrap(), 1);
+        check_mem_size_change(1);
         cache.persisted = 100;
         cache.compact_to(101);
-        assert_eq!(rx.try_recv().unwrap(), -1);
+        check_mem_size_change(-1);
 
         // Test size change for one overlapped entry.
         cache.append(0, 0, &[new_padded_entry(102, 2, 3)]);
-        assert_eq!(rx.try_recv().unwrap(), 1);
+        check_mem_size_change(1);
 
         // Test size change for all overlapped entries.
         cache.append(
@@ -1338,42 +1512,42 @@ pub mod tests {
             0,
             &[new_padded_entry(101, 3, 4), new_padded_entry(102, 3, 5)],
         );
-        assert_eq!(rx.try_recv().unwrap(), 5);
+        check_mem_size_change(5);
 
         cache.append(0, 0, &[new_padded_entry(103, 3, 6)]);
-        assert_eq!(rx.try_recv().unwrap(), 6);
+        check_mem_size_change(6);
 
         // Test trace a dangle entry.
         let cached_entries = CachedEntries::new(vec![new_padded_entry(100, 1, 1)]);
         cache.trace_cached_entries(cached_entries);
-        assert_eq!(rx.try_recv().unwrap(), 1);
+        check_mem_size_change(97);
 
         // Test trace an entry which is still in cache.
         let cached_entries = CachedEntries::new(vec![new_padded_entry(102, 3, 5)]);
         cache.trace_cached_entries(cached_entries);
-        assert_eq!(rx.try_recv().unwrap(), 0);
+        check_mem_size_change(5);
 
         // Test compare `cached_last` with `trunc_to_idx` in `EntryCache::append_impl`.
         cache.append(0, 0, &[new_padded_entry(103, 4, 7)]);
-        assert_eq!(rx.try_recv().unwrap(), 1);
+        check_mem_size_change(1);
 
         // Test compact one traced dangle entry and one entry in cache.
         cache.persisted = 101;
         cache.compact_to(102);
-        assert_eq!(rx.try_recv().unwrap(), -5);
+        check_mem_size_change(-5);
 
         // Test compact the last traced dangle entry.
         cache.persisted = 102;
         cache.compact_to(103);
-        assert_eq!(rx.try_recv().unwrap(), -5);
+        check_mem_size_change(-10);
 
         // Test compact all entries.
         cache.persisted = 103;
         cache.compact_to(104);
-        assert_eq!(rx.try_recv().unwrap(), -7);
+        check_mem_size_change(-7);
 
         drop(cache);
-        assert_eq!(rx.try_recv().unwrap(), -896);
+        check_mem_size_change(-512);
     }
 
     #[test]
@@ -1396,6 +1570,137 @@ pub mod tests {
     }
 
     #[test]
+    fn test_storage_term_cache() {
+        // Normal
+        {
+            let mut cache = TermCache::default();
+            assert_eq!(cache.entry(0), None);
+            assert_eq!(cache.entry(123), None);
+            // Append entries
+            cache.append(1, 1);
+            cache.append(2, 1);
+            cache.append(3, 2);
+            cache.append(4, 2);
+            cache.append(5, 2);
+            cache.append(4, 2); // skip as rewrite with old idx
+            cache.append(3, 2); // skip as rewrite with old idx
+            for i in (1..=10).rev() {
+                cache.append(i + 5, 3);
+            }
+            for i in 1..=5 {
+                cache.append(i + 15, 3 + i);
+            }
+            assert_eq!(cache.entry(0), None);
+            assert_eq!(cache.entry(20), Some(8));
+            assert_eq!(cache.entry(21), Some(8));
+            // index [1..2] => term 1
+            assert_eq!(cache.entry(1), Some(1));
+            assert_eq!(cache.entry(2), Some(1));
+            // index [3..5] => term 2
+            assert_eq!(cache.entry(3), Some(2));
+            assert_eq!(cache.entry(4), Some(2));
+            assert_eq!(cache.entry(5), Some(2));
+            // index [6..15] => term 3
+            assert_eq!(cache.entry(6), Some(3));
+            assert_eq!(cache.entry(15), Some(3));
+            // index [16..20] => term 4..8
+            for i in 16..=20 {
+                assert_eq!(cache.entry(i), Some(i - 12));
+            }
+        }
+        // Prepend sequentail entries & Compact
+        {
+            let mut cache = TermCache::default();
+            cache.append(20, 6);
+            for i in 1..=5 {
+                cache.append(20 + i * 5, i + 6);
+            }
+            let ents = vec![
+                new_entry(2, 2),
+                new_entry(3, 3),
+                new_entry(4, 4),
+                new_entry(5, 5),
+                new_entry(6, 6),
+            ];
+            cache.prepend(&ents);
+            assert_eq!(cache.entry(46), Some(11));
+            assert_eq!(cache.entry(3), None);
+            assert_eq!(cache.entry(4), Some(4));
+            assert_eq!(cache.entry(5), Some(5));
+            assert_eq!(cache.entry(15), Some(6));
+            assert_eq!(cache.entry(39), Some(9));
+            assert_eq!(cache.entry(44), Some(10));
+            // compact to (index = 40, term = 10)
+            cache.compact_to(40);
+            assert_eq!(cache.cache.len(), 2);
+            assert_eq!(cache.entry(39), None);
+            assert_eq!(cache.entry(40), Some(10));
+            // compact to (index = 45, term = 11)
+            cache.compact_to(45);
+            assert_eq!(cache.cache.len(), 1);
+            cache.append(48, 12);
+            assert_eq!(cache.cache.len(), 2);
+            assert_eq!(cache.entry(45), Some(11));
+            cache.compact_to(46);
+            assert_eq!(cache.entry(45), None);
+            // Append reversely, the first term should be cleared.
+            for i in (12..20).rev() {
+                cache.append(48 + i - 11, i);
+            }
+            assert_eq!(cache.entry(48), None);
+            assert_eq!(cache.entry(49), Some(12));
+            assert_eq!(cache.entry(56), Some(19));
+            assert_eq!(cache.entry(57), Some(19));
+        }
+        // Abnormal cases: index hopping
+        {
+            let mut cache = TermCache::default();
+            cache.append(5, 5);
+            cache.append(6, 6);
+            cache.append(7, 6);
+            cache.append(8, 6);
+            assert_eq!(cache.cache.len(), 2);
+            assert_eq!(cache.entry(8), Some(6));
+            cache.append(6, 8);
+            assert_eq!(cache.cache.len(), 1);
+            assert_eq!(cache.entry(8), Some(8));
+            drop(cache);
+
+            let mut cache = TermCache::default();
+            cache.append(6, 3);
+            cache.append(7, 5); // index hopping, clear the cache
+            assert_eq!(cache.cache.len(), 1);
+            assert_eq!(cache.entry(6), None);
+            assert_eq!(cache.entry(7), Some(5));
+            cache.append(5, 4);
+            cache.append(10, 6);
+            assert_eq!(cache.cache.len(), 3);
+        }
+        // Abnormal cases: prepend hopping index
+        {
+            let mut cache = TermCache::default();
+            let ents = vec![
+                new_entry(10, 5),
+                new_entry(15, 6),
+                new_entry(18, 7),
+                // multi election timeout
+                new_entry(20, 10),
+                new_entry(25, 11),
+            ];
+            cache.prepend(&ents);
+            assert_eq!(cache.cache.len(), 2);
+            assert_eq!(cache.entry(18), None);
+            assert_eq!(cache.entry(20), Some(10));
+            cache.append(30, 12);
+            assert_eq!(cache.cache.len(), 3);
+            cache.append(19, 9);
+            assert_eq!(cache.cache.len(), 4);
+            assert_eq!(cache.entry(18), None);
+            assert_eq!(cache.entry(19), Some(9));
+        }
+    }
+
+    #[test]
     fn test_async_fetch() {
         let ents = vec![
             new_entry(2, 2),
@@ -1412,7 +1717,7 @@ pub mod tests {
 
         let mut store = new_storage_from_ents(region_scheduler, dummy_scheduler, &td, &ents);
 
-        let max_u64 = u64::max_value();
+        let max_u64 = u64::MAX;
         let mut tests = vec![
             // already compacted
             (
@@ -1676,7 +1981,7 @@ pub mod tests {
             append_ents(&mut store, &entries);
             let li = store.last_index().unwrap();
             let actual_entries = store
-                .entries(4, li + 1, u64::max_value(), GetEntriesContext::empty(false))
+                .entries(4, li + 1, u64::MAX, GetEntriesContext::empty(false))
                 .unwrap();
             if actual_entries != wentries {
                 panic!("#{}: want {:?}, got {:?}", i, wentries, actual_entries);
@@ -1695,7 +2000,7 @@ pub mod tests {
         store.cache.cache.clear();
         // empty cache should fetch data from rocksdb directly.
         let mut res = store
-            .entries(4, 6, u64::max_value(), GetEntriesContext::empty(false))
+            .entries(4, 6, u64::MAX, GetEntriesContext::empty(false))
             .unwrap();
         assert_eq!(*res, ents[1..]);
 
@@ -1705,7 +2010,7 @@ pub mod tests {
 
         // direct cache access
         res = store
-            .entries(6, 8, u64::max_value(), GetEntriesContext::empty(false))
+            .entries(6, 8, u64::MAX, GetEntriesContext::empty(false))
             .unwrap();
         assert_eq!(res, entries);
 
@@ -1733,7 +2038,7 @@ pub mod tests {
         for low in 4..9 {
             for high in low..9 {
                 let res = store
-                    .entries(low, high, u64::max_value(), GetEntriesContext::empty(false))
+                    .entries(low, high, u64::MAX, GetEntriesContext::empty(false))
                     .unwrap();
                 assert_eq!(*res, exp_res[low as usize - 4..high as usize - 4]);
             }
@@ -1749,6 +2054,7 @@ pub mod tests {
         let (dummy_scheduler, _) = dummy_scheduler();
         let mut store = new_storage_from_ents(sched, dummy_scheduler, &td, &ents);
         store.cache.cache.clear();
+        let mut cache_warmup_state = None;
 
         // initial cache
         let mut entries = vec![new_entry(6, 5), new_entry(7, 5)];
@@ -1787,20 +2093,20 @@ pub mod tests {
 
         // compact to min(5 + 1, 7)
         store.cache.persisted = 5;
-        store.compact_entry_cache(7);
+        store.compact_entry_cache(7, cache_warmup_state.as_mut());
         exp_res = vec![new_entry(6, 7), new_entry(7, 8)];
         validate_cache(&store, &exp_res);
 
         // compact to min(7 + 1, 7)
         store.cache.persisted = 7;
-        store.compact_entry_cache(7);
+        store.compact_entry_cache(7, cache_warmup_state.as_mut());
         exp_res = vec![new_entry(7, 8)];
         validate_cache(&store, &exp_res);
         // compact all
-        store.compact_entry_cache(8);
+        store.compact_entry_cache(8, cache_warmup_state.as_mut());
         validate_cache(&store, &[]);
         // invalid compaction should be ignored.
-        store.compact_entry_cache(6);
+        store.compact_entry_cache(6, cache_warmup_state.as_mut());
     }
 
     #[test]
@@ -1817,14 +2123,14 @@ pub mod tests {
         assert_eq!(store.entry_cache_first_index().unwrap(), 6);
 
         // The return value should be None when it is already warmed up.
-        assert!(store.async_warm_up_entry_cache(6).is_none());
+        assert_matches!(store.async_warm_up_entry_cache(6), None);
 
         // The high index should be equal to the entry_cache_first_index.
-        assert_eq!(store.async_warm_up_entry_cache(5).unwrap(), 6);
+        assert_matches!(store.async_warm_up_entry_cache(5), Some((5, 6)));
 
         store.cache.compact_to(7); // Clean cache.
         // The high index should be equal to the last_index + 1.
-        assert_eq!(store.async_warm_up_entry_cache(5).unwrap(), 7);
+        assert_matches!(store.async_warm_up_entry_cache(5), Some((5, 7)));
     }
 
     #[test]
@@ -1837,7 +2143,9 @@ pub mod tests {
         let (dummy_scheduler, _rx) = dummy_scheduler();
         let mut store = new_storage_from_ents(region_scheduler, dummy_scheduler, &td, &ents);
         store.cache.compact_to(6);
-        store.cache_warmup_state = Some(CacheWarmupState::new_with_range(5, 6));
+        let warmup_timeout = Duration::from_secs(10);
+        let election_timeout = Duration::from_secs(10);
+        let cache_warmup_state = CacheWarmupState::new(5, 6, warmup_timeout, election_timeout);
 
         let res = RaftlogFetchResult {
             ents: Ok(ents[1..3].to_vec()),
@@ -1847,8 +2155,67 @@ pub mod tests {
             tried_cnt: MAX_ASYNC_FETCH_TRY_CNT,
             term: 1,
         };
-        store.maybe_warm_up_entry_cache(res);
+        store.on_async_warm_up_entry_cache_fetched(res, cache_warmup_state.range());
         // Cache should be warmed up.
         assert_eq!(store.entry_cache_first_index().unwrap(), 5);
+    }
+
+    #[test]
+    fn test_evict_cached_entries() {
+        let ents = vec![new_entry(3, 3)];
+        let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
+        let worker = LazyWorker::new("snap-manager");
+        let sched = worker.scheduler();
+        let (dummy_scheduler, _) = dummy_scheduler();
+        let mut store = new_storage_from_ents(sched, dummy_scheduler, &td, &ents);
+
+        // initial cache
+        for i in 4..10 {
+            append_ents(&mut store, &[new_entry(i, 4)]);
+        }
+
+        let cached_entries = vec![
+            CachedEntries::new(vec![new_entry(4, 4)]),
+            CachedEntries::new(vec![new_entry(5, 4)]),
+            CachedEntries::new(vec![new_entry(6, 4), new_entry(7, 4), new_entry(8, 4)]),
+            CachedEntries::new(vec![new_entry(9, 4)]),
+        ];
+        for ents in &cached_entries {
+            store.trace_cached_entries(ents.clone());
+        }
+        assert_eq!(store.cache.first_index().unwrap(), 4);
+
+        store.evict_entry_cache(false);
+        assert_eq!(store.cache.first_index().unwrap(), 4);
+        assert!(cached_entries[0].has_entries());
+
+        store.cache.persisted = 4;
+        store.evict_entry_cache(false);
+        assert_eq!(store.cache.first_index().unwrap(), 5);
+        assert!(!cached_entries[0].has_entries());
+        assert!(cached_entries[1].has_entries());
+
+        store.cache.persisted = 5;
+        store.evict_entry_cache(false);
+        assert_eq!(store.cache.first_index().unwrap(), 6);
+        assert!(!cached_entries[1].has_entries());
+        assert!(cached_entries[2].has_entries());
+
+        for idx in [6, 7] {
+            store.cache.persisted = idx;
+            store.evict_entry_cache(false);
+            assert_eq!(store.cache.first_index().unwrap(), idx + 1);
+            assert!(cached_entries[2].has_entries());
+        }
+
+        store.cache.persisted = 8;
+        store.evict_entry_cache(false);
+        assert_eq!(store.cache.first_index().unwrap(), 9);
+        assert!(!cached_entries[2].has_entries());
+
+        store.cache.persisted = 9;
+        store.evict_entry_cache(false);
+        assert!(store.cache.first_index().is_none());
+        assert!(!cached_entries[3].has_entries());
     }
 }

@@ -4,13 +4,14 @@ use std::{
     borrow::Cow,
     ptr,
     sync::{
-        atomic::{AtomicPtr, AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicPtr, AtomicUsize, Ordering},
     },
-    usize,
 };
 
-use crate::mailbox::BasicMailbox;
+use resource_control::ResourceMetered;
+
+use crate::{mailbox::BasicMailbox, metrics::FsmType};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Priority {
@@ -24,15 +25,22 @@ pub trait FsmScheduler {
 
     /// Schedule a Fsm for later handling.
     fn schedule(&self, fsm: Box<Self::Fsm>);
+
     /// Shutdown the scheduler, which indicates that resources like
     /// background thread pool should be released.
     fn shutdown(&self);
+
+    /// Consume the resources of msg in resource controller if enabled,
+    /// otherwise do nothing.
+    fn consume_msg_resource(&self, msg: &<Self::Fsm as Fsm>::Message);
 }
 
 /// A `Fsm` is a finite state machine. It should be able to be notified for
 /// updating internal state according to incoming messages.
-pub trait Fsm {
-    type Message: Send;
+pub trait Fsm: Send + 'static {
+    type Message: Send + ResourceMetered;
+
+    const FSM_TYPE: FsmType;
 
     fn is_stopped(&self) -> bool;
 
@@ -42,6 +50,7 @@ pub trait Fsm {
         Self: Sized,
     {
     }
+
     /// Take the mailbox from FSM. Implementation should ensure there will be
     /// no reference to mailbox after calling this method.
     fn take_mailbox(&mut self) -> Option<BasicMailbox<Self>>
@@ -141,7 +150,9 @@ impl<N: Fsm> FsmState<N> {
                 Ok(_) => return,
                 Err(Self::NOTIFYSTATE_DROP) => {
                     let ptr = self.data.swap(ptr::null_mut(), Ordering::AcqRel);
-                    unsafe { Box::from_raw(ptr) };
+                    unsafe {
+                        let _ = Box::from_raw(ptr);
+                    };
                     return;
                 }
                 Err(s) => s,
@@ -171,7 +182,9 @@ impl<N> Drop for FsmState<N> {
     fn drop(&mut self) {
         let ptr = self.data.swap(ptr::null_mut(), Ordering::SeqCst);
         if !ptr.is_null() {
-            unsafe { Box::from_raw(ptr) };
+            unsafe {
+                let _ = Box::from_raw(ptr);
+            };
         }
         self.state_cnt.fetch_sub(1, Ordering::Relaxed);
     }

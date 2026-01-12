@@ -22,6 +22,34 @@ pub fn read_slice<'a>(data: &mut BytesSlice<'a>, size: usize) -> Result<BytesSli
     }
 }
 
+/// return the key that keeps the range [self, self.next_prefix()) contains
+/// all keys with the prefix `self`.
+///
+/// # Examples
+/// ```rust
+/// # use tikv_util::codec::next_prefix_of;
+/// // ["hello", "hellp") contains "hello*"
+/// assert_eq!(&next_prefix_of(b"hello".to_vec()), b"hellp");
+/// // [[255], []) contains keys matches [255, *]
+/// assert_eq!(&next_prefix_of(vec![0xffu8]), &[]);
+/// // [[42, 255], [43]) contains keys matches [42, 255, *]
+/// assert_eq!(&next_prefix_of(vec![42u8, 0xffu8]), &[43u8]);
+/// ```
+pub fn next_prefix_of(key: Vec<u8>) -> Vec<u8> {
+    let mut next_prefix = key;
+    for i in (0..next_prefix.len()).rev() {
+        if next_prefix[i] == u8::MAX {
+            next_prefix.pop();
+        } else {
+            next_prefix[i] += 1;
+            break;
+        }
+    }
+    // By definition, the empty key means infinity.
+    // When we have meet keys like [0xff], return empty slice here is expected.
+    next_prefix
+}
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("{0}")]

@@ -6,13 +6,13 @@ mod forward;
 
 use std::ops::Bound;
 
-use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE, CfName};
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
 use txn_types::{
-    Key, Lock, LockType, OldValue, TimeStamp, TsSet, Value, Write, WriteRef, WriteType,
+    Key, Lock, LockType, OldValue, TimeStamp, TsSet, Value, ValueEntry, Write, WriteRef, WriteType,
 };
 
-pub use self::forward::{test_util, DeltaScanner, EntryScanner};
+pub use self::forward::{DeltaScanner, EntryScanner, test_util};
 use self::{
     backward::BackwardKvScanner,
     forward::{
@@ -20,8 +20,10 @@ use self::{
     },
 };
 use crate::storage::{
-    kv::{CfStatistics, Cursor, CursorBuilder, Iterator, ScanMode, Snapshot, Statistics},
-    mvcc::{default_not_found_error, NewerTsCheckState, Result},
+    kv::{
+        CfStatistics, Cursor, CursorBuilder, Iterator, LoadDataHint, ScanMode, Snapshot, Statistics,
+    },
+    mvcc::{NewerTsCheckState, Result, default_not_found_error},
     need_check_locks,
     txn::{Result as TxnResult, Scanner as StoreScanner},
 };
@@ -146,6 +148,16 @@ impl<S: Snapshot> ScannerBuilder<S> {
         self
     }
 
+    /// Set whether to load commit timestamp when scanning.
+    ///
+    /// Default is false.
+    #[inline]
+    #[must_use]
+    pub fn set_load_commit_ts(mut self, enabled: bool) -> Self {
+        self.0.load_commit_ts = enabled;
+        self
+    }
+
     /// Build `Scanner` from the current configuration.
     pub fn build(mut self) -> Result<Scanner<S>> {
         let lock_cursor = self.build_lock_cursor()?;
@@ -222,7 +234,7 @@ pub enum Scanner<S: Snapshot> {
 }
 
 impl<S: Snapshot> StoreScanner for Scanner<S> {
-    fn next(&mut self) -> TxnResult<Option<(Key, Value)>> {
+    fn next_entry(&mut self) -> TxnResult<Option<(Key, ValueEntry)>> {
         fail_point!("scanner_next");
 
         match self {
@@ -253,6 +265,7 @@ pub struct ScannerConfig<S: Snapshot> {
     snapshot: S,
     fill_cache: bool,
     omit_value: bool,
+    load_commit_ts: bool,
     isolation_level: IsolationLevel,
 
     /// `lower_bound` and `upper_bound` is used to create `default_cursor`.
@@ -291,6 +304,7 @@ impl<S: Snapshot> ScannerConfig<S> {
             bypass_locks: Default::default(),
             access_locks: Default::default(),
             check_has_newer_ts_data: false,
+            load_commit_ts: false,
         }
     }
 
@@ -342,7 +356,8 @@ impl<S: Snapshot> ScannerConfig<S> {
 /// Reads user key's value in default CF according to the given write CF value
 /// (`write`).
 ///
-/// Internally, there will be a `near_seek` operation.
+/// Internally, there will be a `near_seek` or `seek` operation depending on
+/// write CF stats.
 ///
 /// Notice that the value may be already carried in the `write` (short value).
 /// In this case, you should not call this function.
@@ -362,8 +377,18 @@ pub fn near_load_data_by_write<I>(
 where
     I: Iterator,
 {
+    fail_point!("near_load_data_by_write_default_not_found", |_| Err(
+        default_not_found_error(
+            user_key.clone().append_ts(write_start_ts).into_encoded(),
+            "near_load_data_by_write",
+        )
+    ));
     let seek_key = user_key.clone().append_ts(write_start_ts);
-    default_cursor.near_seek(&seek_key, &mut statistics.data)?;
+    match statistics.load_data_hint() {
+        LoadDataHint::NearSeek => default_cursor.near_seek(&seek_key, &mut statistics.data)?,
+        LoadDataHint::Seek => default_cursor.seek(&seek_key, &mut statistics.data)?,
+    };
+
     if !default_cursor.valid()?
         || default_cursor.key(&mut statistics.data) != seek_key.as_encoded().as_slice()
     {
@@ -388,7 +413,12 @@ where
     I: Iterator,
 {
     let seek_key = user_key.clone().append_ts(write_start_ts);
-    default_cursor.near_seek_for_prev(&seek_key, &mut statistics.data)?;
+    match statistics.load_data_hint() {
+        LoadDataHint::NearSeek => {
+            default_cursor.near_seek_for_prev(&seek_key, &mut statistics.data)?
+        }
+        LoadDataHint::Seek => default_cursor.seek_for_prev(&seek_key, &mut statistics.data)?,
+    };
     if !default_cursor.valid()?
         || default_cursor.key(&mut statistics.data) != seek_key.as_encoded().as_slice()
     {
@@ -578,9 +608,9 @@ pub(crate) fn load_data_by_lock<S: Snapshot, I: Iterator>(
             }
         }
         LockType::Delete => Ok(None),
-        LockType::Lock | LockType::Pessimistic => {
-            // Only when fails to call `Lock::check_ts_conflict()`, the function is called,
-            // so it's unreachable here.
+        LockType::Lock | LockType::Pessimistic | LockType::Shared => {
+            // Only when fails to call `txn_types::check_ts_conflict()`, the function is
+            // called, so it's unreachable here.
             unreachable!()
         }
     }
@@ -594,10 +624,10 @@ mod tests {
 
     use super::*;
     use crate::storage::{
-        kv::{Engine, RocksEngine, TestEngineBuilder, SEEK_BOUND},
-        mvcc::{tests::*, Error as MvccError, ErrorInner as MvccErrorInner},
+        kv::{Engine, RocksEngine, SEEK_BOUND, TestEngineBuilder},
+        mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, tests::*},
         txn::{
-            tests::*, Error as TxnError, ErrorInner as TxnErrorInner, TxnEntry, TxnEntryScanner,
+            Error as TxnError, ErrorInner as TxnErrorInner, TxnEntry, TxnEntryScanner, tests::*,
         },
     };
 
@@ -928,7 +958,7 @@ mod tests {
         let (key, val1) = (b"foo", b"bar1");
 
         if deep_write_seek {
-            for i in 0..SEEK_BOUND {
+            for i in 1..SEEK_BOUND {
                 must_prewrite_put(&mut engine, key, val1, key, i);
                 must_commit(&mut engine, key, i, i);
             }
@@ -1094,5 +1124,67 @@ mod tests {
 
         assert!(scanner.next().unwrap().is_none());
         assert_eq!(scanner.take_statistics().lock.total_op_count(), 0);
+    }
+
+    #[test]
+    fn test_scan_with_load_commit_ts() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let (key1, val1, val12, val13) = (b"foo1", b"bar1", b"bar4", b"bar5");
+        let (key2, val2, val22) = (b"foo2", b"bar2", b"bar6");
+        let (key3, val3) = (b"foo3", b"bar3");
+
+        must_prewrite_put(&mut engine, key1, val1, key1, 10);
+        must_commit(&mut engine, key1, 10, 20);
+
+        must_prewrite_put(&mut engine, key2, val2, key2, 30);
+        must_commit(&mut engine, key2, 30, 40);
+
+        must_prewrite_put(&mut engine, key3, val3, key3, 50);
+        must_commit(&mut engine, key3, 50, 60);
+
+        must_prewrite_put(&mut engine, key1, val12, key1, 60);
+        must_commit(&mut engine, key1, 60, 70);
+
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, 80.into())
+            .fill_cache(false)
+            .range(Some(Key::from_raw(key1)), None)
+            .desc(false)
+            .set_load_commit_ts(true)
+            .build()
+            .unwrap();
+
+        let expected = vec![(key1, val12, 70), (key2, val2, 40), (key3, val3, 60)];
+        for e in expected {
+            let (k, v_ts) = scanner.next_entry().unwrap().unwrap();
+            assert_eq!(k, Key::from_raw(e.0));
+            assert_eq!(v_ts.value, e.1);
+            assert_eq!(v_ts.commit_ts.unwrap().into_inner(), e.2);
+        }
+        assert!(scanner.next().unwrap().is_none());
+
+        // test access_locks should be ignored
+        must_prewrite_put(&mut engine, key1, val13, key1, 80);
+        must_prewrite_put(&mut engine, key2, val22, key1, 80);
+        must_commit(&mut engine, key1, 80, 90);
+        let locks = TsSet::new(vec![TimeStamp::new(80)]);
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        scanner = ScannerBuilder::new(snapshot, 100.into())
+            .fill_cache(false)
+            .range(Some(Key::from_raw(key1)), None)
+            .desc(false)
+            .set_load_commit_ts(true)
+            .access_locks(locks)
+            .build()
+            .unwrap();
+
+        let (k, v_ts) = scanner.next_entry().unwrap().unwrap();
+        assert_eq!(k, Key::from_raw(key1));
+        assert_eq!(v_ts.value, val13);
+        assert_eq!(v_ts.commit_ts.unwrap().into_inner(), 90);
+
+        // meet lock, load_commit_ts is set, so even access_locks is set, it should be
+        // ignored
+        scanner.next_entry().unwrap_err();
     }
 }

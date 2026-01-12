@@ -1,25 +1,25 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use api_version::{match_template_api_version, KvFormat, RawValue};
-use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName};
+use api_version::{KvFormat, RawValue, match_template_api_version};
+use engine_traits::{CfName, raw_ttl::ttl_to_expire_ts};
 use kvproto::kvrpcpb::ApiVersion;
 use raw::RawStore;
 use tikv_kv::Statistics;
 use txn_types::{Key, Value};
 
 use crate::storage::{
+    ProcessResult, Snapshot,
     kv::{Modify, WriteData},
     lock_manager::LockManager,
     raw,
     txn::{
+        Result,
         commands::{
             Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand,
             WriteContext, WriteResult,
         },
-        Result,
     },
-    ProcessResult, Snapshot,
 };
 
 // TODO: consider add `KvFormat` generic parameter.
@@ -29,7 +29,7 @@ command! {
     /// The previous value is always returned regardless of whether the new value is set.
     RawCompareAndSwap:
         cmd_ty => (Option<Value>, bool),
-        display => "kv::command::raw_compare_and_swap {:?}", (ctx),
+        display => { "kv::command::raw_compare_and_swap {:?}", (ctx), }
         content => {
             cf: CfName,
             key: Key,
@@ -37,6 +37,11 @@ command! {
             value: Value,
             ttl: u64,
             api_version: ApiVersion,
+        }
+        in_heap => {
+            key,
+            value,
+            previous_value,
         }
 }
 
@@ -117,6 +122,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
             new_acquired_locks: vec![],
             lock_guards,
             response_policy: ResponsePolicy::OnApplied,
+            known_txn_status: vec![],
         })
     }
 }
@@ -125,7 +131,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
 mod tests {
     use std::sync::Arc;
 
-    use api_version::{test_kv_format_impl, ApiV2};
+    use api_version::{ApiV2, test_kv_format_impl};
     use causal_ts::CausalTsProviderImpl;
     use concurrency_manager::ConcurrencyManager;
     use engine_traits::CF_DEFAULT;
@@ -134,8 +140,9 @@ mod tests {
 
     use super::*;
     use crate::storage::{
-        lock_manager::MockLockManager, txn::scheduler::get_raw_ext, Engine, Statistics,
-        TestEngineBuilder,
+        Engine, Statistics, TestEngineBuilder,
+        lock_manager::MockLockManager,
+        txn::{scheduler::get_raw_ext, txn_status_cache::TxnStatusCache},
     };
 
     #[test]
@@ -150,7 +157,7 @@ mod tests {
     fn test_cas_basic_impl<F: KvFormat>() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let ts_provider = super::super::test_util::gen_ts_provider(F::TAG);
-        let cm = concurrency_manager::ConcurrencyManager::new(1.into());
+        let cm = concurrency_manager::ConcurrencyManager::new_for_test(1.into());
         let key = b"rk";
 
         let encoded_key = F::encode_raw_key(key, None);
@@ -215,6 +222,7 @@ mod tests {
             statistics: &mut statistic,
             async_apply_prewrite: false,
             raw_ext,
+            txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
         };
         let ret = cmd.cmd.process_write(snap, context)?;
         match ret.pr {
@@ -241,7 +249,7 @@ mod tests {
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let ts_provider = super::super::test_util::gen_ts_provider(F::TAG);
 
-        let cm = concurrency_manager::ConcurrencyManager::new(1.into());
+        let cm = concurrency_manager::ConcurrencyManager::new_for_test(1.into());
         let raw_key = b"rk";
         let raw_value = b"valuek";
         let ttl = 30;
@@ -269,6 +277,7 @@ mod tests {
             statistics: &mut statistic,
             async_apply_prewrite: false,
             raw_ext,
+            txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
         };
         let cmd: Command = cmd.into();
         let write_result = cmd.process_write(snap, context).unwrap();

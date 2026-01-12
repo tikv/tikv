@@ -2,14 +2,15 @@
 
 use std::{marker::PhantomData, sync::Arc};
 
+use api_version::ApiV1;
 use criterion::black_box;
 use futures::executor::block_on;
 use kvproto::coprocessor::KeyRange;
 use test_coprocessor::*;
 use tidb_query_datatype::expr::EvalConfig;
-use tidb_query_executors::{interface::*, BatchTableScanExecutor};
+use tidb_query_executors::{BatchTableScanExecutor, interface::*};
 use tikv::{
-    coprocessor::{dag::TikvStorage, RequestHandler},
+    coprocessor::{RequestHandler, dag::TikvStorage},
     storage::{RocksEngine, Statistics, Store as TxnStore},
 };
 use tipb::ColumnInfo;
@@ -33,7 +34,7 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder for BatchTableScan
         store: &Store<RocksEngine>,
         _: (),
     ) -> Self::E {
-        let mut executor = BatchTableScanExecutor::new(
+        let mut executor = BatchTableScanExecutor::<_, ApiV1>::new(
             black_box(TikvStorage::new(
                 ToTxnStore::<Self::T>::to_store(store),
                 false,

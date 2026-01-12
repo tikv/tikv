@@ -4,7 +4,7 @@ use std::{
     borrow::Cow,
     cmp::Ordering,
     fmt::{self, Debug, Display, Formatter},
-    i64, str,
+    str,
 };
 
 use codec::{
@@ -12,22 +12,24 @@ use codec::{
     number::{self, NumberCodec},
     prelude::*,
 };
+use mysql::VectorFloat32;
 use tikv_util::{codec::BytesSlice, escape};
 
 use super::{
-    mysql::{
-        self, parse_json_path_expr, Decimal, DecimalDecoder, DecimalEncoder, Duration, Enum, Json,
-        JsonDecoder, JsonEncoder, PathExpression, Set, Time, DEFAULT_FSP, MAX_FSP,
-    },
     Result,
+    mysql::{
+        self, DEFAULT_FSP, Decimal, DecimalDecoder, DecimalEncoder, Duration, Enum, Json,
+        JsonDecoder, JsonEncoder, MAX_FSP, PathExpression, Set, Time, VectorFloat32Decoder,
+        VectorFloat32Encoder, parse_json_path_expr,
+    },
 };
 use crate::{
+    FieldTypeTp,
     codec::{
-        convert::{ConvertTo, ToInt},
+        convert::{ConvertTo, ToInt, ToStringValue},
         data_type::AsMySqlBool,
     },
     expr::EvalContext,
-    FieldTypeTp,
 };
 
 pub const NIL_FLAG: u8 = 0;
@@ -41,6 +43,7 @@ pub const DURATION_FLAG: u8 = 7;
 pub const VAR_INT_FLAG: u8 = 8;
 pub const VAR_UINT_FLAG: u8 = 9;
 pub const JSON_FLAG: u8 = 10;
+pub const VECTOR_FLOAT32_FLAG: u8 = 20;
 pub const MAX_FLAG: u8 = 250;
 
 pub const DATUM_DATA_NULL: &[u8; 1] = &[NIL_FLAG];
@@ -57,6 +60,7 @@ pub enum Datum {
     Dec(Decimal),
     Time(Time),
     Json(Json),
+    VectorFloat32(VectorFloat32),
     Enum(Enum),
     Set(Set),
     Min,
@@ -141,6 +145,7 @@ impl Display for Datum {
             Datum::Dec(ref d) => write!(f, "Dec({})", d),
             Datum::Time(t) => write!(f, "Time({})", t),
             Datum::Json(ref j) => write!(f, "Json({})", j),
+            Datum::VectorFloat32(ref v) => write!(f, "VectorFloat32({})", v),
             Datum::Enum(ref e) => write!(f, "Enum({})", e),
             Datum::Set(ref s) => write!(f, "Set({})", s),
             Datum::Min => write!(f, "MIN"),
@@ -207,6 +212,7 @@ impl Datum {
             Datum::Dec(ref d) => self.cmp_dec(ctx, d),
             Datum::Time(t) => self.cmp_time(ctx, t),
             Datum::Json(ref j) => self.cmp_json(ctx, j),
+            Datum::VectorFloat32(_) => Err(box_err!("not implemented")),
             Datum::Enum(ref e) => self.cmp_enum(ctx, e),
             Datum::Set(ref s) => self.cmp_set(ctx, s),
         }
@@ -252,6 +258,7 @@ impl Datum {
             Datum::Dur(ref d) => cmp_f64(d.to_secs_f64(), f),
             Datum::Time(t) => cmp_f64(t.convert(ctx)?, f),
             Datum::Json(_) => Ok(Ordering::Less),
+            Datum::VectorFloat32(_) => Err(box_err!("not implemented")),
             Datum::Enum(_) => Ok(Ordering::Less),
             Datum::Set(_) => Ok(Ordering::Less),
         }
@@ -402,9 +409,9 @@ impl Datum {
             Datum::Time(t) => format!("{}", t),
             Datum::Dur(ref d) => format!("{}", d),
             Datum::Dec(ref d) => format!("{}", d),
-            Datum::Json(ref d) => d.to_string(),
-            Datum::Enum(ref e) => e.to_string(),
-            Datum::Set(ref s) => s.to_string(),
+            Datum::Json(ref d) => d.to_string_value(),
+            Datum::Enum(ref e) => e.to_string_value(),
+            Datum::Set(ref s) => s.to_string_value(),
             ref d => return Err(invalid_type!("can't convert {} to string", d)),
         };
         Ok(s)
@@ -475,6 +482,7 @@ impl Datum {
             | Datum::Bytes(_)
             | Datum::Dec(_)
             | Datum::Json(_)
+            | Datum::VectorFloat32(_)
             | Datum::Enum(_)
             | Datum::Set(_)
             | Datum::Max
@@ -668,7 +676,7 @@ impl Datum {
                     Datum::F64(res)
                 }
             }
-            (&Datum::Dec(ref l), &Datum::Dec(ref r)) => {
+            (Datum::Dec(l), Datum::Dec(r)) => {
                 let dec: Result<Decimal> = (l + r).into();
                 return dec.map(Datum::Dec);
             }
@@ -700,7 +708,7 @@ impl Datum {
             }
             (&Datum::U64(l), &Datum::U64(r)) => l.checked_sub(r).into(),
             (&Datum::F64(l), &Datum::F64(r)) => return Ok(Datum::F64(l - r)),
-            (&Datum::Dec(ref l), &Datum::Dec(ref r)) => {
+            (Datum::Dec(l), Datum::Dec(r)) => {
                 let dec: Result<Decimal> = (l - r).into();
                 return dec.map(Datum::Dec);
             }
@@ -724,7 +732,7 @@ impl Datum {
             }
             (&Datum::U64(l), &Datum::U64(r)) => l.checked_mul(r).into(),
             (&Datum::F64(l), &Datum::F64(r)) => return Ok(Datum::F64(l * r)),
-            (&Datum::Dec(ref l), &Datum::Dec(ref r)) => return Ok(Datum::Dec((l * r).unwrap())),
+            (Datum::Dec(l), Datum::Dec(r)) => return Ok(Datum::Dec((l * r).unwrap())),
             (l, r) => return Err(invalid_type!("{} can't multiply {}", l, r)),
         };
 
@@ -738,7 +746,7 @@ impl Datum {
     pub fn checked_rem(self, _: &mut EvalContext, d: Datum) -> Result<Datum> {
         match d {
             Datum::I64(0) | Datum::U64(0) => return Ok(Datum::Null),
-            Datum::F64(f) if f == 0f64 => return Ok(Datum::Null),
+            Datum::F64(0f64) => return Ok(Datum::Null),
             _ => {}
         }
         match (self, d) {
@@ -846,7 +854,7 @@ impl<'a> From<&'a [u8]> for Datum {
     }
 }
 
-impl<'a> From<Cow<'a, [u8]>> for Datum {
+impl From<Cow<'_, [u8]>> for Datum {
     fn from(data: Cow<'_, [u8]>) -> Datum {
         data.into_owned().into()
     }
@@ -896,7 +904,7 @@ impl From<Json> for Datum {
 
 /// `DatumDecoder` decodes the datum.
 pub trait DatumDecoder:
-    DecimalDecoder + JsonDecoder + CompactByteDecoder + MemComparableByteDecoder
+    DecimalDecoder + JsonDecoder + VectorFloat32Decoder + CompactByteDecoder + MemComparableByteDecoder
 {
     /// `read_datum` decodes on a datum from a byte slice generated by TiDB.
     fn read_datum(&mut self) -> Result<Datum> {
@@ -919,6 +927,7 @@ pub trait DatumDecoder:
             VAR_INT_FLAG => self.read_var_i64().map(Datum::I64)?,
             VAR_UINT_FLAG => self.read_var_u64().map(Datum::U64)?,
             JSON_FLAG => self.read_json().map(Datum::Json)?,
+            VECTOR_FLOAT32_FLAG => self.read_vector_float32().map(Datum::VectorFloat32)?,
             f => return Err(invalid_type!("unsupported data type `{}`", f)),
         };
         Ok(datum)
@@ -939,7 +948,7 @@ pub fn decode(data: &mut BytesSlice<'_>) -> Result<Vec<Datum>> {
 
 /// `DatumEncoder` encodes the datum.
 pub trait DatumEncoder:
-    DecimalEncoder + JsonEncoder + CompactByteEncoder + MemComparableByteEncoder
+    DecimalEncoder + JsonEncoder + VectorFloat32Encoder + CompactByteEncoder + MemComparableByteEncoder
 {
     /// Encode values to buf slice.
     fn write_datum(
@@ -1011,6 +1020,10 @@ pub trait DatumEncoder:
                     self.write_u8(JSON_FLAG)?;
                     self.write_json(j.as_ref())?;
                 }
+                Datum::VectorFloat32(ref v) => {
+                    self.write_u8(VECTOR_FLOAT32_FLAG)?;
+                    self.write_vector_float32(v.as_ref())?;
+                }
                 // TODO: implement datum write here.
                 Datum::Enum(_) => unimplemented!(),
                 Datum::Set(_) => unimplemented!(),
@@ -1057,6 +1070,7 @@ pub fn approximate_size(values: &[Datum], comparable: bool) -> usize {
                 Datum::Dec(ref d) => d.approximate_encoded_size(),
                 Datum::Json(ref d) => d.as_ref().binary_len(),
                 Datum::Null | Datum::Min | Datum::Max => 0,
+                Datum::VectorFloat32(ref v) => v.as_ref().encoded_len(),
                 // TODO: implement here after we implement datum write
                 Datum::Enum(_) => unimplemented!(),
                 Datum::Set(_) => unimplemented!(),
@@ -1126,6 +1140,12 @@ pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
             v.read_json()?;
             l - v.len()
         }
+        VECTOR_FLOAT32_FLAG => {
+            let mut v = &buf[1..];
+            let l = v.len();
+            v.read_vector_float32_ref()?;
+            l - v.len()
+        }
         f => return Err(invalid_type!("unsupported data type `{}`", f)),
     };
     if buf.len() < pos + 1 {
@@ -1156,14 +1176,11 @@ pub fn skip_n(buf: &mut &[u8], n: usize) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        cmp::Ordering, i16, i32, i64, i8, slice::from_ref, str::FromStr, sync::Arc, u16, u32, u64,
-        u8,
-    };
+    use std::{cmp::Ordering, slice::from_ref, str::FromStr, sync::Arc};
 
     use super::*;
     use crate::{
-        codec::mysql::{Decimal, Duration, Time, MAX_FSP},
+        codec::mysql::{Decimal, Duration, MAX_FSP, Time},
         expr::{EvalConfig, EvalContext},
     };
 
@@ -1179,7 +1196,7 @@ mod tests {
             | (&Datum::Null, &Datum::Null)
             | (&Datum::Time(_), &Datum::Time(_))
             | (&Datum::Json(_), &Datum::Json(_)) => true,
-            (&Datum::Dec(ref d1), &Datum::Dec(ref d2)) => d1.prec_and_frac() == d2.prec_and_frac(),
+            (Datum::Dec(d1), Datum::Dec(d2)) => d1.prec_and_frac() == d2.prec_and_frac(),
             _ => false,
         }
     }
@@ -1245,6 +1262,10 @@ mod tests {
                     )
                     .unwrap(),
                 ),
+            ],
+            vec![
+                Datum::VectorFloat32(VectorFloat32::from_f32(vec![1.0, 2.0, 3.0]).unwrap()),
+                Datum::VectorFloat32(VectorFloat32::from_f32(vec![]).unwrap()),
             ],
         ];
         for vs in table {

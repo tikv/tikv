@@ -5,21 +5,26 @@ use std::{
     collections::HashMap,
     io::Read,
     ops::{Deref, DerefMut},
-    u64,
+    sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use api_version::{ApiV2, KeyMode, KvFormat};
-use engine_traits::{raw_ttl::ttl_current_ts, MvccProperties, Range};
+use engine_traits::{MvccProperties, Range, RangeStats, raw_ttl::ttl_current_ts};
+use lazy_static::lazy_static;
 use rocksdb::{
     DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex,
     UserCollectedProperties,
 };
 use tikv_util::{
     codec::{
-        number::{self, NumberEncoder},
         Error, Result,
+        number::{self, NumberEncoder},
     },
     info,
+    smoother::Smoother,
 };
 use txn_types::{Key, Write, WriteType};
 
@@ -34,11 +39,35 @@ const PROP_RANGE_INDEX: &str = "tikv.range_index";
 pub const DEFAULT_PROP_SIZE_INDEX_DISTANCE: u64 = 4 * 1024 * 1024;
 pub const DEFAULT_PROP_KEYS_INDEX_DISTANCE: u64 = 40 * 1024;
 
-fn get_entry_size(value: &[u8], entry_type: DBEntryType) -> std::result::Result<u64, ()> {
+/// Caps the compaction factor to avoid unrealistic estimates.
+pub const TITAN_MAX_COMPACTION_FACTOR: f64 = 5000.0;
+const FIVE_MINS_IN_SECONDS: u64 = 5 * 60;
+
+lazy_static! {
+    // A global smoother used to estimate the Titan blob compression factor over
+    // the last 5 minutes. The window size is 30, roughly matching the number of
+    // data points collected in 5 minutes assuming one data point every 10 secs.
+    pub static ref TITAN_COMPRESSION_FACTOR_SMOOTHER: Mutex<Smoother<f64, 30, FIVE_MINS_IN_SECONDS, 0>> =
+        Mutex::new(Smoother::<f64, 30, FIVE_MINS_IN_SECONDS, 0>::default());
+    pub static ref TITAN_COMPRESSION_FACTOR: AtomicU64 = AtomicU64::new(f64::to_bits(1.0));
+    pub static ref TITAN_MAX_BLOB_SIZE_SEEN: AtomicU64 = AtomicU64::new(u64::MAX);
+}
+
+fn get_entry_size(
+    value: &[u8],
+    entry_type: DBEntryType,
+    titan_compression_factor: f64,
+    titan_max_blob_size: u64,
+) -> std::result::Result<u64, ()> {
     match entry_type {
         DBEntryType::Put => Ok(value.len() as u64),
         DBEntryType::BlobIndex => match TitanBlobIndex::decode(value) {
-            Ok(index) => Ok(index.blob_size + value.len() as u64),
+            Ok(index) => {
+                // Estimate the raw blob size using the Titan compression factor.
+                let estimation = (index.blob_size as f64 * titan_compression_factor) as u64;
+                let blob_raw_size = estimation.min(titan_max_blob_size).max(index.blob_size);
+                Ok(blob_raw_size + value.len() as u64)
+            }
             Err(_) => Err(()),
         },
         _ => Err(()),
@@ -122,7 +151,7 @@ impl DecodeProperties for UserProperties {
 // type until the engine abstraction situation is straightened out.
 pub struct UserCollectedPropertiesDecoder<'a>(pub &'a UserCollectedProperties);
 
-impl<'a> DecodeProperties for UserCollectedPropertiesDecoder<'a> {
+impl DecodeProperties for UserCollectedPropertiesDecoder<'_> {
     fn decode(&self, k: &str) -> Result<&[u8]> {
         match self.0.get(k.as_bytes()) {
             Some(v) => Ok(v),
@@ -144,10 +173,7 @@ pub struct RangeProperties {
 
 impl RangeProperties {
     pub fn get(&self, key: &[u8]) -> &RangeOffsets {
-        let idx = self
-            .offsets
-            .binary_search_by_key(&key, |&(ref k, _)| k)
-            .unwrap();
+        let idx = self.offsets.binary_search_by_key(&key, |(k, _)| k).unwrap();
         &self.offsets[idx].1
     }
 
@@ -205,11 +231,11 @@ impl RangeProperties {
         if start == end {
             return (0, 0);
         }
-        let start_offset = match self.offsets.binary_search_by_key(&start, |&(ref k, _)| k) {
+        let start_offset = match self.offsets.binary_search_by_key(&start, |(k, _)| k) {
             Ok(idx) => Some(idx),
             Err(next_idx) => next_idx.checked_sub(1),
         };
-        let end_offset = match self.offsets.binary_search_by_key(&end, |&(ref k, _)| k) {
+        let end_offset = match self.offsets.binary_search_by_key(&end, |(k, _)| k) {
             Ok(idx) => Some(idx),
             Err(next_idx) => next_idx.checked_sub(1),
         };
@@ -225,10 +251,7 @@ impl RangeProperties {
         start_key: &[u8],
         end_key: &[u8],
     ) -> Vec<(Vec<u8>, RangeOffsets)> {
-        let start_offset = match self
-            .offsets
-            .binary_search_by_key(&start_key, |&(ref k, _)| k)
-        {
+        let start_offset = match self.offsets.binary_search_by_key(&start_key, |(k, _)| k) {
             Ok(idx) => {
                 if idx == self.offsets.len() - 1 {
                     return vec![];
@@ -239,7 +262,7 @@ impl RangeProperties {
             Err(next_idx) => next_idx,
         };
 
-        let end_offset = match self.offsets.binary_search_by_key(&end_key, |&(ref k, _)| k) {
+        let end_offset = match self.offsets.binary_search_by_key(&end_key, |(k, _)| k) {
             Ok(idx) => {
                 if idx == 0 {
                     return vec![];
@@ -293,6 +316,9 @@ pub struct RangePropertiesCollector {
     cur_offsets: RangeOffsets,
     prop_size_index_distance: u64,
     prop_keys_index_distance: u64,
+    titan_compression_factor: f64,
+    titan_max_blob_size: u64,
+    should_reload_titan_stats: bool,
 }
 
 impl Default for RangePropertiesCollector {
@@ -304,6 +330,9 @@ impl Default for RangePropertiesCollector {
             cur_offsets: RangeOffsets::default(),
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+            titan_compression_factor: 1.0,
+            titan_max_blob_size: u64::MAX,
+            should_reload_titan_stats: true,
         }
     }
 }
@@ -333,8 +362,20 @@ impl RangePropertiesCollector {
 
 impl TablePropertiesCollector for RangePropertiesCollector {
     fn add(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
+        if self.should_reload_titan_stats {
+            self.titan_compression_factor =
+                f64::from_bits(TITAN_COMPRESSION_FACTOR.load(Ordering::Relaxed))
+                    .clamp(1.0, TITAN_MAX_COMPACTION_FACTOR);
+            self.titan_max_blob_size = TITAN_MAX_BLOB_SIZE_SEEN.load(Ordering::Relaxed);
+            self.should_reload_titan_stats = false;
+        }
         // size
-        let size = match get_entry_size(value, entry_type) {
+        let size = match get_entry_size(
+            value,
+            entry_type,
+            self.titan_compression_factor,
+            self.titan_max_blob_size,
+        ) {
             Ok(entry_size) => key.len() as u64 + entry_size,
             Err(_) => return,
         };
@@ -353,6 +394,7 @@ impl TablePropertiesCollector for RangePropertiesCollector {
     }
 
     fn finish(&mut self) -> HashMap<Vec<u8>, Vec<u8>> {
+        self.should_reload_titan_stats = true;
         if self.size_in_last_range() > 0 || self.keys_in_last_range() > 0 {
             let key = self.last_key.clone();
             self.insert_new_point(key);
@@ -414,7 +456,10 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
         // TsFilter filters sst based on max_ts and min_ts during iterating.
         // To prevent seeing outdated (GC) records, we should consider
         // RocksDB delete entry type.
-        if entry_type != DBEntryType::Put && entry_type != DBEntryType::Delete {
+        if entry_type != DBEntryType::Put
+            && entry_type != DBEntryType::Delete
+            && entry_type != DBEntryType::BlobIndex
+        {
             return;
         }
 
@@ -447,39 +492,54 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
             self.last_row.extend(k);
         } else {
             self.row_versions += 1;
+            self.props.oldest_stale_version_ts = cmp::min(self.props.oldest_stale_version_ts, ts);
+            self.props.newest_stale_version_ts = cmp::max(self.props.newest_stale_version_ts, ts);
         }
         if self.row_versions > self.props.max_row_versions {
             self.props.max_row_versions = self.row_versions;
         }
 
-        if self.key_mode == KeyMode::Raw {
-            let decode_raw_value = ApiV2::decode_raw_value(value);
-            match decode_raw_value {
-                Ok(raw_value) => {
-                    if raw_value.is_valid(self.current_ts) {
-                        self.props.num_puts += 1;
-                    } else {
-                        self.props.num_deletes += 1;
+        if entry_type != DBEntryType::BlobIndex {
+            if self.key_mode == KeyMode::Raw {
+                let decode_raw_value = ApiV2::decode_raw_value(value);
+                match decode_raw_value {
+                    Ok(raw_value) => {
+                        if raw_value.is_valid(self.current_ts) {
+                            self.props.num_puts += 1;
+                        } else {
+                            self.props.num_deletes += 1;
+                        }
+                        if let Some(expire_ts) = raw_value.expire_ts {
+                            self.props.ttl.add(expire_ts);
+                        }
+                    }
+                    Err(_) => {
+                        self.num_errors += 1;
                     }
                 }
-                Err(_) => {
-                    self.num_errors += 1;
+            } else {
+                let write_type = match Write::parse_type(value) {
+                    Ok(v) => v,
+                    Err(_) => {
+                        self.num_errors += 1;
+                        return;
+                    }
+                };
+
+                match write_type {
+                    WriteType::Put => self.props.num_puts += 1,
+                    WriteType::Delete => {
+                        self.props.num_deletes += 1;
+                        self.props.oldest_delete_ts = cmp::min(self.props.oldest_delete_ts, ts);
+                        self.props.newest_delete_ts = cmp::max(self.props.newest_delete_ts, ts);
+                    }
+                    _ => {}
                 }
             }
         } else {
-            let write_type = match Write::parse_type(value) {
-                Ok(v) => v,
-                Err(_) => {
-                    self.num_errors += 1;
-                    return;
-                }
-            };
-
-            match write_type {
-                WriteType::Put => self.props.num_puts += 1,
-                WriteType::Delete => self.props.num_deletes += 1,
-                _ => {}
-            }
+            // NOTE: if titan is enabled, the entry will always be treated as PUT.
+            // Be careful if you try to enable Titan on CF_WRITE.
+            self.props.num_puts += 1;
         }
 
         // Add new row.
@@ -530,12 +590,12 @@ impl TablePropertiesCollectorFactory<MvccPropertiesCollector>
     }
 }
 
-pub fn get_range_entries_and_versions(
+pub fn get_range_stats(
     engine: &crate::RocksEngine,
     cf: &str,
     start: &[u8],
     end: &[u8],
-) -> Option<(u64, u64)> {
+) -> Option<RangeStats> {
     let range = Range::new(start, end);
     let collection = match engine.get_properties_of_tables_in_range(cf, &[range]) {
         Ok(v) => v,
@@ -557,14 +617,18 @@ pub fn get_range_entries_and_versions(
         num_entries += v.num_entries();
         props.add(&mvcc);
     }
-
-    Some((num_entries, props.num_versions))
+    Some(RangeStats {
+        num_entries,
+        num_versions: props.num_versions,
+        num_rows: props.num_rows,
+        num_deletes: props.num_deletes,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use api_version::RawValue;
-    use engine_traits::{MiscExt, SyncMutable, CF_WRITE, LARGE_CFS};
+    use engine_traits::{CF_WRITE, LARGE_CFS, MiscExt, SyncMutable};
     use rand::Rng;
     use tempfile::Builder;
     use test::Bencher;
@@ -572,8 +636,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        raw::{DBEntryType, TablePropertiesCollector},
         RocksCfOptions, RocksDbOptions,
+        raw::{DBEntryType, TablePropertiesCollector},
     };
 
     #[allow(clippy::many_single_char_names)]
@@ -773,10 +837,9 @@ mod tests {
 
         let start_keys = keys::data_key(&[]);
         let end_keys = keys::data_end_key(&[]);
-        let (entries, versions) =
-            get_range_entries_and_versions(&db, CF_WRITE, &start_keys, &end_keys).unwrap();
-        assert_eq!(entries, (cases.len() * 2) as u64);
-        assert_eq!(versions, cases.len() as u64);
+        let range_stats = get_range_stats(&db, CF_WRITE, &start_keys, &end_keys).unwrap();
+        assert_eq!(range_stats.num_entries, (cases.len() * 2) as u64);
+        assert_eq!(range_stats.num_versions, cases.len() as u64);
     }
 
     #[test]
@@ -845,6 +908,8 @@ mod tests {
         assert_eq!(props.num_puts, 4);
         assert_eq!(props.num_versions, 7);
         assert_eq!(props.max_row_versions, 3);
+        assert_eq!(props.ttl.max_expire_ts, Some(u64::MAX));
+        assert_eq!(props.ttl.min_expire_ts, Some(10));
     }
 
     #[bench]
@@ -862,9 +927,40 @@ mod tests {
 
         let mut collector = MvccPropertiesCollector::new(KeyMode::Txn);
         b.iter(|| {
-            for &(ref k, ref v) in &entries {
+            for (k, v) in &entries {
                 collector.add(k, v, DBEntryType::Put, 0, 0);
             }
         });
+    }
+
+    fn encode_blob_index(blob_size: u64) -> Vec<u8> {
+        let mut index = TitanBlobIndex::default();
+        index.blob_size = blob_size;
+        index.encode()
+    }
+
+    #[test]
+    fn test_get_entry_size() {
+        let blob_size = 10;
+        let val = encode_blob_index(blob_size);
+        let test_cases = [
+            (1.0, 1000, blob_size),
+            (100.0, 1000, blob_size * 100),
+            (200.0, u64::MAX, blob_size * 200),
+            // Estimation clamped by max blob size seen.
+            (100.0, 500, 500),
+            // No regress if stats are 0 or default values.
+            (0.0, 0, blob_size),
+            (0.0, 100, blob_size),
+            (100.0, 0, blob_size),
+            (1.0, u64::MAX, blob_size),
+            (0.0, u64::MAX, blob_size),
+        ];
+
+        for (factor, max_blob_size_seen, expect_size) in test_cases {
+            let entry_size =
+                get_entry_size(&val, DBEntryType::BlobIndex, factor, max_blob_size_seen).unwrap();
+            assert_eq!(entry_size, expect_size + val.len() as u64);
+        }
     }
 }

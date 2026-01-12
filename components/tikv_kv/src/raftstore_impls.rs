@@ -6,8 +6,8 @@ use engine_traits::{CfName, IterOptions, Peekable, ReadOptions, Snapshot};
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use pd_client::BucketMeta;
 use raftstore::{
-    store::{RegionIterator, RegionSnapshot, TxnExt},
     Error as RaftServerError,
+    store::{RegionIterator, RegionSnapshot, TxnExt},
 };
 use txn_types::{Key, Value};
 
@@ -26,10 +26,10 @@ pub struct RegionSnapshotExt<'a, S: Snapshot> {
     snapshot: &'a RegionSnapshot<S>,
 }
 
-impl<'a, S: Snapshot> SnapshotExt for RegionSnapshotExt<'a, S> {
+impl<S: Snapshot> SnapshotExt for RegionSnapshotExt<'_, S> {
     #[inline]
     fn get_data_version(&self) -> Option<u64> {
-        self.snapshot.get_apply_index().ok()
+        self.snapshot.get_data_version().ok()
     }
 
     fn is_max_ts_synced(&self) -> bool {
@@ -40,8 +40,14 @@ impl<'a, S: Snapshot> SnapshotExt for RegionSnapshotExt<'a, S> {
             .unwrap_or(false)
     }
 
+    #[inline]
     fn get_term(&self) -> Option<NonZeroU64> {
         self.snapshot.term
+    }
+
+    #[inline]
+    fn get_region_id(&self) -> Option<u64> {
+        Some(self.snapshot.get_region().id)
     }
 
     fn get_txn_extra_op(&self) -> TxnExtraOp {
@@ -54,6 +60,10 @@ impl<'a, S: Snapshot> SnapshotExt for RegionSnapshotExt<'a, S> {
 
     fn get_buckets(&self) -> Option<Arc<BucketMeta>> {
         self.snapshot.bucket_meta.clone()
+    }
+
+    fn in_memory_engine_hit(&self) -> bool {
+        self.snapshot.get_snapshot().in_memory_engine_hit()
     }
 }
 

@@ -75,7 +75,7 @@ impl<T: BitOp> super::AggrDefinitionParser for AggrFnDefinitionParserBitOp<T> {
         // bit operation outputs one column.
         out_schema.push(root_expr.take_field_type());
 
-        super::util::rewrite_exp_for_bit_op(src_schema, &mut exp).unwrap();
+        super::util::rewrite_exp_for_bit_op(src_schema, &mut exp)?;
         out_exp.push(exp);
 
         Ok(Box::new(AggrFnBitOp::<T>(std::marker::PhantomData)))
@@ -132,8 +132,8 @@ impl<T: BitOp> super::ConcreteAggrFunctionState for AggrFnStateBitOp<T> {
 #[cfg(test)]
 mod tests {
     use tidb_query_datatype::{
-        codec::batch::{LazyBatchColumn, LazyBatchColumnVec},
         EvalType, FieldTypeAccessor, FieldTypeTp,
+        codec::batch::{LazyBatchColumn, LazyBatchColumnVec},
     };
     use tipb_helper::ExprDefBuilder;
 

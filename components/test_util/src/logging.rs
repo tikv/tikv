@@ -6,13 +6,15 @@ use std::{
     io,
     io::prelude::*,
     sync::{Mutex, Once},
+    time::SystemTime,
 };
 
+use chrono::{DateTime, offset::Local};
 use slog::{self, Drain, OwnedKVList, Record};
 
 struct Serializer<'a>(&'a mut dyn std::io::Write);
 
-impl<'a> slog::Serializer for Serializer<'a> {
+impl slog::Serializer for Serializer<'_> {
     fn emit_arguments(&mut self, key: slog::Key, val: &std::fmt::Arguments<'_>) -> slog::Result {
         write!(self.0, ", {}: {}", key, val)?;
         Ok(())
@@ -48,8 +50,8 @@ impl CaseTraceLogger {
         }
 
         let tag = tikv_util::get_tag_from_thread_name().map_or_else(|| "".to_owned(), |s| s + " ");
-        let t = time::now();
-        let time_str = time::strftime("%Y/%m/%d %H:%M:%S.%f", &t).unwrap();
+        let date_time: DateTime<Local> = SystemTime::now().into();
+        let time_str = format!("{}", date_time.format("%Y/%m/%d %H:%M:%S.%f"));
         write!(
             w,
             "{}{} {}:{}: [{}] {}",

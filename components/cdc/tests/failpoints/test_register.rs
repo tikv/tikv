@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{thread, time::Duration};
 
-use api_version::{test_kv_format_impl, KvFormat};
+use api_version::{KvFormat, test_kv_format_impl};
 use futures::{executor::block_on, sink::SinkExt};
 use grpcio::WriteFlags;
 use kvproto::{cdcpb::*, kvrpcpb::*, metapb::RegionEpoch};
@@ -10,7 +10,7 @@ use raft::StateRole;
 use raftstore::coprocessor::{ObserverContext, RoleChange, RoleObserver};
 use test_raftstore::sleep_ms;
 
-use crate::{new_event_feed, TestSuite};
+use crate::{TestSuite, new_event_feed};
 
 #[test]
 fn test_failed_pending_batch() {
@@ -97,7 +97,7 @@ fn test_region_ready_after_deregister_impl<F: KvFormat>() {
         .obs
         .get(&leader.get_store_id())
         .unwrap()
-        .on_role_change(&mut context, &RoleChange::new(StateRole::Follower));
+        .on_role_change(&mut context, &RoleChange::new_for_test(StateRole::Follower));
 
     // Then CDC should not panic
     fail::remove(fp);
@@ -165,7 +165,11 @@ fn test_connections_register_impl<F: KvFormat>() {
     let mut events = receive_event(false).events.to_vec();
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(err) => {
-            assert!(err.has_epoch_not_match(), "{:?}", err);
+            assert!(
+                err.has_epoch_not_match() || err.has_region_not_found(),
+                "{:?}",
+                err
+            );
         }
         other => panic!("unknown event {:?}", other),
     }

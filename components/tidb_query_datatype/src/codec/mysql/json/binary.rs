@@ -4,8 +4,8 @@ use std::convert::TryInto;
 
 use codec::number::NumberCodec;
 
-use super::{constants::*, JsonRef, JsonType, ERR_CONVERT_FAILED};
-use crate::codec::{mysql::json::path_expr::ArrayIndex, Result};
+use super::{ERR_CONVERT_FAILED, JsonRef, JsonType, constants::*};
+use crate::codec::{Result, convert::ToStringValue, mysql::json::path_expr::ArrayIndex};
 
 impl<'a> JsonRef<'a> {
     /// Gets the index from the ArrayIndex
@@ -136,7 +136,7 @@ impl<'a> JsonRef<'a> {
             _ => Err(invalid_type!(
                 "{} from {} to literal",
                 ERR_CONVERT_FAILED,
-                self.to_string()
+                self.to_string_value()
             )),
         }
     }
@@ -167,7 +167,8 @@ mod tests {
             (r#"["d1","d2"]"#, JsonType::Array),
             (r#"-3"#, JsonType::I64),
             (r#"3"#, JsonType::I64),
-            (r#"18446744073709551615"#, JsonType::Double),
+            (r#"18446744073709551615"#, JsonType::U64),
+            (r#"18446744073709551616"#, JsonType::Double),
             (r#"3.0"#, JsonType::Double),
             (r#"null"#, JsonType::Literal),
             (r#"true"#, JsonType::Literal),

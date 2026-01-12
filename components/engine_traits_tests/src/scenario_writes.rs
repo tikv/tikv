@@ -2,8 +2,8 @@
 
 use engine_test::kv::KvTestEngine;
 use engine_traits::{
-    Mutable, Peekable, Result, SyncMutable, WriteBatch, WriteBatchExt, ALL_CFS, CF_DEFAULT,
-    CF_WRITE,
+    ALL_CFS, CF_DEFAULT, CF_WRITE, Mutable, Peekable, Result, SyncMutable, WriteBatch,
+    WriteBatchExt,
 };
 use panic_hook::recover_safe;
 

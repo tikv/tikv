@@ -18,20 +18,29 @@ use grpcio::{
     RpcContext, RpcStatus, RpcStatusCode, ServerBuilder, ServerChecker, ServerCredentialsBuilder,
     ServerCredentialsFetcher,
 };
+use log_wrappers::RedactOption;
+use online_config::{ConfigChange, ConfigManager, OnlineConfig, Result as CfgResult};
+use tikv_util::info;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct SecurityConfig {
     // SSL configs.
+    #[online_config(skip)]
     pub ca_path: String,
+    #[online_config(skip)]
     pub cert_path: String,
+    #[online_config(skip)]
     pub key_path: String,
     // Test purpose only.
     #[serde(skip)]
+    #[online_config(skip)]
     pub override_ssl_target: String,
+    #[online_config(skip)]
     pub cert_allowed_cn: HashSet<String>,
-    pub redact_info_log: Option<bool>,
+    pub redact_info_log: RedactOption,
+    #[online_config(skip)]
     pub encryption: EncryptionConfig,
 }
 
@@ -97,7 +106,6 @@ impl SecurityConfig {
         {
             return Err("ca, cert and private key should be all configured.".into());
         }
-
         Ok(())
     }
 
@@ -124,6 +132,19 @@ impl SecurityConfig {
         }
         *last = Some(this);
         Ok(true)
+    }
+}
+
+pub struct SecurityConfigManager;
+
+impl ConfigManager for SecurityConfigManager {
+    fn dispatch(&mut self, changes: ConfigChange) -> CfgResult<()> {
+        // update log redaction config
+        if let Some(v) = changes.get("redact_info_log") {
+            log_wrappers::set_redact_info_log(RedactOption::try_from(v.clone())?);
+        }
+        info!("update security config"; "config" => ?changes);
+        Ok(())
     }
 }
 
@@ -189,6 +210,10 @@ impl SecurityManager {
                 CertificateRequestType::RequestAndRequireClientCertificateAndVerify,
             )
         }
+    }
+
+    pub fn get_config(&self) -> &SecurityConfig {
+        &self.cfg
     }
 }
 

@@ -7,10 +7,9 @@ use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
 use tidb_query_datatype::{
     codec::{
-        self,
+        self, Error,
         data_type::*,
-        mysql::{RoundMode, DEFAULT_FSP},
-        Error,
+        mysql::{DEFAULT_FSP, RoundMode},
     },
     expr::EvalContext,
 };
@@ -280,7 +279,7 @@ fn sqrt(arg: &Real) -> Result<Option<Real>> {
 #[inline]
 #[rpn_fn]
 fn radians(arg: &Real) -> Result<Option<Real>> {
-    Ok(Real::new(**arg * std::f64::consts::PI / 180_f64).ok())
+    Ok(Real::new(**arg * (std::f64::consts::PI / 180_f64)).ok())
 }
 
 #[inline]
@@ -329,7 +328,7 @@ fn cot(arg: &Real) -> Result<Option<Real>> {
 fn pow(lhs: &Real, rhs: &Real) -> Result<Option<Real>> {
     let pow = (lhs.into_inner()).pow(rhs.into_inner());
     if pow.is_infinite() {
-        Err(Error::overflow("DOUBLE", format!("{}.pow({})", lhs, rhs)).into())
+        Err(Error::overflow("DOUBLE", format!("pow({}, {})", lhs, rhs)).into())
     } else {
         Ok(Real::new(pow).ok())
     }
@@ -353,7 +352,12 @@ fn rand_with_seed_first_gen(seed: Option<&i64>) -> Result<Option<Real>> {
 #[inline]
 #[rpn_fn]
 fn degrees(arg: &Real) -> Result<Option<Real>> {
-    Ok(Real::new(arg.to_degrees()).ok())
+    let ret = arg.to_degrees();
+    if ret.is_infinite() {
+        Err(Error::overflow("DOUBLE", format!("degrees({})", arg)).into())
+    } else {
+        Ok(Real::new(ret).ok())
+    }
 }
 
 #[inline]
@@ -387,22 +391,26 @@ pub fn conv(n: BytesRef, from_base: &Int, to_base: &Int) -> Result<Option<Bytes>
     let s = s.trim();
     let from_base = IntWithSign::from_int(*from_base);
     let to_base = IntWithSign::from_int(*to_base);
-    Ok(if is_valid_base(from_base) && is_valid_base(to_base) {
+    if is_valid_base(from_base) && is_valid_base(to_base) {
         if let Some((num_str, is_neg)) = extract_num_str(s, from_base) {
-            let num = extract_num(num_str.as_ref(), is_neg, from_base);
-            Some(num.format_to_base(to_base).into_bytes())
+            match extract_num(num_str.as_ref(), is_neg, from_base) {
+                Some(num) => Ok(Some(num.format_to_base(to_base).into_bytes())),
+                None => {
+                    Err(Error::overflow("BIGINT UNSIGNED", format!("conv({})", num_str)).into())
+                }
+            }
         } else {
-            Some(b"0".to_vec())
+            Ok(Some(b"0".to_vec()))
         }
     } else {
-        None
-    })
+        Ok(None)
+    }
 }
 
 #[inline]
 #[rpn_fn]
 pub fn round_real(arg: &Real) -> Result<Option<Real>> {
-    Ok(Real::new(arg.round()).ok())
+    Ok(Real::new(arg.round_ties_even()).ok())
 }
 
 #[inline]
@@ -463,9 +471,9 @@ pub fn truncate_uint_with_uint(arg0: &Int, _arg1: &Int) -> Result<Option<Int>> {
 #[rpn_fn]
 pub fn truncate_real_with_int(arg0: &Real, arg1: &Int) -> Result<Option<Real>> {
     let d = if *arg1 >= 0 {
-        (*arg1).min(i64::from(i32::max_value())) as i32
+        (*arg1).min(i64::from(i32::MAX)) as i32
     } else {
-        (*arg1).max(i64::from(i32::min_value())) as i32
+        (*arg1).max(i64::from(i32::MIN)) as i32
     };
     Ok(Some(truncate_real(*arg0, d)))
 }
@@ -473,7 +481,7 @@ pub fn truncate_real_with_int(arg0: &Real, arg1: &Int) -> Result<Option<Real>> {
 #[inline]
 #[rpn_fn]
 pub fn truncate_real_with_uint(arg0: &Real, arg1: &Int) -> Result<Option<Real>> {
-    let d = (*arg1 as u64).min(i32::max_value() as u64) as i32;
+    let d = (*arg1 as u64).min(i32::MAX as u64) as i32;
     Ok(Some(truncate_real(*arg0, d)))
 }
 
@@ -542,9 +550,12 @@ fn round_with_frac_dec(arg0: &Decimal, arg1: &Int) -> Result<Option<Decimal>> {
 pub fn round_with_frac_real(arg0: &Real, arg1: &Int) -> Result<Option<Real>> {
     let number = arg0;
     let digits = arg1;
-    let power = 10.0_f64.powi(-digits as i32);
-    let frac = *number / power;
-    Ok(Some(Real::new(frac.round() * power).unwrap()))
+    let power = 10.0_f64.powi(*digits as i32);
+    let frac = *number * power;
+    if frac.is_infinite() {
+        return Ok(Some(*number));
+    }
+    Ok(Some(Real::new(frac.round_ties_even() / power).unwrap()))
 }
 
 thread_local! {
@@ -566,9 +577,11 @@ impl IntWithSign {
     // Shrink num to fit the boundary of i64.
     fn shrink_from_signed_uint(num: u64, is_neg: bool) -> IntWithSign {
         let value = if is_neg {
-            num.min(-Int::min_value() as u64)
+            // Avoid int64 overflow error.
+            // -int64_min = int64_max + 1
+            num.min(Int::MAX as u64 + 1)
         } else {
-            num.min(Int::max_value() as u64)
+            num.min(Int::MAX as u64)
         };
         IntWithSign::from_signed_uint(value, is_neg)
     }
@@ -594,7 +607,8 @@ impl IntWithSign {
         let IntWithSign(value, is_neg) = self;
         let IntWithSign(to_base, should_ignore_sign) = to_base;
         let mut real_val = value as i64;
-        if is_neg && !should_ignore_sign {
+        // real_val > 0 is to avoid overflow issue when value is -int64_min.
+        if is_neg && !should_ignore_sign && real_val > 0 {
             real_val = -real_val;
         }
         let mut ret = IntWithSign::format_radix(real_val as u64, to_base as u32);
@@ -629,14 +643,17 @@ fn extract_num_str(s: &str, from_base: IntWithSign) -> Option<(String, bool)> {
     }
 }
 
-fn extract_num(num_s: &str, is_neg: bool, from_base: IntWithSign) -> IntWithSign {
+fn extract_num(num_s: &str, is_neg: bool, from_base: IntWithSign) -> Option<IntWithSign> {
     let IntWithSign(from_base, signed) = from_base;
-    let value = u64::from_str_radix(num_s, from_base as u32).unwrap();
-    if signed {
+    let value = match u64::from_str_radix(num_s, from_base as u32) {
+        Ok(v) => v,
+        Err(_) => return None,
+    };
+    Some(if signed {
         IntWithSign::shrink_from_signed_uint(value, is_neg)
     } else {
         IntWithSign::from_signed_uint(value, is_neg)
-    }
+    })
 }
 
 // Returns (isize, is_positive): convert an i64 to usize, and whether the input
@@ -648,13 +665,10 @@ fn extract_num(num_s: &str, is_neg: bool, from_base: IntWithSign) -> IntWithSign
 // assert_eq!(i64_to_usize(1_i64, false), (1_usize, true));
 // assert_eq!(i64_to_usize(-1_i64, false), (1_usize, false));
 // assert_eq!(
-//     i64_to_usize(u64::max_value() as i64, true),
-//     (u64::max_value() as usize, true)
+//     i64_to_usize(u64::MAX as i64, true),
+//     (u64::MAX as usize, true)
 // );
-// assert_eq!(
-//     i64_to_usize(u64::max_value() as i64, false),
-//     (1_usize, false)
-// );
+// assert_eq!(i64_to_usize(u64::MAX as i64, false), (1_usize, false));
 // ```
 #[inline]
 pub fn i64_to_usize(i: i64, is_unsigned: bool) -> (usize, bool) {
@@ -663,8 +677,8 @@ pub fn i64_to_usize(i: i64, is_unsigned: bool) -> (usize, bool) {
     } else if i >= 0 {
         (i as usize, true)
     } else {
-        let i = if i == i64::min_value() {
-            i64::max_value() as usize + 1
+        let i = if i == i64::MIN {
+            i64::MAX as usize + 1
         } else {
             -i as usize
         };
@@ -705,9 +719,9 @@ impl Default for MySqlRng {
 
 #[cfg(test)]
 mod tests {
-    use std::{f64, i64, str::FromStr};
+    use std::{f64, str::FromStr};
 
-    use tidb_query_datatype::{builder::FieldTypeBuilder, FieldTypeFlag, FieldTypeTp};
+    use tidb_query_datatype::{FieldTypeFlag, FieldTypeTp, builder::FieldTypeBuilder};
     use tipb::ScalarFuncSig;
 
     use super::*;
@@ -993,9 +1007,10 @@ mod tests {
         }
     }
 
-    fn test_unary_func_ok_none<I: Evaluable, O: EvaluableRet>(sig: ScalarFuncSig)
+    fn test_unary_func_ok_none<I, O>(sig: ScalarFuncSig)
     where
-        O: PartialEq,
+        I: Evaluable,
+        O: EvaluableRet + PartialEq,
         Option<I>: Into<ScalarValue>,
         Option<O>: From<ScalarValue>,
     {
@@ -1141,10 +1156,7 @@ mod tests {
         let test_cases = vec![
             (None, None),
             (Some(64f64), Some(Real::new(8f64).unwrap())),
-            (
-                Some(2f64),
-                Some(Real::new(std::f64::consts::SQRT_2).unwrap()),
-            ),
+            (Some(2f64), Some(Real::new(f64::consts::SQRT_2).unwrap())),
             (Some(-16f64), None),
             (Some(f64::NAN), None),
         ];
@@ -1172,6 +1184,10 @@ mod tests {
             ),
             (Some(f64::NAN), None),
             (Some(f64::INFINITY), Some(Real::new(f64::INFINITY).unwrap())),
+            (
+                Some(1.0E308),
+                Some(Real::new(1.0E308 * (std::f64::consts::PI / 180_f64)).unwrap()),
+            ),
         ];
         for (input, expect) in test_cases {
             let output = RpnFnScalarEvaluator::new()
@@ -1211,25 +1227,34 @@ mod tests {
     #[test]
     fn test_degrees() {
         let tests_cases = vec![
-            (None, None),
-            (Some(f64::NAN), None),
-            (Some(0f64), Some(Real::new(0f64).unwrap())),
-            (Some(1f64), Some(Real::new(57.29577951308232_f64).unwrap())),
+            (None, None, false),
+            (Some(f64::NAN), None, false),
+            (Some(0f64), Some(Real::new(0f64).unwrap()), false),
+            (
+                Some(1f64),
+                Some(Real::new(57.29577951308232_f64).unwrap()),
+                false,
+            ),
             (
                 Some(std::f64::consts::PI),
                 Some(Real::new(180.0_f64).unwrap()),
+                false,
             ),
             (
                 Some(-std::f64::consts::PI / 2.0_f64),
                 Some(Real::new(-90.0_f64).unwrap()),
+                false,
             ),
+            (Some(1.0E307), None, true),
         ];
-        for (input, expect) in tests_cases {
+        for (input, expect, is_err) in tests_cases {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(input)
-                .evaluate(ScalarFuncSig::Degrees)
-                .unwrap();
-            assert_eq!(expect, output, "{:?}", input);
+                .evaluate(ScalarFuncSig::Degrees);
+            assert_eq!(is_err, output.is_err());
+            if let Ok(out) = output {
+                assert_eq!(expect, out, "{:?}", input);
+            }
         }
     }
 
@@ -1237,10 +1262,7 @@ mod tests {
     fn test_sin() {
         let valid_test_cases = vec![
             (0.0_f64, 0.0_f64),
-            (
-                std::f64::consts::PI / 4.0_f64,
-                std::f64::consts::FRAC_1_SQRT_2,
-            ),
+            (std::f64::consts::PI / 4.0_f64, f64::consts::FRAC_1_SQRT_2),
             (std::f64::consts::PI / 2.0_f64, 1.0_f64),
             (std::f64::consts::PI, 0.0_f64),
         ];
@@ -1446,7 +1468,7 @@ mod tests {
                 Some(Real::new(-std::f64::consts::PI / 2.0_f64).unwrap()),
             ),
             (
-                Some(Real::new(std::f64::consts::SQRT_2 / 2.0_f64).unwrap()),
+                Some(Real::new(f64::consts::SQRT_2 / 2.0_f64).unwrap()),
                 Some(Real::new(std::f64::consts::PI / 4.0_f64).unwrap()),
             ),
         ];
@@ -1487,7 +1509,7 @@ mod tests {
                 Some(Real::new(std::f64::consts::PI).unwrap()),
             ),
             (
-                Some(Real::new(std::f64::consts::SQRT_2 / 2.0_f64).unwrap()),
+                Some(Real::new(f64::consts::SQRT_2 / 2.0_f64).unwrap()),
                 Some(Real::new(std::f64::consts::PI / 4.0_f64).unwrap()),
             ),
         ];
@@ -1605,6 +1627,18 @@ mod tests {
             ("+", 10, 8, "0"),
             ("-", 10, 8, "0"),
             ("", 2, 16, "0"),
+            (
+                "18446744073709551615",
+                10,
+                2,
+                "1111111111111111111111111111111111111111111111111111111111111111",
+            ),
+            (
+                "-18446744073709551615",
+                -10,
+                2,
+                "1000000000000000000000000000000000000000000000000000000000000000",
+            ),
         ];
         for (n, f, t, e) in tests {
             let n = Some(n.as_bytes().to_vec());
@@ -1621,17 +1655,37 @@ mod tests {
         }
 
         let invalid_tests = vec![
-            (None, Some(10), Some(10), None),
-            (Some(b"a6a".to_vec()), Some(1), Some(8), None),
+            (None, Some(10), Some(10)),
+            (Some(b"111".to_vec()), None, Some(7)),
+            (Some(b"112".to_vec()), Some(10), None),
+            (None, None, None),
+            (Some(b"222".to_vec()), Some(2), Some(100)),
+            (Some(b"333".to_vec()), Some(37), Some(2)),
+            (Some(b"a6a".to_vec()), Some(1), Some(8)),
         ];
-        for (n, f, t, e) in invalid_tests {
+        for (n, f, t) in invalid_tests {
             let got = RpnFnScalarEvaluator::new()
                 .push_param(n)
                 .push_param(f)
                 .push_param(t)
                 .evaluate::<Bytes>(ScalarFuncSig::Conv)
                 .unwrap();
-            assert_eq!(got, e);
+            assert_eq!(got, None);
+        }
+
+        let error_tests = vec![
+            ("18446744073709551616", Some(10), Some(10)),
+            ("100000000000000000001", Some(10), Some(8)),
+            ("-18446744073709551616", Some(-10), Some(4)),
+        ];
+        for (n, f, t) in error_tests {
+            let n = Some(n.as_bytes().to_vec());
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(n)
+                .push_param(f)
+                .push_param(t)
+                .evaluate::<Bytes>(ScalarFuncSig::Conv);
+            got.unwrap_err();
         }
     }
 
@@ -1641,6 +1695,14 @@ mod tests {
             (
                 Some(Real::new(-3.12_f64).unwrap()),
                 Some(Real::new(-3f64).unwrap()),
+            ),
+            (
+                Some(Real::new(-3.5_f64).unwrap()),
+                Some(Real::new(-4f64).unwrap()),
+            ),
+            (
+                Some(Real::new(-4.5_f64).unwrap()),
+                Some(Real::new(-4f64).unwrap()),
             ),
             (
                 Some(Real::new(f64::MAX).unwrap()),
@@ -1710,8 +1772,8 @@ mod tests {
             (1028, 5, false, 1028),
             (1028, -2, false, 1000),
             (1028, 309, false, 1028),
-            (1028, i64::min_value(), false, 0),
-            (1028, u64::max_value() as i64, true, 1028),
+            (1028, i64::MIN, false, 0),
+            (1028, u64::MAX as i64, true, 1028),
         ];
         for (lhs, rhs, rhs_is_unsigned, expected) in tests {
             let rhs_field_type = FieldTypeBuilder::new()
@@ -1738,7 +1800,7 @@ mod tests {
         let tests = vec![
             (
                 18446744073709551615_u64,
-                u64::max_value() as i64,
+                u64::MAX as i64,
                 true,
                 18446744073709551615_u64,
             ),
@@ -1781,9 +1843,9 @@ mod tests {
             (123.2, -1, false, 120.0),
             (123.2, 100, false, 123.2),
             (123.2, -100, false, 0.0),
-            (123.2, i64::max_value(), false, 123.2),
-            (123.2, i64::min_value(), false, 0.0),
-            (123.2, u64::max_value() as i64, true, 123.2),
+            (123.2, i64::MAX, false, 123.2),
+            (123.2, i64::MIN, false, 0.0),
+            (123.2, u64::MAX as i64, true, 123.2),
             (-1.23, 0, false, -1.0),
             (
                 1.797693134862315708145274237317043567981e+308,
@@ -1877,7 +1939,7 @@ mod tests {
             ),
             (
                 Decimal::from_str("23.298").unwrap(),
-                u64::max_value() as i64,
+                u64::MAX as i64,
                 true,
                 Decimal::from_str("23.298").unwrap(),
             ),
@@ -2011,6 +2073,21 @@ mod tests {
                 Some(Real::new(23.298_f64).unwrap()),
                 Some(-1),
                 Some(Real::new(20.0_f64).unwrap()),
+            ),
+            (
+                Some(Real::new(0.95_f64).unwrap()),
+                Some(1),
+                Some(Real::new(1.0_f64).unwrap()),
+            ),
+            (
+                Some(Real::new(1.05_f64).unwrap()),
+                Some(1),
+                Some(Real::new(1.0_f64).unwrap()),
+            ),
+            (
+                Some(Real::new(1.05_f64).unwrap()),
+                Some(1000000),
+                Some(Real::new(1.05_f64).unwrap()),
             ),
             (Some(Real::new(23.298_f64).unwrap()), None, None),
             (None, Some(2), None),

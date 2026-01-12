@@ -12,161 +12,209 @@
 //! explicitly stopped. We keep these components in the `TikvServer` struct.
 
 use std::{
-    cmp,
     collections::HashMap,
-    env,
-    net::SocketAddr,
+    marker::PhantomData,
     path::{Path, PathBuf},
     str::FromStr,
     sync::{
-        atomic::{AtomicU32, AtomicU64, Ordering},
-        mpsc, Arc,
+        Arc,
+        atomic::AtomicU64,
+        mpsc::{self, sync_channel},
     },
     time::Duration,
-    u64,
 };
 
-use api_version::{dispatch_api_version, KvFormat};
+use api_version::{KvFormat, dispatch_api_version};
+use backup::disk_snap::Env;
+use backup_stream::{
+    BackupStreamResolver, config::BackupStreamConfigManager, metadata::store::PdStore,
+    observer::BackupStreamObserver,
+};
 use causal_ts::CausalTsProviderImpl;
-use concurrency_manager::ConcurrencyManager;
-use encryption_export::{data_key_manager_from_config, DataKeyManager};
-use engine_rocks::{
-    flush_engine_statistics,
-    raw::{Cache, Env},
-    FlowInfo, RocksEngine, RocksStatistics,
-};
-use engine_traits::{
-    CachedTablet, CfOptions, CfOptionsExt, Engines, FlowControlFactorsExt, KvEngine, MiscExt,
-    RaftEngine, StatisticsReporter, TabletRegistry, CF_DEFAULT, CF_LOCK, CF_WRITE,
-};
-use error_code::ErrorCodeExt;
-use file_system::{
-    get_io_rate_limiter, set_io_rate_limiter, BytesFetcher, File, IoBudgetAdjustor,
-    MetricsManager as IoMetricsManager,
-};
+use cdc::CdcConfigManager;
+use concurrency_manager::{ConcurrencyManager, LIMIT_VALID_TIME_MULTIPLIER};
+use engine_rocks::{RocksEngine, RocksStatistics, from_rocks_compression_type};
+use engine_traits::{CF_DEFAULT, CF_WRITE, Engines, KvEngine, MiscExt, RaftEngine, TabletRegistry};
+use file_system::{BytesFetcher, MetricsManager as IoMetricsManager, get_io_rate_limiter};
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
-use grpcio_health::HealthService;
-use kvproto::{deadlock::create_deadlock, diagnosticspb::create_diagnostics, kvrpcpb::ApiVersion};
-use pd_client::{PdClient, RpcClient};
+use health_controller::HealthController;
+use in_memory_engine::InMemoryEngineStatistics;
+use kvproto::{
+    brpb::create_backup, cdcpb_grpc::create_change_data, deadlock::create_deadlock,
+    debugpb_grpc::create_debug, diagnosticspb::create_diagnostics,
+    import_sstpb_grpc::create_import_sst, kvrpcpb::ApiVersion, logbackuppb::create_log_backup,
+    resource_usage_agent::create_resource_metering_pub_sub,
+};
+use pd_client::{
+    PdClient, RpcClient,
+    meta_storage::{Checked, Sourced},
+    metrics::STORE_SIZE_EVENT_INT_VEC,
+};
 use raft_log_engine::RaftLogEngine;
 use raftstore::{
+    RegionInfoAccessor,
     coprocessor::{
         BoxConsistencyCheckObserver, ConsistencyCheckMethod, CoprocessorHost,
         RawConsistencyCheckObserver,
     },
     store::{
-        memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE, CheckLeaderRunner, SplitConfigManager,
-        TabletSnapManager,
+        AutoSplitController, CheckLeaderRunner, SplitConfigManager, TabletSnapManager,
+        config::RaftstoreConfigManager, memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE,
     },
-    RegionInfoAccessor,
 };
-use raftstore_v2::{router::RaftRouter, StateStorage};
-use security::SecurityManager;
+use raftstore_v2::{
+    StateStorage,
+    router::{DiskSnapBackupHandle, PeerMsg, RaftRouter},
+};
+use resolved_ts::Task;
+use resource_control::{ResourceGroupManager, config::ResourceContrlCfgMgr};
+use security::{SecurityConfigManager, SecurityManager};
+use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
 use tikv::{
-    config::{ConfigController, DbConfigManger, DbType, LogConfigManager, TikvConfig},
+    config::{
+        ConfigController, ConfigurableDb, DbConfigManger, DbType, LogConfigManager,
+        MemoryConfigManager, TikvConfig, loop_registry,
+    },
     coprocessor::{self, MEMTRACE_ROOT as MEMTRACE_COPROCESSOR},
     coprocessor_v2,
-    read_pool::{build_yatp_read_pool, ReadPool},
+    import::{ImportSstService, SstImporter},
+    read_pool::{
+        ReadPool, ReadPoolConfigManager, UPDATE_EWMA_TIME_SLICE_INTERVAL, build_yatp_read_pool,
+    },
     server::{
+        CPU_CORES_QUOTA_GAUGE, KvEngineFactoryBuilder, MEMORY_LIMIT_GAUGE, NodeV2, RaftKv2, Server,
         config::{Config as ServerConfig, ServerConfigManager},
+        debug::Debugger,
+        debug2::DebuggerImplV2,
         gc_worker::{AutoGcConfig, GcWorker},
         lock_manager::LockManager,
         raftkv::ReplicaReadLockChecker,
         resolve,
-        service::DiagnosticsService,
+        service::{DebugService, DefaultGrpcMessageFilter, DiagnosticsService},
         status_server::StatusServer,
-        KvEngineFactoryBuilder, NodeV2, RaftKv2, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID,
-        GRPC_THREAD_PREFIX,
     },
     storage::{
-        self,
+        self, Engine, Storage,
+        config::EngineType,
         config_manager::StorageConfigManger,
+        kv::LocalTablets,
         mvcc::MvccConsistencyCheckObserver,
-        txn::flow_controller::{FlowController, TabletFlowController},
-        Engine, Storage,
+        txn::{
+            flow_controller::{FlowController, TabletFlowController},
+            txn_status_cache::TxnStatusCache,
+        },
     },
 };
+use tikv_alloc::{
+    add_thread_memory_accessor, remove_thread_memory_accessor, thread_allocate_exclusive_arena,
+};
 use tikv_util::{
-    check_environment_variables,
-    config::{ensure_dir_exist, RaftDataStateMachine, VersionTrack},
-    math::MovingAvgU32,
-    metrics::INSTANCE_BACKEND_CPU_QUOTA,
+    Either, check_environment_variables,
+    config::VersionTrack,
+    memory::MemoryQuota,
+    mpsc as TikvMpsc,
     quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
-    sys::{
-        cpu_time::ProcessStat, disk, path_in_diff_mount_point, register_memory_usage_high_water,
-        SysQuota,
-    },
+    sys::{SysQuota, disk, path_in_diff_mount_point, register_memory_usage_high_water},
     thread_group::GroupProperties,
+    thread_name_prefix::{
+        BACKGROUND_WORKER_THREAD, BACKUP_STREAM_THREAD, CDC_THREAD, CHECK_LEADER_THREAD,
+        DEBUGGER_THREAD, GRPC_SERVER_THREAD, PD_WORKER_THREAD, RESOLVED_TS_WORKER_THREAD,
+        SST_RECOVERY_THREAD, UNIFIED_READ_POOL_THREAD,
+    },
     time::{Instant, Monitor},
-    worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
-    Either,
+    worker::{Builder as WorkerBuilder, LazyWorker, Scheduler},
+    yatp_pool::CleanupMethod,
 };
 use tokio::runtime::Builder;
 
 use crate::{
-    memory::*, raft_engine_switch::*, server::Stop, setup::*, signal_handler,
+    common::{
+        ConfiguredRaftEngine, DiskUsageChecker, EngineMetricsManager, EnginesResourceInfo,
+        TikvServerCore,
+    },
+    memory::*,
+    setup::*,
+    signal_handler,
     tikv_util::sys::thread::ThreadBuildWrapper,
+    utils,
 };
 
-// minimum number of core kept for background requests
-const BACKGROUND_REQUEST_CORE_LOWER_BOUND: f64 = 1.0;
-// max ratio of core quota for background requests
-const BACKGROUND_REQUEST_CORE_MAX_RATIO: f64 = 0.95;
-// default ratio of core quota for background requests = core_number * 0.5
-const BACKGROUND_REQUEST_CORE_DEFAULT_RATIO: f64 = 0.5;
-// indication of TiKV instance is short of cpu
-const SYSTEM_BUSY_THRESHOLD: f64 = 0.80;
-// indication of TiKV instance in healthy state when cpu usage is in [0.5, 0.80)
-const SYSTEM_HEALTHY_THRESHOLD: f64 = 0.50;
-// pace of cpu quota adjustment
-const CPU_QUOTA_ADJUSTMENT_PACE: f64 = 200.0; // 0.2 vcpu
-
 #[inline]
-fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TikvConfig) {
-    let mut tikv = TikvServer::<CER>::init::<F>(config);
+fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(
+    config: TikvConfig,
+    service_event_tx: TikvMpsc::Sender<ServiceEvent>,
+    service_event_rx: TikvMpsc::Receiver<ServiceEvent>,
+) {
+    let mut tikv = TikvServer::<CER>::init::<F>(config, service_event_tx.clone());
 
     // Must be called after `TikvServer::init`.
-    let memory_limit = tikv.config.memory_usage_limit.unwrap().0;
-    let high_water = (tikv.config.memory_usage_high_water * memory_limit as f64) as u64;
+    let memory_limit = tikv.core.config.memory_usage_limit.unwrap().0;
+    let high_water = (tikv.core.config.memory_usage_high_water * memory_limit as f64) as u64;
+    let config_controller = tikv.cfg_controller.clone().unwrap();
     register_memory_usage_high_water(high_water);
 
-    tikv.check_conflict_addr();
-    tikv.init_fs();
-    tikv.init_yatp();
-    tikv.init_encryption();
-    let fetcher = tikv.init_io_utility();
-    let listener = tikv.init_flow_receiver();
+    tikv.core.check_conflict_addr();
+    tikv.core.init_fs();
+    tikv.core.init_yatp();
+    tikv.core.init_encryption();
+    let fetcher = tikv.core.init_io_utility();
+    let listener = tikv.core.init_flow_receiver();
     let engines_info = tikv.init_engines(listener);
     let server_config = tikv.init_servers::<F>();
     tikv.register_services();
     tikv.init_metrics_flusher(fetcher, engines_info);
+    tikv.init_cgroup_monitor();
     tikv.init_storage_stats_task();
+    tikv.init_max_ts_updater();
     tikv.run_server(server_config);
     tikv.run_status_server();
-    tikv.init_quota_tuning_task(tikv.quota_limiter.clone());
+    tikv.core.init_quota_tuning_task(tikv.quota_limiter.clone());
 
-    // TODO: support signal dump stats
-    signal_handler::wait_for_signal(
-        None as Option<Engines<RocksEngine, CER>>,
-        tikv.kv_statistics.clone(),
-        tikv.raft_statistics.clone(),
-    );
+    // Build a background worker for handling signals.
+    {
+        let kv_statistics = tikv.kv_statistics.clone();
+        let raft_statistics = tikv.raft_statistics.clone();
+        // TODO: support signal dump stats
+        std::thread::spawn(move || {
+            signal_handler::wait_for_signal(
+                None as Option<Engines<RocksEngine, CER>>,
+                kv_statistics,
+                raft_statistics,
+                config_controller,
+                Some(service_event_tx),
+            )
+        });
+    }
+    loop {
+        if let Ok(service_event) = service_event_rx.recv() {
+            match service_event {
+                ServiceEvent::PauseGrpc => {
+                    tikv.pause();
+                }
+                ServiceEvent::ResumeGrpc => {
+                    tikv.resume();
+                }
+                ServiceEvent::GracefulShutdown => {
+                    tikv.graceful_shutdown();
+                    break;
+                }
+                ServiceEvent::Exit => {
+                    break;
+                }
+            }
+        }
+    }
     tikv.stop();
 }
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
 /// case the server will be properly stopped.
-pub fn run_tikv(config: TikvConfig) {
-    // Sets the global logger ASAP.
-    // It is okay to use the config w/o `validate()`,
-    // because `initial_logger()` handles various conditions.
-    initial_logger(&config);
-
-    // Print version information.
-    let build_timestamp = option_env!("TIKV_BUILD_TIME");
-    tikv::log_tikv_info(build_timestamp);
-
+pub fn run_tikv(
+    config: TikvConfig,
+    service_event_tx: TikvMpsc::Sender<ServiceEvent>,
+    service_event_rx: TikvMpsc::Receiver<ServiceEvent>,
+) {
     // Print resource quota.
     SysQuota::log_quota();
     CPU_CORES_QUOTA_GAUGE.set(SysQuota::cpu_cores_quota());
@@ -178,51 +226,48 @@ pub fn run_tikv(config: TikvConfig) {
 
     dispatch_api_version!(config.storage.api_version(), {
         if !config.raft_engine.enable {
-            run_impl::<RocksEngine, API>(config)
+            run_impl::<RocksEngine, API>(config, service_event_tx, service_event_rx)
         } else {
-            run_impl::<RaftLogEngine, API>(config)
+            run_impl::<RaftLogEngine, API>(config, service_event_tx, service_event_rx)
         }
     })
 }
 
-const RESERVED_OPEN_FDS: u64 = 1000;
-
 const DEFAULT_METRICS_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
 const DEFAULT_MEMTRACE_FLUSH_INTERVAL: Duration = Duration::from_millis(1_000);
-const DEFAULT_ENGINE_METRICS_RESET_INTERVAL: Duration = Duration::from_millis(60_000);
 const DEFAULT_STORAGE_STATS_INTERVAL: Duration = Duration::from_secs(1);
-const DEFAULT_QUOTA_LIMITER_TUNE_INTERVAL: Duration = Duration::from_secs(5);
+const DEFAULT_CGROUP_MONITOR_INTERVAL: Duration = Duration::from_secs(10);
 
 /// A complete TiKV server.
 struct TikvServer<ER: RaftEngine> {
-    config: TikvConfig,
+    core: TikvServerCore,
     cfg_controller: Option<ConfigController>,
     security_mgr: Arc<SecurityManager>,
     pd_client: Arc<RpcClient>,
-    flow_info_sender: Option<mpsc::Sender<FlowInfo>>,
-    flow_info_receiver: Option<mpsc::Receiver<FlowInfo>>,
     router: Option<RaftRouter<RocksEngine, ER>>,
     node: Option<NodeV2<RpcClient, RocksEngine, ER>>,
     resolver: Option<resolve::PdStoreAddrResolver>,
-    store_path: PathBuf,
     snap_mgr: Option<TabletSnapManager>, // Will be filled in `init_servers`.
-    encryption_key_manager: Option<Arc<DataKeyManager>>,
     engines: Option<TikvEngines<RocksEngine, ER>>,
     kv_statistics: Option<Arc<RocksStatistics>>,
+    in_memory_engine_statistics: Option<Arc<InMemoryEngineStatistics>>,
     raft_statistics: Option<Arc<RocksStatistics>>,
     servers: Option<Servers<RocksEngine, ER>>,
     region_info_accessor: Option<RegionInfoAccessor>,
     coprocessor_host: Option<CoprocessorHost<RocksEngine>>,
-    to_stop: Vec<Box<dyn Stop>>,
-    lock_files: Vec<File>,
     concurrency_manager: ConcurrencyManager,
     env: Arc<Environment>,
-    background_worker: Worker,
-    check_leader_worker: Worker,
+    cdc_worker: Option<Box<LazyWorker<cdc::Task>>>,
+    cdc_scheduler: Option<Scheduler<cdc::Task>>,
+    cdc_memory_quota: Option<Arc<MemoryQuota>>,
+    backup_stream_scheduler: Option<tikv_util::worker::Scheduler<backup_stream::Task>>,
     sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
+    resource_manager: Option<Arc<ResourceGroupManager>>,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     tablet_registry: Option<TabletRegistry<RocksEngine>>,
+    resolved_ts_scheduler: Option<Scheduler<Task>>,
+    grpc_service_mgr: GrpcServiceManager,
 }
 
 struct TikvEngines<EK: KvEngine, ER: RaftEngine> {
@@ -233,6 +278,8 @@ struct TikvEngines<EK: KvEngine, ER: RaftEngine> {
 struct Servers<EK: KvEngine, ER: RaftEngine> {
     lock_mgr: LockManager,
     server: LocalServer<EK, ER>,
+    importer: Arc<SstImporter<EK>>,
+    rsmeter_pubsub_service: resource_metering::PubSubService,
 }
 
 type LocalServer<EK, ER> = Server<resolve::PdStoreAddrResolver, RaftKv2<EK, ER>>;
@@ -241,7 +288,10 @@ impl<ER> TikvServer<ER>
 where
     ER: RaftEngine,
 {
-    fn init<F: KvFormat>(mut config: TikvConfig) -> TikvServer<ER> {
+    fn init<F: KvFormat>(
+        mut config: TikvConfig,
+        tx: TikvMpsc::Sender<ServiceEvent>,
+    ) -> TikvServer<ER> {
         tikv_util::thread_group::set_properties(Some(GroupProperties::default()));
         // It is okay use pd config and security config before `init_config`,
         // because these configs must be provided by command line, and only
@@ -250,29 +300,55 @@ where
             SecurityManager::new(&config.security)
                 .unwrap_or_else(|e| fatal!("failed to create security manager: {}", e)),
         );
+        let props = tikv_util::thread_group::current_properties();
         let env = Arc::new(
             EnvBuilder::new()
                 .cq_count(config.server.grpc_concurrency)
-                .name_prefix(thd_name!(GRPC_THREAD_PREFIX))
+                .name_prefix(thd_name!(GRPC_SERVER_THREAD))
+                .after_start(move || {
+                    tikv_util::thread_group::set_properties(props.clone());
+
+                    // SAFETY: we will call `remove_thread_memory_accessor` at before_stop.
+                    unsafe { add_thread_memory_accessor() };
+                    thread_allocate_exclusive_arena().unwrap();
+                })
+                .before_stop(|| {
+                    remove_thread_memory_accessor();
+                })
                 .build(),
         );
-        let pd_client =
-            Self::connect_to_pd_cluster(&mut config, env.clone(), Arc::clone(&security_mgr));
+        let pd_client = TikvServerCore::connect_to_pd_cluster(
+            &mut config,
+            env.clone(),
+            Arc::clone(&security_mgr),
+        );
 
         // Initialize and check config
-        let cfg_controller = Self::init_config(config);
+        let cfg_controller = TikvServerCore::init_config(config);
         let config = cfg_controller.get_current();
 
         let store_path = Path::new(&config.storage.data_dir).to_owned();
 
         let thread_count = config.server.background_thread_count;
-        let background_worker = WorkerBuilder::new("background")
+        let background_worker = WorkerBuilder::new(BACKGROUND_WORKER_THREAD)
             .thread_count(thread_count)
             .create();
 
         // Initialize concurrency manager
         let latest_ts = block_on(pd_client.get_tso()).expect("failed to get timestamp from PD");
-        let concurrency_manager = ConcurrencyManager::new(latest_ts);
+        let concurrency_manager = ConcurrencyManager::new_with_config(
+            latest_ts,
+            (config.storage.max_ts.cache_sync_interval * LIMIT_VALID_TIME_MULTIPLIER).into(),
+            config
+                .storage
+                .max_ts
+                .action_on_invalid_update
+                .as_str()
+                .try_into()
+                .unwrap(),
+            Some(pd_client.clone()),
+            config.storage.max_ts.max_drift.0,
+        );
 
         // use different quota for front-end and back-end requests
         let quota_limiter = Arc::new(QuotaLimiter::new(
@@ -285,6 +361,20 @@ where
             config.quota.max_delay_duration,
             config.quota.enable_auto_tune,
         ));
+
+        let resource_manager = if config.resource_control.enabled {
+            let mgr = Arc::new(ResourceGroupManager::new(config.resource_control.clone()));
+            let io_bandwidth = config.storage.io_rate_limit.max_bytes_per_sec.0;
+            resource_control::start_periodic_tasks(
+                &mgr,
+                pd_client.clone(),
+                &background_worker,
+                io_bandwidth,
+            );
+            Some(mgr)
+        } else {
+            None
+        };
 
         let mut causal_ts_provider = None;
         if let ApiVersion::V2 = F::TAG {
@@ -302,279 +392,53 @@ where
             info!("Causal timestamp provider startup.");
         }
 
-        // Run check leader in a dedicate thread, because it is time sensitive
-        // and crucial to TiCDC replication lag.
-        let check_leader_worker = WorkerBuilder::new("check_leader").thread_count(1).create();
-
         TikvServer {
-            config,
+            core: TikvServerCore {
+                config,
+                store_path,
+                lock_files: vec![],
+                encryption_key_manager: None,
+                flow_info_sender: None,
+                flow_info_receiver: None,
+                to_stop: vec![],
+                background_worker,
+            },
             cfg_controller: Some(cfg_controller),
             security_mgr,
             pd_client,
             router: None,
             node: None,
             resolver: None,
-            store_path,
             snap_mgr: None,
-            encryption_key_manager: None,
             engines: None,
             kv_statistics: None,
+            in_memory_engine_statistics: None,
             raft_statistics: None,
             servers: None,
             region_info_accessor: None,
             coprocessor_host: None,
-            to_stop: vec![],
-            lock_files: vec![],
             concurrency_manager,
             env,
-            background_worker,
-            check_leader_worker,
-            flow_info_sender: None,
-            flow_info_receiver: None,
+            cdc_worker: None,
+            cdc_scheduler: None,
+            cdc_memory_quota: None,
+            backup_stream_scheduler: None,
             sst_worker: None,
             quota_limiter,
+            resource_manager,
             causal_ts_provider,
             tablet_registry: None,
+            resolved_ts_scheduler: None,
+            grpc_service_mgr: GrpcServiceManager::new(tx),
         }
-    }
-
-    /// Initialize and check the config
-    ///
-    /// Warnings are logged and fatal errors exist.
-    ///
-    /// #  Fatal errors
-    ///
-    /// - If `dynamic config` feature is enabled and failed to register config
-    ///   to PD
-    /// - If some critical configs (like data dir) are differrent from last run
-    /// - If the config can't pass `validate()`
-    /// - If the max open file descriptor limit is not high enough to support
-    ///   the main database and the raft database.
-    fn init_config(mut config: TikvConfig) -> ConfigController {
-        validate_and_persist_config(&mut config, true);
-
-        ensure_dir_exist(&config.storage.data_dir).unwrap();
-        if !config.rocksdb.wal_dir.is_empty() {
-            ensure_dir_exist(&config.rocksdb.wal_dir).unwrap();
-        }
-        if config.raft_engine.enable {
-            ensure_dir_exist(&config.raft_engine.config().dir).unwrap();
-        } else {
-            ensure_dir_exist(&config.raft_store.raftdb_path).unwrap();
-            if !config.raftdb.wal_dir.is_empty() {
-                ensure_dir_exist(&config.raftdb.wal_dir).unwrap();
-            }
-        }
-
-        check_system_config(&config);
-
-        tikv_util::set_panic_hook(config.abort_on_panic, &config.storage.data_dir);
-
-        info!(
-            "using config";
-            "config" => serde_json::to_string(&config).unwrap(),
-        );
-        if config.panic_when_unexpected_key_or_data {
-            info!("panic-when-unexpected-key-or-data is on");
-            tikv_util::set_panic_when_unexpected_key_or_data(true);
-        }
-
-        config.write_into_metrics();
-
-        ConfigController::new(config)
-    }
-
-    fn connect_to_pd_cluster(
-        config: &mut TikvConfig,
-        env: Arc<Environment>,
-        security_mgr: Arc<SecurityManager>,
-    ) -> Arc<RpcClient> {
-        let pd_client = Arc::new(
-            RpcClient::new(&config.pd, Some(env), security_mgr)
-                .unwrap_or_else(|e| fatal!("failed to create rpc client: {}", e)),
-        );
-
-        let cluster_id = pd_client
-            .get_cluster_id()
-            .unwrap_or_else(|e| fatal!("failed to get cluster id: {}", e));
-        if cluster_id == DEFAULT_CLUSTER_ID {
-            fatal!("cluster id can't be {}", DEFAULT_CLUSTER_ID);
-        }
-        config.server.cluster_id = cluster_id;
-        info!(
-            "connect to PD cluster";
-            "cluster_id" => cluster_id
-        );
-
-        pd_client
-    }
-
-    fn check_conflict_addr(&mut self) {
-        let cur_addr: SocketAddr = self
-            .config
-            .server
-            .addr
-            .parse()
-            .expect("failed to parse into a socket address");
-        let cur_ip = cur_addr.ip();
-        let cur_port = cur_addr.port();
-        let lock_dir = get_lock_dir();
-
-        let search_base = env::temp_dir().join(lock_dir);
-        file_system::create_dir_all(&search_base)
-            .unwrap_or_else(|_| panic!("create {} failed", search_base.display()));
-
-        for entry in file_system::read_dir(&search_base).unwrap().flatten() {
-            if !entry.file_type().unwrap().is_file() {
-                continue;
-            }
-            let file_path = entry.path();
-            let file_name = file_path.file_name().unwrap().to_str().unwrap();
-            if let Ok(addr) = file_name.replace('_', ":").parse::<SocketAddr>() {
-                let ip = addr.ip();
-                let port = addr.port();
-                if cur_port == port
-                    && (cur_ip == ip || cur_ip.is_unspecified() || ip.is_unspecified())
-                {
-                    let _ = try_lock_conflict_addr(file_path);
-                }
-            }
-        }
-
-        let cur_path = search_base.join(cur_addr.to_string().replace(':', "_"));
-        let cur_file = try_lock_conflict_addr(cur_path);
-        self.lock_files.push(cur_file);
-    }
-
-    fn init_fs(&mut self) {
-        let lock_path = self.store_path.join(Path::new("LOCK"));
-
-        let f = File::create(lock_path.as_path())
-            .unwrap_or_else(|e| fatal!("failed to create lock at {}: {}", lock_path.display(), e));
-        if f.try_lock_exclusive().is_err() {
-            fatal!(
-                "lock {} failed, maybe another instance is using this directory.",
-                self.store_path.display()
-            );
-        }
-        self.lock_files.push(f);
-
-        if tikv_util::panic_mark_file_exists(&self.config.storage.data_dir) {
-            fatal!(
-                "panic_mark_file {} exists, there must be something wrong with the db. \
-                     Do not remove the panic_mark_file and force the TiKV node to restart. \
-                     Please contact TiKV maintainers to investigate the issue. \
-                     If needed, use scale in and scale out to replace the TiKV node. \
-                     https://docs.pingcap.com/tidb/stable/scale-tidb-using-tiup",
-                tikv_util::panic_mark_file_path(&self.config.storage.data_dir).display()
-            );
-        }
-
-        // We truncate a big file to make sure that both raftdb and kvdb of TiKV have
-        // enough space to do compaction and region migration when TiKV recover.
-        // This file is created in data_dir rather than db_path, because we must not
-        // increase store size of db_path.
-        fn calculate_reserved_space(capacity: u64, reserved_size_from_config: u64) -> u64 {
-            let mut reserved_size = reserved_size_from_config;
-            if reserved_size_from_config != 0 {
-                reserved_size =
-                    cmp::max((capacity as f64 * 0.05) as u64, reserved_size_from_config);
-            }
-            reserved_size
-        }
-        fn reserve_physical_space(data_dir: &String, available: u64, reserved_size: u64) {
-            let path = Path::new(data_dir).join(file_system::SPACE_PLACEHOLDER_FILE);
-            if let Err(e) = file_system::remove_file(path) {
-                warn!("failed to remove space holder on starting: {}", e);
-            }
-
-            // place holder file size is 20% of total reserved space.
-            if available > reserved_size {
-                file_system::reserve_space_for_recover(data_dir, reserved_size / 5)
-                    .map_err(|e| panic!("Failed to reserve space for recovery: {}.", e))
-                    .unwrap();
-            } else {
-                warn!("no enough disk space left to create the place holder file");
-            }
-        }
-
-        let disk_stats = fs2::statvfs(&self.config.storage.data_dir).unwrap();
-        let mut capacity = disk_stats.total_space();
-        if self.config.raft_store.capacity.0 > 0 {
-            capacity = cmp::min(capacity, self.config.raft_store.capacity.0);
-        }
-        // reserve space for kv engine
-        let kv_reserved_size =
-            calculate_reserved_space(capacity, self.config.storage.reserve_space.0);
-        disk::set_disk_reserved_space(kv_reserved_size);
-        reserve_physical_space(
-            &self.config.storage.data_dir,
-            disk_stats.available_space(),
-            kv_reserved_size,
-        );
-
-        let raft_data_dir = if self.config.raft_engine.enable {
-            self.config.raft_engine.config().dir
-        } else {
-            self.config.raft_store.raftdb_path.clone()
-        };
-
-        let separated_raft_mount_path =
-            path_in_diff_mount_point(&self.config.storage.data_dir, &raft_data_dir);
-        if separated_raft_mount_path {
-            let raft_disk_stats = fs2::statvfs(&raft_data_dir).unwrap();
-            // reserve space for raft engine if raft engine is deployed separately
-            let raft_reserved_size = calculate_reserved_space(
-                raft_disk_stats.total_space(),
-                self.config.storage.reserve_raft_space.0,
-            );
-            disk::set_raft_disk_reserved_space(raft_reserved_size);
-            reserve_physical_space(
-                &raft_data_dir,
-                raft_disk_stats.available_space(),
-                raft_reserved_size,
-            );
-        }
-    }
-
-    fn init_yatp(&self) {
-        yatp::metrics::set_namespace(Some("tikv"));
-        prometheus::register(Box::new(yatp::metrics::MULTILEVEL_LEVEL0_CHANCE.clone())).unwrap();
-        prometheus::register(Box::new(yatp::metrics::MULTILEVEL_LEVEL_ELAPSED.clone())).unwrap();
-        prometheus::register(Box::new(yatp::metrics::TASK_EXEC_DURATION.clone())).unwrap();
-        prometheus::register(Box::new(yatp::metrics::TASK_POLL_DURATION.clone())).unwrap();
-        prometheus::register(Box::new(yatp::metrics::TASK_EXEC_TIMES.clone())).unwrap();
-    }
-
-    fn init_encryption(&mut self) {
-        self.encryption_key_manager = data_key_manager_from_config(
-            &self.config.security.encryption,
-            &self.config.storage.data_dir,
-        )
-        .map_err(|e| {
-            panic!(
-                "Encryption failed to initialize: {}. code: {}",
-                e,
-                e.error_code()
-            )
-        })
-        .unwrap()
-        .map(Arc::new);
-    }
-
-    fn init_flow_receiver(&mut self) -> engine_rocks::FlowListener {
-        let (tx, rx) = mpsc::channel();
-        self.flow_info_sender = Some(tx.clone());
-        self.flow_info_receiver = Some(rx);
-        engine_rocks::FlowListener::new(tx)
     }
 
     fn init_gc_worker(&mut self) -> GcWorker<RaftKv2<RocksEngine, ER>> {
         let engines = self.engines.as_ref().unwrap();
         let gc_worker = GcWorker::new(
             engines.engine.clone(),
-            self.flow_info_sender.take().unwrap(),
-            self.config.gc.clone(),
+            self.core.flow_info_sender.take().unwrap(),
+            self.core.config.gc.clone(),
             self.pd_client.feature_gate().clone(),
             Arc::new(self.region_info_accessor.clone().unwrap()),
         );
@@ -590,9 +454,9 @@ where
 
     fn init_servers<F: KvFormat>(&mut self) -> Arc<VersionTrack<ServerConfig>> {
         let flow_controller = Arc::new(FlowController::Tablet(TabletFlowController::new(
-            &self.config.storage.flow_control,
+            &self.core.config.storage.flow_control,
             self.tablet_registry.clone().unwrap(),
-            self.flow_info_receiver.take().unwrap(),
+            self.core.flow_info_receiver.take().unwrap(),
         )));
         let mut gc_worker = self.init_gc_worker();
         let ttl_checker = Box::new(LazyWorker::new("ttl-checker"));
@@ -608,63 +472,94 @@ where
         );
 
         cfg_controller.register(tikv::config::Module::Log, Box::new(LogConfigManager));
-
-        let lock_mgr = LockManager::new(&self.config.pessimistic_txn);
+        cfg_controller.register(tikv::config::Module::Memory, Box::new(MemoryConfigManager));
+        cfg_controller.register(
+            tikv::config::Module::Security,
+            Box::new(SecurityConfigManager),
+        );
+        let lock_mgr = LockManager::new(&self.core.config.pessimistic_txn);
         cfg_controller.register(
             tikv::config::Module::PessimisticTxn,
             Box::new(lock_mgr.config_manager()),
         );
         lock_mgr.register_detector_role_change_observer(self.coprocessor_host.as_mut().unwrap());
 
-        let engines = self.engines.as_ref().unwrap();
+        let engines = self.engines.as_mut().unwrap();
 
-        let pd_worker = LazyWorker::new("pd-worker");
-        let pd_sender = raftstore_v2::FlowReporter::new(pd_worker.scheduler());
+        let pd_worker = LazyWorker::new(PD_WORKER_THREAD);
+        let pd_sender = raftstore_v2::PdReporter::new(
+            pd_worker.scheduler(),
+            slog_global::borrow_global().new(slog::o!()),
+        );
 
-        let unified_read_pool = if self.config.readpool.is_unified_pool_enabled() {
+        let unified_read_pool = if self.core.config.readpool.is_unified_pool_enabled() {
+            let resource_ctl = self
+                .resource_manager
+                .as_ref()
+                .map(|m| m.derive_controller(UNIFIED_READ_POOL_THREAD.into(), true));
             Some(build_yatp_read_pool(
-                &self.config.readpool.unified,
+                &self.core.config.readpool.unified,
                 pd_sender.clone(),
                 engines.engine.clone(),
+                resource_ctl,
+                CleanupMethod::Remote(self.core.background_worker.remote()),
+                true,
             ))
         } else {
             None
         };
+        if let Some(unified_read_pool) = &unified_read_pool {
+            let handle = unified_read_pool.handle();
+            self.core.background_worker.spawn_interval_task(
+                UPDATE_EWMA_TIME_SLICE_INTERVAL,
+                move || {
+                    handle.update_ewma_time_slice();
+                },
+            );
+        }
 
         // The `DebugService` and `DiagnosticsService` will share the same thread pool
         let props = tikv_util::thread_group::current_properties();
         let debug_thread_pool = Arc::new(
             Builder::new_multi_thread()
-                .thread_name(thd_name!("debugger"))
+                .thread_name(thd_name!(DEBUGGER_THREAD))
                 .worker_threads(1)
-                .after_start_wrapper(move || {
-                    tikv_alloc::add_thread_memory_accessor();
-                    tikv_util::thread_group::set_properties(props.clone());
-                })
-                .before_stop_wrapper(tikv_alloc::remove_thread_memory_accessor)
+                .with_sys_and_custom_hooks(
+                    move || {
+                        tikv_util::thread_group::set_properties(props.clone());
+                    },
+                    || {},
+                )
                 .build()
                 .unwrap(),
         );
 
         // Start resource metering.
         let (recorder_notifier, collector_reg_handle, resource_tag_factory, recorder_worker) =
-            resource_metering::init_recorder(self.config.resource_metering.precision.as_millis());
-        self.to_stop.push(recorder_worker);
+            resource_metering::init_recorder(
+                self.core.config.resource_metering.precision.as_millis(),
+                self.core
+                    .config
+                    .resource_metering
+                    .enable_network_io_collection,
+            );
+        self.core.to_stop.push(recorder_worker);
         let (reporter_notifier, data_sink_reg_handle, reporter_worker) =
             resource_metering::init_reporter(
-                self.config.resource_metering.clone(),
-                collector_reg_handle,
+                self.core.config.resource_metering.clone(),
+                collector_reg_handle.clone(),
             );
-        self.to_stop.push(reporter_worker);
+        self.core.to_stop.push(reporter_worker);
         let (address_change_notifier, single_target_worker) = resource_metering::init_single_target(
-            self.config.resource_metering.receiver_address.clone(),
+            self.core.config.resource_metering.receiver_address.clone(),
             self.env.clone(),
-            data_sink_reg_handle,
+            data_sink_reg_handle.clone(),
         );
-        self.to_stop.push(single_target_worker);
+        self.core.to_stop.push(single_target_worker);
+        let rsmeter_pubsub_service = resource_metering::PubSubService::new(data_sink_reg_handle);
 
         let cfg_manager = resource_metering::ConfigManager::new(
-            self.config.resource_metering.clone(),
+            self.core.config.resource_metering.clone(),
             recorder_notifier,
             reporter_notifier,
             address_change_notifier,
@@ -673,21 +568,30 @@ where
             tikv::config::Module::ResourceMetering,
             Box::new(cfg_manager),
         );
+        if let Some(resource_ctl) = &self.resource_manager {
+            cfg_controller.register(
+                tikv::config::Module::ResourceControl,
+                Box::new(ResourceContrlCfgMgr::new(resource_ctl.get_config().clone())),
+            );
+        }
 
-        let storage_read_pool_handle = if self.config.readpool.storage.use_unified_pool() {
+        let storage_read_pool_handle = if self.core.config.readpool.storage.use_unified_pool() {
             unified_read_pool.as_ref().unwrap().handle()
         } else {
             let storage_read_pools = ReadPool::from(storage::build_read_pool(
-                &self.config.readpool.storage,
+                &self.core.config.readpool.storage,
                 pd_sender.clone(),
                 engines.engine.clone(),
             ));
             storage_read_pools.handle()
         };
+        let txn_status_cache = Arc::new(TxnStatusCache::new(
+            self.core.config.storage.txn_status_cache_capacity,
+        ));
 
         let storage = Storage::<_, _, F>::from_engine(
             engines.engine.clone(),
-            &self.config.storage,
+            &self.core.config.storage,
             storage_read_pool_handle,
             lock_mgr.clone(),
             self.concurrency_manager.clone(),
@@ -698,6 +602,11 @@ where
             Arc::clone(&self.quota_limiter),
             self.pd_client.feature_gate().clone(),
             self.causal_ts_provider.clone(),
+            self.resource_manager
+                .as_ref()
+                .map(|m| m.derive_controller("scheduler-worker-pool".to_owned(), true)),
+            self.resource_manager.clone(),
+            txn_status_cache.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
         cfg_controller.register(
@@ -707,12 +616,13 @@ where
                 ttl_scheduler,
                 flow_controller,
                 storage.get_scheduler(),
+                storage.get_concurrency_manager(),
             )),
         );
 
         let (resolver, state) = resolve::new_resolver(
             self.pd_client.clone(),
-            &self.background_worker,
+            &self.core.background_worker,
             storage.get_engine().raft_extension(),
         );
         self.resolver = Some(resolver);
@@ -722,51 +632,205 @@ where
 
         // Create snapshot manager, server.
         let snap_path = self
+            .core
             .store_path
             .join(Path::new("tablet_snap"))
             .to_str()
             .unwrap()
             .to_owned();
 
-        let snap_mgr = match TabletSnapManager::new(&snap_path) {
-            Ok(mgr) => mgr,
-            Err(e) => fatal!("failed to create snapshot manager at {}: {}", snap_path, e),
-        };
+        let snap_mgr =
+            match TabletSnapManager::new(&snap_path, self.core.encryption_key_manager.clone()) {
+                Ok(mgr) => mgr,
+                Err(e) => fatal!("failed to create snapshot manager at {}: {}", snap_path, e),
+            };
 
         // Create coprocessor endpoint.
-        let cop_read_pool_handle = if self.config.readpool.coprocessor.use_unified_pool() {
+        let cop_read_pool_handle = if self.core.config.readpool.coprocessor.use_unified_pool() {
             unified_read_pool.as_ref().unwrap().handle()
         } else {
             let cop_read_pools = ReadPool::from(coprocessor::readpool_impl::build_read_pool(
-                &self.config.readpool.coprocessor,
+                &self.core.config.readpool.coprocessor,
                 pd_sender,
                 engines.engine.clone(),
             ));
             cop_read_pools.handle()
         };
 
+        let mut unified_read_pool_scale_receiver = None;
+        if self.core.config.readpool.is_unified_pool_enabled() {
+            let (unified_read_pool_scale_notifier, rx) = mpsc::sync_channel(10);
+            cfg_controller.register(
+                tikv::config::Module::Readpool,
+                Box::new(ReadPoolConfigManager::new(
+                    unified_read_pool.as_ref().unwrap().handle(),
+                    unified_read_pool_scale_notifier,
+                    &self.core.background_worker,
+                    self.core.config.readpool.unified.min_thread_count,
+                    self.core.config.readpool.unified.max_thread_count,
+                    self.core.config.readpool.unified.auto_adjust_pool_size,
+                    self.core.config.readpool.unified.cpu_threshold,
+                )),
+            );
+            unified_read_pool_scale_receiver = Some(rx);
+        }
+
+        // Run check leader in a dedicate thread, because it is time sensitive
+        // and crucial to TiCDC replication lag.
+        let check_leader_worker = Box::new(
+            WorkerBuilder::new(CHECK_LEADER_THREAD)
+                .thread_count(1)
+                .create(),
+        );
+        // Create check leader runer.
         let check_leader_runner = CheckLeaderRunner::new(
             self.router.as_ref().unwrap().store_meta().clone(),
             self.coprocessor_host.clone().unwrap(),
         );
-        let check_leader_scheduler = self
-            .check_leader_worker
-            .start("check-leader", check_leader_runner);
+        let check_leader_scheduler =
+            check_leader_worker.start(CHECK_LEADER_THREAD, check_leader_runner);
+        self.core.to_stop.push(check_leader_worker);
 
-        let server_config = Arc::new(VersionTrack::new(self.config.server.clone()));
+        // Create cdc worker.
+        let mut cdc_worker = self.cdc_worker.take().unwrap();
+        let cdc_scheduler = self.cdc_scheduler.clone().unwrap();
 
-        self.config
+        let cdc_memory_quota = self.cdc_memory_quota.as_ref().unwrap();
+        // Register cdc observer.
+        let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone(), cdc_memory_quota.clone());
+        cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+        // Register cdc config manager.
+        cfg_controller.register(
+            tikv::config::Module::Cdc,
+            Box::new(CdcConfigManager(cdc_scheduler.clone())),
+        );
+        // Start cdc endpoint.
+        let cdc_endpoint = cdc::Endpoint::new(
+            self.core.config.server.cluster_id,
+            &self.core.config.cdc,
+            &self.core.config.resolved_ts,
+            self.core.config.storage.engine == EngineType::RaftKv2,
+            self.core.config.storage.api_version(),
+            self.pd_client.clone(),
+            cdc_scheduler,
+            self.router.clone().unwrap(),
+            LocalTablets::Registry(self.tablet_registry.as_ref().unwrap().clone()),
+            cdc_ob,
+            self.router.as_ref().unwrap().store_meta().clone(),
+            self.concurrency_manager.clone(),
+            self.env.clone(),
+            self.security_mgr.clone(),
+            cdc_memory_quota.clone(),
+            self.causal_ts_provider.clone(),
+        );
+        cdc_worker.start_with_timer(cdc_endpoint);
+        self.core.to_stop.push(cdc_worker);
+
+        // Create resolved ts.
+        if self.core.config.resolved_ts.enable {
+            let mut rts_worker = Box::new(LazyWorker::new(RESOLVED_TS_WORKER_THREAD));
+            // Register the resolved ts observer
+            let resolved_ts_ob = resolved_ts::Observer::new(rts_worker.scheduler());
+            resolved_ts_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+            // Register config manager for resolved ts worker
+            cfg_controller.register(
+                tikv::config::Module::ResolvedTs,
+                Box::new(resolved_ts::ResolvedTsConfigManager::new(
+                    rts_worker.scheduler(),
+                )),
+            );
+            let rts_endpoint = resolved_ts::Endpoint::new(
+                &self.core.config.resolved_ts,
+                rts_worker.scheduler(),
+                self.router.clone().unwrap(),
+                self.router.as_ref().unwrap().store_meta().clone(),
+                self.pd_client.clone(),
+                self.concurrency_manager.clone(),
+                self.env.clone(),
+                self.security_mgr.clone(),
+                storage.get_scheduler().get_txn_status_cache(),
+            );
+            self.resolved_ts_scheduler = Some(rts_worker.scheduler());
+            rts_worker.start_with_timer(rts_endpoint);
+            self.core.to_stop.push(rts_worker);
+        }
+
+        // Start backup stream
+        self.backup_stream_scheduler = if self.core.config.log_backup.enable {
+            // Create backup stream.
+            let mut backup_stream_worker = Box::new(LazyWorker::new(BACKUP_STREAM_THREAD));
+            let backup_stream_scheduler = backup_stream_worker.scheduler();
+
+            // Register backup-stream observer.
+            let backup_stream_ob = BackupStreamObserver::new(backup_stream_scheduler.clone());
+            backup_stream_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+            // Register config manager.
+            cfg_controller.register(
+                tikv::config::Module::BackupStream,
+                Box::new(BackupStreamConfigManager::new(
+                    backup_stream_worker.scheduler(),
+                    self.core.config.log_backup.clone(),
+                )),
+            );
+
+            // build stream backup encryption manager
+            let backup_encryption_manager =
+                utils::build_backup_encryption_manager(self.core.encryption_key_manager.clone())
+                    .expect("failed to build backup encryption manager in server");
+
+            let backup_stream_endpoint = backup_stream::Endpoint::new(
+                self.node.as_ref().unwrap().id(),
+                PdStore::new(Checked::new(Sourced::new(
+                    Arc::clone(&self.pd_client),
+                    pd_client::meta_storage::Source::LogBackup,
+                ))),
+                self.core.config.log_backup.clone(),
+                self.core.config.resolved_ts.clone(),
+                backup_stream_scheduler.clone(),
+                backup_stream_ob,
+                self.region_info_accessor.as_ref().unwrap().clone(),
+                self.router.clone().unwrap(),
+                self.pd_client.clone(),
+                self.concurrency_manager.clone(),
+                BackupStreamResolver::V2(self.router.clone().unwrap(), PhantomData),
+                backup_encryption_manager.clone(),
+                txn_status_cache.clone(),
+            );
+            backup_stream_worker.start(backup_stream_endpoint);
+            self.core.to_stop.push(backup_stream_worker);
+            Some(backup_stream_scheduler)
+        } else {
+            None
+        };
+
+        let server_config = Arc::new(VersionTrack::new(self.core.config.server.clone()));
+
+        self.core.config.raft_store.optimize_for(true);
+        self.core
+            .config
             .raft_store
             .validate(
-                self.config.coprocessor.region_split_size,
-                self.config.coprocessor.enable_region_bucket,
-                self.config.coprocessor.region_bucket_size,
+                self.core.config.coprocessor.region_split_size(),
+                self.core.config.coprocessor.enable_region_bucket(),
+                self.core.config.coprocessor.region_bucket_size,
+                true,
             )
             .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));
-        let raft_store = Arc::new(VersionTrack::new(self.config.raft_store.clone()));
-        let health_service = HealthService::default();
+        let raft_store = Arc::new(VersionTrack::new(self.core.config.raft_store.clone()));
+        let health_controller = HealthController::new();
 
         let node = self.node.as_ref().unwrap();
+
+        // Create coprocessor endpoint.
+        let copr = coprocessor::Endpoint::new(
+            &server_config.value(),
+            cop_read_pool_handle,
+            self.concurrency_manager.clone(),
+            resource_tag_factory,
+            self.quota_limiter.clone(),
+            self.resource_manager.clone(),
+        );
+        let copr_config_manager = copr.config_manager();
 
         self.snap_mgr = Some(snap_mgr.clone());
         // Create server
@@ -775,14 +839,8 @@ where
             &server_config,
             &self.security_mgr,
             storage,
-            coprocessor::Endpoint::new(
-                &server_config.value(),
-                cop_read_pool_handle,
-                self.concurrency_manager.clone(),
-                resource_tag_factory,
-                Arc::clone(&self.quota_limiter),
-            ),
-            coprocessor_v2::Endpoint::new(&self.config.coprocessor_v2),
+            copr,
+            coprocessor_v2::Endpoint::new(&self.core.config.coprocessor_v2),
             self.resolver.clone().unwrap(),
             Either::Right(snap_mgr.clone()),
             gc_worker.clone(),
@@ -790,7 +848,12 @@ where
             self.env.clone(),
             unified_read_pool,
             debug_thread_pool,
-            health_service,
+            health_controller,
+            self.resource_manager.clone(),
+            Arc::new(DefaultGrpcMessageFilter::new(
+                server_config.value().reject_messages_on_memory_ratio,
+            )),
+            self.core.background_worker.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
         cfg_controller.register(
@@ -799,16 +862,60 @@ where
                 server.get_snap_worker_scheduler(),
                 server_config.clone(),
                 server.get_grpc_mem_quota().clone(),
+                copr_config_manager,
             )),
         );
 
+        let import_path = self.core.store_path.join("import");
+        let mut importer = SstImporter::new(
+            &self.core.config.import,
+            import_path,
+            self.core.encryption_key_manager.clone(),
+            self.core.config.storage.api_version(),
+            true,
+        )
+        .unwrap();
+        for (cf_name, compression_type) in &[
+            (
+                CF_DEFAULT,
+                self.core
+                    .config
+                    .rocksdb
+                    .defaultcf
+                    .bottommost_level_compression,
+            ),
+            (
+                CF_WRITE,
+                self.core
+                    .config
+                    .rocksdb
+                    .writecf
+                    .bottommost_level_compression,
+            ),
+        ] {
+            importer.set_compression_type(cf_name, from_rocks_compression_type(*compression_type));
+        }
+        let importer = Arc::new(importer);
+
+        // V2 starts split-check worker within raftstore.
+
         let split_config_manager =
-            SplitConfigManager::new(Arc::new(VersionTrack::new(self.config.split.clone())));
-        cfg_controller.register(tikv::config::Module::Split, Box::new(split_config_manager));
+            SplitConfigManager::new(Arc::new(VersionTrack::new(self.core.config.split.clone())));
+        cfg_controller.register(
+            tikv::config::Module::Split,
+            Box::new(split_config_manager.clone()),
+        );
+
+        let auto_split_controller = AutoSplitController::new(
+            split_config_manager,
+            self.core.config.server.grpc_concurrency,
+            self.core.config.readpool.unified.max_thread_count,
+            unified_read_pool_scale_receiver,
+        );
 
         // `ConsistencyCheckObserver` must be registered before `Node::start`.
         let safe_point = Arc::new(AtomicU64::new(0));
-        let observer = match self.config.coprocessor.consistency_check_method {
+        let observer = match self.core.config.coprocessor.consistency_check_method {
             ConsistencyCheckMethod::Mvcc => BoxConsistencyCheckObserver::new(
                 MvccConsistencyCheckObserver::new(safe_point.clone()),
             ),
@@ -834,12 +941,25 @@ where
                 self.concurrency_manager.clone(),
                 self.causal_ts_provider.clone(),
                 self.coprocessor_host.clone().unwrap(),
-                self.background_worker.clone(),
+                auto_split_controller,
+                collector_reg_handle,
+                self.core.background_worker.clone(),
                 pd_worker,
-                raft_store,
+                raft_store.clone(),
                 &state,
+                importer.clone(),
+                self.core.encryption_key_manager.clone(),
+                self.grpc_service_mgr.clone(),
             )
             .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
+
+        cfg_controller.register(
+            tikv::config::Module::Raftstore,
+            Box::new(RaftstoreConfigManager::new(
+                self.node.as_mut().unwrap().refresh_config_scheduler(),
+                raft_store,
+            )),
+        );
 
         // Start auto gc. Must after `Node::start` because `node_id` is initialized
         // there.
@@ -850,27 +970,178 @@ where
             store_id,
         );
         gc_worker
-            .start(store_id)
+            .start(store_id, self.coprocessor_host.as_ref().cloned().unwrap())
             .unwrap_or_else(|e| fatal!("failed to start gc worker: {}", e));
         if let Err(e) = gc_worker.start_auto_gc(auto_gc_config, safe_point) {
             fatal!("failed to start auto_gc on storage, error: {}", e);
         }
 
-        initial_metric(&self.config.metric);
+        initial_metric(&self.core.config.metric);
 
-        self.servers = Some(Servers { lock_mgr, server });
+        self.servers = Some(Servers {
+            lock_mgr,
+            server,
+            importer,
+            rsmeter_pubsub_service,
+        });
 
         server_config
     }
 
+    fn init_max_ts_updater(&self) {
+        let cm = self.concurrency_manager.clone();
+        let pd_client = self.pd_client.clone();
+
+        let max_ts_sync_interval = self.core.config.storage.max_ts.cache_sync_interval.into();
+        self.core
+            .background_worker
+            .spawn_interval_async_task(max_ts_sync_interval, move || {
+                let cm = cm.clone();
+                let pd_client = pd_client.clone();
+
+                async move {
+                    let pd_tso = pd_client.get_tso().await;
+                    if let Ok(ts) = pd_tso {
+                        cm.set_max_ts_limit(ts);
+                    } else {
+                        warn!("failed to get tso from pd in background");
+                    }
+                }
+            });
+    }
+
     fn register_services(&mut self) {
         let servers = self.servers.as_mut().unwrap();
+        let engines = self.engines.as_ref().unwrap();
+
+        // Backup service.
+        let mut backup_worker = Box::new(self.core.background_worker.lazy_build("backup-endpoint"));
+        let backup_scheduler = backup_worker.scheduler();
+        let backup_service = backup::Service::new(
+            backup_scheduler,
+            Env::new(DiskSnapBackupHandle, Default::default(), None),
+        );
+        if servers
+            .server
+            .register_service(create_backup(backup_service))
+            .is_some()
+        {
+            fatal!("failed to register backup service");
+        }
+
+        let backup_endpoint = backup::Endpoint::new(
+            self.node.as_ref().unwrap().id(),
+            engines.engine.clone(),
+            self.region_info_accessor.clone().unwrap(),
+            LocalTablets::Registry(self.tablet_registry.as_ref().unwrap().clone()),
+            self.core.config.backup.clone(),
+            self.concurrency_manager.clone(),
+            self.core.config.storage.api_version(),
+            self.causal_ts_provider.clone(),
+            self.resource_manager.clone(),
+        );
+        self.cfg_controller.as_mut().unwrap().register(
+            tikv::config::Module::Backup,
+            Box::new(backup_endpoint.get_config_manager()),
+        );
+        backup_worker.start(backup_endpoint);
+
+        // Import SST service.
+        let region_info_accessor = self.region_info_accessor.as_ref().unwrap().clone();
+        let import_service = ImportSstService::new(
+            self.core.config.import.clone(),
+            self.core.config.raft_store.raft_entry_max_size,
+            engines.engine.clone(),
+            LocalTablets::Registry(self.tablet_registry.as_ref().unwrap().clone()),
+            servers.importer.clone(),
+            Some(self.router.as_ref().unwrap().store_meta().clone()),
+            self.resource_manager.clone(),
+            Arc::new(region_info_accessor),
+            Default::default(),
+        );
+        let import_cfg_mgr = import_service.get_config_manager();
+
+        if servers
+            .server
+            .register_service(create_import_sst(import_service))
+            .is_some()
+        {
+            fatal!("failed to register import service");
+        }
+
+        if let Some(sched) = self.backup_stream_scheduler.take() {
+            let pitr_service = backup_stream::BackupStreamGrpcService::new(sched);
+            if servers
+                .server
+                .register_service(create_log_backup(pitr_service))
+                .is_some()
+            {
+                fatal!("failed to register log backup service");
+            }
+        }
+
+        self.cfg_controller
+            .as_mut()
+            .unwrap()
+            .register(tikv::config::Module::Import, Box::new(import_cfg_mgr));
+
+        let mut debugger = DebuggerImplV2::new(
+            self.tablet_registry.clone().unwrap(),
+            self.engines.as_ref().unwrap().raft_engine.clone(),
+            self.cfg_controller.as_ref().unwrap().clone(),
+        );
+        debugger.set_kv_statistics(self.kv_statistics.clone());
+        debugger.set_raft_statistics(self.raft_statistics.clone());
+
+        // Debug service.
+        let resolved_ts_scheduler = Arc::new(self.resolved_ts_scheduler.clone());
+        let debug_service = DebugService::new(
+            debugger,
+            servers.server.get_debug_thread_pool().clone(),
+            engines.engine.raft_extension(),
+            self.router.as_ref().unwrap().store_meta().clone(),
+            Arc::new(
+                move |region_id, log_locks, min_start_ts, callback| -> bool {
+                    if let Some(s) = resolved_ts_scheduler.as_ref() {
+                        let res = s.schedule(Task::GetDiagnosisInfo {
+                            region_id,
+                            log_locks,
+                            min_start_ts,
+                            callback,
+                        });
+                        res.is_ok()
+                    } else {
+                        false
+                    }
+                },
+            ),
+        );
+        if servers
+            .server
+            .register_service(create_debug(debug_service))
+            .is_some()
+        {
+            fatal!("failed to register debug service");
+        }
+
+        let cdc_service = cdc::Service::new(
+            self.cdc_scheduler.as_ref().unwrap().clone(),
+            self.cdc_memory_quota.as_ref().unwrap().clone(),
+            Arc::new(self.core.background_worker.clone()),
+        );
+        if servers
+            .server
+            .register_service(create_change_data(cdc_service))
+            .is_some()
+        {
+            fatal!("failed to register cdc service");
+        }
 
         // Create Diagnostics service
         let diag_service = DiagnosticsService::new(
             servers.server.get_debug_thread_pool().clone(),
-            self.config.log.file.filename.clone(),
-            self.config.slow_log_file.clone(),
+            self.core.config.log.file.filename.clone(),
+            self.core.config.slow_log_file.clone(),
         );
         if servers
             .server
@@ -896,31 +1167,19 @@ where
                 self.pd_client.clone(),
                 self.resolver.clone().unwrap(),
                 self.security_mgr.clone(),
-                &self.config.pessimistic_txn,
+                &self.core.config.pessimistic_txn,
             )
             .unwrap_or_else(|e| fatal!("failed to start lock manager: {}", e));
-    }
 
-    fn init_io_utility(&mut self) -> BytesFetcher {
-        let stats_collector_enabled = file_system::init_io_stats_collector()
-            .map_err(|e| warn!("failed to init I/O stats collector: {}", e))
-            .is_ok();
-
-        let limiter = Arc::new(
-            self.config
-                .storage
-                .io_rate_limit
-                .build(!stats_collector_enabled /* enable_statistics */),
-        );
-        let fetcher = if stats_collector_enabled {
-            BytesFetcher::FromIoStatsCollector()
-        } else {
-            BytesFetcher::FromRateLimiter(limiter.statistics().unwrap())
-        };
-        // Set up IO limiter even when rate limit is disabled, so that rate limits can
-        // be dynamically applied later on.
-        set_io_rate_limiter(Some(limiter));
-        fetcher
+        if servers
+            .server
+            .register_service(create_resource_metering_pub_sub(
+                servers.rsmeter_pubsub_service.clone(),
+            ))
+            .is_some()
+        {
+            warn!("failed to register resource metering pubsub service");
+        }
     }
 
     fn init_metrics_flusher(
@@ -931,7 +1190,8 @@ where
         let mut engine_metrics = EngineMetricsManager::<RocksEngine, ER>::new(
             self.tablet_registry.clone().unwrap(),
             self.kv_statistics.clone(),
-            self.config.rocksdb.titan.enabled,
+            self.in_memory_engine_statistics.clone(),
+            self.core.config.rocksdb.titan.enabled.is_some_and(|v| v),
             self.engines.as_ref().unwrap().raft_engine.clone(),
             self.raft_statistics.clone(),
         );
@@ -944,13 +1204,15 @@ where
         // `cached_latest_tablets` is passed to `update` to avoid memory
         // allocation each time when calling `update`.
         let mut cached_latest_tablets = HashMap::default();
-        self.background_worker
-            .spawn_interval_task(DEFAULT_METRICS_FLUSH_INTERVAL, move || {
+        self.core.background_worker.spawn_interval_task(
+            DEFAULT_METRICS_FLUSH_INTERVAL,
+            move || {
                 let now = Instant::now();
                 engine_metrics.flush(now);
                 io_metrics.flush(now);
                 engines_info_clone.update(now, &mut cached_latest_tablets);
-            });
+            },
+        );
         if let Some(limiter) = get_io_rate_limiter() {
             limiter.set_low_priority_io_adjustor_if_needed(Some(engines_info));
         }
@@ -958,140 +1220,67 @@ where
         let mut mem_trace_metrics = MemoryTraceManager::default();
         mem_trace_metrics.register_provider(MEMTRACE_RAFTSTORE.clone());
         mem_trace_metrics.register_provider(MEMTRACE_COPROCESSOR.clone());
-        self.background_worker
-            .spawn_interval_task(DEFAULT_MEMTRACE_FLUSH_INTERVAL, move || {
+        self.core.background_worker.spawn_interval_task(
+            DEFAULT_MEMTRACE_FLUSH_INTERVAL,
+            move || {
                 let now = Instant::now();
                 mem_trace_metrics.flush(now);
-            });
-    }
-
-    // Only background cpu quota tuning is implemented at present. iops and frontend
-    // quota tuning is on the way
-    fn init_quota_tuning_task(&self, quota_limiter: Arc<QuotaLimiter>) {
-        // No need to do auto tune when capacity is really low
-        if SysQuota::cpu_cores_quota() * BACKGROUND_REQUEST_CORE_MAX_RATIO
-            < BACKGROUND_REQUEST_CORE_LOWER_BOUND
-        {
-            return;
-        };
-
-        // Determine the base cpu quota
-        let base_cpu_quota =
-            // if cpu quota is not specified, start from optimistic case
-            if quota_limiter.cputime_limiter(false).is_infinite() {
-                1000_f64
-                    * f64::max(
-                        BACKGROUND_REQUEST_CORE_LOWER_BOUND,
-                        SysQuota::cpu_cores_quota() * BACKGROUND_REQUEST_CORE_DEFAULT_RATIO,
-                    )
-            } else {
-                quota_limiter.cputime_limiter(false) / 1000_f64
-            };
-
-        // Calculate the celling and floor quota
-        let celling_quota = f64::min(
-            base_cpu_quota * 2.0,
-            1_000_f64 * SysQuota::cpu_cores_quota() * BACKGROUND_REQUEST_CORE_MAX_RATIO,
-        );
-        let floor_quota = f64::max(
-            base_cpu_quota * 0.5,
-            1_000_f64 * BACKGROUND_REQUEST_CORE_LOWER_BOUND,
-        );
-
-        let mut proc_stats: ProcessStat = ProcessStat::cur_proc_stat().unwrap();
-        self.background_worker.spawn_interval_task(
-            DEFAULT_QUOTA_LIMITER_TUNE_INTERVAL,
-            move || {
-                if quota_limiter.auto_tune_enabled() {
-                    let cputime_limit = quota_limiter.cputime_limiter(false);
-                    let old_quota = if cputime_limit.is_infinite() {
-                        base_cpu_quota
-                    } else {
-                        cputime_limit / 1000_f64
-                    };
-                    let cpu_usage = match proc_stats.cpu_usage() {
-                        Ok(r) => r,
-                        Err(_e) => 0.0,
-                    };
-                    // Try tuning quota when cpu_usage is correctly collected.
-                    // rule based tuning:
-                    // - if instance is busy, shrink cpu quota for analyze by one quota pace until
-                    //   lower bound is hit;
-                    // - if instance cpu usage is healthy, no op;
-                    // - if instance is idle, increase cpu quota by one quota pace  until upper
-                    //   bound is hit.
-                    if cpu_usage > 0.0f64 {
-                        let mut target_quota = old_quota;
-
-                        let cpu_util = cpu_usage / SysQuota::cpu_cores_quota();
-                        if cpu_util >= SYSTEM_BUSY_THRESHOLD {
-                            target_quota =
-                                f64::max(target_quota - CPU_QUOTA_ADJUSTMENT_PACE, floor_quota);
-                        } else if cpu_util < SYSTEM_HEALTHY_THRESHOLD {
-                            target_quota =
-                                f64::min(target_quota + CPU_QUOTA_ADJUSTMENT_PACE, celling_quota);
-                        }
-
-                        if old_quota != target_quota {
-                            quota_limiter.set_cpu_time_limit(target_quota as usize, false);
-                            debug!(
-                                "cpu_time_limiter tuned for backend request";
-                                "cpu_util" => ?cpu_util,
-                                "new quota" => ?target_quota);
-                            INSTANCE_BACKEND_CPU_QUOTA.set(target_quota as i64);
-                        }
-                    }
-                }
             },
         );
     }
 
     fn init_storage_stats_task(&self) {
-        let config_disk_capacity: u64 = self.config.raft_store.capacity.0;
-        let data_dir = self.config.storage.data_dir.clone();
-        let store_path = self.store_path.clone();
+        let config_disk_capacity: u64 = self.core.config.raft_store.capacity.0;
+        let data_dir = self.core.config.storage.data_dir.clone();
+        let store_path = self.core.store_path.clone();
         let snap_mgr = self.snap_mgr.clone().unwrap();
         let reserve_space = disk::get_disk_reserved_space();
         let reserve_raft_space = disk::get_raft_disk_reserved_space();
-        if reserve_space == 0 && reserve_raft_space == 0 {
-            info!("disk space checker not enabled");
-            return;
+        let need_update_disk_status = reserve_space != 0 || reserve_raft_space != 0;
+        if !need_update_disk_status {
+            info!("ignore updating disk status as no reserve space is set");
         }
         let raft_engine = self.engines.as_ref().unwrap().raft_engine.clone();
         let tablet_registry = self.tablet_registry.clone().unwrap();
         let raft_path = raft_engine.get_engine_path().to_string();
         let separated_raft_mount_path =
             path_in_diff_mount_point(raft_path.as_str(), tablet_registry.tablet_root());
-        let raft_almost_full_threshold = reserve_raft_space;
-        let raft_already_full_threshold = reserve_raft_space / 2;
-
-        let almost_full_threshold = reserve_space;
-        let already_full_threshold = reserve_space / 2;
-        fn calculate_disk_usage(a: disk::DiskUsage, b: disk::DiskUsage) -> disk::DiskUsage {
-            match (a, b) {
-                (disk::DiskUsage::AlreadyFull, _) => disk::DiskUsage::AlreadyFull,
-                (_, disk::DiskUsage::AlreadyFull) => disk::DiskUsage::AlreadyFull,
-                (disk::DiskUsage::AlmostFull, _) => disk::DiskUsage::AlmostFull,
-                (_, disk::DiskUsage::AlmostFull) => disk::DiskUsage::AlmostFull,
-                (disk::DiskUsage::Normal, disk::DiskUsage::Normal) => disk::DiskUsage::Normal,
-            }
-        }
-        self.background_worker
+        // If the auxiliary directory of raft engine is specified, it's needed to be
+        // checked. Otherwise, it's not needed to be checked. And as the configuration
+        // is static, it's safe to check it only once.
+        let raft_auxiliay_path = if self.core.config.raft_engine.enable {
+            self.core.config.raft_engine.config().spill_dir.clone()
+        } else {
+            None
+        };
+        let (separated_raft_auxillay_mount_path, separated_raft_auxiliary_with_kvdb) =
+            raft_auxiliay_path
+                .as_ref()
+                .map(|path| {
+                    let seperated_with_kvdb =
+                        path_in_diff_mount_point(path.as_str(), tablet_registry.tablet_root());
+                    let seperated_with_raft =
+                        path_in_diff_mount_point(path.as_str(), raft_path.as_str());
+                    (
+                        seperated_with_kvdb && seperated_with_raft,
+                        seperated_with_kvdb,
+                    )
+                })
+                .unwrap_or((false, false));
+        let disk_usage_checker = DiskUsageChecker::new(
+            store_path.as_path().to_str().unwrap().to_string(),
+            raft_path,
+            raft_auxiliay_path,
+            separated_raft_mount_path,
+            separated_raft_auxillay_mount_path,
+            separated_raft_auxiliary_with_kvdb,
+            reserve_space,
+            reserve_raft_space,
+            config_disk_capacity,
+        );
+        self.core.background_worker
             .spawn_interval_task(DEFAULT_STORAGE_STATS_INTERVAL, move || {
-                let disk_stats = match fs2::statvfs(&store_path) {
-                    Err(e) => {
-                        error!(
-                            "get disk stat for kv store failed";
-                            "kv path" => store_path.to_str(),
-                            "err" => ?e
-                        );
-                        return;
-                    }
-                    Ok(stats) => stats,
-                };
-                let disk_cap = disk_stats.total_space();
                 let snap_size = snap_mgr.total_snap_size().unwrap();
-
                 let mut kv_size = 0;
                 tablet_registry.for_each_opened_tablet(|_, cached| {
                     if let Some(tablet) = cached.latest() {
@@ -1099,42 +1288,12 @@ where
                     }
                     true
                 });
-
                 let raft_size = raft_engine
                     .get_engine_size()
                     .expect("get raft engine size");
-
-                let mut raft_disk_status = disk::DiskUsage::Normal;
-                if separated_raft_mount_path && reserve_raft_space != 0 {
-                    let raft_disk_stats = match fs2::statvfs(&raft_path) {
-                        Err(e) => {
-                            error!(
-                                "get disk stat for raft engine failed";
-                                "raft engine path" => raft_path.clone(),
-                                "err" => ?e
-                            );
-                            return;
-                        }
-                        Ok(stats) => stats,
-                    };
-                    let raft_disk_cap = raft_disk_stats.total_space();
-                    let mut raft_disk_available =
-                        raft_disk_cap.checked_sub(raft_size).unwrap_or_default();
-                    raft_disk_available = cmp::min(raft_disk_available, raft_disk_stats.available_space());
-                    raft_disk_status = if raft_disk_available <= raft_already_full_threshold
-                    {
-                        disk::DiskUsage::AlreadyFull
-                    } else if raft_disk_available <= raft_almost_full_threshold
-                    {
-                        disk::DiskUsage::AlmostFull
-                    } else {
-                        disk::DiskUsage::Normal
-                    };
-                }
                 let placeholer_file_path = PathBuf::from_str(&data_dir)
                     .unwrap()
                     .join(Path::new(file_system::SPACE_PLACEHOLDER_FILE));
-
                 let placeholder_size: u64 =
                     file_system::get_file_size(placeholer_file_path).unwrap_or(0);
 
@@ -1143,24 +1302,9 @@ where
                 } else {
                     snap_size + kv_size + placeholder_size
                 };
-                let capacity = if config_disk_capacity == 0 || disk_cap < config_disk_capacity {
-                    disk_cap
-                } else {
-                    config_disk_capacity
-                };
-
-                let mut available = capacity.checked_sub(used_size).unwrap_or_default();
-                available = cmp::min(available, disk_stats.available_space());
-
+                // Check the disk usage and update the disk usage status.
+                let (cur_disk_status, cur_kv_disk_status, raft_disk_status, capacity, available) = disk_usage_checker.inspect(used_size, raft_size);
                 let prev_disk_status = disk::get_disk_status(0); //0 no need care about failpoint.
-                let cur_kv_disk_status = if available <= already_full_threshold {
-                    disk::DiskUsage::AlreadyFull
-                } else if available <= almost_full_threshold {
-                    disk::DiskUsage::AlmostFull
-                } else {
-                    disk::DiskUsage::Normal
-                };
-                let cur_disk_status = calculate_disk_usage(raft_disk_status, cur_kv_disk_status);
                 if prev_disk_status != cur_disk_status {
                     warn!(
                         "disk usage {:?}->{:?} (raft engine usage: {:?}, kv engine usage: {:?}), seperated raft mount={}, kv available={}, snap={}, kv={}, raft={}, capacity={}",
@@ -1176,24 +1320,63 @@ where
                         capacity
                     );
                 }
-                disk::set_disk_status(cur_disk_status);
+                // Update disk status if disk space checker is enabled.
+                if need_update_disk_status {
+                    disk::set_disk_status(cur_disk_status);
+                }
+                // Update disk capacity, used size and available size.
+                disk::set_disk_capacity(capacity);
+                disk::set_disk_used_size(used_size);
+                disk::set_disk_available_size(available);
+
+                // Update metrics.
+                STORE_SIZE_EVENT_INT_VEC.raft_size.set(raft_size as i64);
+                STORE_SIZE_EVENT_INT_VEC.snap_size.set(snap_size as i64);
+                STORE_SIZE_EVENT_INT_VEC.kv_size.set(kv_size as i64);
+
+                STORE_SIZE_EVENT_INT_VEC.capacity.set(capacity as i64);
+                STORE_SIZE_EVENT_INT_VEC.available.set(available as i64);
+                STORE_SIZE_EVENT_INT_VEC.used.set(used_size as i64);
             })
     }
 
     fn init_sst_recovery_sender(&mut self) -> Option<Scheduler<String>> {
         if !self
+            .core
             .config
             .storage
             .background_error_recovery_window
             .is_zero()
         {
-            let sst_worker = Box::new(LazyWorker::new("sst-recovery"));
+            let sst_worker = Box::new(LazyWorker::new(SST_RECOVERY_THREAD));
             let scheduler = sst_worker.scheduler();
             self.sst_worker = Some(sst_worker);
             Some(scheduler)
         } else {
             None
         }
+    }
+
+    fn init_cgroup_monitor(&mut self) {
+        let mut last_cpu_quota: f64 = 0.0;
+        let mut last_memory_limit: u64 = 0;
+        self.core.background_worker.spawn_interval_task(
+            DEFAULT_CGROUP_MONITOR_INTERVAL,
+            move || {
+                let cpu_quota = SysQuota::cpu_cores_quota_current();
+                if cpu_quota != last_cpu_quota {
+                    info!("cpu quota set to {:?}", cpu_quota);
+                    CPU_CORES_QUOTA_GAUGE.set(cpu_quota);
+                    last_cpu_quota = cpu_quota;
+                }
+                let memory_limit = SysQuota::memory_limit_in_bytes_current();
+                if memory_limit != last_memory_limit {
+                    info!("memory limit set to {:?}", memory_limit);
+                    MEMORY_LIMIT_GAUGE.set(memory_limit as f64);
+                    last_memory_limit = memory_limit;
+                }
+            },
+        );
     }
 
     fn run_server(&mut self, server_config: Arc<VersionTrack<ServerConfig>>) {
@@ -1204,20 +1387,27 @@ where
             .unwrap_or_else(|e| fatal!("failed to build server: {}", e));
         server
             .server
-            .start(server_config, self.security_mgr.clone())
+            .start(
+                server_config,
+                self.security_mgr.clone(),
+                self.tablet_registry.clone().unwrap(),
+            )
             .unwrap_or_else(|e| fatal!("failed to start server: {}", e));
     }
 
     fn run_status_server(&mut self) {
         // Create a status server.
-        let status_enabled = !self.config.server.status_addr.is_empty();
+        let status_enabled = !self.core.config.server.status_addr.is_empty();
         if status_enabled {
             let mut status_server = match StatusServer::new(
-                self.config.server.status_thread_pool_size,
-                self.cfg_controller.take().unwrap(),
-                Arc::new(self.config.security.clone()),
+                self.core.config.server.status_thread_pool_size,
+                self.cfg_controller.clone().unwrap(),
+                Arc::new(self.core.config.security.clone()),
                 self.engines.as_ref().unwrap().engine.raft_extension(),
-                self.store_path.clone(),
+                self.resource_manager.clone(),
+                self.grpc_service_mgr.clone(),
+                None,
+                Default::default(),
             ) {
                 Ok(status_server) => Box::new(status_server),
                 Err(e) => {
@@ -1226,22 +1416,92 @@ where
                 }
             };
             // Start the status server.
-            if let Err(e) = status_server.start(self.config.server.status_addr.clone()) {
+            if let Err(e) = status_server.start(self.core.config.server.status_addr.clone()) {
                 error_unknown!(%e; "failed to bind addr for status service");
             } else {
-                self.to_stop.push(status_server);
+                self.core.to_stop.push(status_server);
             }
         }
     }
 
+    fn flush_before_stop(&mut self) {
+        let change = {
+            let mut change = HashMap::new();
+            change.insert("raftstore.store_pool_size".to_owned(), "10".to_owned());
+            change
+        };
+        if let Err(e) = self
+            .cfg_controller
+            .as_mut()
+            .unwrap()
+            .update_without_persist(change)
+        {
+            warn!(
+                "config change failed";
+                "error" => ?e,
+            );
+        }
+        let tablet_registry = self.tablet_registry.as_ref().unwrap();
+        // It should not return error.
+        if let Err(e) = loop_registry(tablet_registry, |cache| {
+            if let Some(latest) = cache.latest() {
+                latest.set_high_priority_background_threads(10, false)?;
+                Ok(false)
+            } else {
+                Ok(true)
+            }
+        }) {
+            warn!(
+                "increase high priority background threads failed during server stop (it will impact close speed)";
+                "error" => ?e,
+            );
+        }
+
+        info!("server stop: flush begin");
+        let engines = self.engines.as_mut().unwrap();
+        let router = self.router.as_ref().unwrap();
+        let mut rxs = vec![];
+        engines
+            .raft_engine
+            .for_each_raft_group::<raftstore::Error, _>(&mut |region_id| {
+                let (tx, rx) = sync_channel(1);
+                let flush_msg = PeerMsg::FlushBeforeClose { tx };
+                if let Err(e) = router.store_router().force_send(region_id, flush_msg) {
+                    warn!(
+                        "flush-before-close: force send error";
+                        "error" => ?e,
+                        "region_id" => region_id,
+                    );
+                } else {
+                    rxs.push(rx);
+                }
+
+                Ok(())
+            })
+            .unwrap();
+
+        for rx in rxs {
+            if let Err(e) = rx.recv() {
+                warn!(
+                    "flush-before-close: receive error";
+                    "error" => ?e,
+                );
+            }
+        }
+
+        info!(
+            "server stop: flush done";
+        );
+    }
+
     fn stop(mut self) {
+        self.flush_before_stop();
         tikv_util::thread_group::mark_shutdown();
         let mut servers = self.servers.unwrap();
         servers
             .server
             .stop()
             .unwrap_or_else(|e| fatal!("failed to stop server: {}", e));
-
         self.node.as_mut().unwrap().stop();
         self.region_info_accessor.as_mut().unwrap().stop();
 
@@ -1251,117 +1511,77 @@ where
             sst_worker.stop_worker();
         }
 
-        self.to_stop.into_iter().for_each(|s| s.stop());
+        self.core.to_stop.into_iter().for_each(|s| s.stop());
     }
-}
 
-pub trait ConfiguredRaftEngine: RaftEngine {
-    fn build(
-        _: &TikvConfig,
-        _: &Arc<Env>,
-        _: &Option<Arc<DataKeyManager>>,
-        _: &Cache,
-    ) -> (Self, Option<Arc<RocksStatistics>>);
-    fn as_rocks_engine(&self) -> Option<&RocksEngine>;
-    fn register_config(&self, _cfg_controller: &mut ConfigController);
-}
-
-impl<T: RaftEngine> ConfiguredRaftEngine for T {
-    default fn build(
-        _: &TikvConfig,
-        _: &Arc<Env>,
-        _: &Option<Arc<DataKeyManager>>,
-        _: &Cache,
-    ) -> (Self, Option<Arc<RocksStatistics>>) {
-        unimplemented!()
-    }
-    default fn as_rocks_engine(&self) -> Option<&RocksEngine> {
-        None
-    }
-    default fn register_config(&self, _cfg_controller: &mut ConfigController) {}
-}
-
-impl ConfiguredRaftEngine for RocksEngine {
-    fn build(
-        config: &TikvConfig,
-        env: &Arc<Env>,
-        key_manager: &Option<Arc<DataKeyManager>>,
-        block_cache: &Cache,
-    ) -> (Self, Option<Arc<RocksStatistics>>) {
-        let mut raft_data_state_machine = RaftDataStateMachine::new(
-            &config.storage.data_dir,
-            &config.raft_engine.config().dir,
-            &config.raft_store.raftdb_path,
-        );
-        let should_dump = raft_data_state_machine.before_open_target();
-
-        let raft_db_path = &config.raft_store.raftdb_path;
-        let config_raftdb = &config.raftdb;
-        let statistics = Arc::new(RocksStatistics::new_titan());
-        let raft_db_opts = config_raftdb.build_opt(env.clone(), Some(&statistics));
-        let raft_cf_opts = config_raftdb.build_cf_opts(block_cache);
-        let raftdb = engine_rocks::util::new_engine_opt(raft_db_path, raft_db_opts, raft_cf_opts)
-            .expect("failed to open raftdb");
-
-        if should_dump {
-            let raft_engine =
-                RaftLogEngine::new(config.raft_engine.config(), key_manager.clone(), None)
-                    .expect("failed to open raft engine for migration");
-            dump_raft_engine_to_raftdb(&raft_engine, &raftdb, 8 /* threads */);
-            raft_engine.stop();
-            drop(raft_engine);
-            raft_data_state_machine.after_dump_data();
+    fn pause(&mut self) {
+        let server = self.servers.as_mut().unwrap();
+        let r = server.server.pause();
+        if let Err(e) = r {
+            warn!(
+                "failed to pause the server";
+                "err" => ?e
+            );
         }
-        (raftdb, Some(statistics))
     }
 
-    fn as_rocks_engine(&self) -> Option<&RocksEngine> {
-        Some(self)
-    }
-
-    fn register_config(&self, cfg_controller: &mut ConfigController) {
-        cfg_controller.register(
-            tikv::config::Module::Raftdb,
-            Box::new(DbConfigManger::new(self.clone(), DbType::Raft)),
-        );
-    }
-}
-
-impl ConfiguredRaftEngine for RaftLogEngine {
-    fn build(
-        config: &TikvConfig,
-        env: &Arc<Env>,
-        key_manager: &Option<Arc<DataKeyManager>>,
-        block_cache: &Cache,
-    ) -> (Self, Option<Arc<RocksStatistics>>) {
-        let mut raft_data_state_machine = RaftDataStateMachine::new(
-            &config.storage.data_dir,
-            &config.raft_store.raftdb_path,
-            &config.raft_engine.config().dir,
-        );
-        let should_dump = raft_data_state_machine.before_open_target();
-
-        let raft_config = config.raft_engine.config();
-        let raft_engine =
-            RaftLogEngine::new(raft_config, key_manager.clone(), get_io_rate_limiter())
-                .expect("failed to open raft engine");
-
-        if should_dump {
-            let config_raftdb = &config.raftdb;
-            let raft_db_opts = config_raftdb.build_opt(env.clone(), None);
-            let raft_cf_opts = config_raftdb.build_cf_opts(block_cache);
-            let raftdb = engine_rocks::util::new_engine_opt(
-                &config.raft_store.raftdb_path,
-                raft_db_opts,
-                raft_cf_opts,
-            )
-            .expect("failed to open raftdb for migration");
-            dump_raftdb_to_raft_engine(&raftdb, &raft_engine, 8 /* threads */);
-            raftdb.stop();
-            drop(raftdb);
-            raft_data_state_machine.after_dump_data();
+    fn resume(&mut self) {
+        let server = self.servers.as_mut().unwrap();
+        let r = server.server.resume();
+        if let Err(e) = r {
+            warn!(
+                "failed to resume the server";
+                "err" => ?e
+            );
         }
-        (raft_engine, None)
+    }
+
+    fn graceful_shutdown(&mut self) {
+        let now = Instant::now();
+        self.set_state(true);
+        self.wait_for_leader_eviction(now);
+        self.set_state(false);
+        std::thread::sleep(Duration::from_millis(200));
+        info!("Graceful shutdown completed");
+    }
+
+    fn wait_for_leader_eviction(&self, now: Instant) {
+        let timeout = self.core.config.server.graceful_shutdown_timeout.0;
+        let region_info_accessor = self.region_info_accessor.as_ref().unwrap();
+        let check_interval = Duration::from_secs(1);
+
+        loop {
+            let leaders_count = region_info_accessor.region_leaders().read().unwrap().len();
+
+            if leaders_count == 0 {
+                info!("All leaders evicted, completing graceful shutdown");
+                break;
+            }
+
+            if now.saturating_elapsed() >= timeout {
+                warn!(
+                    "Graceful shutdown timeout reached with {} leaders remaining",
+                    leaders_count
+                );
+                break;
+            }
+
+            info!("Waiting for leader eviction"; 
+                  "leaders_count" => leaders_count, 
+                  "elapsed" => ?now.saturating_elapsed());
+            std::thread::sleep(check_interval);
+        }
+    }
+
+    fn set_state(&self, state: bool) {
+        if let Some(node) = self.node.as_ref() {
+            let system = node.system();
+            let task = raftstore_v2::PdTask::GracefulShutdownState { state };
+
+            if let Err(e) = system.pd_scheduler().schedule(task) {
+                warn!("Failed to set graceful shutdown state for PD worker"; "error" => ?e);
+            }
+        }
     }
 }
 
@@ -1370,28 +1590,45 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         &mut self,
         flow_listener: engine_rocks::FlowListener,
     ) -> Arc<EnginesResourceInfo> {
-        let block_cache = self.config.storage.block_cache.build_shared_cache();
+        let block_cache = self.core.config.storage.block_cache.build_shared_cache();
         let env = self
+            .core
             .config
-            .build_shared_rocks_env(self.encryption_key_manager.clone(), get_io_rate_limiter())
+            .build_shared_rocks_env(
+                self.core.encryption_key_manager.clone(),
+                get_io_rate_limiter(),
+            )
             .unwrap();
 
         // Create raft engine
         let (raft_engine, raft_statistics) = CER::build(
-            &self.config,
+            &self.core.config,
             &env,
-            &self.encryption_key_manager,
+            &self.core.encryption_key_manager,
             &block_cache,
         );
         self.raft_statistics = raft_statistics;
 
         // Create kv engine.
-        let builder = KvEngineFactoryBuilder::new(env, &self.config, block_cache)
-            .sst_recovery_sender(self.init_sst_recovery_sender())
-            .flow_listener(flow_listener);
+        let builder = KvEngineFactoryBuilder::new(
+            env,
+            &self.core.config,
+            block_cache,
+            self.core.encryption_key_manager.clone(),
+            Default::default(),
+        )
+        .sst_recovery_sender(self.init_sst_recovery_sender())
+        .flow_listener(flow_listener);
 
-        let mut node = NodeV2::new(&self.config.server, self.pd_client.clone(), None);
-        node.try_bootstrap_store(&self.config.raft_store, &raft_engine)
+        let mut node = NodeV2::new(
+            &self.core.config.server,
+            self.pd_client.clone(),
+            None,
+            self.resource_manager
+                .as_ref()
+                .map(|r| r.derive_controller("raft-v2".into(), false)),
+        );
+        node.try_bootstrap_store(&self.core.config.raft_store, &raft_engine)
             .unwrap_or_else(|e| fatal!("failed to bootstrap store: {:?}", e));
         assert_ne!(node.id(), 0);
 
@@ -1404,17 +1641,22 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         )));
         let factory = Box::new(builder.build());
         self.kv_statistics = Some(factory.rocks_statistics());
-        let registry = TabletRegistry::new(factory, self.store_path.join("tablets"))
+        let registry = TabletRegistry::new(factory, self.core.store_path.join("tablets"))
             .unwrap_or_else(|e| fatal!("failed to create tablet registry {:?}", e));
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
             tikv::config::Module::Rocksdb,
-            Box::new(DbConfigManger::new(registry.clone(), DbType::Kv)),
+            Box::new(DbConfigManger::new(
+                cfg_controller.get_current().rocksdb,
+                registry.clone(),
+                DbType::Kv,
+            )),
         );
         self.tablet_registry = Some(registry.clone());
         raft_engine.register_config(cfg_controller);
 
         let engines_info = Arc::new(EnginesResourceInfo::new(
+            &self.core.config,
             registry,
             raft_engine.as_rocks_engine().cloned(),
             180, // max_samples_to_preserve
@@ -1423,11 +1665,28 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         let router = RaftRouter::new(node.id(), router);
         let mut coprocessor_host: CoprocessorHost<RocksEngine> = CoprocessorHost::new(
             router.store_router().clone(),
-            self.config.coprocessor.clone(),
+            self.core.config.coprocessor.clone(),
         );
-        let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
+        let region_info_accessor = RegionInfoAccessor::new(
+            &mut coprocessor_host,
+            Arc::new(|| false), // Not applicable to v2.
+            Box::new(|| {
+                // v2 does not support ime
+                unreachable!()
+            }),
+        );
 
-        let engine = RaftKv2::new(router.clone(), region_info_accessor.region_leaders());
+        let cdc_worker = Box::new(LazyWorker::new(CDC_THREAD));
+        let cdc_scheduler = cdc_worker.scheduler();
+        let cdc_memory_quota = Arc::new(MemoryQuota::new(
+            self.core.config.cdc.sink_memory_quota.0 as _,
+        ));
+        let txn_extra_scheduler =
+            cdc::CdcTxnExtraScheduler::new(cdc_scheduler.clone(), cdc_memory_quota.clone());
+        let mut engine = RaftKv2::new(router.clone(), region_info_accessor.region_leaders());
+        // Set txn extra scheduler immediately to make sure every clone has the
+        // scheduler.
+        engine.set_txn_extra_scheduler(Arc::new(txn_extra_scheduler));
 
         self.engines = Some(TikvEngines {
             raft_engine,
@@ -1437,6 +1696,9 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         self.node = Some(node);
         self.coprocessor_host = Some(coprocessor_host);
         self.region_info_accessor = Some(region_info_accessor);
+        self.cdc_worker = Some(cdc_worker);
+        self.cdc_scheduler = Some(cdc_scheduler);
+        self.cdc_memory_quota = Some(cdc_memory_quota);
 
         engines_info
     }
@@ -1471,236 +1733,13 @@ fn pre_start() {
     }
 }
 
-fn check_system_config(config: &TikvConfig) {
-    info!("beginning system configuration check");
-    let mut rocksdb_max_open_files = config.rocksdb.max_open_files;
-    if config.rocksdb.titan.enabled {
-        // Titan engine maintains yet another pool of blob files and uses the same max
-        // number of open files setup as rocksdb does. So we double the max required
-        // open files here
-        rocksdb_max_open_files *= 2;
-    }
-    if let Err(e) = tikv_util::config::check_max_open_fds(
-        RESERVED_OPEN_FDS + (rocksdb_max_open_files + config.raftdb.max_open_files) as u64,
-    ) {
-        fatal!("{}", e);
-    }
-
-    // Check RocksDB data dir
-    if let Err(e) = tikv_util::config::check_data_dir(&config.storage.data_dir) {
-        warn!(
-            "check: rocksdb-data-dir";
-            "path" => &config.storage.data_dir,
-            "err" => %e
-        );
-    }
-    // Check raft data dir
-    if let Err(e) = tikv_util::config::check_data_dir(&config.raft_store.raftdb_path) {
-        warn!(
-            "check: raftdb-path";
-            "path" => &config.raft_store.raftdb_path,
-            "err" => %e
-        );
-    }
-}
-
-fn try_lock_conflict_addr<P: AsRef<Path>>(path: P) -> File {
-    let f = File::create(path.as_ref()).unwrap_or_else(|e| {
-        fatal!(
-            "failed to create lock at {}: {}",
-            path.as_ref().display(),
-            e
-        )
-    });
-
-    if f.try_lock_exclusive().is_err() {
-        fatal!(
-            "{} already in use, maybe another instance is binding with this address.",
-            path.as_ref().file_name().unwrap().to_str().unwrap()
-        );
-    }
-    f
-}
-
-#[cfg(unix)]
-fn get_lock_dir() -> String {
-    format!("{}_TIKV_LOCK_FILES", unsafe { libc::getuid() })
-}
-
-#[cfg(not(unix))]
-fn get_lock_dir() -> String {
-    "TIKV_LOCK_FILES".to_owned()
-}
-
-pub struct EngineMetricsManager<EK: KvEngine, ER: RaftEngine> {
-    tablet_registry: TabletRegistry<EK>,
-    kv_statistics: Option<Arc<RocksStatistics>>,
-    kv_is_titan: bool,
-    raft_engine: ER,
-    raft_statistics: Option<Arc<RocksStatistics>>,
-    last_reset: Instant,
-}
-
-impl<EK: KvEngine, ER: RaftEngine> EngineMetricsManager<EK, ER> {
-    pub fn new(
-        tablet_registry: TabletRegistry<EK>,
-        kv_statistics: Option<Arc<RocksStatistics>>,
-        kv_is_titan: bool,
-        raft_engine: ER,
-        raft_statistics: Option<Arc<RocksStatistics>>,
-    ) -> Self {
-        EngineMetricsManager {
-            tablet_registry,
-            kv_statistics,
-            kv_is_titan,
-            raft_engine,
-            raft_statistics,
-            last_reset: Instant::now(),
-        }
-    }
-
-    pub fn flush(&mut self, now: Instant) {
-        let mut reporter = EK::StatisticsReporter::new("kv");
-        self.tablet_registry
-            .for_each_opened_tablet(|_, db: &mut CachedTablet<EK>| {
-                if let Some(db) = db.latest() {
-                    reporter.collect(db);
-                }
-                true
-            });
-        reporter.flush();
-        self.raft_engine.flush_metrics("raft");
-
-        if let Some(s) = self.kv_statistics.as_ref() {
-            flush_engine_statistics(s, "kv", self.kv_is_titan);
-        }
-        if let Some(s) = self.raft_statistics.as_ref() {
-            flush_engine_statistics(s, "raft", false);
-        }
-        if now.saturating_duration_since(self.last_reset) >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
-            if let Some(s) = self.kv_statistics.as_ref() {
-                s.reset();
-            }
-            if let Some(s) = self.raft_statistics.as_ref() {
-                s.reset();
-            }
-            self.last_reset = now;
-        }
-    }
-}
-
-pub struct EnginesResourceInfo {
-    tablet_registry: TabletRegistry<RocksEngine>,
-    raft_engine: Option<RocksEngine>,
-    latest_normalized_pending_bytes: AtomicU32,
-    normalized_pending_bytes_collector: MovingAvgU32,
-}
-
-impl EnginesResourceInfo {
-    const SCALE_FACTOR: u64 = 100;
-
-    fn new(
-        tablet_registry: TabletRegistry<RocksEngine>,
-        raft_engine: Option<RocksEngine>,
-        max_samples_to_preserve: usize,
-    ) -> Self {
-        EnginesResourceInfo {
-            tablet_registry,
-            raft_engine,
-            latest_normalized_pending_bytes: AtomicU32::new(0),
-            normalized_pending_bytes_collector: MovingAvgU32::new(max_samples_to_preserve),
-        }
-    }
-
-    pub fn update(
-        &self,
-        _now: Instant,
-        cached_latest_tablets: &mut HashMap<u64, CachedTablet<RocksEngine>>,
-    ) {
-        let mut normalized_pending_bytes = 0;
-
-        fn fetch_engine_cf(engine: &RocksEngine, cf: &str, normalized_pending_bytes: &mut u32) {
-            if let Ok(cf_opts) = engine.get_options_cf(cf) {
-                if let Ok(Some(b)) = engine.get_cf_pending_compaction_bytes(cf) {
-                    if cf_opts.get_soft_pending_compaction_bytes_limit() > 0 {
-                        *normalized_pending_bytes = std::cmp::max(
-                            *normalized_pending_bytes,
-                            (b * EnginesResourceInfo::SCALE_FACTOR
-                                / cf_opts.get_soft_pending_compaction_bytes_limit())
-                                as u32,
-                        );
-                    }
-                }
-            }
-        }
-
-        if let Some(raft_engine) = &self.raft_engine {
-            fetch_engine_cf(raft_engine, CF_DEFAULT, &mut normalized_pending_bytes);
-        }
-
-        self.tablet_registry
-            .for_each_opened_tablet(|id, db: &mut CachedTablet<RocksEngine>| {
-                cached_latest_tablets.insert(id, db.clone());
-                true
-            });
-
-        // todo(SpadeA): Now, there's a potential race condition problem where the
-        // tablet could be destroyed after the clone and before the fetching
-        // which could result in programme panic. It's okay now as the single global
-        // kv_engine will not be destroyed in normal operation and v2 is not
-        // ready for operation. Furthermore, this race condition is general to v2 as
-        // tablet clone is not a case exclusively happened here. We should
-        // propose another PR to tackle it such as destory tablet lazily in a GC
-        // thread.
-
-        for (_, cache) in cached_latest_tablets.iter_mut() {
-            let Some(tablet) = cache.latest() else { continue };
-            for cf in &[CF_DEFAULT, CF_WRITE, CF_LOCK] {
-                fetch_engine_cf(tablet, cf, &mut normalized_pending_bytes);
-            }
-        }
-
-        // Clear ensures that these tablets are not hold forever.
-        cached_latest_tablets.clear();
-
-        let (_, avg) = self
-            .normalized_pending_bytes_collector
-            .add(normalized_pending_bytes);
-        self.latest_normalized_pending_bytes.store(
-            std::cmp::max(normalized_pending_bytes, avg),
-            Ordering::Relaxed,
-        );
-    }
-}
-
-impl IoBudgetAdjustor for EnginesResourceInfo {
-    fn adjust(&self, total_budgets: usize) -> usize {
-        let score = self.latest_normalized_pending_bytes.load(Ordering::Relaxed) as f32
-            / Self::SCALE_FACTOR as f32;
-        // Two reasons for adding `sqrt` on top:
-        // 1) In theory the convergence point is independent of the value of pending
-        //    bytes (as long as backlog generating rate equals consuming rate, which is
-        //    determined by compaction budgets), a convex helps reach that point while
-        //    maintaining low level of pending bytes.
-        // 2) Variance of compaction pending bytes grows with its magnitude, a filter
-        //    with decreasing derivative can help balance such trend.
-        let score = score.sqrt();
-        // The target global write flow slides between Bandwidth / 2 and Bandwidth.
-        let score = 0.5 + score / 2.0;
-        (total_budgets as f32 * score) as usize
-    }
-}
-
 #[cfg(test)]
 mod test {
-    use std::{
-        collections::HashMap,
-        sync::{atomic::Ordering, Arc},
-    };
+    use std::{collections::HashMap, sync::Arc};
 
     use engine_rocks::raw::Env;
     use engine_traits::{
-        FlowControlFactorsExt, MiscExt, SyncMutable, TabletContext, TabletRegistry, CF_DEFAULT,
+        CF_DEFAULT, FlowControlFactorsExt, MiscExt, SyncMutable, TabletContext, TabletRegistry,
     };
     use tempfile::Builder;
     use tikv::{config::TikvConfig, server::KvEngineFactoryBuilder};
@@ -1712,14 +1751,15 @@ mod test {
     fn test_engines_resource_info_update() {
         let mut config = TikvConfig::default();
         config.rocksdb.defaultcf.disable_auto_compactions = true;
-        config.rocksdb.defaultcf.soft_pending_compaction_bytes_limit = Some(ReadableSize(1));
-        config.rocksdb.writecf.soft_pending_compaction_bytes_limit = Some(ReadableSize(1));
-        config.rocksdb.lockcf.soft_pending_compaction_bytes_limit = Some(ReadableSize(1));
+        config.rocksdb.defaultcf.soft_pending_compaction_bytes_limit = ReadableSize(1);
+        config.rocksdb.writecf.soft_pending_compaction_bytes_limit = ReadableSize(1);
+        config.rocksdb.lockcf.soft_pending_compaction_bytes_limit = ReadableSize(1);
         let env = Arc::new(Env::default());
         let path = Builder::new().prefix("test-update").tempdir().unwrap();
         let cache = config.storage.block_cache.build_shared_cache();
 
-        let factory = KvEngineFactoryBuilder::new(env, &config, cache).build();
+        let factory =
+            KvEngineFactoryBuilder::new(env, &config, cache, None, Default::default()).build();
         let reg = TabletRegistry::new(Box::new(factory), path.path().join("tablets")).unwrap();
 
         for i in 1..6 {
@@ -1732,7 +1772,7 @@ mod test {
         // Prepare some data for two tablets of the same region. So we can test whether
         // we fetch the bytes from the latest one.
         for i in 1..21 {
-            tablet.put_cf(CF_DEFAULT, b"key", b"val").unwrap();
+            tablet.put_cf(CF_DEFAULT, b"zkey", b"val").unwrap();
             if i % 2 == 0 {
                 tablet.flush_cf(CF_DEFAULT, true).unwrap();
             }
@@ -1747,7 +1787,7 @@ mod test {
         tablet = cached.latest().unwrap();
 
         for i in 1..11 {
-            tablet.put_cf(CF_DEFAULT, b"key", b"val").unwrap();
+            tablet.put_cf(CF_DEFAULT, b"zkey", b"val").unwrap();
             if i % 2 == 0 {
                 tablet.flush_cf(CF_DEFAULT, true).unwrap();
             }
@@ -1759,7 +1799,7 @@ mod test {
 
         assert!(old_pending_compaction_bytes > new_pending_compaction_bytes);
 
-        let engines_info = Arc::new(EnginesResourceInfo::new(reg, None, 10));
+        let engines_info = Arc::new(EnginesResourceInfo::new(&config, reg, None, 10));
 
         let mut cached_latest_tablets = HashMap::default();
         engines_info.update(Instant::now(), &mut cached_latest_tablets);
@@ -1773,9 +1813,7 @@ mod test {
         // bytes of tablet_1_20
         assert_eq!(
             (new_pending_compaction_bytes * 100) as u32,
-            engines_info
-                .latest_normalized_pending_bytes
-                .load(Ordering::Relaxed)
+            engines_info.latest_normalized_pending_bytes()
         );
     }
 }

@@ -6,10 +6,20 @@
 
 use std::ops::Bound::{self, *};
 
+use tikv_util::codec::bytes::encode_bytes;
+
 /// An error indicating the key cannot be rewritten because it does not start
 /// with the given prefix.
 #[derive(PartialEq, Debug, Clone)]
 pub struct WrongPrefix;
+
+pub fn encode_bound(bound: Bound<Vec<u8>>) -> Bound<Vec<u8>> {
+    match bound {
+        Included(k) => Included(encode_bytes(&k)),
+        Excluded(k) => Excluded(encode_bytes(&k)),
+        Unbounded => Unbounded,
+    }
+}
 
 /// Rewrites the prefix of a byte array.
 pub fn rewrite_prefix(

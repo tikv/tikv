@@ -1,36 +1,17 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::fmt::{self, Debug, Formatter};
+
 use byteorder::{BigEndian, ByteOrder};
-use derive_more::Deref;
-use engine_traits::EncryptionMethod as EtEncryptionMethod;
+use cloud::kms::PlainKey;
 use kvproto::encryptionpb::EncryptionMethod;
-use openssl::symm::{self, Cipher as OCipher};
-use rand::{rngs::OsRng, RngCore};
-use tikv_util::{box_err, impl_display_as_debug};
+use openssl::{
+    rand,
+    symm::{self, Cipher as OCipher},
+};
+use tikv_util::box_err;
 
 use crate::{Error, Result};
-
-pub fn to_engine_encryption_method(method: EncryptionMethod) -> EtEncryptionMethod {
-    match method {
-        EncryptionMethod::Plaintext => EtEncryptionMethod::Plaintext,
-        EncryptionMethod::Aes128Ctr => EtEncryptionMethod::Aes128Ctr,
-        EncryptionMethod::Aes192Ctr => EtEncryptionMethod::Aes192Ctr,
-        EncryptionMethod::Aes256Ctr => EtEncryptionMethod::Aes256Ctr,
-        EncryptionMethod::Sm4Ctr => EtEncryptionMethod::Sm4Ctr,
-        EncryptionMethod::Unknown => EtEncryptionMethod::Unknown,
-    }
-}
-
-pub fn from_engine_encryption_method(method: EtEncryptionMethod) -> EncryptionMethod {
-    match method {
-        EtEncryptionMethod::Plaintext => EncryptionMethod::Plaintext,
-        EtEncryptionMethod::Aes128Ctr => EncryptionMethod::Aes128Ctr,
-        EtEncryptionMethod::Aes192Ctr => EncryptionMethod::Aes192Ctr,
-        EtEncryptionMethod::Aes256Ctr => EncryptionMethod::Aes256Ctr,
-        EtEncryptionMethod::Sm4Ctr => EncryptionMethod::Sm4Ctr,
-        EtEncryptionMethod::Unknown => EncryptionMethod::Unknown,
-    }
-}
 
 pub fn get_method_key_length(method: EncryptionMethod) -> usize {
     match method {
@@ -40,6 +21,40 @@ pub fn get_method_key_length(method: EncryptionMethod) -> usize {
         EncryptionMethod::Aes256Ctr => 32,
         EncryptionMethod::Sm4Ctr => 16,
         unknown => panic!("bad EncryptionMethod {:?}", unknown),
+    }
+}
+
+#[derive(Clone, PartialEq)]
+pub struct FileEncryptionInfo {
+    pub method: EncryptionMethod,
+    pub key: Vec<u8>,
+    pub iv: Vec<u8>,
+}
+impl Default for FileEncryptionInfo {
+    fn default() -> Self {
+        FileEncryptionInfo {
+            method: EncryptionMethod::Unknown,
+            key: vec![],
+            iv: vec![],
+        }
+    }
+}
+
+impl Debug for FileEncryptionInfo {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "FileEncryptionInfo [method={:?}, key=...<{} bytes>, iv=...<{} bytes>]",
+            self.method,
+            self.key.len(),
+            self.iv.len()
+        )
+    }
+}
+
+impl FileEncryptionInfo {
+    pub fn is_empty(&self) -> bool {
+        self.key.is_empty() && self.iv.is_empty()
     }
 }
 
@@ -57,17 +72,17 @@ pub enum Iv {
 
 impl Iv {
     /// Generate a random IV for AES-GCM.
-    pub fn new_gcm() -> Iv {
+    pub fn new_gcm() -> Result<Iv> {
         let mut iv = [0u8; GCM_IV_12];
-        OsRng.fill_bytes(&mut iv);
-        Iv::Gcm(iv)
+        rand::rand_bytes(&mut iv)?;
+        Ok(Iv::Gcm(iv))
     }
 
     /// Generate a random IV for AES-CTR.
-    pub fn new_ctr() -> Iv {
+    pub fn new_ctr() -> Result<Iv> {
         let mut iv = [0u8; CTR_IV_16];
-        OsRng.fill_bytes(&mut iv);
-        Iv::Ctr(iv)
+        rand::rand_bytes(&mut iv)?;
+        Ok(Iv::Ctr(iv))
     }
 
     pub fn from_slice(src: &[u8]) -> Result<Iv> {
@@ -147,7 +162,7 @@ impl<'k> AesGcmCrypter<'k> {
         let mut tag = AesGcmTag([0u8; GCM_TAG_LEN]);
         let ciphertext = symm::encrypt_aead(
             cipher,
-            &self.key.0,
+            self.key.as_slice(),
             Some(self.iv.as_slice()),
             &[], // AAD
             pt,
@@ -160,7 +175,7 @@ impl<'k> AesGcmCrypter<'k> {
         let cipher = OCipher::aes_256_gcm();
         let plaintext = symm::decrypt_aead(
             cipher,
-            &self.key.0,
+            self.key.as_slice(),
             Some(self.iv.as_slice()),
             &[], // AAD
             ct,
@@ -187,38 +202,9 @@ pub fn verify_encryption_config(method: EncryptionMethod, key: &[u8]) -> Result<
     Ok(())
 }
 
-// PlainKey is a newtype used to mark a vector a plaintext key.
-// It requires the vec to be a valid AesGcmCrypter key.
-#[derive(Deref)]
-pub struct PlainKey(Vec<u8>);
-
-impl PlainKey {
-    pub fn new(key: Vec<u8>) -> Result<Self> {
-        if key.len() != AesGcmCrypter::KEY_LEN {
-            return Err(box_err!(
-                "encryption method and key length mismatch, expect {} get {}",
-                AesGcmCrypter::KEY_LEN,
-                key.len()
-            ));
-        }
-        Ok(Self(key))
-    }
-}
-
-// Don't expose the key in a debug print
-impl std::fmt::Debug for PlainKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("PlainKey")
-            .field(&"REDACTED".to_string())
-            .finish()
-    }
-}
-
-// Don't expose the key in a display print
-impl_display_as_debug!(PlainKey);
-
 #[cfg(test)]
 mod tests {
+    use cloud::kms::CryptographyType;
     use hex::FromHex;
 
     use super::*;
@@ -228,9 +214,9 @@ mod tests {
         let mut ivs = Vec::with_capacity(100);
         for c in 0..100 {
             if c % 2 == 0 {
-                ivs.push(Iv::new_ctr());
+                ivs.push(Iv::new_ctr().unwrap());
             } else {
-                ivs.push(Iv::new_gcm());
+                ivs.push(Iv::new_gcm().unwrap());
             }
         }
         ivs.dedup_by(|a, b| a.as_slice() == b.as_slice());
@@ -268,7 +254,7 @@ mod tests {
 
         let pt = Vec::from_hex(pt).unwrap();
         let ct = Vec::from_hex(ct).unwrap();
-        let key = PlainKey::new(Vec::from_hex(key).unwrap()).unwrap();
+        let key = PlainKey::new(Vec::from_hex(key).unwrap(), CryptographyType::AesGcm256).unwrap();
         let iv = Iv::from_slice(Vec::from_hex(iv).unwrap().as_slice()).unwrap();
         let tag = Vec::from_hex(tag).unwrap();
 

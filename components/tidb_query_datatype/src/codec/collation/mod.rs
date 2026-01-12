@@ -15,8 +15,8 @@ use codec::prelude::*;
 use num::Unsigned;
 
 use crate::codec::{
-    data_type::{Bytes, BytesGuard, BytesRef, BytesWriter},
     Result,
+    data_type::{Bytes, BytesGuard, BytesRef, BytesWriter},
 };
 
 #[macro_export]
@@ -32,9 +32,13 @@ macro_rules! match_template_collator {
                 Utf8Mb4BinNoPadding => CollatorUtf8Mb4BinNoPadding,
                 Utf8Mb4GeneralCi => CollatorUtf8Mb4GeneralCi,
                 Utf8Mb4UnicodeCi => CollatorUtf8Mb4UnicodeCi,
+                Utf8Mb40900AiCi => CollatorUtf8Mb40900AiCi,
+                Utf8Mb40900Bin => CollatorUtf8Mb4BinNoPadding,
                 Latin1Bin => CollatorLatin1Bin,
                 GbkBin => CollatorGbkBin,
                 GbkChineseCi => CollatorGbkChineseCi,
+                Gb18030Bin => CollatorGb18030Bin,
+                Gb18030ChineseCi => CollatorGb18030ChineseCi,
             ],
             $($tail)*
          }
@@ -79,6 +83,7 @@ macro_rules! match_template_charset {
                  Utf8Mb4 => EncodingUtf8Mb4,
                  Latin1 => EncodingLatin1,
                  Gbk => EncodingGbk,
+                 Gb18030 => EncodingGb18030,
                  Binary => EncodingBinary,
                  Ascii => EncodingAscii,
             ],
@@ -119,7 +124,7 @@ pub trait Collator: 'static + std::marker::Send + std::marker::Sync + std::fmt::
     }
 
     /// Compares `a` and `b` based on their SortKey.
-    fn sort_compare(a: &[u8], b: &[u8]) -> Result<Ordering>;
+    fn sort_compare(a: &[u8], b: &[u8], force_no_pad: bool) -> Result<Ordering>;
 
     /// Hashes `bstr` based on its SortKey directly.
     ///
@@ -139,13 +144,13 @@ pub trait Encoding {
 
     #[inline]
     fn lower(s: &str, writer: BytesWriter) -> BytesGuard {
-        let res = s.chars().flat_map(char::to_lowercase);
+        let res = s.chars().flat_map(|ch| encoding::unicode_to_lower(ch));
         writer.write_from_char_iter(res)
     }
 
     #[inline]
     fn upper(s: &str, writer: BytesWriter) -> BytesGuard {
-        let res = s.chars().flat_map(char::to_uppercase);
+        let res = s.chars().flat_map(|ch| encoding::unicode_to_upper(ch));
         writer.write_from_char_iter(res)
     }
 }
@@ -192,7 +197,10 @@ where
     #[allow(clippy::transmute_ptr_to_ptr)]
     pub fn new_ref(inner: &T) -> Result<&Self> {
         C::Charset::validate(inner.as_ref())?;
-        Ok(unsafe { std::mem::transmute(inner) })
+        Ok(unsafe {
+            #[allow(clippy::missing_transmute_annotations)]
+            std::mem::transmute(inner)
+        })
     }
 
     #[inline]
@@ -201,7 +209,10 @@ where
         if let Some(inner) = inner {
             C::Charset::validate(inner.as_ref())?;
         }
-        Ok(unsafe { std::mem::transmute(inner) })
+        Ok(unsafe {
+            #[allow(clippy::missing_transmute_annotations)]
+            std::mem::transmute(inner)
+        })
     }
 
     #[inline]
@@ -236,7 +247,7 @@ where
 {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
-        C::sort_compare(self.inner.as_ref(), other.inner.as_ref()).unwrap()
+        C::sort_compare(self.inner.as_ref(), other.inner.as_ref(), false).unwrap()
             == std::cmp::Ordering::Equal
     }
 }
@@ -249,7 +260,7 @@ where
 {
     #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        C::sort_compare(self.inner.as_ref(), other.inner.as_ref()).ok()
+        C::sort_compare(self.inner.as_ref(), other.inner.as_ref(), false).ok()
     }
 }
 
@@ -259,7 +270,7 @@ where
 {
     #[inline]
     fn cmp(&self, other: &Self) -> Ordering {
-        C::sort_compare(self.inner.as_ref(), other.inner.as_ref()).unwrap()
+        C::sort_compare(self.inner.as_ref(), other.inner.as_ref(), false).unwrap()
     }
 }
 

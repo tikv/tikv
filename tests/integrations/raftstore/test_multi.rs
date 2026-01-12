@@ -9,12 +9,12 @@ use std::{
 use engine_traits::Peekable;
 use kvproto::raft_cmdpb::RaftCmdResponse;
 use raft::eraftpb::MessageType;
-use raftstore::{router::RaftStoreRouter, store::*, Result};
+use raftstore::{Result, router::RaftStoreRouter, store::*};
 use rand::{Rng, RngCore};
 use test_raftstore::*;
-use tikv::storage::{kv::SnapshotExt, Snapshot};
-use tikv_util::{config::*, HandyRwLock};
-use txn_types::{Key, PessimisticLock};
+use tikv::storage::{Snapshot, kv::SnapshotExt};
+use tikv_util::{HandyRwLock, config::*};
+use txn_types::{Key, LastChange, PessimisticLock};
 
 fn test_multi_base<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
@@ -114,7 +114,7 @@ fn test_multi_lost_majority<T: Simulator>(cluster: &mut Cluster<T>, count: usize
     cluster.run();
     let leader = cluster.leader_of_region(1);
 
-    let half = (count as u64 + 1) / 2;
+    let half = (count as u64).div_ceil(2);
     for i in 1..=half {
         cluster.stop_node(i);
     }
@@ -803,7 +803,7 @@ fn test_node_catch_up_logs() {
     cluster.stop_node(3);
     for i in 0..10 {
         let v = format!("{:04}", i);
-        cluster.async_put(v.as_bytes(), v.as_bytes()).unwrap();
+        let _ = cluster.async_put(v.as_bytes(), v.as_bytes()).unwrap();
     }
     must_get_equal(&cluster.get_engine(1), b"0009", b"0009");
     cluster.run_node(3).unwrap();
@@ -812,6 +812,8 @@ fn test_node_catch_up_logs() {
 
 #[test]
 fn test_leader_drop_with_pessimistic_lock() {
+    let peer_size_limit = 512 << 10;
+    let instance_size_limit = 100 << 20;
     let mut cluster = new_server_cluster(0, 3);
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));
@@ -825,18 +827,22 @@ fn test_leader_drop_with_pessimistic_lock() {
     txn_ext
         .pessimistic_locks
         .write()
-        .insert(vec![(
-            Key::from_raw(b"k1"),
-            PessimisticLock {
-                primary: b"k1".to_vec().into_boxed_slice(),
-                start_ts: 10.into(),
-                ttl: 1000,
-                for_update_ts: 10.into(),
-                min_commit_ts: 10.into(),
-                last_change_ts: 5.into(),
-                versions_to_last_change: 3,
-            },
-        )])
+        .insert(
+            vec![(
+                Key::from_raw(b"k1"),
+                PessimisticLock {
+                    primary: b"k1".to_vec().into_boxed_slice(),
+                    start_ts: 10.into(),
+                    ttl: 1000,
+                    for_update_ts: 10.into(),
+                    min_commit_ts: 10.into(),
+                    last_change: LastChange::make_exist(5.into(), 3),
+                    is_locked_with_conflict: false,
+                },
+            )],
+            peer_size_limit,
+            instance_size_limit,
+        )
         .unwrap();
 
     // Isolate node 1, leader should be transferred to another node.

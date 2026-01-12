@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::{db_options::TitanCfOptions, sst_partitioner::SstPartitionerFactory, Result};
+use crate::{Result, db_options::TitanCfOptions, sst_partitioner::SstPartitionerFactory};
 
 /// Trait for engines with column family options
 pub trait CfOptionsExt {
@@ -30,4 +30,5 @@ pub trait CfOptions {
     fn get_disable_auto_compactions(&self) -> bool;
     fn get_disable_write_stall(&self) -> bool;
     fn set_sst_partitioner_factory<F: SstPartitionerFactory>(&mut self, factory: F);
+    fn set_max_compactions(&self, n: u32) -> Result<()>;
 }

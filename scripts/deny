@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# use a standalone rust version to build and run deny to decouple from the code build environment
+RUST_VERSION="1.92.0"
+rustup toolchain install $RUST_VERSION --profile minimal --no-self-update
+
+# Update cargo-deny to the 0.15.1 version to fix the issue reported by https://github.com/tikv/tikv/pull/17987.
+cargo +${RUST_VERSION} install --locked cargo-deny@0.18.9 2> /dev/null || echo "Install cargo-deny failed"
+cargo +${RUST_VERSION} deny -V
+cargo +${RUST_VERSION} deny fetch all
+cargo +${RUST_VERSION} deny check --show-stats

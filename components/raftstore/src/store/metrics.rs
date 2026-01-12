@@ -35,7 +35,8 @@ make_auto_flush_static_metric! {
         compact,
         transfer_leader,
         prepare_flashback,
-        finish_flashback
+        finish_flashback,
+        batch_switch_witness : "batch-switch-witness",
     }
 
     pub label_enum AdminCmdStatus {
@@ -85,6 +86,7 @@ make_auto_flush_static_metric! {
         started,
         timeout,
         finished,
+        stale,
     }
 
     pub label_enum CompactionGuardAction {
@@ -143,6 +145,7 @@ make_static_metric! {
         snapshot,
         pending_region,
         has_ready_region,
+        propose_delay,
     }
 
     pub label_enum RaftSentMessageCounterType {
@@ -177,7 +180,9 @@ make_static_metric! {
         region_nonexistent,
         applying_snap,
         disk_full,
+        non_witness,
         recovery,
+        unsafe_vote,
     }
 
     pub label_enum ProposalType {
@@ -205,12 +210,16 @@ make_static_metric! {
         force_leader,
         witness,
         flashback_in_progress,
-        flashback_not_prepared
+        flashback_not_prepared,
+        non_witness,
     }
 
     pub label_enum RaftEventDurationType {
         compact_check,
+        periodic_full_compact,
+        load_metrics_window,
         pd_store_heartbeat,
+        pd_report_min_resolved_ts,
         snap_gc,
         compact_lock_cf,
         consistency_check,
@@ -253,6 +262,38 @@ make_static_metric! {
         unable_to_split_cpu_top,
     }
 
+    pub label_enum SnapshotBrWaitApplyEventType {
+        sent,
+        trivial,
+        accepted,
+        term_not_match,
+        epoch_not_match,
+        duplicated,
+        finished,
+    }
+
+    pub label_enum SnapshotGenerateBytesType {
+        kv,
+        sst,
+        plain,
+        io,
+    }
+
+    pub struct SnapshotBrWaitApplyEvent : IntCounter {
+        "event" => SnapshotBrWaitApplyEventType
+    }
+
+    pub label_enum SnapshotBrLeaseEventType {
+        create,
+        renew,
+        expired,
+        reset,
+    }
+
+    pub struct SnapshotBrLeaseEvent : IntCounter {
+        "event" => SnapshotBrLeaseEventType
+    }
+
     pub struct HibernatedPeerStateGauge: IntGauge {
         "state" => {
             awaken,
@@ -291,6 +332,24 @@ make_static_metric! {
 
     pub struct LoadBaseSplitEventCounterVec: IntCounter {
         "type" => LoadBaseSplitEventType,
+    }
+
+    pub struct StoreBusyOnApplyRegionsGaugeVec: IntGauge {
+        "type" => {
+            busy_apply_peers,
+            completed_apply_peers,
+        },
+    }
+
+    pub struct StoreBusyStateGaugeVec: IntGauge {
+        "type" => {
+            raftstore_busy,
+            applystore_busy,
+        },
+    }
+
+    pub struct SnapshotGenerateBytesTypeVec: IntCounter {
+        "type" => SnapshotGenerateBytesType,
     }
 }
 
@@ -416,13 +475,21 @@ lazy_static! {
         register_histogram!(
             "tikv_raftstore_store_wf_commit_log_duration_seconds",
             "Bucketed histogram of proposals' commit and persist duration.",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
+            exponential_buckets(0.00001, 2.0, 32).unwrap() // 10us ~ 42949s.
         ).unwrap();
     pub static ref STORE_WF_COMMIT_NOT_PERSIST_LOG_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_store_wf_commit_not_persist_log_duration_seconds",
             "Bucketed histogram of proposals' commit but not persist duration",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
+            exponential_buckets(0.00001, 2.0, 32).unwrap() // 10us ~ 42949s.
+        ).unwrap();
+
+    pub static ref STORE_IO_DURATION_HISTOGRAM: HistogramVec =
+        register_histogram_vec!(
+            "tikv_raftstore_io_duration_seconds",
+            "Bucketed histogram of raftstore IO duration",
+            &["type", "reason"],
+            exponential_buckets(0.00001, 2.0, 26).unwrap() // 10us ~ 671s.
         ).unwrap();
 
     pub static ref PEER_PROPOSAL_COUNTER_VEC: IntCounterVec =
@@ -454,8 +521,9 @@ lazy_static! {
         register_histogram!(
             "tikv_raftstore_commit_log_duration_seconds",
             "Bucketed histogram of peer commits logs duration.",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
+            exponential_buckets(0.00001, 2.0, 32).unwrap() // 10us ~ 42949s.
         ).unwrap();
+
 
     pub static ref STORE_APPLY_LOG_HISTOGRAM: Histogram =
         register_histogram!(
@@ -469,6 +537,13 @@ lazy_static! {
             "tikv_raftstore_apply_wait_time_duration_secs",
             "Bucketed histogram of apply task wait time duration.",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+
+    pub static ref APPLY_MSG_LEN: Histogram =
+        register_histogram!(
+            "tikv_raftstore_apply_msg_len",
+            "Length of apply msg.",
+            exponential_buckets(1.0, 2.0, 21).unwrap() // max 1024 * 1024
         ).unwrap();
 
     pub static ref STORE_RAFT_READY_COUNTER_VEC: IntCounterVec =
@@ -523,6 +598,19 @@ lazy_static! {
             exponential_buckets(8.0, 2.0, 22).unwrap()
         ).unwrap();
 
+    pub static ref STORE_APPLY_KEY_SIZE_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_apply_key_size",
+            "Bucketed histogram of apply key size.",
+            exponential_buckets(8.0, 2.0, 17).unwrap()
+        ).unwrap();
+    pub static ref STORE_APPLY_VALUE_SIZE_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_apply_value_size",
+            "Bucketed histogram of apply value size.",
+            exponential_buckets(8.0, 2.0, 23).unwrap()
+        ).unwrap();
+
     pub static ref REGION_HASH_COUNTER_VEC: IntCounterVec =
         register_int_counter_vec!(
             "tikv_raftstore_hash_total",
@@ -544,6 +632,13 @@ lazy_static! {
         register_histogram!(
             "tikv_raftstore_request_wait_time_duration_secs",
             "Bucketed histogram of request wait time duration.",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+
+    pub static ref RAFT_MESSAGE_WAIT_TIME_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_raft_msg_wait_time_duration_secs",
+            "Bucketed histogram of raft message wait time duration.",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
 
@@ -580,7 +675,7 @@ lazy_static! {
             "tikv_snapshot_cf_kv_count",
             "Total number of kv in each cf file of snapshot.",
             &["type"],
-            exponential_buckets(100.0, 2.0, 20).unwrap()
+            exponential_buckets(100.0, 2.0, 21).unwrap()
         ).unwrap();
     pub static ref SNAPSHOT_CF_KV_COUNT: SnapCf =
         auto_flush_from!(SNAPSHOT_CF_KV_COUNT_VEC, SnapCf);
@@ -598,21 +693,21 @@ lazy_static! {
         register_histogram!(
             "tikv_snapshot_build_time_duration_secs",
             "Bucketed histogram of snapshot build time duration.",
-            exponential_buckets(0.05, 2.0, 20).unwrap()
+            exponential_buckets(0.05, 2.0, 21).unwrap()
         ).unwrap();
 
     pub static ref SNAPSHOT_KV_COUNT_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_snapshot_kv_count",
             "Total number of kv in snapshot.",
-            exponential_buckets(100.0, 2.0, 20).unwrap() //100,100*2^1,...100M
+            exponential_buckets(100.0, 2.0, 21).unwrap() //100,100*2^1,...100M
         ).unwrap();
 
     pub static ref SNAPSHOT_SIZE_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_snapshot_size",
             "Size of snapshot.",
-            exponential_buckets(1024.0, 2.0, 22).unwrap() // 1024,1024*2^1,..,4G
+            exponential_buckets(1024.0, 2.0, 23).unwrap() // 1024,1024*2^1,..,4G
         ).unwrap();
 
     pub static ref RAFT_ENTRY_FETCHES_VEC: IntCounterVec =
@@ -647,12 +742,10 @@ lazy_static! {
             "Total number of leader missed region."
         ).unwrap();
 
-    pub static ref INGEST_SST_DURATION_SECONDS: Histogram =
-        register_histogram!(
-            "tikv_snapshot_ingest_sst_duration_seconds",
-            "Bucketed histogram of rocksdb ingestion durations.",
-            exponential_buckets(0.005, 2.0, 20).unwrap()
-        ).unwrap();
+    pub static ref CHECK_STALE_PEER_COUNTER: IntCounter = register_int_counter!(
+        "tikv_raftstore_check_stale_peer",
+        "Total number of checking stale peers."
+    ).unwrap();
 
     pub static ref RAFT_INVALID_PROPOSAL_COUNTER_VEC: IntCounterVec =
         register_int_counter_vec!(
@@ -666,21 +759,21 @@ lazy_static! {
             "tikv_raftstore_event_duration",
             "Duration of raft store events.",
             &["type"],
-            exponential_buckets(0.001, 1.59, 20).unwrap() // max 10s
+            exponential_buckets(0.001, 1.59, 21).unwrap() // max 10s
         ).unwrap();
 
     pub static ref PEER_MSG_LEN: Histogram =
         register_histogram!(
             "tikv_raftstore_peer_msg_len",
             "Length of peer msg.",
-            exponential_buckets(1.0, 2.0, 20).unwrap() // max 1000s
+            exponential_buckets(1.0, 2.0, 21).unwrap() // max 1024 * 1024
         ).unwrap();
 
     pub static ref RAFT_READ_INDEX_PENDING_DURATION: Histogram =
         register_histogram!(
             "tikv_raftstore_read_index_pending_duration",
             "Duration of pending read index.",
-            exponential_buckets(0.001, 2.0, 20).unwrap() // max 1000s
+            exponential_buckets(0.001, 2.0, 21).unwrap() // max 1000s
         ).unwrap();
 
     pub static ref RAFT_READ_INDEX_PENDING_COUNT: IntGauge =
@@ -723,6 +816,17 @@ lazy_static! {
         exponential_buckets(8.0, 2.0, 24).unwrap()
     ).unwrap();
 
+    pub static ref RAFT_APPLY_AHEAD_PERSIST_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_raft_apply_ahead_of_persist",
+        "Histogram of the raft log lag between persisted index and applied index",
+        exponential_buckets(1.0, 2.0, 20).unwrap()
+    ).unwrap();
+
+    pub static ref RAFT_ENABLE_UNPERSISTED_APPLY_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_raft_enable_unpersisted_apply_regions",
+        "The number of regions that disable apply unpersisted raft log."
+    ).unwrap();
+
     pub static ref RAFT_ENTRIES_CACHES_GAUGE: IntGauge = register_int_gauge!(
         "tikv_raft_entries_caches",
         "Total memory size of raft entries caches."
@@ -746,7 +850,7 @@ lazy_static! {
     register_histogram!(
         "tikv_raftstore_peer_pending_duration_seconds",
         "Bucketed histogram of region peer pending duration.",
-        exponential_buckets(0.1, 1.5, 30).unwrap()  // 0.1s ~ 5.3 hours
+        exponential_buckets(0.1, 1.5, 31).unwrap()  // 0.1s ~ 5.3 hours
     ).unwrap();
 
     pub static ref HIBERNATED_PEER_STATE_GAUGE: HibernatedPeerStateGauge = register_static_int_gauge_vec!(
@@ -766,7 +870,7 @@ lazy_static! {
         "Total number of pending write tasks from io rescheduling peers"
     ).unwrap();
 
-    pub static ref STORE_INSPECT_DURTION_HISTOGRAM: HistogramVec =
+    pub static ref STORE_INSPECT_DURATION_HISTOGRAM: HistogramVec =
         register_histogram_vec!(
             "tikv_raftstore_inspect_duration_seconds",
             "Bucketed histogram of inspect duration.",
@@ -774,8 +878,89 @@ lazy_static! {
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
 
-    pub static ref STORE_SLOW_SCORE_GAUGE: Gauge =
-    register_gauge!("tikv_raftstore_slow_score", "Slow score of the store.").unwrap();
+    pub static ref STORE_INSPECT_NETWORK_DURATION_HISTOGRAM: HistogramVec =
+        register_histogram_vec!(
+            "tikv_raftstore_inspect_network_duration_seconds",
+            "Bucketed histogram of inspect network duration.",
+            &["target"],
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+
+    pub static ref STORE_SLOW_SCORE_GAUGE: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_raftstore_slow_score",
+        "Slow score of the store.",
+        &["type"]
+    ).unwrap();
+
+    pub static ref STORE_SLOW_TREND_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend", "Slow trend changing rate.").unwrap();
+
+    pub static ref STORE_SLOW_TREND_L0_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_l0", "Slow trend L0 window avg value.").unwrap();
+    pub static ref STORE_SLOW_TREND_L1_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_l1", "Slow trend L1 window avg value.").unwrap();
+    pub static ref STORE_SLOW_TREND_L2_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_l2", "Slow trend L2 window avg value.").unwrap();
+
+    pub static ref STORE_SLOW_TREND_L0_L1_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_l0_l1", "Slow trend changing rate: L0/L1.").unwrap();
+    pub static ref STORE_SLOW_TREND_L1_L2_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_l1_l2", "Slow trend changing rate: L1/L2.").unwrap();
+
+    pub static ref STORE_SLOW_TREND_L1_MARGIN_ERROR_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_l1_margin_error", "Slow trend: L1 margin error range").unwrap();
+    pub static ref STORE_SLOW_TREND_L2_MARGIN_ERROR_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_l2_margin_error", "Slow trend: L2 margin error range").unwrap();
+
+    pub static ref STORE_SLOW_TREND_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC: IntGaugeVec =
+    register_int_gauge_vec!(
+        "tikv_raftstore_slow_trend_margin_error_gap",
+        "Slow trend: the gap between margin window time and current sampling time",
+        &["window"]
+    ).unwrap();
+
+    pub static ref STORE_SLOW_TREND_MISC_GAUGE_VEC: IntGaugeVec =
+    register_int_gauge_vec!(
+        "tikv_raftstore_slow_trend_misc",
+        "Slow trend uncatelogued gauge(s)",
+        &["window"]
+    ).unwrap();
+
+    pub static ref STORE_SLOW_TREND_RESULT_VALUE_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_result_value", "Store slow trend result meantime value").unwrap();
+    pub static ref STORE_SLOW_TREND_RESULT_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_result", "Store slow trend result changing rate").unwrap();
+
+    pub static ref STORE_SLOW_TREND_RESULT_L0_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_result_l0", "Slow trend result L0 window avg value.").unwrap();
+    pub static ref STORE_SLOW_TREND_RESULT_L1_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_result_l1", "Slow trend result L1 window avg value.").unwrap();
+    pub static ref STORE_SLOW_TREND_RESULT_L2_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_result_l2", "Slow trend result L2 window avg value.").unwrap();
+
+    pub static ref STORE_SLOW_TREND_RESULT_L0_L1_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_result_l0_l1", "Slow trend result changing rate: L0/L1.").unwrap();
+    pub static ref STORE_SLOW_TREND_RESULT_L1_L2_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_result_l1_l2", "Slow trend result changing rate: L1/L2.").unwrap();
+
+    pub static ref STORE_SLOW_TREND_RESULT_L1_MARGIN_ERROR_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_result_l1_margin_error", "Slow trend result: L1 margin error range").unwrap();
+    pub static ref STORE_SLOW_TREND_RESULT_L2_MARGIN_ERROR_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_result_l2_margin_error", "Slow trend result: L2 margin error range").unwrap();
+
+    pub static ref STORE_SLOW_TREND_RESULT_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC: IntGaugeVec =
+    register_int_gauge_vec!(
+        "tikv_raftstore_slow_trend_result_margin_error_gap",
+        "Slow trend result: the gap between margin window time and current sampling time",
+        &["window"]
+    ).unwrap();
+
+    pub static ref STORE_SLOW_TREND_RESULT_MISC_GAUGE_VEC: IntGaugeVec =
+    register_int_gauge_vec!(
+        "tikv_raftstore_slow_trend_result_misc",
+        "Slow trend result uncatelogued gauge(s)",
+        &["type"]
+    ).unwrap();
 
     pub static ref RAFT_LOG_GC_SKIPPED_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_raftstore_raft_log_gc_skipped",
@@ -790,9 +975,64 @@ lazy_static! {
         &["type"]
     ).unwrap();
 
-    pub static ref SNAPSHOT_LIMIT_GENERATE_BYTES: IntCounter = register_int_counter!(
+    pub static ref SNAPSHOT_LIMIT_GENERATE_BYTES_VEC: SnapshotGenerateBytesTypeVec = register_static_int_counter_vec!(
+        SnapshotGenerateBytesTypeVec,
         "tikv_snapshot_limit_generate_bytes",
         "Total snapshot generate limit used",
+        &["type"],
     )
     .unwrap();
+
+    pub static ref MESSAGE_RECV_BY_STORE: IntCounterVec = register_int_counter_vec!(
+        "tikv_raftstore_message_recv_by_store",
+        "Messages received by store",
+        &["store"]
+    )
+    .unwrap();
+
+    pub static ref PEER_IN_FLASHBACK_STATE: IntGauge = register_int_gauge!(
+        "tikv_raftstore_peer_in_flashback_state",
+        "Total number of peers in the flashback state"
+    ).unwrap();
+
+    pub static ref SNAP_BR_SUSPEND_COMMAND_TYPE: IntCounterVec = register_int_counter_vec!(
+        "tikv_raftstore_snap_br_suspend_command_type",
+        "The statistic of rejecting some admin commands being proposed.",
+        &["type"]
+    ).unwrap();
+
+    pub static ref SNAP_BR_WAIT_APPLY_EVENT: SnapshotBrWaitApplyEvent = register_static_int_counter_vec!(
+        SnapshotBrWaitApplyEvent,
+        "tikv_raftstore_snap_br_wait_apply_event",
+        "The events of wait apply issued by snapshot br.",
+        &["event"]
+    ).unwrap();
+
+    pub static ref SNAP_BR_SUSPEND_COMMAND_LEASE_UNTIL: IntGauge = register_int_gauge!(
+        "tikv_raftstore_snap_br_suspend_command_lease_until",
+        "The lease that snapshot br holds of rejecting some type of commands. (In unix timestamp.)"
+    ).unwrap();
+
+    pub static ref SNAP_BR_LEASE_EVENT: SnapshotBrLeaseEvent = register_static_int_counter_vec!(
+        SnapshotBrLeaseEvent,
+        "tikv_raftstore_snap_br_lease_event",
+        "The events of the lease to denying new admin commands being proposed by snapshot br.",
+        &["event"]
+    ).unwrap();
+
+    pub static ref STORE_BUSY_ON_APPLY_REGIONS_GAUGE_VEC: StoreBusyOnApplyRegionsGaugeVec =
+        register_static_int_gauge_vec!(
+            StoreBusyOnApplyRegionsGaugeVec,
+            "tikv_raftstore_busy_on_apply_region_total",
+            "Total number of regions busy on apply or complete apply.",
+            &["type"]
+        ).unwrap();
+
+    pub static ref STORE_PROCESS_BUSY_GAUGE_VEC: StoreBusyStateGaugeVec =
+        register_static_int_gauge_vec!(
+            StoreBusyStateGaugeVec,
+            "tikv_raftstore_process_busy",
+            "Is raft process busy or not",
+            &["type"]
+        ).unwrap();
 }

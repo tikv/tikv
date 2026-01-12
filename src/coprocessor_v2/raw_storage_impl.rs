@@ -10,11 +10,10 @@ use kvproto::kvrpcpb::Context;
 use tikv_util::future::paired_future_callback;
 
 use crate::storage::{
-    self,
+    self, Engine, Storage,
     errors::extract_kv_pairs,
     kv::{Error as KvError, ErrorInner as KvErrorInner},
     lock_manager::LockManager,
-    Engine, Storage,
 };
 
 /// Implementation of the [`RawStorage`] trait.
@@ -60,7 +59,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> RawStorage for RawStorageImpl<'_, E
         Ok(kv_pairs)
     }
 
-    async fn scan(&self, key_range: Range<Key>) -> PluginResult<Vec<Value>> {
+    async fn scan(&self, key_range: Range<Key>) -> PluginResult<Vec<KvPair>> {
         let ctx = self.context.clone();
         let key_only = false;
         let reverse = false;
@@ -78,7 +77,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> RawStorage for RawStorageImpl<'_, E
         let v = res.await.map_err(PluginErrorShim::from)?;
         let values = extract_kv_pairs(Ok(v))
             .into_iter()
-            .map(|kv| kv.value)
+            .map(|kv| (kv.key, kv.value))
             .collect();
         Ok(values)
     }
@@ -215,7 +214,7 @@ mod test {
     use kvproto::kvrpcpb::{ApiVersion, Context};
 
     use super::*;
-    use crate::storage::{lock_manager::MockLockManager, TestStorageBuilder};
+    use crate::storage::{TestStorageBuilder, lock_manager::MockLockManager};
 
     #[tokio::test]
     async fn test_storage_api() {
@@ -317,6 +316,13 @@ mod test {
         // Full scan
         let r = raw_storage.scan(full_scan.clone()).await.unwrap();
         assert_eq!(r.len(), 3);
+        assert_eq!(
+            r,
+            keys.clone()
+                .into_iter()
+                .zip(values.clone())
+                .collect::<Vec<(Vec<u8>, Vec<u8>)>>()
+        );
 
         // Batch delete (one non-existent)
         raw_storage
@@ -331,6 +337,14 @@ mod test {
             .unwrap();
         let r = raw_storage.scan(full_scan.clone()).await.unwrap();
         assert_eq!(r.len(), 1);
+        assert_eq!(
+            r,
+            keys.clone()
+                .into_iter()
+                .skip(2)
+                .zip(values.clone().skip(2))
+                .collect::<Vec<(Vec<u8>, Vec<u8>)>>()
+        );
 
         // Batch put (one overwrite)
         raw_storage
@@ -339,6 +353,13 @@ mod test {
             .unwrap();
         let r = raw_storage.scan(full_scan.clone()).await.unwrap();
         assert_eq!(r.len(), 3);
+        assert_eq!(
+            r,
+            keys.clone()
+                .into_iter()
+                .zip(values.clone())
+                .collect::<Vec<(Vec<u8>, Vec<u8>)>>()
+        );
 
         // Delete range (all)
         raw_storage.delete_range(full_scan.clone()).await.unwrap();

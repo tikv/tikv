@@ -3,15 +3,14 @@
 use std::{
     iter::repeat,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
     },
     thread,
     time::Duration,
-    u64,
 };
 
-use api_version::{dispatch_api_version, KvFormat};
+use api_version::{KvFormat, dispatch_api_version};
 use engine_traits::{CF_DEFAULT, CF_LOCK};
 use kvproto::{
     kvrpcpb::{ApiVersion, Context, KeyRange, LockInfo},
@@ -23,7 +22,7 @@ use test_storage::*;
 use tikv::{
     coprocessor::checksum_crc64_xor,
     server::gc_worker::DEFAULT_GC_BATCH_KEYS,
-    storage::{mvcc::MAX_TXN_WRITE_SIZE, txn::RESOLVE_LOCK_BATCH_SIZE, Engine},
+    storage::{Engine, mvcc::MAX_TXN_WRITE_SIZE, txn::RESOLVE_LOCK_BATCH_SIZE},
 };
 use txn_types::{Key, Mutation, TimeStamp};
 
@@ -1237,6 +1236,9 @@ fn test_isolation_inc() {
         let (punch_card, store, oracle) =
             (Arc::clone(&punch_card), store.clone(), Arc::clone(&oracle));
         threads.push(thread::spawn(move || {
+            // Migrated to 2021 migration. This let statement is probably not needed, see
+            //   https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html
+            let _ = &store;
             for _ in 0..INC_PER_THREAD {
                 let number = inc(&store.store, &oracle, b"key").unwrap() as usize;
                 let mut punch = punch_card.lock().unwrap();
@@ -1326,6 +1328,9 @@ fn test_isolation_multi_inc() {
     for _ in 0..THREAD_NUM {
         let (store, oracle) = (store.clone(), Arc::clone(&oracle));
         threads.push(thread::spawn(move || {
+            // Migrated to 2021 migration. This let statement is probably not needed, see
+            //   https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html
+            let _ = &store;
             for _ in 0..INC_PER_THREAD {
                 assert!(inc_multi(&store.store, &oracle, KEY_NUM));
             }

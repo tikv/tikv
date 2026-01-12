@@ -1,7 +1,5 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::convert::TryFrom;
-
 use codec::{
     buffer::{BufferReader, BufferWriter},
     number::{NumberDecoder, NumberEncoder},
@@ -11,14 +9,16 @@ use tipb::FieldType;
 
 use super::{Error, Result};
 use crate::{
+    EvalType, FieldTypeFlag, FieldTypeTp,
     codec::{
-        data_type::{ChunkRef, VectorValue},
+        Datum,
+        data_type::{ChunkRef, VectorFloat32Ref, VectorValue},
         datum,
         datum_codec::DatumPayloadDecoder,
         mysql::{
             decimal::{
-                Decimal, DecimalDatumPayloadChunkEncoder, DecimalDecoder, DecimalEncoder,
-                DECIMAL_STRUCT_SIZE,
+                DECIMAL_STRUCT_SIZE, Decimal, DecimalDatumPayloadChunkEncoder, DecimalDecoder,
+                DecimalEncoder,
             },
             duration::{
                 Duration, DurationDatumPayloadChunkEncoder, DurationDecoder, DurationEncoder,
@@ -26,12 +26,14 @@ use crate::{
             enums::{Enum, EnumDatumPayloadChunkEncoder, EnumDecoder, EnumEncoder, EnumRef},
             json::{Json, JsonDatumPayloadChunkEncoder, JsonDecoder, JsonEncoder, JsonRef},
             time::{Time, TimeDatumPayloadChunkEncoder, TimeDecoder, TimeEncoder},
+            vector::{
+                VectorFloat32, VectorFloat32DatumPayloadChunkEncoder, VectorFloat32Decoder,
+                VectorFloat32Encoder,
+            },
         },
-        Datum,
     },
     expr::EvalContext,
     prelude::*,
-    EvalType, FieldTypeFlag, FieldTypeTp,
 };
 
 /// `Column` stores the same column data of multi rows in one chunk.
@@ -130,6 +132,11 @@ impl Column {
             EvalType::Json => {
                 for &row_index in logical_rows {
                     col.append_json_datum(&raw_datums[row_index])?
+                }
+            }
+            EvalType::VectorFloat32 => {
+                for &row_index in logical_rows {
+                    col.append_vector_float32_datum(&raw_datums[row_index])?
                 }
             }
             EvalType::Enum => {
@@ -276,6 +283,16 @@ impl Column {
                     }
                 }
             }
+            VectorValue::VectorFloat32(vec) => {
+                for &row_index in logical_rows {
+                    match vec.get_option_ref(row_index) {
+                        None => {
+                            col.append_null();
+                        }
+                        Some(val) => col.append_vector_float32(val)?,
+                    }
+                }
+            }
             VectorValue::Enum(vec) => {
                 for &row_index in logical_rows {
                     match vec.get_option_ref(row_index) {
@@ -317,6 +334,7 @@ impl Column {
             FieldTypeTp::Duration => Datum::Dur(self.get_duration(idx, field_type.decimal())?),
             FieldTypeTp::NewDecimal => Datum::Dec(self.get_decimal(idx)?),
             FieldTypeTp::Json => Datum::Json(self.get_json(idx)?),
+            FieldTypeTp::TiDbVectorFloat32 => Datum::VectorFloat32(self.get_vector_float32(idx)?),
             FieldTypeTp::Enum => Datum::Enum(self.get_enum(idx)?),
             FieldTypeTp::Bit => Datum::Bytes(self.get_bytes(idx).to_vec()),
             FieldTypeTp::Set => {
@@ -903,6 +921,39 @@ impl Column {
         data.read_json()
     }
 
+    pub fn append_vector_float32(&mut self, v: VectorFloat32Ref<'_>) -> Result<()> {
+        self.data.write_vector_float32(v)?;
+        self.finished_append_var();
+        Ok(())
+    }
+
+    pub fn append_vector_float32_datum(&mut self, src_datum: &[u8]) -> Result<()> {
+        let raw_datum = &src_datum[1..];
+        let flag = src_datum[0];
+        match flag {
+            datum::NIL_FLAG => self.append_null(),
+            datum::VECTOR_FLOAT32_FLAG => {
+                self.data
+                    .write_vector_float32_to_chunk_by_datum_payload(raw_datum)?;
+                self.finished_append_var();
+            }
+            _ => {
+                return Err(Error::InvalidDataType(format!(
+                    "Unsupported datum flag {} for VectorFloat32 vector",
+                    flag
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn get_vector_float32(&self, idx: usize) -> Result<VectorFloat32> {
+        let start = self.var_offsets[idx];
+        let end = self.var_offsets[idx + 1];
+        let mut data = &self.data[start..end];
+        data.read_vector_float32()
+    }
+
     // Append an Enum datum to the column
     #[inline]
     pub fn append_enum(&mut self, e: EnumRef<'_>) -> Result<()> {
@@ -966,13 +1017,16 @@ impl Column {
         self.len() == 0
     }
 
-    #[cfg(test)]
-    pub fn decode(buf: &mut tikv_util::codec::BytesSlice<'_>, tp: FieldTypeTp) -> Result<Column> {
+    /// Only used for test
+    pub fn decode_for_test(
+        buf: &mut tikv_util::codec::BytesSlice<'_>,
+        tp: FieldTypeTp,
+    ) -> Result<Column> {
         let length = buf.read_u32_le()? as usize;
         let mut col = Column::new(tp, length);
         col.length = length;
         col.null_cnt = buf.read_u32_le()? as usize;
-        let null_length = (col.length + 7) / 8_usize;
+        let null_length = col.length.div_ceil(8);
         if col.null_cnt > 0 {
             col.null_bitmap = buf.read_bytes(null_length)?.to_vec();
         } else {
@@ -1002,7 +1056,7 @@ pub trait ChunkColumnEncoder: NumberEncoder {
         self.write_u32_le(col.null_cnt as u32)?;
         // bitmap
         if col.null_cnt > 0 {
-            let length = (col.length + 7) / 8;
+            let length = col.length.div_ceil(8);
             self.write_bytes(&col.null_bitmap[0..length])?;
         }
         // offsets
@@ -1022,7 +1076,7 @@ impl<T: BufferWriter> ChunkColumnEncoder for T {}
 
 #[cfg(test)]
 mod tests {
-    use std::{f64, u64};
+    use std::f64;
 
     use tipb::FieldType;
 

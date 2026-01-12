@@ -14,14 +14,14 @@ fn prepare_for_stale_read(leader: Peer) -> (Cluster<ServerCluster>, Arc<TestPdCl
 
 fn prepare_for_stale_read_before_run(
     leader: Peer,
-    before_run: Option<Box<dyn Fn(&mut Cluster<ServerCluster>)>>,
+    before_run: Option<Box<dyn Fn(&mut Config)>>,
 ) -> (Cluster<ServerCluster>, Arc<TestPdClient>, PeerClient) {
     let mut cluster = new_server_cluster(0, 3);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
     if let Some(f) = before_run {
-        f(&mut cluster);
+        f(&mut cluster.cfg);
     };
     cluster.cfg.resolved_ts.enable = true;
     cluster.run();
@@ -30,8 +30,7 @@ fn prepare_for_stale_read_before_run(
     let leader_client = PeerClient::new(&cluster, 1, leader);
 
     // There should be no read index message while handling stale read request
-    let on_step_read_index_msg = "on_step_read_index_msg";
-    fail::cfg(on_step_read_index_msg, "panic").unwrap();
+    fail::cfg("propose_readindex_from_follower", "panic").unwrap();
 
     (cluster, pd_client, leader_client)
 }
@@ -288,9 +287,11 @@ fn test_update_resoved_ts_before_apply_index() {
     sleep_ms(100);
 
     // The leader can't handle stale read with `commit_ts2` because its `safe_ts`
-    // can't update due to its `apply_index` not update
+    // can't update due to its `apply_index` not update.
+    // The request would be handled as a snapshot read on the valid leader peer
+    // after fallback.
     let resp = leader_client.kv_read(b"key1".to_vec(), commit_ts2);
-    assert!(resp.get_region_error().has_data_is_not_ready(),);
+    assert_eq!(resp.get_value(), b"value2");
     // The follower can't handle stale read with `commit_ts2` because it don't
     // have enough data
     let resp = follower_client2.kv_read(b"key1".to_vec(), commit_ts2);
@@ -667,10 +668,10 @@ fn test_stale_read_future_ts_not_update_max_ts() {
         b"key1".to_vec(),
     );
 
-    // Perform stale read with a future ts should return error
+    // Perform stale read with a future ts, the stale read could be processed
+    // falling back to snapshot read on the leader peer.
     let read_ts = get_tso(&pd_client) + 10000000;
-    let resp = leader_client.kv_read(b"key1".to_vec(), read_ts);
-    assert!(resp.get_region_error().has_data_is_not_ready());
+    leader_client.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), read_ts);
 
     // The `max_ts` should not updated by the stale read request, so we can prewrite
     // and commit `async_commit` transaction with a ts that smaller than the
@@ -687,10 +688,10 @@ fn test_stale_read_future_ts_not_update_max_ts() {
     leader_client.must_kv_commit(vec![b"key2".to_vec()], prewrite_ts, commit_ts);
     leader_client.must_kv_read_equal(b"key2".to_vec(), b"value1".to_vec(), get_tso(&pd_client));
 
-    // Perform stale read with a future ts should return error
+    // Perform stale read with a future ts, the stale read could be processed
+    // falling back to snapshot read on the leader peer.
     let read_ts = get_tso(&pd_client) + 10000000;
-    let resp = leader_client.kv_read(b"key1".to_vec(), read_ts);
-    assert!(resp.get_region_error().has_data_is_not_ready());
+    leader_client.must_kv_read_equal(b"key2".to_vec(), b"value1".to_vec(), read_ts);
 
     // The `max_ts` should not updated by the stale read request, so 1pc transaction
     // with a ts that smaller than the `read_ts` should not be fallbacked to 2pc

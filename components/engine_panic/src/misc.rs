@@ -1,6 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{DeleteStrategy, MiscExt, Range, Result, StatisticsReporter};
+use engine_traits::{
+    DeleteStrategy, MiscExt, Range, RangeStats, Result, StatisticsReporter, WriteOptions,
+};
 
 use crate::engine::PanicEngine;
 
@@ -31,12 +33,21 @@ impl MiscExt for PanicEngine {
         panic!()
     }
 
+    fn flush_oldest_cf(
+        &self,
+        wait: bool,
+        age_threshold: Option<std::time::SystemTime>,
+    ) -> Result<bool> {
+        panic!()
+    }
+
     fn delete_ranges_cf(
         &self,
+        wopts: &WriteOptions,
         cf: &str,
         strategy: DeleteStrategy,
         ranges: &[Range<'_>],
-    ) -> Result<()> {
+    ) -> Result<bool> {
         panic!()
     }
 
@@ -44,11 +55,7 @@ impl MiscExt for PanicEngine {
         panic!()
     }
 
-    fn ingest_maybe_slowdown_writes(&self, cf: &str) -> Result<bool> {
-        panic!()
-    }
-
-    fn get_sst_key_ranges(&self, cf: &str, level: usize) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+    fn ingest_maybe_slowdown_writes(&self, cf: &str, inflight_ingest_cnt: u64) -> Result<bool> {
         panic!()
     }
 
@@ -64,7 +71,19 @@ impl MiscExt for PanicEngine {
         panic!()
     }
 
+    fn disable_manual_compaction(&self) -> Result<()> {
+        panic!()
+    }
+
+    fn enable_manual_compaction(&self) -> Result<()> {
+        panic!()
+    }
+
     fn pause_background_work(&self) -> Result<()> {
+        panic!()
+    }
+
+    fn continue_background_work(&self) -> Result<()> {
         panic!()
     }
 
@@ -92,16 +111,31 @@ impl MiscExt for PanicEngine {
         panic!()
     }
 
-    fn get_range_entries_and_versions(
-        &self,
-        cf: &str,
-        start: &[u8],
-        end: &[u8],
-    ) -> Result<Option<(u64, u64)>> {
+    fn get_num_keys(&self) -> Result<u64> {
+        panic!()
+    }
+
+    fn get_range_stats(&self, cf: &str, start: &[u8], end: &[u8]) -> Result<Option<RangeStats>> {
         panic!()
     }
 
     fn is_stalled_or_stopped(&self) -> bool {
+        panic!()
+    }
+
+    fn get_active_memtable_stats_cf(
+        &self,
+        cf: &str,
+    ) -> Result<Option<(u64, std::time::SystemTime)>> {
+        panic!()
+    }
+
+    fn get_accumulated_flush_count_cf(cf: &str) -> Result<u64> {
+        panic!()
+    }
+
+    type DiskEngine = PanicEngine;
+    fn get_disk_engine(&self) -> &Self::DiskEngine {
         panic!()
     }
 }

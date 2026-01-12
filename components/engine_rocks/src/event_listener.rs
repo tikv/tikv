@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::PersistenceListener;
-use file_system::{get_io_type, set_io_type, IoType};
+use file_system::{IoType, get_io_type, set_io_type};
 use regex::Regex;
 use rocksdb::{
     CompactionJobInfo, DBBackgroundErrorReason, FlushJobInfo, IngestionInfo, MemTableInfo,
@@ -120,6 +120,9 @@ impl rocksdb::EventListener for RocksEventListener {
                 DBBackgroundErrorReason::Compaction => "compaction",
                 DBBackgroundErrorReason::WriteCallback => "write_callback",
                 DBBackgroundErrorReason::MemTable => "memtable",
+                DBBackgroundErrorReason::ManifestWrite => "manifest_write",
+                DBBackgroundErrorReason::FlushNoWAL => "flush_no_wal",
+                DBBackgroundErrorReason::ManifestWriteNoWAL => "manifest_write_no_wal",
             };
 
             if err.starts_with("Corruption") || err.starts_with("IO error") {
@@ -127,6 +130,7 @@ impl rocksdb::EventListener for RocksEventListener {
                     if let Some(path) = resolve_sst_filename_from_err(&err) {
                         warn!(
                             "detected rocksdb background error";
+                            "reason" => r,
                             "sst" => &path,
                             "err" => &err
                         );
@@ -171,10 +175,7 @@ impl rocksdb::EventListener for RocksEventListener {
 // We assume that only the corruption sst file path is printed inside error.
 fn resolve_sst_filename_from_err(err: &str) -> Option<String> {
     let r = Regex::new(r"/\w*\.sst").unwrap();
-    let matches = match r.captures(err) {
-        None => return None,
-        Some(v) => v,
-    };
+    let matches = r.captures(err)?;
     let filename = matches.get(0).unwrap().as_str().to_owned();
     Some(filename)
 }
@@ -189,30 +190,51 @@ impl RocksPersistenceListener {
 
 impl rocksdb::EventListener for RocksPersistenceListener {
     fn on_memtable_sealed(&self, info: &MemTableInfo) {
-        self.0
-            .on_memtable_sealed(info.cf_name().to_string(), info.earliest_seqno());
+        // Note: first_seqno is effectively the smallest seqno of memtable.
+        // earliest_seqno has ambiguous semantics.
+        self.0.on_memtable_sealed(
+            info.cf_name().to_string(),
+            info.first_seqno(),
+            info.largest_seqno(),
+        );
+    }
+
+    fn on_flush_begin(&self, _: &FlushJobInfo) {
+        fail::fail_point!("on_flush_begin");
     }
 
     fn on_flush_completed(&self, job: &FlushJobInfo) {
+        let num = match job
+            .file_path()
+            .file_prefix()
+            .and_then(|n| n.to_str())
+            .map(|n| n.parse())
+        {
+            Some(Ok(n)) => n,
+            _ => {
+                slog_global::error!("failed to parse file number"; "path" => job.file_path().display());
+                0
+            }
+        };
         self.0
-            .on_flush_completed(job.cf_name(), job.largest_seqno());
+            .on_flush_completed(job.cf_name(), job.largest_seqno(), num);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use std::sync::{
-        mpsc::{self, Sender},
         Arc, Mutex,
+        mpsc::{self, Sender},
     };
 
     use engine_traits::{
-        FlushProgress, FlushState, MiscExt, StateStorage, SyncMutable, CF_DEFAULT, DATA_CFS,
+        ApplyProgress, CF_DEFAULT, DATA_CFS, FlushState, MiscExt, StateStorage, SyncMutable,
     };
     use tempfile::Builder;
 
     use super::*;
-    use crate::{util, RocksCfOptions, RocksDbOptions};
+    use crate::{RocksCfOptions, RocksDbOptions, util};
 
     #[test]
     fn test_resolve_sst_filename() {
@@ -221,7 +243,7 @@ mod tests {
         assert_eq!(filename, "/000398.sst");
     }
 
-    type Record = (u64, u64, FlushProgress);
+    type Record = (u64, u64, ApplyProgress);
 
     #[derive(Default)]
     struct MemStorage {
@@ -229,7 +251,7 @@ mod tests {
     }
 
     impl StateStorage for MemStorage {
-        fn persist_progress(&self, region_id: u64, tablet_index: u64, pr: FlushProgress) {
+        fn persist_progress(&self, region_id: u64, tablet_index: u64, pr: ApplyProgress) {
             self.records
                 .lock()
                 .unwrap()
@@ -291,7 +313,7 @@ mod tests {
                         Ok(p) => p,
                         Err(_) => return false,
                     };
-                    p.path().extension().map_or(false, |ext| ext == "sst")
+                    p.path().extension().is_some_and(|ext| ext == "sst")
                 })
                 .count()
         };

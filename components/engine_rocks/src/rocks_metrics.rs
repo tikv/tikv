@@ -1,7 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::atomic::Ordering;
+
 use collections::HashMap;
-use engine_traits::{StatisticsReporter, CF_DEFAULT};
+use engine_traits::{CF_DEFAULT, StatisticsReporter};
 use lazy_static::lazy_static;
 use prometheus::*;
 use prometheus_static_metric::*;
@@ -9,7 +11,11 @@ use rocksdb::{
     DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType, HistogramData,
 };
 
-use crate::{engine::RocksEngine, rocks_metrics_defs::*, RocksStatistics};
+use crate::{
+    RocksStatistics, TITAN_COMPRESSION_FACTOR, TITAN_COMPRESSION_FACTOR_SMOOTHER,
+    TITAN_MAX_BLOB_SIZE_SEEN, TITAN_MAX_COMPACTION_FACTOR, engine::RocksEngine,
+    rocks_metrics_defs::*,
+};
 
 make_auto_flush_static_metric! {
     pub label_enum TickerName {
@@ -94,6 +100,10 @@ make_auto_flush_static_metric! {
         failure,
         success,
         trigger_next,
+        last_level_seek_filtered,
+        last_level_seek_filter_match,
+        non_last_level_seek_filtered,
+        non_last_level_seek_filter_match,
     }
 
     pub struct EngineTickerMetrics : LocalIntCounter {
@@ -162,12 +172,6 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
                 .block_cache_index_bytes_insert
                 .inc_by(value);
         }
-        TickerType::BlockCacheIndexBytesEvict => {
-            STORE_ENGINE_CACHE_EFFICIENCY
-                .get(name_enum)
-                .block_cache_index_bytes_evict
-                .inc_by(value);
-        }
         TickerType::BlockCacheFilterMiss => {
             STORE_ENGINE_CACHE_EFFICIENCY
                 .get(name_enum)
@@ -190,12 +194,6 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
             STORE_ENGINE_CACHE_EFFICIENCY
                 .get(name_enum)
                 .block_cache_filter_bytes_insert
-                .inc_by(value);
-        }
-        TickerType::BlockCacheFilterBytesEvict => {
-            STORE_ENGINE_CACHE_EFFICIENCY
-                .get(name_enum)
-                .block_cache_filter_bytes_evict
                 .inc_by(value);
         }
         TickerType::BlockCacheDataMiss => {
@@ -238,6 +236,30 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
             STORE_ENGINE_BLOOM_EFFICIENCY
                 .get(name_enum)
                 .bloom_useful
+                .inc_by(value);
+        }
+        TickerType::LastLevelSeekFiltered => {
+            STORE_ENGINE_BLOOM_EFFICIENCY
+                .get(name_enum)
+                .last_level_seek_filtered
+                .inc_by(value);
+        }
+        TickerType::LastLevelSeekFilterMatch => {
+            STORE_ENGINE_BLOOM_EFFICIENCY
+                .get(name_enum)
+                .last_level_seek_filter_match
+                .inc_by(value);
+        }
+        TickerType::NonLastLevelSeekFiltered => {
+            STORE_ENGINE_BLOOM_EFFICIENCY
+                .get(name_enum)
+                .non_last_level_seek_filtered
+                .inc_by(value);
+        }
+        TickerType::NonLastLevelSeekFilterMatch => {
+            STORE_ENGINE_BLOOM_EFFICIENCY
+                .get(name_enum)
+                .non_last_level_seek_filter_match
                 .inc_by(value);
         }
         TickerType::MemtableHit => {
@@ -357,12 +379,6 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
                 .iter_bytes_read
                 .inc_by(value);
         }
-        TickerType::NoFileCloses => {
-            STORE_ENGINE_FILE_STATUS
-                .get(name_enum)
-                .no_file_closes
-                .inc_by(value);
-        }
         TickerType::NoFileOpens => {
             STORE_ENGINE_FILE_STATUS
                 .get(name_enum)
@@ -409,12 +425,6 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
             STORE_ENGINE_WRITE_SERVED
                 .get(name_enum)
                 .write_done_by_other
-                .inc_by(value);
-        }
-        TickerType::WriteTimedout => {
-            STORE_ENGINE_WRITE_SERVED
-                .get(name_enum)
-                .write_timeout
                 .inc_by(value);
         }
         TickerType::WriteWithWal => {
@@ -677,46 +687,6 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
                 value
             );
         }
-        HistType::StallL0SlowdownCount => {
-            engine_histogram_metrics!(
-                STORE_ENGINE_STALL_L0_SLOWDOWN_COUNT_VEC,
-                "stall_l0_slowdown_count",
-                name,
-                value
-            );
-        }
-        HistType::StallMemtableCompactionCount => {
-            engine_histogram_metrics!(
-                STORE_ENGINE_STALL_MEMTABLE_COMPACTION_COUNT_VEC,
-                "stall_memtable_compaction_count",
-                name,
-                value
-            );
-        }
-        HistType::StallL0NumFilesCount => {
-            engine_histogram_metrics!(
-                STORE_ENGINE_STALL_L0_NUM_FILES_COUNT_VEC,
-                "stall_l0_num_files_count",
-                name,
-                value
-            );
-        }
-        HistType::HardRateLimitDelayCount => {
-            engine_histogram_metrics!(
-                STORE_ENGINE_HARD_RATE_LIMIT_DELAY_VEC,
-                "hard_rate_limit_delay",
-                name,
-                value
-            );
-        }
-        HistType::SoftRateLimitDelayCount => {
-            engine_histogram_metrics!(
-                STORE_ENGINE_SOFT_RATE_LIMIT_DELAY_VEC,
-                "soft_rate_limit_delay",
-                name,
-                value
-            );
-        }
         HistType::NumFilesInSingleCompaction => {
             engine_histogram_metrics!(
                 STORE_ENGINE_NUM_FILES_IN_SINGLE_COMPACTION_VEC,
@@ -917,13 +887,12 @@ struct CfLevelStats {
 #[derive(Default)]
 struct CfStats {
     used_size: Option<u64>,
-    blob_cache_size: Option<u64>,
     readers_mem: Option<u64>,
     mem_tables: Option<u64>,
+    mem_tables_all: Option<u64>,
     num_keys: Option<u64>,
     pending_compaction_bytes: Option<u64>,
     num_immutable_mem_table: Option<u64>,
-    live_blob_size: Option<u64>,
     num_live_blob_file: Option<u64>,
     num_obsolete_blob_file: Option<u64>,
     live_blob_file_size: Option<u64>,
@@ -941,7 +910,10 @@ struct DbStats {
     num_snapshots: Option<u64>,
     oldest_snapshot_time: Option<u64>,
     block_cache_size: Option<u64>,
+    blob_cache_size: Option<u64>,
     stall_num: Option<[u64; ROCKSDB_IOSTALL_KEY.len()]>,
+    num_running_compactions: Option<u64>,
+    num_running_flushes: Option<u64>,
 }
 
 pub struct RocksStatisticsReporter {
@@ -968,7 +940,6 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
             // column families.
             *cf_stats.used_size.get_or_insert_default() +=
                 crate::util::get_engine_cf_used_size(db, handle);
-            *cf_stats.blob_cache_size.get_or_insert_default() += db.get_blob_cache_usage_cf(handle);
             // TODO: find a better place to record these metrics.
             // Refer: https://github.com/facebook/rocksdb/wiki/Memory-usage-in-RocksDB
             // For index and filter blocks memory
@@ -977,6 +948,9 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
             }
             if let Some(v) = db.get_property_int_cf(handle, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES) {
                 *cf_stats.mem_tables.get_or_insert_default() += v;
+            }
+            if let Some(v) = db.get_property_int_cf(handle, ROCKSDB_SIZE_ALL_MEM_TABLES) {
+                *cf_stats.mem_tables_all.get_or_insert_default() += v;
             }
             // TODO: add cache usage and pinned usage.
             if let Some(v) = db.get_property_int_cf(handle, ROCKSDB_ESTIMATE_NUM_KEYS) {
@@ -989,9 +963,6 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
                 *cf_stats.num_immutable_mem_table.get_or_insert_default() += v;
             }
             // Titan.
-            if let Some(v) = db.get_property_int_cf(handle, ROCKSDB_TITANDB_LIVE_BLOB_SIZE) {
-                *cf_stats.live_blob_size.get_or_insert_default() += v;
-            }
             if let Some(v) = db.get_property_int_cf(handle, ROCKSDB_TITANDB_NUM_LIVE_BLOB_FILE) {
                 *cf_stats.num_live_blob_file.get_or_insert_default() += v;
             }
@@ -1074,6 +1045,17 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
             }
         }
 
+        // For compaction and flushes.
+        if let Some(v) = db.get_property_int(ROCKSDB_NUM_RUNNING_COMPACTIONS) {
+            *self
+                .db_stats
+                .num_running_compactions
+                .get_or_insert_default() += v;
+        }
+        if let Some(v) = db.get_property_int(ROCKSDB_NUM_RUNNING_FLUSHES) {
+            *self.db_stats.num_running_flushes.get_or_insert_default() += v;
+        }
+
         // For snapshot
         *self.db_stats.num_snapshots.get_or_insert_default() +=
             db.get_property_int(ROCKSDB_NUM_SNAPSHOTS).unwrap_or(0);
@@ -1095,17 +1077,17 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
             *self.db_stats.block_cache_size.get_or_insert_default() =
                 db.get_block_cache_usage_cf(handle);
         }
+        if self.db_stats.blob_cache_size.is_none() {
+            let handle = crate::util::get_cf_handle(db, CF_DEFAULT).unwrap();
+            *self.db_stats.blob_cache_size.get_or_insert_default() =
+                db.get_blob_cache_usage_cf(handle);
+        }
     }
 
     fn flush(&mut self) {
         for (cf, cf_stats) in &self.cf_stats {
             if let Some(v) = cf_stats.used_size {
                 STORE_ENGINE_SIZE_GAUGE_VEC
-                    .with_label_values(&[&self.name, cf])
-                    .set(v as i64);
-            }
-            if let Some(v) = cf_stats.blob_cache_size {
-                STORE_ENGINE_BLOB_CACHE_USAGE_GAUGE_VEC
                     .with_label_values(&[&self.name, cf])
                     .set(v as i64);
             }
@@ -1117,6 +1099,11 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
             if let Some(v) = cf_stats.mem_tables {
                 STORE_ENGINE_MEMORY_GAUGE_VEC
                     .with_label_values(&[&self.name, cf, "mem-tables"])
+                    .set(v as i64);
+            }
+            if let Some(v) = cf_stats.mem_tables_all {
+                STORE_ENGINE_MEMORY_GAUGE_VEC
+                    .with_label_values(&[&self.name, cf, "mem-tables-all"])
                     .set(v as i64);
             }
             if let Some(v) = cf_stats.num_keys {
@@ -1134,9 +1121,10 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
                     STORE_ENGINE_NUM_FILES_AT_LEVEL_VEC
                         .with_label_values(&[&self.name, cf, &level.to_string()])
                         .set(num_files as i64);
-                    if num_files > 0 && let Some(ratio) = level_stats.weighted_compression_ratio {
-                        let normalized_compression_ratio =
-                        ratio / num_files as f64;
+                    if num_files > 0
+                        && let Some(ratio) = level_stats.weighted_compression_ratio
+                    {
+                        let normalized_compression_ratio = ratio / num_files as f64;
                         STORE_ENGINE_COMPRESSION_RATIO_VEC
                             .with_label_values(&[&self.name, cf, &level.to_string()])
                             .set(normalized_compression_ratio);
@@ -1151,11 +1139,6 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
 
             if let Some(v) = cf_stats.num_immutable_mem_table {
                 STORE_ENGINE_NUM_IMMUTABLE_MEM_TABLE_VEC
-                    .with_label_values(&[&self.name, cf])
-                    .set(v as i64);
-            }
-            if let Some(v) = cf_stats.live_blob_size {
-                STORE_ENGINE_TITANDB_LIVE_BLOB_SIZE_VEC
                     .with_label_values(&[&self.name, cf])
                     .set(v as i64);
             }
@@ -1206,6 +1189,17 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
             }
         }
 
+        if let Some(v) = self.db_stats.num_running_compactions {
+            STORE_ENGINE_NUM_RUNNING_COMPACTIONS_GAUGE_VEC
+                .with_label_values(&[&self.name])
+                .set(v as i64);
+        }
+        if let Some(v) = self.db_stats.num_running_flushes {
+            STORE_ENGINE_NUM_RUNNING_FLUSHES_GAUGE_VEC
+                .with_label_values(&[&self.name])
+                .set(v as i64);
+        }
+
         if let Some(v) = self.db_stats.num_snapshots {
             STORE_ENGINE_NUM_SNAPSHOTS_GAUGE_VEC
                 .with_label_values(&[&self.name])
@@ -1218,6 +1212,11 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
         }
         if let Some(v) = self.db_stats.block_cache_size {
             STORE_ENGINE_BLOCK_CACHE_USAGE_GAUGE_VEC
+                .with_label_values(&[&self.name, "all"])
+                .set(v as i64);
+        }
+        if let Some(v) = self.db_stats.blob_cache_size {
+            STORE_ENGINE_BLOB_CACHE_USAGE_GAUGE_VEC
                 .with_label_values(&[&self.name, "all"])
                 .set(v as i64);
         }
@@ -1242,6 +1241,30 @@ pub fn flush_engine_statistics(statistics: &RocksStatistics, name: &str, is_tita
         }
     }
     if is_titan {
+        if let Some(v) = statistics.get_histogram(HistType::TitanValueSize) {
+            // Update the Titan compression factor, which is used to estimate
+            // blob raw size when building SST table properties.
+            let keys_cnt = statistics.get_ticker_count(TickerType::TitanBlobFileNumKeysWritten);
+            let compressed_size =
+                statistics.get_ticker_count(TickerType::TitanBlobFileBytesWritten);
+            let estimated_raw_size = (v.average * keys_cnt as f64) as u64;
+            if estimated_raw_size > 0 && compressed_size > 0 {
+                let compression_factor = (estimated_raw_size as f64 / compressed_size as f64)
+                    .clamp(1.0, TITAN_MAX_COMPACTION_FACTOR);
+                let mut smoother = TITAN_COMPRESSION_FACTOR_SMOOTHER.lock().unwrap();
+                smoother.observe(compression_factor);
+                TITAN_COMPRESSION_FACTOR.store(smoother.get_avg().to_bits(), Ordering::Relaxed);
+                TITAN_COMPRESSION_FACTOR_GAUGE.set(smoother.get_avg());
+            }
+
+            // Update the Titan max blob size seen, used to cap blob size
+            // estimation.
+            let current = TITAN_MAX_BLOB_SIZE_SEEN.load(Ordering::Relaxed);
+            if current == u64::MAX || v.max as u64 > current {
+                TITAN_MAX_BLOB_SIZE_SEEN.store(v.max as u64, Ordering::Relaxed);
+            }
+        }
+
         for t in TITAN_ENGINE_TICKER_TYPES {
             let v = statistics.get_and_reset_ticker_count(*t);
             flush_engine_ticker_metrics(*t, v, name);
@@ -1297,6 +1320,16 @@ lazy_static! {
         "Number of files at each level",
         &["db", "cf", "level"]
     ).unwrap();
+    pub static ref STORE_ENGINE_NUM_RUNNING_COMPACTIONS_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_engine_num_running_compactions",
+        "Number of currently running compactions",
+        &["db"]
+    ).unwrap();
+    pub static ref STORE_ENGINE_NUM_RUNNING_FLUSHES_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_engine_num_running_flushes",
+        "Number of currently running flushes",
+        &["db"]
+    ).unwrap();
     pub static ref STORE_ENGINE_NUM_SNAPSHOTS_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
         "tikv_engine_num_snapshots",
         "Number of unreleased snapshots",
@@ -1316,11 +1349,6 @@ lazy_static! {
         "tikv_engine_titandb_num_blob_files_at_level",
         "Number of blob files at each level",
         &["db", "cf", "level"]
-    ).unwrap();
-    pub static ref STORE_ENGINE_TITANDB_LIVE_BLOB_SIZE_VEC: IntGaugeVec = register_int_gauge_vec!(
-        "tikv_engine_titandb_live_blob_size",
-        "Total titan blob value size referenced by LSM tree",
-        &["db", "cf"]
     ).unwrap();
     pub static ref STORE_ENGINE_TITANDB_NUM_LIVE_BLOB_FILE_VEC: IntGaugeVec = register_int_gauge_vec!(
         "tikv_engine_titandb_num_live_blob_file",
@@ -1538,9 +1566,9 @@ lazy_static! {
         "Number of times titan blob file sync is done",
         &["db"]
     ).unwrap();
-    pub static ref STORE_ENGINE_BLOB_FILE_SYNCED: SimpleEngineTickerMetrics = 
-        auto_flush_from!(STORE_ENGINE_BLOB_FILE_SYNCED_VEC, SimpleEngineTickerMetrics); 
-    
+    pub static ref STORE_ENGINE_BLOB_FILE_SYNCED: SimpleEngineTickerMetrics =
+        auto_flush_from!(STORE_ENGINE_BLOB_FILE_SYNCED_VEC, SimpleEngineTickerMetrics);
+
     pub static ref STORE_ENGINE_BLOB_CACHE_EFFICIENCY_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_engine_blob_cache_efficiency",
         "Efficiency of titan's blob cache",
@@ -1586,31 +1614,6 @@ lazy_static! {
     pub static ref STORE_ENGINE_WAL_FILE_SYNC_MICROS_VEC: GaugeVec = register_gauge_vec!(
         "tikv_engine_wal_file_sync_micro_seconds",
         "Histogram of WAL file sync micros",
-        &["db", "type"]
-    ).unwrap();
-    pub static ref STORE_ENGINE_STALL_L0_SLOWDOWN_COUNT_VEC: GaugeVec = register_gauge_vec!(
-        "tikv_engine_stall_l0_slowdown_count",
-        "Histogram of stall l0 slowdown count",
-        &["db", "type"]
-    ).unwrap();
-    pub static ref STORE_ENGINE_STALL_MEMTABLE_COMPACTION_COUNT_VEC: GaugeVec = register_gauge_vec!(
-        "tikv_engine_stall_memtable_compaction_count",
-        "Histogram of stall memtable compaction count",
-        &["db", "type"]
-    ).unwrap();
-    pub static ref STORE_ENGINE_STALL_L0_NUM_FILES_COUNT_VEC: GaugeVec = register_gauge_vec!(
-        "tikv_engine_stall_l0_num_files_count",
-        "Histogram of stall l0 num files count",
-        &["db", "type"]
-    ).unwrap();
-    pub static ref STORE_ENGINE_HARD_RATE_LIMIT_DELAY_VEC: GaugeVec = register_gauge_vec!(
-        "tikv_engine_hard_rate_limit_delay_count",
-        "Histogram of hard rate limit delay count",
-        &["db", "type"]
-    ).unwrap();
-    pub static ref STORE_ENGINE_SOFT_RATE_LIMIT_DELAY_VEC: GaugeVec = register_gauge_vec!(
-        "tikv_engine_soft_rate_limit_delay_count",
-        "Histogram of soft rate limit delay count",
         &["db", "type"]
     ).unwrap();
     pub static ref STORE_ENGINE_NUM_FILES_IN_SINGLE_COMPACTION_VEC: GaugeVec = register_gauge_vec!(
@@ -1737,6 +1740,10 @@ lazy_static! {
         "tikv_engine_blob_iter_touch_blob_file_count",
         "Histogram of titan iter touched blob file count",
         &["db", "type"]
+    ).unwrap();
+    pub static ref TITAN_COMPRESSION_FACTOR_GAUGE: Gauge = register_gauge!(
+        "tikv_engine_blob_compression_factor",
+        "Estimated compression factor (raw_size / compressed_size) of Titan"
     ).unwrap();
 }
 

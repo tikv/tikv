@@ -2,20 +2,20 @@
 
 use std::{sync::*, time::Duration};
 
-use api_version::{test_kv_format_impl, KvFormat};
-use cdc::{metrics::CDC_RESOLVED_TS_ADVANCE_METHOD, Task, Validate};
+use api_version::{KvFormat, test_kv_format_impl};
+use cdc::{Task, Validate, metrics::CDC_RESOLVED_TS_ADVANCE_METHOD};
 use concurrency_manager::ConcurrencyManager;
-use futures::{executor::block_on, SinkExt};
+use futures::{SinkExt, executor::block_on};
 use grpcio::WriteFlags;
 use kvproto::{cdcpb::*, kvrpcpb::*};
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
 use tikv::server::DEFAULT_CLUSTER_ID;
-use tikv_util::{config::ReadableDuration, HandyRwLock};
-use txn_types::{Key, Lock, LockType};
+use tikv_util::{HandyRwLock, config::ReadableDuration, debug, error};
+use txn_types::{Key, Lock, LockType, TimeStamp};
 
-use crate::{new_event_feed, TestSuite, TestSuiteBuilder};
+use crate::{TestSuite, TestSuiteBuilder, new_event_feed, new_event_feed_v2};
 
 #[test]
 fn test_cdc_basic() {
@@ -382,8 +382,7 @@ fn test_cdc_cluster_id_mismatch_impl<F: KvFormat>() {
     let mut req = suite.new_changedata_request(1);
     req.mut_header().set_ticdc_version("5.3.0".into());
     req.mut_header().set_cluster_id(DEFAULT_CLUSTER_ID + 1);
-    let (mut req_tx, event_feed_wrap, receive_event) =
-        new_event_feed(suite.get_region_cdc_client(1));
+    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
     block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
 
     // Assert mismatch.
@@ -399,6 +398,8 @@ fn test_cdc_cluster_id_mismatch_impl<F: KvFormat>() {
     // Low version request.
     req.mut_header().set_ticdc_version("4.0.8".into());
     req.mut_header().set_cluster_id(DEFAULT_CLUSTER_ID + 1);
+    let (mut req_tx, event_feed_wrap, receive_event) =
+        new_event_feed(suite.get_region_cdc_client(1));
     block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
@@ -613,16 +614,15 @@ fn test_cdc_scan_impl<F: KvFormat>() {
 fn test_cdc_rawkv_scan() {
     let mut suite = TestSuite::new(3, ApiVersion::V2);
 
-    suite.set_tso(10);
-    suite.flush_causal_timestamp_for_region(1);
     let (k1, v1) = (b"rkey1".to_vec(), b"value1".to_vec());
     suite.must_kv_put(1, k1, v1);
 
     let (k2, v2) = (b"rkey2".to_vec(), b"value2".to_vec());
     suite.must_kv_put(1, k2, v2);
 
-    suite.set_tso(1000);
+    let ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     suite.flush_causal_timestamp_for_region(1);
+
     let (k3, v3) = (b"rkey3".to_vec(), b"value3".to_vec());
     suite.must_kv_put(1, k3.clone(), v3.clone());
 
@@ -631,7 +631,7 @@ fn test_cdc_rawkv_scan() {
 
     let mut req = suite.new_changedata_request(1);
     req.set_kv_api(ChangeDataRequestKvApi::RawKv);
-    req.set_checkpoint_ts(999);
+    req.set_checkpoint_ts(ts.into_inner());
     let (mut req_tx, event_feed_wrap, receive_event) =
         new_event_feed(suite.get_region_cdc_client(1));
     block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
@@ -934,12 +934,15 @@ fn test_cdc_batch_size_limit_impl<F: KvFormat>() {
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1, "{:?}", events);
     match events.pop().unwrap().event.unwrap() {
-        Event_oneof_event::Entries(es) => {
-            assert_eq!(es.entries.len(), 2);
-            let e = &es.entries[0];
+        Event_oneof_event::Entries(mut es) => {
+            let mut entries = es.take_entries().into_vec();
+            assert_eq!(entries.len(), 2);
+            entries.sort_by(|a, b| a.key.cmp(&b.key));
+
+            let e = &entries[0];
             assert_eq!(e.get_type(), EventLogType::Prewrite, "{:?}", e.get_type());
             assert_eq!(e.key, b"xk3", "{:?}", e.key);
-            let e = &es.entries[1];
+            let e = &entries[1];
             assert_eq!(e.get_type(), EventLogType::Prewrite, "{:?}", e.get_type());
             assert_eq!(e.key, b"xk4", "{:?}", e.key);
         }
@@ -1128,8 +1131,8 @@ fn test_old_value_multi_changefeeds_impl<F: KvFormat>() {
     let (mut req_tx_2, event_feed_wrap_2, receive_event_2) =
         new_event_feed(suite.get_region_cdc_client(1));
     block_on(req_tx_2.send((req, WriteFlags::default()))).unwrap();
-
     sleep_ms(1000);
+
     // Insert value
     let mut m1 = Mutation::default();
     let k1 = b"xk1".to_vec();
@@ -1229,12 +1232,13 @@ fn test_cdc_resolve_ts_checking_concurrency_manager_impl<F: KvFormat>() {
                 0.into(),
                 1,
                 ts.into(),
+                false,
             ))
         });
         guard
     };
 
-    cm.update_max_ts(20.into());
+    cm.update_max_ts(20.into(), "").unwrap();
 
     let guard = lock_key(b"a", 80);
     suite.set_tso(99);
@@ -1320,19 +1324,20 @@ fn test_cdc_1pc_impl<F: KvFormat>() {
     let req = suite.new_changedata_request(1);
     let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
     block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+
+    // Wait until the region subscription is initialized.
     let event = receive_event(false);
-    event.events.into_iter().for_each(|e| {
-        match e.event.unwrap() {
-            // Even if there is no write,
-            // it should always outputs an Initialized event.
+    event
+        .events
+        .into_iter()
+        .for_each(|e| match e.event.unwrap() {
             Event_oneof_event::Entries(es) => {
                 assert!(es.entries.len() == 1, "{:?}", es);
                 let e = &es.entries[0];
                 assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
             }
             other => panic!("unknown event {:?}", other),
-        }
-    });
+        });
 
     let (k1, v1) = (b"xk1", b"v1");
     let (k2, v2) = (b"xk2", &[0u8; 512]);
@@ -1376,16 +1381,19 @@ fn test_cdc_1pc_impl<F: KvFormat>() {
         if !events.is_empty() {
             assert_eq!(events.len(), 1);
             match events.pop().unwrap().event.unwrap() {
-                Event_oneof_event::Entries(entries) => {
-                    assert_eq!(entries.entries.len(), 2);
-                    let (e0, e1) = (&entries.entries[0], &entries.entries[1]);
+                Event_oneof_event::Entries(mut es) => {
+                    let mut entries = es.take_entries().into_vec();
+                    assert_eq!(entries.len(), 2);
+                    entries.sort_by(|a, b| a.key.cmp(&b.key));
+
+                    let (e0, e1) = (&entries[0], &entries[1]);
                     assert_eq!(e0.get_type(), EventLogType::Committed);
-                    assert_eq!(e0.get_key(), k2);
-                    assert_eq!(e0.get_value(), v2);
+                    assert_eq!(e0.get_key(), k1);
+                    assert_eq!(e0.get_value(), v1);
                     assert!(e0.commit_ts > resolved_ts);
                     assert_eq!(e1.get_type(), EventLogType::Committed);
-                    assert_eq!(e1.get_key(), k1);
-                    assert_eq!(e1.get_value(), v1);
+                    assert_eq!(e1.get_key(), k2);
+                    assert_eq!(e1.get_value(), v2);
                     assert!(e1.commit_ts > resolved_ts);
                     break;
                 }
@@ -1905,18 +1913,17 @@ fn test_cdc_extract_rollback_if_gc_fence_set_impl<F: KvFormat>() {
     let req = suite.new_changedata_request(1);
     let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
     block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
-    let event = receive_event(false);
-    event
-        .events
-        .into_iter()
-        .for_each(|e| match e.event.unwrap() {
+
+    for e in receive_event(false).events.into_vec() {
+        match e.event.unwrap() {
             Event_oneof_event::Entries(es) => {
                 assert!(es.entries.len() == 1, "{:?}", es);
                 let e = &es.entries[0];
                 assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
             }
             other => panic!("unknown event {:?}", other),
-        });
+        };
+    }
 
     sleep_ms(1000);
 
@@ -2207,7 +2214,7 @@ fn test_cdc_write_rollback_when_no_lock_impl<F: KvFormat>() {
     let k1 = b"xk1".to_vec();
     m1.set_op(Op::Put);
     m1.key = k1.clone();
-    m1.value = b"v1".to_vec();
+    m1.value = vec![b'x'; 16];
     suite.must_kv_prewrite(1, vec![m1], k1.clone(), 10.into());
 
     // Wait until resolved_ts advanced to 10
@@ -2597,4 +2604,868 @@ fn test_flashback() {
             }
         }
     }
+}
+
+#[test]
+fn test_cdc_filter_key_range() {
+    let mut suite = TestSuite::new(1, ApiVersion::V1);
+
+    let req = suite.new_changedata_request(1);
+
+    // Observe range [key1, key3).
+    let mut req_1_3 = req.clone();
+    req_1_3.request_id = 13;
+    req_1_3.start_key = Key::from_raw(b"key1").into_encoded();
+    req_1_3.end_key = Key::from_raw(b"key3").into_encoded();
+    let (mut req_tx13, _event_feed_wrap13, receive_event13) =
+        new_event_feed(suite.get_region_cdc_client(1));
+    block_on(req_tx13.send((req_1_3, WriteFlags::default()))).unwrap();
+    let event = receive_event13(false);
+    event
+        .events
+        .into_iter()
+        .for_each(|e| match e.event.unwrap() {
+            Event_oneof_event::Entries(es) => {
+                assert!(es.entries.len() == 1, "{:?}", es);
+                let e = &es.entries[0];
+                assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+            }
+            other => panic!("unknown event {:?}", other),
+        });
+
+    let (mut req_tx24, _event_feed_wrap24, receive_event24) =
+        new_event_feed(suite.get_region_cdc_client(1));
+    let mut req_2_4 = req;
+    req_2_4.request_id = 24;
+    req_2_4.start_key = Key::from_raw(b"key2").into_encoded();
+    req_2_4.end_key = Key::from_raw(b"key4").into_encoded();
+    block_on(req_tx24.send((req_2_4, WriteFlags::default()))).unwrap();
+    let event = receive_event24(false);
+    event
+        .events
+        .into_iter()
+        .for_each(|e| match e.event.unwrap() {
+            Event_oneof_event::Entries(es) => {
+                assert!(es.entries.len() == 1, "{:?}", es);
+                let e = &es.entries[0];
+                assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+            }
+            other => panic!("unknown event {:?}", other),
+        });
+
+    // Sleep a while to make sure the stream is registered.
+    sleep_ms(1000);
+
+    let receive_and_check_events = |is13: bool, is24: bool| -> Vec<Event> {
+        if is13 && is24 {
+            let mut events = receive_event13(false).events.to_vec();
+            let mut events24 = receive_event24(false).events.to_vec();
+            events.append(&mut events24);
+            events
+        } else if is13 {
+            let events = receive_event13(false).events.to_vec();
+            let event = receive_event24(true);
+            assert!(event.resolved_ts.is_some(), "{:?}", event);
+            events
+        } else if is24 {
+            let events = receive_event24(false).events.to_vec();
+            let event = receive_event13(true);
+            assert!(event.resolved_ts.is_some(), "{:?}", event);
+            events
+        } else {
+            let event = receive_event13(true);
+            assert!(event.resolved_ts.is_some(), "{:?}", event);
+            let event = receive_event24(true);
+            assert!(event.resolved_ts.is_some(), "{:?}", event);
+            vec![]
+        }
+    };
+    for case in &[
+        ("key1", true, false, true /* commit */),
+        ("key1", true, false, false /* rollback */),
+        ("key2", true, true, true),
+        ("key3", false, true, true),
+        ("key4", false, false, true),
+    ] {
+        let (k, v) = (case.0.to_owned(), "value".to_owned());
+        // Prewrite
+        let start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+        let mut mutation = Mutation::default();
+        mutation.set_op(Op::Put);
+        mutation.key = k.clone().into_bytes();
+        mutation.value = v.into_bytes();
+        suite.must_kv_prewrite(1, vec![mutation], k.clone().into_bytes(), start_ts);
+        let mut events = receive_and_check_events(case.1, case.2);
+        while let Some(event) = events.pop() {
+            match event.event.unwrap() {
+                Event_oneof_event::Entries(entries) => {
+                    assert_eq!(entries.entries.len(), 1);
+                    assert_eq!(entries.entries[0].get_type(), EventLogType::Prewrite);
+                }
+                other => panic!("unknown event {:?}", other),
+            }
+        }
+
+        if case.3 {
+            // Commit
+            let commit_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+            suite.must_kv_commit(1, vec![k.into_bytes()], start_ts, commit_ts);
+            let mut events = receive_and_check_events(case.1, case.2);
+            while let Some(event) = events.pop() {
+                match event.event.unwrap() {
+                    Event_oneof_event::Entries(entries) => {
+                        assert_eq!(entries.entries.len(), 1);
+                        assert_eq!(entries.entries[0].get_type(), EventLogType::Commit);
+                    }
+                    other => panic!("unknown event {:?}", other),
+                }
+            }
+        } else {
+            // Rollback
+            suite.must_kv_rollback(1, vec![k.into_bytes()], start_ts);
+            let mut events = receive_and_check_events(case.1, case.2);
+            while let Some(event) = events.pop() {
+                match event.event.unwrap() {
+                    Event_oneof_event::Entries(entries) => {
+                        assert_eq!(entries.entries.len(), 1);
+                        assert_eq!(entries.entries[0].get_type(), EventLogType::Rollback);
+                    }
+                    other => panic!("unknown event {:?}", other),
+                }
+            }
+        }
+    }
+
+    suite.stop();
+}
+
+#[test]
+fn test_cdc_partial_subscription() {
+    let mut cluster = new_server_cluster(0, 1);
+    configure_for_lease_read(&mut cluster.cfg, Some(100), Some(10));
+    cluster.pd_client.disable_default_operator();
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
+    let region = suite.cluster.get_region(&[]);
+    let rid = region.id;
+
+    let prewrite_tso = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    let (k, v) = (b"key".to_vec(), vec![b'x'; 16]);
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.key = k.clone();
+    mutation.value = v;
+    suite.must_kv_prewrite(rid, vec![mutation], k.clone(), prewrite_tso);
+
+    let cf_tso = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    let (mut req_tx, _, receive_event) = new_event_feed_v2(suite.get_region_cdc_client(rid));
+    let mut req = suite.new_changedata_request(rid);
+    req.request_id = 1;
+    req.checkpoint_ts = cf_tso.into_inner();
+    req.set_start_key(Key::from_raw(b"x").into_encoded());
+    req.set_end_key(Key::from_raw(b"z").into_encoded());
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+
+    let cdc_event = receive_event(false);
+    'WaitInit: for event in cdc_event.get_events() {
+        for entry in event.get_entries().get_entries() {
+            match entry.get_type() {
+                EventLogType::Prewrite => {}
+                EventLogType::Initialized => break 'WaitInit,
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    for _ in 0..10 {
+        let cdc_event = receive_event(true);
+        if cdc_event.has_resolved_ts() {
+            let resolved_ts = cdc_event.get_resolved_ts();
+            if resolved_ts.ts > prewrite_tso.into_inner() {
+                return;
+            }
+        }
+    }
+    panic!("resolved_ts should exceed prewrite_tso");
+}
+
+#[test]
+fn test_cdc_rollback_prewrites_with_txn_source() {
+    let mut cluster = new_server_cluster(0, 1);
+    configure_for_lease_read(&mut cluster.cfg, Some(100), Some(10));
+    cluster.pd_client.disable_default_operator();
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
+    let region = suite.cluster.get_region(&[]);
+    let rid = region.id;
+    let cf_tso = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+
+    let (mut req_tx, _, receive_event) = new_event_feed_v2(suite.get_region_cdc_client(rid));
+    let mut req = suite.new_changedata_request(rid);
+    req.request_id = 1;
+    req.checkpoint_ts = cf_tso.into_inner();
+    req.filter_loop = true;
+    req.set_start_key(Key::from_raw(b"a").into_encoded());
+    req.set_end_key(Key::from_raw(b"z").into_encoded());
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+
+    let cdc_event = receive_event(false);
+    'WaitInit: for event in cdc_event.get_events() {
+        for entry in event.get_entries().get_entries() {
+            match entry.get_type() {
+                EventLogType::Prewrite => {}
+                EventLogType::Initialized => break 'WaitInit,
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    let start_tso = cf_tso.next();
+    let k = b"key".to_vec();
+    let v = vec![b'x'; 16 * 1024];
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.key = k.clone();
+    mutation.value = v;
+    suite.must_kv_prewrite_with_source(rid, vec![mutation], k.clone(), start_tso, 1);
+
+    loop {
+        let cdc_event = receive_event(true);
+        if cdc_event.has_resolved_ts() {
+            let resolved_ts = cdc_event.get_resolved_ts().get_ts();
+            assert_eq!(resolved_ts, start_tso.into_inner());
+            break;
+        }
+    }
+
+    suite.must_kv_rollback(rid, vec![k.clone()], start_tso);
+
+    // We can't receive the prewrite because it's with a txn_source,
+    // but we can receive the rollback.
+    let mut rollbacked = false;
+    for _ in 0..5 {
+        let cdc_event = receive_event(true);
+        if !rollbacked {
+            for event in cdc_event.get_events() {
+                for entry in event.get_entries().get_entries() {
+                    match entry.get_type() {
+                        EventLogType::Rollback => rollbacked = true,
+                        _ => unreachable!(),
+                    }
+                }
+            }
+        } else {
+            let resolved_ts = cdc_event.get_resolved_ts().get_ts();
+            if resolved_ts > 5 {
+                return;
+            }
+        }
+    }
+    panic!("resolved ts must be advanced correctly");
+}
+
+#[test]
+fn test_cdc_pessimistic_lock_unlock() {
+    let mut cluster = new_server_cluster(0, 1);
+    configure_for_lease_read(&mut cluster.cfg, Some(100), Some(10));
+    cluster.pd_client.disable_default_operator();
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
+    let region = suite.cluster.get_region(&[]);
+    let rid = region.id;
+    let cf_tso = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+
+    let (mut req_tx, _, receive_event) = new_event_feed_v2(suite.get_region_cdc_client(rid));
+    let mut req = suite.new_changedata_request(rid);
+    req.request_id = 1;
+    req.checkpoint_ts = cf_tso.into_inner();
+    req.filter_loop = true;
+    req.set_start_key(Key::from_raw(b"a").into_encoded());
+    req.set_end_key(Key::from_raw(b"z").into_encoded());
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+
+    let cdc_event = receive_event(false);
+    'WaitInit: for event in cdc_event.get_events() {
+        for entry in event.get_entries().get_entries() {
+            match entry.get_type() {
+                EventLogType::Prewrite => {}
+                EventLogType::Initialized => break 'WaitInit,
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    let start_tso = cf_tso.next();
+    let k = b"key".to_vec();
+    let v = vec![b'x'; 16 * 1024];
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::PessimisticLock);
+    mutation.key = k.clone();
+    mutation.value = v;
+    let for_update_tso = TimeStamp::from(start_tso.into_inner() + 10);
+    suite.must_acquire_pessimistic_lock(rid, vec![mutation], k.clone(), start_tso, for_update_tso);
+    std::thread::sleep(Duration::from_millis(500));
+
+    suite.must_release_pessimistic_lock(rid, k.clone(), start_tso, for_update_tso);
+    std::thread::sleep(Duration::from_millis(500));
+}
+
+#[test]
+fn test_cdc_overlapped_write_bug() {
+    // This test is to verify the overlapped write bug (#18498).
+    let cluster = new_server_cluster(1, 1);
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
+    let region = suite.cluster.get_region(&[]);
+    let region_id = region.get_id();
+
+    debug!("region:"; "region_id" => region_id);
+
+    let test_key = b"test_key";
+    let primary_key_t2 = b"t2_primary"; // t2's primary (different from test_key)
+    let value1 = b"value1";
+    let value2 = b"value2";
+    let value3 = b"value3";
+
+    // Phase 1: t1 prewrites and commits test_key
+    // CRITICAL: We need t2's start_ts to equal t1's commit_ts for overlapped write
+    // detection!
+    let t1_start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    debug!("t1:"; "start_ts" => t1_start_ts);
+
+    let mut mutation1 = Mutation::default();
+    mutation1.set_op(Op::Put);
+    mutation1.set_key(test_key.to_vec());
+    mutation1.set_value(value1.to_vec());
+
+    suite.must_kv_prewrite(region_id, vec![mutation1], test_key.to_vec(), t1_start_ts);
+    // t1: Prewrite completed
+
+    // Get t1's commit_ts, which will become t2's start_ts
+    let t1_commit_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    let mut commit_req = CommitRequest::default();
+    commit_req.set_context(suite.get_context(region_id));
+    commit_req.set_start_version(t1_start_ts.into_inner());
+    commit_req.set_keys(vec![test_key.to_vec()].into());
+    commit_req.set_commit_version(t1_commit_ts.into_inner());
+
+    suite
+        .get_tikv_client(region_id)
+        .kv_commit(&commit_req)
+        .unwrap();
+    debug!("t1:"; "commit_ts" => t1_commit_ts);
+    // CF_WRITE now has t1's committed write
+
+    // Set up CDC AFTER t1 commits
+    let req = suite.new_changedata_request(region_id);
+    let (mut req_tx, event_feed_wrap, receive_event) =
+        new_event_feed(suite.get_region_cdc_client(region_id));
+    block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
+
+    let events = receive_event(false).events.to_vec();
+    debug!("cdc: initialized with "; "events" => events.len());
+
+    // Wait for stream to be registered
+    let scheduler = suite.endpoints.values().next().unwrap().scheduler();
+    let (tx, rx) = mpsc::channel();
+    scheduler
+        .schedule(Task::Validate(Validate::Region(
+            region_id,
+            Box::new(move |delegate| {
+                if let Some(d) = delegate {
+                    assert_eq!(d.downstreams().len(), 1);
+                }
+                tx.send(()).unwrap();
+            }),
+        )))
+        .unwrap();
+    rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+    // Phase 2: t2 prewrites test_key as a SECONDARY key
+    // CRITICAL: Use t1's commit_ts as t2's start_ts to trigger overlapped write!
+    let t2_start_ts = t1_commit_ts; // This is the key: start_ts == commit_ts of t1!
+    debug!("t2: start_ts is the same as t1's commit_ts!"; "start_ts" => t2_start_ts);
+    // t2: primary_key is different from the test_key
+
+    // Prewrite both primary and secondary
+    let mut mutation_t2_primary = Mutation::default();
+    mutation_t2_primary.set_op(Op::Put);
+    mutation_t2_primary.set_key(primary_key_t2.to_vec());
+    mutation_t2_primary.set_value(value2.to_vec());
+
+    let mut mutation_t2_secondary = Mutation::default();
+    mutation_t2_secondary.set_op(Op::Put);
+    mutation_t2_secondary.set_key(test_key.to_vec());
+    mutation_t2_secondary.set_value(value2.to_vec());
+
+    // Prewrite with primary_key_t2 as primary
+    suite.must_kv_prewrite(
+        region_id,
+        vec![mutation_t2_primary, mutation_t2_secondary],
+        primary_key_t2.to_vec(),
+        t2_start_ts,
+    );
+    // t2: Prewrite completed
+    debug!("cf_lock now has t2's lock"; "test_key" => t2_start_ts);
+    debug!("cdc should call push_lock for t2");
+
+    // Wait for t2 prewrite events to be received
+    let mut t2_prewrite_received = false;
+    for _ in 0..5 {
+        let events = receive_event(true).events.to_vec();
+        for event in events {
+            if let Some(Event_oneof_event::Entries(entries)) = event.event {
+                for entry in &entries.entries {
+                    if entry.get_type() == EventLogType::Prewrite
+                        && entry.start_ts == t2_start_ts.into_inner()
+                    {
+                        t2_prewrite_received = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if t2_prewrite_received {
+            break;
+        }
+    }
+
+    // Phase 3: t2 rolls back ONLY the secondary key (test_key)
+    let ctx = suite.get_context(region_id);
+    let tikv_client = suite.get_tikv_client(region_id);
+
+    let mut rollback_req = BatchRollbackRequest::default();
+    rollback_req.set_context(ctx.clone());
+    rollback_req.set_keys(vec![test_key.to_vec()].into()); // Only rollback test_key
+    rollback_req.set_start_version(t2_start_ts.into_inner());
+
+    tikv_client.kv_batch_rollback(&rollback_req).unwrap();
+    // t2: Rollback completed on test_key (secondary)
+    debug!("get_txn_commit_record finds t1's write where"; "commit_ts" => t1_commit_ts, "== t2's start_ts" => t2_start_ts);
+    // get_txn_commit_record returns overlapped_write!
+    // test_key is NOT t2's primary → protected=false
+    // make_rollback(protected=false, overlapped_write=Some) returns None
+    // NO CF_WRITE ENTRY!
+    // Only DELETE from CF_LOCK (CDC ignores this)
+    // CDC's lock_tracker still has t2's lock (stale)
+
+    // Phase 4: t3 prewrites test_key
+    // This will trigger resolve_lock to clean up t2's stale lock
+    let t3_start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    debug!("t3:"; "start_ts" => t3_start_ts);
+    debug!("note:"; "t2's start_ts" => t2_start_ts, "t3's start_ts" => t3_start_ts);
+
+    let mut mutation3 = Mutation::default();
+    mutation3.set_op(Op::Put);
+    mutation3.set_key(test_key.to_vec());
+    mutation3.set_value(value3.to_vec());
+
+    // t3: Attempting prewrite...
+    // Will encounter t2's stale lock in CF_LOCK
+    // Triggers resolve_lock_lite to clean it up
+    // resolve_lock removes lock from CF_LOCK (no CDC notification)
+    // CDC processes t3's prewrite
+    debug!("cdc calls push_lock(test_key)"; "start_ts" => t3_start_ts);
+    debug!("cdc finds t2's stale lock in the lock_tracker"; "start_ts" => t2_start_ts);
+    // EXPECTED: Assertion failure or warning!
+
+    suite.must_kv_prewrite(region_id, vec![mutation3], test_key.to_vec(), t3_start_ts);
+    // t3: Prewrite completed
+
+    // Phase 5: Wait for CDC to process t3 prewrite event
+    let mut t3_prewrite_received = false;
+    for _ in 0..10 {
+        let events_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            receive_event(true).events.to_vec()
+        }));
+
+        if let Ok(events) = events_result {
+            for event in events {
+                if let Some(Event_oneof_event::Entries(entries)) = event.event {
+                    for entry in &entries.entries {
+                        if entry.get_type() == EventLogType::Prewrite
+                            && entry.start_ts == t3_start_ts.into_inner()
+                        {
+                            t3_prewrite_received = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if t3_prewrite_received {
+                break;
+            }
+        } else {
+            // If panic occurred, break to handle it below
+            break;
+        }
+    }
+
+    // Try to receive events (will panic if assertion fails)
+    let events = receive_event(true).events.to_vec();
+    debug!("cdc:"; "received" => events.len());
+    for (i, event) in events.iter().enumerate() {
+        debug!("event"; "index" => i, "event" => ?event);
+    }
+
+    // Check delegate status
+    let scheduler = suite.endpoints.values().next().unwrap().scheduler();
+    let (tx, rx) = mpsc::channel();
+    scheduler
+        .schedule(Task::Validate(Validate::Region(
+            region_id,
+            Box::new(move |delegate| {
+                let status = match delegate {
+                    Some(d) => {
+                        if d.has_failed() {
+                            "FAILED".to_string()
+                        } else {
+                            "ACTIVE".to_string()
+                        }
+                    }
+                    None => "REMOVED".to_string(),
+                };
+                tx.send(status).unwrap();
+            }),
+        )))
+        .unwrap();
+
+    match rx.recv_timeout(Duration::from_secs(1)) {
+        Ok(status) => {
+            assert_eq!(status, "ACTIVE");
+        }
+        Err(e) => {
+            error!("Failed to check delegate status"; "error" => ?e);
+            panic!("Failed to check delegate status");
+        }
+    }
+
+    event_feed_wrap.replace(None);
+    suite.stop();
+}
+
+#[test]
+fn test_cdc_overlapped_write_for_update_ts_larger_bug() {
+    // This test is to verify the overlapped write bug (#19083).
+    let cluster = new_server_cluster(1, 1);
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
+    let region = suite.cluster.get_region(&[]);
+    let region_id = region.get_id();
+
+    debug!("region:"; "region_id" => region_id);
+
+    let test_key = b"test_key";
+    let primary_key_t2 = b"t2_primary"; // t2's primary (different from test_key)
+    let value1 = b"value1";
+    let value2 = b"value2";
+    let value3 = b"value3";
+
+    let t3_start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    debug!("t3:"; "start_ts" => t3_start_ts);
+
+    // Phase 1: t1 prewrites and commits test_key
+    // CRITICAL: We need t2's start_ts to equal t1's commit_ts for overlapped write
+    // detection!
+    let t1_start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    debug!("t1:"; "start_ts" => t1_start_ts);
+
+    let mut mutation1 = Mutation::default();
+    mutation1.set_op(Op::Put);
+    mutation1.set_key(test_key.to_vec());
+    mutation1.set_value(value1.to_vec());
+
+    suite.must_kv_prewrite(region_id, vec![mutation1], test_key.to_vec(), t1_start_ts);
+    // t1: Prewrite completed
+
+    // Get t1's commit_ts, which will become t2's start_ts
+    let t1_commit_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    let mut commit_req = CommitRequest::default();
+    commit_req.set_context(suite.get_context(region_id));
+    commit_req.set_start_version(t1_start_ts.into_inner());
+    commit_req.set_keys(vec![test_key.to_vec()].into());
+    commit_req.set_commit_version(t1_commit_ts.into_inner());
+
+    suite
+        .get_tikv_client(region_id)
+        .kv_commit(&commit_req)
+        .unwrap();
+    debug!("t1:"; "commit_ts" => t1_commit_ts);
+    // CF_WRITE now has t1's committed write
+
+    // Set up CDC AFTER t1 commits
+    let req = suite.new_changedata_request(region_id);
+    let (mut req_tx, event_feed_wrap, receive_event) =
+        new_event_feed(suite.get_region_cdc_client(region_id));
+    block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
+
+    let events = receive_event(false).events.to_vec();
+    debug!("cdc: initialized with "; "events" => events.len());
+
+    // Wait for stream to be registered
+    let scheduler = suite.endpoints.values().next().unwrap().scheduler();
+    let (tx, rx) = mpsc::channel();
+    scheduler
+        .schedule(Task::Validate(Validate::Region(
+            region_id,
+            Box::new(move |delegate| {
+                if let Some(d) = delegate {
+                    assert_eq!(d.downstreams().len(), 1);
+                }
+                tx.send(()).unwrap();
+            }),
+        )))
+        .unwrap();
+    rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+    // Phase 2: t2 prewrites test_key as a SECONDARY key
+    // CRITICAL: Use t1's commit_ts as t2's start_ts to trigger overlapped write!
+    let t2_start_ts = t1_commit_ts; // This is the key: start_ts == commit_ts of t1!
+    debug!("t2: start_ts is the same as t1's commit_ts!"; "start_ts" => t2_start_ts);
+    // t2: primary_key is different from the test_key
+
+    // Prewrite both primary and secondary
+    let mut mutation_t2_primary = Mutation::default();
+    mutation_t2_primary.set_op(Op::Put);
+    mutation_t2_primary.set_key(primary_key_t2.to_vec());
+    mutation_t2_primary.set_value(value2.to_vec());
+
+    let mut mutation_t2_secondary = Mutation::default();
+    mutation_t2_secondary.set_op(Op::Put);
+    mutation_t2_secondary.set_key(test_key.to_vec());
+    mutation_t2_secondary.set_value(value2.to_vec());
+
+    // Prewrite with primary_key_t2 as primary
+    suite.must_kv_prewrite(
+        region_id,
+        vec![mutation_t2_primary, mutation_t2_secondary],
+        primary_key_t2.to_vec(),
+        t2_start_ts,
+    );
+    // t2: Prewrite completed
+    debug!("cf_lock now has t2's lock"; "test_key" => t2_start_ts);
+    debug!("cdc should call push_lock for t2");
+
+    // Wait for t2 prewrite events to be received
+    let mut t2_prewrite_received = false;
+    for _ in 0..5 {
+        let events = receive_event(true).events.to_vec();
+        for event in events {
+            if let Some(Event_oneof_event::Entries(entries)) = event.event {
+                for entry in &entries.entries {
+                    if entry.get_type() == EventLogType::Prewrite
+                        && entry.start_ts == t2_start_ts.into_inner()
+                    {
+                        t2_prewrite_received = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if t2_prewrite_received {
+            break;
+        }
+    }
+
+    // Phase 3: t2 rolls back ONLY the secondary key (test_key)
+    let ctx = suite.get_context(region_id);
+    let tikv_client = suite.get_tikv_client(region_id);
+
+    let mut rollback_req = BatchRollbackRequest::default();
+    rollback_req.set_context(ctx.clone());
+    rollback_req.set_keys(vec![test_key.to_vec()].into()); // Only rollback test_key
+    rollback_req.set_start_version(t2_start_ts.into_inner());
+
+    tikv_client.kv_batch_rollback(&rollback_req).unwrap();
+    // t2: Rollback completed on test_key (secondary)
+    debug!("get_txn_commit_record finds t1's write where"; "commit_ts" => t1_commit_ts, "== t2's start_ts" => t2_start_ts);
+    // get_txn_commit_record returns overlapped_write!
+    // test_key is NOT t2's primary → protected=false
+    // make_rollback(protected=false, overlapped_write=Some) returns None
+    // NO CF_WRITE ENTRY!
+    // Only DELETE from CF_LOCK (CDC ignores this)
+    // CDC's lock_tracker still has t2's lock (stale)
+
+    // Phase 4: t3 prewrites test_key
+    // This will trigger resolve_lock to clean up t2's stale lock
+    let t3_for_update_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    debug!("t3:"; "for_update_ts" => t3_for_update_ts);
+    debug!("note:"; "t2's start_ts" => t2_start_ts, "t3's start_ts" => t3_start_ts, "t3's for_update_ts" => t3_for_update_ts);
+
+    let mut mutation3_lock = Mutation::default();
+    mutation3_lock.set_op(Op::PessimisticLock);
+    mutation3_lock.set_key(test_key.to_vec());
+
+    let mut mutation3 = Mutation::default();
+    mutation3.set_op(Op::Put);
+    mutation3.set_key(test_key.to_vec());
+    mutation3.set_value(value3.to_vec());
+
+    // t3: Attempting prewrite...
+    // Will encounter t2's stale lock in CF_LOCK
+    // Triggers resolve_lock_lite to clean it up
+    // resolve_lock removes lock from CF_LOCK (no CDC notification)
+    // CDC processes t3's prewrite
+    debug!("cdc calls push_lock(test_key)"; "start_ts" => t3_start_ts);
+    debug!("cdc finds t2's stale lock in the lock_tracker"; "start_ts" => t2_start_ts);
+    // EXPECTED: Assertion failure or warning!
+
+    suite.must_acquire_pessimistic_lock(
+        region_id,
+        vec![mutation3_lock],
+        test_key.to_vec(),
+        t3_start_ts,
+        t3_for_update_ts,
+    );
+    suite.must_kv_pessimistic_prewrite(
+        region_id,
+        vec![mutation3],
+        test_key.to_vec(),
+        t3_start_ts,
+        t3_for_update_ts,
+    );
+    // t3: Prewrite completed
+
+    // Phase 5: Wait for CDC to process t3 prewrite event
+    let mut t3_prewrite_received = false;
+    for _ in 0..10 {
+        let events_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            receive_event(true).events.to_vec()
+        }));
+
+        if let Ok(events) = events_result {
+            for event in events {
+                if let Some(Event_oneof_event::Entries(entries)) = event.event {
+                    for entry in &entries.entries {
+                        if entry.get_type() == EventLogType::Prewrite
+                            && entry.start_ts == t3_start_ts.into_inner()
+                        {
+                            t3_prewrite_received = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if t3_prewrite_received {
+                break;
+            }
+        } else {
+            // If panic occurred, break to handle it below
+            break;
+        }
+    }
+
+    // Try to receive events (will panic if assertion fails)
+    let events = receive_event(true).events.to_vec();
+    debug!("cdc:"; "received" => events.len());
+    for (i, event) in events.iter().enumerate() {
+        debug!("event"; "index" => i, "event" => ?event);
+    }
+
+    // Check delegate status
+    let scheduler = suite.endpoints.values().next().unwrap().scheduler();
+    let (tx, rx) = mpsc::channel();
+    scheduler
+        .schedule(Task::Validate(Validate::Region(
+            region_id,
+            Box::new(move |delegate| {
+                let status = match delegate {
+                    Some(d) => {
+                        if d.has_failed() {
+                            "FAILED".to_string()
+                        } else {
+                            "ACTIVE".to_string()
+                        }
+                    }
+                    None => "REMOVED".to_string(),
+                };
+                tx.send(status).unwrap();
+            }),
+        )))
+        .unwrap();
+
+    match rx.recv_timeout(Duration::from_secs(1)) {
+        Ok(status) => {
+            assert_eq!(status, "ACTIVE");
+        }
+        Err(e) => {
+            error!("Failed to check delegate status"; "error" => ?e);
+            panic!("Failed to check delegate status");
+        }
+    }
+
+    event_feed_wrap.replace(None);
+    suite.stop();
+}
+
+#[test]
+fn test_verify_overlapped_write_skips_cf_write() {
+    // This is a simpler test to verify that rollback indeed skips CF_WRITE
+    // when there's an overlapped write and the key is not primary
+    // CRITICAL: Overlapped write requires t2.start_ts == t1.commit_ts
+
+    let cluster = new_server_cluster(1, 1);
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
+    let region = suite.cluster.get_region(&[]);
+    let region_id = region.get_id();
+
+    let test_key = b"test_key";
+    let primary_key = b"primary_key";
+    let value1 = b"value1";
+    let value2 = b"value2";
+
+    // t1: Commit a write
+    let t1_start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    let mut mutation1 = Mutation::default();
+    mutation1.set_op(Op::Put);
+    mutation1.set_key(test_key.to_vec());
+    mutation1.set_value(value1.to_vec());
+    suite.must_kv_prewrite(region_id, vec![mutation1], test_key.to_vec(), t1_start_ts);
+
+    let t1_commit_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    let mut commit_req = CommitRequest::default();
+    commit_req.set_context(suite.get_context(region_id));
+    commit_req.set_start_version(t1_start_ts.into_inner());
+    commit_req.set_keys(vec![test_key.to_vec()].into());
+    commit_req.set_commit_version(t1_commit_ts.into_inner());
+    suite
+        .get_tikv_client(region_id)
+        .kv_commit(&commit_req)
+        .unwrap();
+
+    // t2: Prewrite with test_key as SECONDARY (primary is different)
+    // CRITICAL: Use t1's commit_ts as t2's start_ts!
+    let t2_start_ts = t1_commit_ts;
+    let mut mutation_primary = Mutation::default();
+    mutation_primary.set_op(Op::Put);
+    mutation_primary.set_key(primary_key.to_vec());
+    mutation_primary.set_value(value2.to_vec());
+
+    let mut mutation_secondary = Mutation::default();
+    mutation_secondary.set_op(Op::Put);
+    mutation_secondary.set_key(test_key.to_vec());
+    mutation_secondary.set_value(value2.to_vec());
+
+    suite.must_kv_prewrite(
+        region_id,
+        vec![mutation_primary, mutation_secondary],
+        primary_key.to_vec(),
+        t2_start_ts,
+    );
+
+    // t2: Rollback the secondary key
+    let ctx = suite.get_context(region_id);
+    let tikv_client = suite.get_tikv_client(region_id);
+    let mut rollback_req = BatchRollbackRequest::default();
+    rollback_req.set_context(ctx);
+    rollback_req.set_keys(vec![test_key.to_vec()].into());
+    rollback_req.set_start_version(t2_start_ts.into_inner());
+
+    tikv_client.kv_batch_rollback(&rollback_req).unwrap();
+
+    // t2: Rolled back test_key (secondary)
+    // Expected behavior:
+    //   - get_txn_commit_record finds: commit_ts={t1_commit_ts} ==
+    //     start_ts={t2_start_ts}
+    //   - Overlapped write detected!
+    //   - test_key is NOT primary → protected=false
+    //   - make_rollback(protected=false, overlapped_write=Some) returns None
+    //   - NO CF_WRITE entry created
+    // If this test passes, the overlapped write behavior is confirmed
+    suite.stop();
 }

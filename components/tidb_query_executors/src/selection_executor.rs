@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tidb_query_common::{storage::IntervalRange, Result};
+use tidb_query_common::{Result, storage::IntervalRange};
 use tidb_query_datatype::{
     codec::data_type::*,
     expr::{EvalConfig, EvalContext},
@@ -43,6 +43,11 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
             src,
             conditions,
         }
+    }
+
+    #[cfg(test)]
+    pub fn into_child(self) -> Src {
+        self.src
     }
 
     pub fn new(config: Arc<EvalConfig>, src: Src, conditions_def: Vec<Expr>) -> Result<Self> {
@@ -176,6 +181,19 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
     }
 
     #[inline]
+    fn intermediate_schema(&self, index: usize) -> Result<&[FieldType]> {
+        self.src.intermediate_schema(index)
+    }
+
+    #[inline]
+    fn consume_and_fill_intermediate_results(
+        &mut self,
+        results: &mut [Vec<BatchExecuteResult>],
+    ) -> Result<()> {
+        self.src.consume_and_fill_intermediate_results(results)
+    }
+
+    #[inline]
     async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         let mut src_result = self.src.next_batch(scan_rows).await;
 
@@ -217,7 +235,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
 mod tests {
     use futures::executor::block_on;
     use tidb_query_codegen::rpn_fn;
-    use tidb_query_datatype::{codec::batch::LazyBatchColumnVec, expr::EvalWarnings, FieldTypeTp};
+    use tidb_query_datatype::{FieldTypeTp, codec::batch::LazyBatchColumnVec, expr::EvalWarnings};
 
     use super::*;
     use crate::util::mock_executor::MockExecutor;
@@ -237,7 +255,7 @@ mod tests {
                     physical_columns: LazyBatchColumnVec::empty(),
                     logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(false),
+                    is_drained: Ok(BatchExecIsDrain::Remain),
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
@@ -246,13 +264,13 @@ mod tests {
                     ]),
                     logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(false),
+                    is_drained: Ok(BatchExecIsDrain::Remain),
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::empty(),
                     logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(true),
+                    is_drained: Ok(BatchExecIsDrain::Drain),
                 },
             ],
         );
@@ -276,15 +294,15 @@ mod tests {
         //    |         assert_eq!(r.logical_rows.as_slice(), &[]);
         //    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot infer type
         assert!(r.logical_rows.is_empty());
-        assert!(!r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().is_remain());
 
         let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
-        assert!(!r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().is_remain());
 
         let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
-        assert!(r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     /// Builds an executor that will return these logical data:
@@ -312,7 +330,7 @@ mod tests {
                     ]),
                     logical_rows: vec![2, 0],
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(false),
+                    is_drained: Ok(BatchExecIsDrain::Remain),
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
@@ -321,7 +339,7 @@ mod tests {
                     ]),
                     logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(false),
+                    is_drained: Ok(BatchExecIsDrain::Remain),
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
@@ -330,7 +348,7 @@ mod tests {
                     ]),
                     logical_rows: vec![1],
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(true),
+                    is_drained: Ok(BatchExecIsDrain::Drain),
                 },
             ],
         )
@@ -364,15 +382,15 @@ mod tests {
 
             let r = block_on(exec.next_batch(1));
             assert_eq!(&r.logical_rows, &[2, 0]);
-            assert!(!r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().is_remain());
 
             let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
-            assert!(!r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().is_remain());
 
             let r = block_on(exec.next_batch(1));
             assert_eq!(&r.logical_rows, &[1]);
-            assert!(r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().stop());
         }
     }
 
@@ -390,15 +408,15 @@ mod tests {
 
         let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
-        assert!(!r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().is_remain());
 
         let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
-        assert!(!r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().is_remain());
 
         let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
-        assert!(r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     /// This function returns 1 when the value is even, 0 otherwise.
@@ -446,13 +464,13 @@ mod tests {
                     ]),
                     logical_rows: vec![3, 4, 0, 2],
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(false),
+                    is_drained: Ok(BatchExecIsDrain::Remain),
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::empty(),
                     logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(false),
+                    is_drained: Ok(BatchExecIsDrain::Remain),
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
@@ -462,7 +480,7 @@ mod tests {
                     ]),
                     logical_rows: vec![0],
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(true),
+                    is_drained: Ok(BatchExecIsDrain::Drain),
                 },
             ],
         )
@@ -484,15 +502,15 @@ mod tests {
 
         let r = block_on(exec.next_batch(1));
         assert_eq!(&r.logical_rows, &[3, 0]);
-        assert!(!r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().is_remain());
 
         let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
-        assert!(!r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().is_remain());
 
         let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
-        assert!(r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     #[test]
@@ -509,15 +527,15 @@ mod tests {
 
         let r = block_on(exec.next_batch(1));
         assert_eq!(&r.logical_rows, &[0, 2]);
-        assert!(!r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().is_remain());
 
         let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
-        assert!(!r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().is_remain());
 
         let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
-        assert!(r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     /// Tests the scenario that there are multiple predicates. Only the row that
@@ -537,8 +555,7 @@ mod tests {
             })
             .collect();
 
-        for predicates in vec![
-            // Swap predicates should produce same results.
+        for predicates in [
             vec![predicate[0](), predicate[1]()],
             vec![predicate[1](), predicate[0]()],
         ] {
@@ -547,15 +564,15 @@ mod tests {
 
             let r = block_on(exec.next_batch(1));
             assert_eq!(&r.logical_rows, &[0]);
-            assert!(!r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().is_remain());
 
             let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
-            assert!(!r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().is_remain());
 
             let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
-            assert!(r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().stop());
         }
     }
 
@@ -572,8 +589,7 @@ mod tests {
             })
             .collect();
 
-        for predicates in vec![
-            // Swap predicates should produce same results.
+        for predicates in [
             vec![predicate[0](), predicate[1](), predicate[2]()],
             vec![predicate[1](), predicate[2](), predicate[0]()],
         ] {
@@ -582,15 +598,15 @@ mod tests {
 
             let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
-            assert!(!r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().is_remain());
 
             let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
-            assert!(!r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().is_remain());
 
             let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
-            assert!(r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().stop());
         }
     }
 
@@ -626,7 +642,7 @@ mod tests {
                     ]),
                     logical_rows: vec![1, 3, 4, 0],
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(false),
+                    is_drained: Ok(BatchExecIsDrain::Remain),
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
@@ -635,7 +651,7 @@ mod tests {
                     ]),
                     logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(true),
+                    is_drained: Ok(BatchExecIsDrain::Drain),
                 },
             ],
         );
@@ -659,5 +675,62 @@ mod tests {
         let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         r.is_drained.unwrap_err();
+    }
+
+    #[test]
+    fn test_extra_common_handle_keys() {
+        let src = MockExecutor::new(
+            vec![FieldTypeTp::LongLong.into(), FieldTypeTp::LongLong.into()],
+            vec![BatchExecuteResult {
+                physical_columns: LazyBatchColumnVec::with_columns_and_extra_common_handle_keys(
+                    vec![
+                        VectorValue::Int(
+                            vec![Some(10), Some(11), Some(12), Some(13), Some(14), Some(15)].into(),
+                        )
+                        .into(),
+                        VectorValue::Int(
+                            vec![Some(20), Some(21), Some(22), Some(23), Some(24), Some(15)].into(),
+                        )
+                        .into(),
+                    ],
+                    Some(vec![
+                        b"h00".to_vec(),
+                        b"h01".to_vec(),
+                        b"h02".to_vec(),
+                        b"h03".to_vec(),
+                        b"h04".to_vec(),
+                        b"h05".to_vec(),
+                    ]),
+                ),
+                logical_rows: vec![4, 0, 5, 2, 1, 3],
+                warnings: EvalWarnings::default(),
+                is_drained: Ok(BatchExecIsDrain::Drain),
+            }],
+        );
+
+        let mut exec = BatchSelectionExecutor::new_for_test(
+            src,
+            vec![
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(0)
+                    .push_fn_call_for_test(is_even_fn_meta(), 1, FieldTypeTp::LongLong)
+                    .build_for_test(),
+            ],
+        );
+
+        let mut r = block_on(exec.next_batch(1));
+        assert_eq!(r.logical_rows, vec![4, 0, 2]);
+        assert_eq!(
+            r.physical_columns.take_extra_common_handle_keys(),
+            Some(vec![
+                b"h00".to_vec(),
+                b"h01".to_vec(),
+                b"h02".to_vec(),
+                b"h03".to_vec(),
+                b"h04".to_vec(),
+                b"h05".to_vec(),
+            ])
+        );
+        assert_eq!(r.is_drained.unwrap(), BatchExecIsDrain::Drain);
     }
 }

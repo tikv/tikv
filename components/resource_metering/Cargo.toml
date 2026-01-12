@@ -1,29 +1,25 @@
 [package]
 name = "resource_metering"
 version = "0.0.1"
-edition = "2018"
+edition = "2021"
+license = "Apache-2.0"
 
 [dependencies]
 collections = { workspace = true }
-crossbeam = "0.8"
+crossbeam = { workspace = true }
 futures = "0.3"
 grpcio = { workspace = true }
 kvproto = { workspace = true }
 lazy_static = "1.3"
-libc = "0.2"
-log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 online_config = { workspace = true }
 pdqselect = "0.1"
 pin-project = "1.0"
 prometheus = { version = "0.13", features = ["nightly"] }
 serde = "1.0"
 serde_derive = "1.0"
-slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
-slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+slog = { workspace = true }
+slog-global = { workspace = true }
 tikv_util = { workspace = true }
-
-[target.'cfg(target_os = "linux")'.dependencies]
-procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "6599eb9dca74229b2c1fcc44118bef7eff127128" }
 
 [dev-dependencies]
 rand = "0.8"

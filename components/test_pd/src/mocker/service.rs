@@ -1,14 +1,14 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
     Mutex,
+    atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
 };
 
 use collections::HashMap;
 use fail::fail_point;
 use kvproto::{
-    metapb::{Peer, Region, Store, StoreState},
+    metapb::{Buckets, Peer, Region, Store, StoreState},
     pdpb::*,
 };
 
@@ -21,8 +21,10 @@ pub struct Service {
     is_bootstrapped: AtomicBool,
     stores: Mutex<HashMap<u64, (Store, StoreStats)>>,
     regions: Mutex<HashMap<u64, Region>>,
+    buckets: Mutex<HashMap<u64, Buckets>>,
     leaders: Mutex<HashMap<u64, Peer>>,
     feature_gate: Mutex<String>,
+    service_gc_safepoint: AtomicU64,
 }
 
 impl Service {
@@ -35,6 +37,8 @@ impl Service {
             regions: Mutex::new(HashMap::default()),
             leaders: Mutex::new(HashMap::default()),
             feature_gate: Mutex::new(String::default()),
+            buckets: Mutex::new(HashMap::default()),
+            service_gc_safepoint: Default::default(),
         }
     }
 
@@ -210,6 +214,9 @@ impl PdMocker for Service {
             Some(region) => {
                 resp.set_header(Service::header());
                 resp.set_region(region.clone());
+                if let Some(bucket) = self.buckets.lock().unwrap().get(&req.get_region_id()) {
+                    resp.set_buckets(bucket.clone());
+                }
                 if let Some(leader) = leaders.get(&region.get_id()) {
                     resp.set_leader(leader.clone());
                 }
@@ -225,6 +232,16 @@ impl PdMocker for Service {
                 Some(Ok(resp))
             }
         }
+    }
+
+    fn report_buckets(&self, req: &ReportBucketsRequest) -> Option<Result<ReportBucketsResponse>> {
+        let buckets = req.get_buckets();
+        let region_id = req.get_buckets().get_region_id();
+        self.buckets
+            .lock()
+            .unwrap()
+            .insert(region_id, buckets.clone());
+        None
     }
 
     fn region_heartbeat(
@@ -336,6 +353,44 @@ impl PdMocker for Service {
         let mut resp = GetGcSafePointResponse::default();
         let header = Service::header();
         resp.set_header(header);
+        Some(Ok(resp))
+    }
+
+    fn update_service_gc_safe_point(
+        &self,
+        req: &UpdateServiceGcSafePointRequest,
+    ) -> Option<Result<UpdateServiceGcSafePointResponse>> {
+        // WARNING:
+        // This mocker is only used for testing the behavior that the client yeets an
+        // error if failed to update the service safe point. So it lacks the functions
+        // below, you may need to extend this when needed:
+        //
+        // - Upload many service safe points. (For now, `service_id` will be ignored.)
+        // - Remove the service safe point when request with `ttl` = 0.
+        // - The safe point `gc_worker` always exists with the latest GC safe point.
+
+        let val = self
+            .service_gc_safepoint
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| {
+                if req.get_ttl() == 0 {
+                    Some(0)
+                } else if v > req.safe_point {
+                    None
+                } else {
+                    Some(req.safe_point)
+                }
+            });
+        let val = match val {
+            Ok(_) => req.safe_point,
+            Err(v) => v,
+        };
+
+        let mut resp = UpdateServiceGcSafePointResponse::default();
+        let header = Service::header();
+        resp.set_header(header);
+        resp.set_min_safe_point(val);
+        resp.set_ttl(req.get_ttl());
+        resp.set_service_id(req.get_service_id().to_owned());
         Some(Ok(resp))
     }
 }

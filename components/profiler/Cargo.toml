@@ -1,8 +1,9 @@
 [package]
 name = "profiler"
 version = "0.0.1"
-edition = "2018"
+edition = "2021"
 publish = false
+license = "Apache-2.0"
 
 [features]
 profiling = ["lazy_static", "gperftools", "callgrind", "valgrind_request"]
@@ -18,4 +19,5 @@ valgrind_request = { version = "1.1.0", optional = true }
 
 [[example]]
 name = "prime"
+path = "examples/prime.rs"
 required-features = ["profiling"]

@@ -1,23 +1,36 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    error::Error as StdError,
     fmt::{self, Display, Formatter},
     sync::{Arc, Mutex},
 };
 
 use collections::HashMap;
 use kvproto::replication_modepb::ReplicationMode;
-use pd_client::{take_peer_address, PdClient};
+use pd_client::{PdClient, take_peer_address};
 use raftstore::store::GlobalReplicationState;
+use thiserror::Error;
 use tikv_kv::RaftExtension;
 use tikv_util::{
+    info,
     time::Instant,
     worker::{Runnable, Scheduler, Worker},
 };
 
-use super::{metrics::*, Result};
+use super::metrics::*;
 
 const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("{0:?}")]
+    Other(#[from] Box<dyn StdError + Sync + Send>),
+    #[error("store {0} has been removed")]
+    StoreTombstone(u64),
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
 
 pub type Callback = Box<dyn FnOnce(Result<String>) + Send>;
 
@@ -95,9 +108,24 @@ where
             // it explicitly.
             Err(pd_client::Error::StoreTombstone(_)) => {
                 RESOLVE_STORE_COUNTER_STATIC.tombstone.inc();
-                return Err(box_err!("store {} has been removed", store_id));
+                self.router.report_store_maybe_tombstone(store_id);
+                return Err(Error::StoreTombstone(store_id));
             }
-            Err(e) => return Err(box_err!(e)),
+            Err(e) => {
+                // Tombstone store may be removed manually or automatically
+                // after 30 days of deletion. PD returns
+                // "invalid store ID %d, not found" for such store id.
+                // See https://github.com/tikv/pd/blob/v7.3.0/server/grpc_service.go#L777-L780
+                // And to avoid repeatedly logging the same errors, it
+                // can directly return the `StoreTombstone` err.
+                if format!("{:?}", e).contains("not found") {
+                    RESOLVE_STORE_COUNTER_STATIC.not_found.inc();
+                    info!("resolve store not found"; "store_id" => store_id);
+                    self.router.report_store_maybe_tombstone(store_id);
+                    return Err(Error::StoreTombstone(store_id));
+                }
+                return Err(box_err!(e));
+            }
         };
         let mut group_id = None;
         let mut state = self.state.lock().unwrap();
@@ -181,11 +209,31 @@ impl StoreAddrResolver for PdStoreAddrResolver {
     }
 }
 
+#[derive(Clone)]
+pub struct MockStoreAddrResolver {
+    pub resolve_fn: Arc<dyn Fn(u64, Callback) -> Result<()> + Send + Sync>,
+}
+
+impl StoreAddrResolver for MockStoreAddrResolver {
+    fn resolve(&self, store_id: u64, cb: Callback) -> Result<()> {
+        (self.resolve_fn)(store_id, cb)
+    }
+}
+
+impl Default for MockStoreAddrResolver {
+    fn default() -> MockStoreAddrResolver {
+        MockStoreAddrResolver {
+            resolve_fn: Arc::new(|_, _| unimplemented!()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{net::SocketAddr, ops::Sub, str::FromStr, sync::Arc, thread, time::Duration};
 
     use collections::HashMap;
+    use grpcio::{Error as GrpcError, RpcStatus, RpcStatusCode};
     use kvproto::metapb;
     use pd_client::{PdClient, Result};
     use tikv_kv::FakeExtension;
@@ -200,7 +248,15 @@ mod tests {
     }
 
     impl PdClient for MockPdClient {
-        fn get_store(&self, _: u64) -> Result<metapb::Store> {
+        fn get_store(&self, store_id: u64) -> Result<metapb::Store> {
+            if store_id == u64::MAX {
+                return Err(pd_client::Error::Grpc(GrpcError::RpcFailure(
+                    RpcStatus::with_message(
+                        RpcStatusCode::UNAVAILABLE,
+                        format!("invalid store ID {}, not found", store_id,),
+                    ),
+                )));
+            }
             if self.store.get_state() == metapb::StoreState::Tombstone {
                 // Simulate the behavior of `get_store` in pd client.
                 return Err(pd_client::Error::StoreTombstone(format!(
@@ -259,6 +315,18 @@ mod tests {
         let store = new_store(STORE_ADDR, metapb::StoreState::Tombstone);
         let runner = new_runner(store);
         runner.get_address(0).unwrap_err();
+    }
+
+    #[test]
+    fn test_resolve_store_with_not_found_err() {
+        let mut store = new_store(STORE_ADDR, metapb::StoreState::default());
+        store.set_id(u64::MAX);
+        let store_id = store.get_id();
+        let runner = new_runner(store);
+        let result = runner.get_address(store_id).unwrap_err();
+        if let Error::StoreTombstone(id) = result {
+            assert_eq!(store_id, id);
+        }
     }
 
     #[test]

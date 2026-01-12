@@ -14,7 +14,7 @@ use thiserror::Error;
 use tikv_util::{codec::Error as CodecError, worker::ScheduleError};
 
 use super::snap::Task as SnapTask;
-use crate::storage::{kv::Error as EngineError, Error as StorageError};
+use crate::storage::{Error as StorageError, kv::Error as EngineError};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -69,6 +69,9 @@ pub enum Error {
 
     #[error("{0:?}")]
     StreamDisconnect(#[from] SendError),
+
+    #[error("cluster of request={request_id} does not match TiKV cluster id={cluster_id}")]
+    ClusterIDMisMatch { request_id: u64, cluster_id: u64 },
 }
 
 pub type Result<T> = result::Result<T, Error>;

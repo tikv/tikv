@@ -1,12 +1,14 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp::Ordering, collections::HashMap, fmt::Debug, path::Path, sync::Arc};
+use std::{cmp::Ordering, fmt::Debug, path::Path, sync::Arc};
 
+use chrono::Local;
 use dashmap::DashMap;
 use kvproto::{
     brpb::{StreamBackupError, StreamBackupTaskInfo},
     metapb::Region,
 };
+use protobuf::Message as _;
 use tikv_util::{defer, time::Instant, warn};
 use tokio_stream::StreamExt;
 use txn_types::TimeStamp;
@@ -15,14 +17,88 @@ use super::{
     checkpoint_cache::CheckpointCache,
     keys::{self, KeyValue, MetaKey},
     store::{
-        CondTransaction, Condition, GetExtra, Keys, KvEvent, KvEventType, MetaStore, Snapshot,
-        Subscription, Transaction, WithRevision,
+        CondTransaction, Condition, Keys, KvEvent, KvEventType, MetaStore, Snapshot, Subscription,
+        Transaction, WithRevision,
     },
 };
 use crate::{
-    debug,
+    annotate, debug,
     errors::{ContextualResultExt, Error, Result},
 };
+
+enum Payload {
+    #[allow(dead_code)]
+    Utf8Text(String),
+    LogBackupError(kvproto::brpb::StreamBackupError),
+}
+
+impl serde::Serialize for Payload {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let value = match self {
+            Payload::Utf8Text(_) => "text/plain;charset=UTF-8",
+            Payload::LogBackupError(_) => {
+                "application/x-protobuf;messageType=brpb.StreamBackupError"
+            }
+        };
+        let mut iter = std::collections::HashMap::new();
+        iter.insert("payload_type", value);
+        let payload_value = match self {
+            Payload::Utf8Text(s) => s.as_bytes().to_vec(),
+            Payload::LogBackupError(err) => err.write_to_bytes().unwrap(),
+        };
+        let payload_value_base64 = base64::encode(payload_value);
+        iter.insert("payload", &payload_value_base64);
+        serializer.collect_map(iter)
+    }
+}
+
+#[derive(derive_more::Deref)]
+struct RFC3336Time(chrono::DateTime<Local>);
+
+impl serde::Serialize for RFC3336Time {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.collect_str(&self.0.to_rfc3339())
+    }
+}
+
+#[derive(serde::Serialize)]
+struct PauseV2 {
+    severity: String,
+    operation_hostname: String,
+    operation_pid: u32,
+    operation_time: RFC3336Time,
+
+    #[serde(flatten)]
+    payload: Payload,
+}
+
+#[derive(Debug)]
+pub enum PauseStatus {
+    NotPaused,
+    PausedV1,
+    // The Raw JSON value of the paused V2.
+    // For now this API was only used for integration test
+    // hence deserializing isn't implemented.
+    PausedV2Json(String),
+}
+
+impl PauseV2 {
+    fn by_error(err: kvproto::brpb::StreamBackupError) -> Self {
+        Self {
+            severity: "ERROR".to_owned(),
+            operation_hostname: tikv_util::sys::hostname().unwrap_or_else(|| "unknown".to_owned()),
+            operation_pid: std::process::id(),
+            operation_time: RFC3336Time(Local::now()),
+            payload: Payload::LogBackupError(err),
+        }
+    }
+}
 
 /// Some operations over stream backup metadata key space.
 #[derive(Clone)]
@@ -48,6 +124,7 @@ impl Debug for StreamTask {
             .field("table_filter", &self.info.table_filter)
             .field("start_ts", &self.info.start_ts)
             .field("end_ts", &self.info.end_ts)
+            .field("is_paused", &self.is_paused)
             .finish()
     }
 }
@@ -285,15 +362,26 @@ impl<Store: MetaStore> MetadataClient<Store> {
         Ok(())
     }
 
-    pub async fn get_last_error(
+    pub async fn get_last_error(&self, name: &str) -> Result<Option<StreamBackupError>> {
+        let key = MetaKey::last_errors_of(name);
+
+        let r = self.meta_store.get_latest(Keys::Prefix(key)).await?.inner;
+        if r.is_empty() {
+            return Ok(None);
+        }
+        let r = &r[0];
+        let err = protobuf::parse_from_bytes(r.value())?;
+        Ok(Some(err))
+    }
+
+    pub async fn get_last_error_of(
         &self,
         name: &str,
         store_id: u64,
     ) -> Result<Option<StreamBackupError>> {
         let key = MetaKey::last_error_of(name, store_id);
 
-        let s = self.meta_store.snapshot().await?;
-        let r = s.get(Keys::Key(key)).await?;
+        let r = self.meta_store.get_latest(Keys::Key(key)).await?.inner;
         if r.is_empty() {
             return Ok(None);
         }
@@ -304,8 +392,11 @@ impl<Store: MetaStore> MetadataClient<Store> {
 
     /// check whether the task is paused.
     pub async fn check_task_paused(&self, name: &str) -> Result<bool> {
-        let snap = self.meta_store.snapshot().await?;
-        let kvs = snap.get(Keys::Key(MetaKey::pause_of(name))).await?;
+        let kvs = self
+            .meta_store
+            .get_latest(Keys::Key(MetaKey::pause_of(name)))
+            .await?
+            .inner;
         Ok(!kvs.is_empty())
     }
 
@@ -316,18 +407,47 @@ impl<Store: MetaStore> MetadataClient<Store> {
             .await
     }
 
-    pub async fn get_tasks_pause_status(&self) -> Result<HashMap<Vec<u8>, bool>> {
-        let snap = self.meta_store.snapshot().await?;
-        let kvs = snap.get(Keys::Prefix(MetaKey::pause_prefix())).await?;
-        let mut pause_hash = HashMap::new();
-        let prefix_len = MetaKey::pause_prefix_len();
+    /// pause a task and upload the error
+    pub async fn pause_with_err(
+        &self,
+        name: &str,
+        err: kvproto::brpb::StreamBackupError,
+    ) -> Result<()> {
+        let pause = PauseV2::by_error(err);
+        let pause_bytes = serde_json::to_string(&pause)
+            .map_err(|e| annotate!(e, "failed to serialize the pause v2").report("pause_with_err"))
+            // Anyway the task must be paused.
+            .unwrap_or_default();
+        self.meta_store
+            .set(KeyValue(MetaKey::pause_of(name), pause_bytes.into_bytes()))
+            .await?;
 
-        for kv in kvs {
-            let task_name = kv.key()[prefix_len..].to_vec();
-            pause_hash.insert(task_name, true);
+        Ok(())
+    }
+
+    /// resume a task.
+    pub async fn resume(&self, name: &str) -> Result<()> {
+        self.meta_store
+            .delete(Keys::Key(MetaKey::pause_of(name)))
+            .await
+    }
+
+    pub async fn pause_status(&self, name: &str) -> Result<PauseStatus> {
+        let kvs = self
+            .meta_store
+            .get_latest(Keys::Key(MetaKey::pause_of(name)))
+            .await?;
+        if kvs.inner.is_empty() {
+            return Ok(PauseStatus::NotPaused);
         }
-
-        Ok(pause_hash)
+        let kv = &kvs.inner[0];
+        let pause_bytes = kv.value();
+        let pause_str = std::str::from_utf8(pause_bytes).unwrap_or_default();
+        if !pause_str.is_empty() {
+            Ok(PauseStatus::PausedV2Json(pause_str.to_owned()))
+        } else {
+            Ok(PauseStatus::PausedV1)
+        }
     }
 
     /// query the named task from the meta store.
@@ -336,12 +456,16 @@ impl<Store: MetaStore> MetadataClient<Store> {
         defer! {
             super::metrics::METADATA_OPERATION_LATENCY.with_label_values(&["task_get"]).observe(now.saturating_elapsed().as_secs_f64())
         }
+        fail::fail_point!("failed_to_get_task", |_| {
+            Err(Error::MalformedMetadata(
+                "failed to connect etcd client".to_string(),
+            ))
+        });
         let items = self
             .meta_store
-            .snapshot()
+            .get_latest(Keys::Key(MetaKey::task_of(name)))
             .await?
-            .get(Keys::Key(MetaKey::task_of(name)))
-            .await?;
+            .inner;
         if items.is_empty() {
             return Ok(None);
         }
@@ -359,14 +483,16 @@ impl<Store: MetaStore> MetadataClient<Store> {
         }
         fail::fail_point!("failed_to_get_tasks", |_| {
             Err(Error::MalformedMetadata(
-                "faild to connect etcd client".to_string(),
+                "failed to connect etcd client".to_string(),
             ))
         });
-        let snap = self.meta_store.snapshot().await?;
-        let kvs = snap.get(Keys::Prefix(MetaKey::tasks())).await?;
+        let kvs = self
+            .meta_store
+            .get_latest(Keys::Prefix(MetaKey::tasks()))
+            .await?;
 
-        let mut tasks = Vec::with_capacity(kvs.len());
-        for kv in kvs {
+        let mut tasks = Vec::with_capacity(kvs.inner.len());
+        for kv in kvs.inner {
             let t = protobuf::parse_from_bytes::<StreamBackupTaskInfo>(kv.value())?;
             let paused = self.check_task_paused(t.get_name()).await?;
             tasks.push(StreamTask {
@@ -376,7 +502,7 @@ impl<Store: MetaStore> MetadataClient<Store> {
         }
         Ok(WithRevision {
             inner: tasks,
-            revision: snap.revision(),
+            revision: kvs.revision,
         })
     }
 
@@ -419,7 +545,10 @@ impl<Store: MetaStore> MetadataClient<Store> {
         let stream = watcher
             .stream
             .filter_map(|item| match item {
-                Ok(kv_event) => MetadataEvent::from_watch_pause_event(&kv_event),
+                Ok(kv_event) => {
+                    debug!("watch pause event"; "raw" => ?kv_event);
+                    MetadataEvent::from_watch_pause_event(&kv_event)
+                }
                 Err(err) => Some(MetadataEvent::Error { err }),
             })
             .map(|event| {
@@ -455,13 +584,14 @@ impl<Store: MetaStore> MetadataClient<Store> {
         defer! {
             super::metrics::METADATA_OPERATION_LATENCY.with_label_values(&["task_step"]).observe(now.saturating_elapsed().as_secs_f64())
         }
-        let snap = self.meta_store.snapshot().await?;
-        let ts = snap
-            .get(Keys::Key(MetaKey::storage_checkpoint_of(
+        let ts = self
+            .meta_store
+            .get_latest(Keys::Key(MetaKey::storage_checkpoint_of(
                 task_name,
                 self.store_id,
             )))
-            .await?;
+            .await?
+            .inner;
 
         match ts.as_slice() {
             [ts, ..] => Ok(TimeStamp::new(parse_ts_from_bytes(ts.value())?)),
@@ -488,13 +618,14 @@ impl<Store: MetaStore> MetadataClient<Store> {
         defer! {
             super::metrics::METADATA_OPERATION_LATENCY.with_label_values(&["task_step"]).observe(now.saturating_elapsed().as_secs_f64())
         }
-        let snap = self.meta_store.snapshot().await?;
-        let ts = snap
-            .get(Keys::Key(MetaKey::next_backup_ts_of(
+        let ts = self
+            .meta_store
+            .get_latest(Keys::Key(MetaKey::next_backup_ts_of(
                 task_name,
                 self.store_id,
             )))
-            .await?;
+            .await?
+            .inner;
 
         match ts.as_slice() {
             [ts, ..] => Ok(TimeStamp::new(parse_ts_from_bytes(ts.value())?)),
@@ -507,96 +638,16 @@ impl<Store: MetaStore> MetadataClient<Store> {
         &self,
         task_name: &str,
     ) -> Result<WithRevision<Vec<(Vec<u8>, Vec<u8>)>>> {
-        let snap = self.meta_store.snapshot().await?;
-        let ranges = snap
-            .get(Keys::Prefix(MetaKey::ranges_of(task_name)))
+        let ranges = self
+            .meta_store
+            .get_latest(Keys::Prefix(MetaKey::ranges_of(task_name)))
             .await?;
 
-        Ok(WithRevision {
-            revision: snap.revision(),
-            inner: ranges
-                .into_iter()
+        Ok(ranges.map(|rs| {
+            rs.into_iter()
                 .map(|mut kv: KeyValue| kv.take_range(task_name))
-                .collect(),
-        })
-    }
-
-    /// Perform a two-phase bisection search algorithm for the intersection of
-    /// all ranges and the specificated range (usually region range.)
-    /// TODO: explain the algorithm?
-    pub async fn range_overlap_of_task(
-        &self,
-        task_name: &str,
-        (start_key, end_key): (Vec<u8>, Vec<u8>),
-    ) -> Result<WithRevision<Vec<(Vec<u8>, Vec<u8>)>>> {
-        let now = Instant::now();
-        defer! {
-            super::metrics::METADATA_OPERATION_LATENCY.with_label_values(&["task_range_search"]).observe(now.saturating_elapsed().as_secs_f64())
-        }
-        let snap = self.meta_store.snapshot().await?;
-
-        let mut prev = snap
-            .get_extra(
-                Keys::Range(
-                    MetaKey::ranges_of(task_name),
-                    MetaKey::range_of(task_name, &start_key),
-                ),
-                GetExtra {
-                    desc_order: true,
-                    limit: 1,
-                    ..Default::default()
-                },
-            )
-            .await?;
-        let all = snap
-            .get(Keys::Range(
-                MetaKey::range_of(task_name, &start_key),
-                MetaKey::range_of(task_name, &end_key),
-            ))
-            .await?;
-
-        let mut result = Vec::with_capacity(all.len() + 1);
-        if !prev.kvs.is_empty() {
-            let kv = &mut prev.kvs[0];
-            if kv.value() > start_key.as_slice() {
-                result.push(kv.take_range(task_name));
-            }
-        }
-        for mut kv in all {
-            result.push(kv.take_range(task_name));
-        }
-        Ok(WithRevision {
-            revision: snap.revision(),
-            inner: result,
-        })
-    }
-
-    /// access the next backup ts of some task and some region.
-    pub async fn progress_of_task(&self, task_name: &str) -> Result<u64> {
-        let now = Instant::now();
-        defer! {
-            super::metrics::METADATA_OPERATION_LATENCY.with_label_values(&["task_progress_get"]).observe(now.saturating_elapsed().as_secs_f64())
-        }
-        let task = self.get_task(task_name).await?;
-        if task.is_none() {
-            return Err(Error::NoSuchTask {
-                task_name: task_name.to_owned(),
-            });
-        }
-
-        let timestamp = self.meta_store.snapshot().await?;
-        let items = timestamp
-            .get(Keys::Key(MetaKey::next_backup_ts_of(
-                task_name,
-                self.store_id,
-            )))
-            .await?;
-        if items.is_empty() {
-            Ok(task.unwrap().info.start_ts)
-        } else {
-            assert_eq!(items.len(), 1);
-            parse_ts_from_bytes(items[0].1.as_slice())
-        }
+                .collect()
+        }))
     }
 
     pub async fn checkpoints_of(&self, task_name: &str) -> Result<Vec<Checkpoint>> {
@@ -604,10 +655,10 @@ impl<Store: MetaStore> MetadataClient<Store> {
         defer! {
             super::metrics::METADATA_OPERATION_LATENCY.with_label_values(&["checkpoints_of"]).observe(now.saturating_elapsed().as_secs_f64())
         }
-        let snap = self.meta_store.snapshot().await?;
-        let checkpoints = snap
-            .get(Keys::Prefix(MetaKey::next_backup_ts(task_name)))
+        let checkpoints = self.meta_store
+            .get_latest(Keys::Prefix(MetaKey::next_backup_ts(task_name)))
             .await?
+            .inner
             .iter()
             .filter_map(|kv| {
                 Checkpoint::from_kv(kv)
@@ -674,6 +725,7 @@ impl<Store: MetaStore> MetadataClient<Store> {
 
     /// remove some task, without the ranges.
     /// only for testing.
+    #[cfg(test)]
     pub async fn remove_task(&self, name: &str) -> Result<()> {
         self.meta_store
             .delete(Keys::Key(MetaKey::task_of(name)))
@@ -722,16 +774,19 @@ impl<Store: MetaStore> MetadataClient<Store> {
             return Ok(c);
         }
         let key = MetaKey::next_bakcup_ts_of_region(task, region);
-        let s = self.meta_store.snapshot().await?;
-        let r = s.get(Keys::Key(key.clone())).await?;
+        let r = self
+            .meta_store
+            .get_latest(Keys::Key(key.clone()))
+            .await?
+            .inner;
         let cp = match r.len() {
             0 => {
                 let global_cp = self.global_checkpoint_of(task).await?;
-                let cp = match global_cp {
+
+                match global_cp {
                     None => self.get_task_start_ts_checkpoint(task).await?,
                     Some(cp) => cp,
-                };
-                cp
+                }
             }
             _ => Checkpoint::from_kv(&r[0])?,
         };

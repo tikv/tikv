@@ -1,33 +1,39 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
-use std::{convert::TryInto, fmt::Display, io, sync::Arc};
+use std::{fmt::Display, io};
 
 use async_trait::async_trait;
 use cloud::{
-    blob::{none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty},
+    blob::{
+        BlobConfig, BlobObject, BlobStorage, BucketConf, DeletableStorage, IterableStorage,
+        PutResource, StringNonEmpty, none_to_empty, read_to_end,
+    },
     metrics,
 };
 use futures_util::{
-    future::TryFutureExt,
-    io::{self as async_io, AsyncRead, Cursor},
-    stream::{StreamExt, TryStreamExt},
+    future::{FutureExt, LocalBoxFuture, TryFutureExt},
+    io::Cursor,
+    stream::{self, Stream, StreamExt, TryStreamExt},
 };
 use http::HeaderValue;
-use hyper::{client::HttpConnector, Body, Client, Request, Response, StatusCode};
-use hyper_tls::HttpsConnector;
-pub use kvproto::brpb::{Bucket as InputBucket, CloudDynamic, Gcs as InputConfig};
+use hyper::{Body, Request, Response};
+pub use kvproto::brpb::Gcs as InputConfig;
 use tame_gcs::{
     common::{PredefinedAcl, StorageClass},
-    objects::{InsertObjectOptional, Metadata, Object},
+    objects::{InsertObjectOptional, ListOptional, ListResponse, Metadata, Object},
     types::{BucketName, ObjectId},
 };
-use tame_oauth::gcp::{ServiceAccountAccess, ServiceAccountInfo, TokenOrRequest};
+use tame_oauth::gcp::ServiceAccountInfo;
 use tikv_util::{
-    stream::{error_stream, AsyncReadAsSyncStreamOfBytes, RetryError},
+    stream::{AsyncReadAsSyncStreamOfBytes, error_stream},
     time::Instant,
 };
 
-use crate::utils::retry;
+use crate::{
+    client::{GcpClient, RequestError, status_code_error},
+    utils::{self, retry},
+};
 
+const DEFAULT_SEP: char = '/';
 const GOOGLE_APIS: &str = "https://www.googleapis.com";
 const HARDCODED_ENDPOINTS_SUFFIX: &[&str] = &["upload/storage/v1/", "storage/v1/"];
 
@@ -52,35 +58,6 @@ impl Config {
 
     pub fn missing_credentials() -> io::Error {
         io::Error::new(io::ErrorKind::InvalidInput, "missing credentials")
-    }
-
-    pub fn from_cloud_dynamic(cloud_dynamic: &CloudDynamic) -> io::Result<Config> {
-        let bucket = BucketConf::from_cloud_dynamic(cloud_dynamic)?;
-        let attrs = &cloud_dynamic.attrs;
-        let def = &String::new();
-        let predefined_acl = parse_predefined_acl(attrs.get("predefined_acl").unwrap_or(def))
-            .or_invalid_input("invalid predefined_acl")?;
-        let storage_class = parse_storage_class(&none_to_empty(bucket.storage_class.clone()))
-            .or_invalid_input("invalid storage_class")?;
-
-        let credentials_blob_opt = StringNonEmpty::opt(
-            attrs
-                .get("credentials_blob")
-                .unwrap_or(&"".to_string())
-                .to_string(),
-        );
-        let svc_info = if let Some(cred) = credentials_blob_opt {
-            Some(deserialize_service_account_info(cred)?)
-        } else {
-            None
-        };
-
-        Ok(Config {
-            bucket,
-            predefined_acl,
-            svc_info,
-            storage_class,
-        })
     }
 
     pub fn from_input(input: InputConfig) -> io::Result<Config> {
@@ -123,12 +100,9 @@ impl BlobConfig for Config {
     }
 
     fn url(&self) -> io::Result<url::Url> {
-        self.bucket.url("gcs").map_err(|s| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("error creating bucket url: {}", s),
-            )
-        })
+        self.bucket
+            .url("gcs")
+            .map_err(|s| io::Error::other(format!("error creating bucket url: {}", s)))
     }
 }
 
@@ -136,11 +110,10 @@ impl BlobConfig for Config {
 #[derive(Clone)]
 pub struct GcsStorage {
     config: Config,
-    svc_access: Option<Arc<ServiceAccountAccess>>,
-    client: Client<HttpsConnector<HttpConnector>, Body>,
+    client: GcpClient,
 }
 
-trait ResultExt {
+pub trait ResultExt {
     type Ok;
 
     // Maps the error of this result as an `std::io::Error` with `Other` error
@@ -155,84 +128,40 @@ trait ResultExt {
 impl<T, E: Display> ResultExt for Result<T, E> {
     type Ok = T;
     fn or_io_error<D: Display>(self, msg: D) -> io::Result<T> {
-        self.map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}: {}", msg, e)))
+        self.map_err(|e| io::Error::other(format!("{}: {}", msg, e)))
     }
     fn or_invalid_input<D: Display>(self, msg: D) -> io::Result<T> {
         self.map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}: {}", msg, e)))
     }
 }
 
-#[derive(Debug)]
-enum RequestError {
-    Hyper(hyper::Error, String),
-    OAuth(tame_oauth::Error, String),
-    Gcs(tame_gcs::Error),
-    InvalidEndpoint(http::uri::InvalidUri),
-}
+impl DeletableStorage for GcsStorage {
+    fn delete(&self, name: &str) -> LocalBoxFuture<'_, io::Result<()>> {
+        let name = name.to_owned();
+        async move {
+            let key = self.maybe_prefix_key(&name);
+            let oid = ObjectId::new(self.config.bucket.bucket.to_string(), key)
+                .or_invalid_input(format_args!("invalid object id"))?;
+            let now = Instant::now();
+            retry(
+                || async {
+                    let req = Object::delete(&oid, None).map_err(RequestError::Gcs)?;
+                    self.make_request(
+                        req.map(|_: io::Empty| Body::empty()),
+                        tame_gcs::Scopes::ReadWrite,
+                    )
+                    .await
+                },
+                "delete",
+            )
+            .await?;
+            metrics::CLOUD_REQUEST_HISTOGRAM_VEC
+                .with_label_values(&["gcp", "delete"])
+                .observe(now.saturating_elapsed_secs());
 
-impl From<http::uri::InvalidUri> for RequestError {
-    fn from(err: http::uri::InvalidUri) -> Self {
-        Self::InvalidEndpoint(err)
-    }
-}
-
-fn status_code_error(code: StatusCode, msg: String) -> RequestError {
-    RequestError::OAuth(tame_oauth::Error::HttpStatus(code), msg)
-}
-
-impl From<RequestError> for io::Error {
-    fn from(err: RequestError) -> Self {
-        match err {
-            RequestError::Hyper(e, msg) => {
-                Self::new(io::ErrorKind::InvalidInput, format!("HTTP {}: {}", msg, e))
-            }
-            RequestError::OAuth(tame_oauth::Error::Io(e), _) => e,
-            RequestError::OAuth(tame_oauth::Error::HttpStatus(sc), msg) => {
-                let fmt = format!("GCS OAuth: {}: {}", msg, sc);
-                match sc.as_u16() {
-                    401 | 403 => Self::new(io::ErrorKind::PermissionDenied, fmt),
-                    404 => Self::new(io::ErrorKind::NotFound, fmt),
-                    _ if sc.is_server_error() => Self::new(io::ErrorKind::Interrupted, fmt),
-                    _ => Self::new(io::ErrorKind::InvalidInput, fmt),
-                }
-            }
-            RequestError::OAuth(tame_oauth::Error::AuthError(e), msg) => Self::new(
-                io::ErrorKind::PermissionDenied,
-                format!("authorization failed: {}: {}", msg, e),
-            ),
-            RequestError::OAuth(e, msg) => Self::new(
-                io::ErrorKind::InvalidInput,
-                format!("oauth failed: {}: {}", msg, e),
-            ),
-            RequestError::Gcs(e) => Self::new(
-                io::ErrorKind::InvalidInput,
-                format!("invalid GCS request: {}", e),
-            ),
-            RequestError::InvalidEndpoint(e) => Self::new(
-                io::ErrorKind::InvalidInput,
-                format!("invalid GCS endpoint URI: {}", e),
-            ),
+            Ok(())
         }
-    }
-}
-
-impl RetryError for RequestError {
-    fn is_retryable(&self) -> bool {
-        match self {
-            // FIXME: Inspect the error source?
-            Self::Hyper(e, _) => {
-                e.is_closed()
-                    || e.is_connect()
-                    || e.is_incomplete_message()
-                    || e.is_body_write_aborted()
-            }
-            // See https://cloud.google.com/storage/docs/exponential-backoff.
-            Self::OAuth(tame_oauth::Error::HttpStatus(StatusCode::TOO_MANY_REQUESTS), _) => true,
-            Self::OAuth(tame_oauth::Error::HttpStatus(StatusCode::REQUEST_TIMEOUT), _) => true,
-            Self::OAuth(tame_oauth::Error::HttpStatus(status), _) => status.is_server_error(),
-            // Consider everything else not retryable.
-            _ => false,
-        }
+        .boxed_local()
     }
 }
 
@@ -241,80 +170,17 @@ impl GcsStorage {
         Self::new(Config::from_input(input)?)
     }
 
-    pub fn from_cloud_dynamic(cloud_dynamic: &CloudDynamic) -> io::Result<Self> {
-        Self::new(Config::from_cloud_dynamic(cloud_dynamic)?)
-    }
-
     /// Create a new GCS storage for the given config.
     pub fn new(config: Config) -> io::Result<GcsStorage> {
-        let svc_access = if let Some(si) = &config.svc_info {
-            Some(
-                ServiceAccountAccess::new(si.clone())
-                    .or_invalid_input("invalid credentials_blob")?,
-            )
-        } else {
-            None
-        };
-
-        let client = Client::builder().build(HttpsConnector::new());
-        Ok(GcsStorage {
-            config,
-            svc_access: svc_access.map(Arc::new),
-            client,
-        })
+        let client = GcpClient::with_svc_info(config.svc_info.clone())?;
+        Ok(GcsStorage { config, client })
     }
 
     fn maybe_prefix_key(&self, key: &str) -> String {
         if let Some(prefix) = &self.config.bucket.prefix {
-            return format!("{}/{}", prefix, key);
+            return format!("{}{}{}", prefix, DEFAULT_SEP, key);
         }
         key.to_owned()
-    }
-
-    async fn set_auth(
-        &self,
-        req: &mut Request<Body>,
-        scope: tame_gcs::Scopes,
-        svc_access: Arc<ServiceAccountAccess>,
-    ) -> Result<(), RequestError> {
-        let token_or_request = svc_access
-            .get_token(&[scope])
-            .map_err(|e| RequestError::OAuth(e, "get_token".to_string()))?;
-        let token = match token_or_request {
-            TokenOrRequest::Token(token) => token,
-            TokenOrRequest::Request {
-                request,
-                scope_hash,
-                ..
-            } => {
-                let res = self
-                    .client
-                    .request(request.map(From::from))
-                    .await
-                    .map_err(|e| RequestError::Hyper(e, "set auth request".to_owned()))?;
-                if !res.status().is_success() {
-                    return Err(status_code_error(
-                        res.status(),
-                        "set auth request".to_string(),
-                    ));
-                }
-                let (parts, body) = res.into_parts();
-                let body = hyper::body::to_bytes(body)
-                    .await
-                    .map_err(|e| RequestError::Hyper(e, "set auth body".to_owned()))?;
-                svc_access
-                    .parse_token_response(scope_hash, Response::from_parts(parts, body))
-                    .map_err(|e| RequestError::OAuth(e, "set auth parse token".to_string()))?
-            }
-        };
-        req.headers_mut().insert(
-            http::header::AUTHORIZATION,
-            token
-                .try_into()
-                .map_err(|e| RequestError::OAuth(e, "set auth add auth header".to_string()))?,
-        );
-
-        Ok(())
     }
 
     async fn make_request(
@@ -332,19 +198,18 @@ impl GcsStorage {
             }
         }
 
-        if let Some(svc_access) = &self.svc_access {
-            self.set_auth(&mut req, scope, svc_access.clone()).await?;
+        self.client.make_request(req, scope).await
+    }
+
+    fn strip_prefix_if_needed(&self, key: String) -> String {
+        if let Some(prefix) = &self.config.bucket.prefix {
+            if key.starts_with(prefix.as_str()) {
+                return key[prefix.len()..]
+                    .trim_start_matches(DEFAULT_SEP)
+                    .to_owned();
+            }
         }
-        let uri = req.uri().to_string();
-        let res = self
-            .client
-            .request(req)
-            .await
-            .map_err(|e| RequestError::Hyper(e, uri.clone()))?;
-        if !res.status().is_success() {
-            return Err(status_code_error(res.status(), uri));
-        }
-        Ok(res)
+        key
     }
 
     fn error_to_async_read<E>(kind: io::ErrorKind, e: E) -> cloud::blob::BlobStream<'static>
@@ -379,7 +244,9 @@ impl GcsStorage {
                     if response.status().is_success() {
                         Ok(response.into_body().map_err(|e| {
                             io::Error::new(
-                                io::ErrorKind::Other,
+                                // Given the status is success, if the content stream has been cut down, 
+                                // there must be some network unavailable, which should generally be retryable.
+                                io::ErrorKind::Interrupted,
                                 format!("download from GCS error: {}", e),
                             )
                         }))
@@ -440,14 +307,6 @@ fn parse_predefined_acl(acl: &str) -> Result<Option<PredefinedAcl>, &str> {
     }))
 }
 
-/// Like AsyncReadExt::read_to_end, but only try to initialize the buffer once.
-/// Check https://github.com/rust-lang/futures-rs/issues/2658 for the reason we cannot
-/// directly use it.
-async fn read_to_end<R: AsyncRead>(r: R, v: &mut Vec<u8>) -> std::io::Result<u64> {
-    let mut c = Cursor::new(v);
-    async_io::copy(r, &mut c).await
-}
-
 const STORAGE_NAME: &str = "gcs";
 
 #[async_trait]
@@ -456,61 +315,84 @@ impl BlobStorage for GcsStorage {
         Box::new(self.config.clone()) as Box<dyn BlobConfig>
     }
 
-    async fn put(&self, name: &str, reader: PutResource, content_length: u64) -> io::Result<()> {
-        if content_length == 0 {
-            // It is probably better to just write the empty file
-            // However, currently going forward results in a body write aborted error
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "no content to write",
-            ));
-        }
-        use std::convert::TryFrom;
-
+    async fn put(
+        &self,
+        name: &str,
+        reader: PutResource<'_>,
+        content_length: u64,
+    ) -> io::Result<()> {
         let key = self.maybe_prefix_key(name);
         debug!("save file to GCS storage"; "key" => %key);
-        let bucket = BucketName::try_from(self.config.bucket.bucket.to_string())
-            .or_invalid_input(format_args!("invalid bucket {}", self.config.bucket.bucket))?;
 
-        let metadata = Metadata {
-            name: Some(key),
-            storage_class: self.config.storage_class,
-            ..Default::default()
-        };
+        // Common setup
+        let oid = ObjectId::new(self.config.bucket.bucket.to_string(), key.clone())
+            .or_invalid_input(format_args!("invalid object id"))?;
 
-        // FIXME: Switch to upload() API so we don't need to read the entire data into
-        // memory in order to retry.
-        let begin = Instant::now_coarse();
-        let mut data = Vec::with_capacity(content_length as usize);
-        read_to_end(reader, &mut data).await?;
-        metrics::CLOUD_REQUEST_HISTOGRAM_VEC
-            .with_label_values(&["gcp", "read_local"])
-            .observe(begin.saturating_elapsed_secs());
-        let begin = Instant::now_coarse();
-        retry(
-            || async {
-                let data = Cursor::new(data.clone());
-                let req = Object::insert_multipart(
-                    &bucket,
-                    data,
-                    content_length,
-                    &metadata,
-                    Some(InsertObjectOptional {
-                        predefined_acl: self.config.predefined_acl,
-                        ..Default::default()
-                    }),
+        match content_length {
+            // Empty file case
+            0 => {
+                let begin = Instant::now_coarse();
+                retry(
+                    || async {
+                        let optional = InsertObjectOptional {
+                            predefined_acl: self.config.predefined_acl,
+                            ..Default::default()
+                        };
+                        let req = Object::insert_simple(&oid, "", 0, Some(optional))
+                            .map_err(RequestError::Gcs)?
+                            .map(|_| Body::empty());
+                        self.make_request(req, tame_gcs::Scopes::ReadWrite).await
+                    },
+                    "insert_simple",
                 )
-                .map_err(RequestError::Gcs)?
-                .map(|reader| Body::wrap_stream(AsyncReadAsSyncStreamOfBytes::new(reader)));
-                self.make_request(req, tame_gcs::Scopes::ReadWrite).await
-            },
-            "insert_multipart",
-        )
-        .await?;
-        metrics::CLOUD_REQUEST_HISTOGRAM_VEC
-            .with_label_values(&["gcp", "insert_multipart"])
-            .observe(begin.saturating_elapsed_secs());
-        Ok::<_, io::Error>(())
+                .await?;
+                metrics::CLOUD_REQUEST_HISTOGRAM_VEC
+                    .with_label_values(&["gcp", "insert_simple"])
+                    .observe(begin.saturating_elapsed_secs());
+                Ok(())
+            }
+            // Non-empty file case
+            _ => {
+                let begin = Instant::now_coarse();
+                let mut data = Vec::with_capacity(content_length as usize);
+                read_to_end(reader, &mut data).await?;
+                metrics::CLOUD_REQUEST_HISTOGRAM_VEC
+                    .with_label_values(&["gcp", "read_local"])
+                    .observe(begin.saturating_elapsed_secs());
+
+                let metadata = Metadata {
+                    name: Some(key),
+                    storage_class: self.config.storage_class,
+                    ..Default::default()
+                };
+                let begin = Instant::now_coarse();
+                retry(
+                    || async {
+                        let optional = InsertObjectOptional {
+                            predefined_acl: self.config.predefined_acl,
+                            ..Default::default()
+                        };
+                        let data = Cursor::new(data.clone());
+                        let req = Object::insert_multipart(
+                            &oid.bucket,
+                            data,
+                            content_length,
+                            &metadata,
+                            Some(optional),
+                        )
+                        .map_err(RequestError::Gcs)?
+                        .map(|reader| Body::wrap_stream(AsyncReadAsSyncStreamOfBytes::new(reader)));
+                        self.make_request(req, tame_gcs::Scopes::ReadWrite).await
+                    },
+                    "insert_multipart",
+                )
+                .await?;
+                metrics::CLOUD_REQUEST_HISTOGRAM_VEC
+                    .with_label_values(&["gcp", "insert_multipart"])
+                    .observe(begin.saturating_elapsed_secs());
+                Ok(())
+            }
+        }
     }
 
     fn get(&self, name: &str) -> cloud::blob::BlobStream<'_> {
@@ -523,12 +405,84 @@ impl BlobStorage for GcsStorage {
     }
 }
 
+struct GcsPrefixIter<'cli> {
+    cli: &'cli GcsStorage,
+    page_token: Option<String>,
+    prefix: String,
+    finished: bool,
+}
+
+impl GcsPrefixIter<'_> {
+    async fn one_page(&mut self) -> io::Result<Option<Vec<BlobObject>>> {
+        if self.finished {
+            return Ok(None);
+        }
+
+        let mut opt = ListOptional::default();
+        let bucket =
+            BucketName::try_from(self.cli.config.bucket.bucket.to_string()).or_invalid_input(
+                format_args!("invalid bucket {}", self.cli.config.bucket.bucket),
+            )?;
+        let prefix = self.cli.maybe_prefix_key(&self.prefix);
+        opt.prefix = Some(&prefix);
+        opt.page_token = self.page_token.as_deref();
+        let now = Instant::now();
+        let req = Object::list(&bucket, Some(opt)).or_io_error(format_args!(
+            "failed to list with prefix {} page_token {:?}",
+            self.prefix, self.page_token
+        ))?;
+        let res = self
+            .cli
+            .make_request(req.map(|_e| Body::empty()), tame_gcs::Scopes::ReadOnly)
+            .await
+            .map_err(|err| io::Error::other(err))?;
+        let resp = utils::read_from_http_body::<ListResponse>(res).await?;
+        metrics::CLOUD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["gcp", "list"])
+            .observe(now.saturating_elapsed_secs());
+
+        debug!("requesting paging GCP"; "prefix" => %self.prefix, "page_token" => self.page_token.as_deref(), 
+            "response_size" => resp.objects.len(), "new_page_token" => resp.page_token.as_deref());
+        // GCP returns an empty page token when returning the last page...
+        // We need to break there or we will enter an infinity loop...
+        if resp.page_token.is_none() {
+            self.finished = true;
+        }
+        self.page_token = resp.page_token;
+        let items = resp
+            .objects
+            .into_iter()
+            .map(|v| BlobObject {
+                key: self.cli.strip_prefix_if_needed(v.name.unwrap_or_default()),
+            })
+            .collect::<Vec<_>>();
+        Ok(Some(items))
+    }
+}
+
+impl IterableStorage for GcsStorage {
+    fn iter_prefix(
+        &self,
+        prefix: &str,
+    ) -> std::pin::Pin<Box<dyn Stream<Item = io::Result<cloud::blob::BlobObject>> + '_>> {
+        let walker = GcsPrefixIter {
+            cli: self,
+            page_token: None,
+            prefix: prefix.to_owned(),
+            finished: false,
+        };
+        let s = stream::try_unfold(walker, |mut w| async move {
+            let res = w.one_page().await?;
+            io::Result::Ok(res.map(|v| (v, w)))
+        })
+        .map_ok(|data| stream::iter(data.into_iter().map(Ok)))
+        .try_flatten();
+        Box::pin(s)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    extern crate test;
-    use std::task::Poll;
-
-    use futures_util::AsyncReadExt;
     use matches::assert_matches;
 
     use super::*;
@@ -617,122 +571,5 @@ mod tests {
             &Config::default(bucket).url().unwrap().to_string(),
             "http://endpoint.com/bucket/backup%2002/prefix/"
         );
-    }
-
-    #[test]
-    fn test_config_round_trip() {
-        let mut input = InputConfig::default();
-        input.set_bucket("bucket".to_owned());
-        input.set_prefix("backup 02/prefix/".to_owned());
-        let c1 = Config::from_input(input.clone()).unwrap();
-        let c2 = Config::from_cloud_dynamic(&cloud_dynamic_from_input(input)).unwrap();
-        assert_eq!(c1.bucket.bucket, c2.bucket.bucket);
-        assert_eq!(c1.bucket.prefix, c2.bucket.prefix);
-    }
-
-    enum ThrottleReadState {
-        Spawning,
-        Emitting,
-    }
-    /// ThrottleRead throttles a `Read` -- make it emits 2 chars for each
-    /// `read` call. This is copy & paste from the implmentation from s3.rs.
-    #[pin_project::pin_project]
-    struct ThrottleRead<R> {
-        #[pin]
-        inner: R,
-        state: ThrottleReadState,
-    }
-    impl<R: AsyncRead> AsyncRead for ThrottleRead<R> {
-        fn poll_read(
-            self: std::pin::Pin<&mut Self>,
-            cx: &mut std::task::Context<'_>,
-            buf: &mut [u8],
-        ) -> Poll<io::Result<usize>> {
-            let this = self.project();
-            match this.state {
-                ThrottleReadState::Spawning => {
-                    *this.state = ThrottleReadState::Emitting;
-                    cx.waker().wake_by_ref();
-                    Poll::Pending
-                }
-                ThrottleReadState::Emitting => {
-                    *this.state = ThrottleReadState::Spawning;
-                    this.inner.poll_read(cx, &mut buf[..2])
-                }
-            }
-        }
-    }
-    impl<R> ThrottleRead<R> {
-        fn new(r: R) -> Self {
-            Self {
-                inner: r,
-                state: ThrottleReadState::Spawning,
-            }
-        }
-    }
-
-    const BENCH_READ_SIZE: usize = 128 * 1024;
-
-    // 255,120,895 ns/iter (+/- 73,332,249) (futures-util 0.3.15)
-    #[bench]
-    fn bench_read_to_end(b: &mut test::Bencher) {
-        let mut v = [0; BENCH_READ_SIZE];
-        let mut dst = Vec::with_capacity(BENCH_READ_SIZE);
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap();
-
-        b.iter(|| {
-            let mut r = ThrottleRead::new(Cursor::new(&mut v));
-            dst.clear();
-
-            rt.block_on(r.read_to_end(&mut dst)).unwrap();
-            assert_eq!(dst.len(), BENCH_READ_SIZE)
-        })
-    }
-
-    // 5,850,042 ns/iter (+/- 3,787,438)
-    #[bench]
-    fn bench_manual_read_to_end(b: &mut test::Bencher) {
-        let mut v = [0; BENCH_READ_SIZE];
-        let mut dst = Vec::with_capacity(BENCH_READ_SIZE);
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap();
-        b.iter(|| {
-            let r = ThrottleRead::new(Cursor::new(&mut v));
-            dst.clear();
-
-            rt.block_on(read_to_end(r, &mut dst)).unwrap();
-            assert_eq!(dst.len(), BENCH_READ_SIZE)
-        })
-    }
-
-    fn cloud_dynamic_from_input(mut gcs: InputConfig) -> CloudDynamic {
-        let mut bucket = InputBucket::default();
-        if !gcs.endpoint.is_empty() {
-            bucket.endpoint = gcs.take_endpoint();
-        }
-        if !gcs.prefix.is_empty() {
-            bucket.prefix = gcs.take_prefix();
-        }
-        if !gcs.storage_class.is_empty() {
-            bucket.storage_class = gcs.take_storage_class();
-        }
-        if !gcs.bucket.is_empty() {
-            bucket.bucket = gcs.take_bucket();
-        }
-        let mut attrs = std::collections::HashMap::new();
-        if !gcs.predefined_acl.is_empty() {
-            attrs.insert("predefined_acl".to_owned(), gcs.take_predefined_acl());
-        }
-        if !gcs.credentials_blob.is_empty() {
-            attrs.insert("credentials_blob".to_owned(), gcs.take_credentials_blob());
-        }
-        let mut cd = CloudDynamic::default();
-        cd.set_provider_name("gcp".to_owned());
-        cd.set_attrs(attrs);
-        cd.set_bucket(bucket);
-        cd
     }
 }

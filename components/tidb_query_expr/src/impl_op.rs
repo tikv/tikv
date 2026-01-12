@@ -2,7 +2,7 @@
 
 use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
-use tidb_query_datatype::codec::{data_type::*, Error};
+use tidb_query_datatype::codec::{Error, data_type::*};
 
 #[rpn_fn(nullable)]
 #[inline]
@@ -53,6 +53,18 @@ pub fn unary_not_real(arg: Option<&Real>) -> Result<Option<i64>> {
 #[inline]
 pub fn unary_not_decimal(arg: Option<&Decimal>) -> Result<Option<i64>> {
     Ok(arg.as_ref().map(|v| v.is_zero() as i64))
+}
+
+#[rpn_fn(nullable)]
+#[inline]
+pub fn unary_not_json(arg: Option<JsonRef>) -> Result<Option<i64>> {
+    let json_zero = Json::from_i64(0).unwrap();
+    Ok(arg.as_ref().map(|v| {
+        if v == &json_zero.as_ref() {
+            return 1;
+        }
+        0
+    }))
 }
 
 #[rpn_fn(nullable)]
@@ -120,6 +132,12 @@ pub fn is_null_bytes(arg: Option<BytesRef>) -> Result<Option<i64>> {
 #[rpn_fn(nullable)]
 #[inline]
 pub fn is_null_json(arg: Option<JsonRef>) -> Result<Option<i64>> {
+    is_null_ref(arg)
+}
+
+#[rpn_fn(nullable)]
+#[inline]
+pub fn is_null_vector_float32(arg: Option<VectorFloat32Ref>) -> Result<Option<i64>> {
     is_null_ref(arg)
 }
 
@@ -263,8 +281,8 @@ fn right_shift(lhs: Option<&Int>, rhs: Option<&Int>) -> Result<Option<Int>> {
 #[cfg(test)]
 mod tests {
     use tidb_query_datatype::{
-        builder::FieldTypeBuilder, codec::mysql::TimeType, expr::EvalContext, FieldTypeFlag,
-        FieldTypeTp,
+        FieldTypeFlag, FieldTypeTp, builder::FieldTypeBuilder, codec::mysql::TimeType,
+        expr::EvalContext,
     };
     use tipb::ScalarFuncSig;
 
@@ -380,6 +398,26 @@ mod tests {
                 .evaluate(ScalarFuncSig::UnaryNotDecimal)
                 .unwrap();
             assert_eq!(output, expect_output, "{:?}", arg);
+        }
+    }
+
+    #[test]
+    fn test_unary_not_json() {
+        let test_cases = vec![
+            (None, None),
+            (Some(Json::from_i64(0).unwrap()), Some(1)),
+            (Some(Json::from_i64(1).unwrap()), Some(0)),
+            (
+                Some(Json::from_array(vec![Json::from_i64(0).unwrap()]).unwrap()),
+                Some(0),
+            ),
+        ];
+        for (arg, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg.clone())
+                .evaluate(ScalarFuncSig::UnaryNotJson)
+                .unwrap();
+            assert_eq!(output, expect_output, "{:?}", arg.as_ref());
         }
     }
 

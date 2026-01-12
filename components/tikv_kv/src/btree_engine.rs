@@ -13,8 +13,11 @@ use std::{
 
 use collections::HashMap;
 use engine_panic::PanicEngine;
-use engine_traits::{CfName, IterOptions, ReadOptions, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use futures::{future, stream, Future, Stream};
+use engine_traits::{
+    CF_DEFAULT, CF_LOCK, CF_WRITE, CfName, IterMetricsCollector, IterOptions, MetricsExt,
+    ReadOptions,
+};
+use futures::{Future, Stream, future, stream};
 use kvproto::kvrpcpb::Context;
 use txn_types::{Key, Value};
 
@@ -42,7 +45,7 @@ impl BTreeEngine {
         let mut cf_contents = vec![];
 
         // create default cf if missing
-        if !cfs.iter().any(|&c| c == CF_DEFAULT) {
+        if !cfs.contains(&CF_DEFAULT) {
             cf_names.push(CF_DEFAULT);
             cf_contents.push(Arc::new(RwLock::new(BTreeMap::new())))
         }
@@ -109,6 +112,14 @@ impl Engine for BTreeEngine {
     /// the later modifies!
     fn async_snapshot(&mut self, _ctx: SnapContext<'_>) -> Self::SnapshotRes {
         futures::future::ready(Ok(BTreeEngineSnapshot::new(self)))
+    }
+
+    type IMSnap = Self::Snap;
+    // TODO: revert this once https://github.com/rust-lang/rust/issues/140222 is fixed.
+    // type IMSnapshotRes = Self::SnapshotRes;
+    type IMSnapshotRes = impl Future<Output = EngineResult<Self::Snap>> + Send;
+    fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
+        self.async_snapshot(ctx)
     }
 }
 
@@ -227,6 +238,25 @@ impl Iterator for BTreeEngineIterator {
     }
 }
 
+pub struct BTreeEngineIterMetricsCollector;
+
+impl IterMetricsCollector for BTreeEngineIterMetricsCollector {
+    fn internal_delete_skipped_count(&self) -> u64 {
+        0
+    }
+
+    fn internal_key_skipped_count(&self) -> u64 {
+        0
+    }
+}
+
+impl MetricsExt for BTreeEngineIterator {
+    type Collector = BTreeEngineIterMetricsCollector;
+    fn metrics_collector(&self) -> Self::Collector {
+        BTreeEngineIterMetricsCollector {}
+    }
+}
+
 impl Snapshot for BTreeEngineSnapshot {
     type Iter = BTreeEngineIterator;
     type Ext<'a> = DummySnapshotExt;
@@ -290,6 +320,7 @@ fn write_modifies(engine: &BTreeEngine, modifies: Vec<Modify>) -> EngineResult<(
                 cf_tree.write().unwrap().insert(k, v);
             }
             Modify::DeleteRange(_cf, _start_key, _end_key, _notify_only) => unimplemented!(),
+            Modify::Ingest(_) => unimplemented!(),
         };
     }
     Ok(())
@@ -300,7 +331,7 @@ pub mod tests {
     use engine_traits::IterOptions;
 
     use super::{
-        super::{tests::*, CfStatistics, TEST_ENGINE_CFS},
+        super::{CfStatistics, TEST_ENGINE_CFS, tests::*},
         *,
     };
     use crate::{Cursor, ScanMode};

@@ -15,7 +15,7 @@ const KEY_LEN: usize = 64;
 const LOCK_COUNT: usize = 10_000;
 
 fn prepare_cm() -> ConcurrencyManager {
-    let cm = ConcurrencyManager::new(1.into());
+    let cm = ConcurrencyManager::new_for_test(1.into());
     let mut buf = [0; KEY_LEN];
     for _ in 0..LOCK_COUNT {
         thread_rng().fill_bytes(&mut buf[..]);
@@ -32,6 +32,7 @@ fn prepare_cm() -> ConcurrencyManager {
                 10.into(),
                 1,
                 20.into(),
+                false,
             ));
         });
         // Leak the guard so the lock won't be removed.
@@ -60,8 +61,8 @@ fn bench_point_check(c: &mut Criterion) {
             thread_rng().fill_bytes(&mut buf[..]);
             let key = Key::from_raw(&buf);
             let _ = cm.read_key_check(&key, |l| {
-                Lock::check_ts_conflict(
-                    Cow::Borrowed(l),
+                txn_types::check_ts_conflict(
+                    Cow::Owned(tikv_util::Either::Left(l.clone())),
                     &key,
                     1.into(),
                     &ts_set,
@@ -92,8 +93,8 @@ fn bench_range_check(c: &mut Criterion) {
             let end_key = Key::from_raw(&[start + 25]);
             // The key range is roughly 1/10 the key space.
             let _ = cm.read_range_check(Some(&start_key), Some(&end_key), |key, l| {
-                Lock::check_ts_conflict(
-                    Cow::Borrowed(l),
+                txn_types::check_ts_conflict(
+                    Cow::Owned(tikv_util::Either::Left(l.clone())),
                     key,
                     1.into(),
                     &ts_set,

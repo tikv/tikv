@@ -13,13 +13,32 @@ import sys, json, os, time, re
 WHITE_LIST = {
     "online_config", "online_config_derive", "tidb_query_codegen",
     "panic_hook", "fuzz", "fuzzer_afl", "fuzzer_honggfuzz", "fuzzer_libfuzzer",
-    "coprocessor_plugin_api", "example_coprocessor_plugin", "memory_trace_macros", "case_macros",
-    "tracker"
+    "coprocessor_plugin_api", "example_coprocessor_plugin", "memory_trace_macros",
+    "tracker", "test_raftstore_macro", "crypto",
+    # Whitelist crossbeam test and example binary names.
+    "crossbeam_skiplist", "crossbeam_skiplist_simple",
+    "crossbeam_skiplist_base", "crossbeam_skiplist_map", "crossbeam_skiplist_set",
 }
 
 JEMALLOC_SYMBOL = ["je_arena_boot", " malloc"]
 
 SYS_LIB = ["libstdc++"]
+
+def ensure_link(args, require_static, libs):
+    p = os.popen("uname")
+    if "Linux" not in p.readline():
+        return
+    for bin in args:
+        p = os.popen("ldd " + bin)
+        requires = set(l.split()[0] for l in p.readlines())
+        for lib in libs:
+            if any(lib in r for r in requires):
+                if require_static:
+                    pr("error: %s should not requires dynamic library %s\n" % (bin, lib))
+                    sys.exit(1)
+            elif not require_static:
+                    pr("error: %s should requires dynamic library %s\n" % (bin, lib))
+                    sys.exit(1)
 
 def pr(s):
     if sys.stdout.isatty():
@@ -50,15 +69,16 @@ def is_jemalloc_enabled(features):
 def check_sse(executable):
     p = os.popen("nm -n " + executable)
     lines = p.readlines()
-    segments = [(pos, pos + 1) for (pos, l) in enumerate(lines) if "Fast_CRC32" in l]
+    segments = [(pos, pos + 1) for (pos, l) in enumerate(lines) if "crc32c_3way" in l]
     if len(segments) == 0:
         pr("error: %s does not contain sse4.2\n" % executable)
         print("fix this by building tikv with ROCKSDB_SYS_SSE=1")
         sys.exit(1)
 
-    # Make sure the `Fast_CRC32` uses the sse4.2 instruction `crc32`
+    # Make sure the `crc32c_3way` uses the sse4.2 instruction `crc32`
     # f2.*0f 38 is the opcode of `crc32`, see SSE4 Programming Reference.
     opcode_pattern = re.compile(".*f2.*0f 38.*crc32")
+    matched = False
     for start, end in segments:
         s_addr = lines[start].split()[0]
         e_addr = lines[end].split()[0]
@@ -67,10 +87,28 @@ def check_sse(executable):
             if opcode_pattern.search(l):
                 matched = True
                 break
-        else:
-            pr("error %s does not contain sse4.2\n" % executable)
-            print("fix this by building tikv with ROCKSDB_SYS_SSE=1")
-            sys.exit(1)
+    if not matched:
+        pr("error %s does not contain sse4.2\n" % executable)
+        print("fix this by building tikv with ROCKSDB_SYS_SSE=1")
+        sys.exit(1)
+
+def is_openssl_vendored_enabled(features):
+    return "openssl-vendored" in features
+
+def check_openssl(executable, is_static_link):
+    openssl_libs = ["libcrypto", "libssl"]
+    ensure_link([executable], is_static_link, openssl_libs)
+    if is_static_link:
+        return
+    openssl_symbols = ["EVP_", "OPENSSL"]
+    p = os.popen('nm %s | grep -iE " (t|T) (%s)"' % (executable, "|".join(openssl_symbols)))
+    lines = p.readlines()
+    if lines:
+        pr(
+            "error: %s contains OpenSSL symbol %s in text section:\n%s\n"
+            % (executable, openssl_symbols, "".join(lines))
+        )
+        sys.exit(1)
 
 def check_tests(features):
     if not is_jemalloc_enabled(features):
@@ -95,28 +133,22 @@ def check_tests(features):
 
         pr("Checking binary %s" % name)
         check_jemalloc(executable)
+        check_openssl(executable, True)
     pr("")
     print("Done, takes %.2fs." % (time.time() - start))
 
-def ensure_link(args):
-    p = os.popen("uname")
-    if "Linux" not in p.readline():
-        return
-    for bin in args:
-        p = os.popen("ldd " + bin)
-        requires = set(l.split()[0] for l in p.readlines())
-        for lib in SYS_LIB:
-            if any(lib in r for r in requires):
-                pr("error: %s should not requires dynamic library %s\n" % (bin, lib))
-                sys.exit(1)
-
 def check_release(enabled_features, args):
-    ensure_link(args)
+    # Ensure statically link SYS_LIB.
+    ensure_link(args, True, SYS_LIB)
     checked_features = []
     if is_jemalloc_enabled(enabled_features):
         checked_features.append("jemalloc")
     if is_sse_enabled(enabled_features):
         checked_features.append("SSE4.2")
+    if is_openssl_vendored_enabled(enabled_features):
+        checked_features.append("static-link-openssl")
+    else:
+        checked_features.append("dynamic-link-openssl")
     if not checked_features:
         print("Both jemalloc and SSE4.2 are disabled, skip check")
         return
@@ -127,7 +159,8 @@ def check_release(enabled_features, args):
             check_jemalloc(arg)
         if is_sse_enabled(enabled_features):
             check_sse(arg)
-        pr("%s %s \033[32menabled\033[0m\n" % (arg, " ".join(checked_features)))
+        check_openssl(arg, is_openssl_vendored_enabled(enabled_features))
+        pr("%s [%s] \033[32menabled\033[0m\n" % (arg, " ".join(checked_features)))
 
 def main():
     argv = sys.argv

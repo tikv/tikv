@@ -2,14 +2,81 @@
 
 use lazy_static::lazy_static;
 use prometheus::*;
+use prometheus_static_metric::*;
+
+make_static_metric! {
+    pub label_enum PDRequestEventType {
+        get_region,
+        get_region_by_id,
+        get_region_leader_by_id,
+        scatter_region,
+        get_store,
+        get_store_async,
+        put_store,
+        get_all_stores,
+        get_store_and_stats,
+        bootstrap_cluster,
+        is_cluster_bootstrapped,
+        get_cluster_config,
+        ask_split,
+        ask_batch_split,
+        report_batch_split,
+        get_gc_safe_point,
+        update_service_safe_point,
+        min_resolved_ts,
+        get_operator,
+        alloc_id,
+        is_recovering_marked,
+        store_heartbeat,
+        tso,
+        scan_regions,
+        get_members,
+
+        meta_storage_put,
+        meta_storage_get,
+        meta_storage_delete,
+        meta_storage_watch,
+    }
+
+    pub label_enum PDReconnectEventKind {
+        success,
+        failure,
+        no_need,
+        cancel,
+        try_connect,
+    }
+
+    pub label_enum StoreSizeEventType {
+        capacity,
+        available,
+        used,
+        snap_size,
+        raft_size,
+        kv_size,
+        import_size,
+    }
+
+    pub struct StoreSizeEventIntrVec: IntGauge {
+        "type" => StoreSizeEventType,
+    }
+
+    pub struct PDRequestEventHistogramVec: Histogram {
+        "type" => PDRequestEventType,
+    }
+    pub struct PDReconnectEventCounterVec: IntCounter {
+        "type" => PDReconnectEventKind,
+    }
+}
 
 lazy_static! {
-    pub static ref PD_REQUEST_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
-        "tikv_pd_request_duration_seconds",
-        "Bucketed histogram of PD requests duration",
-        &["type"]
-    )
-    .unwrap();
+    pub static ref PD_REQUEST_HISTOGRAM_VEC: PDRequestEventHistogramVec =
+        register_static_histogram_vec!(
+            PDRequestEventHistogramVec,
+            "tikv_pd_request_duration_seconds",
+            "Bucketed histogram of PD requests duration",
+            &["type"]
+        )
+        .unwrap();
     pub static ref PD_HEARTBEAT_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_pd_heartbeat_message_total",
         "Total number of PD heartbeat messages.",
@@ -22,12 +89,14 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
-    pub static ref PD_RECONNECT_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
-        "tikv_pd_reconnect_total",
-        "Total number of PD reconnections.",
-        &["type"]
-    )
-    .unwrap();
+    pub static ref PD_RECONNECT_COUNTER_VEC: PDReconnectEventCounterVec =
+        register_static_int_counter_vec!(
+            PDReconnectEventCounterVec,
+            "tikv_pd_reconnect_total",
+            "Total number of PD reconnections.",
+            &["type"]
+        )
+        .unwrap();
     pub static ref PD_PENDING_HEARTBEAT_GAUGE: IntGauge = register_int_gauge!(
         "tikv_pd_pending_heartbeat_total",
         "Total number of pending region heartbeat"
@@ -44,8 +113,14 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
-    pub static ref STORE_SIZE_GAUGE_VEC: IntGaugeVec =
-        register_int_gauge_vec!("tikv_store_size_bytes", "Size of storage.", &["type"]).unwrap();
+    pub static ref STORE_SIZE_EVENT_INT_VEC: StoreSizeEventIntrVec =
+        register_static_int_gauge_vec!(
+            StoreSizeEventIntrVec,
+            "tikv_store_size_bytes",
+            "Size of storage.",
+            &["type"]
+        )
+        .unwrap();
     pub static ref REGION_READ_KEYS_HISTOGRAM: Histogram = register_histogram!(
         "tikv_region_read_keys",
         "Histogram of keys written for regions",

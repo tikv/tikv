@@ -5,9 +5,9 @@ use std::{
     iter::Peekable,
     mem,
     sync::{
+        Arc, Mutex,
         atomic::{AtomicU64, AtomicUsize, Ordering},
         mpsc::Sender,
-        Arc, Mutex,
     },
     vec::IntoIter,
 };
@@ -15,42 +15,45 @@ use std::{
 use api_version::{ApiV2, KvFormat};
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::FlowInfo;
+use engine_rocks::{FlowInfo, RocksEngine};
 use engine_traits::{
-    raw_ttl::ttl_current_ts, DeleteStrategy, Error as EngineError, KvEngine, MiscExt, Range,
-    WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    CF_DEFAULT, CF_LOCK, CF_WRITE, DeleteStrategy, Error as EngineError, ImportExt, KvEngine,
+    MiscExt, Range, WriteBatch, WriteOptions, raw_ttl::ttl_current_ts,
 };
 use file_system::{IoType, WithIoType};
 use futures::executor::block_on;
 use kvproto::{kvrpcpb::Context, metapb::Region};
 use pd_client::{FeatureGate, PdClient};
-use raftstore::coprocessor::RegionInfoProvider;
+use raftstore::coprocessor::{CoprocessorHost, RegionInfoProvider};
 use tikv_kv::{CfStatistics, CursorBuilder, Modify, SnapContext};
 use tikv_util::{
-    config::{Tracker, VersionTrack},
-    store::find_peer,
-    time::{duration_to_sec, Instant, Limiter, SlowTimer},
-    worker::{Builder as WorkerBuilder, LazyWorker, Runnable, ScheduleError, Scheduler},
     Either,
+    config::{Tracker, VersionTrack},
+    set_panic_context,
+    store::find_peer,
+    thread_name_prefix::GC_WORKER_THREAD,
+    time::{Instant, Limiter, SlowTimer, duration_to_sec},
+    worker::{Builder as WorkerBuilder, LazyWorker, Runnable, ScheduleError, Scheduler},
 };
 use txn_types::{Key, TimeStamp};
+use yatp::{Remote, task::future::TaskCell};
 
 use super::{
-    check_need_gc,
+    Callback, Error, ErrorInner, Result, check_need_gc,
     compaction_filter::{
         CompactionFilterInitializer, DeleteBatch, GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED,
         GC_COMPACTION_FILTER_MVCC_DELETION_WASTED, GC_COMPACTION_FILTER_ORPHAN_VERSIONS,
     },
+    compaction_runner::{CompactionRunner, CompactionRunnerHandle},
     config::{GcConfig, GcWorkerConfigManager},
     gc_manager::{AutoGcConfig, GcManager, GcManagerHandle},
-    Callback, Error, ErrorInner, Result,
 };
 use crate::{
     server::metrics::*,
     storage::{
-        kv::{metrics::GcKeyMode, Engine, ScanMode, Statistics},
+        kv::{Engine, ScanMode, Statistics, metrics::GcKeyMode},
         mvcc::{GcInfo, MvccReader, MvccTxn},
-        txn::{gc, Error as TxnError},
+        txn::{Error as TxnError, gc},
     },
 };
 
@@ -178,7 +181,7 @@ where
 }
 
 /// Used to perform GC operations on the engine.
-pub struct GcRunner<E: Engine> {
+pub struct GcRunnerCore<E: Engine> {
     store_id: u64,
     engine: E,
 
@@ -191,6 +194,29 @@ pub struct GcRunner<E: Engine> {
     cfg_tracker: Tracker<GcConfig>,
 
     stats_map: HashMap<GcKeyMode, Statistics>,
+
+    coprocessor_host: CoprocessorHost<E::Local>,
+}
+
+impl<E: Engine> Clone for GcRunnerCore<E> {
+    fn clone(&self) -> Self {
+        GcRunnerCore {
+            store_id: self.store_id,
+            engine: self.engine.clone(),
+            flow_info_sender: self.flow_info_sender.clone(),
+            limiter: self.limiter.clone(),
+            cfg: self.cfg.clone(),
+            cfg_tracker: self.cfg_tracker.clone(),
+            stats_map: HashMap::default(),
+            coprocessor_host: self.coprocessor_host.clone(),
+        }
+    }
+}
+
+/// Used to perform GC operations on the engine.
+pub struct GcRunner<E: Engine> {
+    inner: GcRunnerCore<E>,
+    pool: Remote<TaskCell>,
 }
 
 pub const MAX_RAW_WRITE_SIZE: usize = 32 * 1024;
@@ -254,7 +280,7 @@ fn get_keys_in_region(keys: &mut Peekable<IntoIter<Key>>, region: &Region) -> Ve
     let mut keys_in_region = Vec::new();
 
     loop {
-        let Some(key) = keys.peek() else {break};
+        let Some(key) = keys.peek() else { break };
         let key = key.as_encoded().as_slice();
 
         if key < region.get_start_key() {
@@ -282,13 +308,14 @@ fn init_snap_ctx(store_id: u64, region: &Region) -> Context {
     ctx
 }
 
-impl<E: Engine> GcRunner<E> {
+impl<E: Engine> GcRunnerCore<E> {
     pub fn new(
         store_id: u64,
         engine: E,
         flow_info_sender: Sender<FlowInfo>,
         cfg_tracker: Tracker<GcConfig>,
         cfg: GcConfig,
+        coprocessor_host: CoprocessorHost<E::Local>,
     ) -> Self {
         let limiter = Limiter::new(if cfg.max_write_bytes_per_sec.0 > 0 {
             cfg.max_write_bytes_per_sec.0 as f64
@@ -303,6 +330,7 @@ impl<E: Engine> GcRunner<E> {
             cfg,
             cfg_tracker,
             stats_map: Default::default(),
+            coprocessor_host,
         }
     }
 
@@ -331,6 +359,7 @@ impl<E: Engine> GcRunner<E> {
         txn: &mut MvccTxn,
         reader: &mut MvccReader<E::Snap>,
     ) -> Result<()> {
+        let _guard = set_panic_context! {"key" => key};
         let next_gc_info = gc(txn, reader, key.clone(), safe_point).map_err(TxnError::from_mvcc)?;
         gc_info.found_versions += next_gc_info.found_versions;
         gc_info.deleted_versions += next_gc_info.deleted_versions;
@@ -340,9 +369,12 @@ impl<E: Engine> GcRunner<E> {
         Ok(())
     }
 
-    fn new_txn() -> MvccTxn {
+    /// Creates a `MvccTxn` with a dummy concurrency manager, do not use it
+    /// beside the `GCRunner`. It's better to abstract `MvccTxn` for
+    /// recording modifies only.
+    fn mvcc_txn_with_dummy_cm() -> MvccTxn {
         // TODO txn only used for GC, but this is hacky, maybe need an Option?
-        let concurrency_manager = ConcurrencyManager::new(1.into());
+        let concurrency_manager = ConcurrencyManager::new_dummy();
         MvccTxn::new(TimeStamp::zero(), concurrency_manager)
     }
 
@@ -437,7 +469,8 @@ impl<E: Engine> GcRunner<E> {
         let mut gc_info = GcInfo::default();
         let mut keys = keys.into_iter().peekable();
         for region in regions {
-            let mut txn = Self::new_txn();
+            let _guard = set_panic_context! {"region" => region.id};
+            let mut txn = Self::mvcc_txn_with_dummy_cm();
             let mut reader = self.create_reader(
                 count,
                 &region,
@@ -490,7 +523,7 @@ impl<E: Engine> GcRunner<E> {
                         range_start_key.clone(),
                         range_end_key.clone(),
                     )?;
-                    txn = Self::new_txn();
+                    txn = Self::mvcc_txn_with_dummy_cm();
                 }
             }
 
@@ -669,10 +702,7 @@ impl<E: Engine> GcRunner<E> {
     }
 
     pub fn mut_stats(&mut self, key_mode: GcKeyMode) -> &mut Statistics {
-        let stats = self
-            .stats_map
-            .entry(key_mode)
-            .or_insert_with(Default::default);
+        let stats = self.stats_map.entry(key_mode).or_default();
         stats
     }
 
@@ -720,6 +750,9 @@ impl<E: Engine> GcRunner<E> {
             .send(FlowInfo::BeforeUnsafeDestroyRange(ctx.region_id))
             .unwrap();
 
+        self.coprocessor_host
+            .pre_delete_range(start_key.as_encoded(), end_key.as_encoded());
+
         // We are in single-rocksdb version if we can get a local_storage, otherwise, we
         // are in multi-rocksdb version.
         if let Some(local_storage) = self.engine.kv_engine() {
@@ -729,13 +762,17 @@ impl<E: Engine> GcRunner<E> {
             let start_data_key = keys::data_key(start_key.as_encoded());
             let end_data_key = keys::data_end_key(end_key.as_encoded());
 
+            let unsafe_delete_cfs = &[CF_DEFAULT, CF_WRITE];
             let cfs = &[CF_LOCK, CF_DEFAULT, CF_WRITE];
 
             // First, use DeleteStrategy::DeleteFiles to free as much disk space as possible
+            // CF_LOCK is not proper to be handled in DeleteFiles mode because it might make
+            // some deleted locks show up again, and has risk to affect data correctness.
             let delete_files_start_time = Instant::now();
-            for cf in cfs {
+            for cf in unsafe_delete_cfs {
                 local_storage
                 .delete_ranges_cf(
+                    &WriteOptions::default(),
                     cf,
                     DeleteStrategy::DeleteFiles,
                     &[Range::new(&start_data_key, &end_data_key)],
@@ -759,6 +796,7 @@ impl<E: Engine> GcRunner<E> {
                 // TODO: set use_delete_range with config here.
                 local_storage
                     .delete_ranges_cf(
+                        &WriteOptions::default(),
                         cf,
                         DeleteStrategy::DeleteByKey,
                         &[Range::new(&start_data_key, &end_data_key)],
@@ -770,6 +808,7 @@ impl<E: Engine> GcRunner<E> {
                     })?;
                 local_storage
                 .delete_ranges_cf(
+                    &WriteOptions::default(),
                     cf,
                     DeleteStrategy::DeleteBlobs,
                     &[Range::new(&start_data_key, &end_data_key)],
@@ -915,18 +954,12 @@ impl<E: Engine> GcRunner<E> {
             error!("failed to flush deletes, will leave garbage"; "err" => ?e);
         }
     }
-}
-
-impl<E: Engine> Runnable for GcRunner<E> {
-    type Task = GcTask<E::Local>;
 
     #[inline]
-    fn run(&mut self, task: GcTask<E::Local>) {
+    fn run(&mut self, task: GcTask<<E::Local as MiscExt>::DiskEngine>) {
         let _io_type_guard = WithIoType::new(IoType::Gc);
         let enum_label = task.get_enum_label();
-
         GC_GCTASK_COUNTER_STATIC.get(enum_label).inc();
-
         let timer = SlowTimer::from_secs(GC_TASK_SLOW_SECONDS);
         let update_metrics = |is_err| {
             GC_TASK_DURATION_HISTOGRAM_VEC
@@ -937,9 +970,6 @@ impl<E: Engine> Runnable for GcRunner<E> {
                 GC_GCTASK_FAIL_COUNTER_STATIC.get(enum_label).inc();
             }
         };
-
-        // Refresh config before handle task
-        self.refresh_cfg();
 
         match task {
             GcTask::Gc {
@@ -1031,6 +1061,19 @@ impl<E: Engine> Runnable for GcRunner<E> {
                 id,
                 region_info_provider,
             } => {
+                let smallest_key = wb.smallest_key.as_ref().unwrap().as_encoded().as_slice();
+                let largest_key = wb.largest_key.as_ref().unwrap().as_encoded().as_slice();
+                // unwrap() is safe as None only occurs in multi-rocksdb version.
+                let kv_engine = self.engine.kv_engine().unwrap();
+                // Acquire latch to prevent concurrency with ingestion operations
+                // using RocksDB IngestExternalFileOptions.allow_write = true.
+                let _ingest_latch_guard = kv_engine.acquire_ingest_latch(Range {
+                    start_key: smallest_key,
+                    end_key: keys::next_key(largest_key).as_slice(),
+                });
+
+                fail_point!("after_gc_orphan_versions_ingest_latch_acquired");
+
                 let count = wb.count();
                 match wb.batch {
                     Either::Left(mut wb) => {
@@ -1059,6 +1102,45 @@ impl<E: Engine> Runnable for GcRunner<E> {
     }
 }
 
+impl<E: Engine> GcRunner<E> {
+    pub fn new(
+        store_id: u64,
+        engine: E,
+        flow_info_sender: Sender<FlowInfo>,
+        cfg_tracker: Tracker<GcConfig>,
+        cfg: GcConfig,
+        pool: Remote<TaskCell>,
+        coprocessor_host: CoprocessorHost<E::Local>,
+    ) -> Self {
+        Self {
+            inner: GcRunnerCore::new(
+                store_id,
+                engine,
+                flow_info_sender,
+                cfg_tracker,
+                cfg,
+                coprocessor_host,
+            ),
+            pool,
+        }
+    }
+}
+
+impl<E: Engine> Runnable for GcRunner<E> {
+    type Task = GcTask<<E::Local as MiscExt>::DiskEngine>;
+
+    #[inline]
+    fn run(&mut self, task: GcTask<<E::Local as MiscExt>::DiskEngine>) {
+        // Refresh config before handle task
+        self.inner.refresh_cfg();
+
+        let mut inner = self.inner.clone();
+        self.pool.spawn(async move {
+            inner.run(task);
+        });
+    }
+}
+
 /// When we failed to schedule a `GcTask` to `GcRunner`, use this to handle the
 /// `ScheduleError`.
 fn handle_gc_task_schedule_error(e: ScheduleError<GcTask<impl KvEngine>>) -> Result<()> {
@@ -1078,19 +1160,24 @@ fn handle_gc_task_schedule_error(e: ScheduleError<GcTask<impl KvEngine>>) -> Res
 }
 
 /// Schedules a `GcTask` to the `GcRunner`.
-fn schedule_gc(
+pub fn schedule_gc(
     scheduler: &Scheduler<GcTask<impl KvEngine>>,
     region: Region,
     safe_point: TimeStamp,
     callback: Callback<()>,
 ) -> Result<()> {
-    scheduler
-        .schedule(GcTask::Gc {
-            region,
-            safe_point,
-            callback,
-        })
-        .or_else(handle_gc_task_schedule_error)
+    let task = GcTask::Gc {
+        region,
+        safe_point,
+        callback,
+    };
+    if fail::eval("schedule_gc_full", |_| true).is_some() {
+        handle_gc_task_schedule_error(ScheduleError::Full(task))
+    } else {
+        scheduler
+            .schedule(task)
+            .or_else(handle_gc_task_schedule_error)
+    }
 }
 
 /// Does GC synchronously.
@@ -1121,10 +1208,11 @@ where
     /// How many strong references. The worker will be stopped
     /// once there are no more references.
     refs: Arc<AtomicUsize>,
-    worker: Arc<Mutex<LazyWorker<GcTask<E::Local>>>>,
-    worker_scheduler: Scheduler<GcTask<E::Local>>,
+    worker: Arc<Mutex<LazyWorker<GcTask<<E::Local as MiscExt>::DiskEngine>>>>,
+    worker_scheduler: Scheduler<GcTask<<E::Local as MiscExt>::DiskEngine>>,
 
     gc_manager_handle: Arc<Mutex<Option<GcManagerHandle>>>,
+    compaction_runner_handle: Arc<Mutex<Option<CompactionRunnerHandle>>>,
     feature_gate: FeatureGate,
 }
 
@@ -1141,6 +1229,7 @@ impl<E: Engine> Clone for GcWorker<E> {
             worker: self.worker.clone(),
             worker_scheduler: self.worker_scheduler.clone(),
             gc_manager_handle: self.gc_manager_handle.clone(),
+            compaction_runner_handle: self.compaction_runner_handle.clone(),
             feature_gate: self.feature_gate.clone(),
             region_info_provider: self.region_info_provider.clone(),
         }
@@ -1163,30 +1252,10 @@ impl<E: Engine> Drop for GcWorker<E> {
     }
 }
 
-impl<E: Engine> GcWorker<E> {
-    pub fn new(
-        engine: E,
-        flow_info_sender: Sender<FlowInfo>,
-        cfg: GcConfig,
-        feature_gate: FeatureGate,
-        region_info_provider: Arc<dyn RegionInfoProvider>,
-    ) -> Self {
-        let worker_builder = WorkerBuilder::new("gc-worker").pending_capacity(GC_MAX_PENDING_TASKS);
-        let worker = worker_builder.create().lazy_build("gc-worker");
-        let worker_scheduler = worker.scheduler();
-        GcWorker {
-            engine,
-            flow_info_sender: Some(flow_info_sender),
-            config_manager: GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg))),
-            refs: Arc::new(AtomicUsize::new(1)),
-            worker: Arc::new(Mutex::new(worker)),
-            worker_scheduler,
-            gc_manager_handle: Arc::new(Mutex::new(None)),
-            feature_gate,
-            region_info_provider,
-        }
-    }
-
+impl<E> GcWorker<E>
+where
+    E: Engine<Local: KvEngine<DiskEngine = RocksEngine>>,
+{
     pub fn start_auto_gc<S: GcSafePointProvider, R: RegionInfoProvider + Clone + 'static>(
         &self,
         cfg: AutoGcConfig<S, R>,
@@ -1198,7 +1267,8 @@ impl<E: Engine> GcWorker<E> {
         );
 
         info!("initialize compaction filter to perform GC when necessary");
-        self.engine.kv_engine().init_compaction_filter(
+        let disk_engine = self.engine.kv_engine().map(|e| e.get_disk_engine().clone());
+        disk_engine.init_compaction_filter(
             cfg.self_store_id,
             safe_point.clone(),
             self.config_manager.clone(),
@@ -1216,21 +1286,103 @@ impl<E: Engine> GcWorker<E> {
             self.scheduler(),
             self.config_manager.clone(),
             self.feature_gate.clone(),
+            self.config_manager.value().num_threads,
         )
         .start()?;
         *handle = Some(new_handle);
         Ok(())
     }
 
-    pub fn start(&mut self, store_id: u64) -> Result<()> {
+    pub fn start_auto_compaction<
+        S: GcSafePointProvider,
+        R: RegionInfoProvider + Clone + 'static,
+    >(
+        &self,
+        safe_point_provider: S,
+        region_info_provider: R,
+    ) -> Result<()> {
+        let mut handle = self.compaction_runner_handle.lock().unwrap();
+        assert!(handle.is_none(), "compaction runner already started");
+
+        let kv_engine = match self.engine.kv_engine() {
+            Some(engine) => engine,
+            None => {
+                warn!("kv_engine not available, auto compaction cannot start");
+                return Ok(());
+            }
+        };
+
+        let compaction_runner = CompactionRunner::new(
+            safe_point_provider,
+            region_info_provider,
+            kv_engine,
+            self.config_manager.clone(),
+        );
+
+        let new_handle = compaction_runner
+            .start()
+            .map_err(|e| -> Error { box_err!("failed to start compaction runner: {:?}", e) })?;
+
+        *handle = Some(new_handle);
+        info!("compaction runner started");
+        Ok(())
+    }
+
+    pub fn scheduler(&self) -> Scheduler<GcTask<<E::Local as MiscExt>::DiskEngine>> {
+        self.worker_scheduler.clone()
+    }
+}
+
+impl<E: Engine> GcWorker<E> {
+    pub fn new(
+        engine: E,
+        flow_info_sender: Sender<FlowInfo>,
+        cfg: GcConfig,
+        feature_gate: FeatureGate,
+        region_info_provider: Arc<dyn RegionInfoProvider>,
+    ) -> Self {
+        let worker_builder = WorkerBuilder::new(GC_WORKER_THREAD)
+            .pending_capacity(GC_MAX_PENDING_TASKS)
+            .thread_count(cfg.num_threads);
+        let worker = worker_builder.create().lazy_build(GC_WORKER_THREAD);
+        let worker_scheduler = worker.scheduler();
+        GcWorker {
+            engine,
+            flow_info_sender: Some(flow_info_sender),
+            config_manager: GcWorkerConfigManager(
+                Arc::new(VersionTrack::new(cfg)),
+                Some(worker.pool()),
+            ),
+            refs: Arc::new(AtomicUsize::new(1)),
+            worker: Arc::new(Mutex::new(worker)),
+            worker_scheduler,
+            gc_manager_handle: Arc::new(Mutex::new(None)),
+            compaction_runner_handle: Arc::new(Mutex::new(None)),
+            feature_gate,
+            region_info_provider,
+        }
+    }
+
+    pub fn start(
+        &mut self,
+        store_id: u64,
+        coprocessor_host: CoprocessorHost<E::Local>,
+    ) -> Result<()> {
+        let mut worker = self.worker.lock().unwrap();
         let runner = GcRunner::new(
             store_id,
             self.engine.clone(),
             self.flow_info_sender.take().unwrap(),
-            self.config_manager.0.clone().tracker("gc-woker".to_owned()),
+            self.config_manager
+                .0
+                .clone()
+                .tracker(GC_WORKER_THREAD.to_owned()),
             self.config_manager.value().clone(),
+            worker.remote(),
+            coprocessor_host,
         );
-        self.worker.lock().unwrap().start(runner);
+        worker.start(runner);
+
         Ok(())
     }
 
@@ -1239,13 +1391,13 @@ impl<E: Engine> GcWorker<E> {
         if let Some(h) = self.gc_manager_handle.lock().unwrap().take() {
             h.stop()?;
         }
+        // Stop CompactionRunner.
+        if let Some(h) = self.compaction_runner_handle.lock().unwrap().take() {
+            h.stop()?;
+        }
         // Stop self.
         self.worker.lock().unwrap().stop();
         Ok(())
-    }
-
-    pub fn scheduler(&self) -> Scheduler<GcTask<E::Local>> {
-        self.worker_scheduler.clone()
     }
 
     /// Only for tests.
@@ -1293,6 +1445,10 @@ impl<E: Engine> GcWorker<E> {
     pub fn get_config_manager(&self) -> GcWorkerConfigManager {
         self.config_manager.clone()
     }
+
+    pub fn get_worker_thread_count(&self) -> usize {
+        self.worker.lock().unwrap().pool_size()
+    }
 }
 
 #[cfg(any(test, feature = "testexport"))]
@@ -1307,14 +1463,14 @@ pub mod test_gc_worker {
         metapb::{Peer, Region},
     };
     use raftstore::store::RegionSnapshot;
-    use tikv_kv::{write_modifies, OnAppliedCb};
+    use tikv_kv::{OnAppliedCb, write_modifies};
     use txn_types::{Key, TimeStamp};
 
     use crate::{
         server::gc_worker::{GcSafePointProvider, Result as GcWorkerResult},
         storage::{
-            kv::{self, Modify, Result as EngineResult, SnapContext, WriteData},
             Engine,
+            kv::{self, Modify, Result as EngineResult, SnapContext, WriteData},
         },
     };
 
@@ -1361,6 +1517,7 @@ pub mod test_gc_worker {
                         let bytes = keys::data_end_key(key2.as_encoded());
                         *key2 = Key::from_encoded(bytes);
                     }
+                    Modify::Ingest(_) => unimplemented!(),
                 }
             }
             write_modifies(&self.kv_engine().unwrap(), modifies)
@@ -1388,6 +1545,7 @@ pub mod test_gc_worker {
                     *start_key = Key::from_encoded(keys::data_key(start_key.as_encoded()));
                     *end_key = Key::from_encoded(keys::data_end_key(end_key.as_encoded()));
                 }
+                Modify::Ingest(_) => unimplemented!(),
             });
             self.0.async_write(ctx, batch, subscribed, on_applied)
         }
@@ -1403,6 +1561,14 @@ pub mod test_gc_worker {
                 Ok(RegionSnapshot::from_snapshot(snap, Arc::new(region)))
             }
         }
+
+        type IMSnap = Self::Snap;
+        // TODO: revert this once https://github.com/rust-lang/rust/issues/140222 is fixed.
+        // type IMSnapshotRes = Self::SnapshotRes;
+        type IMSnapshotRes = impl Future<Output = EngineResult<Self::Snap>> + Send;
+        fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
+            self.async_snapshot(ctx)
+        }
     }
 
     pub struct MockSafePointProvider(pub u64);
@@ -1416,6 +1582,7 @@ pub mod test_gc_worker {
     #[derive(Clone, Default)]
     pub struct MultiRocksEngine {
         pub engines: Arc<Mutex<HashMap<u64, PrefixedEngine>>>,
+        #[allow(dead_code)]
         pub region_info: HashMap<u64, Region>,
     }
 
@@ -1462,29 +1629,37 @@ pub mod test_gc_worker {
                 .unwrap()
                 .async_snapshot(ctx)
         }
+
+        type IMSnap = Self::Snap;
+        // TODO: revert this once https://github.com/rust-lang/rust/issues/140222 is fixed.
+        // type IMSnapshotRes = Self::SnapshotRes;
+        type IMSnapshotRes = impl Future<Output = EngineResult<Self::Snap>> + Send;
+        fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
+            self.async_snapshot(ctx)
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-
     use std::{
         collections::{BTreeMap, BTreeSet},
         path::Path,
-        sync::mpsc,
+        sync::{atomic::AtomicBool, mpsc},
         thread,
         time::Duration,
     };
 
     use api_version::{ApiV2, KvFormat, RawValue};
-    use engine_rocks::{util::get_cf_handle, RocksEngine};
+    use engine_rocks::{RocksEngine, raw::FlushOptions, util::get_cf_handle};
     use engine_traits::Peekable as _;
     use futures::executor::block_on;
     use kvproto::{kvrpcpb::ApiVersion, metapb::Peer};
+    use online_config::{ConfigChange, ConfigManager, ConfigValue};
     use raft::StateRole;
     use raftstore::coprocessor::{
-        region_info_accessor::{MockRegionInfoProvider, RegionInfoAccessor},
         CoprocessorHost, RegionChangeEvent,
+        region_info_accessor::{MockRegionInfoProvider, RegionInfoAccessor},
     };
     use tempfile::Builder;
     use tikv_kv::Snapshot;
@@ -1496,11 +1671,12 @@ mod tests {
         config::DbConfig,
         server::gc_worker::{MockSafePointProvider, PrefixedEngine},
         storage::{
-            kv::{metrics::GcKeyMode, Modify, TestEngineBuilder, WriteData},
+            Engine, Storage, TestStorageBuilderApiV1,
+            kv::{Modify, TestEngineBuilder, WriteData, metrics::GcKeyMode},
             lock_manager::MockLockManager,
             mvcc::{
-                tests::{must_get_none, must_get_none_on_region, must_get_on_region},
                 MAX_TXN_WRITE_SIZE,
+                tests::{must_get_none, must_get_none_on_region, must_get_on_region},
             },
             txn::{
                 commands,
@@ -1510,7 +1686,6 @@ mod tests {
                     must_rollback,
                 },
             },
-            Engine, Storage, TestStorageBuilderApiV1,
         },
     };
 
@@ -1629,14 +1804,17 @@ mod tests {
         region2.mut_peers().push(new_peer(store_id, 2));
         region2.set_start_key(split_key.to_vec());
 
+        let mut gc_config = GcConfig::default();
+        gc_config.num_threads = 2;
         let mut gc_worker = GcWorker::new(
             engine,
             tx,
-            GcConfig::default(),
+            gc_config,
             gate,
             Arc::new(MockRegionInfoProvider::new(vec![region1, region2])),
         );
-        gc_worker.start(store_id).unwrap();
+        let coprocessor_host = CoprocessorHost::default();
+        gc_worker.start(store_id, coprocessor_host).unwrap();
         // Convert keys to key value pairs, where the value is "value-{key}".
         let data: BTreeMap<_, _> = init_keys
             .iter()
@@ -1671,7 +1849,7 @@ mod tests {
         // Commit.
         let keys: Vec<_> = init_keys.iter().map(|k| Key::from_raw(k)).collect();
         wait_op!(|cb| storage.sched_txn_command(
-            commands::Commit::new(keys, start_ts, commit_ts.into(), Context::default()),
+            commands::Commit::new(keys, start_ts, commit_ts.into(), None, Context::default()),
             cb
         ))
         .unwrap()
@@ -1803,16 +1981,19 @@ mod tests {
 
         let sp_provider = MockSafePointProvider(200);
         let mut host = CoprocessorHost::<RocksEngine>::default();
-        let ri_provider = RegionInfoAccessor::new(&mut host);
+        let ri_provider = RegionInfoAccessor::new(&mut host, Arc::new(|| false), Box::new(|| 0));
 
+        let mut gc_config = GcConfig::default();
+        gc_config.num_threads = 2;
         let mut gc_worker = GcWorker::new(
             prefixed_engine.clone(),
             tx,
-            GcConfig::default(),
+            gc_config,
             feature_gate,
             Arc::new(ri_provider.clone()),
         );
-        gc_worker.start(store_id).unwrap();
+        let coprocessor_host = CoprocessorHost::default();
+        gc_worker.start(store_id, coprocessor_host).unwrap();
 
         let mut r1 = Region::default();
         r1.set_id(1);
@@ -1853,7 +2034,9 @@ mod tests {
             must_prewrite_delete(&mut prefixed_engine, &k, &k, 151);
             must_commit(&mut prefixed_engine, &k, 151, 152);
         }
-        db.flush_cf(cf, true).unwrap();
+        let mut fopts = FlushOptions::default();
+        fopts.set_wait(true);
+        db.flush_cf(cf, &fopts).unwrap();
 
         db.compact_range_cf(cf, None, None);
         for i in 0..100 {
@@ -1895,14 +2078,16 @@ mod tests {
 
         let (tx, _rx) = mpsc::channel();
         let cfg = GcConfig::default();
-        let mut runner = GcRunner::new(
+        let coprocessor_host = CoprocessorHost::default();
+        let mut runner = GcRunnerCore::new(
             store_id,
             prefixed_engine.clone(),
             tx,
-            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())))
+            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())), None)
                 .0
-                .tracker("gc-woker".to_owned()),
+                .tracker(GC_WORKER_THREAD.to_owned()),
             cfg,
+            coprocessor_host,
         );
 
         let mut r1 = Region::default();
@@ -1914,7 +2099,7 @@ mod tests {
         r1.mut_peers()[0].set_store_id(store_id);
 
         let mut host = CoprocessorHost::<RocksEngine>::default();
-        let ri_provider = RegionInfoAccessor::new(&mut host);
+        let ri_provider = RegionInfoAccessor::new(&mut host, Arc::new(|| false), Box::new(|| 0));
         host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
 
         let db = engine.kv_engine().unwrap().as_inner().clone();
@@ -1928,7 +2113,9 @@ mod tests {
             must_commit(&mut prefixed_engine, &k, 151, 152);
             keys.push(Key::from_raw(&k));
         }
-        db.flush_cf(cf, true).unwrap();
+        let mut fopts = FlushOptions::default();
+        fopts.set_wait(true);
+        db.flush_cf(cf, &fopts).unwrap();
 
         assert_eq!(runner.mut_stats(GcKeyMode::txn).write.seek, 0);
         assert_eq!(runner.mut_stats(GcKeyMode::txn).write.next, 0);
@@ -1957,14 +2144,16 @@ mod tests {
 
         let (tx, _rx) = mpsc::channel();
         let cfg = GcConfig::default();
-        let mut runner = GcRunner::new(
+        let coprocessor_host = CoprocessorHost::default();
+        let mut runner = GcRunnerCore::new(
             store_id,
             prefixed_engine.clone(),
             tx,
-            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())))
+            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())), None)
                 .0
-                .tracker("gc-woker".to_owned()),
+                .tracker(GC_WORKER_THREAD.to_owned()),
             cfg,
+            coprocessor_host,
         );
 
         let mut r1 = Region::default();
@@ -1976,7 +2165,11 @@ mod tests {
         r1.mut_peers()[0].set_store_id(store_id);
 
         let mut host = CoprocessorHost::<RocksEngine>::default();
-        let ri_provider = Arc::new(RegionInfoAccessor::new(&mut host));
+        let ri_provider = Arc::new(RegionInfoAccessor::new(
+            &mut host,
+            Arc::new(|| false),
+            Box::new(|| 0),
+        ));
         host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
         // Init env end...
 
@@ -2058,14 +2251,16 @@ mod tests {
 
         let (tx, _rx) = mpsc::channel();
         let cfg = GcConfig::default();
-        let mut runner = GcRunner::new(
+        let coprocessor_host = CoprocessorHost::default();
+        let mut runner = GcRunnerCore::new(
             1,
             prefixed_engine.clone(),
             tx,
-            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())))
+            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())), None)
                 .0
-                .tracker("gc-woker".to_owned()),
+                .tracker(GC_WORKER_THREAD.to_owned()),
             cfg,
+            coprocessor_host,
         );
 
         let mut r1 = Region::default();
@@ -2077,7 +2272,11 @@ mod tests {
         r1.mut_peers()[0].set_store_id(1);
 
         let mut host = CoprocessorHost::<RocksEngine>::default();
-        let ri_provider = Arc::new(RegionInfoAccessor::new(&mut host));
+        let ri_provider = Arc::new(RegionInfoAccessor::new(
+            &mut host,
+            Arc::new(|| false),
+            Box::new(|| 0),
+        ));
         host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
 
         let db = engine.kv_engine().unwrap().as_inner().clone();
@@ -2086,7 +2285,9 @@ mod tests {
         for i in 10u64..30 {
             must_rollback(&mut prefixed_engine, b"k2\x00", i, true);
         }
-        db.flush_cf(cf, true).unwrap();
+        let mut fopts = FlushOptions::default();
+        fopts.set_wait(true);
+        db.flush_cf(cf, &fopts).unwrap();
         must_gc(&mut prefixed_engine, b"k2\x00", 30);
 
         // Test tombstone counter works
@@ -2145,7 +2346,9 @@ mod tests {
             must_prewrite_put(&mut prefixed_engine, b"k2", b"v2", b"k2", start_ts);
             must_commit(&mut prefixed_engine, b"k2", start_ts, commit_ts);
         }
-        db.flush_cf(cf, true).unwrap();
+        let mut fopts = FlushOptions::default();
+        fopts.set_wait(true);
+        db.flush_cf(cf, &fopts).unwrap();
         let safepoint = versions as u64 * 2;
 
         runner
@@ -2178,7 +2381,9 @@ mod tests {
         must_commit(&mut engine, b"key", 10, 20);
         let db = engine.kv_engine().unwrap().as_inner().clone();
         let cf = get_cf_handle(&db, CF_WRITE).unwrap();
-        db.flush_cf(cf, true).unwrap();
+        let mut fopts = FlushOptions::default();
+        fopts.set_wait(true);
+        db.flush_cf(cf, &fopts).unwrap();
 
         let gate = FeatureGate::default();
         gate.set_version("5.0.0").unwrap();
@@ -2187,10 +2392,12 @@ mod tests {
         let mut region = Region::default();
         region.mut_peers().push(new_peer(store_id, 1));
 
+        let mut gc_config = GcConfig::default();
+        gc_config.num_threads = 2;
         let mut gc_worker = GcWorker::new(
             engine.clone(),
             tx,
-            GcConfig::default(),
+            gc_config,
             gate,
             Arc::new(MockRegionInfoProvider::new(vec![region.clone()])),
         );
@@ -2233,7 +2440,8 @@ mod tests {
             )
             .unwrap();
 
-        gc_worker.start(store_id).unwrap();
+        let coprocessor_host = CoprocessorHost::default();
+        gc_worker.start(store_id, coprocessor_host).unwrap();
 
         // After the worker starts running, the destroy range task should run,
         // and the key in the range will be deleted.
@@ -2254,7 +2462,6 @@ mod tests {
 
         fn generate_keys(start: u64, end: u64) -> Vec<Key> {
             (start..end)
-                .into_iter()
                 .map(|i| {
                     let key = format!("k{:02}", i);
                     Key::from_raw(key.as_bytes())
@@ -2318,7 +2525,7 @@ mod tests {
     ) -> (
         MultiRocksEngine,
         Arc<MockRegionInfoProvider>,
-        GcRunner<MultiRocksEngine>,
+        GcRunnerCore<MultiRocksEngine>,
         Vec<Region>,
         mpsc::Receiver<FlowInfo>,
     ) {
@@ -2371,14 +2578,16 @@ mod tests {
         ]));
 
         let cfg = GcConfig::default();
-        let gc_runner = GcRunner::new(
+        let coprocessor_host = CoprocessorHost::default();
+        let gc_runner = GcRunnerCore::new(
             store_id,
             engine.clone(),
             tx,
-            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())))
+            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())), None)
                 .0
-                .tracker("gc-woker".to_owned()),
+                .tracker(GC_WORKER_THREAD.to_owned()),
             cfg,
+            coprocessor_host,
         );
 
         let mut region_id = 0;
@@ -2549,14 +2758,16 @@ mod tests {
         let ri_provider = Arc::new(MockRegionInfoProvider::new(vec![r1, r2]));
 
         let cfg = GcConfig::default();
-        let mut gc_runner = GcRunner::new(
+        let coprocessor_host = CoprocessorHost::default();
+        let mut gc_runner = GcRunnerCore::new(
             store_id,
             engine.clone(),
             tx,
-            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())))
+            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())), None)
                 .0
-                .tracker("gc-woker".to_owned()),
+                .tracker(GC_WORKER_THREAD.to_owned()),
             cfg,
+            coprocessor_host,
         );
 
         // region_id -> vec<(key,expir_ts,is_delete,expect_exist)>
@@ -2740,5 +2951,158 @@ mod tests {
         // Cover two regions
         test_destroy_range_for_multi_rocksdb_impl(b"k05", b"k195", vec![1, 2]);
         test_destroy_range_for_multi_rocksdb_impl(b"k099", b"k25", vec![2, 3]);
+    }
+
+    #[test]
+    fn test_update_gc_thread_count() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let (tx, _rx) = mpsc::channel();
+        let gate = FeatureGate::default();
+        gate.set_version("5.0.0").unwrap();
+        let mut gc_config = GcConfig::default();
+        gc_config.num_threads = 1;
+        let gc_worker = GcWorker::new(
+            engine,
+            tx,
+            gc_config,
+            gate,
+            Arc::new(MockRegionInfoProvider::new(vec![])),
+        );
+        let mut config_change = ConfigChange::new();
+        config_change.insert(String::from("num_threads"), ConfigValue::Usize(5));
+        let mut cfg_manager = gc_worker.get_config_manager();
+        cfg_manager.dispatch(config_change).unwrap();
+
+        assert_eq!(gc_worker.get_worker_thread_count(), 5);
+
+        let mut config_change = ConfigChange::new();
+        config_change.insert(String::from("num_threads"), ConfigValue::Usize(2));
+        cfg_manager.dispatch(config_change).unwrap();
+
+        assert_eq!(gc_worker.get_worker_thread_count(), 2);
+    }
+
+    // This test verifies that the GcOrphanVersions task is blocked by concurrent
+    // ingest operations.
+    #[test]
+    fn test_gc_orphan_version_blocked_by_ingest() {
+        let store_id = 1;
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let prefixed_engine = PrefixedEngine(engine.clone());
+        let (tx, _rx) = mpsc::channel();
+        let cfg = GcConfig::default();
+        let coprocessor_host = CoprocessorHost::default();
+        let mut runner = GcRunnerCore::new(
+            store_id,
+            prefixed_engine.clone(),
+            tx,
+            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())), None)
+                .0
+                .tracker(GC_WORKER_THREAD.to_owned()),
+            cfg,
+            coprocessor_host,
+        );
+
+        let kv_engine = engine.kv_engine().unwrap();
+        let _ingest_latch_guard = kv_engine.acquire_ingest_latch(Range {
+            start_key: b"a",
+            end_key: b"b",
+        });
+
+        let gc_task_completed = Arc::new(AtomicBool::new(false));
+        let gc_task_completed_clone = gc_task_completed.clone();
+        let gc_handle = thread::spawn(move || {
+            let mut wb = DeleteBatch::new(&Some(engine.kv_engine().unwrap()));
+            wb.delete(b"a", 100_u64.into()).unwrap();
+            wb.delete(b"b", 101_u64.into()).unwrap();
+            let region_info_provider = Arc::new(MockRegionInfoProvider::new(vec![]));
+            let task = GcTask::OrphanVersions {
+                wb,
+                region_info_provider,
+                id: 0,
+            };
+            runner.run(task);
+            gc_task_completed_clone.store(true, Ordering::SeqCst);
+        });
+
+        thread::sleep(Duration::from_millis(500));
+        // The GC task must remain pending as _ingest_latch_guard is holding the latch.
+        assert!(
+            !gc_task_completed.load(Ordering::SeqCst),
+            "GC task completed before dropping the guard"
+        );
+        drop(_ingest_latch_guard);
+        gc_handle.join().expect("Gc thread panicked");
+        // The GC task must have finished as _ingest_latch_guard has released the latch.
+        assert!(
+            gc_task_completed.load(Ordering::SeqCst),
+            "GC task did not complete as expected"
+        );
+    }
+
+    // This test verifies that the GcOrphanVersions task blocks the ingest
+    // operation.
+    #[cfg(feature = "failpoints")]
+    #[test]
+    fn test_gc_orphan_version_blocks_ingest() {
+        let store_id = 1;
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let prefixed_engine = PrefixedEngine(engine.clone());
+        let (tx, _rx) = mpsc::channel();
+        let cfg = GcConfig::default();
+        let coprocessor_host = CoprocessorHost::default();
+        let mut runner = GcRunnerCore::new(
+            store_id,
+            prefixed_engine.clone(),
+            tx,
+            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())), None)
+                .0
+                .tracker(GC_WORKER_THREAD.to_owned()),
+            cfg,
+            coprocessor_host,
+        );
+
+        let engine_clone = engine.clone();
+        let gc_handle = thread::spawn(move || {
+            fail::cfg("after_gc_orphan_versions_ingest_latch_acquired", "pause").unwrap();
+            let mut wb = DeleteBatch::new(&Some(engine_clone.kv_engine().unwrap()));
+            wb.delete(b"a", 100_u64.into()).unwrap();
+            wb.delete(b"b", 101_u64.into()).unwrap();
+            let region_info_provider = Arc::new(MockRegionInfoProvider::new(vec![]));
+            let task = GcTask::OrphanVersions {
+                wb,
+                region_info_provider,
+                id: 0,
+            };
+            runner.run(task);
+        });
+
+        // Wait gc_handle to start.
+        thread::sleep(Duration::from_millis(500));
+        let ingest_task_completed = Arc::new(AtomicBool::new(false));
+        let ingest_task_completed_clone = ingest_task_completed.clone();
+        let ingest_handle = thread::spawn(move || {
+            let kv_engine = engine.kv_engine().unwrap();
+            let _ingest_latch_guard = kv_engine.acquire_ingest_latch(Range {
+                start_key: b"a",
+                end_key: b"b",
+            });
+            ingest_task_completed_clone.store(true, Ordering::SeqCst);
+        });
+        thread::sleep(Duration::from_millis(500));
+        // The ingest task must remain pending as _gc_latch_guard is holding the latch.
+        assert!(
+            !ingest_task_completed.load(Ordering::SeqCst),
+            "Ingest task completed before dropping the GC latch guard"
+        );
+        fail::remove("after_gc_orphan_versions_ingest_latch_acquired");
+        thread::sleep(Duration::from_millis(500));
+        gc_handle.join().expect("Gc thread panicked");
+        ingest_handle.join().expect("Ingest thread panicked");
+        // The ingest task must have finished as _gc_latch_guard has released the latch.
+        assert!(
+            ingest_task_completed.load(Ordering::SeqCst),
+            "Ingest task did not complete as expected"
+        );
     }
 }

@@ -8,36 +8,41 @@ use std::{
 use codec::prelude::*;
 use tipb::FieldType;
 
-use super::{check_fsp, Decimal, DEFAULT_FSP};
+use super::{DEFAULT_FSP, Decimal, check_fsp};
 use crate::{
+    FieldTypeAccessor,
     codec::{
+        Error, Result, TEN_POW,
         convert::ConvertTo,
         error::{ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE},
-        mysql::{Time as DateTime, TimeType, MAX_FSP, MIN_FSP},
-        Error, Result, TEN_POW,
+        mysql::{MAX_FSP, MIN_FSP, Time as DateTime, TimeType},
     },
     expr::EvalContext,
-    FieldTypeAccessor,
 };
 
-pub const NANOS_PER_SEC: i64 = 1_000_000_000;
-pub const NANOS_PER_MILLI: i64 = 1_000_000;
 pub const NANOS_PER_MICRO: i64 = 1_000;
+pub const NANOS_PER_MILLI: i64 = 1_000_000;
+pub const NANOS_PER_SEC: i64 = 1_000_000_000;
+pub const NANOS_PER_MINUTE: i64 = 60 * NANOS_PER_SEC;
+pub const NANOS_PER_HOUR: i64 = 60 * NANOS_PER_MINUTE;
+pub const NANOS_PER_DAY: i64 = 24 * NANOS_PER_HOUR;
+
 pub const MICROS_PER_SEC: i64 = 1_000_000;
 pub const NANO_WIDTH: usize = 9;
 pub const MICRO_WIDTH: usize = 6;
 
-const SECS_PER_HOUR: i64 = 3600;
-const SECS_PER_MINUTE: i64 = 60;
+pub const SECS_PER_MINUTE: i64 = 60;
+pub const SECS_PER_HOUR: i64 = 3600;
+pub const SECS_PER_DAY: i64 = SECS_PER_HOUR * 24;
 
 pub const MAX_HOUR_PART: u32 = 838;
 pub const MAX_MINUTE_PART: u32 = 59;
 pub const MAX_SECOND_PART: u32 = 59;
 pub const MAX_NANOS_PART: u32 = 999_999_999;
-pub const MAX_NANOS: i64 = ((MAX_HOUR_PART as i64 * SECS_PER_HOUR)
+pub const MAX_SECS: i64 = MAX_HOUR_PART as i64 * SECS_PER_HOUR
     + MAX_MINUTE_PART as i64 * SECS_PER_MINUTE
-    + MAX_SECOND_PART as i64)
-    * NANOS_PER_SEC;
+    + MAX_SECOND_PART as i64;
+pub const MAX_NANOS: i64 = MAX_SECS * NANOS_PER_SEC;
 const MAX_DURATION_INT_VALUE: u32 = MAX_HOUR_PART * 10000 + MAX_MINUTE_PART * 100 + MAX_SECOND_PART;
 
 #[inline]
@@ -90,9 +95,9 @@ fn check_nanos(nanos: i64) -> Result<i64> {
 
 mod parser {
     use nom::{
+        IResult,
         character::complete::{anychar, char, digit0, digit1, space0, space1},
         combinator::opt,
-        IResult,
     };
 
     use super::*;

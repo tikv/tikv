@@ -40,11 +40,27 @@ impl DbOptions for PanicDbOptions {
         panic!()
     }
 
+    fn get_flush_size(&self) -> Result<u64> {
+        panic!()
+    }
+
     fn set_rate_limiter_auto_tuned(&mut self, rate_limiter_auto_tuned: bool) -> Result<()> {
         panic!()
     }
 
+    fn set_flush_size(&mut self, f: usize) -> Result<()> {
+        panic!()
+    }
+
+    fn set_flush_oldest_first(&mut self, f: bool) -> Result<()> {
+        panic!()
+    }
+
     fn set_titandb_options(&mut self, opts: &Self::TitanDbOptions) {
+        panic!()
+    }
+
+    fn set_track_and_verify_wals_in_manifest(&mut self, v: bool) {
         panic!()
     }
 }

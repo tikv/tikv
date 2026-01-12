@@ -83,6 +83,22 @@
 ## maximum number of old log files to retain
 # max-backups = 0
 
+[memory]
+## Whether enables the heap profiling which may have a bit performance overhead about 2% for the
+## default sample rate.
+# enable-heap-profiling = true
+
+## Average interval between allocation samples, as measured in bytes of allocation activity.
+## Increasing the sampling interval decreases profile fidelity, but also decreases the
+## computational overhead.
+## The default sample interval is 512 KB. It only accepts power of two, otherwise it will be
+## rounded up to the next power of two.
+# profiling-sample-per-bytes = "512KB"
+
+## Whether allocates the exclusive arena for threads.
+## When disabled, the metric of memory usage for each thread would be unavailable.
+# enable-thread-exclusive-arena = true
+
 ## Configurations for the single thread pool serving read requests.
 [readpool.unified]
 ## The minimal working thread count of the thread pool.
@@ -145,6 +161,22 @@
 # max-tasks-per-worker-normal = 2000
 # max-tasks-per-worker-low = 2000
 
+[resource-control]
+## Whether to enable resource control.
+## When set to true, TiKV will use the priority queue to schedule the queued read/write requests from
+## foreground users. The scheduling priority of a request is inversely related to the amount of resources
+## already consumed by the resource group that receives this request, and positively related to the quota
+## of the corresponding resource group.
+# enabled = true
+
+## Configures the control strategy of low-priority tasks.
+## Value options:
+## - "aggressive". Prioritize the performance of high-priority tasks, low-priority tasks will run slower.
+## - "moderate". Balance the latency of high-prioirty tasks and throughput of low-priority tasks.
+## - "conservative". Prioritize of overall throughput, the latency of high-priority tasks may be significantly
+##                   impacted when the overall load is high.
+# priority-ctl-strategy = "moderate"
+
 [server]
 ## Listening address.
 # addr = "127.0.0.1:20160"
@@ -154,7 +186,7 @@
 # advertise-addr = ""
 
 ## Status address.
-## This is used for reporting the status of TiKV directly through 
+## This is used for reporting the status of TiKV directly through
 ## the HTTP address. Notice that there is a risk of leaking status
 ## information if this port is exposed to the public.
 ## Empty string means disabling it.
@@ -205,9 +237,15 @@
 ## Max time to handle Coprocessor requests before timeout.
 # end-point-request-max-handle-duration = "60s"
 
-## Max bytes that snapshot can be written to disk in one second.
-## It should be set based on your disk performance.
-# snap-max-write-bytes-per-sec = "100MB"
+## Memory usage limit for TiKV handling coprocessor requests.
+## By default, it will be set to 12.5% of the available memory of TiKV.
+# end-point-memory-quota = "0B"
+
+## Max bytes that snapshot can interact with disk in one second. It should be
+## set based on your disk performance. Only write flow is considered, if
+## partitioned-raft-kv is used, read flow is also considered and it will be estimated
+## as read_size * 0.5 to get around errors from page cache.
+# snap-io-max-bytes-per-sec = "100MB"
 
 ## Whether to enable request batch.
 # enable-request-batch = true
@@ -227,6 +265,14 @@
 [storage]
 ## The path to RocksDB directory.
 # data-dir = "./"
+
+## Specifies the engine type. This configuration can only be specified when creating a new cluster
+## and cannot be modifies once being specified.
+##
+## Available types are:
+## "raft-kv": The default engine type in versions earlier than TiDB v6.6.0.
+## "partitioned-raft-kv": The new storage engine type introduced in TiDB v6.6.0.
+# engine = "raft-kv"
 
 ## The number of slots in Scheduler latches, which controls write concurrency.
 ## In most cases you can use the default value. When importing data, you can set it to a larger
@@ -278,18 +324,13 @@
 [storage.block-cache]
 
 ## Size of the shared block cache. Normally it should be tuned to 30%-50% of system's total memory.
-## When the config is not set, it is decided by the sum of the following fields or their default
-## value:
-##   * rocksdb.defaultcf.block-cache-size or 25% of system's total memory
-##   * rocksdb.writecf.block-cache-size   or 15% of system's total memory
-##   * rocksdb.lockcf.block-cache-size    or  2% of system's total memory
-##   * raftdb.defaultcf.block-cache-size  or  2% of system's total memory
 ##
 ## To deploy multiple TiKV nodes on a single physical machine, configure this parameter explicitly.
 ## Otherwise, the OOM problem might occur in TiKV.
 ##
-## If it's not set, 45% of available system memory will be used.
-# capacity = "1GB"
+## When storage.engine is "raft-kv", default value is 45% of available system memory.
+## When storage.engine is "partitioned-raft-kv", default value is 30% of available system memory.
+# capacity = "0B"
 
 [storage.flow-control]
 ## Flow controller is used to throttle the write rate at scheduler level, aiming
@@ -297,7 +338,7 @@
 ##   * throttle at scheduler, so raftstore and apply won't be blocked anymore
 ##   * better control on the throttle rate to avoid QPS drop under heavy write
 ##
-## Support change dynamically. 
+## Support change dynamically.
 ## When enabled, it disables kvdb's write stall and raftdb's write stall(except memtable) and vice versa.
 # enable = true
 
@@ -307,12 +348,12 @@
 ## When the number of SST files of level-0 of kvdb reaches the threshold, the flow controller begins to work
 # l0-files-threshold = 20
 
-## When the number of pending compaction bytes of kvdb reaches the threshold, the flow controller begins to 
-## reject some write requests with `ServerIsBusy` error. 
+## When the number of pending compaction bytes of kvdb reaches the threshold, the flow controller begins to
+## reject some write requests with `ServerIsBusy` error.
 # soft-pending-compaction-bytes-limit = "192GB"
 
-## When the number of pending compaction bytes of kvdb reaches the threshold, the flow controller begins to 
-## reject all write requests with `ServerIsBusy` error. 
+## When the number of pending compaction bytes of kvdb reaches the threshold, the flow controller begins to
+## reject all write requests with `ServerIsBusy` error.
 # hard-pending-compaction-bytes-limit = "1024GB"
 
 [storage.io-rate-limit]
@@ -334,7 +375,7 @@
 ## PD endpoints.
 # endpoints = ["127.0.0.1:2379"]
 
-## The interval at which to retry a PD connection initialization.
+## The interval at which to retry a PD connection.
 ## Default is 300ms.
 # retry-interval = "300ms"
 
@@ -377,11 +418,15 @@
 ## Store heartbeat tick interval for reporting to PD.
 # pd-store-heartbeat-tick-interval = "10s"
 
+## Store min resolved ts tick interval for reporting to PD.
+# pd-report-min-resolved-ts-interval = "1s"
+
 ## The threshold of triggering Region split check.
 ## When Region size change exceeds this config, TiKV will check whether the Region should be split
 ## or not. To reduce the cost of scanning data in the checking process, you can set the value to
 ## 32MB during checking and set it back to the default value in normal operations.
-# region-split-check-diff = "6MB"
+## It's recommanded to set it to 1/16 of `region-split-size`.
+# region-split-check-diff = "16MB"
 
 ## The interval of triggering Region split check.
 # split-region-check-tick-interval = "10s"
@@ -399,11 +444,11 @@
 # raft-log-gc-threshold = 50
 
 ## When the entry count exceeds this value, GC will be forced to trigger.
-# raft-log-gc-count-limit = 73728
+# raft-log-gc-count-limit = 196608
 
 ## When the approximate size of Raft log entries exceeds this value, GC will be forced trigger.
 ## It's recommanded to set it to 3/4 of `region-split-size`.
-# raft-log-gc-size-limit = "72MB"
+# raft-log-gc-size-limit = "192MB"
 
 ## Old Raft logs could be reserved if `raft_log_gc_threshold` is not reached.
 ## GC them after ticks `raft_log_reserve_max_ticks` times.
@@ -432,6 +477,15 @@
 ## exceeds `region-compact-tombstones-percent`.
 # region-compact-tombstones-percent = 30
 
+## The minimum number of duplicated MVCC keys to trigger manual compaction.
+# region-compact-min-redundant-rows = 50000
+
+## The minimum percentage of duplicated MVCC keys to trigger manual compaction.
+## It should be set between 1 and 100. Manual compaction is only triggered when the number of
+## duplicated MVCC keys exceeds `region-compact-min-redundant-rows` and the percentage of duplicated MVCC keys
+## exceeds `region-compact-redundant-rows-percent`.
+# region-compact-redundant-rows-percent = 20
+
 ## Interval to check whether to start a manual compaction for Lock Column Family.
 ## If written bytes reach `lock-cf-compact-bytes-threshold` for Lock Column Family, TiKV will
 ## trigger a manual compaction for Lock Column Family.
@@ -452,7 +506,7 @@
 
 ## Use how many threads to handle raft io tasks
 ## If it is 0, it means io tasks are handled in store threads.
-# store-io-pool-size = 0
+# store-io-pool-size = 1
 
 ## When the size of raft db writebatch exceeds this value, write will be triggered.
 # raft-write-size-limit = "1MB"
@@ -473,14 +527,14 @@
 ## When Region [a,e) size exceeds `region_max_size`, it will be split into several Regions [a,b),
 ## [b,c), [c,d), [d,e) and the size of [a,b), [b,c), [c,d) will be `region_split_size` (or a
 ## little larger).
-# region-max-size = "144MB"
-# region-split-size = "96MB"
+# region-max-size = "384MB"
+# region-split-size = "256MB"
 
 ## When the number of keys in Region [a,e) exceeds the `region_max_keys`, it will be split into
 ## several Regions [a,b), [b,c), [c,d), [d,e) and the number of keys in [a,b), [b,c), [c,d) will be
 ## `region_split_keys`.
-# region-max-keys = 1440000
-# region-split-keys = 960000
+# region-max-keys = 3840000
+# region-split-keys = 2560000
 
 ## Set to "mvcc" to do consistency check for MVCC data, or "raw" for raw data.
 # consistency-check-method = "mvcc"
@@ -515,13 +569,13 @@
 ## Value -1 means files opened are always kept open and RocksDB will prefetch index and filter
 ## blocks into block cache at startup. So if your database has a large working set, it will take
 ## several minutes to open the DB. You may need to increase this if your database has a large
-## working set. You can estimate the number of files based on `target-file-size-base` and
-## `target_file_size_multiplier` for level-based compaction.
+## working set. You can estimate the number of files based on `target-file-size-base` for
+## level-based compaction.
 # max-open-files = 40960
 
 ## Max size of RocksDB's MANIFEST file.
 ## For detailed explanation, please refer to https://github.com/facebook/rocksdb/wiki/MANIFEST
-# max-manifest-file-size = "128MB"
+# max-manifest-file-size = "256MB"
 
 ## If the value is `true`, the database will be created if it is missing.
 # create-if-missing = true
@@ -557,10 +611,13 @@
 # wal-size-limit = 0
 
 ## Max RocksDB WAL size in total
+## When storage.engine is "raft-kv", default value is 4GB.
+## When storage.engine is "partitioned-raft-kv", default value is 1.
 # max-total-wal-size = "4GB"
 
 ## Dump statistics periodically in information logs.
-## Same as RocksDB's default value (10 min).
+## When storage.engine is "raft-kv", default value is 10m.
+## When storage.engine is "partitioned-raft-kv", default value is 0.
 # stats-dump-period = "10m"
 
 ## Refer to: https://github.com/facebook/rocksdb/wiki/RocksDB-FAQ
@@ -628,19 +685,24 @@
 
 ## Memory usage limit for Raft Engine. Undersized write buffers will be flushed to satisfy the
 ## requirement.
+##
 ## No limit when not specified.
-# write-buffer-limit = "1GB"
+##
+## When storage.engine is "raft-kv", default is no limit.
+## When storage.engine is "partitioned-raft-kv", default value is 25% of available system memory or
+## 15GiB, whichever is smaller.
+# write-buffer-limit = "0B"
 
 ## Options for `Titan`.
 [rocksdb.titan]
 ## Enables or disables `Titan`. Note that Titan is still an experimental feature. Once
 ## enabled, it can't fall back. Forced fallback may result in data loss.
-## default: false
-# enabled = false
+## Titan is default on since v7.6.0. This won't affect deployments existed before v7.6.0.
+# enabled = true
 
 ## Maximum number of threads of `Titan` background gc jobs.
-## default: 4
-# max-background-gc = 4
+## default: 1
+# max-background-gc = 1
 
 ## Options for "Default" Column Family, which stores actual user data.
 [rocksdb.defaultcf]
@@ -679,7 +741,7 @@
 ## The data block size. RocksDB compresses data based on the unit of block.
 ## Similar to page in other databases, block is the smallest unit cached in block-cache. Note that
 ## the block size specified here corresponds to uncompressed data.
-# block-size = "64KB"
+# block-size = "32KB"
 
 ## If you're doing point lookups you definitely want to turn bloom filters on. We use bloom filters
 ## to avoid unnecessary disk reads. Default bits_per_key is 10, which yields ~1% false positive
@@ -690,6 +752,12 @@
 ## `false` means one SST file one bloom filter, `true` means every block has a corresponding bloom
 ## filter.
 # block-based-bloom-filter = false
+
+## Use Ribbon filter for levels higher or equal to this value. Use non-block-based bloom filter for
+## lower levels. When this is set, `block-based-bloom-filter` will be ignored.
+## Only effective for `format-version` >= 5.
+## Disabled by default.
+## ribbon-filter-above-level = 0
 
 # level0-file-num-compaction-trigger = 4
 
@@ -787,6 +855,10 @@
 ## while using `Raw` mode.
 # optimize-filters-for-hits = true
 
+## Option to generate Bloom/Ribbon filters that minimize memory internal fragmentation.
+## Only effective for `format-version` >= 5.
+# optimize-filters-for-memory = false
+
 ## Enable compaction guard, which is an optimization to split SST files at TiKV region boundaries.
 ## The optimization can help reduce compaction IO, and allow us to use larger SST file size
 ## (thus less SST files overall) while making sure we can still efficiently cleanup stale data on
@@ -825,6 +897,13 @@
 ## This option only affects newly written tables. When reading existing tables,
 ## the information about version is read from the footer.
 ##
+## 5 -- Can be read by TiKV's versions since 6.3. Full and partitioned filters
+## use a generally faster and more accurate Bloom filter implementation, with a
+## different schema.
+##
+## When storage.engine is "raft-kv", default value is 2.
+## When storage.engine is "partitioned-raft-kv", default value is 5.
+##
 # format-version = 2
 
 ## If enabled, prepopulate warm/hot blocks (data, uncompressed dict, index and
@@ -856,12 +935,26 @@
 ## The maximum number of concurrent compaction tasks. 0 stands for no limit.
 # max-compactions = 0
 
+## SST files containing updates older than TTL will go through the compaction
+## process. This usually happens in a cascading way so that those entries
+## will be compacted to bottommost level/file. Disabled as default.
+##
+## Default: 0s.
+# ttl = "0s"
+
+## SST files older than this value will be picked up for compaction, and
+## re-written to the same level as they were before. Disabled as default.
+##
+## Default: 0s.
+# periodic-compaction-seconds = "0s"
+
 ## Options for "Default" Column Family for `Titan`.
 [rocksdb.defaultcf.titan]
 ## The smallest value to store in blob files. Value smaller than
 ## this threshold will be inlined in base DB.
-## default: 1KB
-# min-blob-size = "1KB"
+## The default value is 32KB since v7.6.0. But it won't affect deployments existed
+## before v7.6.0 of which the default value is 1KB.
+# min-blob-size = "32KB"
 
 ## The compression algorithm used to compress data in blob files.
 ## Compression method.
@@ -872,8 +965,20 @@
 ##   lz4:    kLZ4Compression
 ##   lz4hc:  kLZ4HCCompression
 ##   zstd:   kZSTD
-## default: lz4
-# blob-file-compression = "lz4"
+## default: zstd
+# blob-file-compression = "zstd"
+
+## Set blob file zstd dictionary compression, default(0) will use zstd compression.
+## It is recommended to set the dictionary size to values such as 4k or 16k. Additionally,
+## the sample data size to train dictionary is of size 100X dictionary size innerly.
+## It has no effect when `blob-file-compression` is not `zstd`.
+## default: 0
+# zstd-dict-size = 0
+
+## Whether to share blob cache with block cache. If set to true, Titan would use the shared block
+## cache configured in `storage.block_cache` and ignore the setting of `blob-cache-size`.
+## default: true
+# shared-blob-cache = true
 
 ## Specifics cache size for blob records
 ## default: 0
@@ -915,7 +1020,7 @@
 [rocksdb.writecf]
 ## Recommend to set it the same as `rocksdb.defaultcf.compression-per-level`.
 # compression-per-level = ["no", "no", "lz4", "lz4", "lz4", "zstd", "zstd"]
-# block-size = "64KB"
+# block-size = "32KB"
 
 ## Recommend to set it the same as `rocksdb.defaultcf.write-buffer-size`.
 # write-buffer-size = "128MB"
@@ -1099,8 +1204,16 @@
 ## Only available for `format-version` >= 2. This option is only
 ## available when TiKV >= 6.3.x.
 ##
-## Default: false.
-# enable-log-recycle = false
+## Default: true.
+# enable-log-recycle = true
+
+## Whether to prepare log files for recycling when start.
+## If `true`, batch empty log files will be prepared for recycling when
+## starting engine.
+## Only available for `enable-log-reycle` is true.
+##
+## Default: false
+# prefill-for-recycle = false
 
 [security]
 ## The path for TLS certificates. Empty string means disabling secure connections.
@@ -1111,6 +1224,12 @@
 #
 ## Avoid outputing data (e.g. user keys) to info log. It currently does not avoid printing
 ## user data altogether, but greatly reduce those logs.
+##
+## Candidates:
+##   true | "on": Avoid outputing raw data to info log, raw data will be replaced with "?".
+##   false | "off": Output raw data to info log.
+##   "marker": Encapsulate the raw data with "‹..›" to info log.
+##
 ## Default is false.
 # redact-info-log = false
 
@@ -1139,7 +1258,7 @@
 ##     Plaintext as master key means no master key is given and only applicable when
 ##     encryption is not enabled, i.e. data-encryption-method = "plaintext". This type doesn't
 ##     have sub-config items. Example:
-##     
+##
 ##     [security.encryption.master-key]
 ##     type = "plaintext"
 ##
@@ -1163,7 +1282,7 @@
 ##
 ##     Supply a custom encryption key stored in a file. It is recommended NOT to use in production,
 ##     as it breaks the purpose of encryption at rest, unless the file is stored in tempfs.
-##     The file must contain a 256-bits (32 bytes, regardless of key length implied by 
+##     The file must contain a 256-bits (32 bytes, regardless of key length implied by
 ##     data-encryption-method) key encoded as hex string and end with newline ("\n"). Example:
 ##
 ##     [security.encryption.master-key]
@@ -1197,20 +1316,20 @@
 ## When Backup region [a,e) size exceeds `sst-max-size`, it will be backuped into several Files [a,b),
 ## [b,c), [c,d), [d,e) and the size of [a,b), [b,c), [c,d) will be `sst-max-size` (or a
 ## little larger).
-# sst-max-size = "144MB"
+# sst-max-size = "384MB"
 
 ## Automatically reduce the number of backup threads when the current workload is high,
 ## in order to reduce impact on the cluster's performance during back up.
-# enable-auto-tune = true 
+# enable-auto-tune = true
 
-[log-backup] 
+[log-backup]
 ## Number of threads to perform backup stream tasks.
 ## The default value is CPU_NUM * 0.5, and limited to [2, 12].
 # num-threads = 8
 
 ## enable this feature. TiKV will starts watch related tasks in PD. and backup kv changes to storage accodring to task.
 ## The default value is false.
-# enable = true 
+# enable = true
 
 [backup.hadoop]
 ## let TiKV know how to find the hdfs shell command.
@@ -1240,6 +1359,14 @@
 ## Enabling this will improve performance, but slightly increase the transaction failure rate.
 ## It only takes effect when `pessimistic-txn.pipelined` is also set to true.
 # in-memory = true
+
+## Control the memory size limit of pessimistic locks for one region. The pessimistic locks
+## would be written persistently if the memory usage exceeds the limit.
+# in-memory-peer-size-limit = "512KiB"
+
+## Control the memory size limit of pessimistic locks for one TiKV instance. The pessimistic
+## locks would be written persistently if the memory usage exceeds the limit.
+# in-memory-instance-size-limit = "100MiB"
 
 [gc]
 ## The number of keys to GC in one batch.

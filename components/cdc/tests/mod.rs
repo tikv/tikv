@@ -6,27 +6,33 @@ use std::{
 };
 
 use causal_ts::CausalTsProvider;
-use cdc::{recv_timeout, CdcObserver, Delegate, FeatureGate, MemoryQuota, Task, Validate};
+use cdc::{CdcObserver, Delegate, FeatureGate, Task, Validate, recv_timeout};
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
 use futures::executor::block_on;
 use grpcio::{
-    ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, ClientUnaryReceiver, Environment,
+    CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, ClientUnaryReceiver,
+    Environment, MetadataBuilder,
 };
 use kvproto::{
-    cdcpb::{create_change_data, ChangeDataClient, ChangeDataEvent, ChangeDataRequest},
+    cdcpb::{ChangeDataClient, ChangeDataEvent, ChangeDataRequest, create_change_data},
     kvrpcpb::{PrewriteRequestPessimisticAction::*, *},
     tikvpb::TikvClient,
 };
 use online_config::OnlineConfig;
-use raftstore::coprocessor::CoprocessorHost;
+use raftstore::{coprocessor::CoprocessorHost, router::CdcRaftRouter};
 use test_raftstore::*;
-use tikv::{config::CdcConfig, server::DEFAULT_CLUSTER_ID};
+use tikv::{
+    config::{CdcConfig, ResolvedTsConfig},
+    server::DEFAULT_CLUSTER_ID,
+    storage::kv::LocalTablets,
+};
 use tikv_util::{
-    config::ReadableDuration,
-    worker::{LazyWorker, Runnable},
     HandyRwLock,
+    config::ReadableDuration,
+    memory::MemoryQuota,
+    worker::{Builder, LazyWorker, Runnable},
 };
 use txn_types::TimeStamp;
 static INIT: Once = Once::new();
@@ -48,7 +54,6 @@ impl ClientReceiver {
         std::mem::replace(&mut *self.receiver.lock().unwrap(), rx)
     }
 }
-
 #[allow(clippy::type_complexity)]
 pub fn new_event_feed(
     client: &ChangeDataClient,
@@ -57,7 +62,37 @@ pub fn new_event_feed(
     ClientReceiver,
     Box<dyn Fn(bool) -> ChangeDataEvent + Send>,
 ) {
-    let (req_tx, resp_rx) = client.event_feed().unwrap();
+    create_event_feed(client, false)
+}
+
+#[allow(clippy::type_complexity)]
+pub fn new_event_feed_v2(
+    client: &ChangeDataClient,
+) -> (
+    ClientDuplexSender<ChangeDataRequest>,
+    ClientReceiver,
+    Box<dyn Fn(bool) -> ChangeDataEvent + Send>,
+) {
+    create_event_feed(client, true)
+}
+
+#[allow(clippy::type_complexity)]
+fn create_event_feed(
+    client: &ChangeDataClient,
+    stream_multiplexing: bool,
+) -> (
+    ClientDuplexSender<ChangeDataRequest>,
+    ClientReceiver,
+    Box<dyn Fn(bool) -> ChangeDataEvent + Send>,
+) {
+    let (req_tx, resp_rx) = if stream_multiplexing {
+        let mut metadata = MetadataBuilder::with_capacity(1);
+        metadata.add_str("features", "stream-multiplexing").unwrap();
+        let opt = CallOption::default().headers(metadata.build());
+        client.event_feed_v2_opt(opt).unwrap()
+    } else {
+        client.event_feed().unwrap()
+    };
     let event_feed_wrap = Arc::new(Mutex::new(Some(resp_rx)));
     let event_feed_wrap_clone = event_feed_wrap.clone();
 
@@ -137,6 +172,7 @@ impl TestSuiteBuilder {
         let count = cluster.count;
         let pd_cli = cluster.pd_client.clone();
         let mut endpoints = HashMap::default();
+        let mut quotas = HashMap::default();
         let mut obs = HashMap::default();
         let mut concurrency_managers = HashMap::default();
         // Hack! node id are generated from 1..count+1.
@@ -146,29 +182,37 @@ impl TestSuiteBuilder {
             let mut sim = cluster.sim.wl();
 
             // Register cdc service to gRPC server.
+            let memory_quota = Arc::new(MemoryQuota::new(memory_quota));
+            let memory_quota_ = memory_quota.clone();
             let scheduler = worker.scheduler();
+            let pool = Arc::new(Builder::new("cdc-watchdog-test").thread_count(1).create());
             sim.pending_services
                 .entry(id)
                 .or_default()
                 .push(Box::new(move || {
                     create_change_data(cdc::Service::new(
                         scheduler.clone(),
-                        MemoryQuota::new(memory_quota),
+                        memory_quota_.clone(),
+                        pool.clone(),
                     ))
                 }));
             sim.txn_extra_schedulers.insert(
                 id,
-                Arc::new(cdc::CdcTxnExtraScheduler::new(worker.scheduler().clone())),
+                Arc::new(cdc::CdcTxnExtraScheduler::new(
+                    worker.scheduler().clone(),
+                    memory_quota.clone(),
+                )),
             );
             let scheduler = worker.scheduler();
-            let cdc_ob = cdc::CdcObserver::new(scheduler.clone());
+            let cdc_ob = cdc::CdcObserver::new(scheduler.clone(), memory_quota.clone());
             obs.insert(id, cdc_ob.clone());
-            sim.coprocessor_hooks.entry(id).or_default().push(Box::new(
+            sim.coprocessor_hosts.entry(id).or_default().push(Box::new(
                 move |host: &mut CoprocessorHost<RocksEngine>| {
                     cdc_ob.register_to(host);
                 },
             ));
             endpoints.insert(id, worker);
+            quotas.insert(id, memory_quota);
         }
 
         runner(&mut cluster);
@@ -182,17 +226,19 @@ impl TestSuiteBuilder {
             let mut cdc_endpoint = cdc::Endpoint::new(
                 DEFAULT_CLUSTER_ID,
                 &cfg,
+                &ResolvedTsConfig::default(),
+                false,
                 cluster.cfg.storage.api_version(),
                 pd_cli.clone(),
                 worker.scheduler(),
-                raft_router,
-                cluster.engines[id].kv.clone(),
+                CdcRaftRouter(raft_router),
+                LocalTablets::Singleton(cluster.engines[id].kv.clone()),
                 cdc_ob,
                 cluster.store_metas[id].clone(),
                 cm.clone(),
                 env,
                 sim.security_mgr.clone(),
-                MemoryQuota::new(usize::MAX),
+                quotas[id].clone(),
                 sim.get_causal_ts_provider(*id),
             );
             let mut updated_cfg = cfg.clone();
@@ -236,7 +282,7 @@ impl TestSuite {
     pub fn new(count: usize, api_version: ApiVersion) -> TestSuite {
         let mut cluster = new_server_cluster_with_api_ver(1, count, api_version);
         // Increase the Raft tick interval to make this test case running reliably.
-        configure_for_lease_read(&mut cluster, Some(100), None);
+        configure_for_lease_read(&mut cluster.cfg, Some(100), None);
         // Disable background renew to make timestamp predictable.
         configure_for_causal_ts(&mut cluster, "0s", 1);
 
@@ -434,6 +480,26 @@ impl TestSuite {
         );
     }
 
+    pub fn must_release_pessimistic_lock(
+        &mut self,
+        region_id: u64,
+        pk: Vec<u8>,
+        start_ts: TimeStamp,
+        for_update_ts: TimeStamp,
+    ) {
+        let mut req = PessimisticRollbackRequest::default();
+        req.set_context(self.get_context(region_id));
+        req.start_version = start_ts.into_inner();
+        req.for_update_ts = for_update_ts.into_inner();
+        req.set_keys(vec![pk].into_iter().collect());
+        let resp = self
+            .get_tikv_client(region_id)
+            .kv_pessimistic_rollback(&req)
+            .unwrap();
+        assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+        assert!(resp.errors.is_empty(), "{:?}", resp.get_errors());
+    }
+
     pub fn must_kv_pessimistic_prewrite(
         &mut self,
         region_id: u64,
@@ -468,6 +534,27 @@ impl TestSuite {
         );
     }
 
+    pub fn must_kv_txn_heartbeat(
+        &mut self,
+        region_id: u64,
+        pk: Vec<u8>,
+        ts: TimeStamp,
+        advise_lock_ttl: TimeStamp,
+    ) {
+        let mut heartbeat_req = TxnHeartBeatRequest::default();
+        heartbeat_req.set_context(self.get_context(region_id));
+        heartbeat_req.primary_lock = pk;
+        heartbeat_req.start_version = ts.into_inner();
+        heartbeat_req.advise_lock_ttl = advise_lock_ttl.into_inner();
+        let heartbeat_resp = self
+            .get_tikv_client(region_id)
+            .kv_txn_heart_beat(&heartbeat_req)
+            .unwrap();
+        assert!(!heartbeat_resp.has_region_error());
+        assert!(!heartbeat_resp.has_error());
+        assert_eq!(heartbeat_resp.lock_ttl, advise_lock_ttl.into_inner());
+    }
+
     pub fn async_kv_commit(
         &mut self,
         region_id: u64,
@@ -482,6 +569,23 @@ impl TestSuite {
         commit_req.commit_version = commit_ts.into_inner();
         self.get_tikv_client(region_id)
             .kv_commit_async(&commit_req)
+            .unwrap()
+    }
+
+    pub fn async_kv_txn_heartbeat(
+        &mut self,
+        region_id: u64,
+        pk: Vec<u8>,
+        ts: TimeStamp,
+        advise_lock_ttl: TimeStamp,
+    ) -> ClientUnaryReceiver<TxnHeartBeatResponse> {
+        let mut heartbeat_req = TxnHeartBeatRequest::default();
+        heartbeat_req.set_context(self.get_context(region_id));
+        heartbeat_req.primary_lock = pk;
+        heartbeat_req.start_version = ts.into_inner();
+        heartbeat_req.advise_lock_ttl = advise_lock_ttl.into_inner();
+        self.get_tikv_client(region_id)
+            .kv_txn_heart_beat_async(&heartbeat_req)
             .unwrap()
     }
 
@@ -555,10 +659,11 @@ impl TestSuite {
 
     pub fn must_wait_delegate_condition(
         &self,
+        node_id: u64,
         region_id: u64,
         cond: Arc<dyn Fn(Option<&Delegate>) -> bool + Sync + Send>,
     ) {
-        let scheduler = self.endpoints[&region_id].scheduler();
+        let scheduler = self.endpoints[&node_id].scheduler();
         let start = Instant::now();
         loop {
             sleep_ms(100);

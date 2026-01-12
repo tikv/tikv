@@ -6,6 +6,7 @@ use std::{
     str::FromStr,
 };
 
+use rand::Rng;
 use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
@@ -40,6 +41,18 @@ pub fn any_value_json(args: &[Option<JsonRef>]) -> Result<Option<Json>> {
 
 #[rpn_fn(nullable, varg)]
 #[inline]
+pub fn any_value_vector_float32(
+    args: &[Option<VectorFloat32Ref>],
+) -> Result<Option<VectorFloat32>> {
+    if let Some(arg) = args.first() {
+        Ok(arg.map(|x| x.to_owned()))
+    } else {
+        Ok(None)
+    }
+}
+
+#[rpn_fn(nullable, varg)]
+#[inline]
 pub fn any_value_bytes(args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
     if let Some(arg) = args.first() {
         Ok(arg.map(|x| x.to_vec()))
@@ -53,12 +66,12 @@ pub fn any_value_bytes(args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
 pub fn inet_aton(addr: BytesRef) -> Result<Option<Int>> {
     let addr = String::from_utf8_lossy(addr);
 
-    if addr.len() == 0 || addr.ends_with('.') {
+    if addr.is_empty() || addr.ends_with('.') {
         return Ok(None);
     }
     let (mut byte_result, mut result, mut dot_count): (u64, u64, usize) = (0, 0, 0);
     for c in addr.chars() {
-        if ('0'..='9').contains(&c) {
+        if c.is_ascii_digit() {
             let digit = c as u64 - '0' as u64;
             byte_result = byte_result * 10 + digit;
             if byte_result > 255 {
@@ -188,9 +201,12 @@ pub fn is_ipv6(addr: Option<BytesRef>) -> Result<Option<Int>> {
 #[rpn_fn(nullable)]
 #[inline]
 pub fn uuid() -> Result<Option<Bytes>> {
-    let result = Uuid::new_v4();
-    let mut buf = vec![0; uuid::adapter::Hyphenated::LENGTH];
-    result.to_hyphenated().encode_lower(&mut buf);
+    let mut node_id = rand::thread_rng().gen::<[u8; 6]>();
+    node_id[0] |= 0x01; // RFC 4122 multicast bit
+
+    let result = Uuid::now_v1(&node_id);
+    let mut buf = vec![0; uuid::fmt::Hyphenated::LENGTH];
+    result.hyphenated().encode_lower(&mut buf);
     Ok(Some(buf))
 }
 
@@ -440,7 +456,7 @@ mod tests {
             (Some(2063728641), Some(Bytes::from("123.2.0.1"))),
             (Some(0), Some(Bytes::from("0.0.0.0"))),
             (
-                Some(i64::from(u32::max_value())),
+                Some(i64::from(u32::MAX)),
                 Some(Bytes::from("255.255.255.255")),
             ),
             (Some(545460846593), None),
@@ -502,7 +518,8 @@ mod tests {
             (Some(hex("0A000509")), Some(b"10.0.5.9".to_vec())),
             (
                 Some(hex("00000000000000000000000001020304")),
-                Some(b"::1.2.3.4".to_vec()),
+                // See https://github.com/rust-lang/libs-team/issues/239
+                Some(b"::102:304".to_vec()),
             ),
             (
                 Some(hex("00000000000000000000FFFF01020304")),
@@ -529,12 +546,12 @@ mod tests {
             (None, None),
         ];
 
-        for (input, expect_output) in test_cases {
+        for (i, (input, expect_output)) in test_cases.into_iter().enumerate() {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(input)
                 .evaluate::<Bytes>(ScalarFuncSig::Inet6Ntoa)
                 .unwrap();
-            assert_eq!(output, expect_output);
+            assert_eq!(output, expect_output, "case {}", i);
         }
     }
 
@@ -625,5 +642,7 @@ mod tests {
         assert_eq!(v[2].len(), 4);
         assert_eq!(v[3].len(), 4);
         assert_eq!(v[4].len(), 12);
+        let u = Uuid::parse_str(&r).expect("Parsing UUID failed");
+        assert_eq!(u.get_version_num(), 1);
     }
 }

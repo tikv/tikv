@@ -14,16 +14,21 @@ mod util;
 
 mod config;
 pub mod errors;
-use std::{cmp::Ordering, collections::HashMap, ops::Deref, sync::Arc, time::Duration};
+pub mod meta_storage;
+use std::{cmp::Ordering, ops::Deref, sync::Arc, time::Duration};
 
 use futures::future::BoxFuture;
-use grpcio::ClientSStreamReceiver;
 use kvproto::{
-    metapb, pdpb,
+    metapb,
+    pdpb::{self, UpdateServiceGcSafePointRequest, UpdateServiceGcSafePointResponse},
     replication_modepb::{RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus},
+    resource_manager::TokenBucketsRequest,
 };
-use pdpb::{QueryStats, WatchGlobalConfigResponse};
-use tikv_util::time::{Instant, UnixSecs};
+use pdpb::QueryStats;
+use tikv_util::{
+    memory::HeapSize,
+    time::{Instant, UnixSecs},
+};
 use txn_types::TimeStamp;
 
 pub use self::{
@@ -32,13 +37,13 @@ pub use self::{
     config::Config,
     errors::{Error, Result},
     feature_gate::{Feature, FeatureGate},
-    util::{merge_bucket_stats, new_bucket_stats, PdConnector, REQUEST_RECONNECT_INTERVAL},
+    util::{PdConnector, REQUEST_RECONNECT_INTERVAL, merge_bucket_stats, new_bucket_stats},
 };
 
 pub type Key = Vec<u8>;
 pub type PdFuture<T> = BoxFuture<'static, Result<T>>;
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct RegionStat {
     pub down_peers: Vec<pdpb::PeerStats>,
     pub pending_peers: Vec<metapb::Peer>,
@@ -47,6 +52,9 @@ pub struct RegionStat {
     pub read_bytes: u64,
     pub read_keys: u64,
     pub query_stats: QueryStats,
+    // Now, this info is not sent to PD (maybe in the future). It is needed here to make it
+    // collected by region collector.
+    pub cop_detail: RegionWriteCfCopDetail,
     pub approximate_size: u64,
     pub approximate_keys: u64,
     pub last_report_ts: UnixSecs,
@@ -125,6 +133,17 @@ impl BucketMeta {
         self.keys.remove(idx);
         self.sizes.remove(idx);
     }
+
+    // total size of the whole buckets
+    pub fn total_size(&self) -> u64 {
+        self.sizes.iter().sum()
+    }
+}
+
+impl HeapSize for BucketMeta {
+    fn approximate_heap_size(&self) -> usize {
+        self.keys.approximate_heap_size() + self.sizes.approximate_heap_size()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -153,6 +172,33 @@ impl BucketStat {
         }
     }
 
+    pub fn from_meta(meta: Arc<BucketMeta>) -> Self {
+        let stats = new_bucket_stats(&meta);
+        Self::new(meta, stats)
+    }
+
+    pub fn set_meta(&mut self, meta: Arc<BucketMeta>) {
+        self.stats = new_bucket_stats(&meta);
+        self.meta = meta;
+    }
+
+    pub fn clear_stats(&mut self) {
+        self.stats = new_bucket_stats(&self.meta);
+    }
+
+    pub fn merge(&mut self, delta: &BucketStat) {
+        merge_bucket_stats(
+            &self.meta.keys,
+            &mut self.stats,
+            &delta.meta.keys,
+            &delta.stats,
+        );
+    }
+
+    pub fn add_flows<I: AsRef<[u8]>>(&mut self, incoming: &[I], delta_stats: &metapb::BucketStats) {
+        merge_bucket_stats(&self.meta.keys, &mut self.stats, incoming, delta_stats);
+    }
+
     pub fn write_key(&mut self, key: &[u8], value_size: u64) {
         let idx = match util::find_bucket_index(key, &self.meta.keys) {
             Some(idx) => idx,
@@ -164,6 +210,27 @@ impl BucketStat {
         if let Some(bytes) = self.stats.mut_write_bytes().get_mut(idx) {
             *bytes += key.len() as u64 + value_size;
         }
+    }
+
+    // Notice: It's not evenly distributed, so we update all buckets after ingest
+    // sst. Generally, sst file size is region split size, and this region is
+    // empty region.
+    pub fn ingest_sst(&mut self, key_count: u64, value_size: u64) {
+        for stat in self.stats.mut_write_bytes() {
+            *stat += value_size;
+        }
+        for stat in self.stats.mut_write_keys() {
+            *stat += key_count;
+        }
+    }
+
+    pub fn clean_stats(&mut self, idx: usize) {
+        self.stats.write_keys[idx] = 0;
+        self.stats.write_bytes[idx] = 0;
+        self.stats.read_qps[idx] = 0;
+        self.stats.write_qps[idx] = 0;
+        self.stats.read_keys[idx] = 0;
+        self.stats.read_bytes[idx] = 0;
     }
 
     pub fn split(&mut self, idx: usize) {
@@ -201,6 +268,11 @@ impl BucketStat {
 }
 
 pub const INVALID_ID: u64 = 0;
+// TODO: Implementation of config registration for each module
+pub const RESOURCE_CONTROL_CONFIG_PATH: &str = "resource_group/settings";
+pub const RESOURCE_CONTROL_CONTROLLER_CONFIG_PATH: &str = "resource_group/controller";
+
+pub const REGION_LABEL_PATH_PREFIX: &str = "region_label";
 
 /// PdClient communicates with Placement Driver (PD).
 /// Because now one PD only supports one cluster, so it is no need to pass
@@ -208,21 +280,6 @@ pub const INVALID_ID: u64 = 0;
 /// creating the PdClient is enough and the PdClient will use this cluster id
 /// all the time.
 pub trait PdClient: Send + Sync {
-    /// Load a list of GlobalConfig
-    fn load_global_config(&self, _list: Vec<String>) -> PdFuture<HashMap<String, String>> {
-        unimplemented!();
-    }
-
-    /// Store a list of GlobalConfig
-    fn store_global_config(&self, _list: HashMap<String, String>) -> PdFuture<()> {
-        unimplemented!();
-    }
-
-    /// Watching change of GlobalConfig
-    fn watch_global_config(&self) -> Result<ClientSStreamReceiver<WatchGlobalConfigResponse>> {
-        unimplemented!();
-    }
-
     /// Returns the cluster ID.
     fn get_cluster_id(&self) -> Result<u64> {
         unimplemented!();
@@ -265,7 +322,7 @@ pub trait PdClient: Send + Sync {
     /// recovery mode recovery mode will do
     /// 1. update tikv cluster id from pd
     /// 2. all peer apply the log to last of the leader peer which has the most
-    /// log appended. 3. delete data to some point of time (resolved_ts)
+    ///    log appended. 3. delete data to some point of time (resolved_ts)
     fn is_recovering_marked(&self) -> Result<bool> {
         unimplemented!();
     }
@@ -286,7 +343,7 @@ pub trait PdClient: Send + Sync {
     ///   which Region and Peers will be removed.
     /// - For auto-balance, PD determines how to move the Region from one store
     ///   to another.
-
+    ///
     /// Gets store information if it is not a tombstone store.
     fn get_store(&self, _store_id: u64) -> Result<metapb::Store> {
         unimplemented!();
@@ -333,6 +390,11 @@ pub trait PdClient: Send + Sync {
         unimplemented!();
     }
 
+    // Gets Buckets by Region id.
+    fn get_buckets_by_id(&self, _region_id: u64) -> PdFuture<Option<metapb::Buckets>> {
+        unimplemented!();
+    }
+
     /// Gets Region and its leader by Region id.
     fn get_region_leader_by_id(
         &self,
@@ -374,6 +436,7 @@ pub trait PdClient: Send + Sync {
         &self,
         _region: metapb::Region,
         _count: usize,
+        _reason: pdpb::SplitReason,
     ) -> PdFuture<pdpb::AskBatchSplitResponse> {
         unimplemented!();
     }
@@ -409,6 +472,23 @@ pub trait PdClient: Send + Sync {
     }
 
     fn get_gc_safe_point(&self) -> PdFuture<u64> {
+        unimplemented!();
+    }
+
+    fn scan_regions(
+        &self,
+        _start_key: &[u8],
+        _end_key: &[u8],
+        _limit: i32,
+    ) -> Result<Vec<pdpb::Region>> {
+        unimplemented!();
+    }
+
+    fn batch_load_regions(
+        &self,
+        mut _start_key: Vec<u8>,
+        mut _end_key: Vec<u8>,
+    ) -> Vec<Vec<pdpb::Region>> {
         unimplemented!();
     }
 
@@ -459,6 +539,10 @@ pub trait PdClient: Send + Sync {
     fn report_region_buckets(&self, _bucket_stat: &BucketStat, _period: Duration) -> PdFuture<()> {
         unimplemented!();
     }
+
+    fn report_ru_metrics(&self, _req: TokenBucketsRequest) -> PdFuture<()> {
+        unimplemented!();
+    }
 }
 
 const REQUEST_TIMEOUT: u64 = 2; // 2s
@@ -469,5 +553,77 @@ pub fn take_peer_address(store: &mut metapb::Store) -> String {
         store.take_peer_address()
     } else {
         store.take_address()
+    }
+}
+
+fn check_update_service_safe_point_resp(
+    resp: &UpdateServiceGcSafePointResponse,
+    req: &UpdateServiceGcSafePointRequest,
+) -> Result<()> {
+    if req.get_ttl() > 0 && resp.min_safe_point > req.get_safe_point() {
+        return Err(Error::UnsafeServiceGcSafePoint {
+            requested: req.get_safe_point().into(),
+            current_minimal: resp.min_safe_point.into(),
+        });
+    }
+    Ok(())
+}
+
+// Record the coprocessor details for region level.
+#[derive(Clone, Debug, Default)]
+pub struct RegionWriteCfCopDetail {
+    // How many times the `next` is called when handling cop request
+    pub next: usize,
+    // How many times the `prev` is called when handling cop request
+    pub prev: usize,
+    // How many keys that's visible to user
+    pub processed_keys: usize,
+}
+
+impl RegionWriteCfCopDetail {
+    pub fn new(next: usize, prev: usize, processed_keys: usize) -> Self {
+        Self {
+            next,
+            prev,
+            processed_keys,
+        }
+    }
+
+    pub fn add(&mut self, other: &RegionWriteCfCopDetail) {
+        self.next += other.next;
+        self.prev += other.prev;
+        self.processed_keys += other.processed_keys;
+    }
+
+    pub fn sub(&self, other: &RegionWriteCfCopDetail) -> Self {
+        Self::new(
+            self.next - other.next,
+            self.prev - other.prev,
+            self.processed_keys - other.processed_keys,
+        )
+    }
+
+    #[inline]
+    pub fn iterated_count(&self) -> usize {
+        self.next + self.prev
+    }
+
+    #[inline]
+    pub fn mvcc_amplification(&self) -> f64 {
+        // Sometimes, processed_keys is 0 even (next + prev) is pretty high
+        self.iterated_count() as f64 / (self.processed_keys as f64 + 1.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::RegionWriteCfCopDetail;
+
+    #[test]
+    fn test_processed_key_0() {
+        let mut cop_detail = RegionWriteCfCopDetail::default();
+        cop_detail.next = 11;
+
+        assert_eq!(cop_detail.mvcc_amplification(), 11.0);
     }
 }

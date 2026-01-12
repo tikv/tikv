@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use external_storage_export::ExternalStorage;
+use external_storage::ExternalStorage;
 use kvproto::brpb::StorageBackend;
 
 use super::cache_map::{MakeCache, ShareOwned};
@@ -31,9 +31,15 @@ impl StoragePool {
     fn create(backend: &StorageBackend, size: usize) -> Result<Self> {
         let mut r = Vec::with_capacity(size);
         for _ in 0..size {
-            let s = external_storage_export::create_storage(backend, Default::default())?;
+            let s = external_storage::create_storage(backend, Default::default())?;
             r.push(Arc::from(s));
         }
+        fail::fail_point!("create_storage_slowly", |_| {
+            futures::executor::block_on(async {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            });
+            Err(Error::ErrorWrapper(String::from("failpoint")))
+        });
         Ok(Self(r.into_boxed_slice()))
     }
 

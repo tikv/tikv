@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use engine_traits::{CompactExt, CompactedEvent, Result};
+use engine_traits::{CompactExt, CompactedEvent, ManualCompactionOptions, Result};
 
 use crate::engine::PanicEngine;
 
@@ -18,8 +18,7 @@ impl CompactExt for PanicEngine {
         cf: &str,
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
-        exclusive_manual: bool,
-        max_subcompactions: u32,
+        compaction_option: ManualCompactionOptions,
     ) -> Result<()> {
         panic!()
     }
@@ -44,11 +43,19 @@ impl CompactExt for PanicEngine {
     ) -> Result<()> {
         panic!()
     }
+
+    fn check_in_range(&self, start: Option<&[u8]>, end: Option<&[u8]>) -> Result<()> {
+        panic!()
+    }
 }
 
 pub struct PanicCompactedEvent;
 
 impl CompactedEvent for PanicCompactedEvent {
+    fn get_key_range(&self) -> (Vec<u8>, Vec<u8>) {
+        panic!()
+    }
+
     fn total_bytes_declined(&self) -> u64 {
         panic!()
     }

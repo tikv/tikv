@@ -8,8 +8,8 @@ use std::{
 
 use engine_rocks::{RocksEngine, RocksEngineIterator, RocksWriteBatchVec};
 use engine_traits::{
-    IterOptions, Iterable, Iterator, Mutable, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK,
-    CF_WRITE,
+    CF_DEFAULT, CF_LOCK, CF_WRITE, IterOptions, Iterable, Iterator, Mutable, WriteBatch,
+    WriteBatchExt,
 };
 use tikv_util::sys::thread::StdThreadBuildWrapper;
 use txn_types::{Key, TimeStamp, Write, WriteRef};
@@ -132,6 +132,7 @@ impl ResetToVersionWorker {
             box_try!(wb.delete_cf(CF_DEFAULT, default_key.as_encoded()));
         }
         if !wb.is_empty() {
+            // TODO: v2 needs disable_wal=true.
             wb.write().unwrap();
             wb.clear();
         }
@@ -163,6 +164,7 @@ impl ResetToVersionWorker {
             }
         }
         if !wb.is_empty() {
+            // TODO: v2 needs disable_wal=true.
             wb.write().unwrap();
             wb.clear();
         }
@@ -229,7 +231,6 @@ impl ResetToVersionManager {
                 .name("reset_to_version".to_string())
                 .spawn_wrapper(move || {
                     tikv_util::thread_group::set_properties(props);
-                    tikv_alloc::add_thread_memory_accessor();
 
                     while worker
                         .process_next_batch(BATCH_SIZE, &mut wb)
@@ -243,8 +244,6 @@ impl ResetToVersionManager {
                     {}
                     *worker.state.lock().unwrap() = ResetToVersionState::Done;
                     info!("Reset to version done!");
-
-                    tikv_alloc::remove_thread_memory_accessor();
                 })
                 .expect("failed to spawn reset_to_version thread"),
         );
@@ -269,7 +268,7 @@ impl ResetToVersionManager {
 
 #[cfg(test)]
 mod tests {
-    use engine_traits::{WriteBatch, WriteBatchExt, ALL_CFS, CF_LOCK};
+    use engine_traits::{ALL_CFS, CF_LOCK, WriteBatch, WriteBatchExt};
     use tempfile::Builder;
     use txn_types::{Lock, LockType, WriteType};
 
@@ -333,6 +332,7 @@ mod tests {
                 for_update_ts.into(),
                 0,
                 TimeStamp::zero(),
+                false,
             );
             kv.push((CF_LOCK, Key::from_raw(key), lock.to_bytes()));
         }
@@ -374,7 +374,11 @@ mod tests {
         lock_iter.seek_to_first().unwrap();
         let mut remaining_locks = vec![];
         while lock_iter.valid().unwrap() {
-            let lock = Lock::parse(lock_iter.value()).unwrap().to_owned();
+            let lock = txn_types::parse_lock(lock_iter.value())
+                .unwrap()
+                .left()
+                .unwrap()
+                .to_owned();
             let key = lock_iter.key().to_vec();
             lock_iter.next().unwrap();
             remaining_locks.push((key, lock));

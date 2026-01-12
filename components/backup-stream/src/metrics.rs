@@ -2,6 +2,7 @@
 
 use lazy_static::lazy_static;
 use prometheus::*;
+use prometheus_static_metric::*;
 
 /// The status of a task.
 /// The ordering of this imples the priority for presenting to the user.
@@ -29,9 +30,11 @@ pub fn remove_task_status_metric(task: &str) -> Result<()> {
     TASK_STATUS.remove_label_values(&[task])
 }
 
+// When adding new metrics, remember to update in the grafana dashboard, for
+// example update the tikv_details.dashboard.py.
 lazy_static! {
     pub static ref INTERNAL_ACTOR_MESSAGE_HANDLE_DURATION: HistogramVec = register_histogram_vec!(
-        "tikv_log_backup_interal_actor_acting_duration_sec",
+        "tikv_log_backup_internal_actor_acting_duration_sec",
         "The internal actor message handling duration.",
         &["message"],
         exponential_buckets(0.001, 2.0, 16).unwrap()
@@ -155,4 +158,72 @@ lazy_static! {
         &["stage"]
     )
     .unwrap();
+    pub static ref MISC_EVENTS: MiscEvents = register_static_int_counter_vec!(
+        MiscEvents,
+        "tikv_log_backup_misc_events",
+        "Events counter, including 'plain' events(i.e. events without extra information).",
+        &["name"]
+    )
+    .unwrap();
+    pub static ref MIN_TS_RESOLVE_DURATION: Histogram = register_histogram!(
+        "tikv_log_backup_resolve_duration_sec",
+        "The duration of resolving.",
+        exponential_buckets(0.001, 2.0, 16).unwrap()
+    )
+    .unwrap();
+    pub static ref TEMP_FILE_MEMORY_USAGE: IntGauge = register_int_gauge!(
+        "tikv_log_backup_temp_file_memory_usage",
+        "The total memory usage of temporary files.",
+    )
+    .unwrap();
+    pub static ref TEMP_FILE_COUNT: IntGauge = register_int_gauge!(
+        "tikv_log_backup_temp_file_count",
+        "The number of temporary files."
+    )
+    .unwrap();
+    pub static ref TEMP_FILE_SWAP_OUT_BYTES: IntCounter = register_int_counter!(
+        "tikv_log_backup_temp_file_swap_out_bytes",
+        "The number of total bytes being swapped out to disk."
+    )
+    .unwrap();
+    pub static ref IN_DISK_TEMP_FILE_SIZE: Histogram = register_histogram!(
+        "tikv_log_backup_in_disk_temp_file_size",
+        "The histogram of the size of the temp files get swapped out in bytes.",
+        // The default minimal size of a file being able to be swapped out is 1M.
+        exponential_buckets((1024 * 1024) as f64, 2.0, 8).unwrap()
+    ).unwrap();
+    pub static ref TEMP_FILE_READ_POLL_DURATION: Histogram = register_histogram!(
+        "tikv_log_backup_in_disk_temp_file_poll_duration",
+        "The duration of polling read temp file.",
+        exponential_buckets(0.001, 2.0, 10).unwrap()
+    ).unwrap();
+
+    pub static ref STORE_SMALLEST_CHECKPOINT_REGION_ID: IntGauge = register_int_gauge!(
+        "tikv_log_backup_store_last_checkpoint_region_id",
+        "ID of the region with the smallest checkpoint ts in the store."
+    ).unwrap();
+
+    pub static ref STORE_SMALLEST_CHECKPOINT_TS: IntGauge = register_int_gauge!(
+        "tikv_log_backup_store_last_checkpoint_ts",
+        "The smallest checkpoint ts in the store."
+    ).unwrap();
+
+    pub static ref ACTIVE_SUBSCRIPTION_NUMBER: IntGauge = register_int_gauge!(
+        "tikv_log_backup_active_subscription_number",
+        "The number of active subscriptions from advancer in the store."
+    ).unwrap();
+}
+
+make_static_metric! {
+    pub label_enum MiscEventsName {
+        skip_resolve_non_leader,
+        skip_resolve_no_subscription,
+    }
+
+    pub struct MiscEvents: IntCounter {
+        "name" => {
+            skip_resolve_non_leader,
+            skip_resolve_no_subscription,
+        }
+    }
 }

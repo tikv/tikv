@@ -1,17 +1,20 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::mem;
+
 use kvproto::{
     coprocessor::{KeyRange, Request},
     kvrpcpb::Context,
 };
 use protobuf::Message;
-use tidb_query_datatype::codec::{datum, Datum};
+use tidb_query_datatype::codec::{Datum, datum};
 use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv_util::codec::number::NumberEncoder;
 use tipb::{
     Aggregation, ByItem, Chunk, ColumnInfo, DagRequest, ExecType, Executor, Expr, ExprType,
-    IndexScan, Limit, Selection, TableScan, TopN,
+    IndexLookUp, IndexScan, IntermediateOutputChannel, Limit, Selection, TableScan, TopN,
 };
+use txn_types::TimeStamp;
 
 use super::*;
 
@@ -25,6 +28,8 @@ pub struct DagSelect {
     pub key_ranges: Vec<KeyRange>,
     pub output_offsets: Option<Vec<u32>>,
     pub paging_size: Option<u64>,
+    pub start_ts: Option<u64>,
+    pub intermediate_outputs: Vec<IntermediateOutputChannel>,
 }
 
 impl DagSelect {
@@ -48,6 +53,8 @@ impl DagSelect {
             key_ranges: vec![table.get_record_range_all()],
             output_offsets: None,
             paging_size: None,
+            start_ts: None,
+            intermediate_outputs: vec![],
         }
     }
 
@@ -75,7 +82,49 @@ impl DagSelect {
             key_ranges: vec![range],
             output_offsets: None,
             paging_size: None,
+            start_ts: None,
+            intermediate_outputs: vec![],
         }
+    }
+
+    pub fn index_lookup(mut self, table: &Table, handle_offset: Vec<u32>) -> DagSelect {
+        if let Some(l) = self.limit.take() {
+            let mut exec = Executor::default();
+            exec.set_tp(ExecType::TypeLimit);
+            exec.set_limit({
+                let mut limit = Limit::default();
+                limit.set_limit(l);
+                limit
+            });
+            self.execs.push(exec);
+        }
+        let exec_len = self.execs.len() + 2;
+        self.execs[exec_len - 3].set_parent_idx(exec_len as u32 - 1);
+        let table_scan_dag = Self::from(table);
+        self.execs.push(table_scan_dag.execs[0].clone());
+        self.execs.push({
+            let mut exec = Executor::default();
+            exec.set_tp(ExecType::TypeIndexLookUp);
+            exec.set_index_lookup({
+                let mut index_lookup = IndexLookUp::default();
+                index_lookup.set_index_handle_offsets(handle_offset);
+                index_lookup
+            });
+            exec
+        });
+        self.intermediate_outputs.push({
+            let mut channel = IntermediateOutputChannel::default();
+            channel.set_executor_idx(exec_len as u32 - 1);
+            if let Some(output_offsets) = self.output_offsets.take() {
+                channel.set_output_offsets(output_offsets);
+            } else {
+                channel.set_output_offsets((0..self.cols.len() as u32).collect());
+            }
+            channel
+        });
+        self.cols = table_scan_dag.cols;
+        self.output_offsets = table_scan_dag.output_offsets;
+        self
     }
 
     #[must_use]
@@ -195,6 +244,17 @@ impl DagSelect {
     }
 
     #[must_use]
+    pub fn projection(mut self, exprs: Vec<Expr>) -> DagSelect {
+        let mut exec = Executor::default();
+        exec.set_tp(ExecType::TypeProjection);
+        let mut projection = tipb::Projection::default();
+        projection.set_exprs(exprs.into());
+        exec.set_projection(projection);
+        self.execs.push(exec);
+        self
+    }
+
+    #[must_use]
     pub fn desc(mut self, desc: bool) -> DagSelect {
         self.execs[0].mut_tbl_scan().set_desc(desc);
         self
@@ -210,6 +270,11 @@ impl DagSelect {
     #[must_use]
     pub fn key_ranges(mut self, key_ranges: Vec<KeyRange>) -> DagSelect {
         self.key_ranges = key_ranges;
+        self
+    }
+
+    pub fn start_ts(mut self, start_ts: TimeStamp) -> DagSelect {
+        self.start_ts = Some(start_ts.into_inner());
         self
     }
 
@@ -265,9 +330,10 @@ impl DagSelect {
             (0..self.cols.len() as u32).collect()
         };
         dag.set_output_offsets(output_offsets);
+        dag.set_intermediate_output_channels(mem::take(&mut self.intermediate_outputs).into());
 
         let mut req = Request::default();
-        req.set_start_ts(next_id() as u64);
+        req.set_start_ts(self.start_ts.unwrap_or_else(|| next_id() as u64));
         req.set_tp(REQ_TYPE_DAG);
         req.set_data(dag.write_to_bytes().unwrap());
         req.set_ranges(self.key_ranges.into());

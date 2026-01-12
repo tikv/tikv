@@ -16,7 +16,7 @@ pub struct Config {
     ///
     /// Default is `"127.0.0.1:2379"`.
     pub endpoints: Vec<String>,
-    /// The interval at which to retry a PD connection initialization.
+    /// The interval at which to retry a PD connection.
     ///
     /// Default is 300ms.
     pub retry_interval: ReadableDuration,
@@ -45,7 +45,7 @@ impl Default for Config {
         Config {
             endpoints: vec!["127.0.0.1:2379".to_string()],
             retry_interval: ReadableDuration::millis(300),
-            retry_max_count: std::isize::MAX,
+            retry_max_count: isize::MAX,
             retry_log_every: 10,
             update_interval: ReadableDuration::minutes(10),
             enable_forwarding: false,

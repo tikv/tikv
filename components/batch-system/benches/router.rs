@@ -8,7 +8,7 @@ use criterion::*;
 fn bench_send(c: &mut Criterion) {
     let (control_tx, control_fsm) = Runner::new(100000);
     let (router, mut system) =
-        batch_system::create_system(&Config::default(), control_tx, control_fsm);
+        batch_system::create_system(&Config::default(), control_tx, control_fsm, None);
     system.spawn("test".to_owned(), Builder::new());
     let (normal_tx, normal_fsm) = Runner::new(100000);
     let normal_box = BasicMailbox::new(normal_tx, normal_fsm, Arc::default());

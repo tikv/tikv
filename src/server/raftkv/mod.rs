@@ -13,8 +13,8 @@ use std::{
     pin::Pin,
     result,
     sync::{
-        atomic::{AtomicU8, Ordering},
         Arc, RwLock,
+        atomic::{AtomicU8, Ordering},
     },
     task::Poll,
     time::Duration,
@@ -22,8 +22,10 @@ use std::{
 
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot};
-use futures::{future::BoxFuture, task::AtomicWaker, Future, Stream, StreamExt};
+use engine_traits::{CF_LOCK, CfName, KvEngine, MvccProperties, Snapshot};
+use futures::{Future, Stream, StreamExt, TryFutureExt, future::BoxFuture, task::AtomicWaker};
+use hybrid_engine::HybridEngineSnapshot;
+use in_memory_engine::RegionCacheMemoryEngine;
 use kvproto::{
     errorpb,
     kvrpcpb::{Context, IsolationLevel},
@@ -33,28 +35,31 @@ use kvproto::{
     },
 };
 use raft::{
-    eraftpb::{self, MessageType},
     StateRole,
+    eraftpb::{self, MessageType},
 };
 pub use raft_extension::RaftRouterWrap;
 use raftstore::{
+    RegionInfoAccessor, SeekRegionCallback,
     coprocessor::{
-        dispatcher::BoxReadIndexObserver, Coprocessor, CoprocessorHost, ReadIndexObserver,
+        Coprocessor, CoprocessorHost, ReadIndexObserver, RegionInfoProvider,
+        dispatcher::BoxReadIndexObserver,
     },
     errors::Error as RaftServerError,
-    router::{LocalReadRouter, RaftStoreRouter},
+    router::{LocalReadRouter, RaftStoreRouter, ReadContext},
     store::{
         self, Callback as StoreCallback, RaftCmdExtraOpts, ReadIndexContext, ReadResponse,
-        RegionSnapshot, StoreMsg, WriteResponse,
+        RegionSnapshot, StoreMsg, WriteResponse, util::encode_start_ts_into_flag_data,
     },
 };
 use thiserror::Error;
-use tikv_kv::{write_modifies, OnAppliedCb, WriteEvent};
+use tikv_kv::{ExtraRegionOverride, OnAppliedCb, WriteEvent, write_modifies};
 use tikv_util::{
-    codec::number::NumberEncoder,
+    callback::must_call,
     future::{paired_future_callback, paired_must_called_future_callback},
     time::Instant,
 };
+use tracker::{GLOBAL_TRACKERS, get_tls_tracker_token};
 use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 
 use super::metrics::*;
@@ -62,6 +67,8 @@ use crate::storage::{
     self, kv,
     kv::{Engine, Error as KvError, ErrorInner as KvErrorInner, Modify, SnapContext, WriteData},
 };
+
+pub const ASYNC_WRITE_CALLBACK_DROPPED_ERR_MSG: &str = "async write on_applied callback is dropped";
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -80,6 +87,9 @@ pub enum Error {
     #[error("{0}")]
     InvalidRequest(String),
 
+    #[error("{0}")]
+    Undetermined(String),
+
     #[error("timeout after {0:?}")]
     Timeout(Duration),
 }
@@ -94,6 +104,7 @@ pub fn get_status_kind_from_engine_error(e: &kv::Error) -> RequestStatusKind {
         }
         KvError(box KvErrorInner::Timeout(_)) => RequestStatusKind::err_timeout,
         KvError(box KvErrorInner::EmptyRequest) => RequestStatusKind::err_empty_request,
+        KvError(box KvErrorInner::Undetermined(_)) => RequestStatusKind::err_undetermind,
         KvError(box KvErrorInner::Other(_)) => RequestStatusKind::err_other,
     }
 }
@@ -104,6 +115,7 @@ impl From<Error> for kv::Error {
     fn from(e: Error) -> kv::Error {
         match e {
             Error::RequestFailed(e) => KvError::from(KvErrorInner::Request(e)),
+            Error::Undetermined(e) => KvError::from(KvErrorInner::Undetermined(e)),
             Error::Server(e) => e.into(),
             e => box_err!(e),
         }
@@ -118,9 +130,13 @@ where
     Snap(RegionSnapshot<S>),
 }
 
-fn check_raft_cmd_response(resp: &mut RaftCmdResponse) -> Result<()> {
+pub fn check_raft_cmd_response(resp: &mut RaftCmdResponse) -> Result<()> {
     if resp.get_header().has_error() {
-        return Err(Error::RequestFailed(resp.take_header().take_error()));
+        let mut err = resp.take_header().take_error();
+        if err.get_message() == ASYNC_WRITE_CALLBACK_DROPPED_ERR_MSG {
+            return Err(Error::Undetermined(err.take_message()));
+        }
+        return Err(Error::RequestFailed(err));
     }
 
     Ok(())
@@ -151,22 +167,47 @@ where
 }
 
 #[inline]
-pub fn new_request_header(ctx: &Context) -> RaftRequestHeader {
+pub fn new_request_header(
+    ctx: &Context,
+    extra_snap_override: Option<&ExtraRegionOverride>,
+) -> RaftRequestHeader {
     let mut header = RaftRequestHeader::default();
-    header.set_region_id(ctx.get_region_id());
-    header.set_peer(ctx.get_peer().clone());
-    header.set_region_epoch(ctx.get_region_epoch().clone());
-    if ctx.get_term() != 0 {
-        header.set_term(ctx.get_term());
+    match extra_snap_override {
+        Some(&ExtraRegionOverride {
+            region_id,
+            ref region_epoch,
+            ref peer,
+            check_term,
+        }) => {
+            header.set_region_id(region_id);
+            header.set_peer(peer.clone());
+            header.set_region_epoch(region_epoch.clone());
+            if let Some(term) = check_term {
+                header.set_term(term);
+            }
+        }
+        _ => {
+            header.set_region_id(ctx.get_region_id());
+            header.set_peer(ctx.get_peer().clone());
+            header.set_region_epoch(ctx.get_region_epoch().clone());
+            if ctx.get_term() != 0 {
+                header.set_term(ctx.get_term());
+            }
+        }
     }
     header.set_sync_log(ctx.get_sync_log());
     header.set_replica_read(ctx.get_replica_read());
+    header.set_resource_group_name(
+        ctx.get_resource_control_context()
+            .get_resource_group_name()
+            .to_owned(),
+    );
     header
 }
 
 #[inline]
 pub fn new_flashback_req(ctx: &Context, ty: AdminCmdType) -> RaftCmdRequest {
-    let header = new_request_header(ctx);
+    let header = new_request_header(ctx, None);
     let mut req = RaftCmdRequest::default();
     req.set_header(header);
     req.mut_header()
@@ -179,18 +220,36 @@ fn exec_admin<E: KvEngine, S: RaftStoreRouter<E>>(
     router: &S,
     req: RaftCmdRequest,
 ) -> BoxFuture<'static, kv::Result<()>> {
+    let region_id = req.get_header().get_region_id();
+    let peer_id = req.get_header().get_peer().get_id();
+    let term = req.get_header().get_term();
+    let epoch = req.get_header().get_region_epoch().clone();
+    let admin_type = req.get_admin_request().get_cmd_type();
     let (cb, f) = paired_future_callback();
     let res = router.send_command(
         req,
         raftstore::store::Callback::write(cb),
         RaftCmdExtraOpts::default(),
     );
-    Box::pin(async move {
-        res?;
-        let mut resp = box_try!(f.await);
-        check_raft_cmd_response(&mut resp.response)?;
-        Ok(())
-    })
+    Box::pin(
+        async move {
+            res?;
+            let mut resp = box_try!(f.await);
+            check_raft_cmd_response(&mut resp.response)?;
+            Ok(())
+        }
+        .map_err(move |e| {
+            warn!("failed to execute admin command";
+                "err" => ?e,
+                "admin_type" => ?admin_type,
+                "term" => term,
+                "region_epoch" => ?epoch,
+                "peer_id" => peer_id,
+                "region_id" => region_id,
+            );
+            e
+        }),
+    )
 }
 
 pub fn drop_snapshot_callback<T>() -> kv::Result<T> {
@@ -199,6 +258,25 @@ pub fn drop_snapshot_callback<T>() -> kv::Result<T> {
     let mut err = errorpb::Error::default();
     err.set_message("async snapshot callback is dropped".to_string());
     Err(kv::Error::from(kv::ErrorInner::Request(err)))
+}
+
+pub fn async_write_callback_dropped_err() -> errorpb::Error {
+    let mut err = errorpb::Error::default();
+    err.set_message(ASYNC_WRITE_CALLBACK_DROPPED_ERR_MSG.to_string());
+    err
+}
+
+pub fn drop_on_applied_callback() -> WriteResponse {
+    let bt = backtrace::Backtrace::new();
+    error!("async write on_applied callback is dropped"; "backtrace" => ?bt);
+    let mut write_resp = WriteResponse {
+        response: Default::default(),
+    };
+    write_resp
+        .response
+        .mut_header()
+        .set_error(async_write_callback_dropped_err());
+    write_resp
 }
 
 struct WriteResCore {
@@ -300,6 +378,7 @@ where
     router: RaftRouterWrap<S, E>,
     engine: E,
     txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
+    region_info_accessor: Option<RegionInfoAccessor>,
     region_leaders: Arc<RwLock<HashSet<u64>>>,
 }
 
@@ -309,11 +388,17 @@ where
     S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
 {
     /// Create a RaftKv using specified configuration.
-    pub fn new(router: S, engine: E, region_leaders: Arc<RwLock<HashSet<u64>>>) -> RaftKv<E, S> {
+    pub fn new(
+        router: S,
+        engine: E,
+        region_info_accessor: Option<RegionInfoAccessor>,
+        region_leaders: Arc<RwLock<HashSet<u64>>>,
+    ) -> RaftKv<E, S> {
         RaftKv {
             router: RaftRouterWrap::new(router),
             engine,
             txn_extra_scheduler: None,
+            region_info_accessor,
             region_leaders,
         }
     }
@@ -393,6 +478,9 @@ where
                         let bytes = keys::data_end_key(key2.as_encoded());
                         *key2 = Key::from_encoded(bytes);
                     }
+                    Modify::Ingest(_) => {
+                        return Err(box_err!("ingest sst is not supported in local engine"));
+                    }
                 }
             }
         }
@@ -447,8 +535,37 @@ where
         }
 
         let reqs: Vec<Request> = batch.modifies.into_iter().map(Into::into).collect();
+
+        if txn_types::ENABLE_DUP_KEY_DEBUG.load(Ordering::Relaxed) {
+            // Ref: https://github.com/tikv/tikv/issues/18498.
+            // Check for duplicate key entries before proposing commands.
+            // TODO: remove this check when the cause of issue 18498 is located.
+            let mut keys_set = std::collections::HashSet::new();
+            for req in &reqs {
+                if req.has_put() && req.get_put().get_cf() == CF_LOCK {
+                    let key = req.get_put().get_key();
+                    if !keys_set.insert(key.to_vec()) {
+                        let wrapped_key = log_wrappers::Value::key(key);
+                        error!(
+                            "[for debug] found duplicate key in Lock CF PUT request, key: {:?}, \
+                        extra: {:?}, ctx: {:?}, reqs: {:?}, avoid_batch:{:?}",
+                            wrapped_key, batch.extra, ctx, reqs, batch.avoid_batch
+                        );
+                        // TODO: remove this in production or new release.
+                        panic!(
+                            "[for debug] found duplicate key in Lock CF PUT request, key: {:?}, \
+                        extra: {:?}, ctx: {:?}, reqs: {:?}, avoid_batch:{:?}",
+                            wrapped_key, batch.extra, ctx, reqs, batch.avoid_batch
+                        );
+                    }
+                }
+            }
+        }
         let txn_extra = batch.extra;
-        let mut header = new_request_header(ctx);
+        let mut header = new_request_header(ctx, None);
+        if batch.avoid_batch {
+            header.set_uuid(uuid::Uuid::new_v4().as_bytes().to_vec());
+        }
         let mut flags = 0;
         if txn_extra.one_pc {
             flags |= WriteBatchFlags::ONE_PC.bits();
@@ -465,155 +582,95 @@ where
         self.schedule_txn_extra(txn_extra);
 
         let (tx, rx) = WriteResFeed::pair();
-        let proposed_cb = if !WriteEvent::subscribed_proposed(subscribed) {
-            None
-        } else {
-            let tx = tx.clone();
-            Some(Box::new(move || tx.notify_proposed()) as store::ExtCallback)
-        };
-        let committed_cb = if !WriteEvent::subscribed_committed(subscribed) {
-            None
-        } else {
-            let tx = tx.clone();
-            Some(Box::new(move || tx.notify_committed()) as store::ExtCallback)
-        };
-        let applied_tx = tx.clone();
-        let applied_cb = Box::new(move |resp: WriteResponse| {
-            let mut res = match on_write_result::<E::Snapshot>(resp) {
-                Ok(CmdRes::Resp(_)) => {
-                    fail_point!("raftkv_async_write_finish");
-                    Ok(())
-                }
-                Ok(CmdRes::Snap(_)) => Err(box_err!("unexpect snapshot, should mutate instead.")),
-                Err(e) => Err(kv::Error::from(e)),
-            };
-            if let Some(cb) = on_applied {
-                cb(&mut res);
-            }
-            applied_tx.notify(res);
-        });
-
-        let cb = StoreCallback::write_ext(applied_cb, proposed_cb, committed_cb);
-        let extra_opts = RaftCmdExtraOpts {
-            deadline: batch.deadline,
-            disk_full_opt: batch.disk_full_opt,
-        };
         if res.is_ok() {
+            let proposed_cb = if !WriteEvent::subscribed_proposed(subscribed) {
+                None
+            } else {
+                let tx = tx.clone();
+                Some(Box::new(move || tx.notify_proposed()) as store::ExtCallback)
+            };
+            let committed_cb = if !WriteEvent::subscribed_committed(subscribed) {
+                None
+            } else {
+                let tx = tx.clone();
+                Some(Box::new(move || tx.notify_committed()) as store::ExtCallback)
+            };
+            let applied_tx = tx.clone();
+            let applied_cb = must_call(
+                Box::new(move |resp: WriteResponse| {
+                    fail_point!("applied_cb_return_undetermined_err", |_| {
+                        applied_tx.notify(Err(kv::Error::from(Error::Undetermined(
+                            ASYNC_WRITE_CALLBACK_DROPPED_ERR_MSG.to_string(),
+                        ))));
+                    });
+                    let mut res = match on_write_result::<E::Snapshot>(resp) {
+                        Ok(CmdRes::Resp(_)) => {
+                            ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
+                            ASYNC_REQUESTS_DURATIONS_VEC
+                                .write
+                                .observe(begin_instant.saturating_elapsed_secs());
+                            fail_point!("raftkv_async_write_finish");
+                            Ok(())
+                        }
+                        Ok(CmdRes::Snap(_)) => {
+                            Err(box_err!("unexpect snapshot, should mutate instead."))
+                        }
+                        Err(e) => Err(kv::Error::from(e)),
+                    };
+                    if let Some(cb) = on_applied {
+                        cb(&mut res);
+                    }
+                    applied_tx.notify(res);
+                }),
+                drop_on_applied_callback,
+            );
+
+            let cb = StoreCallback::write_ext(applied_cb, proposed_cb, committed_cb);
+            let extra_opts = RaftCmdExtraOpts {
+                deadline: batch.deadline,
+                disk_full_opt: batch.disk_full_opt,
+            };
             res = self
                 .router
                 .send_command(cmd, cb, extra_opts)
                 .map_err(kv::Error::from);
         }
         if res.is_err() {
+            // Note that `on_applied` is not called in this case. We send message to the
+            // channel here to notify the caller that the writing ended, like
+            // how the `applied_cb` does.
             tx.notify(res);
         }
         rx.inspect(move |ev| {
-            let WriteEvent::Finished(res) = ev else { return };
-            match res {
-                Ok(()) => {
-                    ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
-                    ASYNC_REQUESTS_DURATIONS_VEC
-                        .write
-                        .observe(begin_instant.saturating_elapsed_secs());
-                }
-                Err(e) => {
-                    let status_kind = get_status_kind_from_engine_error(e);
-                    ASYNC_REQUESTS_COUNTER_VEC.write.get(status_kind).inc();
-                }
+            if let WriteEvent::Finished(Err(e)) = ev {
+                let status_kind = get_status_kind_from_engine_error(e);
+                ASYNC_REQUESTS_COUNTER_VEC.write.get(status_kind).inc();
             }
         })
     }
 
     type SnapshotRes = impl Future<Output = kv::Result<Self::Snap>> + Send;
-    fn async_snapshot(&mut self, mut ctx: SnapContext<'_>) -> Self::SnapshotRes {
-        let mut res: kv::Result<()> = (|| {
-            fail_point!("raftkv_async_snapshot_err", |_| {
-                Err(box_err!("injected error for async_snapshot"))
-            });
-            Ok(())
-        })();
-
-        let mut req = Request::default();
-        req.set_cmd_type(CmdType::Snap);
-        if !ctx.key_ranges.is_empty() && ctx.start_ts.map_or(false, |ts| !ts.is_zero()) {
-            req.mut_read_index()
-                .set_start_ts(ctx.start_ts.as_ref().unwrap().into_inner());
-            req.mut_read_index()
-                .set_key_ranges(mem::take(&mut ctx.key_ranges).into());
-        }
-        ASYNC_REQUESTS_COUNTER_VEC.snapshot.all.inc();
-        let begin_instant = Instant::now_coarse();
-        let (cb, f) = paired_must_called_future_callback(drop_snapshot_callback);
-
-        let mut header = new_request_header(ctx.pb_ctx);
-        let mut flags = 0;
-        if ctx.pb_ctx.get_stale_read() && ctx.start_ts.map_or(true, |ts| !ts.is_zero()) {
-            let mut data = [0u8; 8];
-            (&mut data[..])
-                .encode_u64(ctx.start_ts.unwrap_or_default().into_inner())
-                .unwrap();
-            flags |= WriteBatchFlags::STALE_READ.bits();
-            header.set_flag_data(data.into());
-        }
-        if ctx.allowed_in_flashback {
-            flags |= WriteBatchFlags::FLASHBACK.bits();
-        }
-        header.set_flags(flags);
-
-        let mut cmd = RaftCmdRequest::default();
-        cmd.set_header(header);
-        cmd.set_requests(vec![req].into());
-        if res.is_ok() {
-            res = self
-                .router
-                .read(
-                    ctx.read_id,
-                    cmd,
-                    StoreCallback::read(Box::new(move |resp| {
-                        cb(on_read_result(resp).map_err(Error::into));
-                    })),
-                )
-                .map_err(kv::Error::from);
-        }
-        async move {
-            // It's impossible to return cancel because the callback will be invoked if it's
-            // destroyed.
-            let res = match res {
-                Ok(()) => f.await.unwrap(),
-                Err(e) => Err(e),
-            };
-            match res {
-                Ok(CmdRes::Resp(mut r)) => {
-                    let e = if r
-                        .get(0)
-                        .map(|resp| resp.get_read_index().has_locked())
-                        .unwrap_or(false)
-                    {
-                        let locked = r[0].take_read_index().take_locked();
-                        KvError::from(KvErrorInner::KeyIsLocked(locked))
-                    } else {
-                        invalid_resp_type(CmdType::Snap, r[0].get_cmd_type()).into()
-                    };
-                    Err(e)
-                }
-                Ok(CmdRes::Snap(s)) => {
-                    ASYNC_REQUESTS_DURATIONS_VEC
-                        .snapshot
-                        .observe(begin_instant.saturating_elapsed_secs());
-                    ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
-                    Ok(s)
-                }
-                Err(e) => {
-                    let status_kind = get_status_kind_from_engine_error(&e);
-                    ASYNC_REQUESTS_COUNTER_VEC.snapshot.get(status_kind).inc();
-                    Err(e)
-                }
-            }
-        }
+    fn async_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::SnapshotRes {
+        async_snapshot(&mut self.router, ctx)
     }
 
     fn release_snapshot(&mut self) {
         self.router.release_snapshot_cache();
+    }
+
+    type IMSnap = RegionSnapshot<HybridEngineSnapshot<E, RegionCacheMemoryEngine>>;
+    type IMSnapshotRes = impl Future<Output = kv::Result<Self::IMSnap>> + Send;
+    fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
+        async_snapshot(&mut self.router, ctx).map_ok(|region_snap| {
+            // TODO: Remove replace_snapshot. Taking a snapshot and replacing it
+            // with a new one is a bit confusing.
+            // A better way to build an in-memory snapshot is to return
+            // `HybridEngineSnapshot<RegionSnapshot<E>, RegionCacheMemoryEngine>>;`
+            // so the `replace_snapshot` can be removed.
+            region_snap.replace_snapshot(move |disk_snap, pinned| {
+                HybridEngineSnapshot::from_observed_snapshot(disk_snap, pinned)
+            })
+        })
     }
 
     fn get_mvcc_properties_cf(
@@ -637,13 +694,16 @@ where
         }
     }
 
-    fn start_flashback(&self, ctx: &Context) -> BoxFuture<'static, kv::Result<()>> {
+    fn start_flashback(&self, ctx: &Context, start_ts: u64) -> BoxFuture<'static, kv::Result<()>> {
         // Send an `AdminCmdType::PrepareFlashback` to prepare the raftstore for the
         // later flashback. Once invoked, we will update the persistent region meta and
         // the memory state of the flashback in Peer FSM to reject all read, write
         // and scheduling operations for this region when propose/apply before we
         // start the actual data flashback transaction command in the next phase.
-        let req = new_flashback_req(ctx, AdminCmdType::PrepareFlashback);
+        let mut req = new_flashback_req(ctx, AdminCmdType::PrepareFlashback);
+        req.mut_admin_request()
+            .mut_prepare_flashback()
+            .set_start_ts(start_ts);
         exec_admin(&*self.router, req)
     }
 
@@ -662,6 +722,132 @@ where
                 // Warn and ignore it.
                 warn!("unsafe destroy range: failed sending ClearRegionSizeInRange"; "err" => ?e);
             });
+    }
+
+    fn seek_region(&self, from: &[u8], callback: SeekRegionCallback) -> kv::Result<()> {
+        match self.region_info_accessor {
+            Some(ref accessor) => accessor
+                .seek_region(from, callback)
+                .map_err(|e| box_err!(e)),
+            None => Err(box_err!("region_info_accessor is not available")),
+        }
+    }
+}
+
+fn async_snapshot<E, S>(
+    router: &mut RaftRouterWrap<S, E>,
+    mut ctx: SnapContext<'_>,
+) -> impl Future<Output = kv::Result<RegionSnapshot<E::Snapshot>>> + Send
+where
+    E: KvEngine,
+    S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
+{
+    let mut res: kv::Result<()> = (|| {
+        fail_point!("raftkv_async_snapshot_err", |_| {
+            Err(box_err!("injected error for async_snapshot"))
+        });
+        Ok(())
+    })();
+
+    let mut req = Request::default();
+    req.set_cmd_type(CmdType::Snap);
+    if !ctx.key_ranges.is_empty() && ctx.start_ts.is_some_and(|ts| !ts.is_zero()) {
+        req.mut_read_index()
+            .set_start_ts(ctx.start_ts.as_ref().unwrap().into_inner());
+        req.mut_read_index()
+            .set_key_ranges(mem::take(&mut ctx.key_ranges).into());
+    }
+    ASYNC_REQUESTS_COUNTER_VEC.snapshot.all.inc();
+    let begin_instant = Instant::now();
+    let (cb, f) = paired_must_called_future_callback(drop_snapshot_callback);
+
+    let mut header = new_request_header(ctx.pb_ctx, ctx.extra_region_override.as_ref());
+    let mut flags = 0;
+    let need_encoded_start_ts = ctx.start_ts.is_none_or(|ts| !ts.is_zero());
+    if ctx.pb_ctx.get_stale_read() && need_encoded_start_ts {
+        flags |= WriteBatchFlags::STALE_READ.bits();
+    }
+    if ctx.allowed_in_flashback {
+        flags |= WriteBatchFlags::FLASHBACK.bits();
+    }
+    header.set_flags(flags);
+    // Encode `start_ts` in `flag_data` for the check of stale read and flashback.
+    if need_encoded_start_ts {
+        encode_start_ts_into_flag_data(&mut header, ctx.start_ts.unwrap_or_default().into_inner());
+    }
+
+    let mut cmd = RaftCmdRequest::default();
+    cmd.set_header(header);
+    cmd.set_requests(vec![req].into());
+    let tracker = get_tls_tracker_token();
+    let store_cb = StoreCallback::read(Box::new(move |resp| {
+        let res = on_read_result(resp).map_err(Error::into);
+        if res.is_ok() {
+            let elapse = begin_instant.saturating_elapsed_secs();
+            GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+                if tracker.metrics.read_index_propose_wait_nanos > 0 {
+                    ASYNC_REQUESTS_DURATIONS_VEC
+                        .snapshot_read_index_propose_wait
+                        .observe(
+                            tracker.metrics.read_index_propose_wait_nanos as f64 / 1_000_000_000.0,
+                        );
+                    // snapshot may be handled by lease read in raftstore
+                    if tracker.metrics.read_index_confirm_wait_nanos > 0 {
+                        ASYNC_REQUESTS_DURATIONS_VEC
+                            .snapshot_read_index_confirm
+                            .observe(
+                                tracker.metrics.read_index_confirm_wait_nanos as f64
+                                    / 1_000_000_000.0,
+                            );
+                    }
+                } else if tracker.metrics.local_read {
+                    ASYNC_REQUESTS_DURATIONS_VEC
+                        .snapshot_local_read
+                        .observe(elapse);
+                }
+            });
+            ASYNC_REQUESTS_DURATIONS_VEC.snapshot.observe(elapse);
+            ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
+        }
+        cb(res);
+    }));
+
+    let read_ctx = ReadContext::new(ctx.read_id, ctx.start_ts.map(|ts| ts.into_inner()));
+    if res.is_ok() {
+        res = router
+            .read(read_ctx, cmd, store_cb)
+            .map_err(kv::Error::from);
+    }
+    async move {
+        let res = match res {
+            Ok(()) => match f.await {
+                Ok(r) => r,
+                // Canceled may be returned during shutdown.
+                Err(e) => Err(kv::Error::from(kv::ErrorInner::Other(box_err!(e)))),
+            },
+            Err(e) => Err(e),
+        };
+        match res {
+            Ok(CmdRes::Resp(mut r)) => {
+                let e = if r
+                    .first()
+                    .map(|resp| resp.get_read_index().has_locked())
+                    .unwrap_or(false)
+                {
+                    let locked = r[0].take_read_index().take_locked();
+                    KvError::from(KvErrorInner::KeyIsLocked(locked))
+                } else {
+                    invalid_resp_type(CmdType::Snap, r[0].get_cmd_type()).into()
+                };
+                Err(e)
+            }
+            Ok(CmdRes::Snap(s)) => Ok(s),
+            Err(e) => {
+                let status_kind = get_status_kind_from_engine_error(&e);
+                ASYNC_REQUESTS_COUNTER_VEC.snapshot.get(status_kind).inc();
+                Err(e)
+            }
+        }
     }
 }
 
@@ -686,7 +872,13 @@ impl ReplicaReadLockChecker {
 impl Coprocessor for ReplicaReadLockChecker {}
 
 impl ReadIndexObserver for ReplicaReadLockChecker {
-    fn on_step(&self, msg: &mut eraftpb::Message, role: StateRole) {
+    fn on_step(
+        &self,
+        msg: &mut eraftpb::Message,
+        role: StateRole,
+        region_start_key: Option<&[u8]>,
+        region_end_key: Option<&[u8]>,
+    ) {
         // Only check and return result if the current peer is a leader.
         // If it's not a leader, the read index request will be redirected to the leader
         // later.
@@ -699,15 +891,20 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
             let begin_instant = Instant::now();
 
             let start_ts = request.get_start_ts().into();
-            self.concurrency_manager.update_max_ts(start_ts);
+            if let Err(e) = self
+                .concurrency_manager
+                .update_max_ts(start_ts, || format!("read_index-{}", start_ts))
+            {
+                error!("failed to update max_ts in concurrency manager"; "err" => ?e);
+            }
+            let key_bound = |key: Vec<u8>| {
+                if key.is_empty() {
+                    None
+                } else {
+                    Some(txn_types::Key::from_encoded(key))
+                }
+            };
             for range in request.mut_key_ranges().iter_mut() {
-                let key_bound = |key: Vec<u8>| {
-                    if key.is_empty() {
-                        None
-                    } else {
-                        Some(txn_types::Key::from_encoded(key))
-                    }
-                };
                 let start_key = key_bound(range.take_start_key());
                 let end_key = key_bound(range.take_end_key());
                 // The replica read is not compatible with `RcCheckTs` isolation level yet.
@@ -717,8 +914,8 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                     start_key.as_ref(),
                     end_key.as_ref(),
                     |key, lock| {
-                        txn_types::Lock::check_ts_conflict(
-                            Cow::Borrowed(lock),
+                        txn_types::check_ts_conflict_for_replica_read(
+                            Cow::Owned(tikv_util::Either::Left(lock.clone())),
                             key,
                             start_ts,
                             &Default::default(),
@@ -737,6 +934,34 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                         .observe(begin_instant.saturating_elapsed().as_secs_f64());
                 }
             }
+            if rctx.locked.is_none() && !start_ts.is_max() {
+                if let (Some(region_start_key), Some(region_end_key)) =
+                    (region_start_key, region_end_key)
+                {
+                    // check if there is a memory lock on a region
+                    let start_key = key_bound(region_start_key.to_vec());
+                    let end_key = key_bound(region_end_key.to_vec());
+
+                    let res = self.concurrency_manager.read_range_check(
+                        start_key.as_ref(),
+                        end_key.as_ref(),
+                        |key, lock| {
+                            // It returns immediately upon encountering a lock in a region,
+                            // regardless of the timestamp.This optimization is for the read index
+                            // cache on the follower side. Considering
+                            // timestamps might require scanning the
+                            // entire region.
+                            let raw_key = key.to_raw()?;
+                            Err(txn_types::Error::from(txn_types::ErrorInner::KeyIsLocked(
+                                lock.clone().into_lock_info(raw_key),
+                            )))
+                        },
+                    );
+                    if res.is_ok() {
+                        rctx.read_index_safe_ts = Some(start_ts.into_inner());
+                    }
+                }
+            }
             msg.mut_entries()[0].set_data(rctx.to_bytes().into());
         }
     }
@@ -753,7 +978,7 @@ mod tests {
     // index.
     #[test]
     fn test_replica_read_lock_checker_for_single_uuid() {
-        let cm = ConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new_for_test(1.into());
         let checker = ReplicaReadLockChecker::new(cm);
         let mut m = eraftpb::Message::default();
         m.set_msg_type(MessageType::MsgReadIndex);
@@ -762,13 +987,13 @@ mod tests {
         e.set_data(uuid.as_bytes().to_vec().into());
         m.mut_entries().push(e);
 
-        checker.on_step(&mut m, StateRole::Leader);
+        checker.on_step(&mut m, StateRole::Leader, None, None);
         assert_eq!(m.get_entries()[0].get_data(), uuid.as_bytes());
     }
 
     #[test]
     fn test_replica_read_lock_check_when_not_leader() {
-        let cm = ConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new_for_test(1.into());
         let checker = ReplicaReadLockChecker::new(cm);
         let mut m = eraftpb::Message::default();
         m.set_msg_type(MessageType::MsgReadIndex);
@@ -778,12 +1003,13 @@ mod tests {
             id: Uuid::new_v4(),
             request: Some(request),
             locked: None,
+            read_index_safe_ts: None,
         };
         let mut e = eraftpb::Entry::default();
         e.set_data(rctx.to_bytes().into());
         m.mut_entries().push(e);
 
-        checker.on_step(&mut m, StateRole::Follower);
+        checker.on_step(&mut m, StateRole::Follower, None, None);
         assert_eq!(m.get_entries()[0].get_data(), rctx.to_bytes());
     }
 }

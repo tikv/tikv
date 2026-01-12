@@ -3,8 +3,8 @@
 use std::{
     cmp::Ordering as CmpOrder,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
@@ -14,8 +14,8 @@ use tokio::sync::{Semaphore, SemaphorePermit};
 
 use super::Result;
 
-/// SoftLimit is an simple "worker pool" just for
-/// restricting the number of workers can running concurrently.
+/// SoftLimit is a simple "worker pool" just for
+/// restricting the number of workers can run concurrently.
 /// It is simply a wrapper over [tokio::sync::Semaphore],
 /// with a counter recording the current permits already and would grant.
 struct SoftLimitInner {
@@ -38,7 +38,7 @@ impl SoftLimit {
         Ok(())
     }
 
-    async fn grant_tokens(&self, n: usize) {
+    fn grant_tokens(&self, n: usize) {
         self.0.semaphore.add_permits(n);
     }
 
@@ -53,9 +53,9 @@ impl SoftLimit {
 
     /// Grows the tasks can be executed concurrently by n
     #[cfg(test)]
-    pub async fn grow(&self, n: usize) {
+    pub fn grow(&self, n: usize) {
         self.0.cap.fetch_add(n, Ordering::SeqCst);
-        self.grant_tokens(n).await;
+        self.grant_tokens(n);
     }
 
     /// resize the tasks available concurrently.
@@ -66,7 +66,7 @@ impl SoftLimit {
                 self.take_tokens(current - target).await?;
             }
             CmpOrder::Less => {
-                self.grant_tokens(target - current).await;
+                self.grant_tokens(target - current);
             }
             _ => {}
         }
@@ -181,8 +181,8 @@ impl SoftLimitByCpu<ThreadInfoStatistics> {
 mod softlimit_test {
     use std::{
         sync::{
-            atomic::{AtomicU8, Ordering},
             Arc,
+            atomic::{AtomicU8, Ordering},
         },
         time::Duration,
     };
@@ -304,7 +304,7 @@ mod softlimit_test {
         )
         .await;
 
-        limit_cloned.grow(1).await;
+        limit_cloned.grow(1);
         let working_cloned = working.clone();
         should_satisfy_in(
             Duration::from_secs(10),
@@ -314,7 +314,7 @@ mod softlimit_test {
         .await;
 
         let working_cloned = working.clone();
-        limit_cloned.grow(2).await;
+        limit_cloned.grow(2);
         should_satisfy_in(
             Duration::from_secs(10),
             "waiting for worker grow to 4",

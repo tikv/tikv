@@ -2,7 +2,7 @@
 
 use std::{assert_matches::assert_matches, time::Duration};
 
-use engine_traits::{Peekable, CF_DEFAULT};
+use engine_traits::{CF_DEFAULT, Peekable};
 use futures::executor::block_on;
 use kvproto::{
     metapb,
@@ -10,10 +10,10 @@ use kvproto::{
 };
 use raft::prelude::ConfChangeType;
 use raftstore_v2::{
-    router::{PeerMsg, PeerTick},
     SimpleWriteEncoder,
+    router::{PeerMsg, PeerTick},
 };
-use tikv_util::store::new_peer;
+use tikv_util::{store::new_peer, time::Instant};
 
 use crate::cluster::Cluster;
 
@@ -92,8 +92,27 @@ pub fn must_transfer_leader(
     admin_req.set_transfer_leader(transfer_req);
     let resp = router.admin_command(region_id, req).unwrap();
     assert!(!resp.get_header().has_error(), "{:?}", resp);
-    cluster.dispatch(region_id, vec![]);
 
+    let start = Instant::now();
+    loop {
+        if start.saturating_elapsed() > Duration::from_secs(5) {
+            break;
+        }
+        cluster.dispatch(region_id, vec![]);
+        let meta1 = router
+            .must_query_debug_info(region_id, Duration::from_secs(3))
+            .unwrap();
+        let meta2 = router2
+            .must_query_debug_info(region_id, Duration::from_secs(3))
+            .unwrap();
+        if meta1.raft_status.soft_state.leader_id == to_peer.id
+            && meta2.raft_status.soft_state.leader_id == to_peer.id
+        {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    // Last try.
     let meta = router
         .must_query_debug_info(region_id, Duration::from_secs(3))
         .unwrap();

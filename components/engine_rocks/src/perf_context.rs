@@ -8,7 +8,7 @@ use crate::{engine::RocksEngine, perf_context_impl::PerfContextStatistics};
 impl PerfContextExt for RocksEngine {
     type PerfContext = RocksPerfContext;
 
-    fn get_perf_context(&self, level: PerfLevel, kind: PerfContextKind) -> Self::PerfContext {
+    fn get_perf_context(level: PerfLevel, kind: PerfContextKind) -> Self::PerfContext {
         RocksPerfContext::new(level, kind)
     }
 }

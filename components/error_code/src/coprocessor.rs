@@ -6,6 +6,7 @@ define_error_codes!(
     LOCKED => ("Locked", "", ""),
     DEADLINE_EXCEEDED => ("DeadlineExceeded", "", ""),
     MAX_PENDING_TASKS_EXCEEDED => ("MaxPendingTasksExceeded", "", ""),
+    MEMORY_QUOTA_EXCEEDED => ("MemoryQuotaExceeded", "", ""),
 
     INVALID_DATA_TYPE => ("InvalidDataType", "", ""),
     ENCODING => ("Encoding", "", ""),
@@ -15,5 +16,8 @@ define_error_codes!(
     CORRUPTED_DATA => ("CorruptedData", "", ""),
 
     STORAGE_ERROR => ("StorageError", "", ""),
-    INVALID_CHARACTER_STRING => ("InvalidCharacterString", "", "")
+    INVALID_CHARACTER_STRING => ("InvalidCharacterString", "", ""),
+
+    INVALID_MAX_TS_UPDATE => ("InvalidMaxTsUpdate", "", ""),
+    DEFAULT_NOT_FOUND => ("DefaultNotFound", "", "")
 );

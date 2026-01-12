@@ -4,8 +4,8 @@ use std::{
     future::Future,
     pin::Pin,
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     task::{Context, Poll},
     time::Duration,
@@ -129,6 +129,14 @@ impl<'a> Sample {
     pub fn add_cpu_time(&mut self, time: Duration) {
         self.cpu_time += time;
     }
+
+    pub fn enable_cpu_limit(&mut self) {
+        self.enable_cpu_limit = true;
+    }
+
+    pub fn cpu_time(&self) -> Duration {
+        self.cpu_time
+    }
 }
 
 pub struct CpuObserveGuard<'a> {
@@ -136,7 +144,7 @@ pub struct CpuObserveGuard<'a> {
     sample: &'a mut Sample,
 }
 
-impl<'a> Drop for CpuObserveGuard<'a> {
+impl Drop for CpuObserveGuard<'_> {
     fn drop(&mut self) {
         if let Some(timer) = self.timer {
             self.sample.add_cpu_time(timer.elapsed());

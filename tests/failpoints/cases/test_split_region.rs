@@ -1,9 +1,9 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
-
 use std::{
     sync::{
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
-        mpsc, Arc, Mutex,
+        mpsc::{self, channel},
     },
     thread,
     time::Duration,
@@ -17,22 +17,109 @@ use kvproto::{
         Mutation, Op, PessimisticLockRequest, PrewriteRequest, PrewriteRequestPessimisticAction::*,
     },
     metapb::Region,
-    raft_serverpb::RaftMessage,
+    pdpb::CheckPolicy,
+    raft_serverpb::{PeerState, RaftMessage},
     tikvpb::TikvClient,
 };
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use raftstore::{
-    store::{config::Config as RaftstoreConfig, util::is_vote_msg, Callback, PeerMsg},
     Result,
+    store::{
+        Callback, PeerMsg, WriteResponse,
+        config::Config as RaftstoreConfig,
+        util::{is_initial_msg, is_vote_msg},
+    },
 };
 use test_raftstore::*;
-use tikv::storage::{kv::SnapshotExt, Snapshot};
+use test_raftstore_macro::test_case;
+use tikv::storage::{Snapshot, kv::SnapshotExt};
 use tikv_util::{
-    config::{ReadableDuration, ReadableSize},
     HandyRwLock,
+    config::{ReadableDuration, ReadableSize},
+    mpsc::{Sender, unbounded},
+    time::Instant,
 };
-use txn_types::{Key, PessimisticLock};
+use txn_types::{Key, LastChange, PessimisticLock};
+
+#[test]
+fn test_meta_inconsistency() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.raft_store.store_batch_system.pool_size = 2;
+    cluster.cfg.raft_store.store_batch_system.max_batch_size = Some(1);
+    cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
+    cluster.cfg.raft_store.apply_batch_system.max_batch_size = Some(1);
+    cluster.cfg.raft_store.hibernate_regions = false;
+    cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let region_id = cluster.run_conf_change();
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    cluster.must_transfer_leader(region_id, new_peer(1, 1));
+    cluster.must_put(b"k1", b"v1");
+
+    // Add new peer on node 3, its snapshot apply is paused.
+    fail::cfg("before_set_region_on_peer_3", "pause").unwrap();
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+
+    // Let only heartbeat msg to pass so a replicate peer could be created on node 3
+    // for peer 1003.
+    let region_packet_filter_region_1000_peer_1003 =
+        RegionPacketFilter::new(1000, 3).skip(MessageType::MsgHeartbeat);
+    cluster
+        .sim
+        .wl()
+        .add_recv_filter(3, Box::new(region_packet_filter_region_1000_peer_1003));
+
+    // Trigger a region split to create region 1000 with peer 1001, 1002 and 1003.
+    let region = cluster.get_region(b"");
+    cluster.must_split(&region, b"k5");
+
+    // Scheduler a larger peer id heartbeat msg to trigger peer destroy for peer
+    // 1003, pause it before the meta.lock operation so new region insertions by
+    // region split could go first.
+    // Thus a inconsistency could happen because the destroy is handled
+    // by a uninitialized peer but the new initialized region info is inserted into
+    // the meta by region split.
+    fail::cfg("before_destroy_peer_on_peer_1003", "pause").unwrap();
+    let new_region = cluster.get_region(b"k4");
+    let mut larger_id_msg = Box::<RaftMessage>::default();
+    larger_id_msg.set_region_id(1000);
+    larger_id_msg.set_to_peer(new_peer(3, 1113));
+    larger_id_msg.set_region_epoch(new_region.get_region_epoch().clone());
+    larger_id_msg
+        .mut_region_epoch()
+        .set_conf_ver(new_region.get_region_epoch().get_conf_ver() + 1);
+    larger_id_msg.set_from_peer(new_peer(1, 1001));
+    let raft_message = larger_id_msg.mut_message();
+    raft_message.set_msg_type(MessageType::MsgHeartbeat);
+    raft_message.set_from(1001);
+    raft_message.set_to(1113);
+    raft_message.set_term(6);
+    cluster.sim.wl().send_raft_msg(*larger_id_msg).unwrap();
+    thread::sleep(Duration::from_millis(500));
+
+    // Let snapshot apply continue on peer 3 from region 0, then region split would
+    // be applied too.
+    fail::remove("before_set_region_on_peer_3");
+    thread::sleep(Duration::from_millis(2000));
+
+    // Let self destroy continue after the region split is finished.
+    fail::remove("before_destroy_peer_on_peer_1003");
+    sleep_ms(1000);
+
+    // Clear the network partition nemesis, trigger a new region split, panic would
+    // be encountered The thread 'raftstore-3-1::test_message_order_3' panicked
+    // at 'meta corrupted: no region for 1000 7A6B35 when creating 1004
+    // region_id: 1004 from_peer { id: 1005 store_id: 1 } to_peer { id: 1007
+    // store_id: 3 } message { msg_type: MsgRequestPreVote to: 1007 from: 1005
+    // term: 6 log_term: 5 index: 5 commit: 5 commit_term: 5 } region_epoch {
+    // conf_ver: 3 version: 3 } end_key: 6B32'.
+    cluster.sim.wl().clear_recv_filters(3);
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k2");
+    cluster.must_put(b"k1", b"v1");
+}
 
 #[test]
 fn test_follower_slow_split() {
@@ -175,7 +262,7 @@ fn gen_split_region() -> (Region, Region, Region) {
     let region_split_size = 30000;
     cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.coprocessor.region_max_size = Some(ReadableSize(region_max_size));
-    cluster.cfg.coprocessor.region_split_size = ReadableSize(region_split_size);
+    cluster.cfg.coprocessor.region_split_size = Some(ReadableSize(region_split_size));
 
     let mut range = 1..;
     cluster.run();
@@ -242,7 +329,11 @@ struct PrevoteRangeFilter {
 impl Filter for PrevoteRangeFilter {
     fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
         self.filter.before(msgs)?;
-        if let Some(msg) = msgs.iter().filter(|m| is_vote_msg(m.get_message())).last() {
+        if let Some(msg) = msgs
+            .iter()
+            .filter(|m| is_vote_msg(m.get_message()))
+            .next_back()
+        {
             let start_key = msg.get_start_key().to_owned();
             let end_key = msg.get_end_key().to_owned();
             if let Some(before) = self.before.as_ref() {
@@ -261,6 +352,68 @@ impl Filter for PrevoteRangeFilter {
     }
 }
 
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_region_size_after_split() {
+    let mut cluster = new_cluster(0, 1);
+    cluster.cfg.raft_store.right_derive_when_split = true;
+    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.region_split_check_diff = Some(ReadableSize(10));
+    let region_max_size = 1440;
+    let region_split_size = 960;
+    cluster.cfg.coprocessor.region_max_size = Some(ReadableSize(region_max_size));
+    cluster.cfg.coprocessor.region_split_size = Some(ReadableSize(region_split_size));
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+    let _r = cluster.run_conf_change();
+
+    // insert 20 key value pairs into the cluster.
+    // from 000000001 to 000000020
+    let mut range = 1..;
+    put_till_size(&mut cluster, region_max_size - 100, &mut range);
+    sleep_ms(100);
+    // disable check split.
+    fail::cfg("on_split_region_check_tick", "return").unwrap();
+    let max_key = put_till_size(&mut cluster, region_max_size, &mut range);
+    // split by use key, split region 1 to region 1 and region 2.
+    // region 1: ["000000010",""]
+    // region 2: ["","000000010")
+    let region = pd_client.get_region(&max_key).unwrap();
+    cluster.must_split(&region, b"000000010");
+    let size = cluster
+        .pd_client
+        .get_region_approximate_size(region.get_id())
+        .unwrap_or_default();
+    assert!(size >= region_max_size - 100, "{}", size);
+
+    let region = pd_client.get_region(b"000000009").unwrap();
+    let size1 = cluster
+        .pd_client
+        .get_region_approximate_size(region.get_id())
+        .unwrap_or_default();
+    assert_eq!(0, size1, "{}", size1);
+
+    // split region by size check, the region 1 will be split to region 1 and region
+    // 3. and the region3 will contains one half region size data.
+    let region = pd_client.get_region(&max_key).unwrap();
+    pd_client.split_region(region.clone(), CheckPolicy::Scan, vec![]);
+    sleep_ms(200);
+    let size2 = cluster
+        .pd_client
+        .get_region_approximate_size(region.get_id())
+        .unwrap_or_default();
+    assert!(size > size2, "{}:{}", size, size2);
+    fail::remove("on_split_region_check_tick");
+
+    let region = pd_client.get_region(b"000000010").unwrap();
+    let size3 = cluster
+        .pd_client
+        .get_region_approximate_size(region.get_id())
+        .unwrap_or_default();
+    assert!(size3 > 0, "{}", size3);
+}
+
 // Test if a peer is created from splitting when another initialized peer with
 // the same region id has already existed. In previous implementation, it can be
 // created and panic will happen because there are two initialized peer with the
@@ -268,7 +421,7 @@ impl Filter for PrevoteRangeFilter {
 #[test]
 fn test_split_not_to_split_existing_region() {
     let mut cluster = new_node_cluster(0, 4);
-    configure_for_merge(&mut cluster);
+    configure_for_merge(&mut cluster.cfg);
     cluster.cfg.raft_store.right_derive_when_split = true;
     cluster.cfg.raft_store.apply_batch_system.max_batch_size = Some(1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
@@ -341,7 +494,7 @@ fn test_split_not_to_split_existing_region() {
 #[test]
 fn test_split_not_to_split_existing_tombstone_region() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_merge(&mut cluster);
+    configure_for_merge(&mut cluster.cfg);
     cluster.cfg.raft_store.right_derive_when_split = true;
     cluster.cfg.raft_store.store_batch_system.max_batch_size = Some(1);
     cluster.cfg.raft_store.store_batch_system.pool_size = 2;
@@ -403,13 +556,122 @@ fn test_split_not_to_split_existing_tombstone_region() {
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
 }
 
+#[test]
+fn test_stale_peer_handle_snap() {
+    test_stale_peer_handle_raft_msg("on_snap_msg_1000_2");
+}
+
+#[test]
+fn test_stale_peer_handle_vote() {
+    test_stale_peer_handle_raft_msg("on_vote_msg_1000_2");
+}
+
+#[test]
+fn test_stale_peer_handle_append() {
+    test_stale_peer_handle_raft_msg("on_append_msg_1000_2");
+}
+
+#[test]
+fn test_stale_peer_handle_heartbeat() {
+    test_stale_peer_handle_raft_msg("on_heartbeat_msg_1000_2");
+}
+
+fn test_stale_peer_handle_raft_msg(on_handle_raft_msg_1000_2_fp: &str) {
+    // The following diagram represents the final state of the test:
+    //
+    //                    ┌───────────┐  ┌───────────┐  ┌───────────┐
+    //                    │           │  │           │  │           │
+    //      Region 1      │ Peer 1    │  │ Peer 2    │  │ Peer 3    │
+    //      [k2, +∞)      │           │  │           │  │           │
+    // ───────────────────┼───────────┼──┼───────────┼──┼───────────┼──
+    //                    │           │  │           │  │           │
+    //      Region 1000   │ Peer 1001 │  │ Peer 1003 │  │ Peer 1002 │
+    //      (-∞, k2)      │           │  │           │  │           │
+    //                    └───────────┘  └───────────┘  └───────────┘
+    //                       Store 1        Store 2        Store 3
+    //
+    // In this test, there is a split operation and Peer 1003 will be created
+    // twice (by raft message and by split). The new Peer 1003 will replace the
+    // old Peer 1003 and but it will be immediately removed. This test verifies
+    // that TiKV would not panic if the old Peer 1003 continues to process a
+    // remaining raft message (which may be a snapshot/vote/heartbeat/append
+    // message).
+
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster.cfg);
+    cluster.cfg.raft_store.right_derive_when_split = true;
+    cluster.cfg.raft_store.store_batch_system.max_batch_size = Some(1);
+    cluster.cfg.raft_store.store_batch_system.pool_size = 2;
+    cluster.cfg.raft_store.apply_batch_system.max_batch_size = Some(1);
+    cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    fail::cfg("on_raft_gc_log_tick", "return()").unwrap();
+    let r1 = cluster.run_conf_change();
+    // Add Peer 3
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+    assert_eq!(r1, 1);
+
+    // Pause the snapshot apply of Peer 2.
+    let before_check_snapshot_1_2_fp = "before_check_snapshot_1_2";
+    fail::cfg(before_check_snapshot_1_2_fp, "pause").unwrap();
+
+    // Add Peer 2. The peer will be created but stuck at applying snapshot due
+    // to the failpoint above.
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    cluster.must_put(b"k1", b"v1");
+
+    // Before the split, pause Peer 1003 when processing a certain raft message.
+    // The message type depends on the failpoint name input.
+    fail::cfg(on_handle_raft_msg_1000_2_fp, "pause").unwrap();
+
+    // Split the region into Region 1 and Region 1000. Peer 1003 will be created
+    // for the first time when it receives a raft message from Peer 1001, but it
+    // will remain uninitialized because it's paused due to the failpoint above.
+    let region = pd_client.get_region(b"k1").unwrap();
+
+    cluster.must_split(&region, b"k2");
+    cluster.must_put(b"k22", b"v22");
+
+    // Check that Store 2 doesn't have any data yet.
+    must_get_none(&cluster.get_engine(2), b"k1");
+    must_get_none(&cluster.get_engine(2), b"k22");
+
+    // Unblock Peer 2. It will proceed to apply the split operation, which
+    // creates Peer 1003 for the second time and replaces the old Peer 1003.
+    fail::remove(before_check_snapshot_1_2_fp);
+
+    // Verify that data can be accessed from Peer 2 and the new Peer 1003.
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k22", b"v22");
+
+    // Immediately remove the new Peer 1003. This removes the region metadata.
+    let left = pd_client.get_region(b"k1").unwrap();
+    let left_peer_2 = find_peer(&left, 2).cloned().unwrap();
+    pd_client.must_remove_peer(left.get_id(), left_peer_2);
+    must_get_none(&cluster.get_engine(2), b"k1");
+    must_get_equal(&cluster.get_engine(2), b"k22", b"v22");
+
+    // Unblock the old Peer 1003 so that it can continue to process its raft
+    // message. It would lead to a panic when it processes a snapshot message if
+    // #17469 is not fixed.
+    fail::remove(on_handle_raft_msg_1000_2_fp);
+
+    // Waiting for the stale peer to handle its raft message.
+    sleep_ms(300);
+
+    must_get_none(&cluster.get_engine(2), b"k1");
+    must_get_equal(&cluster.get_engine(2), b"k22", b"v22");
+}
+
 // TiKV uses memory lock to control the order between spliting and creating
 // new peer. This case test if tikv continues split if the peer is destroyed
 // after memory lock check.
 #[test]
 fn test_split_continue_when_destroy_peer_after_mem_check() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_merge(&mut cluster);
+    configure_for_merge(&mut cluster.cfg);
     cluster.cfg.raft_store.right_derive_when_split = true;
     cluster.cfg.raft_store.store_batch_system.max_batch_size = Some(1);
     cluster.cfg.raft_store.store_batch_system.pool_size = 2;
@@ -443,7 +705,7 @@ fn test_split_continue_when_destroy_peer_after_mem_check() {
     let left_peer_2 = find_peer(&left, 2).cloned().unwrap();
     pd_client.must_remove_peer(left.get_id(), left_peer_2);
 
-    // Make sure it finish mem check before destorying.
+    // Make sure it finish mem check before destroying.
     let (mem_check_tx, mem_check_rx) = crossbeam::channel::bounded(0);
     let on_handle_apply_split_2_fp = "on_handle_apply_split_2_after_mem_check";
     fail::cfg_callback(on_handle_apply_split_2_fp, move || {
@@ -464,7 +726,7 @@ fn test_split_continue_when_destroy_peer_after_mem_check() {
     })
     .unwrap();
 
-    // Resum region 1000 processing and wait till it's destroyed.
+    // Resume region 1000 processing and wait till it's destroyed.
     fail::remove(before_check_snapshot_1000_2_fp);
     destroy_rx.recv_timeout(Duration::from_secs(3)).unwrap();
 
@@ -496,7 +758,7 @@ fn test_split_continue_when_destroy_peer_after_mem_check() {
 #[test]
 fn test_split_should_split_existing_same_uninitialied_peer() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_merge(&mut cluster);
+    configure_for_merge(&mut cluster.cfg);
     cluster.cfg.raft_store.right_derive_when_split = true;
     cluster.cfg.raft_store.store_batch_system.max_batch_size = Some(1);
     cluster.cfg.raft_store.store_batch_system.pool_size = 2;
@@ -549,7 +811,7 @@ fn test_split_should_split_existing_same_uninitialied_peer() {
 #[test]
 fn test_split_not_to_split_existing_different_uninitialied_peer() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_merge(&mut cluster);
+    configure_for_merge(&mut cluster.cfg);
     cluster.cfg.raft_store.right_derive_when_split = true;
     cluster.cfg.raft_store.store_batch_system.max_batch_size = Some(1);
     cluster.cfg.raft_store.store_batch_system.pool_size = 2;
@@ -667,7 +929,7 @@ impl Filter for CollectSnapshotFilter {
 #[test]
 fn test_split_duplicated_batch() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_request_snapshot(&mut cluster);
+    configure_for_request_snapshot(&mut cluster.cfg);
     // Disable raft log gc in this test case.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
     // Use one thread to make it more possible to be fetched into one batch.
@@ -903,6 +1165,8 @@ fn test_split_with_concurrent_pessimistic_locking() {
 
 #[test]
 fn test_split_pessimistic_locks_with_concurrent_prewrite() {
+    let peer_size_limit = 512 << 10;
+    let instance_size_limit = 100 << 20;
     let mut cluster = new_server_cluster(0, 2);
     cluster.cfg.pessimistic_txn.pipelined = true;
     cluster.cfg.pessimistic_txn.in_memory = true;
@@ -943,8 +1207,8 @@ fn test_split_pessimistic_locks_with_concurrent_prewrite() {
         ttl: 3000,
         for_update_ts: (commit_ts + 10).into(),
         min_commit_ts: (commit_ts + 10).into(),
-        last_change_ts: 5.into(),
-        versions_to_last_change: 3,
+        last_change: LastChange::make_exist(5.into(), 3),
+        is_locked_with_conflict: false,
     };
     let lock_c = PessimisticLock {
         primary: b"c".to_vec().into_boxed_slice(),
@@ -952,16 +1216,17 @@ fn test_split_pessimistic_locks_with_concurrent_prewrite() {
         ttl: 3000,
         for_update_ts: (commit_ts + 10).into(),
         min_commit_ts: (commit_ts + 10).into(),
-        last_change_ts: 5.into(),
-        versions_to_last_change: 3,
+        last_change: LastChange::make_exist(5.into(), 3),
+        is_locked_with_conflict: false,
     };
     {
         let mut locks = txn_ext.pessimistic_locks.write();
         locks
-            .insert(vec![
-                (Key::from_raw(b"a"), lock_a),
-                (Key::from_raw(b"c"), lock_c),
-            ])
+            .insert(
+                vec![(Key::from_raw(b"a"), lock_a), (Key::from_raw(b"c"), lock_c)],
+                peer_size_limit,
+                instance_size_limit,
+            )
             .unwrap();
     }
 
@@ -1103,4 +1368,500 @@ fn test_split_store_channel_full() {
     let region = pd_client.get_region(b"k1").unwrap();
     assert_ne!(region.id, 1);
     fail::remove(sender_fp);
+}
+
+#[test]
+fn test_split_during_cluster_shutdown() {
+    // test case for raftstore-v2
+    use test_raftstore_v2::*;
+
+    let test_split = |split_fp| {
+        let count = 1;
+        let mut cluster = new_server_cluster(0, count);
+        cluster.run();
+        cluster.must_put(b"k1", b"v1");
+        cluster.must_put(b"k2", b"v2");
+        cluster.must_put(b"k3", b"v3");
+        fail::cfg_callback(split_fp, move || {
+            // After one second, mailboxes will be cleared in shutdown
+            thread::sleep(Duration::from_secs(1));
+        })
+        .unwrap();
+
+        let pd_client = cluster.pd_client.clone();
+        let region = pd_client.get_region(b"k2").unwrap();
+        let c = Box::new(move |_write_resp: WriteResponse| {});
+        cluster.split_region(&region, b"k2", Callback::write(c));
+
+        cluster.shutdown();
+    };
+
+    test_split("before_cluster_shutdown1");
+    test_split("before_cluster_shutdown2");
+}
+
+// Test that split is handled pretty slow in one node, say node 2. Before node 2
+// handles the split, the peer of the new split region on node 2 has been
+// removed and added back sooner. So, when the new split region on node 2
+// receives a heartbeat from it's leader, it creates a peer with higher peer id
+// than the peer created due to the split on this node.
+#[test]
+fn test_split_race_with_conf_change() {
+    // test case for raftstore-v2
+    use test_raftstore_v2::*;
+
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_snapshot(&mut cluster.cfg);
+    cluster.cfg.raft_store.right_derive_when_split = false;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    cluster.run();
+
+    let split_key1 = b"k05";
+    let region = cluster.get_region(split_key1);
+    cluster.must_transfer_leader(region.get_id(), new_peer(1, 1));
+
+    fail::cfg("on_apply_batch_split", "pause").unwrap();
+    cluster.must_split(&region, split_key1);
+
+    let region = pd_client.get_region(b"k10").unwrap();
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(region.get_id(), 3)
+            .msg_type(MessageType::MsgSnapshot)
+            .msg_type(MessageType::MsgAppend)
+            .direction(Direction::Recv),
+    ));
+
+    let mut peer3 = region
+        .get_peers()
+        .iter()
+        .find(|p| p.get_store_id() == 3)
+        .unwrap()
+        .clone();
+    pd_client.must_remove_peer(region.get_id(), peer3.clone());
+    peer3.set_id(2000);
+    pd_client.must_add_peer(region.get_id(), peer3.clone());
+
+    fail::remove("on_apply_batch_split");
+    std::thread::sleep(Duration::from_millis(200));
+    cluster.clear_send_filters();
+
+    cluster.stop_node(2);
+    cluster.must_put(b"k06", b"val");
+    assert_eq!(cluster.must_get(b"k06").unwrap(), b"val".to_vec());
+}
+
+// split init races with request prevote should not send messages to store 0.
+//
+// 1. split region.
+// 2. send split init to store because peer is no exist.
+// 3. store receives request prevote from normal peer.
+// 4. store receives split init.
+// 5. store creates peer via request prevote.
+// 6. store sends empty raft message to peer.
+// 7. store sends split init to peer.
+// 7. peer inserts peer(0,0) to cache and step the empty meassge.
+// 8. peer handles split snapshot from split init and response to peer(0,0).
+// 9. transport tries to resolve store 0.
+//
+// We must prevent peer incorrectly inserting peer(0,0) to cache and send
+// messages to store 0.
+#[test]
+fn test_split_init_race_with_initial_msg_v2() {
+    // test case for raftstore-v2
+    use test_raftstore_v2::*;
+
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.run();
+
+    let split_key1 = b"k01";
+    let region = cluster.get_region(split_key1);
+    cluster.must_transfer_leader(
+        region.get_id(),
+        region
+            .get_peers()
+            .iter()
+            .find(|p| p.get_store_id() == 1)
+            .unwrap()
+            .to_owned(),
+    );
+
+    // Drop initial messages to store 2.
+    cluster.add_recv_filter_on_node(
+        2,
+        Box::new(DropMessageFilter::new(Arc::new(|m| {
+            !is_initial_msg(m.get_message())
+        }))),
+    );
+    let (tx, rx) = unbounded();
+    cluster.add_send_filter_on_node(2, Box::new(TeeFilter { pipe: tx }));
+
+    fail::cfg("on_store_2_split_init_race_with_initial_message", "return").unwrap();
+    cluster.must_split(&region, split_key1);
+
+    // Wait for store 2 split.
+    let new_region = cluster.get_region(b"k00");
+    let start = Instant::now();
+    loop {
+        sleep_ms(500);
+        let region_state = cluster.region_local_state(new_region.get_id(), 2);
+        if region_state.get_state() == PeerState::Normal {
+            break;
+        }
+        if start.saturating_elapsed() > Duration::from_secs(5) {
+            panic!("timeout");
+        }
+    }
+    cluster.clear_send_filter_on_node(2);
+    while let Ok(msg) = rx.recv_timeout(Duration::from_millis(500)) {
+        if msg.get_to_peer().get_store_id() == 0 {
+            panic!("must not send messages to store 0");
+        }
+    }
+}
+
+struct TeeFilter {
+    pipe: Sender<RaftMessage>,
+}
+
+impl Filter for TeeFilter {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
+        for msg in msgs {
+            let _ = self.pipe.send(msg.clone());
+        }
+        Ok(())
+    }
+}
+
+// Split regions as well as parent will set has_dirty_data be true after
+// applying batch split. And after completing tablet trim, has_dirty_data will
+// be reset to be false. We encounterred a case where has_dirty_data may be true
+// forever which leads to it unable to send snapshot after it becomes leader:
+//
+// 1. split region
+// 2. the splitted region set has_dirty_data be true in `apply_snapshot`
+// 3. the splitted region schedule tablet trim task in `on_applied_snapshot`
+//    with tablet index 5
+// 4. the splitted region received a snapshot sent from its leader
+// 5. after finishing applying this snapshot, the tablet index in storage
+//    changed to 6
+// 6. tablet trim complete and callbacked to raftstore
+// 7. tablet index cannot be matched, so fail to reset has_dirty_data
+#[test]
+fn test_not_reset_has_dirty_data_due_to_slow_split() {
+    let mut cluster = test_raftstore_v2::new_server_cluster(0, 3);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(15);
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
+    cluster.run();
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    // split will be blocked for store 3
+    fail::cfg("apply_before_split_1_3", "pause").unwrap();
+    fail::cfg("finish_receiving_snapshot", "pause").unwrap();
+
+    let region = cluster.get_region(b"");
+    cluster.must_split(&region, b"k0080");
+
+    cluster.add_recv_filter_on_node(3, Box::new(DropMessageFilter::new(Arc::new(|_| false))));
+
+    // prepare some data and split
+    for i in 0..40 {
+        let k = format!("k{:04}", i);
+        cluster.must_put(k.as_bytes(), b"val");
+    }
+
+    fail::cfg("tablet_trimmed_finished", "pause").unwrap();
+    cluster.clear_recv_filter_on_node(3);
+
+    fail::remove("apply_before_split_1_3");
+    let (tx, rx) = channel::<()>();
+    let tx = Arc::new(Mutex::new(tx));
+    fail::cfg_callback("post_split_init_complete", move || {
+        tx.lock().unwrap().send(()).unwrap();
+    })
+    .unwrap();
+    rx.recv_timeout(std::time::Duration::from_secs(50)).unwrap();
+    fail::remove("finish_receiving_snapshot");
+
+    let (tx, rx) = channel::<()>();
+    let tx = Arc::new(Mutex::new(tx));
+    fail::cfg_callback("apply_snapshot_complete", move || {
+        tx.lock().unwrap().send(()).unwrap();
+    })
+    .unwrap();
+    rx.recv_timeout(std::time::Duration::from_secs(50)).unwrap();
+
+    let split_region = cluster.get_region(b"k0010");
+    cluster.must_transfer_leader(
+        split_region.get_id(),
+        split_region
+            .get_peers()
+            .iter()
+            .find(|p| p.get_store_id() == 3)
+            .unwrap()
+            .clone(),
+    );
+
+    // ensure node 3 can send snapshot to node 1
+    cluster.stop_node(1);
+    for i in 40..80 {
+        let k = format!("k{:04}", i);
+        cluster.must_put(k.as_bytes(), b"val");
+    }
+    cluster.stop_node(2);
+    cluster.run_node(1).unwrap();
+
+    cluster.must_put(b"k00001", b"val");
+}
+
+/// This test case test if a split failed for some reason,
+/// it can continue run split check and eventually the split will finish
+#[test_case(test_raftstore::new_node_cluster)]
+fn test_split_by_split_check_on_size() {
+    let mut cluster = new_cluster(0, 1);
+    cluster.cfg.raft_store.right_derive_when_split = true;
+    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(50);
+    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.region_split_check_diff = Some(ReadableSize(10));
+    let region_max_size = 1440;
+    let region_split_size = 960;
+    cluster.cfg.coprocessor.region_max_size = Some(ReadableSize(region_max_size));
+    cluster.cfg.coprocessor.region_split_size = Some(ReadableSize(region_split_size));
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+    let _r = cluster.run_conf_change();
+
+    // make first split fail
+    // 1*return means it would run "return" action once
+    fail::cfg("fail_pre_propose_split", "1*return").unwrap();
+
+    // Insert region_max_size into the cluster.
+    // It should trigger the split
+    let mut range = 1..;
+    let key = put_till_size(&mut cluster, region_max_size / 2, &mut range);
+    let region = pd_client.get_region(&key).unwrap();
+    put_till_size(&mut cluster, region_max_size / 2 + 100, &mut range);
+    // waiting the split,
+    cluster.wait_region_split(&region);
+}
+
+/// This test case test if a split failed for some reason,
+/// it can continue run split check and eventually the split will finish
+#[test_case(test_raftstore::new_node_cluster)]
+fn test_split_by_split_check_on_keys() {
+    let mut cluster = new_cluster(0, 1);
+    cluster.cfg.raft_store.right_derive_when_split = true;
+    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(50);
+    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.region_split_check_diff = Some(ReadableSize(10));
+    let region_max_keys = 15;
+    let region_split_keys = 10;
+    cluster.cfg.coprocessor.region_max_keys = Some(region_max_keys);
+    cluster.cfg.coprocessor.region_split_keys = Some(region_split_keys);
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+    let _r = cluster.run_conf_change();
+
+    // make first split fail
+    // 1*return means it would run "return" action once
+    fail::cfg("fail_pre_propose_split", "1*return").unwrap();
+
+    // Insert region_max_size into the cluster.
+    // It should trigger the split
+    let mut range = 1..;
+    let key = put_till_count(&mut cluster, region_max_keys / 2, &mut range);
+    let region = pd_client.get_region(&key).unwrap();
+    put_till_count(&mut cluster, region_max_keys / 2 + 3, &mut range);
+    // waiting the split,
+    cluster.wait_region_split(&region);
+}
+
+/// Test that if the original leader of the parent region is tranfered to
+/// another peer, the new leader of the parent region will notify the new split
+/// region to campaign.
+#[test_case(test_raftstore::new_node_cluster)]
+fn test_region_split_after_parent_leader_transfer() {
+    let mut cluster = new_cluster(0, 3);
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(50);
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 10;
+
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+
+    cluster.run();
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k2", b"v2");
+    cluster.must_put(b"k3", b"v3");
+    // Transfer leader to peer 3.
+    let region = pd_client.get_region(b"k2").unwrap();
+    cluster.must_transfer_leader(region.get_id(), new_peer(3, 3));
+
+    // Setting: only peers on store 2 can become leader.
+    for id in 1..=3 {
+        if id == 2 {
+            continue;
+        }
+        cluster.add_send_filter(CloneFilterFactory(
+            RegionPacketFilter::new(region.get_id(), id)
+                .msg_type(MessageType::MsgRequestPreVote)
+                .direction(Direction::Send),
+        ));
+        cluster.add_send_filter(CloneFilterFactory(
+            RegionPacketFilter::new(1000, id)
+                .msg_type(MessageType::MsgRequestPreVote)
+                .direction(Direction::Send),
+        ));
+    }
+
+    // Split region to peer 1 & 2, not allow peer 3 (leader) to split.
+    let no_split_on_store_3 = "on_split";
+    fail::cfg(no_split_on_store_3, "pause").unwrap();
+    cluster.split_region(
+        &region,
+        b"k2",
+        Callback::write(Box::new(move |_write_resp: WriteResponse| {})),
+    );
+    // Wait the old lease of the leader timeout and peer 2 gets votes
+    // to become the new leader.
+    thread::sleep(
+        cluster.cfg.raft_store.raft_base_tick_interval.0
+            * cluster.cfg.raft_store.raft_election_timeout_ticks as u32
+            * 2,
+    );
+    // As the split is paused, the leader of the parent region should
+    // be peer 2, not peer 3. And peer 2 will notify the new split region
+    //  `campaign` to become leader.
+    cluster.reset_leader_of_region(region.get_id());
+    assert_eq!(
+        cluster.leader_of_region(region.get_id()).unwrap(),
+        new_peer(2, 2)
+    );
+    // The leader of the new split region should be peer 1002.
+    let new_region = pd_client.get_region(b"k1").unwrap();
+    assert_eq!(
+        cluster.leader_of_region(new_region.get_id()).unwrap(),
+        new_peer(2, 1002)
+    );
+    fail::remove(no_split_on_store_3);
+}
+
+/// Test that the leader of the new split region will not be changed after
+/// the leader of the parent region is transferred.
+#[test_case(test_raftstore::new_node_cluster)]
+fn test_region_split_after_new_leader_elected() {
+    let mut cluster = new_cluster(0, 3);
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(50);
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 10;
+
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+
+    cluster.run();
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k2", b"v2");
+    cluster.must_put(b"k3", b"v3");
+    // Transfer leader to peer 3.
+    let region = pd_client.get_region(b"k2").unwrap();
+    cluster.must_transfer_leader(region.get_id(), new_peer(3, 3));
+
+    // Setting: only peers on store 2 can become leader.
+    for id in 1..=3 {
+        if id == 2 {
+            continue;
+        }
+        cluster.add_send_filter(CloneFilterFactory(
+            RegionPacketFilter::new(region.get_id(), id)
+                .msg_type(MessageType::MsgRequestPreVote)
+                .direction(Direction::Send),
+        ));
+    }
+
+    // Split region to peer 1 & 2, not allow peer 3 (leader) to split.
+    let skip_clear_uncampaign = "on_skip_check_uncampaigned_regions";
+    fail::cfg(skip_clear_uncampaign, "return").unwrap();
+    let no_split_on_store_3 = "on_split";
+    fail::cfg(no_split_on_store_3, "pause").unwrap();
+    cluster.split_region(
+        &region,
+        b"k2",
+        Callback::write(Box::new(move |_write_resp: WriteResponse| {})),
+    );
+    // Wait the leader of the new split region has been elected.
+    thread::sleep(
+        cluster.cfg.raft_store.raft_base_tick_interval.0
+            * cluster.cfg.raft_store.raft_election_timeout_ticks as u32
+            * 2,
+    );
+    cluster.reset_leader_of_region(region.get_id());
+    assert_eq!(
+        cluster.leader_of_region(region.get_id()).unwrap(),
+        new_peer(2, 2)
+    );
+    // The leader of the new split region should be elected.
+    let new_region = pd_client.get_region(b"k1").unwrap();
+    let new_region_leader = cluster.leader_of_region(new_region.get_id()).unwrap();
+    // The new leader will notify the new split region  `campaign` to become
+    // leader, but the leader of the new split region is already elected.
+    fail::remove(no_split_on_store_3);
+    // The leader of the new split region should not changed.
+    cluster.reset_leader_of_region(new_region.get_id());
+    assert_eq!(
+        cluster.leader_of_region(new_region.get_id()).unwrap(),
+        new_region_leader
+    );
+    fail::remove(skip_clear_uncampaign);
+}
+
+// Test that during a split, if a new peer hasn't been created it should always
+// be marked as a pending peer in the region heartbeat.
+#[test]
+fn test_pending_peer_in_heartbeat_during_split() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster.cfg);
+    cluster.cfg.raft_store.store_batch_system.max_batch_size = Some(1);
+    cluster.cfg.raft_store.store_batch_system.pool_size = 1;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+
+    let pd_client_clone: Arc<test_pd_client::TestPdClient> = pd_client.clone();
+    // Pause at the following failpoint so that peer 3 won't be able to split
+    // and thus the new peer 1003 won't be created. Peer 1003 should always be
+    // pending in the region heartbeat uploaded to PD.
+    let apply_before_split_1_3_fp = "apply_before_split_1_3";
+    fail::cfg(apply_before_split_1_3_fp, "pause").unwrap();
+    let finish_hb_fp = "test_pd_client::finish_region_heartbeat";
+    fail::cfg_callback(finish_hb_fp, move || {
+        let region_id = 1000;
+        // Check the heartbeat of new region to see if it has been created.
+        if pd_client_clone
+            .get_region_last_report_ts(region_id)
+            .is_some()
+        {
+            let region = pd_client_clone.get_region(b"k1").unwrap();
+            assert!(region.id == region_id);
+            let new_peer_on_store_3 = find_peer(&region, 3).unwrap();
+
+            let pending_peers = pd_client_clone.get_pending_peers();
+            if !pending_peers.contains_key(&new_peer_on_store_3.id) {
+                panic!("peer {} should still be pending", new_peer_on_store_3.id);
+            }
+        }
+    })
+    .unwrap();
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    let peer_1 = find_peer(&region, 1).unwrap().to_owned();
+    // region 1, leader is peer 1.
+    cluster.must_transfer_leader(region.get_id(), peer_1);
+
+    cluster.must_split(&region, b"k2");
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    fail::remove(finish_hb_fp);
+    fail::remove(apply_before_split_1_3_fp);
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k3", b"v3");
 }

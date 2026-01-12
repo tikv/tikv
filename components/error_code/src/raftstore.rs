@@ -32,6 +32,8 @@ define_error_codes!(
     RECOVERY_IN_PROGRESS => ("RecoveryInProgress", "", ""),
     FLASHBACK_IN_PROGRESS => ("FlashbackInProgress", "", ""),
     FLASHBACK_NOT_PREPARED => ("FlashbackNotPrepared", "", ""),
+    IS_WITNESS => ("IsWitness", "", ""),
+    MISMATCH_PEER_ID => ("MismatchPeerId", "", ""),
 
     SNAP_ABORT => ("SnapAbort", "", ""),
     SNAP_TOO_MANY => ("SnapTooMany", "", ""),
@@ -70,6 +72,8 @@ impl ErrorCodeExt for errorpb::Error {
             FLASHBACK_IN_PROGRESS
         } else if self.has_flashback_not_prepared() {
             FLASHBACK_NOT_PREPARED
+        } else if self.has_is_witness() {
+            IS_WITNESS
         } else {
             UNKNOWN
         }

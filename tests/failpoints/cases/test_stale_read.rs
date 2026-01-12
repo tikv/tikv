@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{atomic::*, mpsc, Arc, Mutex},
+    sync::{Arc, Mutex, atomic::*, mpsc},
     thread,
     time::Duration,
 };
@@ -11,13 +11,13 @@ use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use raftstore::store::Callback;
 use test_raftstore::*;
-use tikv_util::{config::*, HandyRwLock};
+use tikv_util::{HandyRwLock, config::*};
 
 fn stale_read_during_splitting(right_derive: bool) {
     let count = 3;
     let mut cluster = new_node_cluster(0, count);
     cluster.cfg.raft_store.right_derive_when_split = right_derive;
-    let election_timeout = configure_for_lease_read(&mut cluster, None, None);
+    let election_timeout = configure_for_lease_read(&mut cluster.cfg, None, None);
     cluster.run();
 
     // Write the initial values.
@@ -215,8 +215,8 @@ fn test_node_stale_read_during_splitting_right_derive() {
 fn test_stale_read_during_merging() {
     let count = 3;
     let mut cluster = new_node_cluster(0, count);
-    configure_for_merge(&mut cluster);
-    let election_timeout = configure_for_lease_read(&mut cluster, None, None);
+    configure_for_merge(&mut cluster.cfg);
+    let election_timeout = configure_for_lease_read(&mut cluster.cfg, None, None);
     cluster.cfg.raft_store.right_derive_when_split = false;
     cluster.cfg.raft_store.pd_heartbeat_tick_interval =
         cluster.cfg.raft_store.raft_base_tick_interval;
@@ -285,7 +285,7 @@ fn test_stale_read_during_merging() {
     // Note: L: leader, F: follower, X: peer is not exist.
     // TODO: what if cluster runs slow and lease is expired.
     // Epoch changed by prepare merge.
-    // We can not use `get_region_with` to get the latest info of reigon 1000,
+    // We can not use `get_region_with` to get the latest info of region 1000,
     // because leader1 is not paused, it executes commit merge very fast
     // and reports pd, its range covers region1000.
     //
@@ -323,9 +323,9 @@ fn test_read_index_when_transfer_leader_2() {
     let mut cluster = new_node_cluster(0, 3);
 
     // Increase the election tick to make this test case running reliably.
-    configure_for_lease_read(&mut cluster, Some(50), Some(10_000));
+    configure_for_lease_read(&mut cluster.cfg, Some(50), Some(10_000));
     // Stop log compaction to transfer leader with filter easier.
-    configure_for_request_snapshot(&mut cluster);
+    configure_for_request_snapshot(&mut cluster.cfg);
     let max_lease = Duration::from_secs(2);
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(max_lease);
 
@@ -455,7 +455,7 @@ fn test_read_after_peer_destroyed() {
         false,
     );
     request.mut_header().set_peer(new_peer(1, 1));
-    let (cb, rx) = make_cb(&request);
+    let (cb, mut rx) = make_cb_rocks(&request);
     cluster
         .sim
         .rl()
@@ -464,6 +464,19 @@ fn test_read_after_peer_destroyed() {
     // Wait for raftstore receives the read request.
     sleep_ms(200);
     fail::remove(destroy_peer_fp);
+
+    // Validate the async destroy progress.
+    let check_state_on_raft_gc_log_tick = "check_state_on_raft_gc_log_tick";
+    let (gc_tx, gc_rx) = mpsc::sync_channel(1);
+    fail::cfg_callback(check_state_on_raft_gc_log_tick, move || {
+        gc_tx.send(check_state_on_raft_gc_log_tick).unwrap();
+    })
+    .unwrap();
+    assert_eq!(
+        gc_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+        check_state_on_raft_gc_log_tick
+    );
+    fail::remove(check_state_on_raft_gc_log_tick);
 
     let resp = rx.recv_timeout(Duration::from_millis(200)).unwrap();
     assert!(
@@ -482,8 +495,8 @@ fn test_stale_read_during_merging_2() {
     let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
-    configure_for_merge(&mut cluster);
-    configure_for_lease_read(&mut cluster, Some(50), Some(20));
+    configure_for_merge(&mut cluster.cfg);
+    configure_for_lease_read(&mut cluster.cfg, Some(50), Some(20));
 
     cluster.run();
 

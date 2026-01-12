@@ -1,16 +1,17 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    path::Path,
-    sync::{Arc, Mutex, RwLock},
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, RwLock, atomic::AtomicU64},
 };
 
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::{RocksEngine, RocksSnapshot, util};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{Engines, MiscExt, Peekable};
+use health_controller::HealthController;
 use kvproto::{
     kvrpcpb::ApiVersion,
     metapb,
@@ -18,28 +19,32 @@ use kvproto::{
     raft_serverpb::{self, RaftMessage},
 };
 use protobuf::Message;
-use raft::{eraftpb::MessageType, SnapshotStatus};
+use raft::{SnapshotStatus, eraftpb::MessageType};
 use raftstore::{
-    coprocessor::{config::SplitCheckConfigManager, CoprocessorHost},
-    errors::Error as RaftError,
-    router::{LocalReadRouter, RaftStoreRouter, ServerRaftStoreRouter},
-    store::{
-        config::RaftstoreConfigManager,
-        fsm::{store::StoreMeta, RaftBatchSystem, RaftRouter},
-        SnapManagerBuilder, *,
-    },
     Result,
+    coprocessor::{CoprocessorHost, config::SplitCheckConfigManager},
+    errors::Error as RaftError,
+    router::{LocalReadRouter, RaftStoreRouter, ReadContext, ServerRaftStoreRouter},
+    store::{
+        SnapManagerBuilder,
+        config::RaftstoreConfigManager,
+        fsm::{ApplyRouter, RaftBatchSystem, RaftRouter, store::StoreMeta},
+        *,
+    },
 };
+use resource_control::ResourceGroupManager;
 use resource_metering::CollectorRegHandle;
+use service::service_manager::GrpcServiceManager;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use tikv::{
     config::{ConfigController, Module},
     import::SstImporter,
-    server::{raftkv::ReplicaReadLockChecker, Node, Result as ServerResult},
+    server::{MultiRaftServer, Result as ServerResult, raftkv::ReplicaReadLockChecker},
 };
 use tikv_util::{
     config::VersionTrack,
+    sys::disk,
     time::ThreadReadId,
     worker::{Builder as WorkerBuilder, LazyWorker},
 };
@@ -152,11 +157,12 @@ type SimulateChannelTransport = SimulateTransport<ChannelTransport>;
 pub struct NodeCluster {
     trans: ChannelTransport,
     pd_client: Arc<TestPdClient>,
-    nodes: HashMap<u64, Node<TestPdClient, RocksEngine, RaftTestEngine>>,
+    nodes: HashMap<u64, MultiRaftServer<TestPdClient, RocksEngine, RaftTestEngine>>,
     snap_mgrs: HashMap<u64, SnapManager>,
-    cfg_controller: Option<ConfigController>,
+    cfg_controller: HashMap<u64, ConfigController>,
     simulate_trans: HashMap<u64, SimulateChannelTransport>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
+    importers: HashMap<u64, Arc<SstImporter<RocksEngine>>>,
     #[allow(clippy::type_complexity)]
     post_create_coprocessor_host: Option<Box<dyn Fn(u64, &mut CoprocessorHost<RocksEngine>)>>,
 }
@@ -168,9 +174,10 @@ impl NodeCluster {
             pd_client,
             nodes: HashMap::default(),
             snap_mgrs: HashMap::default(),
-            cfg_controller: None,
+            cfg_controller: HashMap::default(),
             simulate_trans: HashMap::default(),
             concurrency_managers: HashMap::default(),
+            importers: HashMap::default(),
             post_create_coprocessor_host: None,
         }
     }
@@ -206,7 +213,7 @@ impl NodeCluster {
     pub fn get_node(
         &mut self,
         node_id: u64,
-    ) -> Option<&mut Node<TestPdClient, RocksEngine, RaftTestEngine>> {
+    ) -> Option<&mut MultiRaftServer<TestPdClient, RocksEngine, RaftTestEngine>> {
         self.nodes.get_mut(&node_id)
     }
 
@@ -214,8 +221,12 @@ impl NodeCluster {
         self.concurrency_managers.get(&node_id).unwrap().clone()
     }
 
-    pub fn get_cfg_controller(&self) -> Option<&ConfigController> {
-        self.cfg_controller.as_ref()
+    pub fn get_cfg_controller(&self, node_id: u64) -> Option<&ConfigController> {
+        self.cfg_controller.get(&node_id)
+    }
+
+    pub fn get_importer(&self, node_id: u64) -> Option<Arc<SstImporter<RocksEngine>>> {
+        self.importers.get(&node_id).cloned()
     }
 }
 
@@ -229,29 +240,34 @@ impl Simulator for NodeCluster {
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RaftTestEngine>,
         system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
+        _resource_manager: &Option<Arc<ResourceGroupManager>>,
+        _force_partition_mgr: &ForcePartitionRangeManager,
     ) -> ServerResult<u64> {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
         let pd_worker = LazyWorker::new("test-pd-worker");
 
         let simulate_trans = SimulateTransport::new(self.trans.clone());
         let mut raft_store = cfg.raft_store.clone();
+        raft_store.optimize_for(false);
         raft_store
             .validate(
-                cfg.coprocessor.region_split_size,
-                cfg.coprocessor.enable_region_bucket,
+                cfg.coprocessor.region_split_size(),
+                cfg.coprocessor.enable_region_bucket(),
                 cfg.coprocessor.region_bucket_size,
+                false,
             )
             .unwrap();
         let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
-        let mut node = Node::new(
+        let store_config = Arc::new(VersionTrack::new(raft_store));
+        let mut node = MultiRaftServer::new(
             system,
             &cfg.server,
-            Arc::new(VersionTrack::new(raft_store)),
+            store_config.clone(),
             cfg.storage.api_version(),
             Arc::clone(&self.pd_client),
             Arc::default(),
             bg_worker.clone(),
-            None,
+            HealthController::new(),
             None,
         );
 
@@ -266,51 +282,103 @@ impl Simulator for NodeCluster {
         {
             let tmp = test_util::temp_dir("test_cluster", cfg.prefer_mem);
             let snap_mgr = SnapManagerBuilder::default()
-                .max_write_bytes_per_sec(cfg.server.snap_max_write_bytes_per_sec.0 as i64)
+                .max_write_bytes_per_sec(cfg.server.snap_io_max_bytes_per_sec.0 as i64)
                 .max_total_size(cfg.server.snap_max_total_size.0)
+                .concurrent_recv_snap_limit(cfg.server.concurrent_recv_snap_limit)
                 .encryption_key_manager(key_manager)
                 .max_per_file_size(cfg.raft_store.max_snapshot_file_raw_size.0)
                 .enable_multi_snapshot_files(true)
+                .enable_receive_tablet_snapshot(cfg.raft_store.enable_v2_compatible_learner)
+                .min_ingest_snapshot_limit(cfg.server.snap_min_ingest_size)
                 .build(tmp.path().to_str().unwrap());
             (snap_mgr, Some(tmp))
         } else {
             let trans = self.trans.core.lock().unwrap();
-            let &(ref snap_mgr, _) = &trans.snap_paths[&node_id];
+            let (snap_mgr, _) = &trans.snap_paths[&node_id];
             (snap_mgr.clone(), None)
         };
 
         self.snap_mgrs.insert(node_id, snap_mgr.clone());
 
         // Create coprocessor.
+        let enable_region_stats_mgr_cb: Arc<dyn Fn() -> bool + Send + Sync> =
+            if cfg.in_memory_engine.enable {
+                Arc::new(|| true)
+            } else {
+                Arc::new(|| false)
+            };
         let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
+
+        // In-memory engine
+        let mut in_memory_engine_config = cfg.in_memory_engine.clone();
+        in_memory_engine_config.expected_region_size = cfg.coprocessor.region_split_size();
+        let in_memory_engine_config = Arc::new(VersionTrack::new(in_memory_engine_config));
+        let in_memory_engine_config_clone = in_memory_engine_config.clone();
+
+        let region_info_accessor = raftstore::RegionInfoAccessor::new(
+            &mut coprocessor_host,
+            enable_region_stats_mgr_cb,
+            Box::new(move || {
+                in_memory_engine_config_clone
+                    .value()
+                    .mvcc_amplification_threshold
+            }),
+        );
 
         if let Some(f) = self.post_create_coprocessor_host.as_ref() {
             f(node_id, &mut coprocessor_host);
         }
 
-        let cm = ConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new_for_test(1.into());
         self.concurrency_managers.insert(node_id, cm.clone());
         ReplicaReadLockChecker::new(cm.clone()).register(&mut coprocessor_host);
 
         let importer = {
             let dir = Path::new(engines.kv.path()).join("import-sst");
-            Arc::new(SstImporter::new(&cfg.import, dir, None, cfg.storage.api_version()).unwrap())
+            Arc::new(
+                SstImporter::new(&cfg.import, dir, None, cfg.storage.api_version(), false).unwrap(),
+            )
         };
+        self.importers.insert(node_id, importer.clone());
 
         let local_reader = LocalReader::new(
             engines.kv.clone(),
             StoreMetaDelegate::new(store_meta.clone(), engines.kv.clone()),
             router.clone(),
+            coprocessor_host.clone(),
         );
         let cfg_controller = ConfigController::new(cfg.tikv.clone());
 
-        let split_check_runner =
-            SplitCheckRunner::new(engines.kv.clone(), router.clone(), coprocessor_host.clone());
+        let split_check_runner = SplitCheckRunner::new(
+            engines.kv.clone(),
+            router.clone(),
+            coprocessor_host.clone(),
+            Some(Arc::new(region_info_accessor)),
+        );
         let split_scheduler = bg_worker.start("test-split-check", split_check_runner);
         cfg_controller.register(
             Module::Coprocessor,
             Box::new(SplitCheckConfigManager(split_scheduler.clone())),
         );
+        // Spawn a task to update the disk status periodically.
+        {
+            let data_dir = PathBuf::from(engines.kv.path());
+            let rocks_engine = Arc::downgrade(engines.kv.as_inner());
+            let snap_mgr = snap_mgr.clone();
+            bg_worker.spawn_interval_task(std::time::Duration::from_millis(1000), move || {
+                if let Some(rocks_engine) = rocks_engine.upgrade() {
+                    let snap_size = snap_mgr.get_total_snap_size().unwrap();
+                    let kv_size = util::get_engine_cfs_used_size(rocks_engine.as_ref())
+                        .expect("get kv engine size");
+                    let used_size = snap_size + kv_size;
+                    let (capacity, available) = disk::get_disk_space_stats(&data_dir).unwrap();
+
+                    disk::set_disk_capacity(capacity);
+                    disk::set_disk_used_size(used_size);
+                    disk::set_disk_available_size(std::cmp::min(available, capacity - used_size));
+                }
+            });
+        }
 
         node.try_bootstrap_store(engines.clone())?;
         node.start(
@@ -326,6 +394,9 @@ impl Simulator for NodeCluster {
             cm,
             CollectorRegHandle::new_for_test(),
             None,
+            DiskCheckRunner::dummy(),
+            GrpcServiceManager::dummy(),
+            Arc::new(AtomicU64::new(0)),
         )?;
         assert!(
             engines
@@ -345,19 +416,11 @@ impl Simulator for NodeCluster {
                 .map(|p| p.path().to_str().unwrap().to_owned())
         );
 
-        let region_split_size = cfg.coprocessor.region_split_size;
-        let enable_region_bucket = cfg.coprocessor.enable_region_bucket;
-        let region_bucket_size = cfg.coprocessor.region_bucket_size;
-        let mut raftstore_cfg = cfg.tikv.raft_store;
-        raftstore_cfg
-            .validate(region_split_size, enable_region_bucket, region_bucket_size)
-            .unwrap();
-        let raft_store = Arc::new(VersionTrack::new(raftstore_cfg));
         cfg_controller.register(
             Module::Raftstore,
             Box::new(RaftstoreConfigManager::new(
                 node.refresh_config_scheduler(),
-                raft_store,
+                store_config,
             )),
         );
 
@@ -378,7 +441,7 @@ impl Simulator for NodeCluster {
             .routers
             .insert(node_id, SimulateTransport::new(router));
         self.nodes.insert(node_id, node);
-        self.cfg_controller = Some(cfg_controller);
+        self.cfg_controller.insert(node_id, cfg_controller);
         self.simulate_trans.insert(node_id, simulate_trans);
 
         Ok(node_id)
@@ -467,7 +530,8 @@ impl Simulator for NodeCluster {
         }
         let mut guard = self.trans.core.lock().unwrap();
         let router = guard.routers.get_mut(&node_id).unwrap();
-        router.read(batch_id, request, cb).unwrap();
+        let read_ctx = ReadContext::new(batch_id, None);
+        router.read(read_ctx, request, cb).unwrap();
     }
 
     fn send_raft_msg(&mut self, msg: raft_serverpb::RaftMessage) -> Result<()> {
@@ -501,14 +565,22 @@ impl Simulator for NodeCluster {
     fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RaftTestEngine>> {
         self.nodes.get(&node_id).map(|node| node.get_router())
     }
+
+    fn get_apply_router(&self, node_id: u64) -> Option<ApplyRouter<RocksEngine>> {
+        self.nodes.get(&node_id).map(|node| node.get_apply_router())
+    }
 }
 
+// Compare to server cluster, node cluster does not have server layer and
+// storage layer.
 pub fn new_node_cluster(id: u64, count: usize) -> Cluster<NodeCluster> {
     let pd_client = Arc::new(TestPdClient::new(id, false));
     let sim = Arc::new(RwLock::new(NodeCluster::new(Arc::clone(&pd_client))));
     Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
 }
 
+// This cluster does not support batch split, we expect it to transfer the
+// `BatchSplit` request to `split` request
 pub fn new_incompatible_node_cluster(id: u64, count: usize) -> Cluster<NodeCluster> {
     let pd_client = Arc::new(TestPdClient::new(id, true));
     let sim = Arc::new(RwLock::new(NodeCluster::new(Arc::clone(&pd_client))));

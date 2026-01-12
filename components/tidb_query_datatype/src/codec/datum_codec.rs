@@ -9,16 +9,15 @@ use tipb::FieldType;
 
 use super::data_type::*;
 use crate::{
+    FieldTypeAccessor, FieldTypeTp,
     codec::{
-        datum,
+        Error, Result, datum,
         mysql::{
             DecimalDecoder, DecimalEncoder, DurationDecoder, EnumDecoder, EnumEncoder, JsonDecoder,
-            JsonEncoder, TimeDecoder,
+            JsonEncoder, TimeDecoder, VectorFloat32Decoder, VectorFloat32Encoder,
         },
-        Error, Result,
     },
     expr::EvalContext,
-    FieldTypeAccessor, FieldTypeTp,
 };
 
 /// A decoder to decode the payload part of a datum.
@@ -33,6 +32,7 @@ pub trait DatumPayloadDecoder:
     + DecimalDecoder
     + JsonDecoder
     + EnumDecoder
+    + VectorFloat32Decoder
 {
     #[inline]
     fn read_datum_payload_i64(&mut self) -> Result<i64> {
@@ -131,6 +131,13 @@ pub trait DatumPayloadDecoder:
     }
 
     #[inline]
+    fn read_datum_payload_vector_float32(&mut self) -> Result<VectorFloat32> {
+        self.read_vector_float32().map_err(|_| {
+            Error::InvalidDataType("Failed to decode datum payload as vectorFloat32".to_owned())
+        })
+    }
+
+    #[inline]
     fn read_datum_payload_enum_compact_bytes(&mut self, field_type: &FieldType) -> Result<Enum> {
         self.read_enum_compact_bytes(field_type).map_err(|_| {
             Error::InvalidDataType("Failed to decode datum payload as enum".to_owned())
@@ -158,7 +165,12 @@ impl<T: BufferReader> DatumPayloadDecoder for T {}
 ///
 /// The types this encoder accepts are not fully 1:1 mapping to evaluable types.
 pub trait DatumPayloadEncoder:
-    NumberEncoder + CompactByteEncoder + JsonEncoder + DecimalEncoder + EnumEncoder
+    NumberEncoder
+    + CompactByteEncoder
+    + JsonEncoder
+    + DecimalEncoder
+    + EnumEncoder
+    + VectorFloat32Encoder
 {
     #[inline]
     fn write_datum_payload_i64(&mut self, v: i64) -> Result<()> {
@@ -208,6 +220,13 @@ pub trait DatumPayloadEncoder:
     fn write_datum_payload_json(&mut self, v: JsonRef<'_>) -> Result<()> {
         self.write_json(v).map_err(|_| {
             Error::InvalidDataType("Failed to encode datum payload from json".to_owned())
+        })
+    }
+
+    #[inline]
+    fn write_datum_payload_vector_float32(&mut self, v: VectorFloat32Ref<'_>) -> Result<()> {
+        self.write_vector_float32(v).map_err(|_| {
+            Error::InvalidDataType("Failed to encode datum payload from vectorFloat32".to_owned())
         })
     }
 
@@ -290,6 +309,12 @@ pub trait DatumFlagAndPayloadEncoder: BufferWriter + DatumPayloadEncoder {
         Ok(())
     }
 
+    fn write_datum_vector_float32(&mut self, val: VectorFloat32Ref<'_>) -> Result<()> {
+        self.write_u8(datum::VECTOR_FLOAT32_FLAG)?;
+        self.write_datum_payload_vector_float32(val)?;
+        Ok(())
+    }
+
     fn write_datum_enum_uint(&mut self, val: EnumRef<'_>) -> Result<()> {
         self.write_u8(datum::UINT_FLAG)?;
         self.write_datum_payload_enum_uint(val)?;
@@ -346,6 +371,11 @@ pub trait EvaluableDatumEncoder: DatumFlagAndPayloadEncoder {
     #[inline]
     fn write_evaluable_datum_json(&mut self, val: JsonRef<'_>) -> Result<()> {
         self.write_datum_json(val)
+    }
+
+    #[inline]
+    fn write_evaluable_datum_vector_float32(&mut self, val: VectorFloat32Ref<'_>) -> Result<()> {
+        self.write_datum_vector_float32(val)
     }
 
     #[inline]
@@ -529,6 +559,24 @@ pub fn decode_json_datum(mut raw_datum: &[u8]) -> Result<Option<Json>> {
     }
 }
 
+pub fn decode_vector_float32_datum(mut raw_datum: &[u8]) -> Result<Option<VectorFloat32>> {
+    if raw_datum.is_empty() {
+        return Err(Error::InvalidDataType(
+            "Failed to decode datum flag".to_owned(),
+        ));
+    }
+    let flag = raw_datum[0];
+    raw_datum = &raw_datum[1..];
+    match flag {
+        datum::NIL_FLAG => Ok(None),
+        datum::VECTOR_FLOAT32_FLAG => Ok(Some(raw_datum.read_datum_payload_vector_float32()?)),
+        _ => Err(Error::InvalidDataType(format!(
+            "Unsupported datum flag {} for VectorFloat32 vector",
+            flag
+        ))),
+    }
+}
+
 pub fn decode_enum_datum(mut raw_datum: &[u8], field_type: &FieldType) -> Result<Option<Enum>> {
     if raw_datum.is_empty() {
         return Err(Error::InvalidDataType(
@@ -557,55 +605,65 @@ pub trait RawDatumDecoder<T> {
     fn decode(self, field_type: &FieldType, ctx: &mut EvalContext) -> Result<Option<T>>;
 }
 
-impl<'a> RawDatumDecoder<Int> for &'a [u8] {
+impl RawDatumDecoder<Int> for &[u8] {
     fn decode(self, _field_type: &FieldType, _ctx: &mut EvalContext) -> Result<Option<Int>> {
         decode_int_datum(self)
     }
 }
 
-impl<'a> RawDatumDecoder<Real> for &'a [u8] {
+impl RawDatumDecoder<Real> for &[u8] {
     fn decode(self, field_type: &FieldType, _ctx: &mut EvalContext) -> Result<Option<Real>> {
         decode_real_datum(self, field_type)
     }
 }
 
-impl<'a> RawDatumDecoder<Decimal> for &'a [u8] {
+impl RawDatumDecoder<Decimal> for &[u8] {
     fn decode(self, _field_type: &FieldType, _ctx: &mut EvalContext) -> Result<Option<Decimal>> {
         decode_decimal_datum(self)
     }
 }
 
-impl<'a> RawDatumDecoder<Bytes> for &'a [u8] {
+impl RawDatumDecoder<Bytes> for &[u8] {
     fn decode(self, _field_type: &FieldType, _ctx: &mut EvalContext) -> Result<Option<Bytes>> {
         decode_bytes_datum(self)
     }
 }
 
-impl<'a> RawDatumDecoder<DateTime> for &'a [u8] {
+impl RawDatumDecoder<DateTime> for &[u8] {
     fn decode(self, field_type: &FieldType, ctx: &mut EvalContext) -> Result<Option<DateTime>> {
         decode_date_time_datum(self, field_type, ctx)
     }
 }
 
-impl<'a> RawDatumDecoder<Duration> for &'a [u8] {
+impl RawDatumDecoder<Duration> for &[u8] {
     fn decode(self, field_type: &FieldType, _ctx: &mut EvalContext) -> Result<Option<Duration>> {
         decode_duration_datum(self, field_type)
     }
 }
 
-impl<'a> RawDatumDecoder<Json> for &'a [u8] {
+impl RawDatumDecoder<Json> for &[u8] {
     fn decode(self, _field_type: &FieldType, _ctx: &mut EvalContext) -> Result<Option<Json>> {
         decode_json_datum(self)
     }
 }
 
-impl<'a> RawDatumDecoder<Enum> for &'a [u8] {
+impl RawDatumDecoder<VectorFloat32> for &[u8] {
+    fn decode(
+        self,
+        _field_type: &FieldType,
+        _ctx: &mut EvalContext,
+    ) -> Result<Option<VectorFloat32>> {
+        decode_vector_float32_datum(self)
+    }
+}
+
+impl RawDatumDecoder<Enum> for &[u8] {
     fn decode(self, field_type: &FieldType, _ctx: &mut EvalContext) -> Result<Option<Enum>> {
         decode_enum_datum(self, field_type)
     }
 }
 
-impl<'a> RawDatumDecoder<Set> for &'a [u8] {
+impl RawDatumDecoder<Set> for &[u8] {
     fn decode(self, _field_type: &FieldType, _ctx: &mut EvalContext) -> Result<Option<Set>> {
         unimplemented!()
     }

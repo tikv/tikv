@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use murmur3::murmur3_x64_128;
+use mur3::murmurhash3_x64_128;
 
 /// `CmSketch` is used to estimate point queries.
 /// Refer:[Count-Min Sketch](https://en.wikipedia.org/wiki/Count-min_sketch)
@@ -30,9 +30,8 @@ impl CmSketch {
     }
 
     // `hash` hashes the data into two u64 using murmur hash.
-    fn hash(mut bytes: &[u8]) -> (u64, u64) {
-        let out = murmur3_x64_128(&mut bytes, 0).unwrap();
-        (out as u64, (out >> 64) as u64)
+    fn hash(bytes: &[u8]) -> (u64, u64) {
+        murmurhash3_x64_128(bytes, 0)
     }
 
     // `insert` inserts the data into cm sketch. For each row i, the position at
@@ -59,10 +58,12 @@ impl CmSketch {
     pub fn push_to_top_n(&mut self, b: Vec<u8>, cnt: u64) {
         self.top_n.push((b, cnt))
     }
+}
 
-    pub fn into_proto(self) -> tipb::CmSketch {
+impl From<CmSketch> for tipb::CmSketch {
+    fn from(cm: CmSketch) -> tipb::CmSketch {
         let mut proto = tipb::CmSketch::default();
-        let rows = self
+        let rows = cm
             .table
             .into_iter()
             .map(|row| {
@@ -72,7 +73,7 @@ impl CmSketch {
             })
             .collect();
         proto.set_rows(rows);
-        let top_n_data = self
+        let top_n_data = cm
             .top_n
             .into_iter()
             .map(|(item, cnt)| {
@@ -92,7 +93,7 @@ mod tests {
     use std::{cmp::min, slice::from_ref};
 
     use collections::HashMap;
-    use rand::{distributions::Distribution, rngs::StdRng, SeedableRng};
+    use rand::{SeedableRng, distributions::Distribution, rngs::StdRng};
     use tidb_query_datatype::{
         codec::{datum, datum::Datum},
         expr::EvalContext,
@@ -105,7 +106,7 @@ mod tests {
         fn query(&self, bytes: &[u8]) -> u32 {
             let (h1, h2) = CmSketch::hash(bytes);
             let mut vals = vec![0u32; self.depth];
-            let mut min_counter = u32::max_value();
+            let mut min_counter = u32::MAX;
             for (i, row) in self.table.iter().enumerate() {
                 let j = (h1.wrapping_add(h2.wrapping_mul(i as u64)) % self.width as u64) as usize;
                 let noise = (self.count - row[j]) / (self.width as u32 - 1);

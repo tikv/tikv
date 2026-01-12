@@ -48,15 +48,17 @@ impl Bucket {
             self.ndv += 1;
         }
     }
+}
 
-    fn into_proto(self) -> tipb::Bucket {
-        let mut bucket = tipb::Bucket::default();
-        bucket.set_repeats(self.repeats as i64);
-        bucket.set_count(self.count as i64);
-        bucket.set_lower_bound(self.lower_bound);
-        bucket.set_upper_bound(self.upper_bound);
-        bucket.set_ndv(self.ndv as i64);
-        bucket
+impl From<Bucket> for tipb::Bucket {
+    fn from(bucket: Bucket) -> tipb::Bucket {
+        let mut b = tipb::Bucket::default();
+        b.set_repeats(bucket.repeats as i64);
+        b.set_count(bucket.count as i64);
+        b.set_lower_bound(bucket.lower_bound);
+        b.set_upper_bound(bucket.upper_bound);
+        b.set_ndv(bucket.ndv as i64);
+        b
     }
 }
 
@@ -80,18 +82,6 @@ impl Histogram {
             buckets_num,
             ..Default::default()
         }
-    }
-
-    pub fn into_proto(self) -> tipb::Histogram {
-        let mut hist = tipb::Histogram::default();
-        hist.set_ndv(self.ndv as i64);
-        let buckets: Vec<tipb::Bucket> = self
-            .buckets
-            .into_iter()
-            .map(|bucket| bucket.into_proto())
-            .collect();
-        hist.set_buckets(buckets.into());
-        hist
     }
 
     // insert a data bigger than or equal to the max value in current histogram.
@@ -148,7 +138,7 @@ impl Histogram {
 
     // It merges every two neighbor buckets.
     fn merge_buckets(&mut self) {
-        let bucket_num = (self.buckets_num + 1) / 2;
+        let bucket_num = self.buckets_num.div_ceil(2);
         if self.buckets_num > 1 {
             let (left, right) = self.buckets.split_at_mut(1);
             mem::swap(&mut left[0].upper_bound, &mut right[0].upper_bound);
@@ -173,9 +163,23 @@ impl Histogram {
     }
 }
 
+impl From<Histogram> for tipb::Histogram {
+    fn from(hist: Histogram) -> tipb::Histogram {
+        let mut h = tipb::Histogram::default();
+        h.set_ndv(hist.ndv as i64);
+        let buckets: Vec<tipb::Bucket> = hist
+            .buckets
+            .into_iter()
+            .map(|bucket| bucket.into())
+            .collect();
+        h.set_buckets(buckets.into());
+        h
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::iter::repeat;
+    use std::iter::repeat_n;
 
     use tidb_query_datatype::{
         codec::{datum, datum::Datum},
@@ -211,7 +215,7 @@ mod tests {
         assert_eq!(hist.ndv, 4);
 
         // push repeated item
-        for item in repeat(3).take(3).map(Datum::I64) {
+        for item in repeat_n(3, 3).map(Datum::I64) {
             let bytes = datum::encode_value(&mut EvalContext::default(), &[item]).unwrap();
             hist.append(&bytes, false);
         }
@@ -222,7 +226,7 @@ mod tests {
         assert_eq!(hist.buckets.len(), 2);
         assert_eq!(hist.ndv, 4);
 
-        for item in repeat(4).take(4).map(Datum::I64) {
+        for item in repeat_n(4, 4).map(Datum::I64) {
             let bytes = datum::encode_value(&mut EvalContext::default(), &[item]).unwrap();
             hist.append(&bytes, false);
         }

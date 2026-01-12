@@ -2,21 +2,24 @@
 
 use std::{
     fmt::{self, Display, Formatter},
-    sync::Arc,
+    sync::{Arc, atomic::Ordering::Relaxed},
     time::Duration,
 };
 
 use collections::{HashMap, HashSet};
 use tikv_util::{
     sys::thread::{self, Pid},
+    thread_name_prefix::RESOURCE_METERING_RECORDER_THREAD,
     time::Instant,
     warn,
     worker::{Builder as WorkerBuilder, LazyWorker, Runnable, RunnableWithTimer, Scheduler},
 };
 
 use self::{collector_reg::CollectorReg, sub_recorder::SubRecorder};
-use crate::{collector::Collector, Config, RawRecords, ResourceTagFactory};
-
+use crate::{
+    Config, RawRecords, ResourceTagFactory, collector::Collector,
+    config::ENABLE_NETWORK_IO_COLLECTION,
+};
 mod collector_reg;
 mod localstorage;
 mod sub_recorder;
@@ -26,7 +29,10 @@ pub use self::{
     localstorage::{LocalStorage, LocalStorageRef, STORAGE},
     sub_recorder::{
         cpu::CpuRecorder,
-        summary::{record_read_keys, record_write_keys, SummaryRecorder},
+        summary::{
+            SummaryRecorder, record_logical_read_bytes, record_logical_write_bytes,
+            record_network_in_bytes, record_network_out_bytes, record_read_keys, record_write_keys,
+        },
     },
 };
 
@@ -123,6 +129,7 @@ impl Recorder {
 
     fn handle_config_change(&mut self, config: Config) {
         self.precision_ms = config.precision.as_millis();
+        ENABLE_NETWORK_IO_COLLECTION.store(config.enable_network_io_collection, Relaxed);
     }
 
     fn tick(&mut self) {
@@ -295,21 +302,24 @@ impl ConfigChangeNotifier {
 /// This function is intended to simplify external use.
 pub fn init_recorder(
     precision_ms: u64,
+    enable_network_io_collection: bool,
 ) -> (
     ConfigChangeNotifier,
     CollectorRegHandle,
     ResourceTagFactory,
     Box<LazyWorker<Task>>,
 ) {
+    // initialize the global flag for network io collection
+    ENABLE_NETWORK_IO_COLLECTION.store(enable_network_io_collection, Relaxed);
     let recorder = RecorderBuilder::default()
         .precision_ms(precision_ms)
         .add_sub_recorder(Box::<CpuRecorder>::default())
         .add_sub_recorder(Box::<SummaryRecorder>::default())
         .build();
-    let mut recorder_worker = WorkerBuilder::new("resource-metering-recorder")
+    let mut recorder_worker = WorkerBuilder::new(RESOURCE_METERING_RECORDER_THREAD)
         .pending_capacity(256)
         .create()
-        .lazy_build("resource-metering-recorder");
+        .lazy_build(RESOURCE_METERING_RECORDER_THREAD);
 
     let collector_reg_handle = CollectorRegHandle::new(recorder_worker.scheduler());
     let resource_tag_factory = ResourceTagFactory::new(recorder_worker.scheduler());
@@ -328,8 +338,8 @@ pub fn init_recorder(
 mod tests {
     use std::{
         sync::{
-            atomic::{AtomicUsize, Ordering::SeqCst},
             Mutex,
+            atomic::{AtomicUsize, Ordering::SeqCst},
         },
         thread::sleep,
     };
@@ -338,8 +348,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        recorder::localstorage::{LocalStorage, LocalStorageRef},
         TagInfos,
+        recorder::localstorage::{LocalStorage, LocalStorageRef},
     };
 
     #[derive(Clone, Default)]
@@ -364,9 +374,14 @@ mod tests {
             records: &mut RawRecords,
             _thread_stores: &mut HashMap<Pid, LocalStorage>,
         ) {
-            let mut tag = TagInfos::default();
-            tag.extra_attachment.push(1);
-            records.records.entry(Arc::new(tag)).or_default().cpu_time = 2;
+            let tag = Arc::new(TagInfos {
+                store_id: 0,
+                region_id: 0,
+                peer_id: 0,
+                key_ranges: vec![],
+                extra_attachment: [1].to_vec().into(),
+            });
+            records.records.entry(tag).or_default().cpu_time = 2;
         }
 
         fn pause(
@@ -445,7 +460,7 @@ mod tests {
         assert_eq!(records.records.len(), 1);
         assert_eq!(
             &records.records.keys().next().unwrap().extra_attachment,
-            &[1]
+            &Arc::new([1].to_vec())
         );
 
         // deregister collector
@@ -510,7 +525,7 @@ mod tests {
         assert_eq!(records.records.len(), 1);
         assert_eq!(
             &records.records.keys().next().unwrap().extra_attachment,
-            &[1]
+            &Arc::new([1].to_vec())
         );
         assert_eq!(records, {
             collector2.records.lock().unwrap().take().unwrap()
@@ -565,7 +580,7 @@ mod tests {
         assert_eq!(records.records.len(), 1);
         assert_eq!(
             &records.records.keys().next().unwrap().extra_attachment,
-            &[1]
+            &Arc::new([1].to_vec())
         );
         assert_eq!(records, {
             observer.records.lock().unwrap().take().unwrap()

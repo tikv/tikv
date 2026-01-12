@@ -4,18 +4,17 @@
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
+    ProcessResult, Snapshot,
     kv::WriteData,
     lock_manager::LockManager,
     mvcc::{MvccTxn, SnapshotReader},
     txn::{
-        cleanup,
+        Result, cleanup,
         commands::{
             Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
             WriteCommand, WriteContext, WriteResult,
         },
-        Result,
     },
-    ProcessResult, Snapshot,
 };
 
 command! {
@@ -24,7 +23,7 @@ command! {
     /// This should be following a [`Prewrite`](Command::Prewrite) on the given key.
     Cleanup:
         cmd_ty => (),
-        display => "kv::command::cleanup {} @ {} | {:?}", (key, start_ts, ctx),
+        display => { "kv::command::cleanup {} @ {} | {:?}", (key, start_ts, ctx), }
         content => {
             key: Key,
             /// The transaction timestamp.
@@ -32,6 +31,9 @@ command! {
             /// The approximate current ts when cleanup request is invoked, which is used to check the
             /// lock's TTL. 0 means do not check TTL.
             current_ts: TimeStamp,
+        }
+        in_heap => {
+            key,
         }
 }
 
@@ -48,7 +50,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Cleanup {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         // It is not allowed for commit to overwrite a protected rollback. So we update
         // max_ts to prevent this case from happening.
-        context.concurrency_manager.update_max_ts(self.start_ts);
+        context
+            .concurrency_manager
+            .update_max_ts(self.start_ts, || format!("cleanup-{}", self.start_ts))?;
 
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
         let mut reader = ReaderWithStats::new(
@@ -80,6 +84,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Cleanup {
             new_acquired_locks,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
+            known_txn_status: vec![],
         })
     }
 }

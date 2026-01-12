@@ -5,6 +5,7 @@ pub mod hash_aggr_helper;
 #[cfg(test)]
 pub mod mock_executor;
 pub mod scan_executor;
+pub mod top_n_heap;
 
 use tidb_query_common::Result;
 use tidb_query_datatype::{codec::batch::LazyBatchColumnVec, expr::EvalContext};
@@ -27,13 +28,13 @@ pub fn ensure_columns_decoded(
 
 /// Evaluates expressions and outputs the result into the given Vec. Lifetime of
 /// the expressions are erased.
-pub unsafe fn eval_exprs_decoded_no_lifetime<'a>(
+pub unsafe fn eval_exprs_decoded_no_lifetime(
     ctx: &mut EvalContext,
     exprs: &[RpnExpression],
     schema: &[FieldType],
     input_physical_columns: &LazyBatchColumnVec,
     input_logical_rows: &[usize],
-    output: &mut Vec<RpnStackNode<'a>>,
+    output: &mut Vec<RpnStackNode<'_>>,
 ) -> Result<()> {
     unsafe fn erase_lifetime<'a, T: ?Sized>(v: &T) -> &'a T {
         &*(v as *const T)
