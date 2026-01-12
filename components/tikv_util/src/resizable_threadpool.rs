@@ -9,6 +9,8 @@ use tokio::{
 };
 use tokio_util::task::task_tracker::TaskTracker;
 
+use crate::thread_name_prefix::RUNTIME_KEEPER_THREAD;
+
 struct DeamonRuntime {
     inner: Option<Runtime>,
     tracker: TaskTracker,
@@ -109,7 +111,7 @@ impl ResizableRuntime {
         let init_name = format!("{}-v0", thread_prefix);
         let keeper = Builder::new_multi_thread()
             .worker_threads(1)
-            .thread_name("rtkp")
+            .thread_name(RUNTIME_KEEPER_THREAD)
             .enable_all()
             .build()
             .expect("Failed to create runtime-keeper");

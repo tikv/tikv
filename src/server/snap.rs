@@ -40,6 +40,7 @@ use tikv_kv::RaftExtension;
 use tikv_util::{
     DeferContext, box_err,
     config::{MIB, Tracker, VersionTrack},
+    thread_name_prefix::SNAP_SENDER_THREAD,
     time::{Instant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
     worker::Runnable,
@@ -469,13 +470,13 @@ impl<R: RaftExtension + 'static> Runner<R> {
         security_mgr: Arc<SecurityManager>,
         cfg: Arc<VersionTrack<Config>>,
     ) -> Self {
-        let cfg_tracker = cfg.clone().tracker("snap-sender".to_owned());
+        let cfg_tracker = cfg.clone().tracker(SNAP_SENDER_THREAD.to_owned());
         let config = cfg.value().clone();
         let snap_worker = Runner {
             env,
             snap_mgr,
             pool: RuntimeBuilder::new_multi_thread()
-                .thread_name(thd_name!("snap-sender"))
+                .thread_name(thd_name!(SNAP_SENDER_THREAD))
                 .with_sys_hooks()
                 .worker_threads(DEFAULT_POOL_SIZE)
                 .build()

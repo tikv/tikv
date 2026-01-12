@@ -232,17 +232,21 @@ impl<S: Snapshot> PointGetter<S> {
         let lock_value = self.snapshot.get_cf(CF_LOCK, user_key)?;
 
         if let Some(ref lock_value) = lock_value {
-            let lock = Lock::parse(lock_value)?;
+            let lock_or_shared_locks = txn_types::parse_lock(lock_value)?;
+
             if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
                 self.met_newer_ts_data = NewerTsCheckState::Met;
             }
-            if let Err(e) = Lock::check_ts_conflict(
-                Cow::Borrowed(&lock),
+            if let Err(e) = txn_types::check_ts_conflict(
+                Cow::Borrowed(&lock_or_shared_locks),
                 user_key,
                 self.ts,
                 &self.bypass_locks,
                 self.isolation_level,
             ) {
+                let lock = lock_or_shared_locks
+                    .left()
+                    .expect("Err result only for single lock");
                 self.statistics.lock.processed_keys += 1;
                 if extract_access_lock && self.access_locks.contains(lock.ts) {
                     return Ok(Some(lock));
@@ -463,9 +467,9 @@ impl<S: Snapshot> PointGetter<S> {
                 }
             }
             LockType::Delete => Ok(None),
-            LockType::Lock | LockType::Pessimistic => {
-                // Only when fails to call `Lock::check_ts_conflict()`, the function is called,
-                // so it's unreachable here.
+            LockType::Lock | LockType::Pessimistic | LockType::Shared => {
+                // Only when fails to call `txn_types::check_ts_conflict()`, the function is
+                // called, so it's unreachable here.
                 unreachable!()
             }
         }

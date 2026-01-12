@@ -47,6 +47,7 @@ use tikv_util::{
     mpsc::bounded,
     slow_log,
     sys::thread::ThreadBuildWrapper,
+    thread_name_prefix::{CDC_WORKER_THREAD, TSO_THREAD},
     time::{Instant, Limiter, SlowTimer},
     timer::SteadyTimer,
     warn,
@@ -529,13 +530,13 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
     ) -> Endpoint<T, E, S> {
         let workers = Builder::new_multi_thread()
-            .thread_name("cdcwkr")
+            .thread_name(CDC_WORKER_THREAD)
             .worker_threads(config.incremental_scan_threads)
             .with_sys_hooks()
             .build()
             .unwrap();
         let tso_worker = Builder::new_multi_thread()
-            .thread_name("tso")
+            .thread_name(TSO_THREAD)
             .worker_threads(config.tso_worker_threads)
             .enable_time()
             .with_sys_hooks()

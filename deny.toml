@@ -92,6 +92,10 @@ ignore = [
     # replace FxHash. Currently, this package is stable and there are no known
     # exploitable vulnerabilities affecting our use case.
     "RUSTSEC-2025-0057",
+    # aws-sdk-s3 transitively depends on lru 0.12.x, which triggers
+    # RUSTSEC-2026-0002 (Stacked Borrows UB). Upstream dependency
+    # constraints prevent upgrading at the moment.
+    "RUSTSEC-2026-0002",
 ]
 
 # TiKV is licensed under Apache 2.0, according to ASF 3RD PARTY LICENSE POLICY,
