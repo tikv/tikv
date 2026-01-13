@@ -53,6 +53,8 @@ pub enum ErrorInner {
         primary: Vec<u8>,
         reason: kvrpcpb::WriteConflictReason,
     },
+    #[error("shared locks are shrink-only")]
+    SharedLocksAreShrinkOnly,
 }
 
 impl ErrorInner {
@@ -78,6 +80,7 @@ impl ErrorInner {
                 primary: primary.to_owned(),
                 reason: reason.to_owned(),
             }),
+            ErrorInner::SharedLocksAreShrinkOnly => Some(ErrorInner::SharedLocksAreShrinkOnly),
         }
     }
 }
@@ -120,6 +123,7 @@ impl ErrorCodeExt for Error {
             ErrorInner::BadFormatWrite => error_code::storage::BAD_FORMAT_WRITE,
             ErrorInner::KeyIsLocked(_) => error_code::storage::KEY_IS_LOCKED,
             ErrorInner::WriteConflict { .. } => error_code::storage::WRITE_CONFLICT,
+            ErrorInner::SharedLocksAreShrinkOnly => error_code::storage::KEY_IS_LOCKED, /* reuse KEY_IS_LOCKED */
         }
     }
 }
