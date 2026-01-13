@@ -22,6 +22,11 @@ const DEFAULT_TOMBSTONES_PERCENT_THRESHOLD: u64 = 30; // same as region_compact_
 const DEFAULT_REDUNDANT_ROWS_THRESHOLD: u64 = 50000; // same as region_compact_min_redundant_rows
 const DEFAULT_REDUNDANT_ROWS_PERCENT_THRESHOLD: u64 = 20; // same as region_compact_redundant_rows_percent
 
+// MVCC-read-aware compaction defaults
+const DEFAULT_MVCC_READ_AWARE_ENABLED: bool = false;
+const DEFAULT_MVCC_SCAN_THRESHOLD: u64 = 1000; // Minimum MVCC versions scanned per request to record in tracker
+const DEFAULT_MVCC_READ_WEIGHT: f64 = 3.0; // Weight multiplier for MVCC read activity in scoring
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -38,6 +43,22 @@ pub struct AutoCompactionConfig {
     pub redundant_rows_percent_threshold: u64,
     /// Force compaction of bottommost level
     pub bottommost_level_force: bool,
+
+    // MVCC-read-aware compaction settings
+    /// Enable MVCC-read-aware compaction prioritization
+    /// When enabled, regions with high MVCC version scanning during reads
+    /// will be prioritized for compaction
+    pub mvcc_read_aware_enabled: bool,
+
+    /// Minimum MVCC versions scanned per request to consider region hot
+    /// Regions where reads encounter this many or more MVCC versions per
+    /// request will get higher compaction priority
+    pub mvcc_scan_threshold: u64,
+
+    /// Weight multiplier for MVCC read activity in scoring
+    /// Higher values give more priority to regions with MVCC read activity
+    /// Typical range: 1.0 (low priority) to 10.0 (high priority)
+    pub mvcc_read_weight: f64,
 }
 
 impl Default for AutoCompactionConfig {
@@ -49,6 +70,9 @@ impl Default for AutoCompactionConfig {
             redundant_rows_threshold: DEFAULT_REDUNDANT_ROWS_THRESHOLD,
             redundant_rows_percent_threshold: DEFAULT_REDUNDANT_ROWS_PERCENT_THRESHOLD,
             bottommost_level_force: false,
+            mvcc_read_aware_enabled: DEFAULT_MVCC_READ_AWARE_ENABLED,
+            mvcc_scan_threshold: DEFAULT_MVCC_SCAN_THRESHOLD,
+            mvcc_read_weight: DEFAULT_MVCC_READ_WEIGHT,
         }
     }
 }
@@ -67,6 +91,9 @@ impl AutoCompactionConfig {
             return Err(
                 "auto_compaction.redundant_rows_percent_threshold should not exceed 100".into(),
             );
+        }
+        if self.mvcc_read_weight < 0.0 {
+            return Err("auto_compaction.mvcc_read_weight should be non-negative".into());
         }
         Ok(())
     }
