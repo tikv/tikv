@@ -13,8 +13,9 @@ use crate::storage::{
     txn::actions::mvcc::collect_mvcc_info_for_debug,
 };
 
-/// Helper function to handle the case when the lock is not found for our transaction.
-/// This checks commit records and collects mvcc_info when appropriate.
+/// Helper function to handle the case when the lock is not found for our
+/// transaction. This checks commit records and collects mvcc_info when
+/// appropriate.
 fn handle_lock_not_found<S: Snapshot, F>(
     reader: &mut SnapshotReader<S>,
     key: Key,
@@ -88,15 +89,28 @@ pub fn commit<S: Snapshot>(
                 Either::Left(_) => {
                     // Lock belongs to a different transaction - fall through to None handling
                     // which properly checks commit records and collects mvcc_info
-                    return handle_lock_not_found(reader, key.clone(), commit_ts, commit_role, &collect_mvcc);
+                    return handle_lock_not_found(
+                        reader,
+                        key.clone(),
+                        commit_ts,
+                        commit_role,
+                        &collect_mvcc,
+                    );
                 }
                 Either::Right(mut shared_locks) => {
                     // Remove our transaction's lock from shared locks
                     match shared_locks.remove_lock(&reader.start_ts)? {
                         Some(l) => (l, Some(shared_locks)),
                         None => {
-                            // Our transaction's lock not in shared locks - fall through to None handling
-                            return handle_lock_not_found(reader, key.clone(), commit_ts, commit_role, &collect_mvcc);
+                            // Our transaction's lock not in shared locks - fall through to None
+                            // handling
+                            return handle_lock_not_found(
+                                reader,
+                                key.clone(),
+                                commit_ts,
+                                commit_role,
+                                &collect_mvcc,
+                            );
                         }
                     }
                 }
@@ -154,7 +168,13 @@ pub fn commit<S: Snapshot>(
             }
         }
         None => {
-            return handle_lock_not_found(reader, key.clone(), commit_ts, commit_role, &collect_mvcc);
+            return handle_lock_not_found(
+                reader,
+                key.clone(),
+                commit_ts,
+                commit_role,
+                &collect_mvcc,
+            );
         }
     };
 

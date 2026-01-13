@@ -117,11 +117,9 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                     );
                 }
             }
-            Either::Right(mut shared_locks) => {
+            Either::Right(shared_locks) => {
                 if !is_shared_lock_req {
-                    // Exclusive lock request blocked by shared locks
-                    // Create a dummy lock info for the error
-                    let lock_info = create_shared_locks_info(&shared_locks, key.to_raw()?);
+                    let lock_info = shared_locks.into_lock_info(key.into_raw()?);
                     return Err(ErrorInner::KeyIsLocked(lock_info).into());
                 } else {
                     // Shared lock request with existing shared locks
@@ -513,22 +511,6 @@ fn handle_existing_shared_lock<S: Snapshot>(
         PessimisticLockKeyResult::new_success(need_value, need_check_existence, None, val),
         old_value,
     ))
-}
-
-/// Create a LockInfo for shared locks to return as an error.
-/// We use the minimum start_ts from all shared locks.
-fn create_shared_locks_info(
-    shared_locks: &SharedLocks,
-    raw_key: Vec<u8>,
-) -> kvproto::kvrpcpb::LockInfo {
-    let mut info = kvproto::kvrpcpb::LockInfo::default();
-    info.set_key(raw_key);
-    info.set_lock_type(kvproto::kvrpcpb::Op::SharedLock);
-    // Use the minimum start_ts from all shared locks
-    if let Some(min_ts) = shared_locks.iter_ts().min() {
-        info.set_lock_version(min_ts.into_inner());
-    }
-    info
 }
 
 #[derive(Clone, Copy)]
@@ -966,21 +948,6 @@ pub mod tests {
                 .unwrap();
         }
         res.0
-    }
-
-    #[cfg(test)]
-    fn load_lock<E: Engine>(engine: &mut E, key: &[u8]) -> Lock {
-        use tikv_util::Either;
-        let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true);
-        let lock_or_shared = reader
-            .load_lock(&Key::from_raw(key))
-            .unwrap()
-            .expect("lock should exist");
-        match lock_or_shared {
-            Either::Left(lock) => lock,
-            Either::Right(_) => panic!("Expected exclusive Lock, got SharedLocks"),
-        }
     }
 
     #[cfg(test)]

@@ -708,6 +708,12 @@ impl SharedLocks {
         self.txn_info_segments.len()
     }
 
+    #[inline]
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.txn_info_segments.is_empty()
+    }
+
     // Decode all shared-lock segments so tests can rely on parsed locks.
     #[cfg(test)]
     pub fn parse_all(&mut self) {
@@ -814,6 +820,21 @@ impl SharedLocks {
                         }
                 })
                 .sum::<usize>()
+    }
+
+    pub fn into_lock_info(self, raw_key: Vec<u8>) -> LockInfo {
+        let mut info = LockInfo::default();
+        let shared_locks: Vec<_> = self
+            .txn_info_segments
+            .values()
+            .map(|lock| match lock {
+                Either::Left(encoded) => Lock::parse(encoded).unwrap(),
+                Either::Right(lock) => lock.clone(),
+            })
+            .map(|lock| lock.into_lock_info(raw_key.clone()))
+            .collect();
+        info.set_shared_lock_infos(shared_locks.into());
+        info
     }
 }
 
@@ -1846,12 +1867,18 @@ mod tests {
         shared_locks.put_shared_lock(txn2_prewrite_lock);
 
         assert_eq!(shared_locks.len(), 2);
-        assert_eq!(shared_locks.get_lock(&txn1_ts).unwrap().unwrap().ts, txn1_ts);
+        assert_eq!(
+            shared_locks.get_lock(&txn1_ts).unwrap().unwrap().ts,
+            txn1_ts
+        );
         assert_eq!(
             shared_locks.get_lock(&txn1_ts).unwrap().unwrap().lock_type,
             LockType::Pessimistic
         );
-        assert_eq!(shared_locks.get_lock(&txn2_ts).unwrap().unwrap().ts, txn2_ts);
+        assert_eq!(
+            shared_locks.get_lock(&txn2_ts).unwrap().unwrap().ts,
+            txn2_ts
+        );
         assert_eq!(
             shared_locks.get_lock(&txn2_ts).unwrap().unwrap().lock_type,
             LockType::Lock

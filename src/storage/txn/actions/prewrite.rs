@@ -11,11 +11,9 @@ use kvproto::kvrpcpb::{
 };
 use tikv_util::Either;
 use txn_types::{
-    Key, LastChange, Mutation, MutationType, OldValue, TimeStamp, Value, Write, WriteType,
-    is_short_value,
+    Key, LastChange, Mutation, MutationType, OldValue, SharedLocks, TimeStamp, Value, Write,
+    WriteType, is_short_value,
 };
-
-use txn_types::SharedLocks;
 
 use crate::storage::{
     Snapshot,
@@ -116,9 +114,10 @@ pub fn prewrite_with_generation<S: Snapshot>(
             Either::Left(lock) => {
                 if mutation.is_shared_lock {
                     // Shared lock prewrite on existing exclusive lock
-                    return Err(
-                        ErrorInner::KeyIsLocked(lock.into_lock_info(mutation.key.to_raw()?)).into(),
-                    );
+                    return Err(ErrorInner::KeyIsLocked(
+                        lock.into_lock_info(mutation.key.to_raw()?),
+                    )
+                    .into());
                 }
                 let lock_status = mutation.check_lock(
                     lock,
@@ -176,7 +175,7 @@ pub fn prewrite_with_generation<S: Snapshot>(
                     return Err(ErrorInner::KeyIsLocked(lock_info).into());
                 }
             }
-        }
+        },
         None if matches!(pessimistic_action, DoPessimisticCheck) => {
             // pipelined DML can't go into this. Otherwise, assertions may need to be
             // skipped for non-first flushes.
@@ -661,7 +660,8 @@ impl<'a> PrewriteMutation<'a> {
         txn: &mut MvccTxn,
         is_new_lock: bool,
         generation: u64,
-        // shared_locks only exists for shared lock prewrite, the prewrite lock is embedded into it.
+        // shared_locks only exists for shared lock prewrite, the prewrite lock is embedded into
+        // it.
         shared_locks: Option<SharedLocks>,
     ) -> Result<TimeStamp> {
         let mut try_one_pc = self.try_one_pc();

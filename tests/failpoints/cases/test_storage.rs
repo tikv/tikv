@@ -1925,6 +1925,7 @@ fn test_shared_exclusive_lock_conflict() {
                     vec![Key::from_raw(&shared_key)],
                     start_ts.into(),
                     commit_ts.into(),
+                    None,
                     Context::default(),
                 ),
                 expect_ok_callback(done_tx, 0),
@@ -1937,19 +1938,22 @@ fn test_shared_exclusive_lock_conflict() {
         let mut engine = storage.get_engine();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true);
-        reader
+        match reader
             .load_lock(&Key::from_raw(&shared_key))
             .unwrap()
             .expect("shared lock should exist")
+        {
+            tikv_util::Either::Right(shared_locks) => shared_locks,
+            tikv_util::Either::Left(_) => panic!("expected shared locks, found exclusive lock"),
+        }
     };
 
     acquire_lock(10, true).recv().unwrap().unwrap();
     let mut shared_lock = load_shared_lock();
-    assert!(shared_lock.is_shared());
     assert_eq!(shared_lock.shared_lock_num(), 1);
     assert!(
         shared_lock
-            .find_shared_lock_txn(TimeStamp::from(10))
+            .get_lock(&TimeStamp::from(10))
             .unwrap()
             .is_some()
     );
@@ -1968,17 +1972,16 @@ fn test_shared_exclusive_lock_conflict() {
     // A different transaction should be merged into the same shared lock entry.
     acquire_lock(20, true).recv().unwrap().unwrap();
     let mut shared_lock = load_shared_lock();
-    assert!(shared_lock.is_shared());
     assert_eq!(shared_lock.shared_lock_num(), 2);
     assert!(
         shared_lock
-            .find_shared_lock_txn(TimeStamp::from(10))
+            .get_lock(&TimeStamp::from(10))
             .unwrap()
             .is_some()
     );
     assert!(
         shared_lock
-            .find_shared_lock_txn(TimeStamp::from(20))
+            .get_lock(&TimeStamp::from(20))
             .unwrap()
             .is_some()
     );
