@@ -543,15 +543,17 @@ expected at least {} bytes after first flag, got {}",
             &mut columns[..self.columns_id_without_handle.len()],
         )?;
 
-        // V2: Extract partition ID from key if present (before handle decoding)
+        // V2: Skip partition ID in key if present (before handle decoding)
+        // We must always skip it to correctly decode the handle, even if we don't need the partition ID
         let mut partition_id_from_key: Option<i64> = None;
-        if self.pid_column_cnt > 0
-            && !key_payload.is_empty()
+        if !key_payload.is_empty()
             && key_payload[0] == table::INDEX_VALUE_PARTITION_ID_FLAG
-            && key_payload.len() > table::ID_LEN
+            && key_payload.len() > table::ID_LEN + 1
         {
-            partition_id_from_key =
-                Some(NumberCodec::decode_i64(&key_payload[1..1 + table::ID_LEN]));
+            if self.pid_column_cnt > 0 {
+                partition_id_from_key =
+                    Some(NumberCodec::decode_i64(&key_payload[1..1 + table::ID_LEN]));
+            }
             key_payload = &key_payload[1 + table::ID_LEN..]; // Skip partition ID
         }
 
