@@ -543,11 +543,6 @@ expected at least {} bytes after first flag, got {}",
             &mut columns[..self.columns_id_without_handle.len()],
         )?;
 
-        // V2: Skip partition ID in key if present (before handle decoding)
-        // We must always skip it to correctly decode the handle, even if we don't need
-        // the partition ID
-        let mut partition_id_from_key: Option<i64> = None;
-
         match self.decode_handle_strategy {
             NoDecode => {}
             // For normal index, it is placed at the end and any columns prior to it are
@@ -567,7 +562,18 @@ expected at least {} bytes after first flag, got {}",
                 columns[self.columns_id_without_handle.len()]
                     .mut_decoded()
                     .push_int(Some(handle_val));
-                partition_id_from_key = partition_id
+                // V2: Populate partition ID column if requested
+                if self.pid_column_cnt > 0 {
+                    if let Some(pid) = partition_id {
+                        let pid_col_idx =
+                            columns.columns_len() - self.physical_table_id_column_cnt - 1;
+                        columns[pid_col_idx].mut_decoded().push_int(Some(pid));
+                    } else {
+                        return Err(other_err!(
+                            "Expect to decode partition id in old collation path but not found in key"
+                        ));
+                    }
+                }
             }
             DecodeCommonHandle => {
                 // Otherwise, if the handle is common handle, we extract it from the key.
@@ -582,18 +588,6 @@ expected at least {} bytes after first flag, got {}",
                     &mut key_payload,
                     &mut columns[self.columns_id_without_handle.len()..end_index],
                 )?;
-            }
-        }
-
-        // V2: Populate partition ID column if requested
-        if self.pid_column_cnt > 0 {
-            if let Some(pid) = partition_id_from_key {
-                let pid_col_idx = columns.columns_len() - self.physical_table_id_column_cnt - 1;
-                columns[pid_col_idx].mut_decoded().push_int(Some(pid));
-            } else {
-                return Err(other_err!(
-                    "Expect to decode partition id in old collation path but not found in key"
-                ));
             }
         }
 
@@ -773,7 +767,7 @@ expected at least {} bytes after first flag, got {}",
 
         let (common_handle_bytes, remaining) = Self::split_common_handle(remaining)?;
 
-        // NEW: Track partition ID from key for V2 format
+        // partition ID from key for V2 format
         let mut partition_id_from_key: Option<&'a [u8]> = None;
 
         let (decode_handle_op, remaining) = {
@@ -813,21 +807,6 @@ expected at least {} bytes after first flag, got {}",
                 DecodeCommonHandle if common_handle_bytes.is_empty() => {
                     // This is a non-unique index, we should extract the common handle from the key.
                     datum::skip_n(&mut key_payload, self.columns_id_without_handle.len())?;
-
-                    // V2: Check for partition ID in key (after indexed columns, before handle)
-                    if !key_payload.is_empty()
-                        && key_payload[0] == table::INDEX_VALUE_PARTITION_ID_FLAG
-                    {
-                        if key_payload.len() < 1 + table::ID_LEN {
-                            return Err(other_err!(
-                                "Key too short to contain partition ID: {} bytes",
-                                key_payload.len()
-                            ));
-                        }
-                        partition_id_from_key = Some(&key_payload[1..1 + table::ID_LEN]);
-                        key_payload = &key_payload[1 + table::ID_LEN..]; // Skip flag + partition ID
-                    }
-
                     DecodeHandleOp::CommonHandle(key_payload)
                 }
                 DecodeCommonHandle => {
@@ -839,12 +818,11 @@ expected at least {} bytes after first flag, got {}",
             (dispatcher, remaining)
         };
 
-        // Always try to split partition ID from value (for V1 compatibility where it's
-        // in both key and value)
+        // Always try to split partition ID from value (for compatibility where it's
+        // in the value, V0 - Only in value, V1 both in key and value)
         let (partition_id_from_value, remaining) = Self::split_partition_id(remaining)?;
 
-        // V2: Prefer partition ID from key if available, otherwise use value (V1/V0
-        // fallback)
+        // Prefer partition ID from key if available, otherwise use value (V0 fallback)
         let decode_pid_op = if let Some(pid_from_key) = partition_id_from_key {
             // V2/V1: partition ID found in key (prefer this)
             DecodePartitionIdOp::Pid(pid_from_key)
