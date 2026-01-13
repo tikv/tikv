@@ -6,7 +6,7 @@ use std::fmt;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::LockInfo;
-use txn_types::{Key, Lock, PessimisticLock, TimeStamp, Value};
+use txn_types::{Key, Lock, PessimisticLock, SharedLocks, TimeStamp, Value};
 
 use super::metrics::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
 use crate::storage::kv::Modify;
@@ -141,6 +141,29 @@ impl MvccTxn {
                 .push(lock.to_lock().into_lock_info(key.to_raw().unwrap()));
         }
         self.modifies.push(Modify::PessimisticLock(key, lock))
+    }
+
+    pub(crate) fn put_shared_pessimistic_lock(
+        &mut self,
+        key: Key,
+        shared_locks: Option<SharedLocks>,
+        lock: PessimisticLock,
+    ) {
+        let (mut shared_locks, is_new) = match shared_locks {
+            Some(l) => (l, false),
+            None => (SharedLocks::new(), true),
+        };
+        shared_locks.put_shared_lock(lock.into_lock());
+        self.put_shared_locks(key, &shared_locks, is_new);
+    }
+
+    pub(crate) fn put_shared_locks(&mut self, key: Key, shared_locks: &SharedLocks, is_new: bool) {
+        let value = shared_locks.to_bytes();
+        if is_new {
+            self.write_size += key.as_encoded().len() + value.len();
+        }
+        let write = Modify::Put(CF_LOCK, key, value);
+        self.modifies.push(write);
     }
 
     /// Append a modify that unlocks the key. If the lock is removed due to
