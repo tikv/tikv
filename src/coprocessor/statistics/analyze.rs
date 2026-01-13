@@ -98,6 +98,8 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
         let mut is_drained = false;
         let mut collector = self.new_collector();
         let mut ctx = EvalContext::default();
+        let mut column_vals: Vec<Vec<u8>> = vec![vec![]; self.columns_info.len()];
+        let mut collation_key_vals: Vec<Vec<u8>> = vec![vec![]; self.columns_info.len()];
         while !is_drained {
             let mut sample = self.quota_limiter.new_sample(!self.is_auto_analyze);
             let mut read_size: usize = 0;
@@ -113,9 +115,12 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                 is_drained = result.is_drained?.stop();
 
                 let columns_slice = result.physical_columns.as_slice();
-                let mut column_vals: Vec<Vec<u8>> = vec![vec![]; self.columns_info.len()];
-                let mut collation_key_vals: Vec<Vec<u8>> = vec![vec![]; self.columns_info.len()];
                 for logical_row in &result.logical_rows {
+                    collector.mut_base().count += 1;
+                    let cur_rng = collector.mut_base().rng.gen_range(0.0, 1.0);
+                    if cur_rng >= self.sample_rate {
+                        continue;
+                    }
                     for i in 0..self.columns_info.len() {
                         column_vals[i].clear();
                         // collation_key_vals[i].clear();
@@ -125,26 +130,8 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                             &mut ctx,
                             &mut column_vals[i],
                         )?;
-                        // if self.columns_info[i].as_accessor().is_string_like() {
-                            // match_template_collator! {
-                                // TT, match self.columns_info[i].as_accessor().collation()? {
-                                    // Collation::TT => {
-                                        // let mut mut_val = &column_vals[i][..];
-                                        // let decoded_val = table::decode_col_value(&mut mut_val, &mut ctx, &self.columns_info[i])?;
-                                        // if decoded_val == Datum::Null {
-                                            // collation_key_vals[i].clone_from(&column_vals[i]);
-                                        // } else {
-                                            // Only if the `decoded_val` is Datum::Null, `decoded_val` is a Ok(None).
-                                            // So it is safe the unwrap the Ok value.
-                                            // TT::write_sort_key(&mut collation_key_vals[i], &decoded_val.as_string()?.unwrap())?;
-                                        // }
-                                    // }
-                                // }
-                            // };
-                        // }
                         read_size += column_vals[i].len();
                     }
-                    collector.mut_base().count += 1;
                     collector.collect_column_group(
                         &column_vals,
                         &collation_key_vals,
@@ -285,12 +272,12 @@ impl BaseRowSampleCollector {
             }
             // let mut hasher = Hasher128::with_seed(0);
             // for j in offsets {
-                // if columns_info[*j as usize].as_accessor().is_string_like() {
-                    // hasher.write(&collation_keys_val[*j as usize]);
-                // } else {
-                    // hasher.write(&columns_val[*j as usize]);
-                // }
-            }
+            // if columns_info[*j as usize].as_accessor().is_string_like() {
+            // hasher.write(&collation_keys_val[*j as usize]);
+            // } else {
+            // hasher.write(&columns_val[*j as usize]);
+            // }
+            // }
             // self.fm_sketches[col_len + i].insert_hash_value(hasher.finish());
         }
     }
@@ -400,10 +387,6 @@ impl RowSampleCollector for BernoulliRowSampleCollector {
         self.sampling(columns_val);
     }
     fn sampling(&mut self, data: &[Vec<u8>]) {
-        let cur_rng = self.base.rng.gen_range(0.0, 1.0);
-        if cur_rng >= self.sample_rate {
-            return;
-        }
         let sample = data.to_vec();
         self.base.memory_usage += sample.iter().map(|x| x.capacity()).sum::<usize>();
         self.base.report_memory_usage(false);
