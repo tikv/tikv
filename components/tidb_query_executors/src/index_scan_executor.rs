@@ -408,7 +408,7 @@ impl IndexScanExecutorImpl {
             .map(|x| x as i64)
     }
 
-    /// ## V1 Global Index (non-unique, non-clustered):
+    /// ## V1/V2 Global Index Version (non-unique, non-clustered):
     /// ```text
     /// [INDEX_VALUE_PARTITION_ID_FLAG][partition_id (8 bytes)][handle_flag][handle_data]
     /// ```
@@ -417,10 +417,11 @@ impl IndexScanExecutorImpl {
     ///
     /// # Note for V1
     /// In V1, partition ID appears in both KEY and VALUE:
-    /// - KEY: Contains partition ID prefix (this function skips it)
+    /// - KEY: Contains partition ID prefix
     /// - VALUE: Still contains partition ID (extracted by `split_partition_id`)
     ///
-    /// Future V2 will remove partition ID from VALUE.
+    /// # Note for V2
+    /// In V2, partition ID appears ONLY in KEY, not in the VALUE.
     /// TODO: Add support for PartitionHandle / index pushdown for Global
     /// Indexes.
     #[inline]
@@ -824,10 +825,10 @@ expected at least {} bytes after first flag, got {}",
 
         // Prefer partition ID from key if available, otherwise use value (V0 fallback)
         let decode_pid_op = if let Some(pid_from_key) = partition_id_from_key {
-            // V2/V1: partition ID found in key (prefer this)
+            // V2/V1: partition ID found in key (prefer this for V1)
             DecodePartitionIdOp::Pid(pid_from_key)
         } else if !partition_id_from_value.is_empty() {
-            // V1 (legacy without key) or standalone partition in value only
+            // normal/V0/legacy, partition id only in value
             DecodePartitionIdOp::Pid(partition_id_from_value)
         } else if self.pid_column_cnt > 0 || self.physical_table_id_column_cnt > 0 {
             // Expect partition ID but none found
