@@ -1312,6 +1312,10 @@ where
             }
         };
 
+        // Initialize the global MVCC read tracker with config manager
+        use crate::storage::mvcc::mvcc_read_tracker::init_mvcc_read_tracker;
+        init_mvcc_read_tracker(self.config_manager.clone());
+
         let compaction_runner = CompactionRunner::new(
             safe_point_provider,
             region_info_provider,
