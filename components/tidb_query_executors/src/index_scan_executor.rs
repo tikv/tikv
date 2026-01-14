@@ -495,7 +495,6 @@ expected at least {} bytes after first flag, got {}",
             val = &val[1..];
             flag
         } else {
-            // first_flag is already the handle flag
             first_flag
         };
 
@@ -573,8 +572,9 @@ expected at least {} bytes after first flag, got {}",
 
         match self.decode_handle_strategy {
             NoDecode => {}
-            // For normal index, it is placed at the end and any columns prior to it are
-            // ensured to be interested. For unique index, it is placed in the value.
+            // For non-unique index, it is placed at the end of the key and any columns prior to it
+            // are ensured to be interested. For unique index, it is placed in the
+            // value.
             DecodeIntHandle if key_payload.is_empty() => {
                 // This is a unique index, and we should look up PK int handle in the value.
                 let handle_val = self.decode_int_handle_from_value(value)?;
@@ -583,8 +583,10 @@ expected at least {} bytes after first flag, got {}",
                     .push_int(Some(handle_val));
             }
             DecodeIntHandle => {
-                // This is a normal index, and we should look up PK handle in the key.
-                // Note: partition ID already extracted above, so key_payload starts at handle
+                // This is a non-unique index, and we should look up PK handle in the key.
+                // For non-unique, non-clustered tables, Global Index Version V1+
+                // the key also includes the partition id, to allow duplicate _tidb_rowid
+                // across partitions.
                 let (handle_val, partition_id) =
                     self.decode_int_handle_and_partition_from_key(key_payload)?;
                 columns[self.columns_id_without_handle.len()]
@@ -795,7 +797,7 @@ expected at least {} bytes after first flag, got {}",
 
         let (common_handle_bytes, remaining) = Self::split_common_handle(remaining)?;
 
-        // partition ID from key for V2 format
+        // partition ID from key for V1/V2 format
         let mut partition_id_from_key: Option<&'a [u8]> = None;
 
         let (decode_handle_op, remaining) = {
@@ -812,7 +814,7 @@ expected at least {} bytes after first flag, got {}",
                     // This is a non-unique index, we should extract the int handle from the key.
                     datum::skip_n(&mut key_payload, self.columns_id_without_handle.len())?;
 
-                    // V2: Check for partition ID in key (after indexed columns, before handle)
+                    // V1/V2: Check for partition ID in key (after indexed columns, before handle)
                     if !key_payload.is_empty()
                         && key_payload[0] == table::INDEX_VALUE_PARTITION_ID_FLAG
                     {
@@ -850,13 +852,13 @@ expected at least {} bytes after first flag, got {}",
         // in the value, V0 - Only in value, V1 both in key and value)
         let (partition_id_from_value, remaining) = Self::split_partition_id(remaining)?;
 
-        // Prefer partition ID from key if available, otherwise use value (V0 fallback)
-        let decode_pid_op = if let Some(pid_from_key) = partition_id_from_key {
-            // V2/V1: partition ID found in key (prefer this for V1)
-            DecodePartitionIdOp::Pid(pid_from_key)
-        } else if !partition_id_from_value.is_empty() {
-            // normal/V0/legacy, partition id only in value
+        // Prefer partition ID from value if available, for backward compatibility
+        let decode_pid_op = if !partition_id_from_value.is_empty() {
+            // normal/legacy/V1, partition id in value
             DecodePartitionIdOp::Pid(partition_id_from_value)
+        } else if let Some(pid_from_key) = partition_id_from_key {
+            // V2: partition ID in key ONLY
+            DecodePartitionIdOp::Pid(pid_from_key)
         } else if self.pid_column_cnt > 0 || self.physical_table_id_column_cnt > 0 {
             // Expect partition ID but none found
             return Err(other_err!(
