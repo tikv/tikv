@@ -719,20 +719,23 @@ impl<'a> PrewriteMutation<'a> {
         // safety check for shared lock.
         if shared_locks.is_some() {
             if generation > 0 {
-                return Err(box_err!(
+                return Err(ErrorInner::Other(box_err!(
                     "shared lock prewrite does not support non-zero generation, generation: {}",
                     generation
-                ));
+                ))
+                .into());
             }
             if try_one_pc {
-                return Err(box_err!(
+                return Err(ErrorInner::Other(box_err!(
                     "shared lock prewrite is incompatible with one-phase commit"
-                ));
+                ))
+                .into());
             }
             if lock.use_async_commit {
-                return Err(box_err!(
+                return Err(ErrorInner::Other(box_err!(
                     "shared lock prewrite cannot use async-commit, falling back to 2PC"
-                ));
+                ))
+                .into());
             }
 
             let mut shared = shared_locks.expect("shared_locks must be Some");

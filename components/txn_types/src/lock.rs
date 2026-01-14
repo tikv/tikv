@@ -759,6 +759,10 @@ impl SharedLocks {
     }
 
     pub fn put_lock(&mut self, ts: TimeStamp, lock: Lock) {
+        assert!(matches!(
+            lock.lock_type,
+            LockType::Lock | LockType::Pessimistic
+        ));
         self.txn_info_segments.insert(ts, Either::Right(lock));
     }
 
@@ -990,6 +994,7 @@ mod tests {
                 i, flag, lock_type, lt
             );
         }
+
         let lock_type = LockType::Shared;
         let f = lock_type.to_u8();
         assert_eq!(f, FLAG_SHARED);
