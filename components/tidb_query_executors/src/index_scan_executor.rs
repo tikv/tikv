@@ -3788,19 +3788,14 @@ mod tests {
         };
 
         // Helper to build key with optional partition prefix
-        fn build_key(
-            partition_id: Option<i64>,
-            handle_flag: u8,
-            handle_value: i64,
-            is_unsigned: bool,
-        ) -> Vec<u8> {
+        fn build_key(partition_id: Option<i64>, handle_flag: u8, handle_value: i64) -> Vec<u8> {
             let mut key = Vec::new();
             if let Some(pid) = partition_id {
                 key.push(table::INDEX_VALUE_PARTITION_ID_FLAG);
                 key.write_i64(pid).unwrap();
             }
             key.push(handle_flag);
-            if is_unsigned {
+            if handle_flag == datum::UINT_FLAG {
                 key.write_u64(handle_value as u64).unwrap();
             } else {
                 key.write_i64(handle_value).unwrap();
@@ -3808,89 +3803,54 @@ mod tests {
             key
         }
 
-        // Success cases: (partition_id, handle_flag, handle_value, is_unsigned,
-        // expected_handle, expected_partition, description)
-        let success_cases: Vec<(Option<i64>, u8, i64, bool, i64, Option<i64>, &str)> = vec![
-            (
-                None,
-                datum::INT_FLAG,
-                123,
-                false,
-                123,
-                None,
-                "INT_FLAG positive",
-            ),
-            (
-                None,
-                datum::INT_FLAG,
-                -456,
-                false,
-                -456,
-                None,
-                "INT_FLAG negative",
-            ),
-            (None, datum::UINT_FLAG, 789, true, 789, None, "UINT_FLAG"),
-            (
-                Some(100),
-                datum::INT_FLAG,
-                999,
-                false,
-                999,
-                Some(100),
-                "partition + INT_FLAG",
-            ),
-            (
-                Some(200),
-                datum::UINT_FLAG,
-                888,
-                true,
-                888,
-                Some(200),
-                "partition + UINT_FLAG",
-            ),
-        ];
+        // Test all combinations of partition IDs and handle values
+        let partition_ids: Vec<Option<i64>> = vec![None, Some(-100), Some(0), Some(100)];
+        let handle_values: Vec<i64> = vec![-999, 0, 999];
 
-        for (
-            partition_id,
-            handle_flag,
-            handle_value,
-            is_unsigned,
-            expected_handle,
-            expected_partition,
-            desc,
-        ) in success_cases
-        {
-            let key = build_key(partition_id, handle_flag, handle_value, is_unsigned);
-            assert_eq!(
-                idx_exe
-                    .decode_int_handle_and_partition_from_key(&key)
-                    .unwrap(),
-                (expected_handle, expected_partition),
-                "Failed for case: {}",
-                desc
-            );
+        for &partition_id in &partition_ids {
+            for &handle_value in &handle_values {
+                // Determine which flags to test based on handle value
+                let flags: Vec<u8> = if handle_value >= 0 {
+                    vec![datum::INT_FLAG, datum::UINT_FLAG]
+                } else {
+                    vec![datum::INT_FLAG] // negative values only work with INT_FLAG
+                };
+
+                for &handle_flag in &flags {
+                    let key = build_key(partition_id, handle_flag, handle_value);
+                    let result = idx_exe.decode_int_handle_and_partition_from_key(&key);
+
+                    assert_eq!(
+                        result.unwrap(),
+                        (handle_value, partition_id),
+                        "Failed for partition_id={:?}, handle_flag={}, handle_value={}",
+                        partition_id,
+                        if handle_flag == datum::INT_FLAG {
+                            "INT"
+                        } else {
+                            "UINT"
+                        },
+                        handle_value
+                    );
+                }
+            }
         }
 
-        // Error cases: (key_bytes, description)
+        // Error cases: malformed keys
         let error_cases: Vec<(Vec<u8>, &str)> = vec![
-            // Invalid handle flag
+            (vec![], "empty key"),
             (
                 vec![0x99, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08],
                 "invalid handle flag",
             ),
-            // Partition flag with insufficient data for partition id
             (
                 vec![table::INDEX_VALUE_PARTITION_ID_FLAG, 0x01, 0x02],
                 "partition flag with insufficient partition data",
             ),
-            // Empty key
-            (vec![], "empty key"),
-            // INT_FLAG with insufficient data
             (
                 vec![datum::INT_FLAG, 0x01],
                 "INT_FLAG with insufficient data",
             ),
-            // UINT_FLAG with insufficient data
             (
                 vec![datum::UINT_FLAG, 0x01],
                 "UINT_FLAG with insufficient data",
@@ -3902,43 +3862,36 @@ mod tests {
                 idx_exe
                     .decode_int_handle_and_partition_from_key(&key)
                     .is_err(),
-                "Expected error for case: {}",
+                "Expected error for: {}",
                 desc
             );
         }
 
-        // Error cases that need key building: (partition_id, extra_bytes, description)
-        // Partition flag with partition id but no/invalid handle
-        let partition_error_cases: Vec<(i64, Vec<u8>, &str)> = vec![
-            (300, vec![], "partition id but no handle data"),
+        // Error cases with partition prefix but malformed handle
+        let malformed_handles: Vec<(Vec<u8>, &str)> = vec![
+            (vec![], "no handle data"),
             (
-                400,
                 vec![0xFF, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08],
-                "partition id with invalid handle flag",
+                "invalid handle flag",
             ),
-            (
-                500,
-                vec![datum::INT_FLAG, 0x01],
-                "partition id with INT_FLAG but insufficient handle data",
-            ),
-            (
-                600,
-                vec![datum::UINT_FLAG, 0x01],
-                "partition id with UINT_FLAG but insufficient handle data",
-            ),
+            (vec![datum::INT_FLAG, 0x01], "INT_FLAG insufficient data"),
+            (vec![datum::UINT_FLAG, 0x01], "UINT_FLAG insufficient data"),
         ];
 
-        for (partition_id, extra_bytes, desc) in partition_error_cases {
-            let mut key = vec![table::INDEX_VALUE_PARTITION_ID_FLAG];
-            key.write_i64(partition_id).unwrap();
-            key.extend(extra_bytes);
-            assert!(
-                idx_exe
-                    .decode_int_handle_and_partition_from_key(&key)
-                    .is_err(),
-                "Expected error for case: {}",
-                desc
-            );
+        for partition_id in [-100i64, 0, 100] {
+            for (extra_bytes, handle_desc) in &malformed_handles {
+                let mut key = vec![table::INDEX_VALUE_PARTITION_ID_FLAG];
+                key.write_i64(partition_id).unwrap();
+                key.extend(extra_bytes);
+                assert!(
+                    idx_exe
+                        .decode_int_handle_and_partition_from_key(&key)
+                        .is_err(),
+                    "Expected error for partition_id={}, handle={}",
+                    partition_id,
+                    handle_desc
+                );
+            }
         }
     }
 
@@ -3967,119 +3920,169 @@ mod tests {
             ci
         }
 
-        // Test cases: (partition_id, indexed_value, handle_value, pid_in_value,
-        // request_pid_column, description)
-        let test_cases: Vec<(i64, i64, i64, bool, bool, &str)> = vec![
-            // V1 format tests: partition ID in both key and value
-            (42, 999, 123, true, true, "V1: normal partition ID"),
-            (0, 100, 1, true, true, "V1: zero partition ID"),
-            (-1, 200, 2, true, true, "V1: negative partition ID"),
-            // V2 format tests: partition ID only in key
-            (88, 555, 777, false, true, "V2: partition in key only"),
-            (0, 111, 222, false, true, "V2: zero partition in key only"),
-            // V2 without requesting partition column
-            (88, 555, 777, false, false, "V2: without partition column"),
-        ];
+        // Test value ranges
+        let partition_ids: Vec<i64> = vec![-100, 0, 100];
+        let indexed_values: Vec<i64> = vec![-50, 0, 50];
+        let handle_values: Vec<i64> = vec![-999, 0, 999];
+        let pid_in_value_options = [true, false]; // V1 vs V2
+        let request_pid_column_options = [true, false];
 
-        for (partition_id, indexed_value, handle_value, pid_in_value, request_pid_column, desc) in
-            test_cases
-        {
-            // Build columns based on test configuration
-            let mut columns_info = vec![
-                make_column(1, false), // indexed column
-                make_column(-1, true), // handle column
-            ];
-            let mut schema: Vec<FieldType> =
-                vec![FieldTypeTp::LongLong.into(), FieldTypeTp::LongLong.into()];
-            if request_pid_column {
-                columns_info.push(make_column(table::EXTRA_PARTITION_ID_COL_ID, false));
-                schema.push(FieldTypeTp::LongLong.into());
-            }
+        for &partition_id in &partition_ids {
+            for &indexed_value in &indexed_values {
+                for &handle_value in &handle_values {
+                    for &pid_in_value in &pid_in_value_options {
+                        for &request_pid_column in &request_pid_column_options {
+                            let version = if pid_in_value { "V1" } else { "V2" };
+                            let pid_col = if request_pid_column {
+                                "with_pid_col"
+                            } else {
+                                "no_pid_col"
+                            };
 
-            // Build index key: [indexed_col][PARTITION_ID_FLAG][partition_id][handle]
-            let mut index_key_data =
-                datum::encode_key(&mut EvalContext::default(), &[Datum::I64(indexed_value)])
-                    .unwrap();
-            index_key_data.push(table::INDEX_VALUE_PARTITION_ID_FLAG);
-            index_key_data.write_i64(partition_id).unwrap();
-            let handle_data =
-                datum::encode_key(&mut EvalContext::default(), &[Datum::I64(handle_value)])
-                    .unwrap();
-            index_key_data.extend(handle_data);
-            let key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &index_key_data);
+                            // Build columns based on test configuration
+                            let mut columns_info = vec![
+                                make_column(1, false), // indexed column
+                                make_column(-1, true), // handle column
+                            ];
+                            let mut schema: Vec<FieldType> =
+                                vec![FieldTypeTp::LongLong.into(), FieldTypeTp::LongLong.into()];
+                            if request_pid_column {
+                                columns_info
+                                    .push(make_column(table::EXTRA_PARTITION_ID_COL_ID, false));
+                                schema.push(FieldTypeTp::LongLong.into());
+                            }
 
-            // Build index value (with or without partition ID based on version)
-            let value = if pid_in_value {
-                let mut v = vec![0u8]; // tail_len = 0
-                v.push(table::INDEX_VALUE_PARTITION_ID_FLAG);
-                let mut pid_bytes = vec![0u8; 8];
-                NumberCodec::encode_i64(&mut pid_bytes, partition_id);
-                v.extend(&pid_bytes);
-                v
-            } else {
-                vec![0u8] // V2: no partition ID in value
-            };
+                            // Build index key:
+                            // [indexed_col][PARTITION_ID_FLAG][partition_id][handle]
+                            let mut index_key_data = datum::encode_key(
+                                &mut EvalContext::default(),
+                                &[Datum::I64(indexed_value)],
+                            )
+                            .unwrap();
+                            index_key_data.push(table::INDEX_VALUE_PARTITION_ID_FLAG);
+                            index_key_data.write_i64(partition_id).unwrap();
+                            let handle_data = datum::encode_key(
+                                &mut EvalContext::default(),
+                                &[Datum::I64(handle_value)],
+                            )
+                            .unwrap();
+                            index_key_data.extend(handle_data);
+                            let key =
+                                table::encode_index_seek_key(TABLE_ID, INDEX_ID, &index_key_data);
 
-            let key_ranges = vec![{
-                let mut range = KeyRange::default();
-                range.set_start(key.clone());
-                range.set_end(key.clone());
-                convert_to_prefix_next(range.mut_end());
-                range
-            }];
+                            // Build index value (with or without partition ID based on version)
+                            let value = if pid_in_value {
+                                let mut v = vec![0u8]; // tail_len = 0
+                                v.push(table::INDEX_VALUE_PARTITION_ID_FLAG);
+                                let mut pid_bytes = vec![0u8; 8];
+                                NumberCodec::encode_i64(&mut pid_bytes, partition_id);
+                                v.extend(&pid_bytes);
+                                v
+                            } else {
+                                vec![0u8] // V2: no partition ID in value
+                            };
 
-            let store = FixtureStorage::from(vec![(key, value)]);
-            let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
-                store,
-                Arc::new(EvalConfig::default()),
-                columns_info,
-                key_ranges,
-                0,
-                false,
-                false,
-                false,
-                false,
-            )
-            .unwrap();
+                            let key_ranges = vec![{
+                                let mut range = KeyRange::default();
+                                range.set_start(key.clone());
+                                range.set_end(key.clone());
+                                convert_to_prefix_next(range.mut_end());
+                                range
+                            }];
 
-            let mut result = block_on(executor.next_batch(10));
-            let expected_cols = if request_pid_column { 3 } else { 2 };
-            assert!(result.is_drained.as_ref().unwrap().stop(), "{}", desc);
-            assert_eq!(
-                result.physical_columns.columns_len(),
-                expected_cols,
-                "{}",
-                desc
-            );
-            assert_eq!(result.physical_columns.rows_len(), 1, "{}", desc);
+                            let store = FixtureStorage::from(vec![(key, value)]);
+                            let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
+                                store,
+                                Arc::new(EvalConfig::default()),
+                                columns_info,
+                                key_ranges,
+                                0,
+                                false,
+                                false,
+                                false,
+                                false,
+                            )
+                            .unwrap();
 
-            // Verify indexed column
-            result.physical_columns[0]
-                .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[0])
-                .unwrap();
-            assert_eq!(
-                result.physical_columns[0].decoded().to_int_vec(),
-                &[Some(indexed_value)],
-                "{}: indexed column mismatch",
-                desc
-            );
+                            let mut result = block_on(executor.next_batch(10));
+                            let expected_cols = if request_pid_column { 3 } else { 2 };
 
-            // Verify handle
-            assert_eq!(
-                result.physical_columns[1].decoded().to_int_vec(),
-                &[Some(handle_value)],
-                "{}: handle mismatch",
-                desc
-            );
+                            assert!(
+                                result.is_drained.as_ref().unwrap().stop(),
+                                "{} {} pid={} idx={} handle={}",
+                                version,
+                                pid_col,
+                                partition_id,
+                                indexed_value,
+                                handle_value
+                            );
+                            assert_eq!(
+                                result.physical_columns.columns_len(),
+                                expected_cols,
+                                "{} {} pid={} idx={} handle={}",
+                                version,
+                                pid_col,
+                                partition_id,
+                                indexed_value,
+                                handle_value
+                            );
+                            assert_eq!(
+                                result.physical_columns.rows_len(),
+                                1,
+                                "{} {} pid={} idx={} handle={}",
+                                version,
+                                pid_col,
+                                partition_id,
+                                indexed_value,
+                                handle_value
+                            );
 
-            // Verify partition ID if requested
-            if request_pid_column {
-                assert_eq!(
-                    result.physical_columns[2].decoded().to_int_vec(),
-                    &[Some(partition_id)],
-                    "{}: partition ID mismatch",
-                    desc
-                );
+                            // Verify indexed column
+                            result.physical_columns[0]
+                                .ensure_all_decoded_for_test(
+                                    &mut EvalContext::default(),
+                                    &schema[0],
+                                )
+                                .unwrap();
+                            assert_eq!(
+                                result.physical_columns[0].decoded().to_int_vec(),
+                                &[Some(indexed_value)],
+                                "{} {} pid={} idx={} handle={}: indexed column mismatch",
+                                version,
+                                pid_col,
+                                partition_id,
+                                indexed_value,
+                                handle_value
+                            );
+
+                            // Verify handle
+                            assert_eq!(
+                                result.physical_columns[1].decoded().to_int_vec(),
+                                &[Some(handle_value)],
+                                "{} {} pid={} idx={} handle={}: handle mismatch",
+                                version,
+                                pid_col,
+                                partition_id,
+                                indexed_value,
+                                handle_value
+                            );
+
+                            // Verify partition ID if requested
+                            if request_pid_column {
+                                assert_eq!(
+                                    result.physical_columns[2].decoded().to_int_vec(),
+                                    &[Some(partition_id)],
+                                    "{} {} pid={} idx={} handle={}: partition ID mismatch",
+                                    version,
+                                    pid_col,
+                                    partition_id,
+                                    indexed_value,
+                                    handle_value
+                                );
+                            }
+                        }
+                    }
+                }
             }
         }
     }
