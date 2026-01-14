@@ -1869,7 +1869,7 @@ fn test_shared_exclusive_lock_conflict() {
             .sched_txn_command(
                 new_acquire_pessimistic_lock_command_with_pk_with_shared(
                     vec![(Key::from_raw(&shared_key), false, is_shared_lock)],
-                    Some(&pk.clone()),
+                    Some(&pk),
                     start_ts,
                     start_ts,
                     false,
