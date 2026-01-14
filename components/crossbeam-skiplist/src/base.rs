@@ -2030,7 +2030,11 @@ where
                 None => self.range.end_bound(),
             };
             if below_upper_bound(&bound, h.key().borrow()) {
-                self.head.clone_from(&next_head);
+                if let Some(e) = mem::replace(&mut self.head, next_head.clone()) {
+                    unsafe {
+                        e.node.decrement(guard);
+                    }
+                }
                 next_head
             } else {
                 unsafe {
@@ -2057,7 +2061,11 @@ where
                 None => self.range.start_bound(),
             };
             if above_lower_bound(&bound, t.key().borrow()) {
-                self.tail.clone_from(&next_tail);
+                if let Some(e) = mem::replace(&mut self.tail, next_tail.clone()) {
+                    unsafe {
+                        e.node.decrement(guard);
+                    }
+                }
                 next_tail
             } else {
                 unsafe {
@@ -2079,6 +2087,18 @@ where
         if let Some(e) = self.tail.take() {
             unsafe { e.node.decrement(guard) };
         }
+    }
+}
+
+impl<Q, R, K, V> Drop for RefRange<'_, Q, R, K, V>
+where
+    K: Ord + Borrow<Q>,
+    R: RangeBounds<Q>,
+    Q: Ord + ?Sized,
+{
+    fn drop(&mut self) {
+        let guard = &epoch::pin();
+        self.drop_impl(guard);
     }
 }
 
