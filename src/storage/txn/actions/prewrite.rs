@@ -33,22 +33,6 @@ use crate::storage::{
     },
 };
 
-/// Create a LockInfo for shared locks to return as an error.
-/// We use the minimum start_ts from all shared locks.
-fn create_shared_locks_info(
-    shared_locks: &SharedLocks,
-    raw_key: Vec<u8>,
-) -> kvproto::kvrpcpb::LockInfo {
-    let mut info = kvproto::kvrpcpb::LockInfo::default();
-    info.set_key(raw_key);
-    info.set_lock_type(kvproto::kvrpcpb::Op::SharedLock);
-    // Use the minimum start_ts from all shared locks
-    if let Some(min_ts) = shared_locks.iter_ts().min() {
-        info.set_lock_version(min_ts.into_inner());
-    }
-    info
-}
-
 /// Prewrite a single mutation by creating and storing a lock and value.
 pub fn prewrite<S: Snapshot>(
     txn: &mut MvccTxn,
@@ -171,7 +155,7 @@ pub fn prewrite_with_generation<S: Snapshot>(
                         .into());
                     }
                     // Non-shared prewrite blocked by existing shared locks
-                    let lock_info = create_shared_locks_info(&shared_locks, mutation.key.to_raw()?);
+                    let lock_info = shared_locks.into_lock_info(mutation.key.to_raw()?);
                     return Err(ErrorInner::KeyIsLocked(lock_info).into());
                 }
             }

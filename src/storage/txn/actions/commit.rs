@@ -203,7 +203,7 @@ pub fn commit<S: Snapshot>(
     txn.put_write(key.clone(), commit_ts, write.as_ref().to_bytes());
     match shared_locks {
         Some(shared_locks) => {
-            if shared_locks.len() == 0 {
+            if shared_locks.is_empty() {
                 Ok(txn.unlock_key(key, true, commit_ts))
             } else {
                 txn.put_shared_locks(key, &shared_locks, false);

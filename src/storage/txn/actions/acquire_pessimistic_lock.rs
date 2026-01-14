@@ -466,6 +466,7 @@ fn handle_existing_shared_lock<S: Snapshot>(
     debug_assert!(!allow_lock_with_conflict);
 
     let need_load_value = need_value || (need_check_existence && need_old_value);
+    // don't support load value for shared lock now.
     let val = None;
 
     let (existing_for_update_ts, last_change, is_locked_with_conflict) = {
