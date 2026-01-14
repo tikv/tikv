@@ -915,6 +915,7 @@ where
                 let observe_id = batch.rts_id;
                 let region_id = observe_region.meta.id;
                 if observe_region.handle.id == observe_id {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
                     let logs = ChangeLog::encode_change_log(region_id, batch);
                     if let Err(e) = observe_region.track_change_log(&logs) {
                         drop(observe_region);
