@@ -153,7 +153,9 @@ impl MvccTxn {
             Some(l) => (l, false),
             None => (SharedLocks::new(), true),
         };
-        shared_locks.put_shared_lock(lock.into_lock());
+        let in_memory_lock = lock.into_lock();
+        let ts = in_memory_lock.ts;
+        shared_locks.put_lock(ts, in_memory_lock);
         self.put_shared_locks(key, &shared_locks, is_new);
     }
 

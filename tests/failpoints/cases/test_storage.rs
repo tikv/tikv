@@ -1950,7 +1950,7 @@ fn test_shared_exclusive_lock_conflict() {
 
     acquire_lock(10, true).recv().unwrap().unwrap();
     let mut shared_lock = load_shared_lock();
-    assert_eq!(shared_lock.shared_lock_num(), 1);
+    assert_eq!(shared_lock.len(), 1);
     assert!(
         shared_lock
             .get_lock(&TimeStamp::from(10))
@@ -1967,12 +1967,12 @@ fn test_shared_exclusive_lock_conflict() {
     // Re-acquiring the same transaction should be idempotent.
     acquire_lock(10, true).recv().unwrap().unwrap();
     let shared_lock = load_shared_lock();
-    assert_eq!(shared_lock.shared_lock_num(), 1);
+    assert_eq!(shared_lock.len(), 1);
 
     // A different transaction should be merged into the same shared lock entry.
     acquire_lock(20, true).recv().unwrap().unwrap();
     let mut shared_lock = load_shared_lock();
-    assert_eq!(shared_lock.shared_lock_num(), 2);
+    assert_eq!(shared_lock.len(), 2);
     assert!(
         shared_lock
             .get_lock(&TimeStamp::from(10))

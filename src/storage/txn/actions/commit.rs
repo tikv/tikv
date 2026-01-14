@@ -203,7 +203,7 @@ pub fn commit<S: Snapshot>(
     txn.put_write(key.clone(), commit_ts, write.as_ref().to_bytes());
     match shared_locks {
         Some(shared_locks) => {
-            if shared_locks.shared_lock_num() == 0 {
+            if shared_locks.len() == 0 {
                 Ok(txn.unlock_key(key, true, commit_ts))
             } else {
                 txn.put_shared_locks(key, &shared_locks, false);
@@ -343,9 +343,10 @@ pub mod tests {
         let lock_count = locks.len();
         let mut shared_locks = SharedLocks::new();
         for lock in locks {
-            shared_locks.put_shared_lock(lock);
+            let ts = lock.ts;
+            shared_locks.put_lock(ts, lock);
         }
-        assert_eq!(shared_locks.shared_lock_num(), lock_count);
+        assert_eq!(shared_locks.len(), lock_count);
         let mut txn = MvccTxn::new(
             TimeStamp::zero(),
             ConcurrencyManager::new_for_test(TimeStamp::zero()),
@@ -746,19 +747,19 @@ pub mod tests {
         }
 
         let mut current_locks = load_shared_locks(&mut engine, key).unwrap();
-        assert_eq!(current_locks.shared_lock_num(), 2);
+        assert_eq!(current_locks.len(), 2);
         assert!(current_locks.get_lock(&start_ts1).unwrap().is_some());
         assert!(current_locks.get_lock(&start_ts2).unwrap().is_some());
 
         let mut simulated_locks = current_locks.clone();
         let _ = simulated_locks.remove_lock(&start_ts1).unwrap();
-        assert_eq!(simulated_locks.shared_lock_num(), 1);
+        assert_eq!(simulated_locks.len(), 1);
 
         // commit start_ts1
         assert!(must_succeed(&mut engine, key, start_ts1, commit_ts_1).is_none());
         must_written(&mut engine, key, start_ts1, commit_ts_1, WriteType::Lock);
         let mut current_locks = load_shared_locks(&mut engine, key).unwrap();
-        assert_eq!(current_locks.shared_lock_num(), 1);
+        assert_eq!(current_locks.len(), 1);
         assert!(current_locks.get_lock(&start_ts1).unwrap().is_none());
         assert!(current_locks.get_lock(&start_ts2).unwrap().is_some());
 

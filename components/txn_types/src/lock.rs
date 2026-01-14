@@ -52,8 +52,7 @@ impl LockType {
         match *mutation {
             Mutation::Put(..) | Mutation::Insert(..) => Some(LockType::Put),
             Mutation::Delete(..) => Some(LockType::Delete),
-            Mutation::Lock(..) => Some(LockType::Lock),
-            Mutation::SharedLock(..) => Some(LockType::Lock),
+            Mutation::Lock(..) | Mutation::SharedLock(..) => Some(LockType::Lock),
             Mutation::CheckNotExists(..) => None,
         }
     }
@@ -704,12 +703,12 @@ impl SharedLocks {
         Ok(Self::new_with_txn_infos(segments))
     }
 
+    #[inline]
     pub fn len(&self) -> usize {
         self.txn_info_segments.len()
     }
 
     #[inline]
-    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.txn_info_segments.is_empty()
     }
@@ -723,12 +722,6 @@ impl SharedLocks {
                 *either = Either::Right(lock);
             }
         }
-    }
-
-    #[inline]
-    #[must_use]
-    pub fn shared_lock_num(&self) -> usize {
-        self.len()
     }
 
     #[inline]
@@ -765,7 +758,7 @@ impl SharedLocks {
         }
     }
 
-    fn put_lock(&mut self, ts: TimeStamp, lock: Lock) {
+    pub fn put_lock(&mut self, ts: TimeStamp, lock: Lock) {
         self.txn_info_segments.insert(ts, Either::Right(lock));
     }
 
@@ -778,17 +771,6 @@ impl SharedLocks {
         } else {
             Ok(None)
         }
-    }
-
-    #[inline]
-    pub fn put_shared_lock(&mut self, lock: Lock) {
-        let lock_type = lock.lock_type;
-        match lock_type {
-            LockType::Lock | LockType::Pessimistic => {}
-            _ => unreachable!(),
-        }
-        let ts = lock.ts;
-        self.put_lock(ts, lock);
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -984,8 +966,8 @@ mod tests {
             ),
             (
                 Mutation::make_shared_lock(Key::from_raw(key)),
-                LockType::Shared,
-                FLAG_SHARED,
+                LockType::Lock,
+                FLAG_LOCK,
             ),
         ];
         for (i, (mutation, lock_type, flag)) in tests.drain(..).enumerate() {
@@ -1862,9 +1844,9 @@ mod tests {
             false,
         );
 
-        shared_locks.put_shared_lock(txn1_lock);
-        shared_locks.put_shared_lock(txn2_pessimistic_lock);
-        shared_locks.put_shared_lock(txn2_prewrite_lock);
+        shared_locks.put_lock(txn1_ts, txn1_lock);
+        shared_locks.put_lock(txn2_ts, txn2_pessimistic_lock);
+        shared_locks.put_lock(txn2_ts, txn2_prewrite_lock);
 
         assert_eq!(shared_locks.len(), 2);
         assert_eq!(

@@ -2770,7 +2770,7 @@ pub mod tests {
         assert!(matches!(result, PessimisticLockKeyResult::Empty));
 
         let mut shared_locks = load_shared_locks(&mut engine, key);
-        assert_eq!(shared_locks.shared_lock_num(), 1);
+        assert_eq!(shared_locks.len(), 1);
 
         let sub_lock = shared_locks
             .get_lock(&start_ts)
@@ -2796,7 +2796,7 @@ pub mod tests {
         must_acquire_shared_lock(&mut engine, key, pk_two, start_two, for_update_two, 2500);
 
         let mut shared_locks = load_shared_locks(&mut engine, key);
-        assert_eq!(shared_locks.shared_lock_num(), 2);
+        assert_eq!(shared_locks.len(), 2);
 
         let first = shared_locks
             .get_lock(&start_one)
@@ -2828,7 +2828,7 @@ pub mod tests {
         must_acquire_shared_lock(&mut engine, key, pk, start_ts, new_for_update_ts, 3000);
 
         let mut shared_locks = load_shared_locks(&mut engine, key);
-        assert_eq!(shared_locks.shared_lock_num(), 1);
+        assert_eq!(shared_locks.len(), 1);
 
         let sub_lock = shared_locks
             .get_lock(&start_ts)

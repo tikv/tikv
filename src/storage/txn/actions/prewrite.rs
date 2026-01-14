@@ -752,7 +752,8 @@ impl<'a> PrewriteMutation<'a> {
             }
 
             let mut shared = shared_locks.expect("shared_locks must be Some");
-            shared.put_shared_lock(lock);
+            let ts = lock.ts;
+            shared.put_lock(ts, lock);
             #[cfg(debug_assertions)]
             {
                 let sub_lock_type = shared
@@ -2997,7 +2998,7 @@ pub mod tests {
 
         prepare_shared_pessimistic_lock(&mut engine, key, pk, start_ts, for_update_ts);
         let mut shared_locks = must_load_shared_lock(&mut engine, key);
-        assert_eq!(shared_locks.shared_lock_num(), 1);
+        assert_eq!(shared_locks.len(), 1);
         let sub_lock = shared_locks.get_lock(&start_ts).unwrap().unwrap();
         assert_eq!(sub_lock.lock_type, LockType::Pessimistic);
 
@@ -3023,7 +3024,7 @@ pub mod tests {
         write(&engine, &ctx, txn.into_modifies());
 
         let mut shared_locks = must_load_shared_lock(&mut engine, key);
-        assert_eq!(shared_locks.shared_lock_num(), 1);
+        assert_eq!(shared_locks.len(), 1);
         let sub_lock = shared_locks.get_lock(&start_ts).unwrap().unwrap();
         assert_eq!(sub_lock.lock_type, LockType::Lock);
         assert_eq!(sub_lock.primary, pk);
