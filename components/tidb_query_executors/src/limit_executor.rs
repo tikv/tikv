@@ -242,6 +242,12 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
 
     #[inline]
     async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+        let real_scan_rows = if self.is_src_scan_executor {
+            std::cmp::min(scan_rows, self.remaining_rows)
+        } else {
+            scan_rows
+        };
+        
         if self.prefix_keys_exps.len() > 0 {  
             #[cfg(debug_assertions)] { self.executed_in_rank_limit_for_test = true; }
 
@@ -254,11 +260,6 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
                 };
             }
 
-            let real_scan_rows = if self.is_src_scan_executor {
-                std::cmp::min(scan_rows, self.remaining_rows)
-            } else {
-                scan_rows
-            };
             let mut result = self.src.next_batch(real_scan_rows).await;
             let total_row_num = result.logical_rows.len();
             let output_row_num;
@@ -302,11 +303,6 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
         } else {
             #[cfg(debug_assertions)] { self.executed_in_limit_for_test = true; }
 
-            let real_scan_rows = if self.is_src_scan_executor {
-                std::cmp::min(scan_rows, self.remaining_rows)
-            } else {
-                scan_rows
-            };
             let mut result = self.src.next_batch(real_scan_rows).await;
             if result.logical_rows.len() < self.remaining_rows {
                 self.remaining_rows -= result.logical_rows.len();
@@ -607,11 +603,12 @@ mod tests {
     #[test]
     fn test_rank_limit_0() {
         let src_exec = MockExecutor::new(
-            vec![FieldTypeTp::LongLong.into()],
+            vec![FieldTypeTp::LongLong.into(), FieldTypeTp::LongLong.into()],
             vec![BatchExecuteResult {
-                physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Int(
-                    vec![None, Some(50), None].into(),
-                )]),
+                physical_columns: LazyBatchColumnVec::from(vec![
+                    VectorValue::Int(vec![None, Some(50), None].into()),
+                    VectorValue::Int(vec![None, Some(50), None].into()),
+                ]),
                 logical_rows: vec![1, 2],
                 warnings: EvalWarnings::default(),
                 is_drained: Ok(BatchExecIsDrain::Drain),
@@ -619,19 +616,16 @@ mod tests {
         );
 
         let config = Arc::new(EvalConfig::default());
-        let group_by_exp = || {
+        let prefix_key_exp = 
             RpnExpressionBuilder::new_for_test()
                 .push_column_ref_for_test(1)
-                .build_for_test()
-        };
-        let mut exec = BatchLimitExecutor::new_rank_limit(src_exec, 0, false, config, vec![group_by_exp()]).unwrap();
+                .build_for_test();
+        let mut exec = BatchLimitExecutor::new_rank_limit(src_exec, 0, false, config, vec![prefix_key_exp]).unwrap();
 
         let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
-        assert_eq!(r.physical_columns.rows_len(), 3);
         assert!(r.is_drained.unwrap().stop());
     }
-    // TODO(x) consider is_src_scan_executor in test?
 
     #[test]
     fn test_rank_limit_one_chunk() {

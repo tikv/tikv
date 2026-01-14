@@ -445,8 +445,8 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
                     .map(|mut item| item.take_expr())
                     .collect_vec();
 
-                // TODO(xzx) fix it
                 if partition_by.is_empty() {
+                    // TODO(x) consider rank limit
                     Box::new(
                         BatchLimitExecutor::new(
                             executor,
