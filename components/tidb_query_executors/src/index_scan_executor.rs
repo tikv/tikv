@@ -469,39 +469,16 @@ expected at least {} bytes after first flag, got {}",
     /// ```
     #[inline]
     fn decode_int_handle_from_key(&self, key: &[u8]) -> Result<i64> {
-        let mut val = key;
-        if val.is_empty() {
+        if key.is_empty() {
             return Err(other_err!("Key is empty, cannot decode handle"));
         }
-        let first_flag = val[0];
-        val = &val[1..];
-
-        // Support partition handle prefix: PARTITION_ID_FLAG + partition_id(8 bytes) +
-        // inner_handle
-        let handle_flag = if first_flag == table::INDEX_VALUE_PARTITION_ID_FLAG {
-            // Ensure there are at least 8 bytes for partition id + 1 byte for handle flag
-            if val.len() < table::ID_LEN + 1 {
-                return Err(other_err!(
-                    "Insufficient data to decode partition ID and handle flag: \
-expected at least {} bytes after first flag, got {}",
-                    table::ID_LEN + 1,
-                    val.len()
-                ));
-            }
-            // Skip the partition id (8 bytes)
-            val = &val[table::ID_LEN..];
-            // Read the actual handle flag
-            let flag = val[0];
-            val = &val[1..];
-            flag
-        } else {
-            first_flag
-        };
+        let flag = key[0];
+        let mut val = &key[1..];
 
         // TODO: Better to use `push_datum`. This requires us to allow `push_datum`
         // receiving optional time zone first.
 
-        match handle_flag {
+        match flag {
             datum::INT_FLAG => val
                 .read_i64()
                 .map_err(|_| other_err!("Failed to decode handle in key as i64")),
@@ -509,7 +486,7 @@ expected at least {} bytes after first flag, got {}",
                 .read_u64()
                 .map_err(|_| other_err!("Failed to decode handle in key as u64"))
                 .map(|x| x as i64),
-            f => Err(other_err!("Unexpected handle flag {}", f)),
+            _ => Err(other_err!("Unexpected handle flag {}", flag)),
         }
     }
 
