@@ -1138,7 +1138,9 @@ pub mod tests {
             is_locked_with_conflict: false,
         };
         let mut shared_locks = SharedLocks::new();
-        shared_locks.insert_lock(pessimistic_lock.into_lock()).unwrap();
+        shared_locks
+            .insert_lock(pessimistic_lock.into_lock())
+            .unwrap();
         txn.put_shared_locks(Key::from_raw(key), &shared_locks, true);
         write(engine, &ctx, txn.into_modifies());
     }

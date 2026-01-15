@@ -299,7 +299,9 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
             Some(l) => (l, false),
             None => (SharedLocks::new(), true),
         };
-        shared_locks.insert_lock(lock.into_lock()).map_err(MvccError::from)?;
+        shared_locks
+            .insert_lock(lock.into_lock())
+            .map_err(MvccError::from)?;
         txn.put_shared_locks(key, &shared_locks, is_new);
     } else if !lock_only_if_exists || val.is_some() {
         txn.put_pessimistic_lock(key, lock, true);
@@ -506,7 +508,9 @@ fn handle_existing_shared_lock<S: Snapshot>(
             last_change,
             is_locked_with_conflict,
         };
-        shared_locks.update_lock(lock_to_write.into_lock()).map_err(MvccError::from)?;
+        shared_locks
+            .update_lock(lock_to_write.into_lock())
+            .map_err(MvccError::from)?;
         txn.put_shared_locks(key, &shared_locks, false);
     } else {
         MVCC_DUPLICATE_CMD_COUNTER_VEC
