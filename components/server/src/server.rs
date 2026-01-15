@@ -68,7 +68,7 @@ use raftstore::{
         config::SplitCheckConfigManager, BoxConsistencyCheckObserver, ConsistencyCheckMethod,
         CoprocessorHost, RawConsistencyCheckObserver, RegionInfoAccessor,
     },
-    router::ServerRaftStoreRouter,
+    router::{CdcRaftRouter, ServerRaftStoreRouter},
     store::{
         config::RaftstoreConfigManager,
         fsm,
@@ -740,7 +740,9 @@ where
         // Create cdc.
         let mut cdc_worker = Box::new(LazyWorker::new("cdc"));
         let cdc_scheduler = cdc_worker.scheduler();
-        let txn_extra_scheduler = cdc::CdcTxnExtraScheduler::new(cdc_scheduler.clone());
+        let cdc_memory_quota = Arc::new(MemoryQuota::new(self.config.cdc.sink_memory_quota.0 as _));
+        let txn_extra_scheduler =
+            cdc::CdcTxnExtraScheduler::new(cdc_scheduler.clone(), cdc_memory_quota.clone());
 
         self.engines
             .as_mut()
@@ -924,7 +926,7 @@ where
         }
 
         // Register cdc.
-        let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
+        let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone(), cdc_memory_quota.clone());
         cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
         // Register cdc config manager.
         cfg_controller.register(
@@ -1180,7 +1182,6 @@ where
         }
 
         // Start CDC.
-        let cdc_memory_quota = Arc::new(MemoryQuota::new(self.config.cdc.sink_memory_quota.0 as _));
         let cdc_endpoint = cdc::Endpoint::new(
             self.config.server.cluster_id,
             &self.config.cdc,
@@ -1188,7 +1189,7 @@ where
             self.config.storage.api_version(),
             self.pd_client.clone(),
             cdc_scheduler.clone(),
-            self.router.clone(),
+            CdcRaftRouter(self.router.clone()),
             self.engines.as_ref().unwrap().engines.kv.clone(),
             cdc_ob,
             engines.store_meta.clone(),
@@ -1370,6 +1371,7 @@ where
         let cdc_service = cdc::Service::new(
             servers.cdc_scheduler.clone(),
             servers.cdc_memory_quota.clone(),
+            Arc::new(self.background_worker.clone()),
         );
         if servers
             .server

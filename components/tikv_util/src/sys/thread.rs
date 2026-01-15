@@ -380,6 +380,10 @@ pub trait ThreadBuildWrapper {
     fn before_stop_wrapper<F>(&mut self, f: F) -> &mut Self
     where
         F: Fn() + Send + Sync + 'static;
+
+    fn with_sys_hooks(&mut self) -> &mut Self {
+        self.after_start_wrapper(|| {}).before_stop_wrapper(|| {})
+    }
 }
 
 lazy_static::lazy_static! {

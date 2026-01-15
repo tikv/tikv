@@ -15,6 +15,7 @@ if [[ -n "$SHELL_DEBUG" ]] ; then
     set -x
 fi
 
+sudo yum install -y protobuf-compiler
 ./scripts/clippy --all-targets --features "testexport failpoints"
 
 # for pkg in "components/cdc" "components/backup" "cmd" "tests"; do

@@ -48,6 +48,8 @@ CLIPPY_LINTS=(
     -D clippy::disallowed_methods \
     -D rust-2018-idioms \
     -D clippy::assertions_on_result_states \
+    -A clippy::redundant_clone \
+    -A clippy::let_unit_value \
 )
 
 cargo clippy --workspace \

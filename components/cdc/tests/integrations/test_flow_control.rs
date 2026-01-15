@@ -75,7 +75,7 @@ fn test_cdc_congest() {
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(e) => {
             // Unknown errors are translated into region_not_found.
-            assert!(e.has_region_not_found(), "{:?}", e);
+            assert!(e.has_congested(), "{:?}", e);
         }
         other => panic!("unknown event {:?}", other),
     }

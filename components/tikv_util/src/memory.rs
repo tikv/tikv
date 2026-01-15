@@ -92,10 +92,18 @@ pub struct MemoryQuota {
 
 impl MemoryQuota {
     pub fn new(capacity: usize) -> MemoryQuota {
+        // Values bigger than `isize::MAX` just mean "unlimited". Cap it to avoid
+        // potential overflows in later arithmetic.
+        let capacity = Self::adjust_capacity(capacity);
         MemoryQuota {
             in_use: AtomicUsize::new(0),
             capacity: AtomicUsize::new(capacity),
         }
+    }
+
+    #[inline]
+    fn adjust_capacity(capacity: usize) -> usize {
+        std::cmp::min(capacity, isize::MAX as usize)
     }
 
     pub fn in_use(&self) -> usize {
@@ -107,7 +115,30 @@ impl MemoryQuota {
     }
 
     pub fn set_capacity(&self, capacity: usize) {
+        let capacity = Self::adjust_capacity(capacity);
         self.capacity.store(capacity, Ordering::Relaxed);
+    }
+
+    /// Returns a floating number between [0, 1] presents the current memory
+    /// status.
+    pub fn used_ratio(&self) -> f64 {
+        self.in_use() as f64 / self.capacity() as f64
+    }
+
+    pub fn alloc_force(&self, bytes: usize) {
+        // The maxinum memory size in byte for a single `alloc` or `alloc_force`.
+        // We set this hard limit to avoid the `in_use` counter overflow that may
+        // lead to undefined behavior.
+        // When passes a higher value, the result will depend on the called function:
+        // - alloc. Return an error.
+        // - alloc_force. Ignore this call and do nothing.
+        // - free. Ignore this call and do nothing.
+        const MAX_MEMORY_ALLOC_SIZE: usize = 1 << 48;
+        if bytes > MAX_MEMORY_ALLOC_SIZE {
+            warn!("bytes size exceeds the max memory alloc size, force alloc is ignored"; "bytes" => bytes);
+            return;
+        }
+        self.in_use.fetch_add(bytes, Ordering::Relaxed);
     }
 
     pub fn alloc(&self, bytes: usize) -> Result<(), MemoryQuotaExceeded> {

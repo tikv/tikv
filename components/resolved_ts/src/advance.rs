@@ -26,7 +26,7 @@ use kvproto::{
 use pd_client::PdClient;
 use protobuf::Message;
 use raftstore::{
-    router::RaftStoreRouter,
+    router::{CdcHandle, RaftStoreRouter},
     store::{
         msg::{Callback, SignificantMsg},
         util::RegionReadProgressRegistry,
@@ -473,6 +473,39 @@ impl LeadershipResolver {
         }
         res
     }
+}
+
+pub async fn resolve_by_raft<T, E>(regions: Vec<u64>, min_ts: TimeStamp, cdc_handle: T) -> Vec<u64>
+where
+    T: 'static + CdcHandle<E>,
+    E: KvEngine,
+{
+    let mut reqs = Vec::with_capacity(regions.len());
+    for region_id in regions {
+        let cdc_handle_clone = cdc_handle.clone();
+        let req = async move {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let callback = Callback::read(Box::new(move |resp| {
+                let resp = if resp.response.get_header().has_error() {
+                    None
+                } else {
+                    Some(region_id)
+                };
+                if tx.send(resp).is_err() {
+                    error!("cdc send tso response failed"; "region_id" => region_id);
+                }
+            }));
+            if let Err(e) = cdc_handle_clone.check_leadership(region_id, callback) {
+                warn!("cdc send LeaderCallback failed"; "err" => ?e, "min_ts" => min_ts);
+                return None;
+            }
+            rx.await.unwrap_or(None)
+        };
+        reqs.push(req);
+    }
+
+    let resps = futures::future::join_all(reqs).await;
+    resps.into_iter().flatten().collect::<Vec<u64>>()
 }
 
 #[inline]

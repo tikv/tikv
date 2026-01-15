@@ -105,6 +105,11 @@ impl Key {
         &self.0
     }
 
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
     /// Gets and moves the encoded representation of this key.
     #[inline]
     pub fn into_encoded(self) -> Vec<u8> {
@@ -540,6 +545,15 @@ impl TxnExtra {
     pub fn is_empty(&self) -> bool {
         self.old_values.is_empty()
     }
+
+    pub fn size(&self) -> usize {
+        let mut result = 0;
+        for (key, value) in &self.old_values {
+            result += key.len();
+            result += value.0.size();
+        }
+        result + std::mem::size_of::<Self>()
+    }
 }
 
 pub trait TxnExtraScheduler: Send + Sync {
@@ -572,6 +586,12 @@ impl WriteBatchFlags {
             // zero or more flags
             Some(f) => f,
         }
+    }
+}
+
+impl tikv_util::memory::HeapSize for Key {
+    fn heap_size(&self) -> usize {
+        self.0.capacity() * std::mem::size_of::<u8>()
     }
 }
 

@@ -835,7 +835,6 @@ dependencies = [
  "engine_traits",
  "fail",
  "futures 0.3.15",
- "futures-timer",
  "getset",
  "grpcio",
  "keys",
@@ -854,7 +853,6 @@ dependencies = [
  "semver 1.0.4",
  "slog",
  "slog-global",
- "tempfile",
  "test_pd_client",
  "test_raftstore",
  "test_util",
@@ -2756,7 +2754,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?branch=release-6.5#a0e3fbb1eeee6b8e04e2bec6d1ca65dcd9172662"
+source = "git+https://git.pingcap.net/pingkai/kvproto.git?branch=release-6.5-new-cdc#92d191429e3f63d7999c4125c8c4704f6d9d643d"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
