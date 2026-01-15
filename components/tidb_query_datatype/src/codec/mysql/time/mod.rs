@@ -2048,13 +2048,23 @@ impl Time {
         }
 
         if self.get_time_type() == TimeType::Timestamp {
-            let ts = self.try_into_chrono_datetime(ctx)?;
-            self = Time::try_from_chrono_datetime(
-                ctx,
-                ts.naive_utc(),
-                self.get_time_type(),
-                self.fsp() as i8,
-            )?;
+            // Convert the timestamp to UTC
+            let ts = self.try_into_chrono_datetime(ctx)?.naive_utc();
+            // Do not call `check` via the normal constructor.
+            // `check` uses ctx.time_zone, but this value is already in UTC.
+            // Running `check` again would apply the timezone offset twice and may make it
+            // invalid.
+            self = Time::unchecked_new(TimeArgs {
+                year: ts.year() as u32,
+                month: ts.month(),
+                day: ts.day(),
+                hour: ts.hour(),
+                minute: ts.minute(),
+                second: ts.second(),
+                micro: ts.nanosecond() / 1000,
+                fsp: self.fsp() as i8,
+                time_type: self.get_time_type(),
+            });
         }
 
         let ymd =
@@ -3852,6 +3862,8 @@ mod tests {
 
         let cases = vec![
             ("0000-00-00 00:00:00", 0),
+            ("1970-01-01 05:00:00", 0),
+            ("1970-01-01 09:00:00", 0),
             ("2010-10-10 10:11:11", 0),
             ("2017-01-01 00:00:00", 0),
             ("2004-01-01 00:00:00", UNSPECIFIED_FSP),
