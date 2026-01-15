@@ -123,10 +123,10 @@ pub fn prewrite_with_generation<S: Snapshot>(
                         .into());
                     }
                     // Remove our lock and proceed
-                    match shared_locks.remove_lock(&reader.start_ts)? {
+                    match shared_locks.get_lock(&reader.start_ts)? {
                         Some(lock) => {
                             let lock_status = mutation.check_lock(
-                                lock,
+                                lock.clone(),
                                 pessimistic_action,
                                 expected_for_update_ts,
                                 generation,
@@ -1137,8 +1137,9 @@ pub mod tests {
             last_change: LastChange::Unknown,
             is_locked_with_conflict: false,
         };
-        txn.put_shared_pessimistic_lock(Key::from_raw(key), None, pessimistic_lock)
-            .unwrap();
+        let mut shared_locks = SharedLocks::new();
+        shared_locks.insert_lock(pessimistic_lock.into_lock()).unwrap();
+        txn.put_shared_locks(Key::from_raw(key), &shared_locks, true);
         write(engine, &ctx, txn.into_modifies());
     }
 
