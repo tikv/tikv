@@ -449,10 +449,11 @@ impl<E: Engine> Endpoint<E> {
         }
         match async_timeout(snapshot_future, max_duration_to_get_snapshot).await {
             Ok(snapshot) => snapshot,
-            Err(_) => {
+            Err(e) => {
                 warn!("timeout when getting snapshot";
                     "region_id" => &ctx.context.get_region_id(),
                     "max_duration_to_get_snapshot" => ?max_duration_to_get_snapshot,
+                    "err" => ?e,
                 );
                 Err(Error::DeadlineExceeded)
             }
@@ -2460,9 +2461,9 @@ mod tests {
                 fail::cfg(failpoint_name, "sleep(5000)").unwrap();
 
                 let mut inner = ReqContextInner::default_for_test();
-                // Set a short deadline (100ms) that will timeout before the sleep completes
-                // Use a longer deadline to give GLOBAL_TIMER_HANDLE time to trigger
-                inner.deadline = Deadline::from_now(Duration::from_millis(100));
+                // Set a short deadline (200ms) so the request timeout before the sleep
+                // completes
+                inner.deadline = Deadline::from_now(Duration::from_millis(200));
                 let req_ctx: ReqContext = inner.into();
 
                 let start = std::time::Instant::now();
