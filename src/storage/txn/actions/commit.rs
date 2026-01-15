@@ -343,8 +343,7 @@ pub mod tests {
         let lock_count = locks.len();
         let mut shared_locks = SharedLocks::new();
         for lock in locks {
-            let ts = lock.ts;
-            shared_locks.put_lock(ts, lock);
+            shared_locks.insert_lock(lock).unwrap();
         }
         assert_eq!(shared_locks.len(), lock_count);
         let mut txn = MvccTxn::new(

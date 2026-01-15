@@ -739,8 +739,7 @@ impl<'a> PrewriteMutation<'a> {
             }
 
             let mut shared = shared_locks.expect("shared_locks must be Some");
-            let ts = lock.ts;
-            shared.put_lock(ts, lock);
+            shared.update_lock(lock)?;
             #[cfg(debug_assertions)]
             {
                 let sub_lock_type = shared
@@ -1138,7 +1137,8 @@ pub mod tests {
             last_change: LastChange::Unknown,
             is_locked_with_conflict: false,
         };
-        txn.put_shared_pessimistic_lock(Key::from_raw(key), None, pessimistic_lock);
+        txn.put_shared_pessimistic_lock(Key::from_raw(key), None, pessimistic_lock)
+            .unwrap();
         write(engine, &ctx, txn.into_modifies());
     }
 

@@ -6,7 +6,9 @@ use std::fmt;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::LockInfo;
-use txn_types::{Key, Lock, PessimisticLock, SharedLocks, TimeStamp, Value};
+use txn_types::{
+    Key, Lock, PessimisticLock, Result as TxnTypesResult, SharedLocks, TimeStamp, Value,
+};
 
 use super::metrics::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
 use crate::storage::kv::Modify;
@@ -148,15 +150,14 @@ impl MvccTxn {
         key: Key,
         shared_locks: Option<SharedLocks>,
         lock: PessimisticLock,
-    ) {
+    ) -> TxnTypesResult<()> {
         let (mut shared_locks, is_new) = match shared_locks {
             Some(l) => (l, false),
             None => (SharedLocks::new(), true),
         };
-        let pessimistic_lock = lock.into_lock();
-        let ts = pessimistic_lock.ts;
-        shared_locks.put_lock(ts, pessimistic_lock);
+        shared_locks.insert_lock(lock.into_lock())?;
         self.put_shared_locks(key, &shared_locks, is_new);
+        Ok(())
     }
 
     pub(crate) fn put_shared_locks(&mut self, key: Key, shared_locks: &SharedLocks, is_new: bool) {
@@ -1785,7 +1786,7 @@ pub(crate) mod tests {
             let cm = ConcurrencyManager::new_for_test(10.into());
             let mut txn = MvccTxn::new(5.into(), cm);
             let mut shared_locks = SharedLocks::new();
-            shared_locks.put_lock(5.into(), make_lock(5, 1000));
+            shared_locks.insert_lock(make_lock(5, 1000)).unwrap();
 
             txn.put_shared_locks(key.clone(), &shared_locks, true);
 
@@ -1800,7 +1801,7 @@ pub(crate) mod tests {
             let cm = ConcurrencyManager::new_for_test(10.into());
             let mut txn = MvccTxn::new(5.into(), cm);
             let mut shared_locks = SharedLocks::new();
-            shared_locks.put_lock(5.into(), make_lock(5, 1000));
+            shared_locks.insert_lock(make_lock(5, 1000)).unwrap();
 
             txn.put_shared_locks(key.clone(), &shared_locks, false);
 
@@ -1814,7 +1815,8 @@ pub(crate) mod tests {
             let cm = ConcurrencyManager::new_for_test(10.into());
             let mut txn = MvccTxn::new(5.into(), cm);
 
-            txn.put_shared_pessimistic_lock(key.clone(), None, make_pessimistic_lock(5, 1000));
+            txn.put_shared_pessimistic_lock(key.clone(), None, make_pessimistic_lock(5, 1000))
+                .unwrap();
 
             assert_eq!(txn.new_locks.len(), 1);
             assert!(txn.write_size() > 0);
@@ -1829,13 +1831,14 @@ pub(crate) mod tests {
             let cm = ConcurrencyManager::new_for_test(10.into());
             let mut txn = MvccTxn::new(5.into(), cm);
             let mut existing = SharedLocks::new();
-            existing.put_lock(3.into(), make_lock(3, 500));
+            existing.insert_lock(make_lock(3, 500)).unwrap();
 
             txn.put_shared_pessimistic_lock(
                 key.clone(),
                 Some(existing),
                 make_pessimistic_lock(5, 1000),
-            );
+            )
+            .unwrap();
 
             assert!(txn.new_locks.is_empty());
             if let Modify::Put(_, _, v) = &txn.modifies[0] {
@@ -1851,13 +1854,14 @@ pub(crate) mod tests {
             let cm = ConcurrencyManager::new_for_test(10.into());
             let mut txn = MvccTxn::new(5.into(), cm);
             let mut existing = SharedLocks::new();
-            existing.put_lock(5.into(), make_lock(5, 500));
+            existing.insert_lock(make_lock(5, 500)).unwrap();
 
             txn.put_shared_pessimistic_lock(
                 key.clone(),
                 Some(existing),
                 make_pessimistic_lock(5, 2000),
-            );
+            )
+            .unwrap();
 
             if let Modify::Put(_, _, v) = &txn.modifies[0] {
                 let mut parsed = SharedLocks::parse(v).unwrap();

@@ -2092,7 +2092,7 @@ mod tests {
         shared_locks.update_lock(prewrite_lock).unwrap();
 
         // Verify the lock type
-        let found = shared_locks.get_lock(&lock_ts).unwrap();
+        let found = shared_locks.get_lock(&lock_ts).unwrap().unwrap();
         assert_eq!(found.lock_type, LockType::Lock);
     }
 

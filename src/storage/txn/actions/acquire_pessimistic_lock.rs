@@ -295,7 +295,8 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     // When lock_only_if_exists is false, always acquire pessimistic lock, otherwise
     // do it when val exists
     if is_shared_lock_req {
-        txn.put_shared_pessimistic_lock(key, current_shared_locks, lock);
+        txn.put_shared_pessimistic_lock(key, current_shared_locks, lock)
+            .map_err(MvccError::from)?;
     } else if !lock_only_if_exists || val.is_some() {
         txn.put_pessimistic_lock(key, lock, true);
     } else if let Some(conflict_info) = conflict_info {
@@ -501,7 +502,8 @@ fn handle_existing_shared_lock<S: Snapshot>(
             last_change,
             is_locked_with_conflict,
         };
-        txn.put_shared_pessimistic_lock(key, Some(shared_locks), lock_to_write);
+        txn.put_shared_pessimistic_lock(key, Some(shared_locks), lock_to_write)
+            .map_err(MvccError::from)?;
     } else {
         MVCC_DUPLICATE_CMD_COUNTER_VEC
             .acquire_pessimistic_lock_shared
