@@ -796,39 +796,37 @@ impl SharedLocks {
         }
     }
 
-    fn put_lock(&mut self, ts: TimeStamp, lock: Lock) -> Option<Lock> {
-        let previous = self.txn_info_segments.insert(ts, Either::Right(lock));
-
-        match previous {
-            Some(either) => match either {
-                Either::Left(encoded) => {
-                    // Previously stored as encoded lock info; decode it back to a Lock.
-                    Some(Lock::parse(&encoded).expect("failed to parse shared lock txn info"))
-                }
-                Either::Right(lock) => Some(lock),
-            },
-            None => None,
+    pub fn insert_lock(&mut self, lock: Lock) -> Result<()> {
+        let lock_type = lock.lock_type;
+        assert!(matches!(lock_type, LockType::Lock | LockType::Pessimistic));
+        if self.is_shrink_only() {
+            return Err(ErrorInner::InvalidOperation(format!(
+                "cannot insert new lock #{} into shrink-only SharedLocks",
+                lock.ts.into_inner()
+            ))
+            .into());
+        } else if self.contains_start_ts(lock.ts) {
+            return Err(ErrorInner::InvalidOperation(format!(
+                "lock #{} already exists in SharedLocks",
+                lock.ts.into_inner()
+            ))
+            .into());
         }
+        self.txn_info_segments.insert(lock.ts, Either::Right(lock));
+        Ok(())
     }
 
-    #[inline]
-    pub fn put_shared_lock(&mut self, lock: Lock) -> Result<()> {
+    pub fn update_lock(&mut self, lock: Lock) -> Result<()> {
         let lock_type = lock.lock_type;
-        match lock_type {
-            LockType::Lock | LockType::Pessimistic => {}
-            _ => unreachable!(),
+        assert!(matches!(lock_type, LockType::Lock | LockType::Pessimistic));
+        if !self.contains_start_ts(lock.ts) {
+            return Err(ErrorInner::InvalidOperation(format!(
+                "lock #{} does not exist in SharedLocks",
+                lock.ts.into_inner()
+            ))
+            .into());
         }
-        if self.is_shrink_only() {
-            return Err(Error::from(ErrorInner::SharedLocksAreShrinkOnly));
-        }
-        let ts = lock.ts;
-        let old = self.put_lock(ts, lock);
-        if lock_type == LockType::Lock {
-            debug_assert!(
-                old.is_some(),
-                "shared lock should be prewritten over pessimistic lock"
-            );
-        }
+        self.txn_info_segments.insert(lock.ts, Either::Right(lock));
         Ok(())
     }
 
@@ -1893,9 +1891,9 @@ mod tests {
             false,
         );
 
-        shared_locks.put_shared_lock(txn1_lock).unwrap();
-        shared_locks.put_shared_lock(txn2_pessimistic_lock).unwrap();
-        shared_locks.put_shared_lock(txn2_prewrite_lock).unwrap();
+        shared_locks.insert_lock(txn1_lock).unwrap();
+        shared_locks.insert_lock(txn2_pessimistic_lock).unwrap();
+        shared_locks.update_lock(txn2_prewrite_lock).unwrap();
 
         assert_eq!(shared_locks.len(), 2);
         assert_eq!(shared_locks.get_lock(&txn1_ts).unwrap().ts, txn1_ts);
@@ -1936,7 +1934,7 @@ mod tests {
             TimeStamp::zero(),
             false,
         );
-        shared_locks.put_shared_lock(lock).unwrap();
+        shared_locks.insert_lock(lock).unwrap();
 
         shared_locks.set_shrink_only();
         assert!(shared_locks.is_shrink_only());
@@ -1954,7 +1952,7 @@ mod tests {
     }
 
     #[test]
-    fn test_put_shared_lock_to_shrink_only_fails() {
+    fn test_insert_lock_to_shrink_only_fails() {
         let mut shared_locks = SharedLocks::new();
 
         let lock = Lock::new(
@@ -1970,7 +1968,7 @@ mod tests {
         );
 
         // Add a lock before setting shrink_only
-        shared_locks.put_shared_lock(lock).unwrap();
+        shared_locks.insert_lock(lock).unwrap();
 
         // Set shrink_only and try to add another lock
         shared_locks.set_shrink_only();
@@ -1985,11 +1983,103 @@ mod tests {
             TimeStamp::zero(),
             false,
         );
-        let result = shared_locks.put_shared_lock(new_lock);
+        let result = shared_locks.insert_lock(new_lock);
         assert!(result.is_err());
         assert_eq!(
             format!("{}", result.unwrap_err()),
-            "shared locks are shrink-only"
+            "invalid operation: cannot insert new lock #7 into shrink-only SharedLocks"
+        );
+    }
+
+    #[test]
+    fn test_insert_lock_duplicate_fails() {
+        let mut shared_locks = SharedLocks::new();
+        let lock_ts: TimeStamp = 10.into();
+
+        let lock = Lock::new(
+            LockType::Pessimistic,
+            b"primary".to_vec(),
+            lock_ts,
+            100,
+            None,
+            TimeStamp::zero(),
+            0,
+            TimeStamp::zero(),
+            false,
+        );
+
+        // First insert should succeed
+        shared_locks.insert_lock(lock.clone()).unwrap();
+
+        // Second insert with same ts should fail
+        let result = shared_locks.insert_lock(lock);
+        assert!(result.is_err());
+        assert_eq!(
+            format!("{}", result.unwrap_err()),
+            "invalid operation: lock #10 already exists in SharedLocks"
+        );
+    }
+
+    #[test]
+    fn test_update_lock_success() {
+        let mut shared_locks = SharedLocks::new();
+        let lock_ts: TimeStamp = 10.into();
+
+        let pessimistic_lock = Lock::new(
+            LockType::Pessimistic,
+            b"primary".to_vec(),
+            lock_ts,
+            100,
+            None,
+            TimeStamp::zero(),
+            0,
+            TimeStamp::zero(),
+            false,
+        );
+
+        shared_locks.insert_lock(pessimistic_lock.clone()).unwrap();
+
+        let prewrite_lock = Lock::new(
+            LockType::Lock,
+            b"primary".to_vec(),
+            lock_ts,
+            100,
+            None,
+            TimeStamp::zero(),
+            0,
+            TimeStamp::zero(),
+            false,
+        );
+        shared_locks.update_lock(prewrite_lock).unwrap();
+
+        // Verify the lock type
+        let found = shared_locks.get_lock(&lock_ts).unwrap();
+        assert_eq!(found.lock_type, LockType::Lock);
+    }
+
+    #[test]
+    fn test_update_lock_nonexistent_fails() {
+        let mut shared_locks = SharedLocks::new();
+        let lock_ts: TimeStamp = 10.into();
+
+        let lock = Lock::new(
+            LockType::Pessimistic,
+            b"primary".to_vec(),
+            lock_ts,
+            100,
+            None,
+            TimeStamp::zero(),
+            0,
+            TimeStamp::zero(),
+            false,
+        );
+
+        // Try to update non-existent lock
+        let result = shared_locks.update_lock(lock);
+        assert!(result.is_err());
+        assert_eq!(
+            format!("{}", result.unwrap_err()),
+            "invalid operation: lock #10 does not exist in SharedLocks"
         );
     }
 }

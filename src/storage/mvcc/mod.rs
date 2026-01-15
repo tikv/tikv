@@ -403,8 +403,8 @@ impl From<txn_types::Error> for ErrorInner {
                 primary,
                 reason,
             },
-            txn_types::Error(e @ box txn_types::ErrorInner::SharedLocksAreShrinkOnly) => {
-                // This error indicates misuse of `put_shared_lock` API. It
+            txn_types::Error(e @ box txn_types::ErrorInner::InvalidOperation(_)) => {
+                // This error indicates misuse of SharedLocks API. It
                 // should be handled internally.
                 ErrorInner::Other(e)
             }
