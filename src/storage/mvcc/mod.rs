@@ -18,8 +18,8 @@ use tikv_util::{
     Either, metrics::CRITICAL_ERROR, panic_when_unexpected_key_or_data, set_panic_mark,
 };
 pub use txn_types::{
-    Key, Lock, LockType, Mutation, SHORT_VALUE_MAX_LEN, TimeStamp, Value, Write, WriteRef,
-    WriteType,
+    Key, Lock, LockType, Mutation, SHORT_VALUE_MAX_LEN, SharedLocks, TimeStamp, Value, Write,
+    WriteRef, WriteType,
 };
 
 pub use self::{
@@ -904,5 +904,16 @@ pub mod tests {
             reader.scan_keys(start.map(Key::from_raw), limit).unwrap(),
             expect
         );
+    }
+
+    pub fn must_load_shared_lock<E: Engine>(engine: &mut E, key: &[u8]) -> SharedLocks {
+        use tikv_util::Either;
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut reader = MvccReader::new(snapshot, None, true);
+        let lock_or_shared = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
+        match lock_or_shared {
+            Either::Right(shared_locks) => shared_locks,
+            Either::Left(_) => panic!("Expected SharedLocks, got Lock"),
+        }
     }
 }
