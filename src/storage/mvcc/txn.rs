@@ -1839,7 +1839,7 @@ pub(crate) mod tests {
             let mut existing = SharedLocks::new();
             existing.insert_lock(make_lock(5, 500)).unwrap();
             existing
-                .insert_lock(make_pessimistic_lock(5, 2000).into_lock())
+                .update_lock(make_pessimistic_lock(5, 2000).into_lock())
                 .unwrap();
             txn.put_shared_locks(key.clone(), &existing, false);
 
