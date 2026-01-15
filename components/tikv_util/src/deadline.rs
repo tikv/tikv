@@ -58,6 +58,11 @@ impl Deadline {
     pub fn to_std_instant(&self) -> std::time::Instant {
         std::time::Instant::now() + self.deadline.duration_since(Instant::now_coarse())
     }
+
+    /// Returns the remaining duration of the deadline.
+    pub fn remaining_duration(&self) -> Duration {
+        self.deadline.duration_since(Instant::now_coarse())
+    }
 }
 
 const DEADLINE_EXCEEDED: &str = "deadline is exceeded";
