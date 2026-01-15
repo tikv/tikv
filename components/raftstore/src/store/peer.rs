@@ -1690,6 +1690,8 @@ where
                 && !self.is_leader()
                 // Keep ticking if it's waiting for snapshot.
                 && !self.wait_data
+                // Keep ticking if it's waiting for leader committed index to catch up post restart.
+                && !self.needs_update_last_leader_committed_idx()
         }
     }
 
