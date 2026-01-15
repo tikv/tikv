@@ -416,30 +416,4 @@ mod tests {
         );
         assert_eq!(result.unwrap(), Err("test error"));
     }
-
-    #[test]
-    fn test_async_timeout_zero_duration() {
-        use futures::executor::block_on;
-        use futures_util::compat::Future01CompatExt;
-
-        // Test case: zero duration timeout should timeout immediately
-        let slow_future = async {
-            GLOBAL_TIMER_HANDLE
-                .delay(std::time::Instant::now() + Duration::from_millis(10))
-                .compat()
-                .await
-                .unwrap();
-            42
-        };
-        let result = block_on(async_timeout(
-            slow_future,
-            std::time::Duration::from_secs(0),
-        ));
-        // Note: zero duration might complete immediately or timeout depending on timer
-        // precision Both outcomes are acceptable
-        assert!(
-            result.is_err() || result.is_ok(),
-            "zero duration should either timeout or complete"
-        );
-    }
 }
