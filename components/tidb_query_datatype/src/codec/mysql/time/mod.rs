@@ -2050,10 +2050,9 @@ impl Time {
         if self.get_time_type() == TimeType::Timestamp {
             // Convert the timestamp to UTC
             let ts = self.try_into_chrono_datetime(ctx)?.naive_utc();
-            // Do not call `check` via the normal constructor.
-            // `check` uses ctx.time_zone, but this value is already in UTC.
-            // Running `check` again would apply the timezone offset twice and may make it
-            // invalid.
+            // Do not call `Time::try_from_chrono_datetime` here (it calls
+            // `TimeArgs::check`). The value is already in UTC. `check` would
+            // apply `ctx.time_zone` again and may make it invalid.
             self = Time::unchecked_new(TimeArgs {
                 year: ts.year() as u32,
                 month: ts.month(),
