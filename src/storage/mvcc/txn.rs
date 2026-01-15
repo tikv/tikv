@@ -1831,7 +1831,11 @@ pub(crate) mod tests {
             let mut existing = SharedLocks::new();
             existing.put_lock(3.into(), make_lock(3, 500));
 
-            txn.put_shared_pessimistic_lock(key.clone(), Some(existing), make_pessimistic_lock(5, 1000));
+            txn.put_shared_pessimistic_lock(
+                key.clone(),
+                Some(existing),
+                make_pessimistic_lock(5, 1000),
+            );
 
             assert!(txn.new_locks.is_empty());
             if let Modify::Put(_, _, v) = &txn.modifies[0] {
@@ -1849,7 +1853,11 @@ pub(crate) mod tests {
             let mut existing = SharedLocks::new();
             existing.put_lock(5.into(), make_lock(5, 500));
 
-            txn.put_shared_pessimistic_lock(key.clone(), Some(existing), make_pessimistic_lock(5, 2000));
+            txn.put_shared_pessimistic_lock(
+                key.clone(),
+                Some(existing),
+                make_pessimistic_lock(5, 2000),
+            );
 
             if let Modify::Put(_, _, v) = &txn.modifies[0] {
                 let mut parsed = SharedLocks::parse(v).unwrap();
