@@ -34,7 +34,6 @@ const FLAG_PUT: u8 = b'P';
 const FLAG_DELETE: u8 = b'D';
 const FLAG_LOCK: u8 = b'L';
 const FLAG_PESSIMISTIC: u8 = b'S';
-const FLAG_SHARED: u8 = b'H';
 
 const FOR_UPDATE_TS_PREFIX: u8 = b'f';
 const TXN_SIZE_PREFIX: u8 = b't';
@@ -48,6 +47,8 @@ const PESSIMISTIC_LOCK_WITH_CONFLICT_PREFIX: u8 = b'F';
 const GENERATION_PREFIX: u8 = b'g';
 const SHARED_LOCK_TXNS_INFO_PREFIX: u8 = b'h';
 const SHARED_LOCK_FLAGS_PREFIX: u8 = b'i';
+// Used with FLAG_LOCK to identify SharedLocks encoding: [FLAG_LOCK][SHARED_LOCK_PREFIX].
+const SHARED_LOCK_PREFIX: u8 = b'M';
 
 impl LockType {
     pub fn from_mutation(mutation: &Mutation) -> Option<LockType> {
@@ -65,7 +66,7 @@ impl LockType {
             FLAG_DELETE => Some(LockType::Delete),
             FLAG_LOCK => Some(LockType::Lock),
             FLAG_PESSIMISTIC => Some(LockType::Pessimistic),
-            FLAG_SHARED => Some(LockType::Shared),
+            // FLAG_SHARED is not handled here; SharedLocks uses FLAG_SHARED + SHARED_LOCK_PREFIX
             _ => None,
         }
     }
@@ -76,7 +77,8 @@ impl LockType {
             LockType::Delete => FLAG_DELETE,
             LockType::Lock => FLAG_LOCK,
             LockType::Pessimistic => FLAG_PESSIMISTIC,
-            LockType::Shared => FLAG_SHARED,
+            // SharedLocks uses FLAG_LOCK + SHARED_LOCK_PREFIX for encoding
+            LockType::Shared => FLAG_LOCK,
         }
     }
 }
@@ -341,6 +343,10 @@ impl Lock {
 pub fn decode_lock_type(b: &[u8]) -> Result<LockType> {
     if b.is_empty() {
         return Err(Error::from(ErrorInner::BadFormatLock));
+    }
+    // Check for SharedLocks: FLAG_LOCK + SHARED_LOCK_PREFIX
+    if b.len() >= 2 && b[0] == FLAG_LOCK && b[1] == SHARED_LOCK_PREFIX {
+        return Ok(LockType::Shared);
     }
     let lock_type = LockType::from_u8(b[0]).ok_or(ErrorInner::BadFormatLock)?;
     Ok(lock_type)
@@ -693,11 +699,13 @@ impl SharedLocks {
     }
 
     pub fn parse(mut b: &[u8]) -> Result<Self> {
-        if b.is_empty() {
+        if b.len() < 2 {
             return Err(Error::from(ErrorInner::BadFormatLock));
         }
-        let lock_type = LockType::from_u8(b.read_u8()?).ok_or(ErrorInner::BadFormatLock)?;
-        assert!(lock_type == LockType::Shared);
+        if b[0] != FLAG_LOCK || b[1] != SHARED_LOCK_PREFIX {
+            return Err(Error::from(ErrorInner::BadFormatLock));
+        }
+        b = &b[2..]; // Skip FLAG_LOCK and SHARED_LOCK_PREFIX
         if b.is_empty() {
             return Ok(Self::new());
         }
@@ -832,7 +840,8 @@ impl SharedLocks {
 
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut b = Vec::with_capacity(self.pre_allocate_size());
-        b.push(LockType::Shared.to_u8());
+        b.push(FLAG_LOCK);
+        b.push(SHARED_LOCK_PREFIX);
         if !self.flags.is_empty() {
             b.push(SHARED_LOCK_FLAGS_PREFIX);
             b.push(self.flags.bits());
@@ -849,7 +858,7 @@ impl SharedLocks {
     }
 
     fn pre_allocate_size(&self) -> usize {
-        1 // lock type
+        2 // FLAG_LOCK + SHARED_LOCK_PREFIX
             + if !self.flags.is_empty() {
                 2 // SHARED_LOCK_FLAGS_PREFIX + flags byte
             } else {
@@ -1039,9 +1048,10 @@ mod tests {
 
         let lock_type = LockType::Shared;
         let f = lock_type.to_u8();
-        assert_eq!(f, FLAG_SHARED);
-        let lt = LockType::from_u8(f).unwrap();
-        assert_eq!(lt, lock_type);
+        // SharedLocks uses FLAG_LOCK + SHARED_LOCK_PREFIX for encoding
+        assert_eq!(f, FLAG_LOCK);
+        // Single FLAG_LOCK is decoded as LockType::Lock, not Shared
+        assert_eq!(LockType::from_u8(f), Some(LockType::Lock));
     }
 
     #[test]
@@ -1814,6 +1824,16 @@ mod tests {
             Ok(LockType::Shared)
         ));
         decode_lock_type(&[]).unwrap_err();
+        // Single FLAG_LOCK without SHARED_LOCK_PREFIX should be decoded as Lock, not Shared
+        assert!(matches!(
+            decode_lock_type(&[FLAG_LOCK]),
+            Ok(LockType::Lock)
+        ));
+        // FLAG_LOCK with wrong prefix should be decoded as Lock, not Shared
+        assert!(matches!(
+            decode_lock_type(&[FLAG_LOCK, b'X']),
+            Ok(LockType::Lock)
+        ));
     }
 
     #[test]
