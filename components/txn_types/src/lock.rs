@@ -47,7 +47,8 @@ const PESSIMISTIC_LOCK_WITH_CONFLICT_PREFIX: u8 = b'F';
 const GENERATION_PREFIX: u8 = b'g';
 const SHARED_LOCK_TXNS_INFO_PREFIX: u8 = b'h';
 const SHARED_LOCK_FLAGS_PREFIX: u8 = b'i';
-// Used with FLAG_LOCK to identify SharedLocks encoding: [FLAG_LOCK][SHARED_LOCK_PREFIX].
+// Used with FLAG_LOCK to identify SharedLocks encoding:
+// [FLAG_LOCK][SHARED_LOCK_PREFIX].
 const SHARED_LOCK_PREFIX: u8 = b'M';
 
 impl LockType {
@@ -1824,11 +1825,9 @@ mod tests {
             Ok(LockType::Shared)
         ));
         decode_lock_type(&[]).unwrap_err();
-        // Single FLAG_LOCK without SHARED_LOCK_PREFIX should be decoded as Lock, not Shared
-        assert!(matches!(
-            decode_lock_type(&[FLAG_LOCK]),
-            Ok(LockType::Lock)
-        ));
+        // Single FLAG_LOCK without SHARED_LOCK_PREFIX should be decoded as Lock, not
+        // Shared
+        assert!(matches!(decode_lock_type(&[FLAG_LOCK]), Ok(LockType::Lock)));
         // FLAG_LOCK with wrong prefix should be decoded as Lock, not Shared
         assert!(matches!(
             decode_lock_type(&[FLAG_LOCK, b'X']),
