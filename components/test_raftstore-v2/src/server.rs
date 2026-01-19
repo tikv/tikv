@@ -81,6 +81,7 @@ use tikv_util::{
     quota_limiter::QuotaLimiter,
     sys::thread::ThreadBuildWrapper,
     thd_name,
+    thread_name_prefix::RESOLVED_TS_WORKER_THREAD,
     worker::{Builder as WorkerBuilder, LazyWorker, Worker},
 };
 use tokio::runtime::{Builder as TokioBuilder, Handle};
@@ -477,7 +478,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
             // Resolved ts worker
             let rts_memory_quota =
                 Arc::new(MemoryQuota::new(cfg.resolved_ts.memory_quota.0 as usize));
-            let mut rts_worker = LazyWorker::new("resolved-ts");
+            let mut rts_worker = LazyWorker::new(RESOLVED_TS_WORKER_THREAD);
             let rts_ob =
                 resolved_ts::Observer::new(rts_worker.scheduler(), rts_memory_quota.clone());
             rts_ob.register_to(&mut coprocessor_host);
@@ -776,7 +777,10 @@ impl<EK: KvEngine> ServerCluster<EK> {
         cfg: &resource_metering::Config,
     ) -> (ResourceTagFactory, CollectorRegHandle, Box<dyn FnOnce()>) {
         let (_, collector_reg_handle, resource_tag_factory, recorder_worker) =
-            resource_metering::init_recorder(cfg.precision.as_millis());
+            resource_metering::init_recorder(
+                cfg.precision.as_millis(),
+                cfg.enable_network_io_collection,
+            );
         let (_, data_sink_reg_handle, reporter_worker) =
             resource_metering::init_reporter(cfg.clone(), collector_reg_handle.clone());
         let (_, single_target_worker) = resource_metering::init_single_target(

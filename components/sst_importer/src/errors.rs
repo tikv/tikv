@@ -1,7 +1,11 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    error::Error as StdError, io::Error as IoError, num::ParseIntError, path::PathBuf, result,
+    error::{Error as StdError, Report},
+    io::Error as IoError,
+    num::ParseIntError,
+    path::PathBuf,
+    result,
     time::Duration,
 };
 
@@ -77,7 +81,7 @@ pub enum Error {
     #[error("{0}")]
     Engine(Box<dyn StdError + Send + Sync + 'static>),
 
-    #[error("Cannot read {url}/{name} into {}: {err}", local_path.display())]
+    #[error("Cannot read {url}/{name} into {}: {}", local_path.display(), Report::new(err))]
     CannotReadExternalStorage {
         url: String,
         name: String,

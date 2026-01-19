@@ -14,7 +14,9 @@ use kvproto::{
     metapb::Region,
 };
 use pd_client::PdClient;
-use tikv_util::{box_err, defer, info, warn, worker::Scheduler};
+use tikv_util::{
+    box_err, defer, info, thread_name_prefix::BACKUP_STREAM_THREAD, warn, worker::Scheduler,
+};
 use tracing::instrument;
 use txn_types::TimeStamp;
 use uuid::Uuid;
@@ -273,7 +275,9 @@ impl CheckpointManager {
         e.and_modify(|old_cp| {
             let old_ver = old_cp.region.get_region_epoch().get_version();
             let checkpoint_is_newer = old_cp.checkpoint < checkpoint;
-            if !checkpoint_is_newer {
+            // Shouldn't log when checkpoint is the same or it can be really verbose when
+            // checkpoint stuck due to pending txn...
+            if !checkpoint_is_newer && old_cp.checkpoint != checkpoint {
                 warn!("received older checkpoint, maybe region merge.";
                     "region_id" => old_cp.region.get_id(),
                     "old_ver" => old_ver,
@@ -497,7 +501,7 @@ impl<PD: PdClient + 'static> FlushObserver for BasicFlushObserver<PD> {
         if let Err(err) = self
             .pd_cli
             .update_service_safe_point(
-                format!("backup-stream-{}-{}", task, self.store_id),
+                format!("{}-{}-{}", BACKUP_STREAM_THREAD, task, self.store_id),
                 TimeStamp::new(rts.saturating_sub(1)),
                 // Add a service safe point for 2 hours.
                 // We make it the same duration as we meet fatal errors because TiKV may be
@@ -614,6 +618,7 @@ pub mod tests {
     use grpcio::{RpcStatus, RpcStatusCode};
     use kvproto::{logbackuppb::SubscribeFlushEventResponse, metapb::*};
     use pd_client::{PdClient, PdFuture};
+    use tikv_util::thread_name_prefix::BACKUP_STREAM_THREAD;
     use txn_types::TimeStamp;
 
     use super::{BasicFlushObserver, FlushObserver, RegionIdWithVersion};
@@ -894,7 +899,7 @@ pub mod tests {
         let r = flush_observer.after(&task, rts).await;
         assert_eq!(r.is_ok(), true);
 
-        let service_id = format!("backup-stream-{}-{}", task, store_id);
+        let service_id = format!("{}-{}-{}", BACKUP_STREAM_THREAD, task, store_id);
         let r = pd_cli.get_service_safe_point(service_id).unwrap();
         assert_eq!(r.into_inner(), rts - 1);
     }

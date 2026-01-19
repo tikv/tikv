@@ -47,7 +47,10 @@ use parking_lot::{Mutex, MutexGuard, RwLockWriteGuard};
 use pd_client::{Feature, FeatureGate};
 use raftstore::store::TxnExt;
 use resource_control::{ResourceController, ResourceGroupManager, TaskMetadata};
-use resource_metering::{FutureExt, ResourceTagFactory};
+use resource_metering::{
+    FutureExt, ResourceTagFactory, record_logical_read_bytes, record_logical_write_bytes,
+    record_network_in_bytes,
+};
 use smallvec::{SmallVec, smallvec};
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData, WriteEvent};
 use tikv_util::{
@@ -320,7 +323,6 @@ impl<L: LockManager> TxnSchedulerInner<L> {
 
     fn dequeue_task_context(&self, cid: u64) -> TaskContext {
         let tctx = self.get_task_slot(cid).remove(&cid).unwrap();
-
         let running_write_bytes = self
             .running_write_bytes
             .fetch_sub(tctx.write_bytes, Ordering::AcqRel) as i64;
@@ -742,11 +744,15 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             ) {
                 snap_ctx.allowed_in_flashback = true;
             }
+            let mut sched_details = SchedulerDetails::new(task.tracker_token());
+
             // The program is currently in scheduler worker threads.
             // Safety: `self.inner.worker_pool` should ensure that a TLS engine exists.
             match unsafe { with_tls_engine(|engine: &mut E| kv::snapshot(engine, snap_ctx)) }.await
             {
                 Ok(snapshot) => {
+                    sched_details.async_snapshot_nanos =
+                        sched_details.start_instant.saturating_elapsed().as_nanos() as u64;
                     SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_ok.inc();
                     let term = snapshot.ext().get_term();
                     let extra_op = snapshot.ext().get_txn_extra_op();
@@ -775,7 +781,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                         "cid" => task.cid(), "term" => ?term, "extra_op" => ?extra_op,
                         "task" => ?&task,
                     );
-                    sched.process(snapshot, task).await;
+                    sched.process(snapshot, task, sched_details).await;
                 }
                 Err(err) => {
                     SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_err.inc();
@@ -822,9 +828,10 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             let req_info = GLOBAL_TRACKERS.with_tracker(details.tracker, |tracker| {
                 let now = Instant::now();
                 TlsFutureTracker::collect_to_tracker(now, tracker);
-                tracker.metrics.scheduler_process_nanos = now
-                    .saturating_duration_since(details.start_process_instant)
-                    .as_nanos() as u64;
+                tracker.metrics.scheduler_process_nanos = (now
+                    .saturating_duration_since(details.start_instant)
+                    .as_nanos() as u64)
+                    .saturating_sub(details.async_snapshot_nanos);
                 tracker.metrics.scheduler_throttle_nanos =
                     details.flow_control_nanos + details.quota_limit_delay_nanos;
                 tracker.req_info.clone()
@@ -944,8 +951,9 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                     let now = Instant::now();
                     TlsFutureTracker::collect_to_tracker(now, tracker);
                     tracker.metrics.scheduler_process_nanos =
-                        now.saturating_duration_since(sched_details.start_process_instant)
-                            .as_nanos() as u64;
+                        (now.saturating_duration_since(sched_details.start_instant)
+                            .as_nanos() as u64)
+                            .saturating_sub(sched_details.async_snapshot_nanos);
                     tracker.metrics.scheduler_throttle_nanos =
                         sched_details.flow_control_nanos + sched_details.quota_limit_delay_nanos;
                 });
@@ -1066,24 +1074,41 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             .load(Ordering::Relaxed);
 
         released_locks.into_iter().for_each(|released_lock| {
-            let (lock_wait_entry, delay_wake_up_future) =
-                match self.inner.lock_wait_queues.pop_for_waking_up(
-                    &released_lock.key,
-                    released_lock.start_ts,
-                    released_lock.commit_ts,
-                    wake_up_delay_duration_ms,
-                ) {
-                    Some(e) => e,
-                    None => return,
-                };
-
-            if lock_wait_entry.parameters.allow_lock_with_conflict {
-                resumable_wake_up_list.push(lock_wait_entry);
-            } else {
-                legacy_wake_up_list.push((lock_wait_entry, released_lock));
+            let (entries, delay_future) = self.inner.lock_wait_queues.pop_for_waking_up(
+                &released_lock.key,
+                released_lock.start_ts,
+                released_lock.commit_ts,
+                wake_up_delay_duration_ms,
+            );
+            if entries.is_empty() {
+                return;
             }
-            if let Some(f) = delay_wake_up_future {
+
+            if let Some(f) = delay_future {
                 delay_wake_up_futures.push(f);
+            }
+
+            let multi_entries = entries.len() > 1;
+
+            for lock_wait_entry in entries {
+                // With multi entries, only shared lock's waiters can be awaken up.
+                debug_assert!(
+                    lock_wait_entry.is_shared_lock || !multi_entries,
+                    "when multiple entries exist, all must be shared locks"
+                );
+                if lock_wait_entry.parameters.allow_lock_with_conflict {
+                    resumable_wake_up_list.push(lock_wait_entry);
+                } else {
+                    legacy_wake_up_list.push((
+                        lock_wait_entry,
+                        ReleasedLock::new(
+                            released_lock.start_ts,
+                            released_lock.commit_ts,
+                            released_lock.key.clone(),
+                            released_lock.pessimistic,
+                        ),
+                    ));
+                }
             }
         });
 
@@ -1208,7 +1233,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
     }
 
     /// Process the task in the current thread.
-    async fn process(self, snapshot: E::Snap, task: Task) {
+    async fn process(self, snapshot: E::Snap, task: Task, mut sched_details: SchedulerDetails) {
         if self.check_task_deadline_exceeded(&task, None) {
             return;
         }
@@ -1219,11 +1244,8 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             fail_point!("scheduler_async_snapshot_finish");
             SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
 
-            let timer = Instant::now();
-
             let region_id = task.cmd().ctx().get_region_id();
             let ts = task.cmd().ts();
-            let mut sched_details = SchedulerDetails::new(task.tracker_token(), timer);
             match task.cmd() {
                 Command::Prewrite(_) | Command::PrewritePessimistic(_) => {
                     tls_collect_query(region_id, QueryKind::Prewrite);
@@ -1241,13 +1263,19 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             }
 
             fail_point!("scheduler_process");
+            GLOBAL_TRACKERS.with_tracker(task.tracker_token(), |tracker| {
+                record_network_in_bytes(tracker.metrics.grpc_req_size);
+            });
+
             if task.cmd().readonly() {
                 self.process_read(snapshot, task, &mut sched_details);
+                record_logical_read_bytes(sched_details.stat.processed_size as u64);
             } else {
+                record_logical_write_bytes(task.cmd().write_bytes() as u64);
                 self.process_write(snapshot, task, &mut sched_details).await;
             };
             tls_collect_scan_details(tag.get_str(), &sched_details.stat);
-            let elapsed = timer.saturating_elapsed();
+            let elapsed = sched_details.start_instant.saturating_elapsed();
             slow_log!(
                 elapsed,
                 "[region {}] scheduler handle command: {}, ts: {}, details: {:?}",
@@ -1277,9 +1305,21 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                     .unwrap_or_else(|e| ProcessResult::Failed { err: e.into() })
             })
         };
+        let cmd_process_duration = begin_instant.saturating_elapsed();
+        sched_details.cmd_process_nanos = cmd_process_duration.as_nanos() as u64;
+        sched_details.block_read_nanos = GLOBAL_TRACKERS
+            .with_tracker(sched_details.tracker, |tracker| {
+                tracker.metrics.block_read_nanos
+            })
+            .unwrap_or_default();
         SCHED_PROCESSING_READ_HISTOGRAM_STATIC
             .get(tag)
-            .observe(begin_instant.saturating_elapsed_secs());
+            .observe(cmd_process_duration.as_secs_f64());
+        if sched_details.block_read_nanos > 0 {
+            SCHED_BLOCK_READ_HISTOGRAM_VEC_STATIC
+                .get(tag)
+                .observe((sched_details.block_read_nanos as f64) / 1_000_000_000f64);
+        }
         self.on_read_finished(cid, pr, tag);
     }
 
@@ -1323,9 +1363,19 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             };
             let cmd_process_duration = begin_instant.saturating_elapsed();
             sched_details.cmd_process_nanos = cmd_process_duration.as_nanos() as u64;
+            sched_details.block_read_nanos = GLOBAL_TRACKERS
+                .with_tracker(sched_details.tracker, |tracker| {
+                    tracker.metrics.block_read_nanos
+                })
+                .unwrap_or_default();
             SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                 .get(tag)
                 .observe(cmd_process_duration.as_secs_f64());
+            if sched_details.block_read_nanos > 0 {
+                SCHED_BLOCK_READ_HISTOGRAM_VEC_STATIC
+                    .get(tag)
+                    .observe((sched_details.block_read_nanos as f64) / 1_000_000_000f64);
+            }
             res
         };
 
@@ -1374,6 +1424,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         write_result: WriteResult,
         sched_details: &mut SchedulerDetails,
         txn_ext: Option<Arc<TxnExt>>,
+        is_shared_lock_cmd: bool,
     ) -> Option<(WriteResult, TaskMetadata<'a>)> {
         let WriteResult {
             ctx,
@@ -1463,6 +1514,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             tag,
             CommandKind::acquire_pessimistic_lock | CommandKind::acquire_pessimistic_lock_resumed
         ) && txn_scheduler.pessimistic_lock_mode() == PessimisticLockMode::InMemory
+            && !is_shared_lock_cmd
             && txn_scheduler.try_write_in_memory_pessimistic_locks(
                 txn_ext.as_deref(),
                 &mut to_be_write,
@@ -1812,10 +1864,20 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         fail_point!("txn_before_process_write");
         let cid = task.cid();
         let tag = task.cmd().tag();
+        let task_cmd_str = if txn_types::ENABLE_DUP_KEY_DEBUG.load(Ordering::Relaxed) {
+            task.cmd().to_string()
+        } else {
+            String::default()
+        };
         let tracker_token = task.tracker_token();
         let mut task_meta_data = TaskMetadata::from_ctx(task.cmd().resource_control_ctx());
         let pipelined = task.cmd().can_be_pipelined()
             && self.pessimistic_lock_mode() == PessimisticLockMode::Pipelined;
+        let is_shared_lock_cmd = if let Command::AcquirePessimisticLock(ref cmd) = task.cmd() {
+            cmd.keys.iter().any(|k| k.2)
+        } else {
+            false
+        };
         let txn_ext = snapshot.ext().get_txn_ext().cloned();
         let deadline = task.cmd().deadline();
         let write_result = Self::handle_task(self.clone(), snapshot, task, sched_details).await;
@@ -1839,6 +1901,55 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             // `WriteFinished` message when it finishes.
             Ok(res) => res,
         };
+
+        // TODO: remove this check when the cause of issue 18498 is located.
+        if txn_types::ENABLE_DUP_KEY_DEBUG.load(Ordering::Relaxed)
+            && !write_result.to_be_write.modifies.is_empty()
+        {
+            let mut seen_keys =
+                std::collections::HashMap::<txn_types::Key, txn_types::Value>::new();
+            for modify in &write_result.to_be_write.modifies {
+                if let Modify::Put(cf, key, value) = modify {
+                    if *cf == CF_LOCK {
+                        let entry = seen_keys.entry(key.clone());
+                        match entry {
+                            std::collections::hash_map::Entry::Vacant(e) => {
+                                e.insert(value.clone());
+                            }
+                            std::collections::hash_map::Entry::Occupied(e) => {
+                                let existing_value = e.get();
+                                error!(
+                                    "[for debug] found duplicate key in CF_LOCK PUT";
+                                    "key" => ?key,
+                                    "existing_value" => ?existing_value,
+                                    "new_value" => ?value,
+                                    "tag" => ?tag,
+                                    "txn_ext" => ?txn_ext,
+                                    "task_cmd_str" => ?task_cmd_str,
+                                );
+
+                                fail_point!("scheduler_dup_key_check", |_| {
+                                    self.finish_with_err(
+                                        cid,
+                                        StorageErrorInner::Other(Box::from(
+                                            "dup_key_found_with_fp",
+                                        )),
+                                        Some(sched_details),
+                                    );
+                                });
+                                // TODO: remove this in production or new release.
+                                panic!(
+                                    "[for debug] found duplicate key in CF_LOCK PUT key={:?}, existing_value={:?}, \
+                                    new_value={:?}, tag={:?}, txn_ext={:?}, task_cmd_str={:?}",
+                                    key, existing_value, value, tag, txn_ext, task_cmd_str
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
         debug!("process_write task handle result";
             "req_info" => TrackerTokenArray::new(&[tracker_token]),
@@ -1858,6 +1969,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 write_result,
                 sched_details,
                 txn_ext.clone(),
+                is_shared_lock_cmd,
             )
         {
             write_result = write_result_res;
@@ -1975,6 +2087,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let mut slot = self.inner.get_task_slot(cid);
         let task_ctx = slot.get_mut(&cid).unwrap();
         let cb = task_ctx.cb.take().unwrap();
+        let is_shared_lock = lock_info.lock_info_pb.lock_type == kvrpcpb::Op::SharedLock;
 
         let ctx = LockWaitContext::new(
             lock_info.key.clone(),
@@ -1994,6 +2107,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             lock_hash: lock_info.lock_digest.hash,
             parameters: lock_info.parameters,
             should_not_exist: lock_info.should_not_exist,
+            is_shared_lock,
             lock_wait_token,
             req_states: ctx.get_shared_states().clone(),
             legacy_wake_up_index: None,
@@ -2008,13 +2122,15 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         lock_info: WriteResultLockInfo,
         cb: PessimisticLockKeyCallback,
     ) -> Box<LockWaitEntry> {
+        assert!(lock_info.lock_info_pb.lock_type != kvrpcpb::Op::SharedLock);
         Box::new(LockWaitEntry {
             key: lock_info.key,
             lock_hash: lock_info.lock_digest.hash,
             parameters: lock_info.parameters,
             should_not_exist: lock_info.should_not_exist,
+            is_shared_lock: false,
             lock_wait_token: lock_info.lock_wait_token,
-            // This must be called after an execution fo AcquirePessimisticLockResumed, in which
+            // This must be called after an execution of AcquirePessimisticLockResumed, in which
             // case there must be a valid req_state.
             req_states: lock_info.req_states.unwrap(),
             legacy_wake_up_index: None,
@@ -2151,27 +2267,33 @@ enum PessimisticLockMode {
 struct SchedulerDetails {
     tracker: TrackerToken,
     stat: Statistics,
-    start_process_instant: Instant,
-    // A write command processing can be divided into four stages:
+    start_instant: Instant,
+    // A write command processing can be divided into five stages:
+    // 0. Take a consistent snapshot from the storage asynchronously.
     // 1. The command is processed using a snapshot to generate the write content.
+    //   a. If the process involves block read, there will be IO time spent on reading blocks.
     // 2. If the quota is exceeded, there will be a delay.
     // 3. If the write flow exceeds the limit, it will be throttled.
     // 4. Finally, the write request is sent to raftkv and responses are awaited.
     cmd_process_nanos: u64,
+    block_read_nanos: u64,
     quota_limit_delay_nanos: u64,
     flow_control_nanos: u64,
+    async_snapshot_nanos: u64,
     async_write_nanos: u64,
 }
 
 impl SchedulerDetails {
-    fn new(tracker: TrackerToken, start_process_instant: Instant) -> Self {
+    fn new(tracker: TrackerToken) -> Self {
         SchedulerDetails {
             tracker,
             stat: Default::default(),
-            start_process_instant,
+            start_instant: Instant::now(),
             cmd_process_nanos: 0,
+            block_read_nanos: 0,
             quota_limit_delay_nanos: 0,
             flow_control_nanos: 0,
+            async_snapshot_nanos: 0,
             async_write_nanos: 0,
         }
     }
@@ -2278,7 +2400,7 @@ mod tests {
             )
             .into(),
             commands::AcquirePessimisticLock::new(
-                vec![(Key::from_raw(b"k"), false)],
+                vec![(Key::from_raw(b"k"), false, false)],
                 b"k".to_vec(),
                 10.into(),
                 0,

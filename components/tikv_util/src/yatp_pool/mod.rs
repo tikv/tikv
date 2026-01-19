@@ -8,7 +8,7 @@ use std::sync::Arc;
 use fail::fail_point;
 pub use future_pool::{Full, FuturePool};
 use futures::{StreamExt, compat::Stream01CompatExt};
-use prometheus::{Histogram, HistogramOpts, local::LocalHistogram};
+use prometheus::local::LocalHistogram;
 use yatp::{
     ThreadPool,
     pool::{CloneRunnerBuilder, Local, Remote, Runner},
@@ -157,6 +157,40 @@ impl Config {
 }
 
 #[derive(Clone)]
+struct TaskScheduleHistograms(Option<[LocalHistogram; TaskPriority::PRIORITY_COUNT]>);
+
+impl TaskScheduleHistograms {
+    fn new(enable: bool, name: &str, metric_vec: &prometheus::HistogramVec) -> Self {
+        if enable {
+            let histograms = TaskPriority::priorities()
+                .map(|p| metric_vec.with_label_values(&[name, p.as_str()]).local());
+            TaskScheduleHistograms(Some(histograms))
+        } else {
+            TaskScheduleHistograms(None)
+        }
+    }
+
+    fn enabled(&self) -> bool {
+        self.0.is_some()
+    }
+
+    fn observe(&mut self, priority: TaskPriority, duration: Duration) {
+        if let Some(histograms) = &mut self.0 {
+            let idx = priority as usize;
+            histograms[idx].observe(duration.as_secs_f64());
+        }
+    }
+
+    fn flush(&mut self) {
+        if let Some(histograms) = &mut self.0 {
+            for hist in histograms.iter_mut() {
+                hist.flush();
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct YatpPoolRunner<T: PoolTicker> {
     inner: FutureRunner,
     ticker: TickerWrapper<T>,
@@ -165,9 +199,10 @@ pub struct YatpPoolRunner<T: PoolTicker> {
     before_stop: Option<Arc<dyn Fn() + Send + Sync>>,
     before_pause: Option<Arc<dyn Fn() + Send + Sync>>,
 
-    // Statistics about the schedule wait duration.
+    // Statistics about the schedule wait/exec duration.
     // local histogram for high,medium,low priority tasks.
-    schedule_wait_durations: [LocalHistogram; TaskPriority::PRIORITY_COUNT],
+    schedule_wait_durations: TaskScheduleHistograms,
+    schedule_exec_durations: TaskScheduleHistograms,
 }
 
 impl<T: PoolTicker> Runner for YatpPoolRunner<T> {
@@ -192,13 +227,34 @@ impl<T: PoolTicker> Runner for YatpPoolRunner<T> {
 
     fn handle(&mut self, local: &mut Local<Self::TaskCell>, mut task_cell: Self::TaskCell) -> bool {
         let extras = task_cell.mut_extras();
-        if let Some(schedule_time) = extras.schedule_time() {
-            let idx = priority_from_task_meta(extras.metadata()) as usize;
-            self.schedule_wait_durations[idx].observe(schedule_time.elapsed().as_secs_f64());
+        let priority = priority_from_task_meta(extras.metadata());
+        let start_time =
+            if self.schedule_wait_durations.enabled() || self.schedule_exec_durations.enabled() {
+                Some(std::time::Instant::now())
+            } else {
+                None
+            };
+        if let Some(dur) = start_time
+            .zip(extras.schedule_time())
+            .map(|(t1, t2)| t1.saturating_duration_since(t2))
+        {
+            self.schedule_wait_durations.observe(priority, dur);
         }
         let finished = self.inner.handle(local, task_cell);
+        let end_time = if self.schedule_exec_durations.enabled() {
+            Some(std::time::Instant::now())
+        } else {
+            None
+        };
+        if let Some(dur) = end_time
+            .zip(start_time)
+            .map(|(t1, t2)| t1.saturating_duration_since(t2))
+        {
+            self.schedule_exec_durations.observe(priority, dur);
+        }
         if self.ticker.try_tick() {
-            self.schedule_wait_durations.iter().for_each(|m| m.flush());
+            self.schedule_wait_durations.flush();
+            self.schedule_exec_durations.flush();
         }
         finished
     }
@@ -226,13 +282,14 @@ impl<T: PoolTicker> Runner for YatpPoolRunner<T> {
 }
 
 impl<T: PoolTicker> YatpPoolRunner<T> {
-    pub fn new(
+    fn new(
         inner: FutureRunner,
         ticker: TickerWrapper<T>,
         after_start: Option<Arc<dyn Fn() + Send + Sync>>,
         before_stop: Option<Arc<dyn Fn() + Send + Sync>>,
         before_pause: Option<Arc<dyn Fn() + Send + Sync>>,
-        schedule_wait_durations: [Histogram; TaskPriority::PRIORITY_COUNT],
+        schedule_wait_durations: TaskScheduleHistograms,
+        schedule_exec_durations: TaskScheduleHistograms,
     ) -> Self {
         YatpPoolRunner {
             inner,
@@ -241,7 +298,8 @@ impl<T: PoolTicker> YatpPoolRunner<T> {
             after_start,
             before_stop,
             before_pause,
-            schedule_wait_durations: schedule_wait_durations.map(|m| m.local()),
+            schedule_wait_durations,
+            schedule_exec_durations,
         }
     }
 }
@@ -259,8 +317,9 @@ pub struct YatpPoolBuilder<T: PoolTicker> {
     max_tasks: usize,
     cleanup_method: CleanupMethod,
 
-    // whether to tracker task scheduling wait duration
+    // whether to tracker task scheduling wait/exec duration
     enable_task_wait_metrics: bool,
+    enable_task_exec_metrics: bool,
     metric_idx_from_task_meta: Option<Arc<dyn Fn(&[u8]) -> usize + Send + Sync>>,
 
     #[cfg(test)]
@@ -283,6 +342,7 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
             cleanup_method: CleanupMethod::InPlace,
 
             enable_task_wait_metrics: false,
+            enable_task_exec_metrics: false,
             metric_idx_from_task_meta: None,
 
             #[cfg(test)]
@@ -356,6 +416,11 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
 
     pub fn enable_task_wait_metrics(mut self, enable: bool) -> Self {
         self.enable_task_wait_metrics = enable;
+        self
+    }
+
+    pub fn enable_task_exec_metrics(mut self, enable: bool) -> Self {
+        self.enable_task_exec_metrics = enable;
         self
     }
 
@@ -492,14 +557,16 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
         let after_start = self.after_start.take();
         let before_stop = self.before_stop.take();
         let before_pause = self.before_pause.take();
-        let schedule_wait_durations = if self.enable_task_wait_metrics {
-            TaskPriority::priorities().map(|p| {
-                metrics::YATP_POOL_SCHEDULE_WAIT_DURATION_VEC
-                    .with_label_values(&[&name, p.as_str()])
-            })
-        } else {
-            std::array::from_fn(|_| Histogram::with_opts(HistogramOpts::new("_", "_")).unwrap())
-        };
+        let schedule_wait_durations = TaskScheduleHistograms::new(
+            self.enable_task_wait_metrics,
+            &name,
+            &metrics::YATP_POOL_SCHEDULE_WAIT_DURATION_VEC,
+        );
+        let schedule_exec_durations = TaskScheduleHistograms::new(
+            self.enable_task_exec_metrics,
+            &name,
+            &metrics::YATP_POOL_SCHEDULE_EXEC_DURATION_VEC,
+        );
         let read_pool_runner = YatpPoolRunner::new(
             Default::default(),
             self.ticker.clone(),
@@ -507,6 +574,7 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
             before_stop,
             before_pause,
             schedule_wait_durations,
+            schedule_exec_durations,
         );
         (builder, read_pool_runner)
     }

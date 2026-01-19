@@ -351,6 +351,7 @@ mod tests {
             lock_hash,
             parameters,
             should_not_exist: false,
+            is_shared_lock: false,
             lock_wait_token: token,
             legacy_wake_up_index: Some(0),
             req_states,

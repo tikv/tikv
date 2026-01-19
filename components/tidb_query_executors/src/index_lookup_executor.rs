@@ -13,7 +13,8 @@ use kvproto::{coprocessor::KeyRange, metapb};
 use tidb_query_common::{
     Error,
     error::Result,
-    execute_stats::{ExecSummaryCollectorEnabled, ExecuteStats},
+    execute_stats::{ExecSummary, ExecSummaryCollector, ExecSummaryCollectorEnabled, ExecuteStats},
+    metrics::EXECUTOR_COUNT_METRICS,
     storage::{FindRegionResult, IntervalRange, RegionStorageAccessor, StateRole, Storage},
 };
 use tidb_query_datatype::{
@@ -27,6 +28,7 @@ use tidb_query_datatype::{
 use tikv_util::{
     Either,
     Either::{Left, Right},
+    error,
 };
 use tipb::{ColumnInfo, FieldType, IndexLookUp, TableScan};
 use txn_types::Key;
@@ -111,6 +113,18 @@ where
     phase: IndexLookUpPhase<Builder::Iterator, S, F>,
     intermediate_results: Vec<BatchExecuteResult>,
     intermediate_channel_index: usize,
+    table_scan_child_index: usize,
+    table_scan_exec_summary: [ExecSummary; 1],
+}
+
+pub struct BuildIndexLookUpExecutorOptions<Src, Accessor> {
+    pub config: Arc<EvalConfig>,
+    pub src: Src,
+    pub index_lookup: IndexLookUp,
+    pub tbl_scan: TableScan,
+    pub accessor: Option<Accessor>,
+    pub intermediate_channel_index: usize,
+    pub table_scan_child_index: usize,
 }
 
 #[inline]
@@ -118,13 +132,18 @@ pub fn build_index_lookup_executor<
     S: Storage + 'static,
     Handle: RowHandle + 'static,
     F: KvFormat,
+    Src: BatchExecutor<StorageStats = S::Statistics> + 'static,
+    Accessor: RegionStorageAccessor<Storage = S> + 'static,
 >(
-    config: Arc<EvalConfig>,
-    src: impl BatchExecutor<StorageStats = S::Statistics> + 'static,
-    mut index_lookup: IndexLookUp,
-    mut tbl_scan: TableScan,
-    accessor: Option<impl RegionStorageAccessor<Storage = S> + 'static>,
-    intermediate_channel_index: usize,
+    BuildIndexLookUpExecutorOptions {
+        config,
+        src,
+        mut index_lookup,
+        mut tbl_scan,
+        accessor,
+        intermediate_channel_index,
+        table_scan_child_index,
+    }: BuildIndexLookUpExecutorOptions<Src, Accessor>,
 ) -> Result<impl BatchExecutor<StorageStats = S::Statistics>> {
     if index_lookup.get_keep_order() {
         return Err(other_err!(
@@ -163,6 +182,7 @@ pub fn build_index_lookup_executor<
             )
         }),
         intermediate_channel_index,
+        table_scan_child_index,
     ))
 }
 
@@ -197,6 +217,7 @@ where
         table_scan_params: TableScanParams,
         table_task_iter_builder: Option<Builder>,
         intermediate_channel_index: usize,
+        table_scan_child_index: usize,
     ) -> Self {
         let force_no_index_lookup =
             if config.paging_size.is_some() || table_task_iter_builder.is_none() {
@@ -229,6 +250,8 @@ where
             phase: IndexLookUpPhase::default(),
             table_scan_params,
             intermediate_channel_index,
+            table_scan_child_index,
+            table_scan_exec_summary: [ExecSummary::default()],
         }
     }
 
@@ -255,6 +278,11 @@ where
     #[inline]
     pub fn intermediate_channel_index(&self) -> usize {
         self.intermediate_channel_index
+    }
+
+    #[inline]
+    pub fn table_scan_child_index(&self) -> usize {
+        self.table_scan_child_index
     }
 
     #[inline]
@@ -403,6 +431,7 @@ where
 
                 match table_task_iter.next().await {
                     Some(task) => {
+                        EXECUTOR_COUNT_METRICS.batch_index_lookup_table_scan.inc();
                         state.table_scan = Some(
                             task.build_table_scan_executor::<F>(
                                 self.config.clone(),
@@ -427,6 +456,12 @@ where
         let mut result = executor.next_batch(scan_rows).await;
         if let Ok(is_drained) = result.is_drained {
             if is_drained.stop() {
+                state
+                    .table_scan
+                    .as_mut()
+                    .unwrap()
+                    .summary_collector
+                    .collect(&mut self.table_scan_exec_summary);
                 state.table_scan = None;
                 result.is_drained = Ok(BatchExecIsDrain::Remain);
             }
@@ -499,8 +534,19 @@ where
 
     #[inline]
     fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {
-        // TODO: support collecting exec stats for index lookup executors.
         self.src.collect_exec_stats(dest);
+        // to collect the second child TableScan's stats, we need to dump the running
+        // executor's stats to `self.table_scan_exec_stats` first.
+        let mut summary = mem::take(&mut self.table_scan_exec_summary);
+        if let IndexLookUpPhase::TableLookUp(TableLookUpState {
+            table_scan: Some(exec),
+            ..
+        }) = &mut self.phase
+        {
+            exec.summary_collector.collect(&mut summary);
+        }
+        dest.summary_per_executor[self.table_scan_child_index] += summary[0];
+        // TODO: how to handle `scanned_rows_per_range`
     }
 
     #[inline]
@@ -611,6 +657,8 @@ where
 
 pub struct TableTask<S> {
     storage: S,
+    // key ranges for the table scan
+    // The `KeyRange.start` and `KeyRange.end` are raw keys without MVCC encoding.
     key_ranges: Vec<KeyRange>,
 }
 
@@ -713,16 +761,14 @@ where
                 )?
             }
 
-            let mut result_handles = Vec::with_capacity(logical_rows_len);
-            for (logical_row_index, &physical_row_index) in result.logical_rows.iter().enumerate() {
-                let handle = Handle::from_lazy_batch_column_vec(
-                    ctx,
-                    &result.physical_columns,
-                    physical_row_index,
-                    &index_layout.handle_offsets,
-                    &index_layout.handle_types,
-                )?;
-                result_handles.push(handle);
+            let result_handles = Handle::from_lazy_batch_column_vec(
+                &mut result.physical_columns,
+                result.logical_rows.as_slice(),
+                &index_layout.handle_offsets,
+                &index_layout.handle_types,
+            )?;
+
+            for logical_row_index in 0..result_handles.len() {
                 orders.push((result_index, logical_row_index));
             }
             handles.push(result_handles);
@@ -885,7 +931,19 @@ where
             // handle this case, just use the region end as the end of the key range to
             // avoid error.
             if !Self::is_key_before_or_eq_region_end(key_range.get_end(), end_exclusive) {
-                key_range.end = end_exclusive.to_vec();
+                let end_exclusive = Key::from_encoded(end_exclusive.to_vec());
+                match end_exclusive.to_raw() {
+                    Ok(end_key) => {
+                        key_range.end = end_key;
+                    }
+                    Err(err) => {
+                        // Set `region` to None to avoid generating a table task.
+                        // The related rows will be looked up on the TiDB side.
+                        region = None;
+                        error!("failed to decode region end key"; "end_key" => ?end_exclusive, "error" => ?err);
+                        debug_assert!(false, "region end should always be in MVCC format");
+                    }
+                }
             }
         }
 
@@ -1264,7 +1322,9 @@ pub mod tests {
         let mut expected_ranges = vec![make_scan_key_range(13, 15)];
         // The end key of the range should be the region end because the point range end
         // of handle 14 exceeds the region.
-        expected_ranges.last_mut().unwrap().end = region.get_end_key().to_vec();
+        expected_ranges.last_mut().unwrap().end = Key::from_encoded(region.get_end_key().to_vec())
+            .to_raw()
+            .unwrap();
         assert_eq!(task.storage, MockStorage(region, expected_ranges.clone()));
         assert_eq!(task.key_ranges, expected_ranges);
         assert_eq!(iter.cursor_in_handle_orders, 5);
@@ -1288,7 +1348,11 @@ pub mod tests {
         let mut expected_range = make_scan_key_range(15, 16);
         // The end key of the range should be the region end because the point range end
         // of handle 15 exceeds the region.
-        expected_range.set_end(region.get_end_key().to_vec());
+        expected_range.set_end(
+            Key::from_encoded(region.get_end_key().to_vec())
+                .to_raw()
+                .unwrap(),
+        );
         let expected_ranges = vec![expected_range];
         assert_eq!(task.storage, MockStorage(region, expected_ranges.clone()));
         assert_eq!(task.key_ranges, expected_ranges.clone());
@@ -1722,6 +1786,7 @@ pub mod tests {
             },
             builder,
             2,
+            3,
         )
     }
 
@@ -2429,5 +2494,66 @@ pub mod tests {
 
         // test index lookup's child's intermediate schema
         assert_eq!(schema2, index_lookup.intermediate_schema(1).unwrap());
+    }
+
+    #[test]
+    fn test_collect_table_scan_summary() {
+        let columns = int_handle_table_columns(vec![FieldTypeTp::LongLong], 0);
+        let src_results = build_int_array_results(vec![vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]]);
+        let mut index_lookup = new_index_lookup_executor_for_test(
+            EvalConfig::default_for_test(),
+            src_results,
+            Some(MockTableTaskIterBuilder),
+            int_handle_table_columns(vec![FieldTypeTp::LongLong, FieldTypeTp::String], 0),
+        );
+
+        // Test the below case
+        // 1. run next_batch to trigger table scan phase
+        // 2. table scan phase loops twice, the first time exhausts the first task,
+        // and the second time consumes 3 rows without exhausting the second task.
+        // 3. collect the summary info
+        assert_eq!(
+            BatchExecIsDrain::Remain,
+            block_on(index_lookup.next_batch(128)).is_drained.unwrap()
+        );
+        let s = index_lookup.phase.mut_table_lookup_or_err().unwrap();
+        s.table_task_iter.as_mut().unwrap().expect_next_task(
+            columns.clone(),
+            vec![vec![
+                Datum::I64(1),
+                Datum::I64(2),
+                Datum::I64(3),
+                Datum::I64(4),
+                Datum::I64(5),
+            ]],
+            vec![make_scan_key_range(i64::MIN, i64::MAX)],
+        );
+        assert_eq!(
+            BatchExecIsDrain::Remain,
+            block_on(index_lookup.next_batch(128)).is_drained.unwrap()
+        );
+        let s = index_lookup.phase.mut_table_lookup_or_err().unwrap();
+        s.table_task_iter.as_mut().unwrap().expect_next_task(
+            columns.clone(),
+            vec![vec![
+                Datum::I64(6),
+                Datum::I64(7),
+                Datum::I64(8),
+                Datum::I64(9),
+                Datum::I64(10),
+            ]],
+            vec![make_scan_key_range(i64::MIN, i64::MAX)],
+        );
+        assert_eq!(
+            BatchExecIsDrain::Remain,
+            block_on(index_lookup.next_batch(2)).is_drained.unwrap()
+        );
+
+        // check summary
+        let mut stats = ExecuteStats::new(index_lookup.table_scan_child_index + 2);
+        index_lookup.collect_exec_stats(&mut stats);
+        let summary = stats.summary_per_executor[index_lookup.table_scan_child_index];
+        assert_eq!(7, summary.num_produced_rows);
+        assert_eq!(2, summary.num_iterations);
     }
 }

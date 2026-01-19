@@ -2,6 +2,7 @@
 
 // #[PerformanceCriticalPath]
 use kvproto::kvrpcpb::ExtraOp;
+use resource_metering::record_network_out_bytes;
 use tikv_kv::Modify;
 use txn_types::{Key, OldValues, TimeStamp, TxnExtra, insert_old_value_if_resolved};
 
@@ -34,7 +35,8 @@ command! {
         }
         content => {
             /// The set of keys to lock.
-            keys: Vec<(Key, bool)>,
+            /// (Key, bool, bool) means (key, should_not_exist, is_shared_lock)
+            keys: Vec<(Key, bool, bool)>,
             /// The primary lock. Secondary locks (from `keys`) will refer to the primary lock.
             primary: Vec<u8>,
             /// The transaction timestamp.
@@ -69,7 +71,7 @@ impl CommandExt for AcquirePessimisticLock {
     fn write_bytes(&self) -> usize {
         self.keys
             .iter()
-            .map(|(key, _)| key.as_encoded().len())
+            .map(|(key, ..)| key.as_encoded().len())
             .sum()
     }
 
@@ -97,7 +99,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
         let mut encountered_locks = vec![];
         let need_old_value = context.extra_op == ExtraOp::ReadOldValue;
         let mut old_values = OldValues::default();
-        for (k, should_not_exist) in keys {
+        for (k, should_not_exist, _is_shared) in keys {
             match acquire_pessimistic_lock(
                 &mut txn,
                 &mut reader,
@@ -175,6 +177,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
 
         let rows = if res.is_ok() { total_keys } else { 0 };
 
+        record_network_out_bytes(res.as_ref().map_or(0, |v| v.estimate_resp_size()));
         let pr = ProcessResult::PessimisticLockRes { res };
 
         let to_be_write = make_write_data(modifies, old_values);

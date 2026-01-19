@@ -24,7 +24,7 @@ use grpcio::{
 };
 use health_controller::HealthController;
 use kvproto::{coprocessor::*, kvrpcpb::*, mpp::*, raft_serverpb::*, tikvpb::*};
-use protobuf::RepeatedField;
+use protobuf::{Message, RepeatedField};
 use raft::eraftpb::MessageType;
 use raftstore::{
     Error as RaftStoreError, Result as RaftStoreResult,
@@ -44,7 +44,9 @@ use tikv_util::{
     time::{Instant, nanos_to_secs},
     worker::Scheduler,
 };
-use tracker::{GLOBAL_TRACKERS, RequestInfo, RequestType, Tracker, set_tls_tracker_token};
+use tracker::{
+    GLOBAL_TRACKERS, RequestInfo, RequestType, Tracker, set_tls_tracker_token, with_tls_tracker,
+};
 use txn_types::{self, Key};
 
 use super::batch::{BatcherBuilder, ReqBatcher};
@@ -59,7 +61,8 @@ use crate::{
         self, SecondaryLocksStatus, Storage, TxnStatus,
         errors::{
             extract_committed, extract_key_error, extract_key_errors, extract_kv_pairs,
-            extract_region_error, extract_region_error_from_error, map_kv_pairs,
+            extract_region_error, extract_region_error_from_error, map_kv_pair_entries,
+            map_kv_pairs,
         },
         kv::Engine,
         lock_manager::LockManager,
@@ -1618,11 +1621,15 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
         req.get_version(),
     )));
     set_tls_tracker_token(tracker);
+    with_tls_tracker(|tracker| {
+        tracker.metrics.grpc_req_size = req.compute_size() as u64;
+    });
     let start = Instant::now();
-    let v = storage.get(
+    let v = storage.get_entry(
         req.take_context(),
         Key::from_raw(req.get_key()),
         req.get_version().into(),
+        req.get_need_commit_ts(),
     );
 
     async move {
@@ -1644,7 +1651,12 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
                     });
                     set_time_detail(exec_detail_v2, duration, &stats.latency_stats);
                     match val {
-                        Some(val) => resp.set_value(val),
+                        Some(val) => {
+                            resp.set_value(val.value);
+                            if let Some(commit_ts) = val.commit_ts {
+                                resp.set_commit_ts(commit_ts.into_inner());
+                            }
+                        }
                         None => resp.set_not_found(true),
                     }
                 }
@@ -1689,6 +1701,9 @@ fn future_scan<E: Engine, L: LockManager, F: KvFormat>(
         req.get_version(),
     )));
     set_tls_tracker_token(tracker);
+    with_tls_tracker(|tracker| {
+        tracker.metrics.grpc_req_size = req.compute_size() as u64;
+    });
     let end_key = Key::from_raw_maybe_unbounded(req.get_end_key());
 
     let v = storage.scan(
@@ -1738,8 +1753,16 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
     )));
     set_tls_tracker_token(tracker);
     let start = Instant::now();
+    with_tls_tracker(|tracker| {
+        tracker.metrics.grpc_req_size = req.compute_size() as u64;
+    });
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
-    let v = storage.batch_get(req.take_context(), keys, req.get_version().into());
+    let v = storage.batch_get(
+        req.take_context(),
+        keys,
+        req.get_version().into(),
+        req.get_need_commit_ts(),
+    );
 
     async move {
         let v = v.await;
@@ -1750,7 +1773,7 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
         } else {
             match v {
                 Ok((kv_res, stats)) => {
-                    let pairs = map_kv_pairs(kv_res);
+                    let pairs = map_kv_pair_entries(kv_res);
                     let exec_detail_v2 = resp.mut_exec_details_v2();
                     stats
                         .stats
@@ -1787,6 +1810,9 @@ fn future_buffer_batch_get<E: Engine, L: LockManager, F: KvFormat>(
         req.get_version(),
     )));
     set_tls_tracker_token(tracker);
+    with_tls_tracker(|tracker| {
+        tracker.metrics.grpc_req_size = req.compute_size() as u64;
+    });
     let start = Instant::now();
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
     let v = storage.buffer_batch_get(req.take_context(), keys, req.get_version().into());
@@ -1831,6 +1857,9 @@ fn future_scan_lock<E: Engine, L: LockManager, F: KvFormat>(
         req.get_max_version(),
     )));
     set_tls_tracker_token(tracker);
+    with_tls_tracker(|tracker| {
+        tracker.metrics.grpc_req_size = req.compute_size() as u64;
+    });
     let start_key = Key::from_raw_maybe_unbounded(req.get_start_key());
     let end_key = Key::from_raw_maybe_unbounded(req.get_end_key());
 
@@ -2394,6 +2423,9 @@ macro_rules! txn_command_future {
                 0,
             )));
             set_tls_tracker_token($tracker);
+            with_tls_tracker(|tracker| {
+                tracker.metrics.grpc_req_size = $req.compute_size() as u64;
+            });
             let (cb, f) = paired_future_callback();
             let res = storage.sched_txn_command($req.into(), cb);
 

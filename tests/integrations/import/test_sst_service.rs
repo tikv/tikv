@@ -197,6 +197,14 @@ fn test_switch_mode_v2() {
     let mut cfg = TikvConfig::default();
     cfg.server.grpc_concurrency = 1;
     cfg.rocksdb.writecf.disable_auto_compactions = true;
+    // `ingest_maybe_slowdown_writes` uses `stop_writes_trigger` to check if ingest
+    // may cause a write stall. We also set `slowdown_writes_trigger` because
+    // RocksDB ignores `stop_writes_trigger` when it is smaller than
+    // `slowdown_writes_trigger`
+    cfg.rocksdb.defaultcf.level0_slowdown_writes_trigger = 4;
+    cfg.rocksdb.writecf.level0_slowdown_writes_trigger = 4;
+    cfg.rocksdb.defaultcf.level0_stop_writes_trigger = Some(4);
+    cfg.rocksdb.writecf.level0_stop_writes_trigger = Some(4);
     cfg.raft_store.right_derive_when_split = true;
     // cfg.rocksdb.writecf.level0_slowdown_writes_trigger = Some(2);
     let (mut cluster, mut ctx, _tikv, import) = open_cluster_and_tikv_import_client_v2(Some(cfg));
@@ -683,7 +691,17 @@ fn test_suspend_import() {
 
 #[test]
 fn test_concurrent_ingest_admission_control() {
-    let (_cluster, ctx, _tikv, import) = new_cluster_and_tikv_import_client();
+    let mut cfg = TikvConfig::default();
+    cfg.server.grpc_concurrency = 1;
+    // `ingest_maybe_slowdown_writes` uses `stop_writes_trigger` to check if ingest
+    // may cause a write stall. We also set `slowdown_writes_trigger` because
+    // RocksDB ignores `stop_writes_trigger` when it is smaller than
+    // `slowdown_writes_trigger`
+    cfg.rocksdb.defaultcf.level0_slowdown_writes_trigger = 4;
+    cfg.rocksdb.writecf.level0_slowdown_writes_trigger = 4;
+    cfg.rocksdb.defaultcf.level0_stop_writes_trigger = Some(4);
+    cfg.rocksdb.writecf.level0_stop_writes_trigger = Some(4);
+    let (_cluster, ctx, _tikv, import) = open_cluster_and_tikv_import_client(Some(cfg));
     let temp_dir = Builder::new().prefix("test_ingest_sst").tempdir().unwrap();
     let sst_path = temp_dir.path().join("test.sst");
     let mut metas = Vec::new();

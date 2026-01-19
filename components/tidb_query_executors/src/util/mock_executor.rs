@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    mem,
     ops::DerefMut,
     sync::{Arc, Mutex},
 };
@@ -12,7 +13,7 @@ use tidb_query_common::{
     Result,
     error::StorageError,
     storage::{
-        FindRegionResult, IntervalRange, OwnedKvPair, PointRange, RegionStorageAccessor,
+        FindRegionResult, IntervalRange, OwnedKvPairEntry, PointRange, RegionStorageAccessor,
         Result as StorageResult, StateRole, Storage,
     },
 };
@@ -64,6 +65,19 @@ impl MockExecutor {
 
     pub fn set_next_intermediate_results(&mut self, results: Vec<BatchExecuteResult>) {
         self.intermediate_results = vec![results].into_iter();
+    }
+
+    pub fn set_extra_common_handle_keys(&mut self, mut keys: Vec<Vec<Vec<u8>>>) {
+        let v = mem::take(&mut self.results)
+            .enumerate()
+            .map(|(i, mut r)| {
+                let extra_keys = r.physical_columns.mut_extra_common_handle_keys();
+                extra_keys.clear();
+                extra_keys.append(&mut keys[i]);
+                r
+            })
+            .collect::<Vec<_>>();
+        self.results = v.into_iter();
     }
 }
 
@@ -218,20 +232,22 @@ impl Storage for MockStorage {
         &mut self,
         _is_backward_scan: bool,
         _is_key_only: bool,
+        _load_commit_ts: bool,
         _range: IntervalRange,
     ) -> StorageResult<()> {
         unimplemented!()
     }
 
-    fn scan_next(&mut self) -> StorageResult<Option<OwnedKvPair>> {
+    fn scan_next_entry(&mut self) -> StorageResult<Option<OwnedKvPairEntry>> {
         unimplemented!()
     }
 
-    fn get(
+    fn get_entry(
         &mut self,
         _is_key_only: bool,
+        _load_commit_ts: bool,
         _range: PointRange,
-    ) -> StorageResult<Option<OwnedKvPair>> {
+    ) -> StorageResult<Option<OwnedKvPairEntry>> {
         unimplemented!()
     }
 

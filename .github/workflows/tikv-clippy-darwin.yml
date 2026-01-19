@@ -1,0 +1,90 @@
+name: Clippy (Darwin)
+
+env:
+  CMAKE_VERSION: "3.28.0"
+
+on:
+  pull_request:
+    branches:
+      - master
+      - 'feature/**'
+    paths-ignore:
+      - '**.md'
+      - '**.png'
+      - '**.jpeg'
+      - '**.jpg'
+      - '**.gif'
+      - '**.svg'
+      - '**.pdf'
+      - '.gitignore'
+      - 'Dockerfile'
+      - 'OWNERS'
+      - 'OWNERS_ALIASES'
+
+permissions:
+  contents: read
+
+jobs:
+  clippy-darwin:
+    name: Run Clippy on macOS (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: macos-15-intel
+          - arch: arm64
+            runner: macos-15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Install CMake
+        env:
+          CMAKE_VERSION: ${{ env.CMAKE_VERSION }}
+        run: |
+          CMAKE_VERSION="${{ env.CMAKE_VERSION }}"
+          CMAKE_URL="https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-macos-universal.tar.gz"
+          
+          cd /tmp
+          curl -L -o cmake.tar.gz "${CMAKE_URL}"
+          tar -xzf cmake.tar.gz
+
+          CMAKE_INSTALL_DIR="/usr/local/cmake-${CMAKE_VERSION}"
+          sudo mkdir -p "${CMAKE_INSTALL_DIR}"
+          sudo cp -R "cmake-${CMAKE_VERSION}-macos-universal/CMake.app" "${CMAKE_INSTALL_DIR}/"
+          sudo ln -sf "${CMAKE_INSTALL_DIR}/CMake.app/Contents/bin/cmake" /usr/local/bin/cmake
+          sudo ln -sf "${CMAKE_INSTALL_DIR}/CMake.app/Contents/bin/ctest" /usr/local/bin/ctest
+          sudo ln -sf "${CMAKE_INSTALL_DIR}/CMake.app/Contents/bin/cpack" /usr/local/bin/cpack
+
+          echo "/usr/local/bin" >> $GITHUB_PATH
+          echo "CMAKE_ROOT=${CMAKE_INSTALL_DIR}/CMake.app/Contents" >> $GITHUB_ENV
+          echo "CMAKE=${CMAKE_INSTALL_DIR}/CMake.app/Contents/bin/cmake" >> $GITHUB_ENV
+
+          rm -rf cmake.tar.gz "cmake-${CMAKE_VERSION}-macos-universal"
+          
+          /usr/local/bin/cmake --version
+          echo "CMake ${CMAKE_VERSION} installed to ${CMAKE_INSTALL_DIR}"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: nightly-2025-02-28
+          components: rustfmt,clippy,rust-src,rust-analyzer
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: ${{ runner.os }}-${{ matrix.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.arch }}-cargo-
+
+      - name: Run Clippy
+        run: |
+          make clippy

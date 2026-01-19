@@ -691,6 +691,25 @@ impl SplitCheckTrigger {
     }
 }
 
+/// A enum contains some useful state to represent different reason for
+/// pending remove.
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingRemoveReason {
+    NotRemoved = 0,
+    Merge,
+    /// The peer has been marked for destruction and is scheduled to be removed.
+    Destroy,
+    /// The peer is now ready to be destroyed; all necessary preparations (such
+    /// as clearing the ApplyFsm) have been completed, so it can be safely
+    /// removed.
+    ///
+    /// Note: The peer enters the final stage of destruction only when its state
+    /// transitions from `Destroy` to `ReadyToDestroy`, or if it is directly
+    /// marked as `ReadyToDestroy`.
+    ReadyToDestroy,
+}
+
 #[derive(Getters, MutGetters)]
 pub struct Peer<EK, ER>
 where
@@ -734,20 +753,20 @@ where
     /// Indicates whether the peer should be woken up.
     pub should_wake_up: bool,
     /// Whether this peer is destroyed asynchronously.
-    /// If it's true,
+    /// If it's Some(...),
     /// - when merging, its data in storeMeta will be removed early by the
     ///   target peer.
     /// - all read requests must be rejected.
-    pub pending_remove: bool,
-    /// Currently it's used to indicate whether the witness -> non-witess
-    /// convertion operation is complete. The meaning of completion is that
+    pub pending_remove: Option<PendingRemoveReason>,
+    /// Currently it's used to indicate whether the witness -> non-witness
+    /// conversion operation is complete. The meaning of completion is that
     /// this peer must contain the applied data, then PD can consider that
     /// the conversion operation is complete, and can continue to schedule
     /// other operators to prevent the existence of multiple witnesses in
     /// the same time period.
     pub wait_data: bool,
 
-    /// When the witness becomes non-witness, it need to actively request a
+    /// When the witness becomes non-witness, it needs to actively request a
     /// snapshot from the leader, but the request may fail, so we need to save
     /// the request index for retrying.
     pub request_index: u64,
@@ -759,7 +778,7 @@ where
     /// the successful transfer of leadership.
     pub delay_clean_data: bool,
 
-    /// When the witness becomes non-witness, it need to actively request a
+    /// When the witness becomes non-witness, it needs to actively request a
     /// snapshot from the leader, In order to avoid log lag, we need to reject
     /// the leader's `MsgAppend` request unless the `term` of the `last index`
     /// is less than the peer's current `term`.
@@ -1013,7 +1032,7 @@ where
             split_check_trigger: SplitCheckTrigger::default(),
             delete_keys_hint: 0,
             leader_unreachable: false,
-            pending_remove: false,
+            pending_remove: None,
             wait_data,
             request_index: last_index,
             delay_clean_data: false,
@@ -1308,7 +1327,7 @@ where
     /// Tries to destroy itself. Returns a job (if needed) to do more cleaning
     /// tasks.
     pub fn maybe_destroy<T>(&mut self, ctx: &PollContext<EK, ER, T>) -> Option<DestroyPeerJob> {
-        if self.pending_remove {
+        if self.pending_remove.is_some() {
             info!(
                 "is being destroyed, skip";
                 "region_id" => self.region_id,
@@ -1365,7 +1384,9 @@ where
         //   is Some and should be set to None.
         self.apply_snap_ctx = None;
 
-        self.pending_remove = true;
+        // Marks the peer is prepared to be destroyed, waiting for finishing
+        // preparations.
+        self.pending_remove = Some(PendingRemoveReason::Destroy);
 
         Some(DestroyPeerJob {
             initialized: self.get_store().is_initialized(),
@@ -1531,10 +1552,54 @@ where
         &self.region_buckets_info
     }
 
+    fn is_peer_heartbeat_timeout(
+        &self,
+        peer_id: u64,
+        heartbeat_timeout_duration: Duration,
+    ) -> bool {
+        if let Some(instant) = self.peer_heartbeats.get(&peer_id) {
+            let elapsed = instant.saturating_elapsed();
+            return elapsed >= heartbeat_timeout_duration;
+        }
+        true // If no heartbeat record, consider it as timeout.
+    }
+
+    /// Checks if all peers that have not sent a hibernate vote are unreachable.
+    /// If one peer is unreachable, it must be in probe state and encounter
+    /// heartbeat timeout.
+    pub fn all_non_hibernate_vote_peers_unreachable(
+        &self,
+        hibernate_vote_peer_ids: &[u64],
+        heartbeat_timeout_duration: Duration,
+    ) -> bool {
+        let status = self.raft_group.status();
+        let progress = match status.progress {
+            Some(progress) => progress,
+            None => return false,
+        };
+        // Check each peer in the raft group
+        for (id, pr) in progress.iter() {
+            if *id == self.peer.get_id() {
+                continue;
+            }
+            if !hibernate_vote_peer_ids.contains(id) {
+                if pr.state != ProgressState::Probe {
+                    // Found a non-hibernate-vote peer not in probe state, return false
+                    return false;
+                }
+                if !self.is_peer_heartbeat_timeout(*id, heartbeat_timeout_duration) {
+                    // Found a non-hibernate-vote peer not in heartbeat timeout, return false
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
     /// Check whether the peer can be hibernated.
     ///
     /// This should be used with `check_after_tick` to get a correct conclusion.
-    pub fn check_before_tick(&self, cfg: &Config) -> CheckTickResult {
+    pub fn check_before_tick(&self, cfg: &Config, down_peer_ids: &[u64]) -> CheckTickResult {
         let mut res = CheckTickResult::default();
         if !self.is_leader() {
             return res;
@@ -1545,17 +1610,29 @@ where
         }
         let status = self.raft_group.status();
         let last_index = self.raft_group.raft.raft_log.last_index();
+        let mut matched_peer_ids = HashSet::default();
+        matched_peer_ids.insert(self.peer.get_id());
         for (id, pr) in status.progress.unwrap().iter() {
-            // Even a recent inactive node is also considered. If we put leader into sleep,
-            // followers or learners may not sync its logs for a long time and become
-            // unavailable. We choose availability instead of performance in this case.
+            // Leader can sleep when every alive peer is in sync and all alive peers reach
+            // majority. If we put leader into sleep when some alive peer lags,
+            // followers or learners may not sync its logs for a long time and
+            // become unavailable. We choose availability instead of performance in this
+            // case.
             if *id == self.peer.get_id() {
                 continue;
             }
-            if pr.matched != last_index {
+            if pr.matched != last_index && !down_peer_ids.contains(id) {
+                // Prevent leader from sleeping when some alive peer is still replicating logs.
                 res.reason = "replication";
                 return res;
             }
+            if pr.matched == last_index {
+                matched_peer_ids.insert(*id);
+            }
+        }
+        if !self.raft_group.raft.prs().has_quorum(&matched_peer_ids) {
+            res.reason = "not enough matched peers";
+            return res;
         }
         if self.raft_group.raft.pending_read_count() > 0 {
             res.reason = "pending read";
@@ -1654,6 +1731,12 @@ where
         region: metapb::Region,
         reason: RegionChangeReason,
     ) {
+        fail_point!(
+            "raftstore_set_region_after_change_peer",
+            self.peer.get_store_id() == 3 && reason == RegionChangeReason::ChangePeer,
+            |_| {}
+        );
+
         if self.region().get_region_epoch().get_version() < region.get_region_epoch().get_version()
         {
             // Epoch version changed, disable read on the local reader for this region.
@@ -1675,7 +1758,7 @@ where
             pessimistic_locks.version = self.region().get_region_epoch().get_version();
         }
 
-        if !self.pending_remove {
+        if self.pending_remove.is_none() {
             host.on_region_changed(
                 self.region(),
                 RegionChangeEvent::Update(reason),
@@ -2106,6 +2189,14 @@ where
             self.refill_disk_full_peers(ctx);
         }
         down_peers
+    }
+
+    /// Returns the current list of down peer ids.
+    ///
+    /// This clones the internal `down_peer_ids` vector so callers can use it
+    /// without borrowing `self` mutably.
+    pub fn get_down_peer_ids(&self) -> Vec<u64> {
+        self.down_peer_ids.clone()
     }
 
     /// Collects all pending peers and update `peers_start_pending_time`.
@@ -2786,7 +2877,7 @@ where
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
     ) -> Option<ReadyResult> {
-        if self.pending_remove {
+        if self.pending_remove.is_some() {
             return None;
         }
 
@@ -3371,7 +3462,7 @@ where
         self.write_router
             .check_new_persisted(ctx, self.persisted_number);
 
-        if !self.pending_remove {
+        if self.pending_remove.is_none() {
             // If `pending_remove` is true, no need to call `on_persist_ready` to
             // update persist index.
             let pre_persist_index = self.raft_group.raft.raft_log.persisted;
@@ -3815,7 +3906,7 @@ where
     }
 
     fn maybe_update_read_progress(&self, reader: &mut ReadDelegate, progress: ReadProgress) {
-        if self.pending_remove {
+        if self.pending_remove.is_some() {
             return;
         }
         debug!(
@@ -3870,7 +3961,7 @@ where
         mut err_resp: RaftCmdResponse,
         mut disk_full_opt: DiskFullOpt,
     ) -> bool {
-        if self.pending_remove {
+        if self.pending_remove.is_some() {
             return false;
         }
 
@@ -5482,7 +5573,7 @@ where
 
     /// Check if the command will be likely to pass all the check and propose.
     pub fn will_likely_propose(&mut self, cmd: &RaftCmdRequest) -> bool {
-        !self.pending_remove
+        self.pending_remove.is_none()
             && self.is_leader()
             && self.pending_merge_state.is_none()
             && self.prepare_merge_fence == 0
@@ -5570,7 +5661,7 @@ where
 
             if self.raft_group.raft.raft_log.applied >= *target_index
                 || force
-                || self.pending_remove
+                || self.pending_remove.is_some()
             {
                 info!("snapshot recovery wait apply finished";
                     "region_id" => self.region().get_id(),

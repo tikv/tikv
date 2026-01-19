@@ -7,6 +7,7 @@ license = "Apache-2.0"
 
 [features]
 default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
+failpoints = ["fail/failpoints", "tikv/failpoints"]
 
 test-engines-rocksdb = [
   "engine_test/test-engines-rocksdb",
@@ -32,6 +33,7 @@ engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
 error_code = { workspace = true }
 external_storage ={ workspace = true }
+fail = "0.5"
 file_system = { workspace = true }
 futures = { version = "0.3", features = ["thread-pool"] }
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
@@ -62,4 +64,5 @@ engine_test = { workspace = true }
 tempfile = "3.0"
 test_sst_importer = { workspace = true }
 test_util = { workspace = true }
+tikv = { workspace = true }
 tokio-util = { version = "0.7", features = ["compat"] }

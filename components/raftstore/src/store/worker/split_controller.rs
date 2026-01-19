@@ -22,6 +22,7 @@ use tikv_util::{
     debug, info,
     metrics::ThreadInfoStatistics,
     store::{QueryStats, is_read_query},
+    thread_name_prefix::{GRPC_SERVER_THREAD, UNIFIED_READ_POOL_THREAD},
     time::Instant,
     warn,
 };
@@ -29,7 +30,10 @@ use tikv_util::{
 use crate::store::{
     metrics::*,
     util::build_key_range,
-    worker::{FlowStatistics, SplitConfig, SplitConfigManager, split_config::get_sample_num},
+    worker::{
+        FlowStatistics, SplitConfig, SplitConfigManager, SplitValidator,
+        split_config::get_sample_num,
+    },
 };
 
 const DEFAULT_MAX_SAMPLE_LOOP_COUNT: usize = 10000;
@@ -760,6 +764,7 @@ impl AutoSplitController {
         read_stats_receiver: &Receiver<ReadStats>,
         cpu_stats_receiver: &Receiver<Arc<RawRecords>>,
         thread_stats: &mut ThreadInfoStatistics,
+        split_validator: &SplitValidator,
     ) -> (Vec<usize>, Vec<SplitInfo>) {
         let mut top_cpu_usage = vec![];
         let mut top_qps = BinaryHeap::with_capacity(TOP_N);
@@ -768,8 +773,8 @@ impl AutoSplitController {
         // Prepare some diagnostic info.
         thread_stats.record();
         let (grpc_thread_usage, unified_read_pool_thread_usage) = (
-            Self::collect_thread_usage(thread_stats, "grpc-server"),
-            Self::collect_thread_usage(thread_stats, "unified-read-po"),
+            Self::collect_thread_usage(thread_stats, GRPC_SERVER_THREAD),
+            Self::collect_thread_usage(thread_stats, UNIFIED_READ_POOL_THREAD),
         );
         // Update first before calculating the latest average gRPC poll CPU usage.
         self.update_grpc_thread_usage(grpc_thread_usage);
@@ -791,6 +796,9 @@ impl AutoSplitController {
         // Start to record the read stats info.
         let mut split_infos = vec![];
         for (region_id, region_infos) in region_infos_map {
+            if split_validator.is_disabled(region_id) {
+                continue;
+            }
             let qps_prefix_sum = prefix_sum(region_infos.iter(), RegionInfo::get_read_qps);
             // region_infos is not empty, so it's safe to unwrap here.
             let qps = *qps_prefix_sum.last().unwrap();
@@ -1330,6 +1338,7 @@ mod tests {
                 &read_stats_receiver,
                 &cpu_stats_receiver,
                 &mut ThreadInfoStatistics::default(),
+                &SplitValidator::new(),
             );
             if (i + 1) % hub.cfg.detect_times != 0 {
                 continue;
@@ -1369,6 +1378,7 @@ mod tests {
                 &read_stats_receiver,
                 &cpu_stats_receiver,
                 &mut ThreadInfoStatistics::default(),
+                &SplitValidator::new(),
             );
             if (i + 1) % hub.cfg.detect_times != 0 {
                 continue;
@@ -1417,6 +1427,10 @@ mod tests {
                     cpu_time: cpu_times[idx],
                     read_keys: 0,
                     write_keys: 0,
+                    network_in_bytes: 0,
+                    network_out_bytes: 0,
+                    logical_read_bytes: 0,
+                    logical_write_bytes: 0,
                 },
             );
         }
@@ -1461,6 +1475,7 @@ mod tests {
                 &read_stats_receiver,
                 &cpu_stats_receiver,
                 &mut ThreadInfoStatistics::default(),
+                &SplitValidator::new(),
             );
         }
 
@@ -1482,6 +1497,7 @@ mod tests {
             &read_stats_receiver,
             &cpu_stats_receiver,
             &mut ThreadInfoStatistics::default(),
+            &SplitValidator::new(),
         );
     }
 
@@ -1891,6 +1907,10 @@ mod tests {
                     cpu_time: test_case.0,
                     read_keys: 0,
                     write_keys: 0,
+                    network_in_bytes: 0,
+                    network_out_bytes: 0,
+                    logical_read_bytes: 0,
+                    logical_write_bytes: 0,
                 },
             );
             // ["c", "d"] with (test_case.1)ms CPU time.
@@ -1900,6 +1920,10 @@ mod tests {
                     cpu_time: test_case.1,
                     read_keys: 0,
                     write_keys: 0,
+                    network_in_bytes: 0,
+                    network_out_bytes: 0,
+                    logical_read_bytes: 0,
+                    logical_write_bytes: 0,
                 },
             );
             // Multiple key ranges with (test_case.2)ms CPU time.
@@ -1909,6 +1933,10 @@ mod tests {
                     cpu_time: test_case.2,
                     read_keys: 0,
                     write_keys: 0,
+                    network_in_bytes: 0,
+                    network_out_bytes: 0,
+                    logical_read_bytes: 0,
+                    logical_write_bytes: 0,
                 },
             );
             // Empty key range with (test_case.3)ms CPU time.
@@ -1918,6 +1946,10 @@ mod tests {
                     cpu_time: test_case.3,
                     read_keys: 0,
                     write_keys: 0,
+                    network_in_bytes: 0,
+                    network_out_bytes: 0,
+                    logical_read_bytes: 0,
+                    logical_write_bytes: 0,
                 },
             );
 
@@ -2040,6 +2072,7 @@ mod tests {
                 &read_stats_receiver,
                 &cpu_stats_receiver,
                 &mut threads,
+                &SplitValidator::new(),
             );
         });
     }

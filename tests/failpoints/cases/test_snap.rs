@@ -16,7 +16,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
-use tikv_util::{HandyRwLock, config::*, time::Instant};
+use tikv_util::{HandyRwLock, config::*, thread_name_prefix::RAFTSTORE_THREAD, time::Instant};
 
 #[test]
 fn test_overlap_cleanup() {
@@ -201,7 +201,11 @@ fn test_destroy_peer_on_pending_snapshot() {
     pd_client.disable_default_operator();
 
     fail::cfg_callback("engine_rocks_raft_engine_clean_seek", move || {
-        if std::thread::current().name().unwrap().contains("raftstore") {
+        if std::thread::current()
+            .name()
+            .unwrap()
+            .contains(RAFTSTORE_THREAD)
+        {
             panic!("seek should not happen in raftstore threads");
         }
     })

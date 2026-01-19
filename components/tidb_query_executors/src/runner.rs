@@ -15,7 +15,7 @@ use tidb_query_common::{
 };
 use tidb_query_datatype::{
     EvalType, FieldTypeAccessor,
-    codec::table::IntHandle,
+    codec::table::{CommonHandle, IntHandle},
     expr::{EvalConfig, EvalContext, EvalWarnings},
 };
 use tikv_util::{
@@ -42,7 +42,10 @@ const BATCH_INITIAL_SIZE: usize = 32;
 // benchmarks.
 pub use tidb_query_expr::types::BATCH_MAX_SIZE;
 
-use crate::{index_lookup_executor::build_index_lookup_executor, interface::BatchExecuteResult};
+use crate::{
+    index_lookup_executor::{BuildIndexLookUpExecutorOptions, build_index_lookup_executor},
+    interface::BatchExecuteResult,
+};
 
 // TODO: Maybe there can be some better strategy. Needs benchmarks and tunes.
 const BATCH_GROW_FACTOR: usize = 2;
@@ -208,6 +211,43 @@ fn is_arrow_encodable<'a>(mut schema: impl Iterator<Item = &'a FieldType>) -> bo
     schema.all(|schema| EvalType::try_from(schema.as_accessor().tp()).is_ok())
 }
 
+#[inline]
+fn is_executor_under_parent_tp<'a>(
+    under_tp: ExecType,
+    mut executor: &'a tipb::Executor,
+    mut executor_index: usize,
+    mut left_executors: &'a [tipb::Executor],
+) -> Result<bool> {
+    while !left_executors.is_empty() {
+        let mut parent_idx = executor.get_parent_idx() as usize;
+        if parent_idx > 0 {
+            // parent_idx > 0 indicates the parent id is explicitly specified,
+            // otherwise `parent_idx == 0` means to use the next executor as parent.
+            if parent_idx <= executor_index || parent_idx > left_executors.len() + executor_index {
+                return Err(other_err!(
+                    "invalid parent index: {}, for executor with index: {}, executors len: {}",
+                    parent_idx,
+                    executor_index,
+                    left_executors.len() + executor_index + 1
+                ));
+            }
+
+            // set the parent index to the index in left_executors
+            parent_idx = parent_idx - executor_index - 1;
+        }
+
+        let parent = &left_executors[parent_idx];
+        if parent.get_tp() == under_tp {
+            return Ok(true);
+        }
+
+        executor = parent;
+        executor_index += parent_idx + 1;
+        left_executors = &left_executors[parent_idx + 1..];
+    }
+    Ok(false)
+}
+
 #[allow(clippy::explicit_counter_loop)]
 pub fn build_executors<S: Storage + 'static, F: KvFormat>(
     executor_descriptors: Vec<tipb::Executor>,
@@ -259,6 +299,17 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
             let mut descriptor = first_ed.take_idx_scan();
             let columns_info = descriptor.take_columns().into();
             let primary_column_ids_len = descriptor.take_primary_column_ids().len();
+            // If the table has a common handle and the index scan is under the
+            // IndexLookUp, we need to fill extra_common_handle_keys in the
+            // BatchExecuteResult which can be used by IndexLookUp.
+            let fill_extra_common_handles = primary_column_ids_len > 0
+                && is_executor_under_parent_tp(
+                    ExecType::TypeIndexLookUp,
+                    &first_ed,
+                    0,
+                    executor_descriptors.as_slice(),
+                )?;
+
             Box::new(
                 BatchIndexScanExecutor::<_, F>::new(
                     storage,
@@ -269,6 +320,7 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
                     descriptor.get_desc(),
                     descriptor.get_unique(),
                     is_scanned_range_aware,
+                    fill_extra_common_handles,
                 )?
                 .collect_summary(summary_slot_index),
             )
@@ -459,6 +511,7 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
                 }
             }
             ExecType::TypeIndexLookUp => {
+                EXECUTOR_COUNT_METRICS.batch_index_lookup.inc();
                 if children.len() != 1 {
                     return Err(other_err!(
                         "IndexLookUp should have one child executor, but got {}",
@@ -491,18 +544,25 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
                 }
 
                 let tbl_scan = child.take_tbl_scan();
-                if !tbl_scan.get_primary_column_ids().is_empty() {
-                    return Err(other_err!("Common handle is not supported in index lookup"));
+                let is_common_handle = !tbl_scan.get_primary_column_ids().is_empty();
+                let options = BuildIndexLookUpExecutorOptions {
+                    config: config.clone(),
+                    src: executor,
+                    index_lookup: ed.take_index_lookup(),
+                    tbl_scan,
+                    accessor: extra_storage_accessor.clone(),
+                    intermediate_channel_index: channel_ids[0],
+                    table_scan_child_index: summary_slot_index - 1,
+                };
+
+                if is_common_handle {
+                    let e = build_index_lookup_executor::<_, CommonHandle, F, _, _>(options)?
+                        .collect_summary(summary_slot_index);
+                    Box::new(e)
                 } else {
-                    let e = build_index_lookup_executor::<_, IntHandle, F>(
-                        config.clone(),
-                        executor,
-                        ed.take_index_lookup(),
-                        tbl_scan,
-                        extra_storage_accessor.clone(),
-                        channel_ids[0],
-                    )?;
-                    Box::new(e.collect_summary(summary_slot_index))
+                    let e = build_index_lookup_executor::<_, IntHandle, F, _, _>(options)?
+                        .collect_summary(summary_slot_index);
+                    Box::new(e)
                 }
             }
             _ => {
@@ -1361,47 +1421,53 @@ mod tests {
                 .contains("The intermediate schema is not found until root executor, index: 2")
         );
 
-        let check_index_lookup_executor = |executor: &IndexLookupExecutor| {
-            // schema should use the table scan's schema
-            assert_eq!(
-                executor.schema(),
-                table_columns
-                    .iter()
-                    .map(field_type_from_column_info)
-                    .collect_vec()
-                    .as_slice()
-            );
+        let check_index_lookup_executor =
+            |executor: &IndexLookupExecutor, table_scan_child_idx: usize| {
+                // schema should use the table scan's schema
+                assert_eq!(
+                    executor.schema(),
+                    table_columns
+                        .iter()
+                        .map(field_type_from_column_info)
+                        .collect_vec()
+                        .as_slice()
+                );
 
-            // cfg should equal
-            let config = executor.config();
-            assert_eq!(config.flag, cfg.flag);
-            assert_eq!(config.div_precision_increment, cfg.div_precision_increment);
-            assert_eq!(config.sql_mode, cfg.sql_mode);
+                // cfg should equal
+                let config = executor.config();
+                assert_eq!(config.flag, cfg.flag);
+                assert_eq!(config.div_precision_increment, cfg.div_precision_increment);
+                assert_eq!(config.sql_mode, cfg.sql_mode);
 
-            // check table scan params
-            assert_eq!(
-                &TableScanParams {
-                    columns_info: table_columns.clone(),
-                    primary_column_ids: vec![],
-                    primary_prefix_column_ids: vec![],
-                },
-                executor.get_table_scan_params()
-            );
+                // check table scan params
+                assert_eq!(
+                    &TableScanParams {
+                        columns_info: table_columns.clone(),
+                        primary_column_ids: vec![],
+                        primary_prefix_column_ids: vec![],
+                    },
+                    executor.get_table_scan_params()
+                );
 
-            // check table task iter builder
-            let builder = executor.get_table_task_builder().unwrap();
-            assert_eq!(456, builder.table_id());
-            assert_eq!(
-                &IndexLayout {
-                    handle_types: vec![field_type_from_column_info(index_columns.get(1).unwrap())],
-                    handle_offsets: vec![1],
-                },
-                builder.get_index_layout()
-            );
+                // check table task iter builder
+                let builder = executor.get_table_task_builder().unwrap();
+                assert_eq!(456, builder.table_id());
+                assert_eq!(
+                    &IndexLayout {
+                        handle_types: vec![field_type_from_column_info(
+                            index_columns.get(1).unwrap()
+                        )],
+                        handle_offsets: vec![1],
+                    },
+                    builder.get_index_layout()
+                );
 
-            // check intermediate channel index
-            assert_eq!(1, executor.intermediate_channel_index());
-        };
+                // check intermediate channel index
+                assert_eq!(1, executor.intermediate_channel_index());
+
+                // check the lookup executor's index
+                assert_eq!(table_scan_child_idx, executor.table_scan_child_index());
+            };
 
         // check the executors from top to down:
         // Projection <- Selection <- IndexLookUp <- Limit <- IndexScan
@@ -1414,7 +1480,7 @@ mod tests {
         let summary = cast_as_summary::<IndexLookupExecutor>(executor);
         assert_eq!(3, summary.summary_collector.get_output_index());
         let index_lookup = summary.into_inner();
-        check_index_lookup_executor(&index_lookup);
+        check_index_lookup_executor(&index_lookup, 2);
         executor = index_lookup.into_index_child();
         let summary = cast_as_summary::<LimitExecutor>(executor);
         assert_eq!(1, summary.summary_collector.get_output_index());
@@ -2098,6 +2164,84 @@ mod tests {
             chunks[2].clone(),
             &field_types,
             encode_type,
+        );
+    }
+
+    #[test]
+    fn test_is_executor_under_parent_tp() {
+        fn new_executor(tp: ExecType, parent_idx: u32) -> Executor {
+            let mut exec = Executor::default();
+            exec.set_tp(tp);
+            exec.set_parent_idx(parent_idx);
+            exec
+        }
+
+        let executors = vec![
+            new_executor(ExecType::TypeIndexScan, 0),
+            new_executor(ExecType::TypeSelection, 0),
+            new_executor(ExecType::TypeLimit, 5),
+            new_executor(ExecType::TypeTableScan, 0),
+            new_executor(ExecType::TypeAggregation, 0),
+            new_executor(ExecType::TypeIndexLookUp, 0),
+            new_executor(ExecType::TypeLimit, 0),
+        ];
+
+        let test_executor_with_index = |idx: usize, expect: bool| {
+            assert_eq!(
+                expect,
+                is_executor_under_parent_tp(
+                    ExecType::TypeIndexLookUp,
+                    &executors[idx],
+                    idx,
+                    &executors[idx + 1..]
+                )
+                .unwrap()
+            )
+        };
+
+        test_executor_with_index(0, true);
+        test_executor_with_index(1, true);
+        test_executor_with_index(2, true);
+        test_executor_with_index(3, true);
+        test_executor_with_index(4, true);
+        test_executor_with_index(5, false);
+        test_executor_with_index(6, false);
+
+        // invalid case 1
+        let executors = vec![
+            new_executor(ExecType::TypeIndexScan, 2),
+            new_executor(ExecType::TypeSelection, 0),
+        ];
+        let err = is_executor_under_parent_tp(
+            ExecType::TypeIndexLookUp,
+            &executors[0],
+            0,
+            &executors[1..],
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("invalid parent index: 2, for executor with index: 0, executors len: 2")
+        );
+
+        // invalid case 2
+        let executors = vec![
+            new_executor(ExecType::TypeIndexScan, 0),
+            new_executor(ExecType::TypeSelection, 0),
+            new_executor(ExecType::TypeLimit, 0),
+            new_executor(ExecType::TypeTableScan, 3),
+            new_executor(ExecType::TypeIndexLookUp, 0),
+        ];
+        let err = is_executor_under_parent_tp(
+            ExecType::TypeIndexLookUp,
+            &executors[0],
+            0,
+            &executors[1..],
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("invalid parent index: 3, for executor with index: 3, executors len: 5")
         );
     }
 }

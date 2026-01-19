@@ -1,6 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
+use tikv_util::Either;
+
 use crate::storage::{
     Snapshot, TxnStatus,
     mvcc::{
@@ -31,7 +33,7 @@ pub fn cleanup<S: Snapshot>(
     ));
 
     match reader.load_lock(&key)? {
-        Some(ref lock) if lock.ts == reader.start_ts => {
+        Some(Either::Left(ref lock)) if lock.ts == reader.start_ts => {
             // If current_ts is not 0, check the Lock's TTL.
             // If the lock is not expired, do not rollback it but report key is locked.
             if !current_ts.is_zero() && lock.ts.physical() + lock.ttl >= current_ts.physical() {
@@ -48,31 +50,42 @@ pub fn cleanup<S: Snapshot>(
                 !protect_rollback,
             )
         }
-        l => match check_txn_status_missing_lock(
-            txn,
-            reader,
-            key.clone(),
-            l,
-            MissingLockAction::rollback_protect(protect_rollback),
-            false,
-        )? {
-            TxnStatus::Committed { commit_ts } => {
-                MVCC_CONFLICT_COUNTER.rollback_committed.inc();
-                Err(ErrorInner::Committed {
-                    start_ts: reader.start_ts,
-                    commit_ts,
-                    key: key.into_raw()?,
+        Some(Either::Right(_shared_locks)) => {
+            unimplemented!("SharedLocks returned from load_lock is not supported here")
+        }
+        l => {
+            let l = l.map(|lock| match lock {
+                Either::Left(lock) => lock,
+                Either::Right(_shared_locks) => {
+                    unimplemented!("SharedLocks returned from load_lock is not supported here")
                 }
-                .into())
+            });
+            match check_txn_status_missing_lock(
+                txn,
+                reader,
+                key.clone(),
+                l,
+                MissingLockAction::rollback_protect(protect_rollback),
+                false,
+            )? {
+                TxnStatus::Committed { commit_ts } => {
+                    MVCC_CONFLICT_COUNTER.rollback_committed.inc();
+                    Err(ErrorInner::Committed {
+                        start_ts: reader.start_ts,
+                        commit_ts,
+                        key: key.into_raw()?,
+                    }
+                    .into())
+                }
+                TxnStatus::RolledBack => {
+                    // Return Ok on Rollback already exist.
+                    MVCC_DUPLICATE_CMD_COUNTER_VEC.rollback.inc();
+                    Ok(None)
+                }
+                TxnStatus::LockNotExist => Ok(None),
+                _ => unreachable!(),
             }
-            TxnStatus::RolledBack => {
-                // Return Ok on Rollback already exist.
-                MVCC_DUPLICATE_CMD_COUNTER_VEC.rollback.inc();
-                Ok(None)
-            }
-            TxnStatus::LockNotExist => Ok(None),
-            _ => unreachable!(),
-        },
+        }
     }
 }
 

@@ -63,6 +63,7 @@ make_auto_flush_static_metric! {
         all,
         schedule,
         snapshot,
+        suspend,
     }
 
     pub label_enum MemLockCheckResult {
@@ -179,6 +180,11 @@ lazy_static! {
         "The number of tasks waiting for the semaphore"
     )
     .unwrap();
+    pub static ref COPR_SEMAPHORE_WAIT_TIME: Histogram = register_histogram!(
+        "tikv_coprocessor_semaphore_wait_time_duration_seconds",
+        "The duration of heavy tasks waiting for the semaphore",
+        exponential_buckets(0.00001, 2.0, 26).unwrap()
+    ).unwrap();
     pub static ref MEM_LOCK_CHECK_HISTOGRAM_VEC: HistogramVec =
         register_histogram_vec!(
             "tikv_coprocessor_mem_lock_check_duration_seconds",

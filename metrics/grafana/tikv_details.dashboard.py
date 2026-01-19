@@ -3157,6 +3157,20 @@ def YatpPool(
                 metric="tikv_yatp_pool_schedule_wait_duration_bucket",
                 label_selectors=[f'name=~"{pool_name_prefix}.*"'],
             ),
+            graph_panel(
+                title="Running threads",
+                description="The number of concurrently running threads in the yatp thread pool.",
+                targets=[
+                    target(
+                        expr=expr_sum_aggr_over_time(
+                            "tikv_unified_read_pool_thread_count",
+                            "avg",
+                            "1m",
+                        ),
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
         ]
     )
     layout.row(
@@ -3683,13 +3697,25 @@ def SchedulerCommands() -> RowPanel:
     layout.row(
         [
             graph_panel_histogram_quantiles(
-                title="Scheduler command read duration",
-                description="The time consumed on reading when executing commit command",
+                title="Scheduler command process duration",
+                description="The time consumed on processing command",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
                 metric="tikv_scheduler_processing_read_duration_seconds",
                 label_selectors=['type="$command"'],
                 hide_count=True,
             ),
+            graph_panel_histogram_quantiles(
+                title="Scheduler command block read duration",
+                description="The time consumed on rocksdb block read while processing command",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_scheduler_block_read_duration_seconds",
+                label_selectors=['type="$command"'],
+                hide_count=True,
+            ),
+        ]
+    )
+    layout.row(
+        [
             heatmap_panel(
                 title="Check memory locks duration",
                 description="The time consumed on checking memory locks",
@@ -3813,6 +3839,12 @@ def Scheduler() -> RowPanel:
                 title="Txn Scheduler Pool Wait Duration",
                 yaxis=yaxis(format=UNITS.SECONDS),
                 metric="tikv_yatp_pool_schedule_wait_duration_bucket",
+                label_selectors=['name=~"sched-worker.*"'],
+            ),
+            heatmap_panel(
+                title="Txn Scheduler Pool Exec Duration",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_yatp_pool_schedule_exec_duration_bucket",
                 label_selectors=['name=~"sched-worker.*"'],
             ),
         ]
@@ -4161,6 +4193,42 @@ def GC() -> RowPanel:
             ),
         ]
     )
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="Auto Compaction Num Tombstones",
+                description="Histogram of number of tombstones in compaction candidates",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                metric="tikv_auto_compaction_num_tombstones",
+                hide_count=True,
+            ),
+            graph_panel_histogram_quantiles(
+                title="Auto Compaction Num Discardable",
+                description="Histogram of number of discardable MVCC versions in compaction candidates",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                metric="tikv_auto_compaction_num_discardable",
+                hide_count=True,
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="Auto Compaction MVCC Versions Scanned",
+                description="Histogram of average MVCC versions scanned per request for compaction candidates",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                metric="tikv_auto_compaction_mvcc_versions_scanned",
+                hide_count=True,
+            ),
+            graph_panel_histogram_quantiles(
+                title="Auto Compaction Score",
+                description="Histogram of compaction scores for candidates",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                metric="tikv_auto_compaction_score",
+                hide_count=True,
+            ),
+        ]
+    )
 
     return layout.row_panel
 
@@ -4493,6 +4561,7 @@ def CoprocessorOverview() -> RowPanel:
         [
             graph_panel(
                 title="KV Cursor Operations",
+                yaxes=yaxes(left_format=UNITS.SHORT),
                 targets=[
                     target(
                         expr=expr_sum_rate(
@@ -4696,7 +4765,7 @@ def CoprocessorDetail() -> RowPanel:
             ),
             graph_panel(
                 title="Total Ops Details by CF (Index Scan)",
-                yaxes=yaxes(left_format=UNITS.OPS_PER_MIN),
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
                 targets=[
                     target(
                         expr=expr_sum_rate(
@@ -4719,6 +4788,34 @@ def CoprocessorDetail() -> RowPanel:
             yaxis_format=UNITS.SECONDS,
             metric="tikv_coprocessor_mem_lock_check_duration_seconds",
         ),
+    )
+    layout.row(
+        heatmap_panel_graph_panel_histogram_quantile_pairs(
+            heatmap_title="Semaphore waiting duration",
+            heatmap_description="The time consumed on waiting for semaphore permits for heavy coprocessor requests",
+            graph_title="Semaphore waiting duration",
+            graph_description="The time consumed on waiting for semaphore permits for heavy coprocessor requests",
+            yaxis_format=UNITS.SECONDS,
+            metric="tikv_coprocessor_semaphore_wait_time_duration_seconds",
+        ),
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Semaphore waiting tasks count",
+                description="The number of cop tasks waiting for semaphore permits.",
+                targets=[
+                    target(
+                        expr=expr_sum_aggr_over_time(
+                            "tikv_coprocessor_waiting_for_semaphore",
+                            "avg",
+                            "30s",
+                        ),
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
+        ]
     )
     return layout.row_panel
 

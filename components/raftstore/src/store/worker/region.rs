@@ -895,6 +895,7 @@ where
                         let _ = self.router.significant_send(
                             region_id,
                             SignificantMsg::ReadyToDestroyPeer {
+                                to_peer_id: peer_id,
                                 merged_by_target: keep_data,
                                 clear_stat,
                             },
@@ -957,6 +958,7 @@ pub(crate) mod tests {
     use tempfile::Builder;
     use tikv_util::{
         config::{ReadableDuration, ReadableSize},
+        thread_name_prefix::{REGION_WORKER_THREAD, SNAP_GENERATOR_THREAD},
         worker::{LazyWorker, Worker},
     };
 
@@ -1138,8 +1140,8 @@ pub(crate) mod tests {
 
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
-        let bg_worker = Worker::new("region-worker");
-        let mut worker: LazyWorker<Task> = bg_worker.lazy_build("region-worker");
+        let bg_worker = Worker::new(REGION_WORKER_THREAD);
+        let mut worker: LazyWorker<Task> = bg_worker.lazy_build(REGION_WORKER_THREAD);
         let sched = worker.scheduler();
         let (casual_tx, _) = mpsc::sync_channel(11);
         let (significant_tx, _) = mpsc::sync_channel(11);
@@ -1205,7 +1207,12 @@ pub(crate) mod tests {
             .register_apply_snapshot_observer(1, BoxApplySnapshotObserver::new(obs.clone()));
 
         let mut cf_opts = CfOptions::new();
+        // `ingest_maybe_slowdown_writes` uses `stop_writes_trigger` to check if ingest
+        // may cause a write stall. We also set `slowdown_writes_trigger` because
+        // RocksDB ignores `stop_writes_trigger` when it is smaller than
+        // `slowdown_writes_trigger`
         cf_opts.set_level_zero_slowdown_writes_trigger(5);
+        cf_opts.set_level_zero_stop_writes_trigger(5);
         cf_opts.set_disable_auto_compactions(true);
         let kv_cfs_opts = vec![
             (CF_DEFAULT, cf_opts.clone()),
@@ -1265,7 +1272,7 @@ pub(crate) mod tests {
         );
         worker.start_with_timer(runner);
 
-        let mut snap_gen_worker = LazyWorker::new("snap-generator");
+        let mut snap_gen_worker = LazyWorker::new(SNAP_GENERATOR_THREAD);
         let snap_gen_sched = snap_gen_worker.scheduler();
         let snap_gen_runner = SnapGenRunner::new(
             engine.kv.clone(),

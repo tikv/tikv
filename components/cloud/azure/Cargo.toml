@@ -7,13 +7,11 @@ license = "Apache-2.0"
 
 [dependencies]
 async-trait = "0.1"
-# TODO: The azure sdk with the newest version needs the rustc v1.70, but current version of rustc in TiKV is v1.67.
-#     Therefore use the patch to update sdk to support fips 140.
-azure_core = { git = "https://github.com/tikv/azure-sdk-for-rust", branch = "release-7.5-fips" }
-azure_identity = { git = "https://github.com/tikv/azure-sdk-for-rust", branch = "release-7.5-fips" }
-azure_security_keyvault = { git = "https://github.com/tikv/azure-sdk-for-rust", branch = "release-7.5-fips", default-features = false }
-azure_storage = { git = "https://github.com/tikv/azure-sdk-for-rust", branch = "release-7.5-fips", default-features = false }
-azure_storage_blobs = { git = "https://github.com/tikv/azure-sdk-for-rust", branch = "release-7.5-fips" }
+azure_core = { version = "0.18", default-features = false, features = ["hmac_openssl"]}
+azure_identity = "0.18"
+azure_security_keyvault = { version = "0.18", default-features = false }
+azure_storage = { version = "0.18", default-features = false }
+azure_storage_blobs = { version = "0.18", default-features = false }
 base64 = "0.13"
 cloud = { workspace = true }
 futures = "0.3"

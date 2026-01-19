@@ -59,6 +59,7 @@ use tikv_util::{
     GLOBAL_SERVER_READINESS,
     logger::set_log_level,
     metrics::{dump, dump_to},
+    thread_name_prefix::STATUS_SERVER_THREAD,
     timer::GLOBAL_TIMER_HANDLE,
 };
 use tokio::{
@@ -71,7 +72,7 @@ use tracing_active_tree::tree::formating::FormatFlat;
 
 use crate::{
     config::{ConfigController, LogLevel},
-    server::Result,
+    server::{Result, debug},
     tikv_util::sys::thread::ThreadBuildWrapper,
 };
 
@@ -121,7 +122,7 @@ where
         let thread_pool = Builder::new_multi_thread()
             .enable_all()
             .worker_threads(status_thread_pool_size)
-            .thread_name("status-server")
+            .thread_name(STATUS_SERVER_THREAD)
             .with_sys_and_custom_hooks(
                 || debug!("Status server started"),
                 || debug!("stopping status server"),
@@ -884,6 +885,9 @@ where
                             (Method::GET, "/force_partition_ranges") => Self::dump_partition_ranges(&force_partition_range_mgr),
                             (Method::POST, "/force_partition_ranges") => Self::add_partition_ranges(req, &force_partition_range_mgr).await,
                             (Method::DELETE, "/force_partition_ranges") => Self::remove_partition_ranges(req, &force_partition_range_mgr).await,
+                            (_, path) if path.starts_with("/debug/dup-key") => {
+                                debug::handle_dup_key_debug(req)
+                            }
                             _ => {
                                 is_unknown_path = true;
                                 Ok(make_response(StatusCode::NOT_FOUND, "path not found"))

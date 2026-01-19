@@ -68,6 +68,7 @@ use tikv_util::{
     escape,
     future::block_on_timeout,
     mpsc::future,
+    thread_name_prefix::SST_RECOVERY_THREAD,
     time::{Instant, ThreadReadId},
     worker::LazyWorker,
 };
@@ -767,7 +768,7 @@ pub fn start_test_engine(
         .build_shared_rocks_env(key_manager.clone(), limiter)
         .unwrap();
 
-    let sst_worker = LazyWorker::new("sst-recovery");
+    let sst_worker = LazyWorker::new(SST_RECOVERY_THREAD);
     let scheduler = sst_worker.scheduler();
 
     let (raft_engine, raft_statistics) = RaftTestEngine::build(&cfg, &env, &key_manager, &cache);
@@ -812,7 +813,9 @@ pub fn configure_for_hibernate(config: &mut Config) {
     // Uses long check interval to make leader keep sleeping during tests.
     config.raft_store.abnormal_leader_missing_duration = ReadableDuration::secs(20);
     config.raft_store.max_leader_missing_duration = ReadableDuration::secs(40);
-    config.raft_store.peer_stale_state_check_interval = ReadableDuration::secs(10);
+    config.raft_store.peer_stale_state_check_interval = ReadableDuration::secs(5);
+    // speed up down peer detection
+    config.raft_store.max_peer_down_duration = ReadableDuration::secs(5);
 }
 
 pub fn configure_for_snapshot(config: &mut Config) {
@@ -1041,6 +1044,8 @@ pub fn must_kv_read_equal(client: &TikvClient, ctx: Context, key: Vec<u8>, val: 
     assert!(!get_resp.has_error(), "{:?}", get_resp.get_error());
     assert!(!get_resp.get_not_found());
     assert_eq!(get_resp.take_value(), val);
+    // if need_commit_ts is not set, `get_commit_ts()` should always return 0
+    assert_eq!(get_resp.get_commit_ts(), 0);
 }
 
 pub fn must_kv_read_not_found(client: &TikvClient, ctx: Context, key: Vec<u8>, ts: u64) {

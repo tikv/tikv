@@ -705,6 +705,20 @@ pub enum Cmd {
             )
         )]
         minimal_compaction_size: ReadableSize,
+
+        #[structopt(
+            long,
+            default_value = "128",
+            help("specify the maximum count of running tasks to download a metadata")
+        )]
+        prefetch_running_count: u64,
+
+        #[structopt(
+            long,
+            default_value = "1024",
+            help("specify the maximum count of spawning tasks to download a metadata")
+        )]
+        prefetch_buffer_count: u64,
     },
     /// Get the state of a region's RegionReadProgress.
     GetRegionReadProgress {

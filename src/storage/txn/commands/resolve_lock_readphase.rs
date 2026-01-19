@@ -2,7 +2,8 @@
 
 // #[PerformanceCriticalPath]
 use collections::HashMap;
-use txn_types::{Key, TimeStamp};
+use tikv_util::Either;
+use txn_types::{Key, Lock, TimeStamp};
 
 use crate::storage::{
     ScanMode, Snapshot, Statistics,
@@ -60,6 +61,18 @@ impl<S: Snapshot> ReadCommand<S> for ResolveLockReadPhase {
         );
         statistics.add(&reader.statistics);
         let (kv_pairs, has_remain) = result?;
+        let kv_pairs: Vec<(Key, Lock)> = kv_pairs
+            .into_iter()
+            .map(|(key, lock)| {
+                let lock = match lock {
+                    Either::Left(lock) => lock,
+                    Either::Right(_shared_locks) => unimplemented!(
+                        "SharedLocks returned from scan_locks_from_storage is not supported here"
+                    ),
+                };
+                (key, lock)
+            })
+            .collect();
         tls_collect_keyread_histogram_vec(tag.get_str(), kv_pairs.len() as f64);
 
         if kv_pairs.is_empty() {
