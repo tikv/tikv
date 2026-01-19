@@ -11,6 +11,7 @@ use std::{
 
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
+use fail::fail_point;
 use futures::channel::oneshot::{Receiver, Sender, channel};
 use grpcio::Environment;
 use kvproto::{kvrpcpb::LeaderInfo, metapb::Region, raft_cmdpb::AdminCmdType};
@@ -977,6 +978,7 @@ where
                 }
             }
         }
+        fail_point!("resolved_ts_after_handle_change_log");
     }
 
     fn handle_scan_locks(
