@@ -255,6 +255,7 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
     storage: S,
     extra_storage_accessor: Option<impl RegionStorageAccessor<Storage = S> + 'static>,
     ranges: Vec<KeyRange>,
+    range_versions: Option<Vec<u64>>,
     config: Arc<EvalConfig>,
     is_scanned_range_aware: bool,
 ) -> Result<Box<dyn BatchExecutor<StorageStats = S::Statistics>>> {
@@ -289,6 +290,7 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
                     descriptor.get_desc(),
                     is_scanned_range_aware,
                     primary_prefix_column_ids,
+                    range_versions,
                 )?
                 .collect_summary(summary_slot_index),
             )
@@ -608,6 +610,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         ranges: Vec<KeyRange>,
         storage: S,
         extra_storage_accessor: Option<impl RegionStorageAccessor<Storage = S> + 'static>,
+        range_versions: Option<Vec<u64>>,
         deadline: Deadline,
         stream_row_limit: usize,
         is_streaming: bool,
@@ -626,6 +629,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             storage,
             extra_storage_accessor,
             ranges,
+            range_versions,
             config.clone(),
             is_streaming || paging_size.is_some(), /* For streaming and paging request,
                                                     * executors will continue scan from range
@@ -1286,6 +1290,7 @@ mod tests {
             vec![],
             MockStorage(Region::default(), vec![]),
             Some(MockRegionStorageAccessor::with_expect_mode()),
+            None,
             Deadline::from_now(Duration::from_secs(300)),
             1024,
             false,
@@ -1390,6 +1395,7 @@ mod tests {
                 MockStorage(Region::default(), vec![]),
                 Some(MockRegionStorageAccessor::with_expect_mode()),
                 vec![],
+                None,
                 Arc::new(cfg.clone()),
                 false,
             )
