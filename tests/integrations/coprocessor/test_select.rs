@@ -14,6 +14,7 @@ use test_coprocessor::*;
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
 use test_storage::*;
+use tidb_query_common::util::convert_to_prefix_next;
 use tidb_query_datatype::{
     FieldTypeTp,
     codec::{Datum, datum, table::encode_row_key},
@@ -93,6 +94,48 @@ fn test_select() {
         assert_eq!(result_encoded, &*expected_encoded);
     }
     assert_eq!(limiter.total_read_bytes_consumed(true), total_chunk_size); // the consume_sample is called due to read bytes quota
+}
+
+#[test]
+fn test_versioned_lookup_range_versions_reads_old_version() {
+    let product = ProductTable::new();
+
+    // Write an initial version.
+    let data = vec![(1, Some("name:old"), 2)];
+    let (mut store, endpoint) = init_with_data(&product, &data);
+    let ts_old = store.to_snapshot_store().get_start_ts();
+
+    // Overwrite the same row key to create a newer version.
+    store.begin();
+    store
+        .insert_into(&product)
+        .set(&product["id"], Datum::I64(1))
+        .set(&product["name"], Some("name:new").map(str::as_bytes).into())
+        .set(&product["count"], Datum::I64(2))
+        .execute_with_ctx(Context::default());
+    store.commit();
+    let ts_new = store.to_snapshot_store().get_start_ts();
+    assert!(ts_new > ts_old);
+
+    // Point range for this row key.
+    let row_key = encode_row_key(product.table_id(), 1);
+    let mut end = row_key.clone();
+    convert_to_prefix_next(&mut end);
+    let mut key_range = kvproto::coprocessor::KeyRange::default();
+    key_range.set_start(row_key);
+    key_range.set_end(end);
+
+    // Read using per-key ts = old commit ts, should return the old row value.
+    let mut req = DagSelect::from(&product)
+        .key_ranges(vec![key_range])
+        .build();
+    req.mut_range_versions().push(ts_old.into_inner());
+
+    let mut resp = handle_select(&endpoint, req);
+    let mut spliter = DagChunkSpliter::new(resp.take_chunks().into(), 3);
+    let row = spliter.next().unwrap();
+    assert_eq!(row[1], Datum::Bytes(b"name:old".to_vec()));
+    assert!(spliter.next().is_none());
 }
 
 #[test]

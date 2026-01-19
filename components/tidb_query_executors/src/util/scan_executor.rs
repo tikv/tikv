@@ -9,6 +9,7 @@ use tidb_query_common::{
         IntervalRange, Range, Storage,
         scanner::{RangesScanner, RangesScannerOptions},
     },
+    util::is_point,
 };
 use tidb_query_datatype::{codec::batch::LazyBatchColumnVec, expr::EvalContext};
 use tipb::{ColumnInfo, FieldType};
@@ -65,6 +66,10 @@ pub struct ScanExecutorOptions<S, I> {
     pub accept_point_range: bool,
     pub is_scanned_range_aware: bool,
     pub load_commit_ts: bool,
+    /// Per-range read ts aligned with `key_ranges`.
+    ///
+    /// When present, it is only supported for point ranges.
+    pub range_versions: Option<Vec<u64>>,
 }
 
 impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> ScanExecutor<S, I, F> {
@@ -73,6 +78,7 @@ impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> ScanExecutor<S, I, F> {
             imp,
             storage,
             mut key_ranges,
+            mut range_versions,
             is_backward,
             is_key_only,
             accept_point_range,
@@ -81,12 +87,35 @@ impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> ScanExecutor<S, I, F> {
         }: ScanExecutorOptions<S, I>,
     ) -> Result<Self> {
         tidb_query_datatype::codec::table::check_table_ranges::<F>(&key_ranges)?;
+        if let Some(versions) = range_versions.as_ref() {
+            if !accept_point_range {
+                return Err(other_err!(
+                    "range_versions is only supported for point ranges"
+                ));
+            }
+            if versions.len() != key_ranges.len() {
+                return Err(other_err!(
+                    "range_versions length {} doesn't match ranges length {}",
+                    versions.len(),
+                    key_ranges.len()
+                ));
+            }
+            if key_ranges.iter().any(|r| !is_point(r)) {
+                return Err(other_err!(
+                    "range_versions is only supported for point ranges"
+                ));
+            }
+        }
         if is_backward {
             key_ranges.reverse();
+            if let Some(v) = range_versions.as_mut() {
+                v.reverse();
+            }
         }
         Ok(Self {
             imp,
             scanner: RangesScanner::new(RangesScannerOptions {
+                range_versions,
                 storage,
                 ranges: key_ranges
                     .into_iter()

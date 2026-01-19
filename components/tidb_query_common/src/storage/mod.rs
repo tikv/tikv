@@ -58,6 +58,15 @@ pub trait Storage: Send {
         range: PointRange,
     ) -> Result<Option<OwnedKvPairEntry>>;
 
+    /// Get a point entry at the specified read timestamp.
+    fn get_entry_at_ts(
+        &mut self,
+        is_key_only: bool,
+        load_commit_ts: bool,
+        range: PointRange,
+        ts: u64,
+    ) -> Result<Option<OwnedKvPairEntry>>;
+
     #[inline]
     fn get(&mut self, is_key_only: bool, range: PointRange) -> Result<Option<OwnedKvPair>> {
         Ok(self
@@ -94,6 +103,16 @@ impl<T: Storage + ?Sized> Storage for Box<T> {
         range: PointRange,
     ) -> Result<Option<OwnedKvPairEntry>> {
         (**self).get_entry(is_key_only, load_commit_ts, range)
+    }
+
+    fn get_entry_at_ts(
+        &mut self,
+        is_key_only: bool,
+        load_commit_ts: bool,
+        range: PointRange,
+        ts: u64,
+    ) -> Result<Option<OwnedKvPairEntry>> {
+        (**self).get_entry_at_ts(is_key_only, load_commit_ts, range, ts)
     }
 
     fn met_uncacheable_data(&self) -> Option<bool> {

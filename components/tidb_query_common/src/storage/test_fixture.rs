@@ -130,6 +130,25 @@ impl super::Storage for FixtureStorage {
         }
     }
 
+    fn get_entry_at_ts(
+        &mut self,
+        is_key_only: bool,
+        load_commit_ts: bool,
+        range: PointRange,
+        ts: u64,
+    ) -> Result<Option<OwnedKvPairEntry>> {
+        // For fixture tests, we don't implement MVCC. Encode the per-key ts into
+        // the key by appending `#<ts>`.
+        //
+        // This is enough to verify the per-range versions plumbing:
+        // TableScan -> ScanExecutor -> RangesScanner -> Storage::get_entry_at_ts.
+        let mut k = range.0.clone();
+        k.extend_from_slice(b"#");
+        k.extend_from_slice(ts.to_string().as_bytes());
+
+        self.get_entry(is_key_only, load_commit_ts, PointRange(k))
+    }
+
     fn collect_statistics(&mut self, _dest: &mut Self::Statistics) {}
 
     fn met_uncacheable_data(&self) -> Option<bool> {
