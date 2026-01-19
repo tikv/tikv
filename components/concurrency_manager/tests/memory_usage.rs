@@ -80,8 +80,8 @@ fn test_memory_usage() {
 fn stress_skipmap_range_iter() {
     use std::{
         sync::{
-            Arc,
             atomic::{AtomicBool, AtomicU64, Ordering},
+            Arc,
         },
         time::{Duration, Instant},
     };
