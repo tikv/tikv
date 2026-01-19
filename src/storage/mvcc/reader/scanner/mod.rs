@@ -503,7 +503,7 @@ where
                 // See https://github.com/tikv/tikv/issues/11187
                 let latest_write_ts = Key::decode_ts_from(write_cursor.key(&mut statistics.write))?;
                 if after_ts < latest_write_ts {
-                    warn!("found the user key of which ts > after_ts. There may be exist an unexpected pessimistic lock";
+                    warn!("found the user key of which ts > after_ts. There may be exist an unexpected stale non-pessimistic lock";
                         "user_key" => %user_key,
                         "after_ts" => after_ts,
                         "latest_write_ts" => latest_write_ts,
