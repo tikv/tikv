@@ -951,7 +951,6 @@ where
                 let observe_id = batch.rts_id;
                 let region_id = observe_region.meta.id;
                 if observe_region.handle.id == observe_id {
-                    std::thread::sleep(std::time::Duration::from_millis(1));
                     let logs = ChangeLog::encode_change_log(region_id, batch);
                     if let Err(e) = observe_region.track_change_log(&logs) {
                         drop(observe_region);
@@ -1393,10 +1392,6 @@ where
     S: StoreRegionMeta,
 {
     fn on_timeout(&mut self) {
-        info!("dbg rts memory quota";
-            "used" => self.memory_quota.in_use(),
-            "capacity" => self.memory_quota.capacity(),
-        );
         let stats = self.collect_stats();
         self.update_metrics(&stats);
         self.log_slow_regions(&stats);

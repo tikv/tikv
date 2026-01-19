@@ -2090,18 +2090,6 @@ where
     }
 }
 
-impl<Q, R, K, V> Drop for RefRange<'_, Q, R, K, V>
-where
-    K: Ord + Borrow<Q>,
-    R: RangeBounds<Q>,
-    Q: Ord + ?Sized,
-{
-    fn drop(&mut self) {
-        let guard = &epoch::pin();
-        self.drop_impl(guard);
-    }
-}
-
 /// An owning iterator over the entries of a `SkipList`.
 pub struct IntoIter<K, V> {
     /// The current node.
