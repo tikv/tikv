@@ -3338,6 +3338,9 @@ pub struct ResolvedTsConfig {
     pub memory_quota: ReadableSize,
     pub incremental_scan_concurrency: usize,
     pub memory_quota_active_check_interval: ReadableDuration,
+    // Re-register regions backoff duration when memory quota is exceeded.
+    // The actual backoff duration will be in the range
+    // [configured_duration, 2 * configured_duration)
     pub memory_quota_exceeded_backoff_duration: ReadableDuration,
 }
 

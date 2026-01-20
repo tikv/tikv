@@ -265,7 +265,7 @@ fn test_change_log_task_channel_memory_quota_exceeded() {
     assert_eq!(num_locks, 0, "num_locks: {}", num_locks);
 
     let pending_bytes = resolved_ts::RTS_CHANNEL_PENDING_CMD_BYTES.get();
-    assert!(pending_bytes == 0, "pending_bytes: {}", pending_bytes);
+    assert_eq!(pending_bytes, 0, "pending_bytes: {}", pending_bytes);
 
     suite.stop();
 }

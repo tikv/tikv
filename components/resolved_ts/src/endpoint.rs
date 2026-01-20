@@ -957,13 +957,13 @@ where
                         drop(observe_region);
                         match e {
                             cause @ Error::MemoryQuotaExceeded(_) => {
-                                self.re_register_all_regions(Some(cause.to_string().as_str()));
+                                self.re_register_all_regions(Some(&cause.to_string()));
                             }
                             cause @ Error::Other(_) => {
                                 self.re_register_region(
                                     region_id,
                                     observe_id,
-                                    Some(cause.to_string().as_str()),
+                                    Some(&cause.to_string()),
                                     None,
                                 );
                             }
@@ -1003,7 +1003,7 @@ where
                 "observe_id" => ?observe_id);
         }
         if let Some(e) = memory_quota_exceeded {
-            self.re_register_all_regions(Some(e.to_string().as_str()));
+            self.re_register_all_regions(Some(&e.to_string()));
         }
     }
 
@@ -1197,7 +1197,7 @@ where
             self.last_active_memory_quota_check = std::time::Instant::now();
             // Check whether memory quota is exceeded actively.
             if let Err(e) = self.memory_quota.alloc(0) {
-                self.re_register_all_regions(Some(e.to_string().as_str()));
+                self.re_register_all_regions(Some(&e.to_string()));
             }
         }
 
@@ -1210,12 +1210,7 @@ where
                 region_id,
                 observe_id,
                 cause,
-            } => self.re_register_region(
-                region_id,
-                observe_id,
-                Some(cause.to_string().as_str()),
-                None,
-            ),
+            } => self.re_register_region(region_id, observe_id, Some(&cause.to_string()), None),
             Task::AdvanceResolvedTs { leader_resolver } => {
                 self.handle_advance_resolved_ts(leader_resolver)
             }
