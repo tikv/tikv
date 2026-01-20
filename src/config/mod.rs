@@ -3383,6 +3383,7 @@ pub struct QuotaConfig {
     pub background_cpu_time: usize,
     pub background_write_bandwidth: ReadableSize,
     pub background_read_bandwidth: ReadableSize,
+    pub background_iops: usize,
     pub enable_auto_tune: bool,
 }
 
@@ -3396,6 +3397,7 @@ impl Default for QuotaConfig {
             background_cpu_time: 0,
             background_write_bandwidth: ReadableSize(0),
             background_read_bandwidth: ReadableSize(0),
+            background_iops: 0,
             enable_auto_tune: false,
         }
     }
@@ -6395,6 +6397,7 @@ mod tests {
             cfg.quota.background_cpu_time,
             cfg.quota.background_write_bandwidth,
             cfg.quota.background_read_bandwidth,
+            cfg.quota.background_iops,
             cfg.quota.max_delay_duration,
             false,
         ));
