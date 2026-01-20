@@ -6,7 +6,7 @@ use std::fmt;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::LockInfo;
-use txn_types::{Key, Lock, PessimisticLock, TimeStamp, Value};
+use txn_types::{Key, Lock, PessimisticLock, SharedLocks, TimeStamp, Value};
 
 use super::metrics::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
 use crate::storage::kv::Modify;
@@ -141,6 +141,17 @@ impl MvccTxn {
                 .push(lock.to_lock().into_lock_info(key.to_raw().unwrap()));
         }
         self.modifies.push(Modify::PessimisticLock(key, lock))
+    }
+
+    pub(crate) fn put_shared_locks(&mut self, key: Key, shared_locks: &SharedLocks, is_new: bool) {
+        let value = shared_locks.to_bytes();
+        if is_new {
+            self.new_locks
+                .push(shared_locks.clone().into_lock_info(key.to_raw().unwrap()));
+            self.write_size += key.as_encoded().len() + value.len();
+        }
+        let write = Modify::Put(CF_LOCK, key, value);
+        self.modifies.push(write);
     }
 
     /// Append a modify that unlocks the key. If the lock is removed due to
@@ -321,7 +332,7 @@ pub(crate) fn make_txn_error(
 #[cfg(test)]
 pub(crate) mod tests {
     use kvproto::kvrpcpb::{AssertionLevel, Context, PrewriteRequestPessimisticAction::*};
-    use txn_types::{SHORT_VALUE_MAX_LEN, TimeStamp, WriteType};
+    use txn_types::{LastChange, SHORT_VALUE_MAX_LEN, TimeStamp, WriteType};
 
     use super::*;
     use crate::storage::{
@@ -1723,5 +1734,120 @@ pub(crate) mod tests {
         let w = must_written(&mut engine, k2, 10, 20, WriteType::Put);
         assert!(w.has_overlapped_rollback);
         must_prewrite_put_err(&mut engine, k2, v2, k2, 20);
+    }
+
+    #[test]
+    fn test_put_shared_locks() {
+        let key = Key::from_raw(b"key");
+
+        let make_lock = |ts: u64, ttl: u64| {
+            Lock::new(
+                txn_types::LockType::Pessimistic,
+                b"key".to_vec(),
+                ts.into(),
+                ttl,
+                None,
+                (ts + 5).into(),
+                0,
+                (ts + 10).into(),
+                false,
+            )
+        };
+
+        let make_pessimistic_lock = |ts: u64, ttl: u64| PessimisticLock {
+            primary: b"key".to_vec().into_boxed_slice(),
+            start_ts: ts.into(),
+            ttl,
+            for_update_ts: (ts + 5).into(),
+            min_commit_ts: (ts + 10).into(),
+            last_change: LastChange::make_exist(3.into(), 1),
+            is_locked_with_conflict: false,
+        };
+
+        // Test 1: put_shared_locks with is_new = true
+        {
+            let cm = ConcurrencyManager::new_for_test(10.into());
+            let mut txn = MvccTxn::new(5.into(), cm);
+            let mut shared_locks = SharedLocks::new();
+            shared_locks.insert_lock(make_lock(5, 1000)).unwrap();
+
+            txn.put_shared_locks(key.clone(), &shared_locks, true);
+
+            assert_eq!(txn.new_locks.len(), 1);
+            assert!(txn.write_size() > 0);
+            assert_eq!(txn.modifies.len(), 1);
+            assert!(matches!(&txn.modifies[0], Modify::Put(CF_LOCK, k, _) if k == &key));
+        }
+
+        // Test 2: put_shared_locks with is_new = false
+        {
+            let cm = ConcurrencyManager::new_for_test(10.into());
+            let mut txn = MvccTxn::new(5.into(), cm);
+            let mut shared_locks = SharedLocks::new();
+            shared_locks.insert_lock(make_lock(5, 1000)).unwrap();
+
+            txn.put_shared_locks(key.clone(), &shared_locks, false);
+
+            assert!(txn.new_locks.is_empty());
+            assert_eq!(txn.write_size(), 0);
+            assert_eq!(txn.modifies.len(), 1);
+        }
+
+        // Test 3: put_shared_locks with new SharedLocks
+        {
+            let cm = ConcurrencyManager::new_for_test(10.into());
+            let mut txn = MvccTxn::new(5.into(), cm);
+
+            let mut shared_locks = SharedLocks::new();
+            shared_locks
+                .insert_lock(make_pessimistic_lock(5, 1000).into_lock())
+                .unwrap();
+            txn.put_shared_locks(key.clone(), &shared_locks, true);
+
+            assert_eq!(txn.new_locks.len(), 1);
+            assert!(txn.write_size() > 0);
+            if let Modify::Put(_, _, v) = &txn.modifies[0] {
+                let parsed = SharedLocks::parse(v).unwrap();
+                assert!(parsed.contains_start_ts(5.into()));
+            }
+        }
+
+        // Test 4: put_shared_locks with existing SharedLocks
+        {
+            let cm = ConcurrencyManager::new_for_test(10.into());
+            let mut txn = MvccTxn::new(5.into(), cm);
+            let mut existing = SharedLocks::new();
+            existing.insert_lock(make_lock(3, 500)).unwrap();
+            existing
+                .insert_lock(make_pessimistic_lock(5, 1000).into_lock())
+                .unwrap();
+            txn.put_shared_locks(key.clone(), &existing, false);
+
+            assert!(txn.new_locks.is_empty());
+            if let Modify::Put(_, _, v) = &txn.modifies[0] {
+                let parsed = SharedLocks::parse(v).unwrap();
+                assert_eq!(parsed.len(), 2);
+                assert!(parsed.contains_start_ts(3.into()));
+                assert!(parsed.contains_start_ts(5.into()));
+            }
+        }
+
+        // Test 5: put_shared_locks replacing same ts
+        {
+            let cm = ConcurrencyManager::new_for_test(10.into());
+            let mut txn = MvccTxn::new(5.into(), cm);
+            let mut existing = SharedLocks::new();
+            existing.insert_lock(make_lock(5, 500)).unwrap();
+            existing
+                .update_lock(make_pessimistic_lock(5, 2000).into_lock())
+                .unwrap();
+            txn.put_shared_locks(key.clone(), &existing, false);
+
+            if let Modify::Put(_, _, v) = &txn.modifies[0] {
+                let mut parsed = SharedLocks::parse(v).unwrap();
+                assert_eq!(parsed.len(), 1);
+                assert_eq!(parsed.get_lock(&5.into()).unwrap().unwrap().ttl, 2000);
+            }
+        }
     }
 }
