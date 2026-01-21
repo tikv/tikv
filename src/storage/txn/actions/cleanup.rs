@@ -32,7 +32,26 @@ pub fn cleanup<S: Snapshot>(
         crate::storage::mvcc::txn::make_txn_error(err, &key, reader.start_ts).into()
     ));
 
-    match reader.load_lock(&key)? {
+    // Check for pending lock modifications first. This is important when
+    // processing multiple sub-locks of the same key in a single batch (e.g.,
+    // in resolve_lock). Each operation needs to see the pending writes from
+    // previous operations in the same batch.
+    let lock_state = match txn.get_pending_lock_bytes(&key) {
+        Some(None) => {
+            // Lock was deleted by a previous operation in this batch
+            None
+        }
+        Some(Some(bytes)) => {
+            // Use pending lock state
+            Some(txn_types::parse_lock(bytes)?)
+        }
+        None => {
+            // No pending modification, read from snapshot
+            reader.load_lock(&key)?
+        }
+    };
+
+    match lock_state {
         Some(Either::Left(ref lock)) if lock.ts == reader.start_ts => {
             // If current_ts is not 0, check the Lock's TTL.
             // If the lock is not expired, do not rollback it but report key is locked.
@@ -81,11 +100,11 @@ pub fn cleanup<S: Snapshot>(
             )
         }
         lock_or_shared_locks => {
-            let lock = lock_or_shared_locks.map(|lock_or_shared_locks| {
-                lock_or_shared_locks
-                    .left()
-                    .expect("SharedLocks is handled above, should not reach here")
-            });
+            let lock =
+                lock_or_shared_locks.and_then(|lock_or_shared_locks| match lock_or_shared_locks {
+                    Either::Left(lock) => Some(lock),
+                    Either::Right(_) => None,
+                });
             match check_txn_status_missing_lock(
                 txn,
                 reader,

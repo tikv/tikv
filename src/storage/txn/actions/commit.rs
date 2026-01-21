@@ -82,7 +82,26 @@ pub fn commit<S: Snapshot>(
         )
     };
 
-    let (mut lock, shared_locks, commit) = match reader.load_lock(&key)? {
+    // Check for pending lock modifications first. This is important when
+    // processing multiple sub-locks of the same key in a single batch (e.g.,
+    // in resolve_lock). Each operation needs to see the pending writes from
+    // previous operations in the same batch.
+    let lock_state = match txn.get_pending_lock_bytes(&key) {
+        Some(None) => {
+            // Lock was deleted by a previous operation in this batch
+            None
+        }
+        Some(Some(bytes)) => {
+            // Use pending lock state
+            Some(txn_types::parse_lock(bytes)?)
+        }
+        None => {
+            // No pending modification, read from snapshot
+            reader.load_lock(&key)?
+        }
+    };
+
+    let (mut lock, shared_locks, commit) = match lock_state {
         Some(lock_or_shared) => {
             let (lock, shared_locks) = match lock_or_shared {
                 Either::Left(lock) if lock.ts == reader.start_ts => (lock, None),
