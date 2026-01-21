@@ -162,7 +162,8 @@ pub fn commit<S: Snapshot>(
                     // info here for further debugging if needed.
                     "mvcc_info" => ?collect_mvcc(reader),
                 );
-                (lock, None, false)
+                // Preserve shared_locks so other transactions' sub-locks are not lost
+                (lock, shared_locks, false)
             } else {
                 (lock, shared_locks, true)
             }
@@ -780,5 +781,93 @@ pub mod tests {
         must_written(&mut engine, key, start_ts2, commit_ts_2, WriteType::Lock);
         // lock is removed when no shared lock entries are left.
         assert!(load_shared_locks(&mut engine, key).is_none());
+    }
+
+    #[test]
+    fn test_commit_stale_pessimistic_lock_preserves_other_shared_locks() {
+        use tikv_util::Either;
+        use txn_types::SharedLocks;
+
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+
+        let key = b"shared-pessimistic-key";
+        let pessimistic_ts = TimeStamp::new(10);
+        let prewrite_ts = TimeStamp::new(20);
+        let commit_ts = TimeStamp::new(30);
+
+        // Create a pessimistic lock (stale - never prewritten)
+        let pessimistic_lock = Lock::new(
+            LockType::Pessimistic,
+            key.to_vec(),
+            pessimistic_ts,
+            0,                     // ttl
+            None,                  // short_value
+            pessimistic_ts.next(), // for_update_ts (non-zero makes it pessimistic txn)
+            0,                     // txn_size
+            TimeStamp::zero(),
+            false,
+        );
+
+        // Create a prewrite lock (from another transaction)
+        let prewrite_lock = make_shared_sub_lock(key, prewrite_ts);
+
+        // Put both locks into SharedLocks
+        put_shared_lock(&mut engine, key, vec![pessimistic_lock, prewrite_lock]);
+
+        fn load_shared_locks<E: Engine>(engine: &mut E, key: &[u8]) -> Option<SharedLocks> {
+            let snapshot = engine.snapshot(Default::default()).unwrap();
+            let mut reader = MvccReader::new(snapshot, None, true);
+            match reader.load_lock(&Key::from_raw(key)).unwrap()? {
+                Either::Right(shared_locks) => Some(shared_locks),
+                Either::Left(_) => None,
+            }
+        }
+
+        // Verify initial state: both locks exist
+        let mut current_locks = load_shared_locks(&mut engine, key).unwrap();
+        assert_eq!(current_locks.len(), 2);
+        assert!(current_locks.get_lock(&pessimistic_ts).unwrap().is_some());
+        assert!(current_locks.get_lock(&prewrite_ts).unwrap().is_some());
+
+        // Try to commit the pessimistic lock.
+        // Since it's a stale pessimistic lock (never prewritten), commit should
+        // roll it back but preserve the other lock.
+        assert!(must_succeed(&mut engine, key, pessimistic_ts, commit_ts).is_none());
+
+        // The pessimistic lock should be rolled back (released), not committed.
+        // Note: The current buggy behavior may return None here because unlock_key
+        // is called with the wrong parameters.
+        // After fix, this should return Some(ReleasedLock) with commit_ts = 0.
+
+        // Critical assertion: The prewrite lock (ts=20) should still exist!
+        let remaining_locks = load_shared_locks(&mut engine, key);
+        assert!(
+            remaining_locks.is_some(),
+            "BUG: SharedLocks was deleted entirely! The prewrite lock (ts=20) was lost."
+        );
+
+        let mut remaining = remaining_locks.unwrap();
+        assert_eq!(
+            remaining.len(),
+            1,
+            "Expected 1 remaining lock, got {}",
+            remaining.len()
+        );
+
+        // The pessimistic lock should be gone
+        assert!(
+            remaining.get_lock(&pessimistic_ts).unwrap().is_none(),
+            "Pessimistic lock (ts=10) should have been removed"
+        );
+
+        // The prewrite lock should still be there
+        assert!(
+            remaining.get_lock(&prewrite_ts).unwrap().is_some(),
+            "BUG: Prewrite lock (ts=20) was lost when rolling back the stale pessimistic lock"
+        );
+
+        // No commit record should be written for the pessimistic lock
+        // (it was rolled back, not committed)
+        must_not_have_write(&mut engine, key, commit_ts);
     }
 }

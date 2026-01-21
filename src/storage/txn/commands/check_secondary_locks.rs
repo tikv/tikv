@@ -176,9 +176,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
                 }
                 // Async commit transactions don't write shared locks, so if we get SharedLocks,
                 // check the write CF for the commit record directly.
-                Some(Either::Right(_)) => {
-                    check_determined_txn_status(&mut reader, &key)?
-                }
+                Some(Either::Right(_)) => check_determined_txn_status(&mut reader, &key)?,
                 // Searches the write CF for the commit record of the lock and returns the commit
                 // timestamp (0 if the lock is not committed).
                 l => {

@@ -924,6 +924,7 @@ impl SharedLocks {
             .map(|lock| lock.into_lock_info(raw_key.clone()))
             .collect();
         info.set_shared_lock_infos(shared_locks.into());
+        info.set_key(raw_key);
         info
     }
 }
