@@ -80,18 +80,17 @@ pub fn cleanup<S: Snapshot>(
                 !protect_rollback,
             )
         }
-        l => {
-            let l = l.map(|lock| match lock {
-                Either::Left(lock) => lock,
-                Either::Right(_shared_locks) => {
-                    unimplemented!("SharedLocks returned from load_lock is not supported here")
-                }
+        lock_or_shared_locks => {
+            let lock = lock_or_shared_locks.map(|lock_or_shared_locks| {
+                lock_or_shared_locks
+                    .left()
+                    .expect("SharedLocks is handled above, should not reach here")
             });
             match check_txn_status_missing_lock(
                 txn,
                 reader,
                 key.clone(),
-                l,
+                lock,
                 MissingLockAction::rollback_protect(protect_rollback),
                 false,
             )? {
