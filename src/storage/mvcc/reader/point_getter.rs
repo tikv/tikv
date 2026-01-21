@@ -26,9 +26,9 @@ pub struct PointGetterBuilder<S: Snapshot> {
     bypass_locks: TsSet,
     access_locks: TsSet,
     check_has_newer_ts_data: bool,
-    /// If true, skip all txn-related checks (lock checking, RcCheckTs newer-ts
-    /// check). Used by special read paths (e.g. TiCI versioned lookup).
-    bypass_txn_check: bool,
+    /// If true, this getter is used by versioned lookup, which must ignore all
+    /// txn-related checks (lock checking, RcCheckTs newer-ts check).
+    is_versioned_lookup: bool,
 }
 
 impl<S: Snapshot> PointGetterBuilder<S> {
@@ -43,7 +43,7 @@ impl<S: Snapshot> PointGetterBuilder<S> {
             bypass_locks: Default::default(),
             access_locks: Default::default(),
             check_has_newer_ts_data: false,
-            bypass_txn_check: false,
+            is_versioned_lookup: false,
         }
     }
 
@@ -111,14 +111,14 @@ impl<S: Snapshot> PointGetterBuilder<S> {
         self
     }
 
-    /// If enabled, skip all txn-related checks (lock checking and `RcCheckTs`
-    /// newer-ts check).
+    /// Mark this getter as used by versioned lookup and skip all txn-related
+    /// checks (lock checking and `RcCheckTs` newer-ts check).
     ///
     /// Defaults to `false`.
     #[inline]
     #[must_use]
-    pub(crate) fn bypass_txn_check(mut self, enabled: bool) -> Self {
-        self.bypass_txn_check = enabled;
+    pub(crate) fn is_versioned_lookup(mut self, enabled: bool) -> Self {
+        self.is_versioned_lookup = enabled;
         self
     }
 
@@ -142,7 +142,7 @@ impl<S: Snapshot> PointGetterBuilder<S> {
             } else {
                 NewerTsCheckState::Unknown
             },
-            bypass_txn_check: self.bypass_txn_check,
+            is_versioned_lookup: self.is_versioned_lookup,
 
             statistics: Statistics::default(),
 
@@ -164,7 +164,7 @@ pub struct PointGetter<S: Snapshot> {
     bypass_locks: TsSet,
     access_locks: TsSet,
     met_newer_ts_data: NewerTsCheckState,
-    bypass_txn_check: bool,
+    is_versioned_lookup: bool,
 
     statistics: Statistics,
 
@@ -208,7 +208,7 @@ impl<S: Snapshot> PointGetter<S> {
         load_commit_ts: bool,
     ) -> Result<Option<ValueEntry>> {
         fail_point!("point_getter_get");
-        if !self.bypass_txn_check && need_check_locks(self.isolation_level) {
+        if !self.is_versioned_lookup && need_check_locks(self.isolation_level) {
             // Check locks that signal concurrent writes for `Si` or more recent writes for
             // `RcCheckTs`.
             if let Some(lock) = self.load_and_check_lock(user_key, !load_commit_ts)? {
@@ -291,7 +291,7 @@ impl<S: Snapshot> PointGetter<S> {
         let mut use_near_seek = false;
         let mut seek_key = user_key.clone();
 
-        if !self.bypass_txn_check
+        if !self.is_versioned_lookup
             && (self.met_newer_ts_data == NewerTsCheckState::NotMetYet
                 || self.isolation_level == IsolationLevel::RcCheckTs)
         {
@@ -884,7 +884,7 @@ mod tests {
             bypass_locks: Default::default(),
             access_locks: Default::default(),
             met_newer_ts_data: NewerTsCheckState::NotMetYet,
-            bypass_txn_check: false,
+            is_versioned_lookup: false,
             statistics: Statistics::default(),
             write_cursor,
         };
@@ -1471,7 +1471,7 @@ mod tests {
     }
 
     #[test]
-    fn test_bypass_txn_check_skips_lock_conflict() {
+    fn test_versioned_lookup_skips_lock_conflict() {
         let mut engine = new_sample_engine_2();
         let snapshot = engine.snapshot(Default::default()).unwrap();
 
@@ -1484,14 +1484,14 @@ mod tests {
 
         let mut bypass = PointGetterBuilder::new(snapshot, 5.into())
             .isolation_level(IsolationLevel::Si)
-            .bypass_txn_check(true)
+            .is_versioned_lookup(true)
             .build()
             .unwrap();
         must_get_entry(&mut bypass, b"bar", false, b"barval", None);
     }
 
     #[test]
-    fn test_bypass_txn_check_skips_rc_check_ts_newer_version() {
+    fn test_versioned_lookup_skips_rc_check_ts_newer_version() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let key = b"k";
 
@@ -1509,7 +1509,7 @@ mod tests {
 
         let mut bypass = PointGetterBuilder::new(snapshot, 35.into())
             .isolation_level(IsolationLevel::RcCheckTs)
-            .bypass_txn_check(true)
+            .is_versioned_lookup(true)
             .build()
             .unwrap();
         must_get_value(&mut bypass, key, b"v20");
