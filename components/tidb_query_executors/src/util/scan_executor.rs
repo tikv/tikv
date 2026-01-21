@@ -9,7 +9,6 @@ use tidb_query_common::{
         IntervalRange, Range, Storage,
         scanner::{RangesScanner, RangesScannerOptions},
     },
-    util::is_point,
 };
 use tidb_query_datatype::{codec::batch::LazyBatchColumnVec, expr::EvalContext};
 use tipb::{ColumnInfo, FieldType};
@@ -87,6 +86,7 @@ impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> ScanExecutor<S, I, F> {
         }: ScanExecutorOptions<S, I>,
     ) -> Result<Self> {
         tidb_query_datatype::codec::table::check_table_ranges::<F>(&key_ranges)?;
+        let has_range_versions = range_versions.is_some();
         if let Some(versions) = range_versions.as_ref() {
             if !accept_point_range {
                 return Err(other_err!(
@@ -100,11 +100,6 @@ impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> ScanExecutor<S, I, F> {
                     key_ranges.len()
                 ));
             }
-            if key_ranges.iter().any(|r| !is_point(r)) {
-                return Err(other_err!(
-                    "range_versions is only supported for point ranges"
-                ));
-            }
         }
         if is_backward {
             key_ranges.reverse();
@@ -112,15 +107,22 @@ impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> ScanExecutor<S, I, F> {
                 v.reverse();
             }
         }
+        let mut ranges = Vec::with_capacity(key_ranges.len());
+        for r in key_ranges {
+            let r = Range::from_pb_range(r, accept_point_range);
+            if has_range_versions && !matches!(r, Range::Point(_)) {
+                return Err(other_err!(
+                    "range_versions is only supported for point ranges"
+                ));
+            }
+            ranges.push(r);
+        }
         Ok(Self {
             imp,
             scanner: RangesScanner::new(RangesScannerOptions {
                 range_versions,
                 storage,
-                ranges: key_ranges
-                    .into_iter()
-                    .map(|r| Range::from_pb_range(r, accept_point_range))
-                    .collect(),
+                ranges,
                 scan_backward_in_range: is_backward,
                 is_key_only,
                 is_scanned_range_aware,
