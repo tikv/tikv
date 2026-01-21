@@ -86,9 +86,9 @@ mod tests {
     use kvproto::kvrpcpb::PrewriteRequestPessimisticAction::*;
 
     use crate::storage::{
+        TestEngineBuilder,
         mvcc::tests::{must_get_rollback_protected, must_load_shared_lock, must_unlocked},
         txn::tests::*,
-        TestEngineBuilder,
     };
 
     #[test]
@@ -118,25 +118,15 @@ mod tests {
         must_acquire_shared_pessimistic_lock(&mut engine, key, pk2, start_ts2, 40, 3000);
 
         let mut shared_lock = must_load_shared_lock(&mut engine, key);
-        assert_eq!(shared_lock.shared_lock_num(), 2);
+        assert_eq!(shared_lock.len(), 2);
 
         must_rollback(&mut engine, key, start_ts1, false);
         must_get_rollback_protected(&mut engine, key, start_ts1, false);
 
         shared_lock = must_load_shared_lock(&mut engine, key);
-        assert_eq!(shared_lock.shared_lock_num(), 1);
-        assert!(
-            shared_lock
-                .find_shared_lock_txn(&start_ts1)
-                .unwrap()
-                .is_none()
-        );
-        assert!(
-            shared_lock
-                .find_shared_lock_txn(&start_ts2)
-                .unwrap()
-                .is_some()
-        );
+        assert_eq!(shared_lock.len(), 1);
+        assert!(shared_lock.get_lock(&start_ts1).unwrap().is_none());
+        assert!(shared_lock.get_lock(&start_ts2).unwrap().is_some());
 
         must_rollback(&mut engine, key, start_ts2, false);
         must_unlocked(&mut engine, key);
