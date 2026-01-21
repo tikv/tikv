@@ -57,7 +57,22 @@ pub const CDC_THREAD: &str = "cdc";
 
 pub const PD_WORKER_THREAD: &str = "pd-worker";
 
-pub const UNIFIED_READ_POOL_THREAD: &str = "unified-read";
+// Keep the legacy prefix to preserve existing monitoring; it will be truncated by Linux.
+pub const UNIFIED_READ_POOL_THREAD: &str = "unified-read-pool";
+
+const LINUX_THREAD_NAME_MAX_LEN: usize = 15;
+
+#[inline]
+pub fn matches_thread_name_prefix(thread_name: &str, prefix: &str) -> bool {
+    if thread_name.contains(prefix) {
+        return true;
+    }
+    if prefix.len() <= LINUX_THREAD_NAME_MAX_LEN {
+        return false;
+    }
+    // Thread name prefixes are ASCII; byte slicing is safe here.
+    thread_name.contains(&prefix[..LINUX_THREAD_NAME_MAX_LEN])
+}
 
 pub const DEBUGGER_THREAD: &str = "debugger";
 
