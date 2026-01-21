@@ -577,7 +577,7 @@ impl<S: Snapshot> SnapshotStore<S> {
         key: &Key,
         ts: TimeStamp,
         load_commit_ts: bool,
-        bypass_txn_check: bool,
+        is_versioned_lookup: bool,
         statistics: &mut Statistics,
     ) -> Result<Option<ValueEntry>> {
         let mut point_getter = PointGetterBuilder::new(self.snapshot.clone(), ts)
@@ -585,7 +585,7 @@ impl<S: Snapshot> SnapshotStore<S> {
             .isolation_level(self.isolation_level)
             .bypass_locks(self.bypass_locks.clone())
             .access_locks(self.access_locks.clone())
-            .bypass_txn_check(bypass_txn_check)
+            .is_versioned_lookup(is_versioned_lookup)
             .build()?;
         let v = point_getter.get_entry(key, load_commit_ts)?;
         statistics.add(&point_getter.take_statistics());
