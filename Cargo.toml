@@ -280,6 +280,7 @@ aws = { path = "components/cloud/aws" }
 azure = { path = "components/cloud/azure" }
 backup = { path = "components/backup", default-features = false }
 backup-stream = { path = "components/backup-stream", default-features = false }
+br_parquet_exporter = { path = "components/br_parquet_exporter" }
 batch-system = { path = "components/batch-system" }
 causal_ts = { path = "components/causal_ts" }
 cdc = { path = "components/cdc", default-features = false }
@@ -322,6 +323,7 @@ online_config = { path = "components/online_config" }
 panic_hook = { path = "components/panic_hook" }
 pd_client = { path = "components/pd_client" }
 profiler = { path = "components/profiler" }
+protobuf = { git = "https://github.com/pingcap/rust-protobuf", branch = "v2.8" }
 raft_log_engine = { path = "components/raft_log_engine" }
 raftstore = { path = "components/raftstore", default-features = false }
 raftstore-v2 = { path = "components/raftstore-v2", default-features = false }

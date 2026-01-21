@@ -631,6 +631,48 @@ pub enum Cmd {
         /// hex end key
         end: String,
     },
+    /// Export BR SST artifacts into Parquet files and optional Iceberg
+    /// manifests.
+    BrParquetExport {
+        #[structopt(
+            long = "input-storage-base64",
+            help = "base64 encoded StorageBackend pointing to the BR backup"
+        )]
+        input_storage_base64: String,
+        #[structopt(
+            long = "output-storage-base64",
+            help = "base64 encoded StorageBackend used for Parquet output"
+        )]
+        output_storage_base64: String,
+        #[structopt(
+            long = "backupmeta",
+            default_value = "backupmeta",
+            help = "path to the backupmeta file within the input storage"
+        )]
+        backup_meta: String,
+        #[structopt(
+            long = "output-prefix",
+            default_value = "parquet",
+            help = "prefix under the output storage to place Parquet files"
+        )]
+        output_prefix: String,
+        #[structopt(
+            long = "row-group-size",
+            default_value = "8192",
+            help = "row group size for the emitted Parquet files"
+        )]
+        row_group_size: usize,
+        #[structopt(
+            long = "compression",
+            default_value = "snappy",
+            help = "Parquet compression codec (snappy|zstd|gzip|brotli|lz4raw|none)"
+        )]
+        compression: String,
+        #[structopt(long = "write-iceberg-manifest")]
+        write_iceberg_manifest: bool,
+        #[structopt(flatten)]
+        iceberg: IcebergOptions,
+    },
     CompactLogBackup {
         #[structopt(
             short,
@@ -738,6 +780,22 @@ pub enum Cmd {
         /// can be recorded in TiKV logs.
         min_start_ts: Option<u64>,
     },
+}
+
+#[derive(Default, StructOpt)]
+pub struct IcebergOptions {
+    #[structopt(long = "iceberg-warehouse")]
+    pub warehouse: Option<String>,
+    #[structopt(long = "iceberg-namespace")]
+    pub namespace: Option<String>,
+    #[structopt(long = "iceberg-table")]
+    pub table: Option<String>,
+    #[structopt(
+        long = "iceberg-manifest-prefix",
+        default_value = "manifest",
+        help = "manifest file prefix under the warehouse/table/metadata path"
+    )]
+    pub manifest_prefix: String,
 }
 
 #[derive(StructOpt)]
