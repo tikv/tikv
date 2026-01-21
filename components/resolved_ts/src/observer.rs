@@ -73,6 +73,7 @@ impl<E: KvEngine> CmdObserver<E> for Observer {
         if let Err(e) = self.scheduler.schedule(Task::ChangeLog {
             cmd_batch: cmd_batches,
         }) {
+            self.memory_quota.free(size);
             info!("failed to schedule change log event"; "err" => ?e);
         }
     }
