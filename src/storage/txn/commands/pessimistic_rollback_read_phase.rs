@@ -93,10 +93,10 @@ pub mod tests {
 
     use super::*;
     use crate::storage::{
+        TestEngineBuilder,
         kv::Engine,
         mvcc::tests::must_load_shared_lock,
         txn::{scheduler::DEFAULT_EXECUTION_DURATION_LIMIT, tests::*},
-        TestEngineBuilder,
     };
 
     fn run_read_phase<E: Engine>(
@@ -132,10 +132,7 @@ pub mod tests {
         // Verify the shared lock contains the pessimistic entry we are going to roll
         // back.
         let mut shared_lock = must_load_shared_lock(&mut engine, key);
-        let shared_entry = shared_lock
-            .find_shared_lock_txn(&10.into())
-            .unwrap()
-            .unwrap();
+        let shared_entry = shared_lock.get_lock(&10.into()).unwrap().unwrap();
         assert!(shared_entry.is_pessimistic_lock());
 
         // read pessimistic lock inside shared lock.

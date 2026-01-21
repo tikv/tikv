@@ -54,7 +54,9 @@ pub fn cleanup<S: Snapshot>(
                 !protect_rollback,
             )
         }
-        Some(Either::Right(mut shared_locks)) if shared_locks.contains_start_ts(reader.start_ts) => {
+        Some(Either::Right(mut shared_locks))
+            if shared_locks.contains_start_ts(reader.start_ts) =>
+        {
             // If current_ts is not 0, check the Lock's TTL.
             // If the lock is not expired, do not rollback it but report key is locked.
             if !current_ts.is_zero() {
@@ -69,7 +71,14 @@ pub fn cleanup<S: Snapshot>(
                     .into());
                 }
             }
-            rollback_shared_lock(txn, reader, key, shared_locks, reader.start_ts, !protect_rollback)
+            rollback_shared_lock(
+                txn,
+                reader,
+                key,
+                shared_locks,
+                reader.start_ts,
+                !protect_rollback,
+            )
         }
         l => {
             let l = l.map(|lock| match lock {
@@ -299,7 +308,7 @@ pub mod tests {
             10,
         );
         let shared_lock = must_load_shared_lock(&mut engine, shared_lock_key);
-        assert_eq!(shared_lock.shared_lock_num(), 1);
+        assert_eq!(shared_lock.len(), 1);
 
         must_err(&mut engine, shared_lock_key, ts(20, 0), ts(30, 0));
         must_succeed(&mut engine, shared_lock_key, ts(20, 0), ts(40, 0));
@@ -318,12 +327,8 @@ pub mod tests {
         must_shared_prewrite_lock(&mut engine, shared_lock_key, pk, ts(30, 0), ts(35, 0));
 
         let mut shared_lock = must_load_shared_lock(&mut engine, shared_lock_key);
-        assert_eq!(shared_lock.shared_lock_num(), 1);
-        let sub_lock = shared_lock
-            .find_shared_lock_txn(&ts(30, 0))
-            .unwrap()
-            .unwrap()
-            .clone();
+        assert_eq!(shared_lock.len(), 1);
+        let sub_lock = shared_lock.get_lock(&ts(30, 0)).unwrap().unwrap();
         assert_eq!(sub_lock.lock_type, txn_types::LockType::Lock);
         assert_eq!(sub_lock.ttl, 10);
 
@@ -357,14 +362,14 @@ pub mod tests {
             10,
         );
         let shared_lock = must_load_shared_lock(&mut engine, shared_lock_key);
-        assert_eq!(shared_lock.shared_lock_num(), 2);
+        assert_eq!(shared_lock.len(), 2);
 
         for start_ts in [40, 50] {
             let last_lock = start_ts == 50;
             let snapshot = engine.snapshot(Default::default()).unwrap();
             let current_ts = ts(start_ts + 20, 0);
             let start_ts = ts(start_ts, 0);
-            let cm = ConcurrencyManager::new(current_ts);
+            let cm = ConcurrencyManager::new_for_test(current_ts);
             let mut txn = MvccTxn::new(start_ts, cm);
             let mut reader = SnapshotReader::new(start_ts, snapshot, true);
             let released = cleanup(

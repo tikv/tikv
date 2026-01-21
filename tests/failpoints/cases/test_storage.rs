@@ -41,7 +41,7 @@ use tikv::{
         *,
     },
 };
-use tikv_util::{HandyRwLock, future::paired_future_callback, worker::dummy_scheduler};
+use tikv_util::{Either, HandyRwLock, future::paired_future_callback, worker::dummy_scheduler};
 use txn_types::{Key, Mutation, TimeStamp};
 
 #[test_case(test_raftstore::new_server_cluster)]
@@ -2146,9 +2146,11 @@ fn test_resolve_shared_locks() {
         reader.load_lock(&Key::from_raw(&shared_key)).unwrap()
     };
 
-    let mut lock = load_lock().unwrap();
-    assert!(lock.is_shared());
-    assert_eq!(lock.shared_lock_num(), 2);
+    let mut shared_locks = match load_lock().unwrap() {
+        Either::Right(shared_locks) => shared_locks,
+        _ => panic!("expected SharedLocks"),
+    };
+    assert_eq!(shared_locks.len(), 2);
 
     let resolve_lock = |txn_status: HashMap<TimeStamp, TimeStamp>,
                         key_locks: Vec<(Key, txn_types::Lock)>| {
@@ -2168,16 +2170,15 @@ fn test_resolve_shared_locks() {
         txn_status,
         vec![(
             Key::from_raw(&shared_key),
-            lock.find_shared_lock_txn(&10.into())
-                .unwrap()
-                .unwrap()
-                .clone(),
+            shared_locks.get_lock(&10.into()).unwrap().unwrap().clone(),
         )],
     );
-    let mut lock = load_lock().unwrap();
-    assert!(lock.is_shared());
-    assert_eq!(lock.shared_lock_num(), 1);
-    assert!(lock.contains_start_ts(&20.into()));
+    let mut shared_locks = match load_lock().unwrap() {
+        Either::Right(shared_locks) => shared_locks,
+        _ => panic!("expected SharedLocks"),
+    };
+    assert_eq!(shared_locks.len(), 1);
+    assert!(shared_locks.contains_start_ts(20.into()));
     exclusive_lock.try_recv().unwrap_err();
 
     let mut txn_status = HashMap::default();
@@ -2186,10 +2187,7 @@ fn test_resolve_shared_locks() {
         txn_status,
         vec![(
             Key::from_raw(&shared_key),
-            lock.find_shared_lock_txn(&20.into())
-                .unwrap()
-                .unwrap()
-                .clone(),
+            shared_locks.get_lock(&20.into()).unwrap().unwrap().clone(),
         )],
     );
     assert!(load_lock().is_none());

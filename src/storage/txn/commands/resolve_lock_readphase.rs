@@ -2,7 +2,7 @@
 
 use collections::HashMap;
 use tikv_util::Either;
-use txn_types::{Key, Lock, TimeStamp};
+use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
     ScanMode, Snapshot, Statistics,
@@ -55,41 +55,37 @@ impl<S: Snapshot> ReadCommand<S> for ResolveLockReadPhase {
         let result = reader.scan_locks_from_storage(
             self.scan_key.as_ref(),
             None,
-            |_, lock| txn_status.keys().any(|ts| lock.contains_start_ts(ts)),
+            // Filter function: for Lock, check if ts is in txn_status;
+            // for SharedLocks, the filter is applied during scan and returns only matching locks
+            |_, lock| txn_status.keys().any(|ts| lock.ts == *ts),
             RESOLVE_LOCK_BATCH_SIZE,
         );
         statistics.add(&reader.statistics);
         let (kv_pairs, has_remain) = result?;
-        let kv_pairs: Vec<(Key, Lock)> = kv_pairs
-            .into_iter()
-            .map(|(key, lock)| {
-                let lock = match lock {
-                    Either::Left(lock) => lock,
-                    Either::Right(_shared_locks) => unimplemented!(
-                        "SharedLocks returned from scan_locks_from_storage is not supported here"
-                    ),
-                };
-                (key, lock)
-            })
-            .collect();
-        tls_collect_keyread_histogram_vec(tag.get_str(), kv_pairs.len() as f64);
 
-        let flatten_pairs = if kv_pairs.iter().any(|(_, lock)| lock.is_shared()) {
-            let mut flatten_pairs = Vec::with_capacity(kv_pairs.len());
-            for (key, mut lock) in kv_pairs {
-                if lock.is_shared() {
-                    for sub_lock in lock.flatten_shared_locks().unwrap() {
-                        flatten_pairs.push((key.clone(), sub_lock));
-                    }
-                } else {
+        // Flatten the result: convert LockOrSharedLocks to Vec<(Key, Lock)>
+        let mut flatten_pairs = Vec::with_capacity(kv_pairs.len());
+        for (key, lock_or_shared) in kv_pairs {
+            match lock_or_shared {
+                Either::Left(lock) => {
                     flatten_pairs.push((key, lock));
                 }
+                Either::Right(mut shared_locks) => {
+                    // For SharedLocks, iterate through all locks that match txn_status
+                    let ts_to_process: Vec<_> = shared_locks
+                        .iter_ts()
+                        .filter(|ts| txn_status.contains_key(ts))
+                        .cloned()
+                        .collect();
+                    for ts in ts_to_process {
+                        if let Some(lock) = shared_locks.get_lock(&ts).unwrap() {
+                            flatten_pairs.push((key.clone(), lock.clone()));
+                        }
+                    }
+                }
             }
-            flatten_pairs
-        } else {
-            kv_pairs
-        };
-
+        }
+        tls_collect_keyread_histogram_vec(tag.get_str(), flatten_pairs.len() as f64);
 
         if flatten_pairs.is_empty() {
             Ok(ProcessResult::Res)
@@ -120,7 +116,7 @@ mod tests {
     use kvproto::kvrpcpb::Context;
 
     use super::*;
-    use crate::storage::{kv::Engine, txn::tests::*, TestEngineBuilder};
+    use crate::storage::{TestEngineBuilder, kv::Engine, txn::tests::*};
 
     fn run_resolve_lock_read_phase<E: Engine>(
         engine: &mut E,
@@ -164,7 +160,8 @@ mod tests {
                     .iter()
                     .map(|(k, lock)| {
                         assert_eq!(k, &expected_key);
-                        assert!(!lock.is_shared());
+                        // In current branch, Lock type is never shared - shared locks use
+                        // SharedLocks type
                         (lock.ts, lock)
                     })
                     .collect();

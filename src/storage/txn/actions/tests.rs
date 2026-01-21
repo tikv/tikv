@@ -998,7 +998,7 @@ pub fn must_shared_prewrite_lock<E: Engine>(
     let ctx = Context::default();
     let snapshot = engine.snapshot(Default::default()).unwrap();
     let for_update_ts = for_update_ts.into();
-    let cm = ConcurrencyManager::new(for_update_ts);
+    let cm = ConcurrencyManager::new_for_test(for_update_ts);
     let ts = ts.into();
     let mut txn = MvccTxn::new(ts, cm);
     let mut reader = SnapshotReader::new(ts, snapshot, true);

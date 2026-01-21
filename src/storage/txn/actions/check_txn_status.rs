@@ -304,7 +304,8 @@ pub fn rollback_lock(
     is_pessimistic_txn: bool,
     collapse_rollback: bool,
 ) -> Result<Option<ReleasedLock>> {
-    assert!(!lock.is_shared());
+    // Lock is never shared in the current branch's architecture - shared locks use
+    // SharedLocks type
     let overlapped_write = match reader.get_txn_commit_record(&key)? {
         TxnCommitRecord::None { overlapped_write } => overlapped_write,
         TxnCommitRecord::SingleRecord { write, commit_ts }

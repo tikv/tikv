@@ -275,13 +275,8 @@ pub mod tests {
         // Rolling back one shared pessimistic lock keeps the other entry.
         must_success(&mut engine, key, 10, 30);
         let mut shared_lock = must_load_shared_lock(&mut engine, key);
-        assert_eq!(shared_lock.shared_lock_num(), 1);
-        assert!(
-            shared_lock
-                .find_shared_lock_txn(&20.into())
-                .unwrap()
-                .is_some()
-        );
+        assert_eq!(shared_lock.len(), 1);
+        assert!(shared_lock.get_lock(&20.into()).unwrap().is_some());
 
         // Rolling back the last entry removes the lock entirely.
         must_success(&mut engine, key, 20, 20);

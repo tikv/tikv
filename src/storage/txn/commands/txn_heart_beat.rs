@@ -98,7 +98,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
 
                 lock
             }
-            Some(Either::Right(mut shared_locks)) if shared_locks.contains_start_ts(self.start_ts) => {
+            Some(Either::Right(mut shared_locks))
+                if shared_locks.contains_start_ts(self.start_ts) =>
+            {
                 let lock = shared_locks
                     .get_lock(&self.start_ts)
                     .map_err(MvccError::from)?
@@ -125,7 +127,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
                 }
 
                 if updated {
-                    shared_locks.update_lock(updated_lock.clone()).map_err(MvccError::from)?;
+                    shared_locks
+                        .update_lock(updated_lock.clone())
+                        .map_err(MvccError::from)?;
                     txn.put_shared_locks(self.primary_key.clone(), &shared_locks, false);
                 }
 
