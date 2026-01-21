@@ -1775,15 +1775,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     statistics.add(&reader.statistics);
                     let (read_locks, _) = read_res?;
                     let mut locks = Vec::with_capacity(read_locks.len());
-                    for (key, lock) in read_locks.into_iter() {
-                        let lock = match lock {
-                            Either::Left(lock) => lock,
-                            Either::Right(_shared_locks) => unimplemented!(
-                                "SharedLocks returned from scan_locks is not supported here"
-                            ),
+                    for (key, lock_or_shared_locks) in read_locks.into_iter() {
+                        let lock_info = match lock_or_shared_locks {
+                            Either::Left(lock) => {
+                                lock.into_lock_info(key.into_raw().map_err(txn::Error::from)?)
+                            }
+                            Either::Right(shared_locks) => shared_locks
+                                .into_lock_info(key.into_raw().map_err(txn::Error::from)?),
                         };
-                        let lock_info =
-                            lock.into_lock_info(key.into_raw().map_err(txn::Error::from)?);
                         locks.push(lock_info);
                     }
 
