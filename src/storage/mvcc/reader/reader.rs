@@ -342,12 +342,13 @@ impl<S: EngineSnapshot> MvccReader<S> {
                         return Ok(None);
                     }
                 }
-                let mut lock = txn_types::parse_lock(cursor.value(&mut self.statistics.lock))?;
-                match &mut lock {
+                let mut lock_or_shared_locks =
+                    txn_types::parse_lock(cursor.value(&mut self.statistics.lock))?;
+                match &mut lock_or_shared_locks {
                     Either::Left(l) => {
                         if filter(&key, TxnLockRef::Persisted(l)) {
                             self.statistics.lock.processed_keys += 1;
-                            return Ok(Some((key, lock)));
+                            return Ok(Some((key, lock_or_shared_locks)));
                         }
                     }
                     Either::Right(shared_locks) => {
@@ -356,7 +357,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
                         })?;
                         if !shared_locks.is_empty() {
                             self.statistics.lock.processed_keys += 1;
-                            return Ok(Some((key, lock)));
+                            return Ok(Some((key, lock_or_shared_locks)));
                         }
                     }
                 }
@@ -747,17 +748,18 @@ impl<S: EngineSnapshot> MvccReader<S> {
                 }
             }
 
-            let mut lock = txn_types::parse_lock(cursor.value(&mut self.statistics.lock))?;
-            match &mut lock {
+            let mut lock_or_shared_locks =
+                txn_types::parse_lock(cursor.value(&mut self.statistics.lock))?;
+            match &mut lock_or_shared_locks {
                 Either::Left(l) => {
                     if filter(&key, l) {
-                        locks.push((key, lock));
+                        locks.push((key, lock_or_shared_locks));
                     }
                 }
                 Either::Right(shared_locks) => {
                     shared_locks.filter_shared_locks(|shared_lock| filter(&key, shared_lock))?;
                     if !shared_locks.is_empty() {
-                        locks.push((key, lock));
+                        locks.push((key, lock_or_shared_locks));
                     }
                 }
             }
