@@ -606,6 +606,7 @@ impl PdClient for RpcClient {
         req.set_approximate_size(region_stat.approximate_size);
         req.set_approximate_keys(region_stat.approximate_keys);
         req.set_cpu_usage(region_stat.cpu_usage);
+        req.set_cpu_stats(region_stat.cpu_stats);
         if let Some(s) = replication_status {
             req.set_replication_status(s);
         }

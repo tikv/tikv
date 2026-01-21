@@ -61,6 +61,8 @@ pub struct RegionStat {
     // cpu_usage is the CPU time usage of the leader region since the last heartbeat,
     // which is calculated by cpu_time_delta/heartbeat_reported_interval.
     pub cpu_usage: u64,
+    // cpu_stats contains detailed CPU usage for the leader region.
+    pub cpu_stats: pdpb::CpuStats,
 }
 
 #[derive(Clone, Debug, PartialEq)]
