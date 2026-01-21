@@ -225,30 +225,41 @@ pub fn commit_flashback_key(
     flashback_commit_ts: TimeStamp,
 ) -> TxnResult<()> {
     if let Some(lock) = reader.load_lock(key_to_commit)? {
-        // `WriteType::from_lock_type.unwrap` guarantees the lock type must not be
-        // Pessimistic or Shared.
-        let mut lock = match lock {
-            Either::Left(lock) => lock,
-            Either::Right(_shared_locks) => {
-                unimplemented!("SharedLocks returned from load_lock is not supported here")
+        let is_pessimistic_txn = match lock {
+            Either::Left(mut lock) => {
+                txn.put_write(
+                    key_to_commit.clone(),
+                    flashback_commit_ts,
+                    Write::new(
+                        WriteType::from_lock_type(lock.lock_type).unwrap(),
+                        flashback_start_ts,
+                        lock.short_value.take(),
+                    )
+                    .set_last_change(lock.last_change.clone())
+                    .set_txn_source(lock.txn_source)
+                    .as_ref()
+                    .to_bytes(),
+                );
+                lock.is_pessimistic_txn()
+            },
+            Either::Right(_) => {
+                txn.put_write(
+                    key_to_commit.clone(),
+                    flashback_commit_ts,
+                    Write::new(
+                        WriteType::Lock,
+                        flashback_start_ts,
+                        None,
+                    )
+                    .as_ref()
+                    .to_bytes(),
+                );
+                true
             }
         };
-        txn.put_write(
-            key_to_commit.clone(),
-            flashback_commit_ts,
-            Write::new(
-                WriteType::from_lock_type(lock.lock_type).unwrap(),
-                flashback_start_ts,
-                lock.short_value.take(),
-            )
-            .set_last_change(lock.last_change.clone())
-            .set_txn_source(lock.txn_source)
-            .as_ref()
-            .to_bytes(),
-        );
         txn.unlock_key(
             key_to_commit.clone(),
-            lock.is_pessimistic_txn(),
+            is_pessimistic_txn,
             flashback_commit_ts,
         );
     } else {
@@ -272,22 +283,18 @@ pub fn check_flashback_commit(
 ) -> TxnResult<bool> {
     match reader.load_lock(key_to_commit)? {
         // If the lock exists, it means the flashback hasn't been finished.
-        Some(lock) => {
-            let lock = match lock {
-                Either::Left(lock) => lock,
-                Either::Right(_shared_locks) => {
-                    unimplemented!("SharedLocks returned from load_lock is not supported here")
+        Some(lock_or_shared_locks) => {
+            if let Either::Left(lock) = lock_or_shared_locks.as_ref() {
+                if lock.ts == flashback_start_ts {
+                    return Ok(false);
                 }
-            };
-            if lock.ts == flashback_start_ts {
-                return Ok(false);
             }
             error!(
                 "check flashback commit exception: lock record mismatched";
                 "key_to_commit" => log_wrappers::Value::key(key_to_commit.as_encoded()),
                 "flashback_start_ts" => flashback_start_ts,
                 "flashback_commit_ts" => flashback_commit_ts,
-                "lock" => ?lock,
+                "lock" => ?lock_or_shared_locks,
             );
         }
         // If the lock doesn't exist and the flashback commit record exists, it means the flashback

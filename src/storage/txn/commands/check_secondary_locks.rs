@@ -180,7 +180,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
                 // Searches the write CF for the commit record of the lock and returns the commit
                 // timestamp (0 if the lock is not committed).
                 l => {
-                    mismatch_lock = l.map(|lock| match lock {
+                    mismatch_lock = l.map(|lock_or_shared_locks| match lock_or_shared_locks {
                         Either::Left(lock) => lock,
                         Either::Right(_shared_locks) => unimplemented!(
                             "SharedLocks returned from load_lock is not supported here"
