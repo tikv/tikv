@@ -2,12 +2,21 @@
 
 use std::sync::{Arc, Mutex, atomic::*};
 
+use br_parquet_exporter::{
+    ExportOptions as ParquetExportOptions, SstParquetExporter, parse_parquet_compression,
+};
+use external_storage::{BackendConfig, create_storage};
 use futures::{FutureExt, SinkExt, StreamExt, TryFutureExt, channel::mpsc};
+use futures::executor::block_on;
 use futures_util::stream::AbortHandle;
 use grpcio::{self, *};
 use kvproto::brpb::*;
 use raftstore::store::snapshot_backup::SnapshotBrHandle;
+use tikv::config::BackupIcebergConfig;
 use tikv_util::{error, info, warn, worker::*};
+use txn_types::TimeStamp;
+
+use crate::IcebergCatalog;
 
 use super::Task;
 use crate::disk_snap::{self, StreamHandleLoop};
@@ -172,6 +181,117 @@ where
                 "result" => ?res, "peer" => %peer);
         });
     }
+
+    fn parquet_export(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: ParquetExportRequest,
+        sink: UnarySink<ParquetExportResponse>,
+    ) {
+        let peer = ctx.peer();
+        let runtime = self.snap_br_env.get_async_runtime().clone();
+        runtime.spawn(async move {
+            let export_result = tokio::task::spawn_blocking(move || run_parquet_export(req)).await;
+            let resp = match export_result {
+                Ok(resp) => resp,
+                Err(err) => parquet_export_error(format!("parquet export join error: {}", err)),
+            };
+            if resp.has_error() {
+                warn!("parquet export failed"; "peer" => %peer, "err" => ?resp.get_error());
+            } else {
+                info!("parquet export finished"; "peer" => %peer, "files" => resp.get_file_count(), "rows" => resp.get_total_rows());
+            }
+            if let Err(err) = sink.success(resp).await {
+                warn!("parquet export response failed"; "peer" => %peer, "err" => ?err);
+            }
+        });
+    }
+}
+
+fn parquet_export_error(msg: String) -> ParquetExportResponse {
+    let mut resp = ParquetExportResponse::default();
+    let mut err = kvproto::brpb::Error::default();
+    err.set_msg(msg);
+    resp.set_error(err);
+    resp
+}
+
+fn run_parquet_export(req: ParquetExportRequest) -> ParquetExportResponse {
+    match run_parquet_export_inner(req) {
+        Ok(resp) => resp,
+        Err(err) => parquet_export_error(err),
+    }
+}
+
+fn run_parquet_export_inner(
+    req: ParquetExportRequest,
+) -> std::result::Result<ParquetExportResponse, String> {
+    if req.get_backup_meta().is_empty() {
+        return Err("backup_meta is required".to_string());
+    }
+    let input_storage = create_storage(req.get_input_storage(), BackendConfig::default())
+        .map_err(|err| format!("failed to open input storage: {}", err))?;
+    let output_storage = create_storage(req.get_output_storage(), BackendConfig::default())
+        .map_err(|err| format!("failed to open output storage: {}", err))?;
+
+    let mut options = ParquetExportOptions::default();
+    if req.get_row_group_size() > 0 {
+        options.row_group_size = usize::try_from(req.get_row_group_size())
+            .map_err(|_| "row group size overflows usize".to_string())?;
+    }
+    if !req.get_compression().is_empty() {
+        options.compression =
+            parse_parquet_compression(req.get_compression()).map_err(|err| err)?;
+    }
+
+    let mut exporter =
+        SstParquetExporter::new(input_storage.as_ref(), output_storage.as_ref(), options)
+            .map_err(|err| format!("failed to initialize exporter: {}", err))?;
+    let report = exporter
+        .export_backup_meta(req.get_backup_meta(), req.get_output_prefix())
+        .map_err(|err| format!("failed to export backup: {}", err))?;
+    let total_bytes: u64 = report.files.iter().map(|info| info.size).sum();
+
+    if req.get_write_iceberg_manifest() {
+        let warehouse = req.get_iceberg_warehouse();
+        let namespace = req.get_iceberg_namespace();
+        let table = req.get_iceberg_table();
+        if warehouse.is_empty() || namespace.is_empty() || table.is_empty() {
+            return Err("iceberg warehouse, namespace and table are required".to_string());
+        }
+        let manifest_prefix = if req.get_iceberg_manifest_prefix().is_empty() {
+            "manifest".to_string()
+        } else {
+            req.get_iceberg_manifest_prefix().to_string()
+        };
+        let iceberg_cfg = BackupIcebergConfig {
+            enable: true,
+            warehouse: warehouse.to_string(),
+            namespace: namespace.to_string(),
+            table: table.to_string(),
+            manifest_prefix,
+        };
+        if let Some(catalog) = IcebergCatalog::from_config(iceberg_cfg) {
+            let manifest_files: Vec<_> = report
+                .files
+                .iter()
+                .map(|info| info.to_manifest_file(report.start_version, report.end_version))
+                .collect();
+            block_on(catalog.write_manifest(
+                output_storage.as_ref(),
+                &manifest_files,
+                TimeStamp::new(report.start_version),
+                TimeStamp::new(report.end_version),
+            ))
+            .map_err(|err| format!("failed to write iceberg manifest: {}", err))?;
+        }
+    }
+
+    let mut resp = ParquetExportResponse::default();
+    resp.set_file_count(report.files.len() as u64);
+    resp.set_total_rows(report.total_rows);
+    resp.set_total_bytes(total_bytes);
+    Ok(resp)
 }
 
 #[cfg(test)]

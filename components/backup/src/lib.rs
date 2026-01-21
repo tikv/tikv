@@ -8,6 +8,7 @@ extern crate tikv_alloc;
 pub mod disk_snap;
 mod endpoint;
 mod errors;
+mod iceberg;
 mod metrics;
 mod service;
 mod softlimit;
@@ -16,5 +17,6 @@ mod writer;
 
 pub use endpoint::{Endpoint, Task, backup_file_name};
 pub use errors::{Error, Result};
+pub use iceberg::IcebergCatalog;
 pub use service::Service;
 pub use writer::{BackupRawKvWriter, BackupWriter};
