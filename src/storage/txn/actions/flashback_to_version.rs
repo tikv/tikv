@@ -241,18 +241,14 @@ pub fn commit_flashback_key(
                     .to_bytes(),
                 );
                 lock.is_pessimistic_txn()
-            },
+            }
             Either::Right(_) => {
                 txn.put_write(
                     key_to_commit.clone(),
                     flashback_commit_ts,
-                    Write::new(
-                        WriteType::Lock,
-                        flashback_start_ts,
-                        None,
-                    )
-                    .as_ref()
-                    .to_bytes(),
+                    Write::new(WriteType::Lock, flashback_start_ts, None)
+                        .as_ref()
+                        .to_bytes(),
                 );
                 true
             }
