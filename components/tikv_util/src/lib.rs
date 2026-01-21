@@ -64,6 +64,7 @@ pub mod resource_control;
 pub mod smoother;
 pub mod store;
 pub mod stream;
+pub mod table_filter;
 pub mod sys;
 pub mod thread_group;
 pub mod thread_name_prefix;

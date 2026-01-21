@@ -159,6 +159,63 @@ You can see [this manual](./doc/deploy.md) of production-like cluster deployment
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
+## BR Parquet export (tikv-ctl)
+
+`tikv-ctl` can convert BR SST backups into Parquet files, and optionally write Iceberg manifests.
+Backupmeta v1 (inline schemas/files) and v2 (meta indexes) are supported.
+It expects base64-encoded `StorageBackend` values for the input (BR backup) and output (Parquet) storages.
+
+Required flags:
+
+- `--input-storage-base64` base64-encoded storage backend pointing at the BR SST backup
+- `--output-storage-base64` base64-encoded storage backend for Parquet output
+
+Optional flags:
+
+- `--backupmeta` (default `backupmeta`) path within the input storage
+- `--output-prefix` (default `parquet`) prefix under the output storage
+- `--row-group-size` (default `8192`)
+- `--compression` (default `snappy`, supports `snappy|zstd|gzip|brotli|lz4raw|none`)
+- `--filter` table filter rules (same syntax as BR `--filter`, repeatable; supports `!` blocklist and `@file`)
+- `--table-ids` comma-separated list of physical table IDs
+- `--write-iceberg-manifest` plus `--iceberg-warehouse`, `--iceberg-namespace`, `--iceberg-table`
+- `--iceberg-manifest-prefix` (default `manifest`)
+
+Example:
+
+```bash
+# Generate base64 StorageBackend strings with BR.
+bin/br operator base64ify -s "s3://mybucket/full" --s3.endpoint="$S3_ENDPOINT" --load-credentials
+bin/br operator base64ify -s "s3://mybucket/parquet" --s3.endpoint="$S3_ENDPOINT" --load-credentials
+
+# Export BR SST backup to Parquet + Iceberg manifest.
+tikv-ctl br-parquet-export \
+  --input-storage-base64 "<BASE64_INPUT>" \
+  --output-storage-base64 "<BASE64_OUTPUT>" \
+  --backupmeta "backupmeta" \
+  --output-prefix "parquet" \
+  --row-group-size 8192 \
+  --compression zstd \
+  --write-iceberg-manifest \
+  --iceberg-warehouse "s3://warehouse" \
+  --iceberg-namespace "analytics" \
+  --iceberg-table "orders"
+
+# Export only selected tables.
+tikv-ctl br-parquet-export \
+  --input-storage-base64 "<BASE64_INPUT>" \
+  --output-storage-base64 "<BASE64_OUTPUT>" \
+  --filter "sales.orders" \
+  --filter "hr.employees"
+
+# Export all tables except internal ones.
+tikv-ctl br-parquet-export \
+  --input-storage-base64 "<BASE64_INPUT>" \
+  --output-storage-base64 "<BASE64_OUTPUT>" \
+  --filter "*.*" \
+  --filter "!mysql.*"
+```
+
 ## Client drivers
 
 - [Go](https://github.com/tikv/client-go) (The most stable and widely used)

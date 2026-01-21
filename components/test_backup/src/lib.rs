@@ -75,6 +75,22 @@ macro_rules! retry_req {
 
 impl TestSuite {
     pub fn new(count: usize, sst_max_size: u64, api_version: ApiVersion) -> TestSuite {
+        let mut base_cfg = BackupConfig {
+            num_threads: 4,
+            batch_size: 8,
+            ..Default::default()
+        };
+        base_cfg.sst_max_size = ReadableSize(sst_max_size);
+        Self::new_with_backup_config(count, sst_max_size, api_version, base_cfg)
+    }
+
+    pub fn new_with_backup_config(
+        count: usize,
+        sst_max_size: u64,
+        api_version: ApiVersion,
+        mut backup_cfg: BackupConfig,
+    ) -> TestSuite {
+        backup_cfg.sst_max_size = ReadableSize(sst_max_size);
         let mut cluster = new_server_cluster_with_api_ver(1, count, api_version);
         // Increase the Raft tick interval to make this test case running reliably.
         configure_for_lease_read(&mut cluster.cfg, Some(100), None);
@@ -90,12 +106,7 @@ impl TestSuite {
                 sim.storages[id].clone(),
                 sim.region_info_accessors[id].clone(),
                 LocalTablets::Singleton(engines.kv.clone()),
-                BackupConfig {
-                    num_threads: 4,
-                    batch_size: 8,
-                    sst_max_size: ReadableSize(sst_max_size),
-                    ..Default::default()
-                },
+                backup_cfg.clone(),
                 sim.get_concurrency_manager(*id),
                 api_version,
                 None,
