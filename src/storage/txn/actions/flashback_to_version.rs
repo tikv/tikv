@@ -87,12 +87,13 @@ pub fn rollback_locks(
                     true,
                 )?;
             }
-            Either::Right(shared_locks) => {
+            Either::Right(mut shared_locks) => {
                 // The `shared_locks` is built from read phase and only contains sub-locks
                 // to be rolled back (lock.ts != flashback_start_ts). Since
                 // flashback itself doesn't acquire shared locks, all sub-locks shall be
                 // rolled back in this step.
-                for lock_ts in shared_locks.iter_ts().cloned().collect::<Vec<_>>() {
+                let timestamps: Vec<_> = shared_locks.iter_ts().cloned().collect();
+                for lock_ts in timestamps {
                     reader.start_ts = lock_ts;
                     rollback_shared_lock(
                         txn,
@@ -102,6 +103,9 @@ pub fn rollback_locks(
                         lock_ts,
                         true,
                     )?;
+                    // Synchronize local state so subsequent iterations pass the correct
+                    // shared_locks (with already-processed locks removed).
+                    let _ = shared_locks.remove_lock(&lock_ts);
                 }
             }
         }
@@ -752,9 +756,13 @@ pub mod tests {
         must_acquire_shared_pessimistic_lock(&mut engine, k, pk2, 35, 35, 3000);
 
         // Flashback to version 17 with start_ts = 40, commit_ts = 45.
-        // This should rollback both shared locks, put 2 rollback records to write CF
-        // and delete 1 lock on `k`.
-        assert_eq!(must_rollback_lock(&mut engine, k, 40), 3);
+        // This should rollback both shared locks:
+        // - Put 2 rollback records to write CF
+        // - Update shared_locks once (after first rollback, when one lock remains)
+        // - Delete the lock on `k` (after second rollback, when shared_locks becomes
+        //   empty)
+        // Total: 4 modifies
+        assert_eq!(must_rollback_lock(&mut engine, k, 40), 4);
         assert_eq!(
             must_flashback_write_to_version(&mut engine, k, 17, 40, 45),
             1
