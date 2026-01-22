@@ -1560,9 +1560,8 @@ mod tests {
         )
         .unwrap_err();
 
-        lock.lock_type = LockType::Shared;
         check_ts_conflict(
-            Cow::Owned(Either::Left(lock)),
+            Cow::Owned(Either::Right(SharedLocks::new())),
             &key,
             160.into(),
             &empty,
