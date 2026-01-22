@@ -10,6 +10,7 @@ use cloud::blob::{BlobStorage, DeletableStorage, IterableStorage, PutResource};
 use encryption::DataKeyManager;
 use futures_util::{future::LocalBoxFuture, stream::LocalBoxStream};
 use gcp::GcsStorage;
+use gcs_v2::GcsStorage as GcsStorageV2;
 use kvproto::brpb::{
     AzureBlobStorage, Gcs, Noop, S3, StorageBackend, StorageBackend_oneof_backend as Backend,
 };
@@ -71,7 +72,14 @@ fn create_backend(
             s.set_multi_part_size(backend_config.s3_multi_part_size);
             blob_store(s)
         }
-        Backend::Gcs(config) => blob_store(GcsStorage::from_input(config.clone())?),
+        Backend::Gcs(config) => {
+            if config.storage_class.starts_with("v2") {
+                 info!("external storage selected: gcs_v2");
+                 blob_store(GcsStorageV2::from_input(config.clone())?)
+            } else {
+                 blob_store(GcsStorage::from_input(config.clone())?)
+            }
+        },
         Backend::AzureBlobStorage(config) => blob_store(AzureStorage::from_input(config.clone())?),
         Backend::CloudDynamic(dyn_backend) => {
             // CloudDynamic backend is no longer supported.
