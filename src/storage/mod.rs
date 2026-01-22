@@ -12230,10 +12230,14 @@ mod tests {
         }
         storage
             .sched_txn_command(
-                commands::Prewrite::with_defaults(
-                    vec![txn_types::Mutation::make_shared_lock(key)],
+                commands::PrewritePessimistic::with_defaults(
+                    vec![(
+                        txn_types::Mutation::make_shared_lock(key),
+                        DoPessimisticCheck,
+                    )],
                     pk2.clone(),
                     20.into(),
+                    21.into(),
                 ),
                 expect_ok_callback(tx, 0),
             )
