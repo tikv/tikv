@@ -3705,8 +3705,8 @@ fn test_batch_get_with_need_commit_ts() {
     must_kv_prewrite(&client, ctx.clone(), vec![mutation], k3.clone(), 1000);
 
     let mut req = BatchGetRequest::default();
-    let mut new_ctx = ctx.clone();
-    new_ctx.set_committed_locks(vec![1000]);
+    let mut ctx = ctx.clone();
+    ctx.set_committed_locks(vec![1000]);
     req.set_context(ctx.clone());
     req.set_version(5000);
     req.set_keys(vec![k1.clone(), k2.clone(), k3.clone(), k4.clone()].into());
@@ -3735,9 +3735,9 @@ fn test_batch_get_with_need_commit_ts() {
     let mut req = BatchGetRequest::default();
     req.set_context(ctx.clone());
     req.set_version(5000);
-    req.set_keys(vec![k1.clone(), k2.clone()].into());
+    req.set_keys(vec![k1.clone(), k2.clone(), k3.clone()].into());
     let resp = client.kv_batch_get(&req).unwrap();
-    assert_eq!(resp.pairs.len(), 2);
+    assert_eq!(resp.pairs.len(), 3);
     let pair1 = &resp.pairs[0];
     assert_eq!(pair1.key, b"k1");
     assert_eq!(pair1.value, b"v1");
@@ -3746,4 +3746,10 @@ fn test_batch_get_with_need_commit_ts() {
     assert_eq!(pair2.key, b"k2");
     assert_eq!(pair2.value, b"v2");
     assert_eq!(pair2.commit_ts, 0);
+    let pair3 = &resp.pairs[2];
+    assert_eq!(pair3.key, b"k3");
+    // without `need_commit_ts` set, it can read the value of the lock in
+    // committed_locks
+    assert_eq!(pair3.value, b"v33");
+    assert_eq!(pair3.commit_ts, 0);
 }
