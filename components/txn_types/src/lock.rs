@@ -921,16 +921,7 @@ impl SharedLocks {
                 Either::Left(encoded) => Lock::parse(encoded).unwrap(),
                 Either::Right(lock) => lock.clone(),
             })
-            .map(|lock| {
-                let mut lock_info = lock.into_lock_info(raw_key.clone());
-                // Convert lock types to shared variants for locks inside SharedLocks
-                match lock_info.get_lock_type() {
-                    Op::PessimisticLock => lock_info.set_lock_type(Op::SharedPessimisticLock),
-                    Op::Lock => lock_info.set_lock_type(Op::SharedLock),
-                    _ => {}
-                }
-                lock_info
-            })
+            .map(|lock| lock.into_lock_info(raw_key.clone()))
             .collect();
         info.set_shared_lock_infos(shared_locks.into());
         info.set_key(raw_key);

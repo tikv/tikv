@@ -2103,8 +2103,7 @@ fn test_shared_exclusive_lock_conflict() {
     }
 }
 
-#[test_case(test_raftstore::new_server_cluster)]
-#[test_case(test_raftstore_v2::new_server_cluster)]
+#[test]
 #[allow(unused)]
 fn test_resolve_shared_locks() {
     let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
@@ -2195,8 +2194,7 @@ fn test_resolve_shared_locks() {
     exclusive_lock.try_recv().unwrap();
 }
 
-#[test_case(test_raftstore::new_server_cluster)]
-#[test_case(test_raftstore_v2::new_server_cluster)]
+#[test]
 fn test_scan_lock_shared_lock_infos_filtered_by_max_ts() {
     let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
         .build()
