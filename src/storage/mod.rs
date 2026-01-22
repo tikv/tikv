@@ -12257,10 +12257,9 @@ mod tests {
         }
         assert_eq!(shared_locks.len(), 2);
 
-        for (ts, for_update_ts, primary, op) in [
-            (10, 11, pk1, Op::PessimisticLock),
-            (20, 21, pk2, Op::Lock),
-        ] {
+        for (ts, for_update_ts, primary, op) in
+            [(10, 11, pk1, Op::PessimisticLock), (20, 21, pk2, Op::Lock)]
+        {
             let shared_lock = shared_locks.get(&ts).expect("shared lock missing");
             assert_eq!(shared_lock.get_key(), b"shared-lock");
             assert_eq!(shared_lock.get_primary_lock(), primary.as_slice());
