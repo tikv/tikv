@@ -22,18 +22,18 @@ pub struct BatchLimitExecutor<Src: BatchExecutor> {
 
     context: EvalContext,
     
-    prefix_keys_exps: Vec<RpnExpression>,
-    prefix_keys_field_type: Vec<FieldType>,
-    prefix_key_num: usize,
+    truncate_keys_exps: Vec<RpnExpression>,
+    truncate_keys_field_type: Vec<FieldType>,
+    truncate_key_num: usize,
 
-    /// Stores previous prefix keys to compare with current prefix keys
-    prev_prefix_keys: Vec<ScalarValue>,
+    /// Stores previous truncate keys to compare with current truncate keys
+    prev_truncate_keys: Vec<ScalarValue>,
 
-    /// Stores current prefix keys
+    /// Stores current truncate keys
     /// It is just used to reduce allocations. The lifetime is not really
     /// 'static. The elements are only valid in the same batch where they
     /// are added.
-    current_prefix_keys_unsafe: Vec<RpnStackNode<'static>>,
+    current_truncate_keys_unsafe: Vec<RpnStackNode<'static>>,
     executed_in_limit_for_test: bool,
     executed_in_rank_limit_for_test: bool,
 }
@@ -45,11 +45,11 @@ impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
             remaining_rows: limit,
             is_src_scan_executor,
             context: EvalContext::new(Arc::new(EvalConfig::default())),
-            prefix_keys_exps: Vec::with_capacity(0),
-            prefix_keys_field_type: Vec::with_capacity(0),
-            prefix_key_num: 0,
-            prev_prefix_keys: Vec::with_capacity(0),
-            current_prefix_keys_unsafe: Vec::with_capacity(0),
+            truncate_keys_exps: Vec::with_capacity(0),
+            truncate_keys_field_type: Vec::with_capacity(0),
+            truncate_key_num: 0,
+            prev_truncate_keys: Vec::with_capacity(0),
+            current_truncate_keys_unsafe: Vec::with_capacity(0),
             executed_in_limit_for_test: false,
             executed_in_rank_limit_for_test: false,
         })
@@ -60,9 +60,9 @@ impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
         limit: usize,
         is_src_scan_executor: bool,
         config: Arc<EvalConfig>,
-        prefix_key_exp_defs: Vec<RpnExpression>) -> Result<Self> {
-            let prefix_key_num = prefix_key_exp_defs.len();
-            let prefix_keys_field_type: Vec<FieldType> = prefix_key_exp_defs
+        truncate_key_exp_defs: Vec<RpnExpression>) -> Result<Self> {
+            let truncate_key_num = truncate_key_exp_defs.len();
+            let truncate_keys_field_type: Vec<FieldType> = truncate_key_exp_defs
                 .iter()
                 .map(|exp| exp.ret_field_type(src.schema()).clone())
                 .collect();
@@ -71,11 +71,11 @@ impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
                 remaining_rows: limit,
                 is_src_scan_executor,
                 context: EvalContext::new(config),
-                prefix_keys_exps: prefix_key_exp_defs,
-                prefix_keys_field_type: prefix_keys_field_type,
-                prefix_key_num: prefix_key_num,
-                prev_prefix_keys: Vec::with_capacity(prefix_key_num),
-                current_prefix_keys_unsafe: Vec::with_capacity(prefix_key_num),
+                truncate_keys_exps: truncate_key_exp_defs,
+                truncate_keys_field_type,
+                truncate_key_num,
+                prev_truncate_keys: Vec::with_capacity(truncate_key_num),
+                current_truncate_keys_unsafe: Vec::with_capacity(truncate_key_num),
                 executed_in_limit_for_test: false,
                 executed_in_rank_limit_for_test: false,
             })
@@ -86,13 +86,13 @@ impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
         self.src
     }
 
-    // Record the prefix key values for the last row
+    // Record the truncate key values for the last row
     #[inline]
-    fn record_prefix_key_values(&mut self, result: &mut BatchExecuteResult, idx: usize) -> Result<()> {
+    fn record_truncate_key_values(&mut self, result: &mut BatchExecuteResult, idx: usize) -> Result<()> {
         let src_schema = self.src.schema();
         let mut res = ensure_columns_decoded(
             &mut self.context,
-            &self.prefix_keys_exps,
+            &self.truncate_keys_exps,
             src_schema,
             &mut result.physical_columns,
             &result.logical_rows,
@@ -102,15 +102,15 @@ impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
             Err(err) => {return Err(err);}
         }
 
-        self.current_prefix_keys_unsafe.clear();
+        self.current_truncate_keys_unsafe.clear();
         unsafe {
             res = eval_exprs_decoded_no_lifetime(
                 &mut self.context,
-                &self.prefix_keys_exps,
+                &self.truncate_keys_exps,
                 src_schema,
                 &mut result.physical_columns,
                 &result.logical_rows,
-                &mut self.current_prefix_keys_unsafe,
+                &mut self.current_truncate_keys_unsafe,
             );
 
             match res {
@@ -119,25 +119,25 @@ impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
             }
         }
 
-        let mut cur_prefix_keys_ref = Vec::with_capacity(self.prefix_keys_exps.len());
-        for cur_prefix_key_result in &self.current_prefix_keys_unsafe {
-            cur_prefix_keys_ref.push(cur_prefix_key_result.get_logical_scalar_ref(idx));
+        let mut cur_truncate_keys_ref = Vec::with_capacity(self.truncate_keys_exps.len());
+        for cur_truncate_key_result in &self.current_truncate_keys_unsafe {
+            cur_truncate_keys_ref.push(cur_truncate_key_result.get_logical_scalar_ref(idx));
         }
 
-        self.prev_prefix_keys.clear();
-        self.prev_prefix_keys.extend(cur_prefix_keys_ref.drain(..).map(ScalarValueRef::to_owned));
-        cur_prefix_keys_ref.clear();
+        self.prev_truncate_keys.clear();
+        self.prev_truncate_keys.extend(cur_truncate_keys_ref.drain(..).map(ScalarValueRef::to_owned));
+        cur_truncate_keys_ref.clear();
         Ok(())
     }
 
     #[inline]
-    fn find_different_prefix_key_row(&mut self, result: &mut BatchExecuteResult, start_idx: usize) -> Result<usize> {
+    fn find_different_truncate_key_row(&mut self, result: &mut BatchExecuteResult, start_idx: usize) -> Result<usize> {
         let src_schema = self.src.schema();
         // Decode columns with mutable input first, so subsequent access to input can be
         // immutable (and the borrow checker will be happy)
         let mut res = ensure_columns_decoded(
             &mut self.context,
-            &self.prefix_keys_exps,
+            &self.truncate_keys_exps,
             src_schema,
             &mut result.physical_columns,
             &result.logical_rows,
@@ -147,15 +147,15 @@ impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
             Err(err) => {return Err(err);}
         }
 
-        self.current_prefix_keys_unsafe.clear();
+        self.current_truncate_keys_unsafe.clear();
         unsafe {
             res = eval_exprs_decoded_no_lifetime(
                 &mut self.context,
-                &self.prefix_keys_exps,
+                &self.truncate_keys_exps,
                 src_schema,
                 &mut result.physical_columns,
                 &result.logical_rows,
-                &mut self.current_prefix_keys_unsafe,
+                &mut self.current_truncate_keys_unsafe,
             );
 
             match res {
@@ -166,28 +166,28 @@ impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
 
         let total_row_num = result.logical_rows.len();
         let mut i = start_idx;
-        let mut cur_prefix_keys_ref = Vec::with_capacity(self.prefix_keys_exps.len());
+        let mut cur_truncate_keys_ref = Vec::with_capacity(self.truncate_keys_exps.len());
         while i < total_row_num {
-            for cur_prefix_key_result in &self.current_prefix_keys_unsafe {
-                cur_prefix_keys_ref.push(cur_prefix_key_result.get_logical_scalar_ref(i));
+            for cur_truncate_key_result in &self.current_truncate_keys_unsafe {
+                cur_truncate_keys_ref.push(cur_truncate_key_result.get_logical_scalar_ref(i));
             }
 
-            if self.prev_prefix_keys.len() == 0 {
-                self.prev_prefix_keys.extend(cur_prefix_keys_ref.drain(..).map(ScalarValueRef::to_owned));
-                cur_prefix_keys_ref.clear();
+            if self.prev_truncate_keys.len() == 0 {
+                self.prev_truncate_keys.extend(cur_truncate_keys_ref.drain(..).map(ScalarValueRef::to_owned));
+                cur_truncate_keys_ref.clear();
                 i += 1;
                 continue;
             }
 
-            let prefix_key_match = || -> Result<bool> {
-                match self.prev_prefix_keys.chunks_exact(self.prefix_key_num).next() {
+            let truncate_key_match = || -> Result<bool> {
+                match self.prev_truncate_keys.chunks_exact(self.truncate_key_num).next() {
                     Some(current_key) => {
-                        for preifx_key_col_index in 0..self.prefix_key_num {
+                        for preifx_key_col_index in 0..self.truncate_key_num {
                             if current_key[preifx_key_col_index]
                                 .as_scalar_value_ref()
                                 .cmp_sort_key(
-                                    &cur_prefix_keys_ref[preifx_key_col_index],
-                                    &self.prefix_keys_field_type[preifx_key_col_index],
+                                    &cur_truncate_keys_ref[preifx_key_col_index],
+                                    &self.truncate_keys_field_type[preifx_key_col_index],
                                 )?
                                 != Ordering::Equal
                             {
@@ -200,11 +200,11 @@ impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
                 }
             };
 
-            let res = prefix_key_match();
+            let res = truncate_key_match();
             match res {
                 Ok(v) => {
                     if v {
-                        cur_prefix_keys_ref.clear();
+                        cur_truncate_keys_ref.clear();
                     } else {
                         return Ok(i);
                     }
@@ -248,10 +248,10 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
             scan_rows
         };
         
-        if self.prefix_keys_exps.len() > 0 {  
+        if self.truncate_keys_exps.len() > 0 {  
             #[cfg(debug_assertions)] { self.executed_in_rank_limit_for_test = true; }
 
-            if self.remaining_rows == 0 && self.prev_prefix_keys.len() == 0 {
+            if self.remaining_rows == 0 && self.prev_truncate_keys.len() == 0 {
                 return BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::empty(),
                     logical_rows: Vec::new(),
@@ -267,25 +267,25 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
                 output_row_num = total_row_num;
                 self.remaining_rows -= output_row_num;
 
-                // Record prefix key values for further search
-                let res = self.record_prefix_key_values(&mut result, output_row_num-1);
+                // Record truncate key values for further search
+                let res = self.record_truncate_key_values(&mut result, output_row_num-1);
                 match res {
                     Ok(_) => {},
                     Err(err) => {return BatchExecuteResult{is_drained:Err(err), physical_columns: result.physical_columns, logical_rows: result.logical_rows, warnings: EvalWarnings::default()}}
                 }
             } else {
-                // When self.remaining_rows == 0, it means that previous prefix key values have been recorded before.
+                // When self.remaining_rows == 0, it means that previous truncate key values have been recorded before.
                 if self.remaining_rows != 0 {
-                    // Record prefix key values for further search
-                    let res = self.record_prefix_key_values(&mut result, self.remaining_rows-1);
+                    // Record truncate key values for further search
+                    let res = self.record_truncate_key_values(&mut result, self.remaining_rows-1);
                     match res {
                         Ok(_) => {},
                         Err(err) => {return BatchExecuteResult{is_drained:Err(err), physical_columns: result.physical_columns, logical_rows: result.logical_rows, warnings: EvalWarnings::default()}}
                     }
                 }
 
-                // Traverse remaining rows, so that we can find the row whose prefix key values are different the prev.
-                let end_idx = self.find_different_prefix_key_row(&mut result, self.remaining_rows);
+                // Traverse remaining rows, so that we can find the row whose truncate key values are different the prev.
+                let end_idx = self.find_different_truncate_key_row(&mut result, self.remaining_rows);
                 match end_idx {
                     Ok(v) => {output_row_num = v;}
                     Err(err) => {return BatchExecuteResult{is_drained:Err(err), physical_columns: result.physical_columns, logical_rows: result.logical_rows, warnings: EvalWarnings::default()}}
@@ -616,11 +616,11 @@ mod tests {
         );
 
         let config = Arc::new(EvalConfig::default());
-        let prefix_key_exp = 
+        let truncate_key_exp = 
             RpnExpressionBuilder::new_for_test()
                 .push_column_ref_for_test(1)
                 .build_for_test();
-        let mut exec = BatchLimitExecutor::new_rank_limit(src_exec, 0, false, config, vec![prefix_key_exp]).unwrap();
+        let mut exec = BatchLimitExecutor::new_rank_limit(src_exec, 0, false, config, vec![truncate_key_exp]).unwrap();
 
         let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
@@ -685,12 +685,12 @@ mod tests {
             );
 
             let config = Arc::new(EvalConfig::default());
-            let prefix_key_exp = 
+            let truncate_key_exp = 
                 RpnExpressionBuilder::new_for_test()
                     .push_column_ref_for_test(1)
                     .build_for_test();
 
-            let mut exec = BatchLimitExecutor::new_rank_limit(src_exec, limits[i], false, config, vec![prefix_key_exp]).unwrap();
+            let mut exec = BatchLimitExecutor::new_rank_limit(src_exec, limits[i], false, config, vec![truncate_key_exp]).unwrap();
 
             let r = block_on(exec.next_batch(10));
             assert_eq!(r.logical_rows, results[i]);
@@ -874,11 +874,11 @@ mod tests {
             );
 
             let config = Arc::new(EvalConfig::default());
-            let prefix_key_exp = 
+            let truncate_key_exp = 
                 RpnExpressionBuilder::new_for_test()
                     .push_column_ref_for_test(1)
                     .build_for_test();
-            let mut exec = BatchLimitExecutor::new_rank_limit(src_exec, limits[i], false, config, vec![prefix_key_exp]).unwrap();
+            let mut exec = BatchLimitExecutor::new_rank_limit(src_exec, limits[i], false, config, vec![truncate_key_exp]).unwrap();
 
             let mut actual_logical_rows: Vec<usize> = vec![];
 
@@ -1062,11 +1062,11 @@ mod tests {
             );
             
             let config = Arc::new(EvalConfig::default());
-            let prefix_key_exp = 
+            let truncate_key_exp = 
                 RpnExpressionBuilder::new_for_test()
                     .push_column_ref_for_test(1)
                     .build_for_test();
-            let mut exec = BatchLimitExecutor::new_rank_limit(src_exec, limits[i], false, config, vec![prefix_key_exp]).unwrap();
+            let mut exec = BatchLimitExecutor::new_rank_limit(src_exec, limits[i], false, config, vec![truncate_key_exp]).unwrap();
 
             let mut actual_logical_rows: Vec<usize> = vec![];
 
