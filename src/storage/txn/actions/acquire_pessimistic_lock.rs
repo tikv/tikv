@@ -119,6 +119,9 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
             }
             Either::Right(shared_locks) => {
                 if !is_shared_lock_req {
+                    if !shared_locks.is_shrink_only() {
+                        return Err(ErrorInner::NotInShrinkMode(shared_locks).into());
+                    }
                     let lock_info = shared_locks.into_lock_info(key.into_raw()?);
                     return Err(ErrorInner::KeyIsLocked(lock_info).into());
                 } else {
@@ -138,6 +141,10 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                             allow_lock_with_conflict,
                             shared_locks,
                         );
+                    }
+                    if shared_locks.is_shrink_only() {
+                        let lock_info = shared_locks.into_lock_info(key.into_raw()?);
+                        return Err(ErrorInner::KeyIsLocked(lock_info).into());
                     }
                     // Fall through to add a new lock to existing shared locks
                     current_shared_locks = Some(shared_locks);
@@ -2868,5 +2875,71 @@ pub mod tests {
         // exclusive lock cannot downgrade to shared lock
         must_acquire_pessimistic_lock(&mut engine, exclusive_key, pk, start_ts, for_update_ts);
         must_err_shared_lock(&mut engine, exclusive_key, pk, start_ts, new_for_update_ts);
+    }
+
+    #[test]
+    fn test_xlock_meet_slock_without_shrink_only() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let key = b"shared-no-shrink";
+        let pk = b"shared-no-shrink-pk";
+        let existing_start_ts = TimeStamp::from(10);
+        let existing_for_update_ts = TimeStamp::from(20);
+
+        must_acquire_shared_lock(
+            &mut engine,
+            key,
+            pk,
+            existing_start_ts,
+            existing_for_update_ts,
+            3000,
+        );
+
+        let err = must_err(&mut engine, key, pk, 30, 30);
+        match err {
+            MvccError(box ErrorInner::NotInShrinkMode(shared_locks)) => {
+                assert!(!shared_locks.is_shrink_only());
+                assert_eq!(shared_locks.len(), 1);
+            }
+            other => panic!("expected NotInShrinkMode, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_slock_meet_slock_with_shrink_only() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let key = b"shared-shrink-only";
+        let pk = b"shared-shrink-only-pk";
+        let existing_start_ts = TimeStamp::from(5);
+        let existing_for_update_ts = TimeStamp::from(15);
+
+        must_acquire_shared_lock(
+            &mut engine,
+            key,
+            pk,
+            existing_start_ts,
+            existing_for_update_ts,
+            3000,
+        );
+
+        // Set the slock to shrink-only.
+        let mut shared_locks = load_shared_locks(&mut engine, key);
+        shared_locks.set_shrink_only();
+        let cm = ConcurrencyManager::new_for_test(TimeStamp::zero());
+        let mut txn = MvccTxn::new(1.into(), cm);
+        txn.put_shared_locks(Key::from_raw(key), &shared_locks, false);
+        engine
+            .write(
+                &Context::default(),
+                WriteData::from_modifies(txn.into_modifies()),
+            )
+            .unwrap();
+
+        let err = must_err_shared_lock(&mut engine, key, pk, 20, 20);
+        match err {
+            MvccError(box ErrorInner::KeyIsLocked(lock_info)) => {
+                assert_eq!(lock_info.get_lock_type(), kvproto::kvrpcpb::Op::SharedLock);
+            }
+            other => panic!("expected KeyIsLocked, got {:?}", other),
+        }
     }
 }

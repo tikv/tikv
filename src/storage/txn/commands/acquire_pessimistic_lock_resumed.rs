@@ -172,6 +172,22 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLockR
                     res.push(PessimisticLockKeyResult::Waiting);
                     encountered_locks.push(lock_info);
                 }
+                Err(MvccError(box MvccErrorInner::NotInShrinkMode(shared_locks))) => {
+                    // TODO(slock): Currently we just let the resumed item wait without setting the
+                    // `shared_locks` to shrink-only. It may lead to starvation in some cases.
+                    let lock_info_pb = shared_locks.into_lock_info(key.to_raw()?);
+                    let mut lock_info = WriteResultLockInfo::new(
+                        lock_info_pb,
+                        params,
+                        key,
+                        should_not_exist,
+                        false,
+                    );
+                    lock_info.lock_wait_token = lock_wait_token;
+                    lock_info.req_states = Some(req_states);
+                    res.push(PessimisticLockKeyResult::Waiting);
+                    encountered_locks.push(lock_info);
+                }
                 Err(e) => {
                     res.push(PessimisticLockKeyResult::Failed(
                         StorageError::from(Error::from(e)).into(),
