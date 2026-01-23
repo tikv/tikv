@@ -47,6 +47,10 @@ pub const EXTRA_PARTITION_ID_COL_ID: i64 = -2;
 /// If it's a global index, it will return partition id, see <https://github.com/tikv/tikv/issues/17138>
 pub const EXTRA_PHYSICAL_TABLE_ID_COL_ID: i64 = -3;
 
+// EXTRA_COMMIT_TS_COL_ID is the column ID of column which holds the commit
+// timestamp.
+pub const EXTRA_COMMIT_TS_COL_ID: i64 = -5;
+
 /// `TableEncoder` encodes the table record/index prefix.
 trait TableEncoder: NumberEncoder {
     fn append_table_record_prefix(&mut self, table_id: i64) -> Result<()> {

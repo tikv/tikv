@@ -2,7 +2,7 @@
 
 use std::{cmp::Reverse, collections::BinaryHeap, marker::PhantomData, sync::Arc};
 
-use api_version::{keyspace::KvPair, KvFormat};
+use api_version::{keyspace::KvPairEntry, KvFormat};
 use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
@@ -235,6 +235,7 @@ impl<S: Snapshot, F: KvFormat> RequestHandler for AnalyzeContext<S, F> {
                     scan_backward_in_range: false,
                     is_key_only: true,
                     is_scanned_range_aware: false,
+                    load_commit_ts: false,
                 });
                 let res = AnalyzeContext::handle_index(
                     req,
