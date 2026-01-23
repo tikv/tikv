@@ -11,7 +11,6 @@ use std::{
 use futures::{
     channel::{mpsc, oneshot as futures_oneshot},
     future::{self, BoxFuture, Future, FutureExt, TryFutureExt},
-    pin_mut,
     stream::{Stream, StreamExt},
     task::{self, ArcWake, Context, Poll},
 };
@@ -255,28 +254,25 @@ where
 {
     use futures_util::compat::Future01CompatExt;
 
-    pin_mut!(fut);
+    // Use select_biased! to check if future completes immediately
+    // If the future completes first, return without creating a timer (fast path)
+    // If ready() completes first, the future is pending, so create timer (slow
+    // path)
+    futures::pin_mut!(fut);
     let mut fut = fut.fuse();
 
-    // Try polling once without creating a timer.
-    // Use a no-op waker to avoid side effects from the first poll.
-    struct NoOpWaker;
-    impl ArcWake for NoOpWaker {
-        fn wake_by_ref(_arc_self: &Arc<Self>) {}
-    }
-    let waker = task::waker(Arc::new(NoOpWaker));
-    let mut cx = Context::from_waker(&waker);
-
-    // Fast path: if future is ready immediately, return without creating timer.
-    match std::pin::Pin::new(&mut fut).poll(&mut cx) {
-        Poll::Ready(result) => Ok(result),
-        Poll::Pending => {
-            // Slow path: future didn't complete, create timer and use select!.
+    futures::select_biased! {
+        result = fut => {
+            // Fast path: future completed immediately, no timer needed
+            Ok(result)
+        }
+        _ = futures::future::ready(()) => {
+            // Slow path: future is pending, create timer and use select!
             let timeout_fut = GLOBAL_TIMER_HANDLE
                 .delay(std::time::Instant::now() + dur)
                 .compat()
                 .fuse();
-            pin_mut!(timeout_fut);
+            futures::pin_mut!(timeout_fut);
 
             futures::select! {
                 result = fut => Ok(result),
