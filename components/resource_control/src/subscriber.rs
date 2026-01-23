@@ -80,29 +80,33 @@ impl ReadSubscriberData {
                 let cpu_time = usages.cpu_time();
 
                 let read_pool_cpu_ratio = cpu_time / self.max_cpu_time;
+                let last_cpu_severity = self.cpu_severity;
                 self.cpu_severity =
                     Severity::get_severity(read_pool_cpu_ratio, self.severity_threshold);
-                info!(
-                    "read subscriber on_usages Global {:?} {:?} cpu_time {} max_cpu_time {} read_pool_cpu_ratio {} cpu_severity {:?}",
-                    usages.resource_type,
-                    usages.total(),
-                    cpu_time,
-                    self.max_cpu_time,
-                    read_pool_cpu_ratio,
-                    self.cpu_severity,
-                );
+                if last_cpu_severity != self.cpu_severity {
+                    info!(
+                        "read subscriber on_usages Global {:?} {:?} cpu_time {} max_cpu_time {} read_pool_cpu_ratio {} cpu_severity {:?}, previous cpu_severity: {:?}",
+                        usages.resource_type,
+                        usages.total(),
+                        cpu_time,
+                        self.max_cpu_time,
+                        read_pool_cpu_ratio,
+                        self.cpu_severity,
+                        last_cpu_severity,
+                    );
+                }
             }
             Usages::ResourceGroup { usages } => {
                 self.usages = usages.clone();
+                if !self.cpu_severity.is_abnormal() || self.usages.total() == 0 {
+                    return;
+                }
                 info!(
                     "read subscriber on_usages ResoureGroup {:?} {:?} cpu_severity {:?}",
                     usages.resource_type,
                     usages.total(),
                     self.cpu_severity
                 );
-                if !self.cpu_severity.is_abnormal() || self.usages.total() == 0 {
-                    return;
-                }
 
                 let bytes_usage = usages.bytes();
                 let heavy_usage = bytes_usage / 100;

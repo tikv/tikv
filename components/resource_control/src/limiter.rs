@@ -11,11 +11,15 @@ use std::{
 
 use dashmap::DashMap;
 use futures::compat::Future01CompatExt;
+use prometheus::IntGauge;
 use tikv_util::{
     error, info, resource_control::DEFAULT_RESOURCE_GROUP_NAME, timer::GLOBAL_TIMER_HANDLE,
 };
 
-use crate::{ACTIVE_RESOURCE_GROUP_READ_BYTES, AtomicDuration, AtomicTime, Config, TimeUnit};
+use crate::{
+    ACTIVE_RESOURCE_GROUP_READ_BYTES, AtomicDuration, AtomicTime, Config, TimeUnit,
+    metrics::{RESOURCE_GROUP_QPS_LIMITER_QUOTA, RESOURCE_GROUP_READ_BYTES_LIMITER_QUOTA},
+};
 
 const MIN_WAIT_TIME_INTERVAL: Duration = Duration::from_millis(1);
 
@@ -96,12 +100,12 @@ impl ReadLimiter {
     }
 
     pub(crate) fn clear_all_limiter(&self) {
-        self.resource_group_limiters.iter().for_each(|group_limiter_ref|{
-            let name = group_limiter_ref.key();
-            let _ =  ACTIVE_RESOURCE_GROUP_READ_BYTES.remove_label_values(&[name.as_str()]).map_err(
-                |err| error!("failed to remove active resource group read bytes metric"; "resource_group" => name, "err" => %err),
-            );
-        });
+        self.resource_group_limiters
+            .iter()
+            .for_each(|group_limiter_ref| {
+                let name = group_limiter_ref.key();
+                Self::remove_resource_group_metrics(name);
+            });
         self.resource_group_limiters.clear();
     }
 
@@ -132,6 +136,32 @@ impl ReadLimiter {
                 group_read_limiter.set_speed_limit(req_speed_limit, bytes_speed_limit);
                 (instant, group_read_limiter)
             });
+
+        Self::update_limit_metrics(
+            req_speed_limit,
+            RESOURCE_GROUP_QPS_LIMITER_QUOTA.with_label_values(&[name]),
+        );
+        Self::update_limit_metrics(
+            bytes_speed_limit,
+            RESOURCE_GROUP_READ_BYTES_LIMITER_QUOTA.with_label_values(&[name]),
+        );
+    }
+
+    fn remove_resource_group_metrics(name: &str) {
+        let _ =  ACTIVE_RESOURCE_GROUP_READ_BYTES.remove_label_values(&[name]).map_err(
+            |err| error!("failed to remove active resource group read bytes metric"; "resource_group" => name, "err" => %err),
+        );
+        _ = RESOURCE_GROUP_QPS_LIMITER_QUOTA.remove_label_values(&[name]);
+        _ = RESOURCE_GROUP_READ_BYTES_LIMITER_QUOTA.remove_label_values(&[name]);
+    }
+
+    fn update_limit_metrics(speed_limit: Option<f64>, metric: IntGauge) {
+        // if the quota exceed u64::MAX we treat it as infinite.
+        let mut speed_limit = speed_limit.unwrap_or_default();
+        if speed_limit.is_infinite() || speed_limit > i64::MAX as f64 {
+            speed_limit = 0.0
+        }
+        metric.set(speed_limit as i64);
     }
 
     pub fn get_limiter(&self, name: &str) -> Option<ResourceGroupReadLimiter> {
@@ -155,9 +185,7 @@ impl ReadLimiter {
 
     fn remove_limiter(&self, name: &str) {
         self.resource_group_limiters.remove(name);
-        let _ =  ACTIVE_RESOURCE_GROUP_READ_BYTES.remove_label_values(&[name]).map_err(
-            |err| error!("failed to remove active resource group read bytes metric"; "resource_group" => name, "err" => %err),
-        );
+        Self::remove_resource_group_metrics(name);
     }
 }
 
