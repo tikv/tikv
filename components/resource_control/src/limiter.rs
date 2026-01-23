@@ -63,7 +63,7 @@ impl ReadLimiterCore {
             enabled: AtomicBool::from(config.enabled),
             timeout: AtomicDuration::new(timeout, TimeUnit::Millisecond),
             stats_interval: AtomicDuration::new(stats_interval, TimeUnit::Millisecond),
-            max_wait_time: AtomicDuration::new(MAX_WAIT_TIME, TimeUnit::Millisecond),
+            max_wait_time: AtomicDuration::new(config.max_read_wait_time.0, TimeUnit::Millisecond),
             resource_group_limiters: DashMap::new(),
         }
     }

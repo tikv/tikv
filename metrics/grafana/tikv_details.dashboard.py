@@ -10514,7 +10514,7 @@ def ResourceControl() -> RowPanel:
                 description="The 99 quantile durtion of coprocessor request wait read limiter duration",
                 metric="tikv_resource_control_request_wait_duration_seconds",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
-                by_labels=["resource_group"],
+                by_labels=["type"],
                 hide_p9999=True,
                 hide_count=True,
                 hide_avg=False,
