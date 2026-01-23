@@ -161,12 +161,17 @@ impl<E: Engine> Tracker<E> {
     }
 
     pub fn on_begin_all_items(&mut self) {
-        if let TrackerState::SlowDown(at) = self.current_stage {
-            let now = Instant::now();
-            self.slow_down_time = now - at;
-            self.current_stage = TrackerState::AllItemsBegan;
-        } else {
-            unreachable!()
+        match self.current_stage {
+            // only unary request has the slow_down stage, other request can directly enter
+            // this stage after getting snapshot.
+            TrackerState::SlowDown(at) | TrackerState::SnapshotRetrieved(at) => {
+                let now = Instant::now();
+                self.slow_down_time = now - at;
+                self.current_stage = TrackerState::AllItemsBegan;
+            }
+            _ => {
+                unreachable!();
+            }
         }
     }
 
