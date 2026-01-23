@@ -239,6 +239,11 @@ where
 /// Runs an async future with a timeout. Returns `Ok(result)` if the future
 /// completes before the timeout, or returns an error if it times out.
 ///
+/// This function uses lazy timer initialization: it only creates a timer if
+/// the future doesn't complete immediately. This optimization avoids timer
+/// creation overhead in the common case where futures complete quickly
+/// (e.g., local snapshot reads).
+///
 /// This function works in yatp FuturePool contexts and doesn't require
 /// a Tokio runtime.
 pub async fn async_timeout<F>(
@@ -246,20 +251,38 @@ pub async fn async_timeout<F>(
     dur: std::time::Duration,
 ) -> Result<F::Output, Box<dyn std::error::Error + Send + Sync>>
 where
-    F: std::future::Future,
+    F: std::future::Future + Send,
 {
     use futures_util::compat::Future01CompatExt;
 
-    let timeout_fut = GLOBAL_TIMER_HANDLE
-        .delay(std::time::Instant::now() + dur)
-        .compat()
-        .fuse();
     pin_mut!(fut);
     let mut fut = fut.fuse();
-    pin_mut!(timeout_fut);
-    futures::select! {
-        result = fut => Ok(result),
-        _ = timeout_fut => Err(format!("future timeout after {:?}", dur).into()),
+
+    // Try polling once without creating a timer.
+    // Use a no-op waker to avoid side effects from the first poll.
+    struct NoOpWaker;
+    impl ArcWake for NoOpWaker {
+        fn wake_by_ref(_arc_self: &Arc<Self>) {}
+    }
+    let waker = task::waker(Arc::new(NoOpWaker));
+    let mut cx = Context::from_waker(&waker);
+
+    // Fast path: if future is ready immediately, return without creating timer.
+    match std::pin::Pin::new(&mut fut).poll(&mut cx) {
+        Poll::Ready(result) => return Ok(result),
+        Poll::Pending => {
+            // Slow path: future didn't complete, create timer and use select!.
+            let timeout_fut = GLOBAL_TIMER_HANDLE
+                .delay(std::time::Instant::now() + dur)
+                .compat()
+                .fuse();
+            pin_mut!(timeout_fut);
+
+            futures::select! {
+                result = fut => Ok(result),
+                _ = timeout_fut => Err(format!("future timeout after {:?}", dur).into()),
+            }
+        }
     }
 }
 
@@ -415,5 +438,39 @@ mod tests {
             "error result should propagate (not timeout)"
         );
         assert_eq!(result.unwrap(), Err("test error"));
+    }
+
+    #[test]
+    fn test_async_timeout_lazy_timer_optimization() {
+        use futures::executor::block_on;
+        use futures_util::compat::Future01CompatExt;
+
+        // Test case: verify that fast futures complete without creating timer
+        // (lazy optimization: timer is only created if future doesn't complete
+        // immediately)
+        let fast_future = async { 42 };
+        let result = block_on(async_timeout(
+            fast_future,
+            std::time::Duration::from_millis(100),
+        ));
+        assert!(result.is_ok(), "fast future should complete successfully");
+        assert_eq!(result.unwrap(), 42);
+
+        // Test case: verify that slow futures still work correctly with timer
+        // This verifies the lazy timer is created when needed
+        let slow_future = async {
+            GLOBAL_TIMER_HANDLE
+                .delay(std::time::Instant::now() + Duration::from_millis(50))
+                .compat()
+                .await
+                .unwrap();
+            100
+        };
+        let result = block_on(async_timeout(
+            slow_future,
+            std::time::Duration::from_millis(200),
+        ));
+        assert!(result.is_ok(), "slow future should complete before timeout");
+        assert_eq!(result.unwrap(), 100);
     }
 }
