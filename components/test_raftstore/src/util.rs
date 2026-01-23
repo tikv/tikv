@@ -991,6 +991,8 @@ pub fn must_kv_read_equal(client: &TikvClient, ctx: Context, key: Vec<u8>, val: 
     assert!(!get_resp.has_error(), "{:?}", get_resp.get_error());
     assert!(!get_resp.get_not_found());
     assert_eq!(get_resp.take_value(), val);
+    // if need_commit_ts is not set, `get_commit_ts()` should always return 0
+    assert_eq!(get_resp.get_commit_ts(), 0);
 }
 
 pub fn must_kv_read_not_found(client: &TikvClient, ctx: Context, key: Vec<u8>, ts: u64) {

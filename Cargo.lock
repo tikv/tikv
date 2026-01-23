@@ -3765,7 +3765,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?branch=release-8.5#ed676560b3b4dd283ca50c2ef5f914be2629a6ba"
+source = "git+https://github.com/pingcap/kvproto.git?branch=release-8.5#e7016d9dbe90171f2fbba486974d5b3efd8bd147"
 dependencies = [
  "bytes",
  "futures 0.3.15",
@@ -7451,7 +7451,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "8.5.5"
+version = "8.5.6"
 dependencies = [
  "anyhow",
  "api_version",
