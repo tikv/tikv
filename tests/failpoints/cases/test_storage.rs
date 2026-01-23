@@ -1982,17 +1982,6 @@ fn test_shared_exclusive_lock_conflict() {
             .is_some()
     );
 
-    // exclusive lock blocked.
-    let exclusive_lock = acquire_lock(30, false);
-    exclusive_lock
-        .recv_timeout(Duration::from_millis(100))
-        .unwrap_err();
-
-    // Re-acquiring the same transaction should be idempotent.
-    acquire_lock(10, true).recv().unwrap().unwrap();
-    let shared_lock = load_shared_lock();
-    assert_eq!(shared_lock.len(), 1);
-
     // A different transaction should be merged into the same shared lock entry.
     acquire_lock(20, true).recv().unwrap().unwrap();
     let mut shared_lock = load_shared_lock();
@@ -2010,7 +1999,35 @@ fn test_shared_exclusive_lock_conflict() {
             .is_some()
     );
 
+    // Exclusive lock gets KeyIsLocked immediately at first time. It sets the shared lock shrink-only.
+    let exclusive_lock = acquire_lock(30, false);
+    let err = exclusive_lock
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap().unwrap().unwrap_err();
+    assert!(matches!(
+        err,
+        storage::Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
+            mvcc::Error(box mvcc::ErrorInner::KeyIsLocked { .. }),
+        ))))
+    ));
+
+    // Exclusive lock is blocked by shrink-only shared lock when re-acquiring.
+    let exclusive_lock = acquire_lock(30, false);
     exclusive_lock
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap_err();
+
+    // New shared lock is also blocked by shrink-only shared lock.
+    let shared_lock = acquire_lock(40, true);
+    shared_lock
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap_err();
+
+    // Previous lock requests are still blocked.
+    exclusive_lock
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap_err();
+    shared_lock
         .recv_timeout(Duration::from_millis(100))
         .unwrap_err();
 
