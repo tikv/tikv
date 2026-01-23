@@ -2,7 +2,7 @@
 
 use std::u64;
 
-use api_version::{keyspace::KvPair, ApiV1};
+use api_version::{keyspace::KvPairEntry, ApiV1};
 use futures::executor::block_on;
 use kvproto::{
     coprocessor::{KeyRange, Request},
@@ -86,6 +86,7 @@ fn reversed_checksum_crc64_xor<E: Engine>(store: &Store<E>, range: KeyRange) -> 
         scan_backward_in_range: true,
         is_key_only: false,
         is_scanned_range_aware: false,
+        load_commit_ts: false,
     });
 
     let mut checksum = 0;
