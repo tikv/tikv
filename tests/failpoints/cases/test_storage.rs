@@ -1999,16 +1999,19 @@ fn test_shared_exclusive_lock_conflict() {
             .is_some()
     );
 
-    // Exclusive lock gets KeyIsLocked immediately at first time. It sets the shared lock shrink-only.
+    // Exclusive lock gets KeyIsLocked immediately at first time. It sets the shared
+    // lock shrink-only.
     let exclusive_lock = acquire_lock(30, false);
     let err = exclusive_lock
         .recv_timeout(Duration::from_millis(100))
-        .unwrap().unwrap().unwrap_err();
+        .unwrap()
+        .unwrap()
+        .unwrap_err();
     assert!(matches!(
         err,
-        storage::Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
-            mvcc::Error(box mvcc::ErrorInner::KeyIsLocked { .. }),
-        ))))
+        storage::Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
+            box mvcc::ErrorInner::KeyIsLocked { .. },
+        )))))
     ));
 
     // Exclusive lock is blocked by shrink-only shared lock when re-acquiring.
