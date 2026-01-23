@@ -269,7 +269,7 @@ where
 
     // Fast path: if future is ready immediately, return without creating timer.
     match std::pin::Pin::new(&mut fut).poll(&mut cx) {
-        Poll::Ready(result) => return Ok(result),
+        Poll::Ready(result) => Ok(result),
         Poll::Pending => {
             // Slow path: future didn't complete, create timer and use select!.
             let timeout_fut = GLOBAL_TIMER_HANDLE
